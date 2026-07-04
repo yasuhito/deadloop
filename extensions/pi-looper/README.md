@@ -17,6 +17,10 @@ Pi 本体から読み込まれる extension 実体です。通常は package roo
 
 状態と lock は `~/.pi/agent/pi-looper/` に保存します。
 
+## Status report
+
+Pi command `/pi-looper-status` prints a concise operator report for the active project. It reads the local project config, pi-looper state file, GitHub issue/PR labels, and Herdr worker worktrees so maintainers can answer what the loop is waiting on without manually combining those commands.
+
 ## Herdr cleanup
 
 `generic-issue-coordinator` は issue 選択前に `automations/cleanup-completed-worker-worktrees.py` を呼び、merged / closed PR に対応する clean な Herdr linked worktree だけを決定論的に片付けます。削除可否は prompt では判断しません。

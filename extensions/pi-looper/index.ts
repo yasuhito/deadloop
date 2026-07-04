@@ -16,6 +16,10 @@ const {
   sanitizeId,
   templateValues,
 } = require("../../src/core.ts");
+const {
+  buildStatusSnapshot,
+  formatStatusReport,
+} = require("../../src/status.ts");
 
 const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 const STATE_DIR = path.join(CONFIG_DIR, EXTENSION_NAME);
@@ -274,6 +278,137 @@ function readPrompt(project, automation) {
   return renderTemplate(template, templateValues(project, automation, AUTOMATION_DIR));
 }
 
+async function execJson(pi, command, args, fallback, options = {}) {
+  try {
+    const result = await pi.exec(command, args, { timeout: options.timeout || 15_000 });
+    if (result.code !== 0) return fallback;
+    return JSON.parse(result.stdout || "null") ?? fallback;
+  } catch (error) {
+    debugLog("status query failed", command, args.join(" "), error?.message || error);
+    return fallback;
+  }
+}
+
+function uniquePrs(prs) {
+  const seen = new Set();
+  const unique = [];
+  for (const pr of prs) {
+    const number = Number(pr?.number || 0);
+    if (number && seen.has(number)) continue;
+    if (number) seen.add(number);
+    unique.push(pr);
+  }
+  return unique;
+}
+
+function worktreesFromHerdrResult(data) {
+  if (Array.isArray(data)) return data;
+  return ((data?.result || {}).worktrees || []);
+}
+
+async function gitText(pi, args) {
+  try {
+    const result = await pi.exec("git", args, { timeout: 5_000 });
+    if (result.code !== 0) return undefined;
+    return result.stdout;
+  } catch {
+    return undefined;
+  }
+}
+
+async function buildLiveStatusReport(pi, cwd) {
+  const projects = loadProjects();
+  const state = loadState();
+  const project = activeProject(cwd, projects);
+  if (!project) {
+    return formatStatusReport(buildStatusSnapshot({ cwd, projects, state }));
+  }
+
+  const issues = project.githubRepo
+    ? await execJson(pi, "gh", [
+        "issue",
+        "list",
+        "-R",
+        project.githubRepo,
+        "--state",
+        "open",
+        "--limit",
+        "200",
+        "--json",
+        "number,title,labels,updatedAt",
+      ], [])
+    : [];
+  const openPrs = project.githubRepo
+    ? await execJson(pi, "gh", [
+        "pr",
+        "list",
+        "-R",
+        project.githubRepo,
+        "--state",
+        "open",
+        "--limit",
+        "100",
+        "--json",
+        "number,title,labels,updatedAt,headRefName,headRefOid",
+      ], [])
+    : [];
+  const mergedPrs = project.githubRepo
+    ? await execJson(pi, "gh", [
+        "pr",
+        "list",
+        "-R",
+        project.githubRepo,
+        "--state",
+        "merged",
+        "--limit",
+        "100",
+        "--json",
+        "number,title,state,mergedAt,closedAt,headRefName,headRefOid,labels",
+      ], [])
+    : [];
+  const closedPrs = project.githubRepo
+    ? await execJson(pi, "gh", [
+        "pr",
+        "list",
+        "-R",
+        project.githubRepo,
+        "--state",
+        "closed",
+        "--limit",
+        "100",
+        "--json",
+        "number,title,state,mergedAt,closedAt,headRefName,headRefOid,labels",
+      ], [])
+    : [];
+
+  const herdrData = project.repoPath
+    ? await execJson(pi, "herdr", ["worktree", "list", "--cwd", project.repoPath, "--json"], { result: { worktrees: [] } })
+    : { result: { worktrees: [] } };
+  const worktrees = worktreesFromHerdrResult(herdrData);
+  const gitStatuses = {};
+  const gitHeads = {};
+  for (const worktree of worktrees) {
+    const worktreePath = String(worktree?.path || "");
+    if (!worktreePath) continue;
+    const status = await gitText(pi, ["-C", worktreePath, "status", "--short"]);
+    if (status !== undefined) gitStatuses[worktreePath] = status;
+    const head = await gitText(pi, ["-C", worktreePath, "rev-parse", "HEAD"]);
+    if (head !== undefined) gitHeads[worktreePath] = head.trim();
+  }
+
+  return formatStatusReport(buildStatusSnapshot({
+    cwd,
+    projects,
+    state,
+    issues,
+    openPrs,
+    closedPrs: uniquePrs([...(mergedPrs || []), ...(closedPrs || [])]),
+    worktrees,
+    gitStatuses,
+    gitHeads,
+  }));
+}
+
 async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
   const now = Date.now();
   const key = automationStateKey(project, automation);
@@ -343,6 +478,18 @@ async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
 }
 
 export default function (pi) {
+  pi.registerCommand("pi-looper-status", {
+    description: "Show the active pi-looper project, automations, GitHub queues, and Herdr worker worktrees",
+    handler: async (_args, ctx) => {
+      const report = await buildLiveStatusReport(pi, ctx.cwd);
+      if (ctx.mode === "print" || ctx.mode === "json") {
+        console.log(report);
+      } else {
+        pi.sendMessage({ customType: "pi-looper-status", content: report, display: true });
+      }
+    },
+  });
+
   let timer = null;
   let running = false;
   let startupTick = null;

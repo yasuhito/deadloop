@@ -131,6 +131,16 @@ PI_LOOPER_CONFIG=/path/to/projects.json pi
 
 v0 の `schedule` は `*/N * * * *` 形式だけに対応します。例: `*/10 * * * *`。
 
+## Status report
+
+Operator/debugging status can be checked from Pi with:
+
+```text
+/pi-looper-status
+```
+
+The report resolves the active project from the current working directory, then summarizes enabled automations, current GitHub issue/PR queues, and related Herdr worker worktrees including cleanup candidates.
+
 ## 付属 automation
 
 - `generic-issue-coordinator`
