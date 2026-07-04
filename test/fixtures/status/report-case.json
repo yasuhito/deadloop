@@ -1,0 +1,81 @@
+{
+  "cwd": "/home/yasuhito/Work/pi-looper",
+  "nowMs": 1783209900000,
+  "projects": [
+    {
+      "id": "pi-looper",
+      "enabled": true,
+      "repoPath": "/home/yasuhito/Work/pi-looper",
+      "githubRepo": "yasuhito/pi-looper",
+      "baseBranch": "origin/main",
+      "worktreeRoot": "/home/yasuhito/Work/herdr-worktrees/pi-looper",
+      "autoMerge": false,
+      "automations": [
+        {
+          "id": "pi-looper:issue-coordinator",
+          "name": "pi-looper issue coordinator",
+          "schedule": "*/10 * * * *"
+        },
+        {
+          "id": "pi-looper:pr-reviewer",
+          "name": "pi-looper PR reviewer",
+          "schedule": "*/10 * * * *"
+        }
+      ]
+    }
+  ],
+  "state": {
+    "automations": {
+      "pi-looper:pi-looper:issue-coordinator": {
+        "lastScheduledAt": 1783209000000,
+        "lastResult": "queued"
+      }
+    }
+  },
+  "issues": [
+    {
+      "number": 13,
+      "title": "Add pi-looper status report",
+      "labels": [{ "name": "agent:in-progress" }]
+    }
+  ],
+  "openPrs": [
+    {
+      "number": 21,
+      "title": "Add status report",
+      "labels": [{ "name": "agent:review" }]
+    }
+  ],
+  "closedPrs": [
+    {
+      "number": 20,
+      "state": "MERGED",
+      "mergedAt": "2026-07-04T00:00:00Z",
+      "headRefName": "agent/issue-12-old",
+      "headRefOid": "abc123",
+      "labels": [{ "name": "agent:review" }]
+    }
+  ],
+  "worktrees": [
+    {
+      "branch": "agent/issue-12-old",
+      "path": "/home/yasuhito/Work/herdr-worktrees/pi-looper/agent-issue-12-old",
+      "open_workspace_id": "workspace-20",
+      "is_linked_worktree": true
+    },
+    {
+      "branch": "agent/issue-13-add-pi-looper-status-report",
+      "path": "/home/yasuhito/Work/herdr-worktrees/pi-looper/agent-issue-13-add-pi-looper-status-report",
+      "open_workspace_id": "workspace-13",
+      "is_linked_worktree": true
+    }
+  ],
+  "gitStatuses": {
+    "/home/yasuhito/Work/herdr-worktrees/pi-looper/agent-issue-12-old": "",
+    "/home/yasuhito/Work/herdr-worktrees/pi-looper/agent-issue-13-add-pi-looper-status-report": " M src/status.ts"
+  },
+  "gitHeads": {
+    "/home/yasuhito/Work/herdr-worktrees/pi-looper/agent-issue-12-old": "abc123",
+    "/home/yasuhito/Work/herdr-worktrees/pi-looper/agent-issue-13-add-pi-looper-status-report": "def456"
+  }
+}
