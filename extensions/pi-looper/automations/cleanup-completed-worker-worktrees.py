@@ -175,6 +175,9 @@ def select_cleanup_plan(
         if worktree.get("is_linked_worktree") is False:
             skipped.append(skip("not_linked_worktree", pr, worktree))
             continue
+        if not worktree.get("open_workspace_id"):
+            skipped.append(skip("missing_workspace_id", pr, worktree))
+            continue
         if not is_under_root(path, config.worktree_root):
             skipped.append(skip("outside_worktree_root", pr, worktree))
             continue
@@ -280,12 +283,10 @@ def apply_plan(plan: dict[str, list[dict[str, Any]]], config: Config, runner: Co
 
     for item in plan["candidates"]:
         workspace_id = item.get("workspaceId")
-        path = str(item.get("path") or "")
         try:
-            if workspace_id:
-                runner.text(["herdr", "worktree", "remove", "--workspace", str(workspace_id), "--json"])
-            else:
-                runner.text(["git", "-C", config.repo_path, "worktree", "remove", path])
+            if not workspace_id:
+                raise CommandError("missing Herdr workspace id; refusing direct git worktree removal")
+            runner.text(["herdr", "worktree", "remove", "--workspace", str(workspace_id), "--json"])
             removed.append(item)
         except CommandError as error:
             failed.append({**item, "error": str(error)})

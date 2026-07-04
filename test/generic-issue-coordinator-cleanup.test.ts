@@ -104,6 +104,10 @@ describe("generic issue coordinator cleanup", () => {
     expect(runCleanupFixture("cleanup-dirty-worktree.json").candidates).toEqual([]);
   });
 
+  it("does not select a Herdr worktree without a workspace id", () => {
+    expect(runCleanupFixture("cleanup-missing-workspace.json").candidates).toEqual([]);
+  });
+
   it("wakes the coordinator for cleanup when no issue is required", () => {
     expect(runIssuePrecheckWithCleanupCandidate()).toBe(0);
   });

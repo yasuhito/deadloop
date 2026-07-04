@@ -1,0 +1,27 @@
+{
+  "repo": "owner/repo",
+  "repoPath": "/repo",
+  "worktreeRoot": "/worktrees/repo",
+  "prs": [
+    {
+      "number": 2,
+      "state": "MERGED",
+      "mergedAt": "2026-07-04T00:00:00Z",
+      "headRefName": "agent/issue-1-cleanup",
+      "headRefOid": "final-pr-head",
+      "labels": [{ "name": "agent:review" }]
+    }
+  ],
+  "worktrees": [
+    {
+      "branch": "agent/issue-1-cleanup",
+      "is_linked_worktree": true,
+      "path": "/worktrees/repo/agent-issue-1-cleanup"
+    }
+  ],
+  "git": {
+    "statuses": {
+      "/worktrees/repo/agent-issue-1-cleanup": ""
+    }
+  }
+}
