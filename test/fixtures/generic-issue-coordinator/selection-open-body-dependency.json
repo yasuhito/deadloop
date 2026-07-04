@@ -1,0 +1,17 @@
+{
+  "issues": [
+    {
+      "number": 2,
+      "title": "Issue with an open dependency",
+      "body": "## Agent Brief\nBuild after dependency.\n\n## Blocked by\n- Depends on #1\n\n## Acceptance criteria\n- It works.",
+      "labels": [
+        { "name": "ready-for-agent" },
+        { "name": "agent:implement" }
+      ]
+    }
+  ],
+  "dependencyStates": {
+    "1": "OPEN"
+  },
+  "relationshipDependencies": {}
+}
