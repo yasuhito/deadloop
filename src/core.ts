@@ -52,6 +52,7 @@ export type RawProject = {
   baseBranch?: string;
   worktreeRoot?: string;
   checkCommand?: string;
+  autoMerge?: boolean;
   workerInstructions?: string;
   workerLaunchPolicy?: string;
   labels?: LabelConfig;
@@ -66,6 +67,7 @@ export type NormalizedProject = {
   baseBranch: string;
   worktreeRoot: string;
   checkCommand: string;
+  autoMerge: boolean;
   workerInstructions: string;
   workerLaunchPolicy: string;
   labels: NormalizedLabels;
@@ -156,6 +158,7 @@ export function normalizeProject(raw: RawProject): NormalizedProject {
     baseBranch: raw.baseBranch || "origin/main",
     worktreeRoot: raw.worktreeRoot || "",
     checkCommand: raw.checkCommand || "git diff --check",
+    autoMerge: raw.autoMerge === true,
     workerInstructions: raw.workerInstructions || DEFAULT_WORKER_INSTRUCTIONS,
     workerLaunchPolicy: raw.workerLaunchPolicy || DEFAULT_WORKER_LAUNCH_POLICY,
     labels: normalizeLabels(raw.labels || {}),
@@ -239,6 +242,7 @@ export function templateValues(
     baseBranch: project.baseBranch,
     worktreeRoot: project.worktreeRoot || "",
     checkCommand: project.checkCommand || "git diff --check",
+    autoMerge: project.autoMerge,
     workerInstructions: project.workerInstructions || "",
     workerLaunchPolicy: project.workerLaunchPolicy || "",
     readyLabel: project.labels.ready,

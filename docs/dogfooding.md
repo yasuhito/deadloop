@@ -46,6 +46,7 @@ pi-looper 自体の開発も、pi-looper で回します。
       "baseBranch": "origin/main",
       "worktreeRoot": "/home/yasuhito/Work/herdr-worktrees/pi-looper/",
       "checkCommand": "npm test && bash -n extensions/pi-looper/automations/*.sh && python3 -m py_compile extensions/pi-looper/automations/*.py && npm pack --dry-run",
+      "autoMerge": false,
       "workerInstructions": "AGENTS.md, README.md, docs/dogfooding.md, and relevant files must be read before making changes. Follow the one-expectation-per-test rule.",
       "automations": [
         {
@@ -62,7 +63,7 @@ pi-looper 自体の開発も、pi-looper で回します。
 }
 ```
 
-`generic-pr-reviewer` は Phase 1 では入れません。レビュー自動化を試す場合だけ、別コミットで有効にします。
+`generic-pr-reviewer` は Phase 1 では入れません。レビュー自動化を試す場合だけ、別コミットで有効にします。その場合も最初は `autoMerge: false` のままにし、review worker の確認と検証が終わった PR を `ready-for-human` に渡す運用で試します。`autoMerge: true` は Phase 3 まで使いません。
 
 ## 起動方法
 

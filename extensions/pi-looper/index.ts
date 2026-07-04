@@ -215,6 +215,7 @@ function automationEnv(project, automation) {
     PI_LOOPER_BASE_BRANCH: project.baseBranch,
     PI_LOOPER_WORKTREE_ROOT: project.worktreeRoot || "",
     PI_LOOPER_CHECK_COMMAND: project.checkCommand || "git diff --check",
+    PI_LOOPER_AUTO_MERGE: project.autoMerge ? "1" : "0",
     PI_LOOPER_READY_LABEL: project.labels.ready,
     PI_LOOPER_IMPLEMENT_LABEL: project.labels.implement,
     PI_LOOPER_IN_PROGRESS_LABEL: project.labels.inProgress,
@@ -236,6 +237,7 @@ function automationEnv(project, automation) {
   env.HEADR_BASE_BRANCH = env.PI_LOOPER_BASE_BRANCH;
   env.HEADR_WORKTREE_ROOT = env.PI_LOOPER_WORKTREE_ROOT;
   env.HEADR_CHECK_COMMAND = env.PI_LOOPER_CHECK_COMMAND;
+  env.HEADR_AUTO_MERGE = env.PI_LOOPER_AUTO_MERGE;
   env.HEADR_READY_LABEL = env.PI_LOOPER_READY_LABEL;
   env.HEADR_IMPLEMENT_LABEL = env.PI_LOOPER_IMPLEMENT_LABEL;
   env.HEADR_IN_PROGRESS_LABEL = env.PI_LOOPER_IN_PROGRESS_LABEL;

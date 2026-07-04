@@ -74,6 +74,7 @@ describe("deterministic extension core", () => {
       baseBranch: "origin/main",
       worktreeRoot: "",
       checkCommand: "git diff --check",
+      autoMerge: false,
       workerInstructions: "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。",
       workerLaunchPolicy:
         "Worker 起動時は issue の難易度を見て Pi の起動オプションを自分で選ぶ。原則としてモデル名は変更せず、--thinking で調整する。単純なドキュメント修正・小さなテスト修正・局所的な実装は --thinking low、通常の実装は --thinking medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は --thinking high。プロジェクト設定で明示的に低コストモデルが許可されている場合だけ --model を付けてよい。判断理由を worker prompt に1行で残す。",
@@ -180,6 +181,20 @@ describe("deterministic extension core", () => {
         values,
       ),
     ).toBe("demo owner/repo /ext/automations  ready-for-agent");
+  });
+
+  it("defaults auto merge to disabled", () => {
+    expect(normalizeProject({}).autoMerge).toBe(false);
+  });
+
+  it("preserves explicitly enabled auto merge", () => {
+    expect(normalizeProject({ autoMerge: true }).autoMerge).toBe(true);
+  });
+
+  it("exposes auto merge state to prompt templates", () => {
+    const project = normalizeProject({ automations: [{}] });
+
+    expect(renderTemplate("{{autoMerge}}", templateValues(project, project.automations[0], "/auto"))).toBe("false");
   });
 
   it("sanitizes display identifiers to lowercase slugs", () => {

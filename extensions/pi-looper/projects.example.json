@@ -8,6 +8,7 @@
       "baseBranch": "origin/main",
       "worktreeRoot": "/absolute/path/to/herdr/worktrees/example-project/",
       "checkCommand": "git diff --check",
+      "autoMerge": false,
       "workerInstructions": "AGENTS.md and relevant project docs must be read before making changes.",
       "labels": {
         "ready": "ready-for-agent",

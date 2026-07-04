@@ -4,7 +4,7 @@ Pi 本体から読み込まれる extension 実体です。通常は package roo
 
 ## ローカル設定
 
-通常は `~/.pi/agent/pi-looper/projects.json` に実運用用の設定を置きます。この directory に `projects.json` を置くこともできますが、リポジトリには含めません。公開用の雛形は `projects.example.json` です。
+通常は `~/.pi/agent/pi-looper/projects.json` に実運用用の設定を置きます。この directory に `projects.json` を置くこともできますが、リポジトリには含めません。公開用の雛形は `projects.example.json` です。PR reviewer の自動マージは安全のため既定で無効です。必要な場合だけ project config に `"autoMerge": true` を明示します。
 
 優先順位:
 

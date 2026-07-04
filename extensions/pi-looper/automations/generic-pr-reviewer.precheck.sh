@@ -16,6 +16,7 @@ review_label = os.environ.get("PI_LOOPER_REVIEW_LABEL") or os.environ.get("HEADR
 reviewing_label = os.environ.get("PI_LOOPER_REVIEWING_LABEL") or os.environ.get("HEADR_REVIEWING_LABEL", "agent:reviewing")
 human_label = os.environ.get("PI_LOOPER_HUMAN_LABEL") or os.environ.get("HEADR_HUMAN_LABEL", "ready-for-human")
 blocked_label = os.environ.get("PI_LOOPER_BLOCKED_LABEL") or os.environ.get("HEADR_BLOCKED_LABEL", "agent:blocked")
+auto_merge = (os.environ.get("PI_LOOPER_AUTO_MERGE") or os.environ.get("HEADR_AUTO_MERGE") or "0").lower() in {"1", "true", "yes", "on"}
 external_review_wait_seconds = int(
     os.environ.get("PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS")
     or os.environ.get("HERDR_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS")
@@ -70,7 +71,7 @@ prs = gh_json(
 )
 
 blocked_labels = {reviewing_label, blocked_label}
-candidate_labels = {review_label, human_label}
+candidate_labels = {review_label, human_label} if auto_merge else {review_label}
 for pr in prs:
     labels = {label["name"] for label in pr.get("labels", [])}
     if not (labels & candidate_labels):
