@@ -115,7 +115,11 @@ describe("generic PR reviewer precheck", () => {
     expect(runExternalReviewGate("precheck-stale-external-marker.json")).toBe("fallback_review");
   });
 
-  it("skips PRs with blocked or reviewing labels", () => {
-    expect(runPrecheck("precheck-blocked-reviewing.json")).toBe(1);
+  it("skips PRs with the reviewing label", () => {
+    expect(runPrecheck("precheck-reviewing.json")).toBe(1);
+  });
+
+  it("skips PRs with the blocked label", () => {
+    expect(runPrecheck("precheck-blocked.json")).toBe(1);
   });
 });
