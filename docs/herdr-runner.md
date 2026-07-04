@@ -1,21 +1,21 @@
-# Herdr runner
+# Herdr 実行基盤
 
-pi-looper v0 は Herdr runner を使います。
+pi-looper v0 は Herdr 実行基盤を使います。
 
 ## 役割
 
 - Herdr worktree を作る
-- Pi worker / review worker のセッションを起動する
-- pane / session から worker の完了 promise を確認する
-- merge / close 後に不要な worker workspace / linked worktree を決定論的 helper で片付ける
+- Pi 作業エージェント / レビューエージェントのセッションを起動する
+- ペイン / セッションから作業エージェントの完了 promise を確認する
+- マージ / close 後に不要な作業用 workspace / linked worktree を決定論的な補助スクリプトで片付ける
 
 ## 必要なもの
 
 - `herdr` CLI
 - `gh` CLI
 - 対象 GitHub repository への読み書き権限
-- 対象 repository の local checkout
+- 対象リポジトリのローカル作業ツリー
 
-## 将来の runner
+## 将来の実行基盤
 
-Herdr 固有の操作は runner として扱います。将来、tmux や別の terminal / workspace manager を追加する場合も、GitHub issue / PR の状態管理は pi-looper 側に残します。
+Herdr 固有の操作は実行基盤として扱います。将来、tmux や別の端末 / workspace 管理ツールを追加する場合も、GitHub Issue / PR の状態管理は pi-looper 側に残します。
