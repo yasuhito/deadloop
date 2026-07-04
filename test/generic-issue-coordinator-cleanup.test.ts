@@ -108,9 +108,9 @@ describe("generic issue coordinator cleanup", () => {
     expect(runIssuePrecheckWithCleanupCandidate()).toBe(0);
   });
 
-  it("documents a unique Herdr worker agent name", () => {
+  it("starts Herdr with a unique worker agent name", () => {
     expect(readFileSync("extensions/pi-looper/automations/generic-issue-coordinator.prompt.md", "utf8")).toContain(
-      '--name "{{projectId}}-issue-<N>-worker"',
+      'herdr agent start "{{projectId}}-issue-<N>-worker"',
     );
   });
 });
