@@ -17,6 +17,10 @@ Pi 本体から読み込まれる extension 実体です。通常は package roo
 
 状態と lock は `~/.pi/agent/pi-looper/` に保存します。
 
+## Herdr cleanup
+
+`generic-issue-coordinator` は issue 選択前に `automations/cleanup-completed-worker-worktrees.py` を呼び、merged / closed PR に対応する clean な Herdr linked worktree だけを決定論的に片付けます。削除可否は prompt では判断しません。
+
 ## 旧名互換
 
 旧 `herdr-looper` からの移行のため、当面は `HERDR_LOOPER_*` と内部 `HEADR_*` 環境変数も読みます。新規設定では `PI_LOOPER_*` を使ってください。

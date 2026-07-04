@@ -7,7 +7,7 @@ pi-looper v0 は Herdr runner を使います。
 - Herdr worktree を作る
 - Pi worker / review worker のセッションを起動する
 - pane / session から worker の完了 promise を確認する
-- merge 後に不要な worktree を片付ける
+- merge / close 後に不要な worker workspace / linked worktree を決定論的 helper で片付ける
 
 ## 必要なもの
 
