@@ -1,0 +1,14 @@
+{
+  "name": "pi-looper",
+  "version": "0.1.0",
+  "description": "Pi extension that loops GitHub issue implementation and PR review workflows. The initial runner uses Herdr.",
+  "keywords": ["pi-package", "pi-extension", "agent", "github", "herdr"],
+  "license": "MIT",
+  "type": "commonjs",
+  "pi": {
+    "extensions": ["./extensions/pi-looper/index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

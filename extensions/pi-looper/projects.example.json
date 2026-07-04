@@ -1,0 +1,44 @@
+{
+  "projects": [
+    {
+      "id": "example-project",
+      "enabled": true,
+      "repoPath": "/absolute/path/to/your/repo",
+      "githubRepo": "owner/repo",
+      "baseBranch": "origin/main",
+      "worktreeRoot": "/absolute/path/to/herdr/worktrees/example-project/",
+      "checkCommand": "git diff --check",
+      "workerInstructions": "AGENTS.md and relevant project docs must be read before making changes.",
+      "labels": {
+        "ready": "ready-for-agent",
+        "implement": "agent:implement",
+        "inProgress": "agent:in-progress",
+        "blocked": "agent:blocked",
+        "review": "agent:review",
+        "reviewing": "agent:reviewing",
+        "human": "ready-for-human",
+        "needsInfo": "needs-info",
+        "wontfix": "wontfix",
+        "needsTriage": "needs-triage"
+      },
+      "automations": [
+        {
+          "id": "example-project:issue-coordinator",
+          "name": "example-project issue coordinator",
+          "schedule": "*/10 * * * *",
+          "promptFile": "generic-issue-coordinator.prompt.md",
+          "precheckFile": "generic-issue-coordinator.precheck.sh",
+          "precheckTimeoutSeconds": 60
+        },
+        {
+          "id": "example-project:pr-reviewer",
+          "name": "example-project PR reviewer",
+          "schedule": "*/10 * * * *",
+          "promptFile": "generic-pr-reviewer.prompt.md",
+          "precheckFile": "generic-pr-reviewer.precheck.sh",
+          "precheckTimeoutSeconds": 60
+        }
+      ]
+    }
+  ]
+}
