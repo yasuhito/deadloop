@@ -96,6 +96,7 @@ v0 の `schedule` は `*/N * * * *` 形式だけに対応します。例: `*/10 
 ## 付属 automation
 
 - `generic-issue-coordinator`
+  - merged / closed PR に対応する完了済み Herdr worker workspace / worktree を決定論的 helper で片付ける
   - 実装可能 issue を1件選ぶ
   - Herdr worktree / Pi worker を起動する
   - worker 完了後に検証して PR を作る

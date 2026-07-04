@@ -7,7 +7,7 @@
 - Base branch: `{{baseBranch}}`
 - Herdr CLI: `herdr`
 - Worker worktree: `herdr worktree create --cwd {{repoPath}} --branch <branch> --base {{baseBranch}} --label <label> --no-focus --json`
-- Worker 起動: `herdr agent start pi --cwd <worktreePath> --workspace <workspaceId> --no-focus -- pi --name <name> <launchOptions> @<promptFile>`
+- Worker 起動: `herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --workspace <workspaceId> --no-focus -- pi --name "{{projectId}}-issue-<N>-worker" <launchOptions> @<promptFile>`
 - Worker 起動オプション方針: {{workerLaunchPolicy}}
 - 同時実行: 1件だけ
 - 既定検証コマンド: `{{checkCommand}}`
@@ -43,24 +43,13 @@
 
 ### 0. Cleanup
 
-候補 issue を探す前に、automation が作った PR のうち merged / closed になったものを確認し、対応する Herdr worktree が残っていれば安全に片付ける。
+候補 issue を探す前に、必ず付属 helper で completed worker cleanup を実行する。削除可否は helper が GitHub / Herdr / git の最新状態から決定するため、Coordinator は独自に削除判断をしない。
 
-対象 PR:
+```bash
+python3 {{automationDir}}/cleanup-completed-worker-worktrees.py --apply --json
+```
 
-- `{{reviewLabel}}` または `{{humanLabel}}` label が付いている
-- または `headRefName` が `agent/issue-` で始まる
-
-削除してよい worktree:
-
-- PR の `headRefName` と同じ branch
-- main workspace ではない
-- `{{worktreeRoot}}` が設定されている場合はその配下
-- `git status --short` が空
-- merged PR は、squash merge でも元 branch の HEAD が base branch の祖先にならないため、`git merge-base --is-ancestor HEAD <base branch remote>` を必須条件にしない
-- merged PR なら、GitHub 上の PR state が `MERGED` で、PR の `headRefName` が worktree branch と一致していれば削除してよい
-- closed かつ未merge PR なら remote head branch と同一または祖先確認できる場合だけ削除してよい
-
-片付け前に `git fetch --prune` を実行する。削除できない場合は無理に消さず、最後の要約に理由を書く。GitHub へは書き込まない。
+helper は、automation が作った merged / closed PR と対応する clean な Herdr linked worktree だけを対象にし、Herdr workspace / panes を `herdr worktree remove --workspace <workspaceId>` で片付けてから linked worktree を取り除く。削除できない場合や unsafe な worktree は無理に消さず、JSON の `skipped` / `failed` を最後の要約に含める。GitHub へは書き込まない。
 
 ### 1. Audit
 
@@ -149,6 +138,8 @@ Worker を起動する前に、issue の難易度から `<launchOptions>` を自
 - `xhigh` は OpenAI codex-max 専用なので、通常は選ばない。
 - 追加方針: {{workerLaunchPolicy}}
 - Worker prompt の先頭に `起動判断: ...` と1行で選択理由を書く。
+
+Worker の Herdr agent name は issue ごとに一意にし、既定名 `pi` のまま起動しない。例: `{{projectId}}-issue-<N>-worker`。
 
 `herdr worktree create --no-focus` と `herdr agent start ... --no-focus` を使い、ユーザーの表示中タブを奪わない。
 
