@@ -30,6 +30,9 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Run static and formatting checks
+        run: npm run lint
+
       - name: Check shell automation syntax
         run: bash -n extensions/pi-looper/automations/*.sh
 

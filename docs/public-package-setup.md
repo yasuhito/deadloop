@@ -121,6 +121,7 @@ Use these commands before trusting a package change or when validating this repo
 
 ```bash
 npm test
+npm run lint
 bash -n extensions/pi-looper/automations/*.sh
 python3 -m py_compile extensions/pi-looper/automations/*.py
 npm pack --dry-run

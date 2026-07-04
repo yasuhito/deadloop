@@ -17,6 +17,10 @@ describe("GitHub Actions CI workflow", () => {
     expect(workflow).toContain("npm test");
   });
 
+  it("runs lint checks", () => {
+    expect(workflow).toContain("npm run lint");
+  });
+
   it("runs shell syntax checks", () => {
     expect(workflow).toContain("bash -n extensions/pi-looper/automations/*.sh");
   });
