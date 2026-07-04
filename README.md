@@ -94,12 +94,14 @@ pi -e /path/to/pi-looper
 
 ## 設定
 
-`extensions/pi-looper/projects.example.json` を参考に、ローカル設定ファイルを作ります。この `projects.json` はローカル設定であり、リポジトリにコミットしません。
+`projects.example.json` を参考に、ローカル設定ファイルを作ります。この `projects.json` はローカル設定であり、リポジトリにコミットしません。GitHub から install した場合は、Pi が clone した package からコピーします。
 
 ```bash
 mkdir -p ~/.pi/agent/pi-looper
-cp extensions/pi-looper/projects.example.json ~/.pi/agent/pi-looper/projects.json
+cp ~/.pi/agent/git/github.com/yasuhito/pi-looper/extensions/pi-looper/projects.example.json ~/.pi/agent/pi-looper/projects.json
 ```
+
+ローカル開発 checkout から試す場合は、代わりに `/absolute/path/to/pi-looper/extensions/pi-looper/projects.example.json` からコピーしてください。
 
 既定では `~/.pi/agent/pi-looper/projects.json` を読みます。pi-looper は Pi の現在ディレクトリが `repoPath` またはその配下にある場合だけ動くため、対象 repository の中で起動してください。
 
