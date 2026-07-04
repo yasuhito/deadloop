@@ -40,13 +40,27 @@
 
 ### 1. Select
 
-open PR のうち、次を満たす番号最小の1件だけ扱う。
+候補選定、draft gate 対象判定、pending checks / 外部レビュー進行中の待機判定は決定論的 helper に任せる。司令塔は helper が選んだ番号最小の1件だけ扱う。
 
-- `{{reviewLabel}}` label がある
-- `autoMerge=true` の場合に限り、`{{humanLabel}}` label だけの PR も対象にしてよい
-- `{{reviewingLabel}}`、`{{blockedLabel}}` がない
+```bash
+prs_json=$(mktemp)
+gh pr list -R {{githubRepo}} --state open --limit 100 \
+  --json number,updatedAt,headRefOid,isDraft,labels,statusCheckRollup,comments,reviewRequests \
+  > "$prs_json"
+decision_json=$(python3 {{automationDir}}/generic-pr-reviewer-decisions.py \
+  --input "$prs_json" \
+  --review-label "{{reviewLabel}}" \
+  --reviewing-label "{{reviewingLabel}}" \
+  --human-label "{{humanLabel}}" \
+  --blocked-label "{{blockedLabel}}" \
+  --auto-merge "{{autoMerge}}" \
+  --external-review-wait-seconds "${PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-${HERDR_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-1800}}")
+selected=$(printf '%s' "$decision_json" | jq -r '.selected')
+pr_number=$(printf '%s' "$decision_json" | jq -r '.number // empty')
+action=$(printf '%s' "$decision_json" | jq -r '.action // empty')
+```
 
-候補が0件なら、GitHub へ書き込まず「対象 PR なし」と要約して終了する。
+`selected` が `true` でなければ、GitHub へ書き込まず「対象 PR なし」と要約して終了する。`action=draft_gate` の場合は、選ばれた PR 番号で次の Draft gate へ進む。
 
 ### 2. Draft gate
 
@@ -84,19 +98,33 @@ gh api repos/{{githubRepo}}/pulls/<PR>/comments
 
 ### 5. 外部レビュー依頼 gate
 
-最新 HEAD に対する Copilot / CodeRabbit / 人間のレビューが1件もなく、Copilot が quota / unavailable / disabled / unable to review を返していない場合は、外部レビューを最大1回だけ依頼する。
+最新 HEAD に対する Copilot / CodeRabbit / 人間のレビューが1件もなく、Copilot が quota / unavailable / disabled / unable to review を返していない場合は、外部レビュー依頼 / 待機 / 代替レビュー移行の判定を helper に任せる。
 
-- 現在の `headRefOid` に対応する依頼済み marker コメント `<!-- pi-looper:external-review-request head=<headRefOid> -->` が無い場合は、次を実行してこの実行回では終了する。
+```bash
+pr_json=$(mktemp)
+gh pr view <PR> -R {{githubRepo}} \
+  --json number,updatedAt,headRefOid,reviewRequests,comments \
+  > "$pr_json"
+head_ref_oid=$(jq -r '.headRefOid' "$pr_json")
+gate_json=$(python3 {{automationDir}}/generic-pr-reviewer-decisions.py \
+  --mode external-review-gate \
+  --input "$pr_json" \
+  --external-review-wait-seconds "${PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-${HERDR_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-1800}}")
+gate_action=$(printf '%s' "$gate_json" | jq -r '.action')
+```
+
+- `gate_action=request_external_review` の場合は、現在の `headRefOid` に対応する外部レビューを次で1回だけ依頼し、この実行回では終了する。
 
 ```bash
 gh pr edit <PR> -R {{githubRepo}} --add-reviewer "@copilot"
-gh pr comment <PR> -R {{githubRepo}} --body $'@coderabbitai review\n\n<!-- pi-looper:external-review-request head=<headRefOid> -->'
+gh pr comment <PR> -R {{githubRepo}} --body "@coderabbitai review
+
+<!-- pi-looper:external-review-request head=${head_ref_oid} -->"
 gh pr edit <PR> -R {{githubRepo}} --remove-label "{{reviewingLabel}}"
 ```
 
-- marker コメントがあり、依頼から30分未満なら、`{{reviewingLabel}}` を外してこの実行回では終了する。
-- marker コメントがあり、依頼から30分以上経っても外部レビューが無い場合は、外部レビューが得られないものとして review worker による代替レビューへ進む。
-- Copilot の review request が残っているだけで30分以上進展がない場合も、無期限に待たず代替レビューへ進む。
+- `gate_action=wait_external_review` の場合は、`{{reviewingLabel}}` を外してこの実行回では終了する。
+- `gate_action=fallback_review` の場合は、外部レビューが得られないものとして review worker による代替レビューへ進む。
 
 ### 6. Prepare worktree
 

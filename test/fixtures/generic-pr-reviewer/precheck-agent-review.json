@@ -1,0 +1,12 @@
+[
+  {
+    "number": 7,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "isDraft": false,
+    "labels": [{ "name": "agent:review" }],
+    "statusCheckRollup": [],
+    "comments": [],
+    "reviewRequests": []
+  }
+]

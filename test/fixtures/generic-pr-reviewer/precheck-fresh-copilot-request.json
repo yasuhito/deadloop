@@ -1,0 +1,18 @@
+[
+  {
+    "number": 10,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefOid": "dddddddddddddddddddddddddddddddddddddddd",
+    "isDraft": false,
+    "labels": [{ "name": "agent:review" }],
+    "statusCheckRollup": [],
+    "comments": [
+      {
+        "createdAt": "2026-07-04T00:20:00Z",
+        "author": { "login": "pi-looper" },
+        "body": "@coderabbitai review\n\n<!-- pi-looper:external-review-request head=dddddddddddddddddddddddddddddddddddddddd -->"
+      }
+    ],
+    "reviewRequests": [{ "requestedReviewer": { "login": "copilot-pull-request-reviewer" } }]
+  }
+]
