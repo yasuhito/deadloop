@@ -18,6 +18,12 @@ export type DoctorGithubItem = GithubItem & {
   comments?: GithubComment[];
 };
 
+type ClaudeProjectTrust = { hasTrustDialogAccepted?: boolean } | null | undefined;
+
+export type ClaudeConfigResult =
+  | { ok: true; projects: Record<string, ClaudeProjectTrust> }
+  | { ok: false };
+
 export type DoctorInput = {
   cwd: string;
   projects: NormalizedProject[];
@@ -25,6 +31,7 @@ export type DoctorInput = {
   openPrs?: DoctorGithubItem[];
   worktrees?: HerdrWorktree[];
   gitStatuses?: Record<string, string>;
+  claudeConfig?: ClaudeConfigResult;
   nowMs?: number;
 };
 
@@ -32,7 +39,8 @@ export type DoctorFindingType =
   | "blocked_issue"
   | "stale_in_progress"
   | "orphan_worktree"
-  | "queue_jam";
+  | "queue_jam"
+  | "workspace_trust";
 
 export type DoctorFinding = {
   id: string;
@@ -257,6 +265,44 @@ function buildQueueJamFindings(project: NormalizedProject, issues: DoctorGithubI
   return findings;
 }
 
+function buildWorkspaceTrustFindings(
+  project: NormalizedProject,
+  claudeConfig: ClaudeConfigResult | undefined,
+): DoctorFinding[] {
+  if (project.workerAgent !== "claude") return [];
+  const repoPath = project.repoPath;
+  if (!repoPath) return [];
+
+  if (!claudeConfig || claudeConfig.ok === false) {
+    return [
+      {
+        id: `workspace-trust-unknown-${repoPath}`,
+        type: "workspace_trust",
+        title: `workspace trust 状態を確認できません: ${repoPath}`,
+        summary:
+          "~/.claude.json を読めないため trust 状態を確認できません。claude Worker は未 trust だと初回起動が trust ダイアログでブロックされます。",
+        commands: [
+          `jq --arg p ${shellArg(repoPath)} '.projects[$p].hasTrustDialogAccepted' ~/.claude.json`,
+        ],
+      },
+    ];
+  }
+
+  const trust = claudeConfig.projects?.[repoPath];
+  if (trust?.hasTrustDialogAccepted === true) return [];
+
+  return [
+    {
+      id: `workspace-trust-${repoPath}`,
+      type: "workspace_trust",
+      title: `workspace trust 未受け入れ: ${repoPath}`,
+      summary:
+        "claude Worker は対話モードで起動するため、未 trust だと初回起動が trust ダイアログでブロックされます。一度手動で受け入れてください。",
+      commands: [`cd ${shellArg(repoPath)} && claude`],
+    },
+  ];
+}
+
 export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   const project = resolveActiveProject(input.cwd, input.projects);
   if (!project) return { project: null, cwd: input.cwd, findings: [] };
@@ -275,6 +321,7 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
       ...buildStaleInProgressFindings(project, issues, worktrees, nowMs),
       ...buildOrphanWorktreeFindings(project, issues, openPrs, worktrees, gitStatuses),
       ...buildQueueJamFindings(project, issues),
+      ...buildWorkspaceTrustFindings(project, input.claudeConfig),
     ],
   };
 }
