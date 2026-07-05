@@ -10,6 +10,8 @@
       "checkCommand": "git diff --check",
       "autoMerge": false,
       "workerInstructions": "AGENTS.md and relevant project docs must be read before making changes.",
+      "workerModel": "anthropic/claude-opus-4-8",
+      "reviewerModel": "",
       "labels": {
         "ready": "ready-for-agent",
         "implement": "agent:implement",

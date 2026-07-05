@@ -77,7 +77,9 @@ describe("deterministic extension core", () => {
       autoMerge: false,
       workerInstructions: "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。",
       workerLaunchPolicy:
-        "Worker 起動時は issue の難易度を見て Pi の起動オプションを自分で選ぶ。原則としてモデル名は変更せず、--thinking で調整する。単純なドキュメント修正・小さなテスト修正・局所的な実装は --thinking low、通常の実装は --thinking medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は --thinking high。プロジェクト設定で明示的に低コストモデルが許可されている場合だけ --model を付けてよい。判断理由を worker prompt に1行で残す。",
+        "Worker 起動時は issue の難易度を見て --thinking を選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は --thinking low、通常の実装は --thinking medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は --thinking high。判断理由を worker prompt に1行で残す。",
+      workerModel: "",
+      reviewerModel: "",
       labels: {
         ready: "agent-ready",
         implement: "agent:implement",
@@ -181,6 +183,25 @@ describe("deterministic extension core", () => {
         values,
       ),
     ).toBe("demo owner/repo /ext/automations  ready-for-agent");
+  });
+
+  it("preserves the operator-designated worker model verbatim", () => {
+    const project = normalizeProject({ workerModel: "anthropic/claude-opus-4-8" });
+
+    expect(project.workerModel).toBe("anthropic/claude-opus-4-8");
+  });
+
+  it("preserves the operator-designated reviewer model verbatim", () => {
+    const project = normalizeProject({ reviewerModel: "openai-codex/gpt-5.2-codex" });
+
+    expect(project.reviewerModel).toBe("openai-codex/gpt-5.2-codex");
+  });
+
+  it("exposes worker and reviewer models to prompt templates", () => {
+    const project = normalizeProject({ workerModel: "anthropic/claude-opus-4-8", automations: [{}] });
+    const values = templateValues(project, project.automations[0], "/auto");
+
+    expect(renderTemplate("{{workerModel}}|{{reviewerModel}}", values)).toBe("anthropic/claude-opus-4-8|");
   });
 
   it("defaults auto merge to disabled", () => {

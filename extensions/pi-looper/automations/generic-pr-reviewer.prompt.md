@@ -8,6 +8,7 @@
 - Herdr CLI: `herdr`
 - 既定検証コマンド: `{{checkCommand}}`
 - 自動マージ設定: `autoMerge={{autoMerge}}`
+- Review worker モデル指定: "{{reviewerModel}}"（operator の設定。空でなければ起動コマンドに必ず `--model {{reviewerModel}}` を付ける。空なら `--model` を付けない）
 - レビュー作業は PR branch の Herdr worktree で行う。main workspace を編集しない。
 - 同時実行: 1件だけ
 
@@ -185,10 +186,10 @@ PR #<PR> をレビューしてください。
 - 失敗、仕様不一致、危険変更、判断不能なら、最後に必ず `<promise>BLOCKED: 理由</promise>` を日本語で出力してください。
 ```
 
-起動コマンド例。`herdr agent start` の出力にある `result.agent.pane_id` を `<paneId>` として保存する。`herdr agent start` は `--json` を受け付けないため付けない。
+起動コマンド例。`herdr agent start` の出力にある `result.agent.pane_id` を `<paneId>` として保存する。`herdr agent start` は `--json` を受け付けないため付けない。`<modelOption>` は Review worker モデル指定が空でなければ `--model {{reviewerModel}}`、空なら何も置かない。
 
 ```bash
-start_output=$(herdr agent start pi --cwd <worktreePath> --workspace <workspaceId> --no-focus -- pi --name "{{projectId}}-pr-<PR>-reviewer" --thinking medium @<promptFile>)
+start_output=$(herdr agent start pi --cwd <worktreePath> --workspace <workspaceId> --no-focus -- pi --name "{{projectId}}-pr-<PR>-reviewer" <modelOption> --thinking medium @<promptFile>)
 pane_id=$(printf '%s' "$start_output" | jq -r '.result.agent.pane_id')
 ```
 

@@ -8,6 +8,7 @@
 - Herdr CLI: `herdr`
 - Worker worktree: `herdr worktree create --cwd {{repoPath}} --branch <branch> --base {{baseBranch}} --label <label> --no-focus --json`
 - Worker 起動: `herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --workspace <workspaceId> --no-focus -- pi --name "{{projectId}}-issue-<N>-worker" <launchOptions> @<promptFile>`
+- Worker モデル指定: "{{workerModel}}"（operator の設定。空でなければ必ず `--model {{workerModel}}` を付ける。空なら `--model` を付けない）
 - Worker 起動オプション方針: {{workerLaunchPolicy}}
 - 同時実行: 1件だけ
 - 既定検証コマンド: `{{checkCommand}}`
@@ -128,14 +129,13 @@ Issue #<N> を実装してください。
 - 失敗、仕様不足、危険変更、または判断不能なら、最後に必ず `<promise>BLOCKED: 理由</promise>` を日本語で出力してください。
 ```
 
-Worker を起動する前に、issue の難易度から `<launchOptions>` を自分で判断する。Pi では `--thinking <off|minimal|low|medium|high|xhigh>` と、明示許可がある場合だけ `--model <model-name>` を使える。方針は次の順に優先する。
+Worker を起動する前に、issue の難易度から `<launchOptions>` を自分で判断する。方針は次の順に優先する。
 
 - 安全規則を `{{workerLaunchPolicy}}` より優先する。
-- 既定では `--model` を付けない。`--model` は operator が `workerLaunchPolicy` で明示許可した完全一致のモデル名だけに限る。
+- モデルは operator の設定に従う。Worker モデル指定が空でなければ、issue の内容にかかわらず必ず `--model {{workerModel}}` を付ける。空なら `--model` を付けず、Pi の既定モデルを使う。coordinator の判断でモデルを選ばない。
 - issue 難易度で `--thinking` を選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は `--thinking low`、通常の実装は `--thinking medium`、複数コンポーネント・設計判断・データ移行・難しい不具合修正は `--thinking high`。
-- モデル名・許可条件・issue 難易度のいずれかが不明なら、`--model` を省略し、既定モデルで `--thinking medium` 以上を使う。
-- 高リスク issue（大きな設計変更、複数言語、危険な移行、難しい不具合修正）では低コストモデルへ切り替えず、`--thinking high` を使う。
-- `xhigh` は OpenAI codex-max 専用なので、通常は選ばない。
+- issue 難易度が不明なら `--thinking medium` 以上を使う。
+- `xhigh` は対応モデル（現状 OpenAI codex-max）専用なので、通常は選ばない。
 - 追加方針: {{workerLaunchPolicy}}
 - Worker prompt の先頭に `起動判断: ...` と1行で選択理由を書く。
 

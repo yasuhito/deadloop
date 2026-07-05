@@ -3,7 +3,7 @@ export const DEFAULT_TIMEZONE = "Asia/Tokyo";
 export const DEFAULT_WORKER_INSTRUCTIONS = "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。";
 
 export const DEFAULT_WORKER_LAUNCH_POLICY =
-  "Worker 起動時は issue の難易度を見て Pi の起動オプションを自分で選ぶ。原則としてモデル名は変更せず、--thinking で調整する。単純なドキュメント修正・小さなテスト修正・局所的な実装は --thinking low、通常の実装は --thinking medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は --thinking high。プロジェクト設定で明示的に低コストモデルが許可されている場合だけ --model を付けてよい。判断理由を worker prompt に1行で残す。";
+  "Worker 起動時は issue の難易度を見て --thinking を選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は --thinking low、通常の実装は --thinking medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は --thinking high。判断理由を worker prompt に1行で残す。";
 
 export type LabelConfig = {
   ready?: string;
@@ -55,6 +55,8 @@ export type RawProject = {
   autoMerge?: boolean;
   workerInstructions?: string;
   workerLaunchPolicy?: string;
+  workerModel?: string;
+  reviewerModel?: string;
   labels?: LabelConfig;
   automations?: RawAutomation[];
 };
@@ -70,6 +72,8 @@ export type NormalizedProject = {
   autoMerge: boolean;
   workerInstructions: string;
   workerLaunchPolicy: string;
+  workerModel: string;
+  reviewerModel: string;
   labels: NormalizedLabels;
   automations: NormalizedAutomation[];
 };
@@ -161,6 +165,8 @@ export function normalizeProject(raw: RawProject): NormalizedProject {
     autoMerge: raw.autoMerge === true,
     workerInstructions: raw.workerInstructions || DEFAULT_WORKER_INSTRUCTIONS,
     workerLaunchPolicy: raw.workerLaunchPolicy || DEFAULT_WORKER_LAUNCH_POLICY,
+    workerModel: raw.workerModel || "",
+    reviewerModel: raw.reviewerModel || "",
     labels: normalizeLabels(raw.labels || {}),
     automations: [],
   };
@@ -245,6 +251,8 @@ export function templateValues(
     autoMerge: project.autoMerge,
     workerInstructions: project.workerInstructions || "",
     workerLaunchPolicy: project.workerLaunchPolicy || "",
+    workerModel: project.workerModel || "",
+    reviewerModel: project.reviewerModel || "",
     readyLabel: project.labels.ready,
     implementLabel: project.labels.implement,
     inProgressLabel: project.labels.inProgress,
