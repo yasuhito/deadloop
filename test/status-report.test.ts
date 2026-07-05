@@ -2,17 +2,18 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { normalizeProject } from "../src/core";
+import { EXTENSION_CODE_CHANGED_WARNING, normalizeProject } from "../src/core";
 import { buildStatusSnapshot, formatStatusReport, resolveActiveProject } from "../src/status";
 
 const fixture = JSON.parse(readFileSync("test/fixtures/status/report-case.json", "utf8"));
 const projects = fixture.projects.map(normalizeProject);
 
-function report() {
+function report(warnings: string[] = []) {
   return formatStatusReport(
     buildStatusSnapshot({
       ...fixture,
       projects,
+      warnings,
     }),
   );
 }
@@ -40,5 +41,9 @@ describe("pi-looper status report", () => {
     expect(report()).toContain(
       "agent/issue-13-add-pi-looper-status-report -> /home/yasuhito/Work/herdr-worktrees/pi-looper/agent-issue-13-add-pi-looper-status-report (workspace-13)",
     );
+  });
+
+  it("shows extension code freshness warnings", () => {
+    expect(report([EXTENSION_CODE_CHANGED_WARNING])).toContain(EXTENSION_CODE_CHANGED_WARNING);
   });
 });

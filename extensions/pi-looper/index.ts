@@ -5,21 +5,21 @@ const path = require("node:path");
 const EXTENSION_NAME = "pi-looper";
 const STATUS_KEY = EXTENSION_NAME;
 const TICK_MS = 30_000;
+const MODULE_LOAD_TIME_MS = Date.now();
 const {
   DEFAULT_TIMEZONE,
   automationStateKey,
+  codeFreshnessWarning,
   getDueSlot,
   nextSlotAfter,
-  normalizeProject,
+  parseProjectsConfig,
   renderTemplate,
   resolveConfigPath,
+  resolveProjectForTick,
   sanitizeId,
   templateValues,
 } = require("../../src/core.ts");
-const {
-  buildStatusSnapshot,
-  formatStatusReport,
-} = require("../../src/status.ts");
+const { buildStatusSnapshot, formatStatusReport } = require("../../src/status.ts");
 
 const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 const STATE_DIR = path.join(CONFIG_DIR, EXTENSION_NAME);
@@ -42,6 +42,7 @@ function resolveExtensionDir() {
 }
 
 const EXTENSION_DIR = resolveExtensionDir();
+const CODE_FRESHNESS_SOURCE_PATHS = [__filename, path.resolve(__dirname, "../../src/core.ts")];
 const CONFIG_PATH = resolveConfigPath({
   env: process.env,
   stateDir: STATE_DIR,
@@ -72,18 +73,71 @@ function debugLog(...args) {
   }
 }
 
+function readConfigText() {
+  try {
+    return fs.readFileSync(CONFIG_PATH, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return "{}";
+    throw error;
+  }
+}
+
+function projectFilter() {
+  return process.env.PI_LOOPER_PROJECTS || process.env.HERDR_LOOPER_PROJECTS || "";
+}
+
+function loadProjectsResult() {
+  let text;
+  try {
+    text = readConfigText();
+  } catch (error) {
+    return { ok: false, reason: `projects.json read error: ${error?.message || error}` };
+  }
+  const result = parseProjectsConfig(text, projectFilter());
+  if (result.ok) {
+    debugLog(
+      "config",
+      CONFIG_PATH,
+      "projects",
+      result.projects.map((project) => project.id || project.repoPath),
+    );
+  } else {
+    debugLog("config", CONFIG_PATH, result.reason);
+  }
+  return result;
+}
+
 function loadProjects() {
-  const config = readJsonFile(CONFIG_PATH, { projects: [] });
-  debugLog("config", CONFIG_PATH, "projects", (config.projects || []).map((project) => project.id || project.repoPath));
-  const only = (process.env.PI_LOOPER_PROJECTS || process.env.HERDR_LOOPER_PROJECTS || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .map((value) => sanitizeId(value));
-  return (config.projects || [])
-    .map(normalizeProject)
-    .filter((project) => project.enabled)
-    .filter((project) => !only.length || only.includes(project.id));
+  const result = loadProjectsResult();
+  if (!result.ok) throw new Error(result.reason);
+  return result.projects;
+}
+
+function extensionCodeWarning() {
+  const sources = [];
+  for (const sourcePath of CODE_FRESHNESS_SOURCE_PATHS) {
+    try {
+      sources.push({ path: sourcePath, mtimeMs: fs.statSync(sourcePath).mtimeMs });
+    } catch (error) {
+      debugLog("code freshness stat failed", sourcePath, error?.message || error);
+    }
+  }
+  return codeFreshnessWarning(MODULE_LOAD_TIME_MS, sources);
+}
+
+function statusWarnings(extraWarnings = []) {
+  return [extensionCodeWarning(), ...extraWarnings].filter(Boolean);
+}
+
+function statusText(text) {
+  const warning = extensionCodeWarning();
+  return warning ? `${warning} | ${text}` : text;
+}
+
+function setLooperStatus(ctx, text) {
+  try {
+    ctx.ui.setStatus(STATUS_KEY, text == null ? undefined : statusText(text));
+  } catch {}
 }
 
 function loadState() {
@@ -127,7 +181,10 @@ function acquireSchedulerLock(project) {
     try {
       const fd = fs.openSync(lockPath, "wx");
       try {
-        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, cwd: process.cwd(), projectId: project.id, startedAt: Date.now() }));
+        fs.writeFileSync(
+          fd,
+          JSON.stringify({ pid: process.pid, cwd: process.cwd(), projectId: project.id, startedAt: Date.now() }),
+        );
       } finally {
         fs.closeSync(fd);
       }
@@ -179,15 +236,15 @@ function formatTime(ms) {
 }
 
 function updateStatus(ctx, project, state) {
-  const nextTimes = project.automations.map((automation) => {
-    const entry = state.automations[automationStateKey(project, automation)] || {};
-    const next = nextSlotAfter(entry, automation, Date.now());
-    return next ? `${automation.name.replace(new RegExp(`^${project.id}\\s+`), "")}: ${formatTime(next)}` : null;
-  }).filter(Boolean);
+  const nextTimes = project.automations
+    .map((automation) => {
+      const entry = state.automations[automationStateKey(project, automation)] || {};
+      const next = nextSlotAfter(entry, automation, Date.now());
+      return next ? `${automation.name.replace(new RegExp(`^${project.id}\\s+`), "")}: ${formatTime(next)}` : null;
+    })
+    .filter(Boolean);
   const suffix = nextTimes.length ? `${project.id} next ${nextTimes.join(" / ")}` : `${project.id} on`;
-  try {
-    ctx.ui.setStatus(STATUS_KEY, suffix);
-  } catch {}
+  setLooperStatus(ctx, suffix);
 }
 
 function activeProject(cwd, projects) {
@@ -197,21 +254,23 @@ function activeProject(cwd, projects) {
   } catch {
     resolvedCwd = cwd;
   }
-  return projects.find((project) => {
-    try {
-      const repoPath = path.resolve(project.repoPath);
-      const matches = resolvedCwd === repoPath || resolvedCwd.startsWith(`${repoPath}${path.sep}`);
-      debugLog("project candidate", project.id, "repoPath", repoPath, "cwd", resolvedCwd, "matches", matches);
-      return matches;
-    } catch (error) {
-      debugLog("project candidate error", project.id, error?.message || error);
-      return cwd === project.repoPath;
-    }
-  }) || null;
+  return (
+    projects.find((project) => {
+      try {
+        const repoPath = path.resolve(project.repoPath);
+        const matches = resolvedCwd === repoPath || resolvedCwd.startsWith(`${repoPath}${path.sep}`);
+        debugLog("project candidate", project.id, "repoPath", repoPath, "cwd", resolvedCwd, "matches", matches);
+        return matches;
+      } catch (error) {
+        debugLog("project candidate error", project.id, error?.message || error);
+        return cwd === project.repoPath;
+      }
+    }) || null
+  );
 }
 
 function automationEnv(project, automation) {
-  const env = {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     PI_LOOPER_PROJECT_ID: project.id,
     PI_LOOPER_REPO_PATH: project.repoPath,
@@ -278,7 +337,7 @@ function readPrompt(project, automation) {
   return renderTemplate(template, templateValues(project, automation, AUTOMATION_DIR));
 }
 
-async function execJson(pi, command, args, fallback, options = {}) {
+async function execJson(pi, command, args, fallback, options: { timeout?: number } = {}) {
   try {
     const result = await pi.exec(command, args, { timeout: options.timeout || 15_000 });
     if (result.code !== 0) return fallback;
@@ -303,7 +362,7 @@ function uniquePrs(prs) {
 
 function worktreesFromHerdrResult(data) {
   if (Array.isArray(data)) return data;
-  return ((data?.result || {}).worktrees || []);
+  return (data?.result || {}).worktrees || [];
 }
 
 async function gitText(pi, args) {
@@ -317,72 +376,96 @@ async function gitText(pi, args) {
 }
 
 async function buildLiveStatusReport(pi, cwd) {
-  const projects = loadProjects();
+  const projectsResult = loadProjectsResult();
+  const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
+  const warnings = statusWarnings(projectsResult.ok ? [] : [projectsResult.reason]);
   const project = activeProject(cwd, projects);
   if (!project) {
-    return formatStatusReport(buildStatusSnapshot({ cwd, projects, state }));
+    return formatStatusReport(buildStatusSnapshot({ cwd, projects, state, warnings }));
   }
 
   const issues = project.githubRepo
-    ? await execJson(pi, "gh", [
-        "issue",
-        "list",
-        "-R",
-        project.githubRepo,
-        "--state",
-        "open",
-        "--limit",
-        "200",
-        "--json",
-        "number,title,labels,updatedAt",
-      ], [])
+    ? await execJson(
+        pi,
+        "gh",
+        [
+          "issue",
+          "list",
+          "-R",
+          project.githubRepo,
+          "--state",
+          "open",
+          "--limit",
+          "200",
+          "--json",
+          "number,title,labels,updatedAt",
+        ],
+        [],
+      )
     : [];
   const openPrs = project.githubRepo
-    ? await execJson(pi, "gh", [
-        "pr",
-        "list",
-        "-R",
-        project.githubRepo,
-        "--state",
-        "open",
-        "--limit",
-        "100",
-        "--json",
-        "number,title,labels,updatedAt,headRefName,headRefOid",
-      ], [])
+    ? await execJson(
+        pi,
+        "gh",
+        [
+          "pr",
+          "list",
+          "-R",
+          project.githubRepo,
+          "--state",
+          "open",
+          "--limit",
+          "100",
+          "--json",
+          "number,title,labels,updatedAt,headRefName,headRefOid",
+        ],
+        [],
+      )
     : [];
   const mergedPrs = project.githubRepo
-    ? await execJson(pi, "gh", [
-        "pr",
-        "list",
-        "-R",
-        project.githubRepo,
-        "--state",
-        "merged",
-        "--limit",
-        "100",
-        "--json",
-        "number,title,state,mergedAt,closedAt,headRefName,headRefOid,labels",
-      ], [])
+    ? await execJson(
+        pi,
+        "gh",
+        [
+          "pr",
+          "list",
+          "-R",
+          project.githubRepo,
+          "--state",
+          "merged",
+          "--limit",
+          "100",
+          "--json",
+          "number,title,state,mergedAt,closedAt,headRefName,headRefOid,labels",
+        ],
+        [],
+      )
     : [];
   const closedPrs = project.githubRepo
-    ? await execJson(pi, "gh", [
-        "pr",
-        "list",
-        "-R",
-        project.githubRepo,
-        "--state",
-        "closed",
-        "--limit",
-        "100",
-        "--json",
-        "number,title,state,mergedAt,closedAt,headRefName,headRefOid,labels",
-      ], [])
+    ? await execJson(
+        pi,
+        "gh",
+        [
+          "pr",
+          "list",
+          "-R",
+          project.githubRepo,
+          "--state",
+          "closed",
+          "--limit",
+          "100",
+          "--json",
+          "number,title,state,mergedAt,closedAt,headRefName,headRefOid,labels",
+        ],
+        [],
+      )
     : [];
 
   const herdrData = project.repoPath
-    ? await execJson(pi, "herdr", ["worktree", "list", "--cwd", project.repoPath, "--json"], { result: { worktrees: [] } })
+    ? await execJson(pi, "herdr", ["worktree", "list", "--cwd", project.repoPath, "--json"], {
+        result: { worktrees: [] },
+      })
     : { result: { worktrees: [] } };
   const worktrees = worktreesFromHerdrResult(herdrData);
   const gitStatuses = {};
@@ -396,17 +479,20 @@ async function buildLiveStatusReport(pi, cwd) {
     if (head !== undefined) gitHeads[worktreePath] = head.trim();
   }
 
-  return formatStatusReport(buildStatusSnapshot({
-    cwd,
-    projects,
-    state,
-    issues,
-    openPrs,
-    closedPrs: uniquePrs([...(mergedPrs || []), ...(closedPrs || [])]),
-    worktrees,
-    gitStatuses,
-    gitHeads,
-  }));
+  return formatStatusReport(
+    buildStatusSnapshot({
+      cwd,
+      projects,
+      state,
+      issues,
+      openPrs,
+      closedPrs: uniquePrs([...(mergedPrs || []), ...(closedPrs || [])]),
+      worktrees,
+      gitStatuses,
+      gitHeads,
+      warnings,
+    }),
+  );
 }
 
 async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
@@ -423,9 +509,7 @@ async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
   entry.schedule = automation.schedule;
   saveState(state);
 
-  try {
-    ctx.ui.setStatus(STATUS_KEY, `precheck: ${automation.name}`);
-  } catch {}
+  setLooperStatus(ctx, `precheck: ${automation.name}`);
 
   let result;
   try {
@@ -497,12 +581,30 @@ export default function (pi) {
   let ownsLock = false;
 
   async function tick(ctx) {
-    if (!active?.project) return;
+    if (!active) return;
     if (running) return;
     if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
     if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return;
 
-    const project = active.project;
+    let configText;
+    try {
+      configText = readConfigText();
+    } catch (error) {
+      setLooperStatus(ctx, `skipped: projects.json read error: ${error?.message || error}`);
+      return;
+    }
+    const projectResult = resolveProjectForTick({
+      cwd: ctx.cwd,
+      configText,
+      only: projectFilter(),
+      lockedProjectId: active.project.id,
+    });
+    if (!projectResult.ok) {
+      setLooperStatus(ctx, `skipped: ${projectResult.reason}`);
+      return;
+    }
+    const project = projectResult.project;
+
     const state = loadState();
     updateStatus(ctx, project, state);
 
@@ -528,11 +630,17 @@ export default function (pi) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    const projects = loadProjects();
+    if (ctx.mode === "print" || ctx.mode === "json") return;
+    let projects;
+    try {
+      projects = loadProjects();
+    } catch (error) {
+      setLooperStatus(ctx, `skipped: ${error?.message || error}`);
+      return;
+    }
     const project = activeProject(ctx.cwd, projects);
     debugLog("session_start", "cwd", ctx.cwd, "mode", ctx.mode, "project", project?.id || null);
     if (!project) return;
-    if (ctx.mode === "print" || ctx.mode === "json") return;
     if (
       process.env.PI_LOOPER === "off" ||
       process.env.PI_LOOPER_AUTOMATIONS === "off" ||
@@ -546,9 +654,7 @@ export default function (pi) {
     ownsLock = lock.acquired;
     active = { project, lockPath: lock.lockPath };
     if (!ownsLock) {
-      try {
-        ctx.ui.setStatus(STATUS_KEY, `${project.id} standby: owner pid ${lock.owner ?? "unknown"}`);
-      } catch {}
+      setLooperStatus(ctx, `${project.id} standby: owner pid ${lock.owner ?? "unknown"}`);
       return;
     }
 
@@ -583,8 +689,6 @@ export default function (pi) {
       ownsLock = false;
     }
     active = null;
-    try {
-      ctx.ui.setStatus(STATUS_KEY, undefined);
-    } catch {}
+    setLooperStatus(ctx, undefined);
   });
 }

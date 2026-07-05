@@ -139,7 +139,60 @@ git fetch origin <headRefName>
 herdr worktree create --cwd {{repoPath}} --branch <headRefName> --base origin/<headRefName> --label "review pr #<PR>" --no-focus --json
 ```
 
-### 7. レビューエージェントの起動
+### 7. PR branch update gate
+
+レビューエージェントを起動する前に、PR branch が `{{baseBranch}}` に追従できる状態か確認する。判断の決定的な部分は helper に任せる。
+
+```bash
+cd <worktreePath>
+git fetch origin
+git fetch origin <headRefName>
+update_json=$(python3 {{automationDir}}/pr-branch-update-decision.py --repo <worktreePath> --head HEAD --base {{baseBranch}} --expected-head-ref origin/<headRefName>)
+update_action=$(printf '%s' "$update_json" | jq -r '.action')
+```
+
+- `update_action=blocked`: worktree が clean ではない、または local `HEAD` が `origin/<headRefName>` と一致しない。`{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に理由をコメントして終了する。
+- `update_action=no_update`: そのままレビューエージェントの起動へ進む。
+- `update_action=mechanical_update`: エージェントを起動せず、司令塔が機械的に更新する。helper が clean worktree と `origin/<headRefName>` との一致を確認済みの場合だけ実行する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら branch update commit を作って push する。この実行回ではマージせず、`{{reviewingLabel}}` を外して次回に回す。
+- `update_action=delegate_worker`: 衝突あり。レビューエージェントとは別に branch update worker を 1 体だけ起動し、PR branch 更新を委譲する。同一 PR に対する後続 worker を多重起動してはならない。既存の branch update worker がいる場合は、新しい worker を起動せず、その worker の promise ファイルを待ってから次を判断する。branch update worker を起動する場合も、worker 名と同じ label の専用タブを作ってから `herdr agent start ... --tab <tabId> --no-focus` で起動し、`--workspace <workspaceId>` 直指定の split 起動はしない。
+
+branch update worker を起動する前に、起動ごとに一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` として採番する。採番した promise ファイルパスは衝突解消 worker prompt に必ず含める。
+
+衝突解消 worker prompt には必ず以下を含める。
+
+```markdown
+PR branch を base branch に追従させてください。
+
+対象:
+- GitHub repo: {{githubRepo}}
+- PR: #<PR> <title>
+- PR URL: <url>
+- Head branch: <headRefName>
+- Base branch: {{baseBranch}}
+
+契約:
+- `<headRefName>` に `{{baseBranch}}` を取り込み、衝突を解消してください。
+- 解消後に `{{checkCommand}}` を実行し、成功させてください。
+- conventional commit で branch update / conflict resolution commit を作り、push してください。
+
+禁止事項:
+- issue を閉じない。
+- ラベルを編集しない。
+- PR をマージしない。
+- main workspace を編集しない。
+- 破壊的な git 操作をしない。
+- 無関係な変更を戻さない。
+
+完了報告:
+- 作業終了時は、司令塔が指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
+- 成功時は `{"status":"complete","reason":"","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗、仕様不一致、危険変更、判断不能なら `{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
+```
+
+衝突解消 worker の監視も `extract-worker-promise.py --file "<promiseFile>"` を使う。`blocked` / `invalid` / promise 不在の場合は `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に理由をコメントして終了する。`complete` の場合もこの実行回ではマージせず、`{{reviewingLabel}}` を外して次回に回す。
+
+### 8. レビューエージェントの起動
 
 外部レビューコメントがある場合も、外部レビューが無く代替レビューが必要な場合も、PR branch worktree でレビューエージェントを起動する。司令塔自身は指摘の取捨選択や修正をしない。
 
@@ -190,14 +243,16 @@ PR #<PR> をレビューしてください。
 - 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
 ```
 
-起動コマンド例。`<modelOption>` はレビューエージェントのモデル指定が空でなければ `--model {{reviewerModel}}`、空なら何も置かない。
+起動コマンド例。まずレビューエージェント名と同じ label の専用タブを作り、出力 JSON の `result.tab.tab_id` を `<tabId>` として保存する。その後、`herdr agent start ... --tab <tabId> --no-focus` で起動する。`herdr agent start` は `--json` を受け付けないため付けない。`<modelOption>` はレビューエージェントのモデル指定が空でなければ `--model {{reviewerModel}}`、空なら何も置かない。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。後続のレビューエージェントを起動する場合も、同じ手順で専用タブを作ってから `--tab` 指定で起動する。
 
 ```bash
 reviewer_name="{{projectId}}-pr-<PR>-reviewer"
-herdr agent start "$reviewer_name" --cwd <worktreePath> --workspace <workspaceId> --no-focus -- pi --name "$reviewer_name" <modelOption> --thinking medium @<promptFile>
+tab_output=$(herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "$reviewer_name" --no-focus)
+tab_id=$(printf '%s' "$tab_output" | jq -r '.result.tab.tab_id')
+herdr agent start "$reviewer_name" --cwd <worktreePath> --tab "$tab_id" --no-focus -- pi --name "$reviewer_name" <modelOption> --thinking medium @<promptFile>
 ```
 
-### 8. レビューエージェントの監視
+### 9. レビューエージェントの監視
 
 採番した promise ファイルだけを、唯一の完了判定の権威として扱う。Herdr の agent status は監視ヒントに限り、完了判定の権威にしない。
 
@@ -224,7 +279,7 @@ helper status が `complete` の場合:
 5. レビューエージェントが push して `head_sha_before` と最新 head SHA が違う場合は、`{{reviewingLabel}}` を外し、`{{reviewLabel}}` は残す。Copilot 再レビューを依頼できるなら依頼し、この実行回ではマージしない。
 6. head SHA が変わっていない場合だけ、次の最終判定へ進む。
 
-### 9. Final disposition
+### 10. Final disposition
 
 レビューエージェントが最新 HEAD に対して完了し、次の条件をすべて満たす場合だけ、`autoMerge` の設定に応じてマージまたは人間確認へ進む。
 

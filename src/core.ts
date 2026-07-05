@@ -1,3 +1,5 @@
+import path from "node:path";
+
 export const DEFAULT_TIMEZONE = "Asia/Tokyo";
 
 export const DEFAULT_WORKER_INSTRUCTIONS = "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。";
@@ -86,12 +88,23 @@ export type AutomationStateEntry = {
 
 export type TemplateValueMap = Record<string, unknown>;
 
+export const EXTENSION_CODE_CHANGED_WARNING = "⚠ extension code changed since load — restart required";
+
 export type ConfigPathOptions = {
   env?: Record<string, string | undefined>;
   stateDir: string;
   extensionDir: string;
   exists?: (path: string) => boolean;
   joinPath?: (...parts: string[]) => string;
+};
+
+export type ProjectConfigResolution = { ok: true; projects: NormalizedProject[] } | { ok: false; reason: string };
+
+export type TickProjectResolution = { ok: true; project: NormalizedProject } | { ok: false; reason: string };
+
+export type CodeSourceMtime = {
+  path: string;
+  mtimeMs: number;
 };
 
 export function resolveConfigPath(options: ConfigPathOptions): string {
@@ -146,10 +159,21 @@ export function normalizeAutomation(
     precheckTimeoutSeconds: Number.isFinite(automation.precheckTimeoutSeconds)
       ? automation.precheckTimeoutSeconds!
       : 60,
-    initialLastScheduledAt: Number.isFinite(automation.initialLastScheduledAt)
-      ? automation.initialLastScheduledAt!
-      : 0,
+    initialLastScheduledAt: Number.isFinite(automation.initialLastScheduledAt) ? automation.initialLastScheduledAt! : 0,
   };
+}
+
+function filterProjectIds(only?: string | string[]): string[] {
+  const values = Array.isArray(only) ? only : String(only || "").split(",");
+  return values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => sanitizeId(value));
+}
+
+function isPathInside(child: string, parent: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 export function normalizeProject(raw: RawProject): NormalizedProject {
@@ -172,6 +196,54 @@ export function normalizeProject(raw: RawProject): NormalizedProject {
   };
   project.automations = (raw.automations || []).map((automation) => normalizeAutomation(project, automation));
   return project;
+}
+
+export function projectsFromConfig(config: unknown, only?: string | string[]): NormalizedProject[] {
+  const onlyIds = filterProjectIds(only);
+  const projects =
+    config && typeof config === "object" && Array.isArray((config as { projects?: unknown }).projects)
+      ? (config as { projects: RawProject[] }).projects
+      : [];
+  return projects
+    .map(normalizeProject)
+    .filter((project) => project.enabled)
+    .filter((project) => !onlyIds.length || onlyIds.includes(project.id));
+}
+
+export function parseProjectsConfig(text: string, only?: string | string[]): ProjectConfigResolution {
+  try {
+    return { ok: true, projects: projectsFromConfig(JSON.parse(text || "{}"), only) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, reason: `projects.json parse error: ${message}` };
+  }
+}
+
+export function resolveProjectForTick(input: {
+  cwd: string;
+  configText: string;
+  only?: string | string[];
+  lockedProjectId?: string;
+}): TickProjectResolution {
+  const config = parseProjectsConfig(input.configText, input.only);
+  if (config.ok === false) return { ok: false, reason: config.reason };
+  const project = config.projects.find((candidate) => {
+    if (!candidate.repoPath) return false;
+    try {
+      return isPathInside(input.cwd, candidate.repoPath);
+    } catch {
+      return input.cwd === candidate.repoPath;
+    }
+  });
+  if (!project) return { ok: false, reason: "active project is not present in projects.json" };
+  if (input.lockedProjectId && project.id !== input.lockedProjectId) {
+    return { ok: false, reason: "active project changed since scheduler lock was acquired" };
+  }
+  return { ok: true, project };
+}
+
+export function codeFreshnessWarning(loadedAtMs: number, sources: CodeSourceMtime[]): string | null {
+  return sources.some((source) => source.mtimeMs > loadedAtMs) ? EXTENSION_CODE_CHANGED_WARNING : null;
 }
 
 export function parseEveryMinutes(schedule: unknown): number | null {

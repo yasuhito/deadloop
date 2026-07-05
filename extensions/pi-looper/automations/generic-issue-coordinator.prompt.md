@@ -7,7 +7,8 @@
 - Base branch: `{{baseBranch}}`
 - Herdr CLI: `herdr`
 - Worker worktree: `herdr worktree create --cwd {{repoPath}} --branch <branch> --base {{baseBranch}} --label <label> --no-focus --json`
-- Worker 起動: `herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --workspace <workspaceId> --no-focus -- pi --name "{{projectId}}-issue-<N>-worker" <launchOptions> @<promptFile>`
+- Worker タブ作成: `herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "{{projectId}}-issue-<N>-worker" --no-focus`
+- Worker 起動: タブ作成の出力 JSON から `result.tab.tab_id` を取得し、`herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --tab <tabId> --no-focus -- pi --name "{{projectId}}-issue-<N>-worker" <launchOptions> @<promptFile>`
 - Worker モデル指定: "{{workerModel}}"（operator の設定。空でなければ必ず `--model {{workerModel}}` を付ける。空なら `--model` を付けない）
 - Worker 起動オプション方針: {{workerLaunchPolicy}}
 - 同時実行: 1件だけ
@@ -145,7 +146,7 @@ Worker を起動する前に、issue の難易度から `<launchOptions>` を自
 
 Worker の Herdr agent name は issue ごとに一意にし、既定名 `pi` のまま起動しない。例: `{{projectId}}-issue-<N>-worker`。
 
-`herdr worktree create --no-focus` と `herdr agent start ... --no-focus` を使い、ユーザーの表示中タブを奪わない。
+`herdr worktree create --no-focus`、`herdr tab create --no-focus`、`herdr agent start ... --tab <tabId> --no-focus` を使い、ユーザーの表示中タブを奪わない。Worker はまず `herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "{{projectId}}-issue-<N>-worker" --no-focus` で専用タブを作り、出力 JSON の `result.tab.tab_id` を `herdr agent start ... --tab <tabId>` に渡して起動する。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。検証失敗やブランチ更新などで後続 Worker に再対応を依頼する場合も、同じ手順で Worker 名と同じ label の専用タブを作ってから `--tab` 指定で起動する。
 
 ### 6. Watch
 
@@ -181,7 +182,59 @@ BLOCKED の場合:
 - issue に、ブロッカー、確認済み事項、次に必要な判断を日本語でコメントする
 - push / PR 作成はしない
 
-### 7. Verify and PR
+### 7. PR branch update gate
+
+COMPLETE の場合、PR 作成前に worker branch が `{{baseBranch}}` を取り込める状態か確認する。判断の決定的な部分は helper に任せる。
+
+```bash
+cd <worktreePath>
+git fetch origin
+git fetch origin <branch>
+update_json=$(python3 {{automationDir}}/pr-branch-update-decision.py --repo <worktreePath> --head HEAD --base {{baseBranch}})
+update_action=$(printf '%s' "$update_json" | jq -r '.action')
+```
+
+- `update_action=blocked`: worktree が clean ではない。PR を作らず、Issue を `{{blockedLabel}}` にして理由をコメントする。
+- `update_action=no_update`: そのまま検証へ進む。
+- `update_action=mechanical_update`: worker を起動せず、司令塔が機械的に更新する。helper が clean worktree を確認済みの場合だけ実行する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら coordinator が branch update commit を作る。
+- `update_action=delegate_worker`: 衝突あり。worker を 1 体だけ起動して PR branch 更新を委譲する。同一 branch / 同一 PR 相当の更新について後続 worker を多重起動してはならない。既存の branch update worker がいる場合は、新しい worker を起動せず、その worker の promise ファイルを待ってから次の判断を行う。
+
+branch update worker を起動する前に、起動ごとに一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` として採番する。採番した promise ファイルパスは衝突解消 worker prompt に必ず含める。
+
+衝突解消 worker prompt には必ず以下を含める。
+
+```markdown
+PR branch を base branch に追従させてください。
+
+対象:
+- GitHub repo: {{githubRepo}}
+- PR: 未作成（Issue #<N> の worker branch）
+- Head branch: <branch>
+- Base branch: {{baseBranch}}
+
+契約:
+- `<branch>` に `{{baseBranch}}` を取り込み、衝突を解消してください。
+- 解消後に `{{checkCommand}}` を実行し、成功させてください。
+- conventional commit で branch update / conflict resolution commit を作ってください。
+
+禁止事項:
+- push しない。
+- label を編集しない。
+- issue / PR にコメントしない。
+- PR を作らない。
+- issue を閉じない。
+- unrelated な変更を戻さない。
+
+完了報告:
+- 作業終了時は、司令塔が指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
+- 成功時は `{"status":"complete","reason":"","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗、仕様不足、危険変更、または判断不能なら `{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
+```
+
+衝突解消 worker の監視も `extract-worker-promise.py --file "<promiseFile>"` を使う。`blocked` / `invalid` / promise 不在の場合は PR を作らず、Issue を `{{blockedLabel}}` にして理由をコメントする。
+
+### 8. Verify and PR
 
 COMPLETE の場合、worker worktree で次を行う。
 
