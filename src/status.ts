@@ -1,11 +1,6 @@
 import path from "node:path";
 
-import {
-  automationStateKey,
-  nextSlotAfter,
-  type NormalizedProject,
-  type AutomationStateEntry,
-} from "./core";
+import { automationStateKey, nextSlotAfter, type NormalizedProject, type AutomationStateEntry } from "./core";
 
 export type LabelLike = string | { name?: string | null };
 
@@ -42,6 +37,7 @@ export type StatusReportInput = {
   worktrees?: HerdrWorktree[];
   gitStatuses?: Record<string, string>;
   gitHeads?: Record<string, string>;
+  warnings?: string[];
   nowMs?: number;
 };
 
@@ -70,6 +66,7 @@ export type CleanupCandidate = {
 export type StatusSnapshot = {
   project: NormalizedProject | null;
   cwd: string;
+  warnings: string[];
   automations: AutomationStatus[];
   issues: {
     eligible: StatusLineItem[];
@@ -142,11 +139,7 @@ function isClean(status: unknown): boolean {
   return String(status || "").trim() === "";
 }
 
-function localHeadMatchesClosedPr(
-  worktree: HerdrWorktree,
-  pr: GithubItem,
-  gitHeads: Record<string, string>,
-): boolean {
+function localHeadMatchesClosedPr(worktree: HerdrWorktree, pr: GithubItem, gitHeads: Record<string, string>): boolean {
   const expected = String(pr.headRefOid || "");
   const worktreePath = String(worktree.path || "");
   if (!expected || !worktreePath) return false;
@@ -203,10 +196,7 @@ function selectCleanupCandidates(
   return candidates;
 }
 
-function selectStaleLeftovers(
-  worktrees: HerdrWorktree[],
-  cleanupCandidates: CleanupCandidate[],
-): HerdrWorktree[] {
+function selectStaleLeftovers(worktrees: HerdrWorktree[], cleanupCandidates: CleanupCandidate[]): HerdrWorktree[] {
   const cleanupPaths = new Set(cleanupCandidates.map((candidate) => candidate.path).filter(Boolean));
   return worktrees.filter((worktree) => worktree.path && cleanupPaths.has(worktree.path));
 }
@@ -218,6 +208,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
     return {
       project: null,
       cwd: input.cwd,
+      warnings: input.warnings || [],
       automations: [],
       issues: { eligible: [], inProgress: [], blockedOrNeedsInfo: [] },
       prs: { reviewTarget: [], reviewing: [] },
@@ -241,7 +232,14 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
   const issues = input.issues || [];
   const eligible = issues.filter((issue) => {
     const labels = labelsOf(issue);
-    return labels.has(project.labels.ready) && labels.has(project.labels.implement) && !labels.has(project.labels.inProgress) && !labels.has(project.labels.blocked) && !labels.has(project.labels.needsInfo) && !labels.has(project.labels.wontfix);
+    return (
+      labels.has(project.labels.ready) &&
+      labels.has(project.labels.implement) &&
+      !labels.has(project.labels.inProgress) &&
+      !labels.has(project.labels.blocked) &&
+      !labels.has(project.labels.needsInfo) &&
+      !labels.has(project.labels.wontfix)
+    );
   });
   const inProgress = issues.filter((issue) => labelsOf(issue).has(project.labels.inProgress));
   const blockedOrNeedsInfo = issues.filter((issue) => {
@@ -265,6 +263,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
   return {
     project,
     cwd: input.cwd,
+    warnings: input.warnings || [],
     automations,
     issues: {
       eligible: eligible.map(lineItem),
@@ -316,7 +315,11 @@ function formatCleanupCandidates(candidates: CleanupCandidate[]): string {
 
 export function formatStatusReport(snapshot: StatusSnapshot): string {
   if (!snapshot.project) {
-    return [`pi-looper status: no active project`, `cwd: ${snapshot.cwd}`].join("\n");
+    return [
+      `pi-looper status: no active project`,
+      `cwd: ${snapshot.cwd}`,
+      ...snapshot.warnings.map((warning) => `warning: ${warning}`),
+    ].join("\n");
   }
 
   const project = snapshot.project;
@@ -324,6 +327,7 @@ export function formatStatusReport(snapshot: StatusSnapshot): string {
     `pi-looper status: ${project.id}`,
     `repo: ${project.githubRepo || "unknown"}`,
     `cwd: ${snapshot.cwd}`,
+    ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     `autoMerge: ${project.autoMerge ? "on" : "off"}`,
     "",
     "Automations:",
