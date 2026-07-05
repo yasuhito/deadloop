@@ -186,10 +186,13 @@ PR #<PR> をレビューしてください。
 - 失敗、仕様不一致、危険変更、判断不能なら、最後に必ず `<promise>BLOCKED: 理由</promise>` を日本語で出力してください。
 ```
 
-起動コマンド例。`herdr agent start` の出力にある `result.agent.pane_id` を `<paneId>` として保存する。`herdr agent start` は `--json` を受け付けないため付けない。`<modelOption>` は Review worker モデル指定が空でなければ `--model {{reviewerModel}}`、空なら何も置かない。
+起動コマンド例。まず review worker 名と同じ label の専用タブを作り、出力 JSON の `result.tab.tab_id` を `<tabId>` として保存する。その後、`herdr agent start ... --tab <tabId> --no-focus` で起動し、出力にある `result.agent.pane_id` を `<paneId>` として保存する。`herdr agent start` は `--json` を受け付けないため付けない。`<modelOption>` は Review worker モデル指定が空でなければ `--model {{reviewerModel}}`、空なら何も置かない。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。後続の review worker を起動する場合も、同じ手順で専用タブを作ってから `--tab` 指定で起動する。
 
 ```bash
-start_output=$(herdr agent start pi --cwd <worktreePath> --workspace <workspaceId> --no-focus -- pi --name "{{projectId}}-pr-<PR>-reviewer" <modelOption> --thinking medium @<promptFile>)
+reviewer_name="{{projectId}}-pr-<PR>-reviewer"
+tab_output=$(herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "$reviewer_name" --no-focus)
+tab_id=$(printf '%s' "$tab_output" | jq -r '.result.tab.tab_id')
+start_output=$(herdr agent start "$reviewer_name" --cwd <worktreePath> --tab "$tab_id" --no-focus -- pi --name "$reviewer_name" <modelOption> --thinking medium @<promptFile>)
 pane_id=$(printf '%s' "$start_output" | jq -r '.result.agent.pane_id')
 ```
 
