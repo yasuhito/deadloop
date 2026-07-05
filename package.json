@@ -7,7 +7,7 @@
   "type": "commonjs",
   "scripts": {
     "test": "vitest run",
-    "lint": "biome check package.json biome.json --files-ignore-unknown=true && biome lint src extensions/pi-looper/index.ts test/*.ts"
+    "lint": "biome check package.json biome.json test/ci-workflow.test.ts test/package-manifest.test.ts --files-ignore-unknown=true && biome lint src extensions/pi-looper/index.ts test/*.ts --files-ignore-unknown=true"
   },
   "files": [
     "AGENTS.md",
