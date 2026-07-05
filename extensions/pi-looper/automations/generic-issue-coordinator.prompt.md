@@ -7,7 +7,8 @@
 - Base branch: `{{baseBranch}}`
 - Herdr CLI: `herdr`
 - Worker worktree: `herdr worktree create --cwd {{repoPath}} --branch <branch> --base {{baseBranch}} --label <label> --no-focus --json`
-- Worker 起動: `herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --workspace <workspaceId> --no-focus -- pi --name "{{projectId}}-issue-<N>-worker" <launchOptions> @<promptFile>`
+- Worker タブ作成: `herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "{{projectId}}-issue-<N>-worker" --no-focus`
+- Worker 起動: タブ作成の出力 JSON から `result.tab.tab_id` を取得し、`herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --tab <tabId> --no-focus -- pi --name "{{projectId}}-issue-<N>-worker" <launchOptions> @<promptFile>`
 - Worker モデル指定: "{{workerModel}}"（operator の設定。空でなければ必ず `--model {{workerModel}}` を付ける。空なら `--model` を付けない）
 - Worker 起動オプション方針: {{workerLaunchPolicy}}
 - 同時実行: 1件だけ
@@ -141,7 +142,7 @@ Worker を起動する前に、issue の難易度から `<launchOptions>` を自
 
 Worker の Herdr agent name は issue ごとに一意にし、既定名 `pi` のまま起動しない。例: `{{projectId}}-issue-<N>-worker`。
 
-`herdr worktree create --no-focus` と `herdr agent start ... --no-focus` を使い、ユーザーの表示中タブを奪わない。
+`herdr worktree create --no-focus`、`herdr tab create --no-focus`、`herdr agent start ... --tab <tabId> --no-focus` を使い、ユーザーの表示中タブを奪わない。Worker はまず `herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "{{projectId}}-issue-<N>-worker" --no-focus` で専用タブを作り、出力 JSON の `result.tab.tab_id` を `herdr agent start ... --tab <tabId>` に渡して起動する。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。検証失敗やブランチ更新などで後続 Worker に再対応を依頼する場合も、同じ手順で Worker 名と同じ label の専用タブを作ってから `--tab` 指定で起動する。
 
 ### 6. Watch
 
