@@ -25,7 +25,10 @@ function runExternalReviewGate(fixtureName: string, now = "2026-07-04T00:30:00Z"
   return JSON.parse(result.stdout).action;
 }
 
-function runPrecheck(fixtureName: string, options: { autoMerge?: boolean; now?: string } = {}): number | null {
+function runPrecheck(
+  fixtureName: string,
+  options: { autoMerge?: boolean; now?: string; projectId?: string; agentsFixture?: string } = {},
+): number | null {
   const tempRoot = mkdtempSync(path.join(tmpdir(), "pi-looper-precheck-"));
   try {
     const fakeGhPath = path.join(tempRoot, "gh");
@@ -45,6 +48,23 @@ function runPrecheck(fixtureName: string, options: { autoMerge?: boolean; now?: 
     );
     chmodSync(fakeGhPath, 0o755);
 
+    const fakeHerdrPath = path.join(tempRoot, "herdr");
+    writeFileSync(
+      fakeHerdrPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "if [ \"${1:-}\" = \"agent\" ] && [ \"${2:-}\" = \"list\" ]; then",
+        "  cat \"${PI_LOOPER_TEST_HERDR_FIXTURE:?}\"",
+        "  exit 0",
+        "fi",
+        "echo \"unexpected herdr invocation: $*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeHerdrPath, 0o755);
+
     const result = spawnSync("bash", ["extensions/pi-looper/automations/pr-reviewer.precheck.sh"], {
       cwd: process.cwd(),
       env: {
@@ -52,6 +72,7 @@ function runPrecheck(fixtureName: string, options: { autoMerge?: boolean; now?: 
         PATH: `${tempRoot}:${process.env.PATH || ""}`,
         PI_LOOPER_REPO_PATH: process.cwd(),
         PI_LOOPER_GITHUB_REPO: "owner/repo",
+        PI_LOOPER_PROJECT_ID: options.projectId || "demo",
         PI_LOOPER_AUTO_MERGE: options.autoMerge ? "1" : "0",
         PI_LOOPER_REVIEW_LABEL: "agent:review",
         PI_LOOPER_REVIEWING_LABEL: "agent:reviewing",
@@ -60,6 +81,11 @@ function runPrecheck(fixtureName: string, options: { autoMerge?: boolean; now?: 
         PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS: "1800",
         PI_LOOPER_NOW: options.now || "2026-07-04T00:30:00Z",
         PI_LOOPER_TEST_FIXTURE: path.join(process.cwd(), "test/fixtures/pr-reviewer", fixtureName),
+        PI_LOOPER_TEST_HERDR_FIXTURE: path.join(
+          process.cwd(),
+          "test/fixtures/pr-reviewer",
+          options.agentsFixture || "agents-empty.json",
+        ),
       },
       encoding: "utf8",
     });
@@ -115,8 +141,12 @@ describe("PR reviewer precheck", () => {
     expect(runExternalReviewGate("precheck-stale-external-marker.json")).toBe("fallback_review");
   });
 
-  it("skips PRs with the reviewing label", () => {
-    expect(runPrecheck("precheck-reviewing.json")).toBe(1);
+  it("reclaims a stale reviewing PR when no reviewer agent is running", () => {
+    expect(runPrecheck("precheck-reviewing.json", { agentsFixture: "agents-empty.json" })).toBe(0);
+  });
+
+  it("skips a reviewing PR while its reviewer agent is working", () => {
+    expect(runPrecheck("precheck-reviewing.json", { agentsFixture: "agents-reviewer-working.json" })).toBe(1);
   });
 
   it("skips PRs with the blocked label", () => {
