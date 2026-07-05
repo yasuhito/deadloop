@@ -7,7 +7,8 @@
 - Base branch: `{{baseBranch}}`
 - Herdr CLI: `herdr`
 - Worker worktree: `herdr worktree create --cwd {{repoPath}} --branch <branch> --base {{baseBranch}} --label <label> --no-focus --json`
-- Worker 起動: `herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --workspace <workspaceId> --no-focus -- pi --name "{{projectId}}-issue-<N>-worker" <launchOptions> @<promptFile>`
+- Worker タブ作成: `herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "{{projectId}}-issue-<N>-worker" --no-focus`
+- Worker 起動: タブ作成の出力 JSON から `result.tab.tab_id` を取得し、`herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --tab <tabId> --no-focus -- pi --name "{{projectId}}-issue-<N>-worker" <launchOptions> @<promptFile>`
 - Worker モデル指定: "{{workerModel}}"（operator の設定。空でなければ必ず `--model {{workerModel}}` を付ける。空なら `--model` を付けない）
 - Worker 起動オプション方針: {{workerLaunchPolicy}}
 - 同時実行: 1件だけ
@@ -43,7 +44,7 @@
 ## Blocked 報告フォーマット
 
 `{{blockedLabel}}` を付けて issue にコメントするすべての経路では、コメント本文に少なくとも次の節をこの順で含める。
-テンプレート内のコマンド例は `{{githubRepo}}`、`{{repoPath}}`、`{{automationDir}}`、`{{blockedLabel}}`、`{{implementLabel}}` などの placeholder を使って定義する。コメント投稿時は、実際の issue 番号、pane ID、workspace ID、worktree path、branch 名などの実行時の値を司令塔が確認して埋め、operator がそのままコピーできるコマンドとして書く。
+テンプレート内のコマンド例は `{{githubRepo}}`、`{{repoPath}}`、`{{automationDir}}`、`{{blockedLabel}}`、`{{implementLabel}}` などの placeholder を使って定義する。コメント投稿時は、実際の issue 番号、promise ファイル、pane ID、workspace ID、worktree path、branch 名などの実行時の値を司令塔が確認して埋め、operator がそのままコピーできるコマンドとして書く。
 復旧手順は operator が原因を確認し、必要な修正を終えたあとに使うもの。`{{blockedLabel}}` は sticky なので、原因確認なしに再実行しない。
 
 ````markdown
@@ -55,7 +56,8 @@
 1. 原因を確認する。
    ```bash
    gh issue view <N> -R {{githubRepo}} --comments
-   python3 {{automationDir}}/extract-worker-promise.py --pane-id <paneId> || true
+   python3 {{automationDir}}/extract-worker-promise.py --file <promiseFile> || true
+   herdr agent list
    herdr pane list
    ```
 2. 残骸（worktree / branch）を確認し、安全に掃除する。
@@ -133,6 +135,8 @@ gh issue edit <N> -R {{githubRepo}} --remove-label "{{implementLabel}}" --add-la
 
 branch 名は `agent/issue-<N>-<slug>`。slug は issue title から ASCII 小文字、数字、ハイフンだけの短い文字列にする。空なら `task`。
 
+Worker を起動する前に、起動ごとに一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` として採番する。`uuid` は `python3 -c 'import uuid; print(uuid.uuid4())'` などで作る。`<worktreePath>/.pi-looper` を作成し、同じパスの古いファイルがあれば削除してから起動する。採番した promise ファイルパスは Worker prompt に必ず含める。
+
 Worker prompt には必ず以下を含める。
 
 ```markdown
@@ -159,9 +163,11 @@ Issue #<N> を実装してください。
 - issue を閉じない。
 - unrelated な変更を戻さない。
 
-完了出力:
-- 完了したら最後に必ず `<promise>COMPLETE</promise>` を出力してください。
-- 失敗、仕様不足、危険変更、または判断不能なら、最後に必ず `<promise>BLOCKED: 理由</promise>` を日本語で出力してください。
+完了報告:
+- 作業終了時は、司令塔が指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
+- 成功時は `{"status":"complete","reason":"","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗、仕様不足、危険変更、または判断不能なら `{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
 ```
 
 Worker を起動する前に、issue の難易度から `<launchOptions>` を自分で判断する。方針は次の順に優先する。
@@ -176,39 +182,34 @@ Worker を起動する前に、issue の難易度から `<launchOptions>` を自
 
 Worker の Herdr agent name は issue ごとに一意にし、既定名 `pi` のまま起動しない。例: `{{projectId}}-issue-<N>-worker`。
 
-`herdr worktree create --no-focus` と `herdr agent start ... --no-focus` を使い、ユーザーの表示中タブを奪わない。
+`herdr worktree create --no-focus`、`herdr tab create --no-focus`、`herdr agent start ... --tab <tabId> --no-focus` を使い、ユーザーの表示中タブを奪わない。Worker はまず `herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "{{projectId}}-issue-<N>-worker" --no-focus` で専用タブを作り、出力 JSON の `result.tab.tab_id` を `herdr agent start ... --tab <tabId>` に渡して起動する。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。検証失敗やブランチ更新などで後続 Worker に再対応を依頼する場合も、同じ手順で Worker 名と同じ label の専用タブを作ってから `--tab` 指定で起動する。
 
 ### 6. Watch
 
-Worker の Pi session JSONL を読み、`role: assistant` の通常テキストに出た promise だけを採用する。pane 文字列、起動時 prompt、`thinking`、tool output、単純な `grep '<promise>'` は誤検出・見落としの原因になるため、判定に使わない。
+採番した promise ファイルだけを、唯一の完了判定の権威として扱う。Herdr の agent status は監視ヒントに限り、完了判定の権威にしない。
 
-promise 検出には必ず付属 helper を使う。
+promise ファイルの確認には必ず付属 helper を使う。
 
 ```bash
-# <paneId> は `herdr agent start` の result.agent.pane_id
-python3 {{automationDir}}/extract-worker-promise.py --pane-id <paneId>
+python3 {{automationDir}}/extract-worker-promise.py --file "<promiseFile>"
 ```
 
 helper の出力例:
 
 ```json
-{"status":"complete","latest":{"promise":"COMPLETE"}}
-{"status":"blocked","latest":{"promise":"BLOCKED: 理由"}}
+{"status":"complete","promise":{"status":"complete","reason":"","summary":"実装した。検証した。残作業なし。"}}
+{"status":"blocked","promise":{"status":"blocked","reason":"理由","summary":"確認した。仕様が足りない。判断待ち。"}}
 {"status":"none"}
+{"status":"invalid","error":"invalid_status"}
 ```
-
-待つ promise:
-
-- `<promise>COMPLETE</promise>` → helper status `complete`
-- `<promise>BLOCKED: ...</promise>` → helper status `blocked`
 
 監視手順:
 
-1. `herdr pane list` で対象 pane の `agent_session.value` が存在することを確認する。
-2. 30秒ごとに helper を実行する。
-3. helper status が `complete` または `blocked` なら採用する。
-4. Herdr の agent status が `idle` / `done` / `blocked` でも、helper status が `none` なら、pane 出力だけで完了扱いしない。追加で最新 session JSONL と pane を確認し、promise が無い場合は worker に promise 出力を依頼する。
-5. `herdr wait agent-status --status done` は補助に留める。`idle` に遷移した完了 worker を取り逃がすことがあるため、唯一の待機条件にしない。
+1. 30秒ごとに helper を実行する。
+2. helper status が `complete` または `blocked` なら採用する。
+3. helper status が `none` または `invalid` なら完了扱いしない。
+4. Herdr の agent status が `idle` / `done` / `blocked` でも、helper status が `none` または `invalid` なら完了扱いしない。Worker に、指定済み promise ファイルへ JSON を書くよう1回依頼する。
+5. `herdr wait agent-status --status done` は補助に留める。唯一の待機条件にしない。
 
 BLOCKED の場合:
 
@@ -217,7 +218,59 @@ BLOCKED の場合:
 - issue に、ブロッカー、確認済み事項、次に必要な判断を Blocked 報告フォーマットで日本語コメントする
 - push / PR 作成はしない
 
-### 7. Verify and PR
+### 7. PR branch update gate
+
+COMPLETE の場合、PR 作成前に worker branch が `{{baseBranch}}` を取り込める状態か確認する。判断の決定的な部分は helper に任せる。
+
+```bash
+cd <worktreePath>
+git fetch origin
+git fetch origin <branch>
+update_json=$(python3 {{automationDir}}/pr-branch-update-decision.py --repo <worktreePath> --head HEAD --base {{baseBranch}})
+update_action=$(printf '%s' "$update_json" | jq -r '.action')
+```
+
+- `update_action=blocked`: worktree が clean ではない。PR を作らず、Issue を `{{blockedLabel}}` にして理由を Blocked 報告フォーマットでコメントする。
+- `update_action=no_update`: そのまま検証へ進む。
+- `update_action=mechanical_update`: worker を起動せず、司令塔が機械的に更新する。helper が clean worktree を確認済みの場合だけ実行する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら coordinator が branch update commit を作る。
+- `update_action=delegate_worker`: 衝突あり。worker を 1 体だけ起動して PR branch 更新を委譲する。同一 branch / 同一 PR 相当の更新について後続 worker を多重起動してはならない。既存の branch update worker がいる場合は、新しい worker を起動せず、その worker の promise ファイルを待ってから次の判断を行う。
+
+branch update worker を起動する前に、起動ごとに一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` として採番する。採番した promise ファイルパスは衝突解消 worker prompt に必ず含める。
+
+衝突解消 worker prompt には必ず以下を含める。
+
+```markdown
+PR branch を base branch に追従させてください。
+
+対象:
+- GitHub repo: {{githubRepo}}
+- PR: 未作成（Issue #<N> の worker branch）
+- Head branch: <branch>
+- Base branch: {{baseBranch}}
+
+契約:
+- `<branch>` に `{{baseBranch}}` を取り込み、衝突を解消してください。
+- 解消後に `{{checkCommand}}` を実行し、成功させてください。
+- conventional commit で branch update / conflict resolution commit を作ってください。
+
+禁止事項:
+- push しない。
+- label を編集しない。
+- issue / PR にコメントしない。
+- PR を作らない。
+- issue を閉じない。
+- unrelated な変更を戻さない。
+
+完了報告:
+- 作業終了時は、司令塔が指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
+- 成功時は `{"status":"complete","reason":"","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗、仕様不足、危険変更、または判断不能なら `{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
+```
+
+衝突解消 worker の監視も `extract-worker-promise.py --file "<promiseFile>"` を使う。`blocked` / `invalid` / promise 不在の場合は PR を作らず、Issue を `{{blockedLabel}}` にして理由を Blocked 報告フォーマットでコメントする。
+
+### 8. Verify and PR
 
 COMPLETE の場合、worker worktree で次を行う。
 
