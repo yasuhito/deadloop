@@ -14,7 +14,7 @@ _Avoid_: 実装エージェント、子エージェント
 
 **レビューエージェント**:
 PR reviewer が起動する、単一 PR をレビューする使い捨ての Pi セッション。Worker とは別概念で、モデル指定も独立している。
-_Avoid_: レビュワー(automation の PR reviewer と混同するため)
+_Avoid_: レビュワー(automation の PR reviewer と混同するため)、review worker
 
 **モデル指定 (workerModel / reviewerModel)**:
 operator がプロジェクト設定で固定する、Worker・レビューエージェントの使用モデル。サブスクリプション残量などの資源配分に基づく operator の意思決定であり、司令塔の裁量ではない。
