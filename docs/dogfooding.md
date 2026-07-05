@@ -20,7 +20,7 @@ See [public-package-setup.md](public-package-setup.md) for the first-time setup 
 1. **Phase 1: 実装 PR 作成まで**
    - `issue-coordinator` だけを有効にする。
    - エージェントに渡せる Issue を拾い、Herdr worktree の Pi 作業エージェントに実装させる。
-   - 司令塔が検証して PR を作る。
+   - オーケストレータが検証して PR を作る。
    - PR レビューとマージは人間が行う。
 2. **Phase 2: レビュー自動化を試す**
    - 安全制御が入ってから `pr-reviewer` を有効にする。

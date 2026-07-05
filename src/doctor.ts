@@ -434,7 +434,7 @@ function buildAutomationFindings(
         id: `automation-stalled-${automation.id}`,
         type: "coordinator_stalled",
         title: `automation not attempted: ${ref}`,
-        summary: `${STALLED_SLOT_THRESHOLD} スロット以上、試行が途絶えています。司令塔セッションが停止している疑いがあります。lastAttemptAt=${new Date(lastAttemptAt).toISOString()}`,
+        summary: `${STALLED_SLOT_THRESHOLD} スロット以上、試行が途絶えています。オーケストレータセッションが停止している疑いがあります。lastAttemptAt=${new Date(lastAttemptAt).toISOString()}`,
         commands: [`cat ${shellArg(statePath)}`],
       });
       continue;

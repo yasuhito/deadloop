@@ -45,7 +45,7 @@
 ## Blocked 報告フォーマット
 
 `{{blockedLabel}}` を付けて issue にコメントするすべての経路では、コメント本文に少なくとも次の節をこの順で含める。
-テンプレート内のコマンド例は `{{githubRepo}}`、`{{repoPath}}`、`{{automationDir}}`、`{{blockedLabel}}`、`{{implementLabel}}` などの placeholder を使って定義する。コメント投稿時は、実際の issue 番号、promise ファイル、pane ID、workspace ID、worktree path、branch 名などの実行時の値を司令塔が確認して埋め、operator がそのままコピーできるコマンドとして書く。
+テンプレート内のコマンド例は `{{githubRepo}}`、`{{repoPath}}`、`{{automationDir}}`、`{{blockedLabel}}`、`{{implementLabel}}` などの placeholder を使って定義する。コメント投稿時は、実際の issue 番号、promise ファイル、pane ID、workspace ID、worktree path、branch 名などの実行時の値をオーケストレータが確認して埋め、operator がそのままコピーできるコマンドとして書く。
 復旧手順は operator が原因を確認し、必要な修正を終えたあとに使うもの。`{{blockedLabel}}` は sticky なので、原因確認なしに再実行しない。
 
 ````markdown
@@ -165,7 +165,7 @@ Issue #<N> を実装してください。
 - unrelated な変更を戻さない。
 
 完了報告:
-- 作業終了時は、司令塔が指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
+- 作業終了時は、オーケストレータが指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
 - 成功時は `{"status":"complete","reason":"","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
 - 失敗、仕様不足、危険変更、または判断不能なら `{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
 - 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
@@ -177,7 +177,7 @@ Worker を起動する前に、issue の難易度から `<level>` (`low` / `medi
 - モデルは operator の設定に従う。Worker モデル指定が空でなければ、issue の内容にかかわらず必ず `--model {{workerModel}}` を付ける。空なら `--model` を付けない。coordinator の判断でモデルを選ばない。
 - issue 難易度で `<level>` を選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は `low`、通常の実装は `medium`、複数コンポーネント・設計判断・データ移行・難しい不具合修正は `high`。
 - issue 難易度が不明なら `medium` 以上を使う。
-- レベルからエージェント固有フラグ（`pi` の `--thinking` / `claude` の `--effort`）への写像はランチャーが行う。司令塔はレベルの値だけを選ぶ。
+- レベルからエージェント固有フラグ（`pi` の `--thinking` / `claude` の `--effort`）への写像はランチャーが行う。オーケストレータはレベルの値だけを選ぶ。
 - 追加方針: {{workerLaunchPolicy}}
 - Worker prompt の先頭に `起動判断: ...` と1行で選択理由を書く。
 
@@ -185,7 +185,7 @@ Worker の Herdr agent name は issue ごとに一意にし、既定名 `pi` の
 
 `herdr worktree create --no-focus`、`herdr tab create --no-focus`、`herdr agent start ... --tab <tabId> --no-focus` を使い、ユーザーの表示中タブを奪わない。Worker はまず `herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "{{projectId}}-issue-<N>-worker" --no-focus` で専用タブを作り、出力 JSON の `result.tab.tab_id` を `herdr agent start ... --tab <tabId>` に渡して起動する。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。検証失敗やブランチ更新などで後続 Worker に再対応を依頼する場合も、同じ手順で Worker 名と同じ label の専用タブを作ってから `--tab` 指定で起動する。
 
-起動はランチャー 1 コマンドで行う。エージェント種別・実行基盤別の分岐、prompt の渡し方、前提条件検査はランチャーが行うので、司令塔は種別で起動コマンドを分岐しない。`uuid` は promise ファイルパスの `promise-<uuid>.json` と（`claude` の）`--session-id` で同じ値を使うため、司令塔が採番して `--uuid` で渡す。`{{workerModel}}` が空なら `--model` はランチャーが省くので、そのまま渡してよい。ランチャーが `claude` の前提条件（workspace trust）を検査し、未充足が確定した場合は起動せず解決コマンド付きのエラー JSON を返して終了コードが非 0 になる。その場合は Blocked 報告フォーマットで理由をコメントする。
+起動はランチャー 1 コマンドで行う。エージェント種別・実行基盤別の分岐、prompt の渡し方、前提条件検査はランチャーが行うので、オーケストレータは種別で起動コマンドを分岐しない。`uuid` は promise ファイルパスの `promise-<uuid>.json` と（`claude` の）`--session-id` で同じ値を使うため、オーケストレータが採番して `--uuid` で渡す。`{{workerModel}}` が空なら `--model` はランチャーが省くので、そのまま渡してよい。ランチャーが `claude` の前提条件（workspace trust）を検査し、未充足が確定した場合は起動せず解決コマンド付きのエラー JSON を返して終了コードが非 0 になる。その場合は Blocked 報告フォーマットで理由をコメントする。
 
 ```bash
 node {{automationDir}}/launch-agent.ts \
@@ -249,7 +249,7 @@ update_action=$(printf '%s' "$update_json" | jq -r '.action')
 
 - `update_action=blocked`: worktree が clean ではない。PR を作らず、Issue を `{{blockedLabel}}` にして理由を Blocked 報告フォーマットでコメントする。
 - `update_action=no_update`: そのまま検証へ進む。
-- `update_action=mechanical_update`: worker を起動せず、司令塔が機械的に更新する。helper が clean worktree を確認済みの場合だけ実行する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら coordinator が branch update commit を作る。
+- `update_action=mechanical_update`: worker を起動せず、オーケストレータが機械的に更新する。helper が clean worktree を確認済みの場合だけ実行する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら coordinator が branch update commit を作る。
 - `update_action=delegate_worker`: 衝突あり。worker を 1 体だけ起動して PR branch 更新を委譲する。同一 branch / 同一 PR 相当の更新について後続 worker を多重起動してはならない。既存の branch update worker がいる場合は、新しい worker を起動せず、その worker の promise ファイルを待ってから次の判断を行う。
 
 branch update worker を起動する前に、起動ごとに一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` として採番する。採番した promise ファイルパスは衝突解消 worker prompt に必ず含める。
@@ -279,7 +279,7 @@ PR branch を base branch に追従させてください。
 - unrelated な変更を戻さない。
 
 完了報告:
-- 作業終了時は、司令塔が指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
+- 作業終了時は、オーケストレータが指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
 - 成功時は `{"status":"complete","reason":"","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
 - 失敗、仕様不足、危険変更、または判断不能なら `{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
 - 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。

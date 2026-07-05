@@ -22,11 +22,11 @@
 
 ## 原則
 
-- この automation は司令塔として、レビューエージェントの起動、結果確認、ラベル操作、最終判定だけを行う。issue は直接閉じない。
+- この automation はオーケストレータとして、レビューエージェントの起動、結果確認、ラベル操作、最終判定だけを行う。issue は直接閉じない。
 - 毎回 GitHub / Herdr / git の最新状態をコマンドで再取得する。
 - Copilot / CodeRabbit / 人間の行コメント、レビュー要約、通常コメントを確認する。
 - レビュー本文の作成、指摘の判断、必要な修正、検証、push は PR branch の別 Pi セッションであるレビューエージェントに任せる。
-- 司令塔自身は PR 差分の詳細レビューや修正をしない。例外は、レビューエージェントの起動失敗や GitHub / Herdr 状態確認に必要な調査だけ。
+- オーケストレータ自身は PR 差分の詳細レビューや修正をしない。例外は、レビューエージェントの起動失敗や GitHub / Herdr 状態確認に必要な調査だけ。
 - 最新 HEAD に対する外部レビューがなく、Copilot が利用不能と分かっておらず、Copilot へのレビュー依頼も未送信なら、`gh pr edit <PR> -R {{githubRepo}} --add-reviewer "@copilot"` と `gh pr comment <PR> -R {{githubRepo}} --body '@coderabbitai review'` を1回だけ実行し、`{{reviewingLabel}}` を外してこの実行回を終了する。
 - Copilot が quota / unavailable / disabled / unable to review を返した場合は、再依頼を繰り返さない。
 - Copilot / CodeRabbit / 人間のレビューが得られない場合でも、そのまま無レビュー扱いでマージしない。レビューエージェントを起動して代替レビューを行う。
@@ -41,7 +41,7 @@
 ## Blocked 報告フォーマット
 
 `{{blockedLabel}}` を付けて PR にコメントするすべての経路では、コメント本文に少なくとも次の節をこの順で含める。
-テンプレート内のコマンド例は `{{githubRepo}}`、`{{repoPath}}`、`{{automationDir}}`、`{{blockedLabel}}`、`{{implementLabel}}` などの placeholder を使って定義する。コメント投稿時は、実際の PR 番号、対象 issue 番号、promise ファイル、pane ID、workspace ID、worktree path、branch 名などの実行時の値を司令塔が確認して埋め、operator がそのままコピーできるコマンドとして書く。
+テンプレート内のコマンド例は `{{githubRepo}}`、`{{repoPath}}`、`{{automationDir}}`、`{{blockedLabel}}`、`{{implementLabel}}` などの placeholder を使って定義する。コメント投稿時は、実際の PR 番号、対象 issue 番号、promise ファイル、pane ID、workspace ID、worktree path、branch 名などの実行時の値をオーケストレータが確認して埋め、operator がそのままコピーできるコマンドとして書く。
 復旧手順は operator が原因を確認し、必要な修正を終えたあとに使うもの。`{{blockedLabel}}` は sticky なので、原因確認なしに再実行しない。
 
 ````markdown
@@ -79,7 +79,7 @@
 
 ### 1. Select
 
-候補選定、draft gate 対象判定、pending checks / 外部レビュー進行中の待機判定は決定論的 helper に任せる。司令塔は helper が選んだ番号最小の1件だけ扱う。
+候補選定、draft gate 対象判定、pending checks / 外部レビュー進行中の待機判定は決定論的 helper に任せる。オーケストレータは helper が選んだ番号最小の1件だけ扱う。
 
 `{{reviewingLabel}}` が残る open PR は原則として中断されたレビュー run の残骸として扱い、再クレーム候補にする。ただし、同じ PR のレビューエージェント（`{{projectId}}-pr-<PR>-reviewer`）がまだ `working` の場合は二重クレームを避けるため helper がスキップを維持する。この安全判定のため、`herdr agent list` を helper に渡す。
 
@@ -206,7 +206,7 @@ update_action=$(printf '%s' "$update_json" | jq -r '.action')
 
 - `update_action=blocked`: worktree が clean ではない、または local `HEAD` が `origin/<headRefName>` と一致しない。`{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に理由を Blocked 報告フォーマットでコメントして終了する。
 - `update_action=no_update`: そのままレビューエージェントの起動へ進む。
-- `update_action=mechanical_update`: エージェントを起動せず、司令塔が機械的に更新する。helper が clean worktree と `origin/<headRefName>` との一致を確認済みの場合だけ実行する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら branch update commit を作って push する。この実行回ではマージせず、`{{reviewingLabel}}` を外して次回に回す。
+- `update_action=mechanical_update`: エージェントを起動せず、オーケストレータが機械的に更新する。helper が clean worktree と `origin/<headRefName>` との一致を確認済みの場合だけ実行する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら branch update commit を作って push する。この実行回ではマージせず、`{{reviewingLabel}}` を外して次回に回す。
 - `update_action=delegate_worker`: 衝突あり。レビューエージェントとは別に branch update worker を 1 体だけ起動し、PR branch 更新を委譲する。同一 PR に対する後続 worker を多重起動してはならない。既存の branch update worker がいる場合は、新しい worker を起動せず、その worker の promise ファイルを待ってから次を判断する。branch update worker を起動する場合も、worker 名と同じ label の専用タブを作ってから `herdr agent start ... --tab <tabId> --no-focus` で起動し、`--workspace <workspaceId>` 直指定の split 起動はしない。
 
 branch update worker を起動する前に、起動ごとに一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` として採番する。採番した promise ファイルパスは衝突解消 worker prompt に必ず含める。
@@ -237,7 +237,7 @@ PR branch を base branch に追従させてください。
 - 無関係な変更を戻さない。
 
 完了報告:
-- 作業終了時は、司令塔が指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
+- 作業終了時は、オーケストレータが指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
 - 成功時は `{"status":"complete","reason":"","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
 - 失敗、仕様不一致、危険変更、判断不能なら `{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
 - 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
@@ -247,7 +247,7 @@ PR branch を base branch に追従させてください。
 
 ### 8. レビューエージェントの起動
 
-外部レビューコメントがある場合も、外部レビューが無く代替レビューが必要な場合も、PR branch worktree でレビューエージェントを起動する。司令塔自身は指摘の取捨選択や修正をしない。
+外部レビューコメントがある場合も、外部レビューが無く代替レビューが必要な場合も、PR branch worktree でレビューエージェントを起動する。オーケストレータ自身は指摘の取捨選択や修正をしない。
 
 起動前に最新 head SHA を保存する。
 
@@ -255,7 +255,7 @@ PR branch を base branch に追従させてください。
 head_sha_before=$(gh pr view <PR> -R {{githubRepo}} --json headRefOid --jq .headRefOid)
 ```
 
-レビューエージェントを起動する前に、起動ごとに一意な `uuid` を `python3 -c 'import uuid; print(uuid.uuid4())'` などで採番し、一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` とする。`uuid` は promise ファイルパスの `promise-<uuid>.json` と（`claude` の）`--session-id` で同じ値を使うため、司令塔が採番して `--uuid` で渡す（worker と同じ契約、ADR 0003）。`<worktreePath>/.pi-looper` を作成し、同じパスの古いファイルがあれば削除してから起動する。採番した promise ファイルパスはレビューエージェント用プロンプトに必ず含める。
+レビューエージェントを起動する前に、起動ごとに一意な `uuid` を `python3 -c 'import uuid; print(uuid.uuid4())'` などで採番し、一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` とする。`uuid` は promise ファイルパスの `promise-<uuid>.json` と（`claude` の）`--session-id` で同じ値を使うため、オーケストレータが採番して `--uuid` で渡す（worker と同じ契約、ADR 0003）。`<worktreePath>/.pi-looper` を作成し、同じパスの古いファイルがあれば削除してから起動する。採番した promise ファイルパスはレビューエージェント用プロンプトに必ず含める。
 
 レビューエージェント用プロンプトは一時ファイルに書く。必ず次を含める。
 
@@ -290,13 +290,13 @@ PR #<PR> をレビューしてください。
 - 無関係な変更を戻さない。
 
 完了報告:
-- 作業終了時は、司令塔が指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
+- 作業終了時は、オーケストレータが指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
 - 成功時は `{"status":"complete","reason":"","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
 - 失敗、仕様不一致、危険変更、判断不能なら `{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
 - 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
 ```
 
-起動はランチャー `launch-agent` 1 コマンドで行う。まずレビューエージェント名と同じ label の専用タブを作り、出力 JSON の `result.tab.tab_id` を `<tabId>` として保存する。その後、`node {{automationDir}}/launch-agent.ts` にエージェント種別・名前・cwd・レベル・モデル・uuid・prompt ファイル・tab を渡す。ランチャーがエージェントプロファイルから argv を組み立て、シェルを介さず `herdr agent start ... --no-focus -- <argv>` を実行し、結果 JSON をそのまま返す。エージェント種別・実行基盤別の分岐、prompt の渡し方、前提条件検査はランチャーが行うので、司令塔は種別で起動コマンドを分岐しない。`{{reviewerModel}}` が空なら `--model` はランチャーが省くので、そのまま渡してよい。ランチャーが `claude` の前提条件（workspace trust）を検査し、未充足が確定した場合は起動せず解決コマンド付きのエラー JSON を返して終了コードが非 0 になる。その場合は Blocked 報告フォーマットで理由をコメントする。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。後続のレビューエージェントを起動する場合も、同じ手順で専用タブを作ってから `--tab` 指定で起動する。
+起動はランチャー `launch-agent` 1 コマンドで行う。まずレビューエージェント名と同じ label の専用タブを作り、出力 JSON の `result.tab.tab_id` を `<tabId>` として保存する。その後、`node {{automationDir}}/launch-agent.ts` にエージェント種別・名前・cwd・レベル・モデル・uuid・prompt ファイル・tab を渡す。ランチャーがエージェントプロファイルから argv を組み立て、シェルを介さず `herdr agent start ... --no-focus -- <argv>` を実行し、結果 JSON をそのまま返す。エージェント種別・実行基盤別の分岐、prompt の渡し方、前提条件検査はランチャーが行うので、オーケストレータは種別で起動コマンドを分岐しない。`{{reviewerModel}}` が空なら `--model` はランチャーが省くので、そのまま渡してよい。ランチャーが `claude` の前提条件（workspace trust）を検査し、未充足が確定した場合は起動せず解決コマンド付きのエラー JSON を返して終了コードが非 0 になる。その場合は Blocked 報告フォーマットで理由をコメントする。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。後続のレビューエージェントを起動する場合も、同じ手順で専用タブを作ってから `--tab` 指定で起動する。
 
 ```bash
 reviewer_name="{{projectId}}-pr-<PR>-reviewer"
@@ -339,7 +339,7 @@ helper status が `complete` の場合:
 1. PR、GitHub checks、最新 head SHA を再取得する。
 2. レビューエージェントの worktree で `git status --short` が空であることを確認する。
 3. `git rev-parse HEAD`、`git rev-parse origin/<headRefName>`、PR の `headRefOid` が一致することを確認する。未push commit や未反映のローカル変更があればマージしない。
-4. レビューエージェントの worktree で `{{checkCommand}}` を司令塔が再実行し、終了コード 0 を必須にする。失敗したら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に失敗内容を Blocked 報告フォーマットでコメントしてマージしない。
+4. レビューエージェントの worktree で `{{checkCommand}}` をオーケストレータが再実行し、終了コード 0 を必須にする。失敗したら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に失敗内容を Blocked 報告フォーマットでコメントしてマージしない。
 5. レビューエージェントが push して `head_sha_before` と最新 head SHA が違う場合は、`{{reviewingLabel}}` を外し、`{{reviewLabel}}` は残す。Copilot 再レビューを依頼できるなら依頼し、この実行回ではマージしない。
 6. head SHA が変わっていない場合だけ、次の最終判定へ進む。
 
@@ -350,7 +350,7 @@ helper status が `complete` の場合:
 - PR が draft ではない。
 - issue 契約を満たしている。
 - GitHub checks が成功している。
-- 司令塔がレビューエージェントの worktree で再実行した `{{checkCommand}}` が成功している。
+- オーケストレータがレビューエージェントの worktree で再実行した `{{checkCommand}}` が成功している。
 - CI が完了している。
 - `mergeStateStatus` が `CLEAN` または同等のマージ可能状態である。
 - `reviewDecision` が `CHANGES_REQUESTED` ではない。
