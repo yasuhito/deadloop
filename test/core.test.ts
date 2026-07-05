@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EXTENSION_CODE_CHANGED_WARNING,
+  codeFreshnessWarning,
   cronSlotAt,
   getDueSlot,
   nextSlotAfter,
@@ -8,6 +10,7 @@ import {
   parseEveryMinutes,
   renderTemplate,
   resolveConfigPath,
+  resolveProjectForTick,
   sanitizeId,
   templateValues,
 } from "../src/core";
@@ -178,10 +181,7 @@ describe("deterministic extension core", () => {
     const values = templateValues(project, project.automations[0], "/ext/automations");
 
     expect(
-      renderTemplate(
-        "{{ projectId }} {{githubRepo}} {{automationDir}} {{ missing.value }} {{readyLabel}}",
-        values,
-      ),
+      renderTemplate("{{ projectId }} {{githubRepo}} {{automationDir}} {{ missing.value }} {{readyLabel}}", values),
     ).toBe("demo owner/repo /ext/automations  ready-for-agent");
   });
 
@@ -216,6 +216,41 @@ describe("deterministic extension core", () => {
     const project = normalizeProject({ automations: [{}] });
 
     expect(renderTemplate("{{autoMerge}}", templateValues(project, project.automations[0], "/auto"))).toBe("false");
+  });
+
+  it("uses reloaded project settings during tick resolution", () => {
+    const configTexts = ["old-model", "new-model"].map((workerModel) =>
+      JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", workerModel }] }),
+    );
+    const workerModels = configTexts.map((configText) => {
+      const result = resolveProjectForTick({ cwd: "/repo", configText });
+      return result.ok ? result.project.workerModel : "";
+    });
+
+    expect(workerModels).toEqual(["old-model", "new-model"]);
+  });
+
+  it("returns a status reason when project config cannot be parsed", () => {
+    expect(resolveProjectForTick({ cwd: "/repo", configText: "{" })).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("projects.json parse error"),
+    });
+  });
+
+  it("does not run a project that differs from the scheduler lock owner", () => {
+    expect(
+      resolveProjectForTick({
+        cwd: "/repo",
+        configText: JSON.stringify({ projects: [{ id: "new-demo", repoPath: "/repo" }] }),
+        lockedProjectId: "demo",
+      }),
+    ).toMatchObject({ ok: false, reason: "active project changed since scheduler lock was acquired" });
+  });
+
+  it("warns when extension source mtime is newer than module load time", () => {
+    expect(codeFreshnessWarning(1000, [{ path: "extensions/pi-looper/index.ts", mtimeMs: 1001 }])).toBe(
+      EXTENSION_CODE_CHANGED_WARNING,
+    );
   });
 
   it("sanitizes display identifiers to lowercase slugs", () => {

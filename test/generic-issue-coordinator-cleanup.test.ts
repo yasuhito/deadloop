@@ -117,4 +117,46 @@ describe("generic issue coordinator cleanup", () => {
       'herdr agent start "{{projectId}}-issue-<N>-worker"',
     );
   });
+
+  it("creates a dedicated tab before starting a worker", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-issue-coordinator.prompt.md", "utf8")).toContain(
+      'herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "{{projectId}}-issue-<N>-worker" --no-focus',
+    );
+  });
+
+  it("starts workers in the dedicated tab", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-issue-coordinator.prompt.md", "utf8")).toContain(
+      'herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --tab <tabId> --no-focus',
+    );
+  });
+
+  it("does not document workspace split startup for workers", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-issue-coordinator.prompt.md", "utf8")).not.toMatch(
+      /herdr agent start[^`\n]*--workspace <workspaceId>/,
+    );
+  });
+
+  it("creates a dedicated tab before starting a review worker", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-pr-reviewer.prompt.md", "utf8")).toContain(
+      'herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "$reviewer_name" --no-focus',
+    );
+  });
+
+  it("starts review workers in the dedicated tab", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-pr-reviewer.prompt.md", "utf8")).toContain(
+      'herdr agent start "$reviewer_name" --cwd <worktreePath> --tab "$tab_id" --no-focus',
+    );
+  });
+
+  it("does not document workspace split startup for review workers", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-pr-reviewer.prompt.md", "utf8")).not.toMatch(
+      /herdr agent start[^`\n]*--workspace <workspaceId>/,
+    );
+  });
+
+  it("documents dedicated tab startup for branch update workers", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-pr-reviewer.prompt.md", "utf8")).toContain(
+      "branch update worker を起動する場合も、worker 名と同じ label の専用タブを作ってから `herdr agent start ... --tab <tabId> --no-focus`",
+    );
+  });
 });

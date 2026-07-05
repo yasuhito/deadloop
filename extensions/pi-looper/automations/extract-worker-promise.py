@@ -1,110 +1,55 @@
 #!/usr/bin/env python3
-"""Extract a worker promise from a Pi session JSONL.
-
-Only assistant normal text content is considered. User prompts, pane text,
-thinking blocks, and tool output are ignored so startup instructions do not
-produce false positives.
-"""
+"""Validate a worker promise JSON file."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
-PROMISE_RE = re.compile(r"<promise>\s*(COMPLETE|BLOCKED:\s*.*?)\s*</promise>", re.DOTALL)
+VALID_STATUSES = {"complete", "blocked"}
 
 
-def pane_session_path(pane_id: str) -> Path | None:
+def invalid(file_path: Path, error: str) -> dict[str, Any]:
+    return {"status": "invalid", "file": str(file_path), "error": error}
+
+
+def validate_promise(file_path: Path) -> dict[str, Any]:
+    if not file_path.exists():
+        return {"status": "none", "file": str(file_path)}
+
     try:
-        output = subprocess.check_output(["herdr", "pane", "list", "--json"], text=True, stderr=subprocess.DEVNULL)
-    except subprocess.CalledProcessError:
-        output = subprocess.check_output(["herdr", "pane", "list"], text=True)
-    data = json.loads(output)
-    for pane in data.get("result", {}).get("panes", []):
-        if pane.get("pane_id") != pane_id:
-            continue
-        session = pane.get("agent_session") or {}
-        if session.get("kind") == "path" and session.get("value"):
-            return Path(session["value"])
-    return None
+        payload = json.loads(file_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return invalid(file_path, "invalid_json")
+    except OSError as error:
+        return invalid(file_path, f"read_error: {error}")
 
+    if not isinstance(payload, dict):
+        return invalid(file_path, "not_object")
 
-def assistant_texts(message: dict[str, Any]) -> list[str]:
-    if message.get("role") != "assistant":
-        return []
-    content = message.get("content")
-    if isinstance(content, str):
-        return [content]
-    if not isinstance(content, list):
-        return []
-    texts: list[str] = []
-    for item in content:
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") != "text":
-            continue
-        text = item.get("text")
-        if isinstance(text, str):
-            texts.append(text)
-    return texts
+    status = payload.get("status")
+    if status not in VALID_STATUSES:
+        return invalid(file_path, "invalid_status")
 
+    if not isinstance(payload.get("reason"), str):
+        return invalid(file_path, "invalid_reason")
 
-def extract(session_path: Path) -> dict[str, Any]:
-    matches: list[dict[str, Any]] = []
-    if not session_path.exists():
-        return {"status": "missing_session", "session": str(session_path), "matches": []}
+    if not isinstance(payload.get("summary"), str):
+        return invalid(file_path, "invalid_summary")
 
-    with session_path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, 1):
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if entry.get("type") != "message":
-                continue
-            message = entry.get("message") or {}
-            for text in assistant_texts(message):
-                for match in PROMISE_RE.finditer(text):
-                    value = " ".join(match.group(1).split())
-                    status = "complete" if value == "COMPLETE" else "blocked"
-                    matches.append(
-                        {
-                            "status": status,
-                            "promise": value,
-                            "line": line_number,
-                            "entryId": entry.get("id"),
-                            "timestamp": entry.get("timestamp") or message.get("timestamp"),
-                        }
-                    )
-
-    if not matches:
-        return {"status": "none", "session": str(session_path), "matches": []}
-    latest = matches[-1]
-    return {"status": latest["status"], "session": str(session_path), "latest": latest, "matches": matches}
+    return {"status": status, "file": str(file_path), "promise": payload}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--session", type=Path)
-    source.add_argument("--pane-id")
+    parser.add_argument("--file", required=True, type=Path)
     args = parser.parse_args()
 
-    session_path = args.session
-    if args.pane_id:
-        session_path = pane_session_path(args.pane_id)
-        if session_path is None:
-            print(json.dumps({"status": "missing_pane", "paneId": args.pane_id}, ensure_ascii=False))
-            return 2
-
-    result = extract(session_path)
+    result = validate_promise(args.file)
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if result["status"] in {"complete", "blocked"} else 1
+    return 0 if result["status"] in VALID_STATUSES else 1
 
 
 if __name__ == "__main__":

@@ -33,6 +33,9 @@ jobs:
       - name: Run static and formatting checks
         run: npm run lint
 
+      - name: Run TypeScript type checks
+        run: npm run typecheck
+
       - name: Check shell automation syntax
         run: bash -n extensions/pi-looper/automations/*.sh
 

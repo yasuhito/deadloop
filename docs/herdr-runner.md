@@ -6,7 +6,7 @@ pi-looper v0 は Herdr 実行基盤を使います。
 
 - Herdr worktree を作る
 - Pi 作業エージェント / レビューエージェントのセッションを起動する
-- ペイン / セッションから作業エージェントの完了 promise を確認する
+- 作業エージェントが書いた promise ファイルから完了報告を確認する
 - マージ / close 後に不要な作業用 workspace / linked worktree を決定論的な補助スクリプトで片付ける
 
 ## 必要なもの
