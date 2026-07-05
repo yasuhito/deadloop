@@ -37,6 +37,43 @@
 - レビューループは反復型。修正を push した実行回、外部レビューを依頼した実行回、レビューエージェントが修正 commit を push した実行回ではマージしない。次回の実行回で新しいコメントがないことを確認してから進める。
 - 破壊的な git 操作は禁止。`git reset --hard`、`git clean`、無関係な変更の破棄は禁止。
 
+## Blocked 報告フォーマット
+
+`{{blockedLabel}}` を付けて PR にコメントするすべての経路では、コメント本文に少なくとも次の節をこの順で含める。
+テンプレート内のコマンド例は `{{githubRepo}}`、`{{repoPath}}`、`{{automationDir}}`、`{{blockedLabel}}`、`{{implementLabel}}` などの placeholder を使って定義する。コメント投稿時は、実際の PR 番号、対象 issue 番号、promise ファイル、pane ID、workspace ID、worktree path、branch 名などの実行時の値を司令塔が確認して埋め、operator がそのままコピーできるコマンドとして書く。
+復旧手順は operator が原因を確認し、必要な修正を終えたあとに使うもの。`{{blockedLabel}}` は sticky なので、原因確認なしに再実行しない。
+
+````markdown
+## 何が起きたか
+- 事象とエラーの要約を書く。
+- 確認済み事項と、次に必要な判断を書く。
+
+## 復旧手順
+1. 原因を確認する。
+   ```bash
+   gh pr view <PR> -R {{githubRepo}} --comments --json number,title,url,headRefName,headRefOid,labels,commits,statusCheckRollup
+   gh pr checks <PR> -R {{githubRepo}}
+   python3 {{automationDir}}/extract-worker-promise.py --file <promiseFile> || true
+   herdr agent list
+   herdr pane list
+   ```
+2. 残骸（worktree / branch）を確認し、安全に掃除する。
+   ```bash
+   herdr worktree list --cwd {{repoPath}} --json
+   git -C {{repoPath}} worktree list
+   git -C {{repoPath}} branch --list "<headRefName>"
+   herdr worktree remove --workspace <workspaceId>
+   git -C {{repoPath}} worktree remove <worktreePath>
+   git -C {{repoPath}} branch -d <headRefName>
+   ```
+3. 原因を解消したあと、対象 issue を再 queue する。
+   ```bash
+   gh issue edit <issueNumber> -R {{githubRepo}} --remove-label "{{blockedLabel}}" --add-label "{{implementLabel}}"
+   ```
+````
+
+対象 issue 番号は PR 本文の `Closes #N` / `Fixes #N` / `Resolves #N` から埋める。特定できない場合も再 queue コマンドを省略せず、`<issueNumber>` を埋めるために必要な確認を `## 何が起きたか` に書く。該当しない掃除コマンドがある場合は、そのコマンドを削らず「該当なし: 理由」を直前に添える。掃除コマンドは対象が clean / 不要であることを確認してから実行するよう明記する。
+
 ## ループ
 
 ### 1. Select
@@ -65,7 +102,7 @@ action=$(printf '%s' "$decision_json" | jq -r '.action // empty')
 
 ### 2. Draft gate
 
-対象 PR が draft の場合は自動で ready にしない。まだ同じ通知をしていなければ、PR に日本語で「draft のため自動レビューと自動マージを見送る。準備できたら ready にして `{{reviewLabel}}` を付け直してください」とコメントする。`{{reviewingLabel}}` と `{{reviewLabel}}` を外し、`{{blockedLabel}}` を付けて、この実行回では終了する。
+対象 PR が draft の場合は自動で ready にしない。まだ同じ通知をしていなければ、PR に Blocked 報告フォーマットで「draft のため自動レビューと自動マージを見送る。準備できたら ready にして `{{reviewLabel}}` を付け直してください」と日本語コメントする。`{{reviewingLabel}}` と `{{reviewLabel}}` を外し、`{{blockedLabel}}` を付けて、この実行回では終了する。
 
 ### 3. Claim
 
@@ -151,7 +188,7 @@ update_json=$(python3 {{automationDir}}/pr-branch-update-decision.py --repo <wor
 update_action=$(printf '%s' "$update_json" | jq -r '.action')
 ```
 
-- `update_action=blocked`: worktree が clean ではない、または local `HEAD` が `origin/<headRefName>` と一致しない。`{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に理由をコメントして終了する。
+- `update_action=blocked`: worktree が clean ではない、または local `HEAD` が `origin/<headRefName>` と一致しない。`{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に理由を Blocked 報告フォーマットでコメントして終了する。
 - `update_action=no_update`: そのままレビューエージェントの起動へ進む。
 - `update_action=mechanical_update`: エージェントを起動せず、司令塔が機械的に更新する。helper が clean worktree と `origin/<headRefName>` との一致を確認済みの場合だけ実行する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら branch update commit を作って push する。この実行回ではマージせず、`{{reviewingLabel}}` を外して次回に回す。
 - `update_action=delegate_worker`: 衝突あり。レビューエージェントとは別に branch update worker を 1 体だけ起動し、PR branch 更新を委譲する。同一 PR に対する後続 worker を多重起動してはならない。既存の branch update worker がいる場合は、新しい worker を起動せず、その worker の promise ファイルを待ってから次を判断する。branch update worker を起動する場合も、worker 名と同じ label の専用タブを作ってから `herdr agent start ... --tab <tabId> --no-focus` で起動し、`--workspace <workspaceId>` 直指定の split 起動はしない。
@@ -190,7 +227,7 @@ PR branch を base branch に追従させてください。
 - 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
 ```
 
-衝突解消 worker の監視も `extract-worker-promise.py --file "<promiseFile>"` を使う。`blocked` / `invalid` / promise 不在の場合は `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に理由をコメントして終了する。`complete` の場合もこの実行回ではマージせず、`{{reviewingLabel}}` を外して次回に回す。
+衝突解消 worker の監視も `extract-worker-promise.py --file "<promiseFile>"` を使う。`blocked` / `invalid` / promise 不在の場合は `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に理由を Blocked 報告フォーマットでコメントして終了する。`complete` の場合もこの実行回ではマージせず、`{{reviewingLabel}}` を外して次回に回す。
 
 ### 8. レビューエージェントの起動
 
@@ -265,17 +302,17 @@ python3 {{automationDir}}/extract-worker-promise.py --file "<promiseFile>"
 helper status ごとの扱い:
 
 - `complete`: 完了として採用する。
-- `blocked`: `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR にブロッカー、確認済み事項、次に必要な判断を日本語でコメントして終了する。マージしない。
-- `none`: Herdr の agent status がまだ working なら待つ。agent status が `idle` / `done` / `blocked` なのに promise ファイルが無い場合は、レビューエージェントに指定済み promise ファイルへ JSON を書くよう1回だけ依頼する。次の確認でも `none` なら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントが完了報告を書かなかった」とコメントして終了する。
-- `invalid`: レビューエージェントに指定済み promise ファイルへ正しい JSON を書くよう1回だけ依頼する。次の確認でも `invalid` なら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントの完了報告 JSON が不正だった」とコメントして終了する。
-- 起動失敗または監視 timeout: `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に起動失敗または timeout の内容をコメントして終了する。
+- `blocked`: `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR にブロッカー、確認済み事項、次に必要な判断を Blocked 報告フォーマットで日本語コメントして終了する。マージしない。
+- `none`: Herdr の agent status がまだ working なら待つ。agent status が `idle` / `done` / `blocked` なのに promise ファイルが無い場合は、レビューエージェントに指定済み promise ファイルへ JSON を書くよう1回だけ依頼する。次の確認でも `none` なら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントが完了報告を書かなかった」と Blocked 報告フォーマットでコメントして終了する。
+- `invalid`: レビューエージェントに指定済み promise ファイルへ正しい JSON を書くよう1回だけ依頼する。次の確認でも `invalid` なら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントの完了報告 JSON が不正だった」と Blocked 報告フォーマットでコメントして終了する。
+- 起動失敗または監視 timeout: `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に起動失敗または timeout の内容を Blocked 報告フォーマットでコメントして終了する。
 
 helper status が `complete` の場合:
 
 1. PR、GitHub checks、最新 head SHA を再取得する。
 2. レビューエージェントの worktree で `git status --short` が空であることを確認する。
 3. `git rev-parse HEAD`、`git rev-parse origin/<headRefName>`、PR の `headRefOid` が一致することを確認する。未push commit や未反映のローカル変更があればマージしない。
-4. レビューエージェントの worktree で `{{checkCommand}}` を司令塔が再実行し、終了コード 0 を必須にする。失敗したら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に失敗内容をコメントしてマージしない。
+4. レビューエージェントの worktree で `{{checkCommand}}` を司令塔が再実行し、終了コード 0 を必須にする。失敗したら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に失敗内容を Blocked 報告フォーマットでコメントしてマージしない。
 5. レビューエージェントが push して `head_sha_before` と最新 head SHA が違う場合は、`{{reviewingLabel}}` を外し、`{{reviewLabel}}` は残す。Copilot 再レビューを依頼できるなら依頼し、この実行回ではマージしない。
 6. head SHA が変わっていない場合だけ、次の最終判定へ進む。
 
@@ -309,4 +346,4 @@ helper status が `complete` の場合:
 3. マージ後、可能なら `{{reviewLabel}}`、`{{reviewingLabel}}`、`{{humanLabel}}` を外す。ラベル削除が失敗しても、PR が merged なら成功扱いでよい。
 4. 最後に PR URL と merge 結果を要約する。
 
-マージ不可、checks 失敗、契約不一致、判断不能の場合は、`{{reviewingLabel}}` を外し、必要なら `{{blockedLabel}}` を付け、理由と次に必要な判断を PR に日本語でコメントする。マージしない。
+マージ不可、checks 失敗、契約不一致、判断不能の場合は、`{{reviewingLabel}}` を外し、必要なら `{{blockedLabel}}` を付け、理由と次に必要な判断を PR に Blocked 報告フォーマットで日本語コメントする。マージしない。
