@@ -123,7 +123,7 @@ PI_LOOPER_CONFIG=/path/to/projects.json pi
 - `githubRepo` — `owner/name`
 - `baseBranch` — worktree の基準 branch
 - `worktreeRoot` — Herdr worktree の root
-- `checkCommand` — 作業エージェント / レビューエージェントが最後に通す検証コマンド。pi-looper 自体では `npm test && bash -n extensions/pi-looper/automations/*.sh && python3 -m py_compile extensions/pi-looper/automations/*.py && npm pack --dry-run` を標準検証にしています
+- `checkCommand` — 作業エージェント / レビューエージェントが最後に通す検証コマンド。pi-looper 自体では `npm test && npm run lint && bash -n extensions/pi-looper/automations/*.sh && python3 -m py_compile extensions/pi-looper/automations/*.py && npm pack --dry-run` を標準検証にしています
 - `autoMerge` — `true` のときだけ PR reviewer が条件を満たした PR をマージする。既定値は `false` なので、初回導入では明示的に `false` のままにしてください
 - `workerInstructions` — 作業エージェント用プロンプトに差し込むプロジェクト固有指示
 - `workerModel` — 作業エージェントの使用モデル。Pi の `provider/id` 形式(例: `anthropic/claude-opus-4-8`)をそのまま `--model` に渡す。設定すると司令塔は issue の内容にかかわらず必ずこのモデルで Worker を起動する。未設定なら Pi の既定モデルを使う

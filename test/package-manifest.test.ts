@@ -2,9 +2,23 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { files: string[] };
+const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+  devDependencies: Record<string, string>;
+  files: string[];
+  scripts: Record<string, string>;
+};
 
 describe("package manifest files", () => {
+  it("defines a local lint command", () => {
+    expect(packageJson.scripts.lint).toBe(
+      "biome check package.json biome.json test/ci-workflow.test.ts test/package-manifest.test.ts --files-ignore-unknown=true && biome lint src extensions/pi-looper/index.ts test/*.ts --files-ignore-unknown=true",
+    );
+  });
+
+  it("uses Biome for lightweight static and formatting checks", () => {
+    expect(packageJson.devDependencies["@biomejs/biome"]).toBeDefined();
+  });
+
   it("includes public setup documentation", () => {
     expect(packageJson.files).toContain("docs/*.md");
   });
