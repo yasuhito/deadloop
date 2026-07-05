@@ -154,7 +154,9 @@ update_action=$(printf '%s' "$update_json" | jq -r '.action')
 - `update_action=blocked`: worktree が clean ではない、または local `HEAD` が `origin/<headRefName>` と一致しない。`{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に理由をコメントして終了する。
 - `update_action=no_update`: そのままレビューエージェントの起動へ進む。
 - `update_action=mechanical_update`: エージェントを起動せず、司令塔が機械的に更新する。helper が clean worktree と `origin/<headRefName>` との一致を確認済みの場合だけ実行する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら branch update commit を作って push する。この実行回ではマージせず、`{{reviewingLabel}}` を外して次回に回す。
-- `update_action=delegate_worker`: 衝突あり。レビューエージェントとは別に branch update worker を 1 体だけ起動し、PR branch 更新を委譲する。同一 PR に対する後続 worker を多重起動してはならない。既存の branch update worker がいる場合は、新しい worker を起動せず、その worker の `<promise>` を待ってから次を判断する。branch update worker を起動する場合も、worker 名と同じ label の専用タブを作ってから `herdr agent start ... --tab <tabId> --no-focus` で起動し、`--workspace <workspaceId>` 直指定の split 起動はしない。
+- `update_action=delegate_worker`: 衝突あり。レビューエージェントとは別に branch update worker を 1 体だけ起動し、PR branch 更新を委譲する。同一 PR に対する後続 worker を多重起動してはならない。既存の branch update worker がいる場合は、新しい worker を起動せず、その worker の promise ファイルを待ってから次を判断する。branch update worker を起動する場合も、worker 名と同じ label の専用タブを作ってから `herdr agent start ... --tab <tabId> --no-focus` で起動し、`--workspace <workspaceId>` 直指定の split 起動はしない。
+
+branch update worker を起動する前に、起動ごとに一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` として採番する。採番した promise ファイルパスは衝突解消 worker prompt に必ず含める。
 
 衝突解消 worker prompt には必ず以下を含める。
 
@@ -181,12 +183,14 @@ PR branch を base branch に追従させてください。
 - 破壊的な git 操作をしない。
 - 無関係な変更を戻さない。
 
-完了出力:
-- 完了したら最後に必ず `<promise>COMPLETE</promise>` を出力してください。
-- 失敗、仕様不一致、危険変更、判断不能なら、最後に必ず `<promise>BLOCKED: 理由</promise>` を日本語で出力してください。
+完了報告:
+- 作業終了時は、司令塔が指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
+- 成功時は `{"status":"complete","reason":"","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗、仕様不一致、危険変更、判断不能なら `{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
 ```
 
-衝突解消 worker の監視も `extract-worker-promise.py` を使う。`BLOCKED` または promise 不在の場合は `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に理由をコメントして終了する。`COMPLETE` の場合もこの実行回ではマージせず、`{{reviewingLabel}}` を外して次回に回す。
+衝突解消 worker の監視も `extract-worker-promise.py --file "<promiseFile>"` を使う。`blocked` / `invalid` / promise 不在の場合は `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に理由をコメントして終了する。`complete` の場合もこの実行回ではマージせず、`{{reviewingLabel}}` を外して次回に回す。
 
 ### 8. レビューエージェントの起動
 
@@ -197,6 +201,8 @@ PR branch を base branch に追従させてください。
 ```bash
 head_sha_before=$(gh pr view <PR> -R {{githubRepo}} --json headRefOid --jq .headRefOid)
 ```
+
+レビューエージェントを起動する前に、起動ごとに一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` として採番する。`uuid` は `python3 -c 'import uuid; print(uuid.uuid4())'` などで作る。`<worktreePath>/.pi-looper` を作成し、同じパスの古いファイルがあれば削除してから起動する。採番した promise ファイルパスはレビューエージェント用プロンプトに必ず含める。
 
 レビューエージェント用プロンプトは一時ファイルに書く。必ず次を含める。
 
@@ -230,39 +236,38 @@ PR #<PR> をレビューしてください。
 - 破壊的な git 操作をしない。
 - 無関係な変更を戻さない。
 
-完了出力:
-- 完了したら最後に必ず `<promise>COMPLETE</promise>` を出力してください。
-- 失敗、仕様不一致、危険変更、判断不能なら、最後に必ず `<promise>BLOCKED: 理由</promise>` を日本語で出力してください。
+完了報告:
+- 作業終了時は、司令塔が指定した promise ファイル `<promiseFile>` に必ず JSON を書いてください。
+- 成功時は `{"status":"complete","reason":"","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗、仕様不一致、危険変更、判断不能なら `{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}` を書いてください。
+- 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
 ```
 
-起動コマンド例。まずレビューエージェント名と同じ label の専用タブを作り、出力 JSON の `result.tab.tab_id` を `<tabId>` として保存する。その後、`herdr agent start ... --tab <tabId> --no-focus` で起動し、出力にある `result.agent.pane_id` を `<paneId>` として保存する。`herdr agent start` は `--json` を受け付けないため付けない。`<modelOption>` はレビューエージェントのモデル指定が空でなければ `--model {{reviewerModel}}`、空なら何も置かない。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。後続のレビューエージェントを起動する場合も、同じ手順で専用タブを作ってから `--tab` 指定で起動する。
+起動コマンド例。まずレビューエージェント名と同じ label の専用タブを作り、出力 JSON の `result.tab.tab_id` を `<tabId>` として保存する。その後、`herdr agent start ... --tab <tabId> --no-focus` で起動する。`herdr agent start` は `--json` を受け付けないため付けない。`<modelOption>` はレビューエージェントのモデル指定が空でなければ `--model {{reviewerModel}}`、空なら何も置かない。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。後続のレビューエージェントを起動する場合も、同じ手順で専用タブを作ってから `--tab` 指定で起動する。
 
 ```bash
 reviewer_name="{{projectId}}-pr-<PR>-reviewer"
 tab_output=$(herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "$reviewer_name" --no-focus)
 tab_id=$(printf '%s' "$tab_output" | jq -r '.result.tab.tab_id')
-start_output=$(herdr agent start "$reviewer_name" --cwd <worktreePath> --tab "$tab_id" --no-focus -- pi --name "$reviewer_name" <modelOption> --thinking medium @<promptFile>)
-pane_id=$(printf '%s' "$start_output" | jq -r '.result.agent.pane_id')
+herdr agent start "$reviewer_name" --cwd <worktreePath> --tab "$tab_id" --no-focus -- pi --name "$reviewer_name" <modelOption> --thinking medium @<promptFile>
 ```
-
-出力が JSON として読めない場合は、`herdr pane list` または `herdr agent list` で、対象 workspace とレビューエージェント名に一致する pane の `pane_id` を取得する。
 
 ### 9. レビューエージェントの監視
 
-レビューエージェントの Pi session JSONL を読み、`role: assistant` の通常テキストに出た promise だけを採用する。pane 文字列、起動時 prompt、`thinking`、tool output、単純な `grep '<promise>'` は誤検出・見落としの原因になるため、判定に使わない。
+採番した promise ファイルだけを、唯一の完了判定の権威として扱う。Herdr の agent status は監視ヒントに限り、完了判定の権威にしない。
 
-promise 検出には必ず付属 helper を使う。
+promise ファイルの確認には必ず付属 helper を使う。
 
 ```bash
-python3 {{automationDir}}/extract-worker-promise.py --pane-id <paneId>
+python3 {{automationDir}}/extract-worker-promise.py --file "<promiseFile>"
 ```
 
 helper status ごとの扱い:
 
 - `complete`: 完了として採用する。
 - `blocked`: `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR にブロッカー、確認済み事項、次に必要な判断を日本語でコメントして終了する。マージしない。
-- `none`: Herdr の agent status がまだ working なら待つ。agent status が `idle` / `done` / `blocked` なのに promise が無い場合は、レビューエージェントに promise 出力を1回だけ依頼する。次の確認でも `none` なら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントが完了 promise を返さなかった」とコメントして終了する。
-- `missing_session` / `missing_pane`: `herdr pane list` と `herdr agent list` で対象 pane / session を再確認する。復旧できない場合は `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントの session を確認できない」とコメントして終了する。
+- `none`: Herdr の agent status がまだ working なら待つ。agent status が `idle` / `done` / `blocked` なのに promise ファイルが無い場合は、レビューエージェントに指定済み promise ファイルへ JSON を書くよう1回だけ依頼する。次の確認でも `none` なら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントが完了報告を書かなかった」とコメントして終了する。
+- `invalid`: レビューエージェントに指定済み promise ファイルへ正しい JSON を書くよう1回だけ依頼する。次の確認でも `invalid` なら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントの完了報告 JSON が不正だった」とコメントして終了する。
 - 起動失敗または監視 timeout: `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に起動失敗または timeout の内容をコメントして終了する。
 
 helper status が `complete` の場合:

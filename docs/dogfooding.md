@@ -186,7 +186,7 @@ npm pack --dry-run
 次の状態になったら自動処理を止め、人間が確認します。
 
 - worktree に未コミット差分が残っている
-- 作業エージェントが `<promise>BLOCKED: ...</promise>` を返した
+- 作業エージェントが promise ファイルに `status: "blocked"` を書いた
 - `checkCommand` が失敗した
 - PR が draft のまま
 - 外部レビューや CI が失敗した
