@@ -31,3 +31,7 @@ _Avoid_: promise テキスト規約(`<promise>` タグ)、pane grep、session JS
 **起動ポリシー (workerLaunchPolicy)**:
 issue の難易度から `--thinking` レベルを選ぶための、司令塔向けの方針文。モデル選択はこのポリシーの管轄外。
 _Avoid_: launch policy でのモデル許可
+
+**doctor 診断**:
+operator が 1 コマンドで実行する、既知の失敗モードの読み取り専用診断。所見ごとにコピペ可能な確認コマンドまたは解決コマンドを提示するが、自動修復はしない。
+_Avoid_: 自動修復、司令塔セッション自身の設定鮮度診断

@@ -17,6 +17,10 @@ const {
   templateValues,
 } = require("../../src/core.ts");
 const {
+  buildDoctorSnapshot,
+  formatDoctorReport,
+} = require("../../src/doctor.ts");
+const {
   buildStatusSnapshot,
   formatStatusReport,
 } = require("../../src/status.ts");
@@ -316,14 +320,20 @@ async function gitText(pi, args) {
   }
 }
 
-async function buildLiveStatusReport(pi, cwd) {
+async function collectLiveSnapshotData(pi, cwd, options = {}) {
+  const includeClosedPrs = options.includeClosedPrs === true;
+  const includeIssueComments = options.includeIssueComments === true;
+
   const projects = loadProjects();
   const state = loadState();
   const project = activeProject(cwd, projects);
   if (!project) {
-    return formatStatusReport(buildStatusSnapshot({ cwd, projects, state }));
+    return { cwd, projects, state };
   }
 
+  const issueFields = includeIssueComments
+    ? "number,title,labels,updatedAt,comments"
+    : "number,title,labels,updatedAt";
   const issues = project.githubRepo
     ? await execJson(pi, "gh", [
         "issue",
@@ -335,7 +345,7 @@ async function buildLiveStatusReport(pi, cwd) {
         "--limit",
         "200",
         "--json",
-        "number,title,labels,updatedAt",
+        issueFields,
       ], [])
     : [];
   const openPrs = project.githubRepo
@@ -352,7 +362,7 @@ async function buildLiveStatusReport(pi, cwd) {
         "number,title,labels,updatedAt,headRefName,headRefOid",
       ], [])
     : [];
-  const mergedPrs = project.githubRepo
+  const mergedPrs = includeClosedPrs && project.githubRepo
     ? await execJson(pi, "gh", [
         "pr",
         "list",
@@ -366,7 +376,7 @@ async function buildLiveStatusReport(pi, cwd) {
         "number,title,state,mergedAt,closedAt,headRefName,headRefOid,labels",
       ], [])
     : [];
-  const closedPrs = project.githubRepo
+  const closedPrs = includeClosedPrs && project.githubRepo
     ? await execJson(pi, "gh", [
         "pr",
         "list",
@@ -396,7 +406,7 @@ async function buildLiveStatusReport(pi, cwd) {
     if (head !== undefined) gitHeads[worktreePath] = head.trim();
   }
 
-  return formatStatusReport(buildStatusSnapshot({
+  return {
     cwd,
     projects,
     state,
@@ -406,7 +416,17 @@ async function buildLiveStatusReport(pi, cwd) {
     worktrees,
     gitStatuses,
     gitHeads,
-  }));
+  };
+}
+
+async function buildLiveStatusReport(pi, cwd) {
+  const data = await collectLiveSnapshotData(pi, cwd, { includeClosedPrs: true });
+  return formatStatusReport(buildStatusSnapshot(data));
+}
+
+async function buildLiveDoctorReport(pi, cwd) {
+  const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true });
+  return formatDoctorReport(buildDoctorSnapshot(data));
 }
 
 async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
@@ -486,6 +506,18 @@ export default function (pi) {
         console.log(report);
       } else {
         pi.sendMessage({ customType: "pi-looper-status", content: report, display: true });
+      }
+    },
+  });
+
+  pi.registerCommand("pi-looper-doctor", {
+    description: "Diagnose known pi-looper failure modes and show copy-paste recovery or inspection commands",
+    handler: async (_args, ctx) => {
+      const report = await buildLiveDoctorReport(pi, ctx.cwd);
+      if (ctx.mode === "print" || ctx.mode === "json") {
+        console.log(report);
+      } else {
+        pi.sendMessage({ customType: "pi-looper-doctor", content: report, display: true });
       }
     },
   });
