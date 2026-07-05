@@ -80,13 +80,19 @@
 
 候補選定、draft gate 対象判定、pending checks / 外部レビュー進行中の待機判定は決定論的 helper に任せる。司令塔は helper が選んだ番号最小の1件だけ扱う。
 
+`{{reviewingLabel}}` が残る open PR は原則として中断されたレビュー run の残骸として扱い、再クレーム候補にする。ただし、同じ PR のレビューエージェント（`{{projectId}}-pr-<PR>-reviewer`）がまだ `working` の場合は二重クレームを避けるため helper がスキップを維持する。この安全判定のため、`herdr agent list` を helper に渡す。
+
 ```bash
 prs_json=$(mktemp)
+agents_json=$(mktemp)
 gh pr list -R {{githubRepo}} --state open --limit 100 \
   --json number,updatedAt,headRefOid,isDraft,labels,statusCheckRollup,comments,reviewRequests \
   > "$prs_json"
+herdr agent list > "$agents_json" 2>/dev/null || printf '{"result":{"agents":[]}}' > "$agents_json"
 decision_json=$(python3 {{automationDir}}/pr-reviewer-decisions.py \
   --input "$prs_json" \
+  --agents "$agents_json" \
+  --project-id "{{projectId}}" \
   --review-label "{{reviewLabel}}" \
   --reviewing-label "{{reviewingLabel}}" \
   --human-label "{{humanLabel}}" \
@@ -96,9 +102,10 @@ decision_json=$(python3 {{automationDir}}/pr-reviewer-decisions.py \
 selected=$(printf '%s' "$decision_json" | jq -r '.selected')
 pr_number=$(printf '%s' "$decision_json" | jq -r '.number // empty')
 action=$(printf '%s' "$decision_json" | jq -r '.action // empty')
+stale_reclaim=$(printf '%s' "$decision_json" | jq -r '.staleReclaim // false')
 ```
 
-`selected` が `true` でなければ、GitHub へ書き込まず「対象 PR なし」と要約して終了する。`action=draft_gate` の場合は、選ばれた PR 番号で次の Draft gate へ進む。
+`selected` が `true` でなければ、GitHub へ書き込まず「対象 PR なし」と要約して終了する。`action=draft_gate` の場合は、選ばれた PR 番号で次の Draft gate へ進む。`stale_reclaim=true` の場合は、中断されたレビューを再開する扱いになる（後述の Claim を参照）。
 
 ### 2. Draft gate
 
@@ -109,6 +116,14 @@ action=$(printf '%s' "$decision_json" | jq -r '.action // empty')
 ```bash
 gh pr edit <PR> -R {{githubRepo}} --add-label "{{reviewingLabel}}"
 ```
+
+`stale_reclaim=true` の場合、対象 PR には前の run が残した `{{reviewingLabel}}` がすでに付いている。これは中断されたレビューの残骸なので、沈黙のまま再開しない。まず PR に「中断されたレビュー run を再開します」と分かる1行コメントを日本語で投稿してから、通常フローに入る。
+
+```bash
+gh pr comment <PR> -R {{githubRepo}} --body "中断されたレビュー run を検知したため、レビューを再開します。"
+```
+
+残骸として残った worktree / レビューエージェントがあれば、次の Gather 以降で最新状態を再取得し、Blocked 報告フォーマットの掃除手順に従って安全に片付ける。`stale_reclaim=false` の通常選定ではこのコメントは投稿しない。
 
 ### 4. Gather
 

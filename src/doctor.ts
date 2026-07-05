@@ -38,12 +38,21 @@ export type ClaudeConfigResult =
   | { ok: true; projects: Record<string, ClaudeProjectTrust> }
   | { ok: false };
 
+export type HerdrAgent = {
+  name?: string | null;
+  agent?: string | null;
+  agent_status?: string | null;
+  cwd?: string | null;
+  foreground_cwd?: string | null;
+};
+
 export type DoctorInput = {
   cwd: string;
   projects: NormalizedProject[];
   issues?: DoctorGithubItem[];
   openPrs?: DoctorGithubItem[];
   worktrees?: HerdrWorktree[];
+  agents?: HerdrAgent[];
   gitStatuses?: Record<string, string>;
   state?: DoctorState | null;
   automationDir?: string;
@@ -57,6 +66,7 @@ export type DoctorFindingType =
   | "stale_in_progress"
   | "orphan_worktree"
   | "queue_jam"
+  | "stuck_claim"
   | "automation_unavailable"
   | "automation_spinning"
   | "coordinator_stalled"
@@ -285,6 +295,98 @@ function buildQueueJamFindings(project: NormalizedProject, issues: DoctorGithubI
   return findings;
 }
 
+function findWorktreeForBranch(branch: string, worktrees: HerdrWorktree[]): HerdrWorktree | null {
+  if (!branch) return null;
+  return worktrees.find((worktree) => String(worktree.branch || "") === branch) || null;
+}
+
+function agentCwdInside(agent: HerdrAgent, targetPath: string): boolean {
+  if (!targetPath) return false;
+  for (const candidate of [agent.cwd, agent.foreground_cwd]) {
+    const value = String(candidate || "");
+    if (value && isPathInside(value, targetPath)) return true;
+  }
+  return false;
+}
+
+function hasWorkingReviewer(
+  agents: HerdrAgent[],
+  reviewerName: string,
+  worktree: HerdrWorktree | null,
+): boolean {
+  const worktreePathValue = worktree ? worktreePath(worktree) : "";
+  return agents.some((agent) => {
+    if (String(agent.agent_status || "") !== "working") return false;
+    return String(agent.name || "") === reviewerName || agentCwdInside(agent, worktreePathValue);
+  });
+}
+
+function hasWorkerAgent(agents: HerdrAgent[], workerName: string, worktree: HerdrWorktree | null): boolean {
+  const worktreePathValue = worktree ? worktreePath(worktree) : "";
+  return agents.some(
+    (agent) => String(agent.name || "") === workerName || agentCwdInside(agent, worktreePathValue),
+  );
+}
+
+function requeueImplementCommand(project: NormalizedProject, issueNumber: number | undefined): string {
+  const repo = project.githubRepo || "<repo>";
+  return `gh issue edit ${issueNumber ?? "<number>"} -R ${shellArg(repo)} --remove-label ${shellArg(project.labels.inProgress)} --add-label ${shellArg(project.labels.ready)} --add-label ${shellArg(project.labels.implement)}`;
+}
+
+function buildStuckReviewClaimFindings(
+  project: NormalizedProject,
+  openPrs: DoctorGithubItem[],
+  worktrees: HerdrWorktree[],
+  agents: HerdrAgent[],
+): DoctorFinding[] {
+  const repo = project.githubRepo || "<repo>";
+  return openPrs
+    .filter((pr) => labelsOf(pr).has(project.labels.reviewing))
+    .filter((pr) => {
+      const reviewerName = `${project.id}-pr-${pr.number ?? "?"}-reviewer`;
+      const worktree = findWorktreeForBranch(String(pr.headRefName || ""), worktrees);
+      return !hasWorkingReviewer(agents, reviewerName, worktree);
+    })
+    .map((pr) => ({
+      id: `stuck-review-claim-${pr.number ?? "unknown"}`,
+      type: "stuck_claim" as const,
+      title: `stuck reviewing claim: ${issueRef(pr)}`,
+      summary: `${project.labels.reviewing} が付いていますが、対応するレビューエージェントが Herdr で working ではありません。レビュー run が中断された残骸の疑いがあります。`,
+      commands: [`gh pr edit ${pr.number ?? "<number>"} -R ${shellArg(repo)} --remove-label ${shellArg(project.labels.reviewing)}`],
+    }));
+}
+
+function buildStuckImplementClaimFindings(
+  project: NormalizedProject,
+  issues: DoctorGithubItem[],
+  worktrees: HerdrWorktree[],
+  agents: HerdrAgent[],
+): DoctorFinding[] {
+  return issues
+    .filter((issue) => labelsOf(issue).has(project.labels.inProgress))
+    .filter((issue) => {
+      const workerName = `${project.id}-issue-${issue.number ?? "?"}-worker`;
+      const worktree = issue.number ? findWorktreeForIssue(issue.number, worktrees) : null;
+      return !hasWorkerAgent(agents, workerName, worktree);
+    })
+    .map((issue) => {
+      const worktree = issue.number ? findWorktreeForIssue(issue.number, worktrees) : null;
+      const targetPath = worktree ? worktreePath(worktree) : "";
+      const confirmCommand = targetPath
+        ? `git -C ${shellArg(targetPath)} log ${shellArg(project.baseBranch || "origin/main")}..HEAD --oneline`
+        : project.repoPath
+          ? `herdr worktree list --cwd ${shellArg(project.repoPath)} --json`
+          : "herdr worktree list --json";
+      return {
+        id: `stuck-implement-claim-${issue.number ?? "unknown"}`,
+        type: "stuck_claim" as const,
+        title: `stuck implement claim: ${issueRef(issue)}`,
+        summary: `${project.labels.inProgress} が付いていますが、対応する Worker が Herdr に存在しません。実装 run が中断された残骸の疑いがあります。まず未回収コミットを確認してから再 queue してください。`,
+        commands: [confirmCommand, requeueImplementCommand(project, issue.number)],
+      };
+    });
+}
+
 function automationRef(project: NormalizedProject, automation: NormalizedAutomation): string {
   const name = automation.name || automation.id;
   return `${project.id} ${name.replace(new RegExp(`^${project.id}[:\\s]+`), "")}`.trim();
@@ -410,6 +512,7 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   const issues = input.issues || [];
   const openPrs = input.openPrs || [];
   const worktrees = input.worktrees || [];
+  const agents = input.agents || [];
   const gitStatuses = input.gitStatuses || {};
   const state = input.state || {};
   const automationDir = input.automationDir || ".";
@@ -424,6 +527,8 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
       ...buildStaleInProgressFindings(project, issues, worktrees, nowMs),
       ...buildOrphanWorktreeFindings(project, issues, openPrs, worktrees, gitStatuses),
       ...buildQueueJamFindings(project, issues),
+      ...buildStuckReviewClaimFindings(project, openPrs, worktrees, agents),
+      ...buildStuckImplementClaimFindings(project, issues, worktrees, agents),
       ...buildAutomationFindings(project, state, automationDir, statePath, nowMs),
       ...buildWorkspaceTrustFindings(project, input.claudeConfig),
     ],

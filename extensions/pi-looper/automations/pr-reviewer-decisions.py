@@ -26,6 +26,7 @@ class ReviewDecisionConfig:
     blocked_label: str = "agent:blocked"
     auto_merge: bool = False
     external_review_wait_seconds: int = 1800
+    project_id: str = ""
     now: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -143,12 +144,44 @@ def pr_number(pr: dict[str, Any]) -> int:
         return 0
 
 
+def iter_agents(data: Any) -> Iterable[dict[str, Any]]:
+    if isinstance(data, dict):
+        result = data.get("result")
+        if isinstance(result, dict):
+            data = result
+        agents = data.get("agents")
+        if isinstance(agents, list):
+            return [agent for agent in agents if isinstance(agent, dict)]
+        return []
+    if isinstance(data, list):
+        return [agent for agent in data if isinstance(agent, dict)]
+    return []
+
+
+def working_reviewer_pr_numbers(agents: Any, project_id: str) -> frozenset[int]:
+    """PR numbers whose `<projectId>-pr-<N>-reviewer` agent is still working."""
+    if not project_id:
+        return frozenset()
+    pattern = re.compile(rf"^{re.escape(project_id)}-pr-(\d+)-reviewer$")
+    working: set[int] = set()
+    for agent in iter_agents(agents):
+        if str(agent.get("agent_status") or "").lower() != "working":
+            continue
+        match = pattern.match(str(agent.get("name") or ""))
+        if match:
+            working.add(int(match.group(1)))
+    return frozenset(working)
+
+
 def skip(reason: str, pr: dict[str, Any]) -> dict[str, Any]:
     return {"number": pr.get("number"), "reason": reason}
 
 
-def select_pr_for_review(prs: list[dict[str, Any]], config: ReviewDecisionConfig) -> dict[str, Any]:
-    blocked_labels = {config.reviewing_label, config.blocked_label}
+def select_pr_for_review(
+    prs: list[dict[str, Any]],
+    config: ReviewDecisionConfig,
+    working_reviewer_prs: frozenset[int] = frozenset(),
+) -> dict[str, Any]:
     candidate_labels = {config.review_label, config.human_label} if config.auto_merge else {config.review_label}
     skipped: list[dict[str, Any]] = []
 
@@ -157,15 +190,25 @@ def select_pr_for_review(prs: list[dict[str, Any]], config: ReviewDecisionConfig
         if not labels.intersection(candidate_labels):
             skipped.append(skip("missing_candidate_label", pr))
             continue
-        if labels.intersection(blocked_labels):
-            skipped.append(skip("blocked_or_reviewing", pr))
+        if config.blocked_label in labels:
+            skipped.append(skip("blocked", pr))
             continue
+        stale_reclaim = False
+        if config.reviewing_label in labels:
+            # A serialized run always drops the reviewing label on exit, so a PR
+            # that still carries it at selection time is an interrupted claim.
+            # Keep skipping only while its reviewer agent is confirmed working.
+            if pr_number(pr) in working_reviewer_prs:
+                skipped.append(skip("reviewer_working", pr))
+                continue
+            stale_reclaim = True
         if pr.get("isDraft"):
             return {
                 "selected": True,
                 "number": pr.get("number"),
                 "action": "draft_gate",
                 "reason": "draft",
+                "staleReclaim": stale_reclaim,
                 "skipped": skipped,
             }
         if has_copilot_review_request(pr) and not external_review_wait_is_stale(pr, config):
@@ -181,7 +224,8 @@ def select_pr_for_review(prs: list[dict[str, Any]], config: ReviewDecisionConfig
             "selected": True,
             "number": pr.get("number"),
             "action": "review",
-            "reason": "selectable",
+            "reason": "stale_reclaim" if stale_reclaim else "selectable",
+            "staleReclaim": stale_reclaim,
             "skipped": skipped,
         }
 
@@ -213,9 +257,18 @@ def load_pr(path: str | None) -> dict[str, Any]:
     raise ValueError("PR JSON must be an object or a non-empty list")
 
 
+def load_agents(path: str | None) -> Any:
+    if not path:
+        return {}
+    with open(path, "r", encoding="utf-8") as stream:
+        return json.load(stream)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", help="Path to PR JSON. Defaults to stdin.")
+    parser.add_argument("--agents", help="Path to `herdr agent list` JSON for stale-claim safety checks.")
+    parser.add_argument("--project-id", default="", help="Project id used in `<projectId>-pr-<N>-reviewer` agent names.")
     parser.add_argument("--mode", choices=["select", "external-review-gate"], default="select")
     parser.add_argument("--review-label", default="agent:review")
     parser.add_argument("--reviewing-label", default="agent:reviewing")
@@ -240,12 +293,14 @@ def main(argv: list[str] | None = None) -> int:
         blocked_label=args.blocked_label,
         auto_merge=parse_bool(args.auto_merge),
         external_review_wait_seconds=args.external_review_wait_seconds,
+        project_id=args.project_id,
         now=now,
     )
     if args.mode == "external-review-gate":
         decision = external_review_gate(load_pr(args.input), config)
     else:
-        decision = select_pr_for_review(load_prs(args.input), config)
+        working = working_reviewer_pr_numbers(load_agents(args.agents), config.project_id)
+        decision = select_pr_for_review(load_prs(args.input), config, working)
     print(json.dumps(decision, ensure_ascii=False, sort_keys=True))
     if args.exit_code and not decision["selected"]:
         return 1

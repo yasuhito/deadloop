@@ -1,0 +1,7 @@
+{
+  "result": {
+    "agents": [
+      { "name": "demo-pr-13-reviewer", "agent_status": "idle", "workspace_id": "w9" }
+    ]
+  }
+}
