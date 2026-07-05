@@ -25,6 +25,7 @@ const {
   formatDoctorReport,
 } = require("../../src/doctor.ts");
 const { buildStatusSnapshot, formatStatusReport } = require("../../src/status.ts");
+const { readClaudeConfig } = require("../../src/agent-trust.cjs");
 
 const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 const STATE_DIR = path.join(CONFIG_DIR, EXTENSION_NAME);
@@ -373,24 +374,6 @@ async function gitText(pi, args) {
   }
 }
 
-function readClaudeConfigResult() {
-  const configPath = path.join(os.homedir(), ".claude.json");
-  let raw;
-  try {
-    raw = fs.readFileSync(configPath, "utf8");
-  } catch {
-    return { ok: false };
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    const projects =
-      parsed && typeof parsed.projects === "object" && parsed.projects ? parsed.projects : {};
-    return { ok: true, projects };
-  } catch {
-    return { ok: false };
-  }
-}
-
 async function collectLiveSnapshotData(
   pi,
   cwd,
@@ -494,7 +477,7 @@ async function collectLiveSnapshotData(
       })
     : { result: { worktrees: [] } };
   const claudeConfig =
-    project.workerAgent === "claude" ? readClaudeConfigResult() : undefined;
+    project.workerAgent === "claude" ? readClaudeConfig() : undefined;
   const worktrees = worktreesFromHerdrResult(herdrData);
   const gitStatuses = {};
   const gitHeads = {};

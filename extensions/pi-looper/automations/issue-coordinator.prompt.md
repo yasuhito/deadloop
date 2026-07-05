@@ -9,9 +9,7 @@
 - Worker worktree: `herdr worktree create --cwd {{repoPath}} --branch <branch> --base {{baseBranch}} --label <label> --no-focus --json`
 - Worker タブ作成: `herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "{{projectId}}-issue-<N>-worker" --no-focus`
 - Worker エージェント種別: `{{workerAgent}}`（`pi` / `claude`。未設定プロジェクトは `pi`）
-- Worker 起動: タブ作成の出力 JSON から `result.tab.tab_id` を取得し、エージェント種別で起動コマンドを分岐する
-  - `pi`: `herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --tab <tabId> --no-focus -- pi --name "{{projectId}}-issue-<N>-worker" --thinking <level> [--model <m>] @<promptFile>`
-  - `claude`: `worker_prompt_text=$(cat "<promptFile>"); herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --tab <tabId> --no-focus -- claude --session-id "$uuid" --effort "$level" [--model <m>] --permission-mode bypassPermissions "$worker_prompt_text"`
+- Worker 起動: ランチャー `launch-agent` を使う。タブ作成の出力 JSON から `result.tab.tab_id` を取得し、`node {{automationDir}}/launch-agent.ts` にエージェント種別・名前・cwd・レベル・モデル・uuid・prompt ファイル・tab を渡す。ランチャーがエージェントプロファイルから argv を組み立て、シェルを介さず `herdr agent start ... --no-focus -- <argv>` を実行し、結果 JSON をそのまま返す。エージェント別・実行基盤別の起動分岐、prompt の渡し方（`pi` は `@<promptFile>` 参照、`claude` はファイル内容をポジショナル引数）、前提条件検査（`claude` の workspace trust）はランチャーの責務。
 - Worker モデル指定: "{{workerModel}}"（operator の設定。空でなければ必ず `--model {{workerModel}}` を付ける。空なら `--model` を付けない。値は選択したエージェントが理解する形式で、`pi` は Pi の `provider/id`、`claude` は Claude Code CLI の `opus` / `claude-opus-4-8` など）
 - Worker 起動オプション方針: {{workerLaunchPolicy}}
 - 同時実行: 1件だけ
@@ -179,7 +177,7 @@ Worker を起動する前に、issue の難易度から `<level>` (`low` / `medi
 - モデルは operator の設定に従う。Worker モデル指定が空でなければ、issue の内容にかかわらず必ず `--model {{workerModel}}` を付ける。空なら `--model` を付けない。coordinator の判断でモデルを選ばない。
 - issue 難易度で `<level>` を選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は `low`、通常の実装は `medium`、複数コンポーネント・設計判断・データ移行・難しい不具合修正は `high`。
 - issue 難易度が不明なら `medium` 以上を使う。
-- フラグ写像: `pi` は `--thinking <level>`、`claude` は `--effort <level>`。
+- レベルからエージェント固有フラグ（`pi` の `--thinking` / `claude` の `--effort`）への写像はランチャーが行う。司令塔はレベルの値だけを選ぶ。
 - 追加方針: {{workerLaunchPolicy}}
 - Worker prompt の先頭に `起動判断: ...` と1行で選択理由を書く。
 
@@ -187,17 +185,19 @@ Worker の Herdr agent name は issue ごとに一意にし、既定名 `pi` の
 
 `herdr worktree create --no-focus`、`herdr tab create --no-focus`、`herdr agent start ... --tab <tabId> --no-focus` を使い、ユーザーの表示中タブを奪わない。Worker はまず `herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "{{projectId}}-issue-<N>-worker" --no-focus` で専用タブを作り、出力 JSON の `result.tab.tab_id` を `herdr agent start ... --tab <tabId>` に渡して起動する。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。検証失敗やブランチ更新などで後続 Worker に再対応を依頼する場合も、同じ手順で Worker 名と同じ label の専用タブを作ってから `--tab` 指定で起動する。
 
-起動コマンドは必ず `{{workerAgent}}` で分岐する。`uuid` は promise ファイルパスの `promise-<uuid>.json` と `claude --session-id` で同じ値を使う。`model_args` は `{{workerModel}}` が空なら空、空でなければ `--model {{workerModel}}` とする。
+起動はランチャー 1 コマンドで行う。エージェント種別・実行基盤別の分岐、prompt の渡し方、前提条件検査はランチャーが行うので、司令塔は種別で起動コマンドを分岐しない。`uuid` は promise ファイルパスの `promise-<uuid>.json` と（`claude` の）`--session-id` で同じ値を使うため、司令塔が採番して `--uuid` で渡す。`{{workerModel}}` が空なら `--model` はランチャーが省くので、そのまま渡してよい。ランチャーが `claude` の前提条件（workspace trust）を検査し、未充足が確定した場合は起動せず解決コマンド付きのエラー JSON を返して終了コードが非 0 になる。その場合は Blocked 報告フォーマットで理由をコメントする。
 
 ```bash
-# workerAgent = pi（未設定プロジェクトの既定。現行互換）
-herdr agent start "$worker_name" --cwd "$worktree_path" --tab "$tab_id" --no-focus -- \
-  pi --name "$worker_name" --thinking "$level" $model_args @"$prompt_file"
-
-# workerAgent = claude（対話モード。prompt ファイルは書いたうえで中身を渡す）
-worker_prompt_text=$(cat "$prompt_file")
-herdr agent start "$worker_name" --cwd "$worktree_path" --tab "$tab_id" --no-focus -- \
-  claude --session-id "$uuid" --effort "$level" $model_args --permission-mode bypassPermissions "$worker_prompt_text"
+node {{automationDir}}/launch-agent.ts \
+  --agent "{{workerAgent}}" \
+  --name "$worker_name" \
+  --cwd "$worktree_path" \
+  --repo-path "{{repoPath}}" \
+  --level "$level" \
+  --model "{{workerModel}}" \
+  --uuid "$uuid" \
+  --prompt-file "$prompt_file" \
+  --tab "$tab_id"
 ```
 
 ### 6. Watch

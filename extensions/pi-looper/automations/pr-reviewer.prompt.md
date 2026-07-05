@@ -280,13 +280,21 @@ PR #<PR> をレビューしてください。
 - 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
 ```
 
-起動コマンド例。まずレビューエージェント名と同じ label の専用タブを作り、出力 JSON の `result.tab.tab_id` を `<tabId>` として保存する。その後、`herdr agent start ... --tab <tabId> --no-focus` で起動する。`herdr agent start` は `--json` を受け付けないため付けない。`<modelOption>` はレビューエージェントのモデル指定が空でなければ `--model {{reviewerModel}}`、空なら何も置かない。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。後続のレビューエージェントを起動する場合も、同じ手順で専用タブを作ってから `--tab` 指定で起動する。
+起動はランチャー `launch-agent` 1 コマンドで行う。まずレビューエージェント名と同じ label の専用タブを作り、出力 JSON の `result.tab.tab_id` を `<tabId>` として保存する。その後、`node {{automationDir}}/launch-agent.ts` にエージェント種別・名前・cwd・レベル・モデル・prompt ファイル・tab を渡す。ランチャーがエージェントプロファイルから argv を組み立て、シェルを介さず `herdr agent start ... --no-focus -- <argv>` を実行し、結果 JSON をそのまま返す。レビューエージェントは当面 `--agent pi` 固定（設定値化は #31）。`{{reviewerModel}}` が空なら `--model` はランチャーが省くので、そのまま渡してよい。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。後続のレビューエージェントを起動する場合も、同じ手順で専用タブを作ってから `--tab` 指定で起動する。
 
 ```bash
 reviewer_name="{{projectId}}-pr-<PR>-reviewer"
 tab_output=$(herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "$reviewer_name" --no-focus)
 tab_id=$(printf '%s' "$tab_output" | jq -r '.result.tab.tab_id')
-herdr agent start "$reviewer_name" --cwd <worktreePath> --tab "$tab_id" --no-focus -- pi --name "$reviewer_name" <modelOption> --thinking medium @<promptFile>
+node {{automationDir}}/launch-agent.ts \
+  --agent pi \
+  --name "$reviewer_name" \
+  --cwd <worktreePath> \
+  --repo-path "{{repoPath}}" \
+  --level medium \
+  --model "{{reviewerModel}}" \
+  --prompt-file <promptFile> \
+  --tab "$tab_id"
 ```
 
 ### 9. レビューエージェントの監視

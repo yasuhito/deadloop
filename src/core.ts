@@ -1,5 +1,7 @@
 import path from "node:path";
 
+import { AGENT_KINDS, type AgentKind, isAgentKind } from "./agent-profiles.cjs";
+
 export const DEFAULT_TIMEZONE = "Asia/Tokyo";
 
 export const DEFAULT_WORKER_INSTRUCTIONS = "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。";
@@ -46,7 +48,9 @@ export type NormalizedAutomation = {
   initialLastScheduledAt: number;
 };
 
-export type WorkerAgent = "pi" | "claude";
+// The worker agent enum is derived from the profile table keys (agent-profiles.cjs),
+// so adding an agent profile is the only place that widens this union.
+export type WorkerAgent = AgentKind;
 
 export type RawProject = {
   id?: string;
@@ -217,8 +221,9 @@ function isPathInside(child: string, parent: string): boolean {
 
 function normalizeWorkerAgent(value: unknown): WorkerAgent {
   if (value === undefined) return "pi";
-  if (value === "pi" || value === "claude") return value;
-  throw new Error(`invalid workerAgent: ${String(value)} (expected "pi" or "claude")`);
+  if (isAgentKind(value)) return value;
+  const expected = AGENT_KINDS.map((kind) => `"${kind}"`).join(" or ");
+  throw new Error(`invalid workerAgent: ${String(value)} (expected ${expected})`);
 }
 
 export function normalizeProject(raw: RawProject): NormalizedProject {

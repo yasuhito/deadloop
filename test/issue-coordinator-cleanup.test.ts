@@ -112,9 +112,9 @@ describe("issue coordinator cleanup", () => {
     expect(runIssuePrecheckWithCleanupCandidate()).toBe(0);
   });
 
-  it("starts Herdr with a unique worker agent name", () => {
+  it("passes a unique worker agent name to the launcher", () => {
     expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      'herdr agent start "{{projectId}}-issue-<N>-worker"',
+      '--name "$worker_name"',
     );
   });
 
@@ -124,9 +124,9 @@ describe("issue coordinator cleanup", () => {
     );
   });
 
-  it("starts workers in the dedicated tab", () => {
+  it("forwards the dedicated tab to the launcher for workers", () => {
     expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      'herdr agent start "{{projectId}}-issue-<N>-worker" --cwd <worktreePath> --tab <tabId> --no-focus',
+      '--tab "$tab_id"',
     );
   });
 
@@ -142,9 +142,9 @@ describe("issue coordinator cleanup", () => {
     );
   });
 
-  it("starts review workers in the dedicated tab", () => {
+  it("forwards the dedicated tab to the launcher for review agents", () => {
     expect(readFileSync("extensions/pi-looper/automations/pr-reviewer.prompt.md", "utf8")).toContain(
-      'herdr agent start "$reviewer_name" --cwd <worktreePath> --tab "$tab_id" --no-focus',
+      '--tab "$tab_id"',
     );
   });
 
@@ -154,27 +154,13 @@ describe("issue coordinator cleanup", () => {
     );
   });
 
-  it("documents claude worker startup with a shared session id", () => {
+  // The claude/pi launch argv details (session id, effort, bypass permissions,
+  // positional prompt) now live in the launcher and are covered by
+  // test/agent-profiles.test.ts. The coordinator keeps only the uuid coupling:
+  // the same uuid names the promise file and is handed to the launcher.
+  it("hands the shared session uuid to the launcher", () => {
     expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      '-- claude --session-id "$uuid"',
-    );
-  });
-
-  it("documents claude worker startup with effort levels", () => {
-    expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      '--effort "$level"',
-    );
-  });
-
-  it("documents claude worker startup with bypass permissions", () => {
-    expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      "--permission-mode bypassPermissions",
-    );
-  });
-
-  it("documents claude worker startup with positional prompt text", () => {
-    expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      '"$worker_prompt_text"',
+      '--uuid "$uuid"',
     );
   });
 
