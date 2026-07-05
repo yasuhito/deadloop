@@ -249,7 +249,7 @@ function buildQueueJamFindings(project: NormalizedProject, issues: DoctorGithubI
         summary: `${project.labels.needsTriage} に降格されています。内容を確認し、実装可能ならラベルを戻してください。`,
         commands: [
           `gh issue view ${issue.number ?? "<number>"}`,
-          `gh issue edit ${issue.number ?? "<number>"} --remove-label ${shellArg(project.labels.needsTriage)} --add-label ${shellArg(project.labels.ready)}`,
+          `gh issue edit ${issue.number ?? "<number>"} --remove-label ${shellArg(project.labels.needsTriage)} --add-label ${shellArg(project.labels.ready)} --add-label ${shellArg(project.labels.implement)}`,
         ],
       });
     }

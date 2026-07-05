@@ -109,6 +109,14 @@ describe("pi-looper doctor", () => {
     expect(result.findings[0]?.commands).toContain("gh issue view 7");
   });
 
+  it("reports full requeue command for needs-triage issues", () => {
+    const result = snapshot({ issues: [{ number: 7, labels: ["needs-triage"] }] });
+
+    expect(result.findings[0]?.commands).toContain(
+      "gh issue edit 7 --remove-label needs-triage --add-label ready-for-agent --add-label agent:implement",
+    );
+  });
+
   it("prints no-problem message when there are no findings", () => {
     const report = formatDoctorReport(snapshot());
 
