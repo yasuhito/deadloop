@@ -37,9 +37,29 @@ def merge_tree_is_clean(repo: str, head_ref: str, base_ref: str) -> bool:
     return result.returncode == 0
 
 
-def decide(ahead: int, behind: int, conflict_free: bool) -> dict[str, Any]:
+def worktree_is_clean(repo: str) -> bool:
+    return run_git(repo, ["status", "--short"]).stdout.strip() == ""
+
+
+def rev_parse(repo: str, ref: str) -> str:
+    return run_git(repo, ["rev-parse", "--verify", ref]).stdout.strip()
+
+
+def decide(
+    ahead: int,
+    behind: int,
+    conflict_free: bool,
+    clean_worktree: bool = True,
+    head_matches_expected: bool = True,
+) -> dict[str, Any]:
     diverged = ahead > 0 and behind > 0
-    if behind <= 0:
+    if not clean_worktree:
+        action = "blocked"
+        reason = "dirty_worktree"
+    elif not head_matches_expected:
+        action = "blocked"
+        reason = "stale_head"
+    elif behind <= 0:
         action = "no_update"
         reason = "head_contains_base"
     elif conflict_free:
@@ -56,17 +76,32 @@ def decide(ahead: int, behind: int, conflict_free: bool) -> dict[str, Any]:
         "behind": behind,
         "diverged": diverged,
         "conflictFree": conflict_free,
+        "cleanWorktree": clean_worktree,
+        "headMatchesExpected": head_matches_expected,
     }
 
 
-def decide_live(repo: str, head_ref: str, base_ref: str) -> dict[str, Any]:
-    run_git(repo, ["rev-parse", "--verify", head_ref])
+def decide_live(repo: str, head_ref: str, base_ref: str, expected_head_ref: str | None) -> dict[str, Any]:
+    head_oid = rev_parse(repo, head_ref)
     run_git(repo, ["rev-parse", "--verify", base_ref])
+    expected_head_oid = rev_parse(repo, expected_head_ref) if expected_head_ref else head_oid
     ahead = count_commits(repo, f"{base_ref}..{head_ref}")
     behind = count_commits(repo, f"{head_ref}..{base_ref}")
     conflict_free = True if behind <= 0 else merge_tree_is_clean(repo, head_ref, base_ref)
-    decision = decide(ahead=ahead, behind=behind, conflict_free=conflict_free)
-    decision.update({"headRef": head_ref, "baseRef": base_ref})
+    decision = decide(
+        ahead=ahead,
+        behind=behind,
+        conflict_free=conflict_free,
+        clean_worktree=worktree_is_clean(repo),
+        head_matches_expected=head_oid == expected_head_oid,
+    )
+    decision.update({
+        "headRef": head_ref,
+        "baseRef": base_ref,
+        "headOid": head_oid,
+        "expectedHeadRef": expected_head_ref,
+        "expectedHeadOid": expected_head_oid,
+    })
     return decision
 
 
@@ -76,6 +111,8 @@ def decide_fixture(path: str) -> dict[str, Any]:
         ahead=int(data.get("ahead", 0)),
         behind=int(data.get("behind", 0)),
         conflict_free=bool(data.get("conflictFree", True)),
+        clean_worktree=bool(data.get("cleanWorktree", True)),
+        head_matches_expected=bool(data.get("headMatchesExpected", True)),
     )
 
 
@@ -85,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--head", help="PR head ref, for example origin/my-branch.")
     parser.add_argument("--base", help="Base ref, for example origin/main.")
     parser.add_argument("--fixture", help="Fixture JSON with ahead, behind, and conflictFree.")
+    parser.add_argument("--expected-head-ref", help="Optional ref that local head must match before updating.")
     return parser
 
 
@@ -95,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         if not args.repo or not args.head or not args.base:
             raise ValueError("--repo, --head, and --base are required unless --fixture is used")
-        decision = decide_live(args.repo, args.head, args.base)
+        decision = decide_live(args.repo, args.head, args.base, args.expected_head_ref)
     print(json.dumps(decision, ensure_ascii=False, sort_keys=True))
     return 0
 

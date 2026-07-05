@@ -194,8 +194,9 @@ update_json=$(python3 {{automationDir}}/pr-branch-update-decision.py --repo <wor
 update_action=$(printf '%s' "$update_json" | jq -r '.action')
 ```
 
+- `update_action=blocked`: worktree が clean ではない。PR を作らず、Issue を `{{blockedLabel}}` にして理由をコメントする。
 - `update_action=no_update`: そのまま検証へ進む。
-- `update_action=mechanical_update`: worker を起動せず、司令塔が機械的に更新する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら coordinator が branch update commit を作る。
+- `update_action=mechanical_update`: worker を起動せず、司令塔が機械的に更新する。helper が clean worktree を確認済みの場合だけ実行する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら coordinator が branch update commit を作る。
 - `update_action=delegate_worker`: 衝突あり。worker を 1 体だけ起動して PR branch 更新を委譲する。同一 branch / 同一 PR 相当の更新について後続 worker を多重起動してはならない。既存の branch update worker がいる場合は、新しい worker を起動せず、その worker の `<promise>` を待ってから次の判断を行う。
 
 衝突解消 worker prompt には必ず以下を含める。

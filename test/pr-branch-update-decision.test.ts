@@ -33,4 +33,12 @@ describe("PR branch update decision", () => {
   it("delegates one worker when the branch update conflicts", () => {
     expect(runDecisionFixture("conflict.json").action).toBe("delegate_worker");
   });
+
+  it("blocks mechanical updates from a dirty worktree", () => {
+    expect(runDecisionFixture("dirty-worktree.json").reason).toBe("dirty_worktree");
+  });
+
+  it("blocks mechanical updates from a stale head", () => {
+    expect(runDecisionFixture("stale-head.json").reason).toBe("stale_head");
+  });
 });
