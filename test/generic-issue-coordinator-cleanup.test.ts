@@ -154,6 +154,36 @@ describe("generic issue coordinator cleanup", () => {
     );
   });
 
+  it("documents claude worker startup with a shared session id", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-issue-coordinator.prompt.md", "utf8")).toContain(
+      '-- claude --session-id "$uuid"',
+    );
+  });
+
+  it("documents claude worker startup with effort levels", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-issue-coordinator.prompt.md", "utf8")).toContain(
+      '--effort "$level"',
+    );
+  });
+
+  it("documents claude worker startup with bypass permissions", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-issue-coordinator.prompt.md", "utf8")).toContain(
+      "--permission-mode bypassPermissions",
+    );
+  });
+
+  it("documents claude worker startup with positional prompt text", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-issue-coordinator.prompt.md", "utf8")).toContain(
+      '"$worker_prompt_text"',
+    );
+  });
+
+  it("documents separate enter sends when nudging claude workers", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-issue-coordinator.prompt.md", "utf8")).toContain(
+      "herdr agent send <t> $'\\r'",
+    );
+  });
+
   it("documents dedicated tab startup for branch update workers", () => {
     expect(readFileSync("extensions/pi-looper/automations/generic-pr-reviewer.prompt.md", "utf8")).toContain(
       "branch update worker を起動する場合も、worker 名と同じ label の専用タブを作ってから `herdr agent start ... --tab <tabId> --no-focus`",

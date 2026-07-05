@@ -5,7 +5,7 @@ export const DEFAULT_TIMEZONE = "Asia/Tokyo";
 export const DEFAULT_WORKER_INSTRUCTIONS = "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。";
 
 export const DEFAULT_WORKER_LAUNCH_POLICY =
-  "Worker 起動時は issue の難易度を見て --thinking を選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は --thinking low、通常の実装は --thinking medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は --thinking high。判断理由を worker prompt に1行で残す。";
+  "Worker 起動時は issue の難易度を見てレベルを選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は low、通常の実装は medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は high。判断理由を worker prompt に1行で残す。";
 
 export type LabelConfig = {
   ready?: string;
@@ -46,6 +46,8 @@ export type NormalizedAutomation = {
   initialLastScheduledAt: number;
 };
 
+export type WorkerAgent = "pi" | "claude";
+
 export type RawProject = {
   id?: string;
   enabled?: boolean;
@@ -57,6 +59,7 @@ export type RawProject = {
   autoMerge?: boolean;
   workerInstructions?: string;
   workerLaunchPolicy?: string;
+  workerAgent?: string;
   workerModel?: string;
   reviewerModel?: string;
   labels?: LabelConfig;
@@ -74,6 +77,7 @@ export type NormalizedProject = {
   autoMerge: boolean;
   workerInstructions: string;
   workerLaunchPolicy: string;
+  workerAgent: WorkerAgent;
   workerModel: string;
   reviewerModel: string;
   labels: NormalizedLabels;
@@ -176,6 +180,12 @@ function isPathInside(child: string, parent: string): boolean {
   return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function normalizeWorkerAgent(value: unknown): WorkerAgent {
+  if (value === undefined) return "pi";
+  if (value === "pi" || value === "claude") return value;
+  throw new Error(`invalid workerAgent: ${String(value)} (expected "pi" or "claude")`);
+}
+
 export function normalizeProject(raw: RawProject): NormalizedProject {
   const id = sanitizeId(raw.id || raw.githubRepo || raw.repoPath);
   const project: NormalizedProject = {
@@ -189,6 +199,7 @@ export function normalizeProject(raw: RawProject): NormalizedProject {
     autoMerge: raw.autoMerge === true,
     workerInstructions: raw.workerInstructions || DEFAULT_WORKER_INSTRUCTIONS,
     workerLaunchPolicy: raw.workerLaunchPolicy || DEFAULT_WORKER_LAUNCH_POLICY,
+    workerAgent: normalizeWorkerAgent(raw.workerAgent),
     workerModel: raw.workerModel || "",
     reviewerModel: raw.reviewerModel || "",
     labels: normalizeLabels(raw.labels || {}),
@@ -323,6 +334,7 @@ export function templateValues(
     autoMerge: project.autoMerge,
     workerInstructions: project.workerInstructions || "",
     workerLaunchPolicy: project.workerLaunchPolicy || "",
+    workerAgent: project.workerAgent,
     workerModel: project.workerModel || "",
     reviewerModel: project.reviewerModel || "",
     readyLabel: project.labels.ready,

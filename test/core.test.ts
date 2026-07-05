@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_WORKER_LAUNCH_POLICY,
   EXTENSION_CODE_CHANGED_WARNING,
   codeFreshnessWarning,
   cronSlotAt,
@@ -80,7 +81,8 @@ describe("deterministic extension core", () => {
       autoMerge: false,
       workerInstructions: "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。",
       workerLaunchPolicy:
-        "Worker 起動時は issue の難易度を見て --thinking を選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は --thinking low、通常の実装は --thinking medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は --thinking high。判断理由を worker prompt に1行で残す。",
+        "Worker 起動時は issue の難易度を見てレベルを選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は low、通常の実装は medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は high。判断理由を worker prompt に1行で残す。",
+      workerAgent: "pi",
       workerModel: "",
       reviewerModel: "",
       labels: {
@@ -185,6 +187,26 @@ describe("deterministic extension core", () => {
     ).toBe("demo owner/repo /ext/automations  ready-for-agent");
   });
 
+  it("defaults the worker agent to pi", () => {
+    expect(normalizeProject({}).workerAgent).toBe("pi");
+  });
+
+  it("preserves the pi worker agent selection", () => {
+    expect(normalizeProject({ workerAgent: "pi" }).workerAgent).toBe("pi");
+  });
+
+  it("preserves the claude worker agent selection", () => {
+    expect(normalizeProject({ workerAgent: "claude" }).workerAgent).toBe("claude");
+  });
+
+  it("rejects invalid worker agent values", () => {
+    expect(() => normalizeProject({ workerAgent: "codex" })).toThrow(/invalid workerAgent/);
+  });
+
+  it("keeps the default worker launch policy independent of pi thinking flags", () => {
+    expect(DEFAULT_WORKER_LAUNCH_POLICY).not.toContain("--thinking");
+  });
+
   it("preserves the operator-designated worker model verbatim", () => {
     const project = normalizeProject({ workerModel: "anthropic/claude-opus-4-8" });
 
@@ -202,6 +224,14 @@ describe("deterministic extension core", () => {
     const values = templateValues(project, project.automations[0], "/auto");
 
     expect(renderTemplate("{{workerModel}}|{{reviewerModel}}", values)).toBe("anthropic/claude-opus-4-8|");
+  });
+
+  it("exposes the worker agent to prompt templates", () => {
+    const project = normalizeProject({ workerAgent: "claude", automations: [{}] });
+
+    expect(renderTemplate("{{workerAgent}}", templateValues(project, project.automations[0], "/auto"))).toBe(
+      "claude",
+    );
   });
 
   it("defaults auto merge to disabled", () => {

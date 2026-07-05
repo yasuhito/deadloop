@@ -34,6 +34,8 @@ For a local development checkout, copy from `/absolute/path/to/pi-looper/extensi
 
 `projects.json` is local configuration. It contains local paths, repository names, and rollout choices, so do **not** commit it. The package includes only `extensions/pi-looper/projects.example.json` as a template.
 
+If a project uses `workerAgent: "claude"`, run `claude` interactively once from the target repository root and accept Claude Code workspace trust before enabling the automation.
+
 Key fields:
 
 - `repoPath` — absolute path to the target repository checkout.
@@ -43,6 +45,8 @@ Key fields:
 - `checkCommand` — verification command workers and reviewers must pass before handoff.
 - `autoMerge` — keep `false` until the repository has proven safeguards. Only `true` allows the PR reviewer automation to squash merge and delete the head branch after its gates pass.
 - `workerInstructions` — repository-specific instructions injected into worker prompts.
+- `workerAgent` — worker CLI agent type. Allowed values are `"pi"` and `"claude"`; the default is `"pi"`.
+- `workerModel` — optional worker model passed through verbatim in the format understood by the selected `workerAgent` (`provider/id` for Pi, `opus` / `claude-opus-4-8` style names for Claude Code CLI).
 - `labels` — GitHub labels used to coordinate issue and PR state.
 - `automations` — scheduled automation entries and their prompt/precheck files.
 

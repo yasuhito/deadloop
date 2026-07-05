@@ -57,6 +57,7 @@ See [public-package-setup.md](public-package-setup.md) for the first-time setup 
       "checkCommand": "npm test && npm run lint && npm run typecheck && bash -n extensions/pi-looper/automations/*.sh && python3 -m py_compile extensions/pi-looper/automations/*.py && npm pack --dry-run",
       "autoMerge": false,
       "workerInstructions": "AGENTS.md, README.md, docs/dogfooding.md, and relevant files must be read before making changes. Follow the one-expectation-per-test rule.",
+      "workerAgent": "pi",
       "automations": [
         {
           "id": "pi-looper:issue-coordinator",

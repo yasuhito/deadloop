@@ -38,6 +38,8 @@ pi-looper は GitHub Issue / PR にコメントを書き込み、ラベルを編
 
    `projects.json` is local config. It contains local paths and rollout choices, so do **not** commit it. Keep `autoMerge: false` while getting started.
 
+   If a project uses `workerAgent: "claude"`, the operator must first run `claude` interactively once from the target repository root and accept Claude Code workspace trust for that checkout.
+
 3. Create the required GitHub labels, then label an issue with both `ready-for-agent` and `agent:implement`.
 
 4. Roll out in phases:
@@ -126,8 +128,9 @@ PI_LOOPER_CONFIG=/path/to/projects.json pi
 - `checkCommand` — 作業エージェント / レビューエージェントが最後に通す検証コマンド。pi-looper 自体では `npm test && npm run lint && npm run typecheck && bash -n extensions/pi-looper/automations/*.sh && python3 -m py_compile extensions/pi-looper/automations/*.py && npm pack --dry-run` を標準検証にしています
 - `autoMerge` — `true` のときだけ PR reviewer が条件を満たした PR をマージする。既定値は `false` なので、初回導入では明示的に `false` のままにしてください
 - `workerInstructions` — 作業エージェント用プロンプトに差し込むプロジェクト固有指示
-- `workerModel` — 作業エージェントの使用モデル。Pi の `provider/id` 形式(例: `anthropic/claude-opus-4-8`)をそのまま `--model` に渡す。設定すると司令塔は issue の内容にかかわらず必ずこのモデルで Worker を起動する。未設定なら Pi の既定モデルを使う
-- `reviewerModel` — レビューエージェントの使用モデル。形式と意味論は `workerModel` と同じ。実装(重い)とレビュー(軽い)でサブスクリプションの消費先を分けられるよう独立させている
+- `workerAgent` — Worker を起動するエージェント種別。列挙値は `"pi"` / `"claude"`、未設定時は `"pi"`。`"claude"` を使う場合は、対象リポジトリのルートで operator が一度 `claude` を対話起動し、Claude Code の workspace trust を受け入れておく
+- `workerModel` — 作業エージェントの使用モデル。選択した `workerAgent` が理解する形式で書く（`pi` は `provider/id`、`claude` は `opus` / `claude-opus-4-8` など）。設定すると司令塔は issue の内容にかかわらず必ずこのモデルで Worker を起動する。未設定なら各エージェントの既定モデルを使う
+- `reviewerModel` — レビューエージェントの使用モデル。現在のレビューエージェントは Pi で起動するため Pi の `provider/id` 形式で書く。実装(重い)とレビュー(軽い)でサブスクリプションの消費先を分けられるよう独立させている
 - `labels` — Issue / PR のラベル
 - `automations` — schedule、prompt、precheck
 
