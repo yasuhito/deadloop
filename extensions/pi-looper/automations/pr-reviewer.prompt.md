@@ -8,7 +8,8 @@
 - Herdr CLI: `herdr`
 - 既定検証コマンド: `{{checkCommand}}`
 - 自動マージ設定: `autoMerge={{autoMerge}}`
-- レビューエージェントのモデル指定: "{{reviewerModel}}"（運用者の設定。空でなければ起動コマンドに必ず `--model {{reviewerModel}}` を付ける。空なら `--model` を付けない）
+- レビューエージェント種別: `{{reviewerAgent}}`（`pi` / `claude`。未設定プロジェクトは `pi`）
+- レビューエージェントのモデル指定: "{{reviewerModel}}"（運用者の設定。空でなければ起動コマンドに必ず `--model {{reviewerModel}}` を付ける。空なら `--model` を付けない。値は選択したエージェントが理解する形式で、`pi` は Pi の `provider/id`、`claude` は Claude Code CLI の `opus` / `claude-opus-4-8` など）
 - レビュー作業は PR branch の Herdr worktree で行う。main workspace を編集しない。
 - 同時実行: 1件だけ
 
@@ -254,7 +255,7 @@ PR branch を base branch に追従させてください。
 head_sha_before=$(gh pr view <PR> -R {{githubRepo}} --json headRefOid --jq .headRefOid)
 ```
 
-レビューエージェントを起動する前に、起動ごとに一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` として採番する。`uuid` は `python3 -c 'import uuid; print(uuid.uuid4())'` などで作る。`<worktreePath>/.pi-looper` を作成し、同じパスの古いファイルがあれば削除してから起動する。採番した promise ファイルパスはレビューエージェント用プロンプトに必ず含める。
+レビューエージェントを起動する前に、起動ごとに一意な `uuid` を `python3 -c 'import uuid; print(uuid.uuid4())'` などで採番し、一意な promise ファイルパスを `<worktreePath>/.pi-looper/promise-<uuid>.json` とする。`uuid` は promise ファイルパスの `promise-<uuid>.json` と（`claude` の）`--session-id` で同じ値を使うため、司令塔が採番して `--uuid` で渡す（worker と同じ契約、ADR 0003）。`<worktreePath>/.pi-looper` を作成し、同じパスの古いファイルがあれば削除してから起動する。採番した promise ファイルパスはレビューエージェント用プロンプトに必ず含める。
 
 レビューエージェント用プロンプトは一時ファイルに書く。必ず次を含める。
 
@@ -295,19 +296,20 @@ PR #<PR> をレビューしてください。
 - 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。
 ```
 
-起動はランチャー `launch-agent` 1 コマンドで行う。まずレビューエージェント名と同じ label の専用タブを作り、出力 JSON の `result.tab.tab_id` を `<tabId>` として保存する。その後、`node {{automationDir}}/launch-agent.ts` にエージェント種別・名前・cwd・レベル・モデル・prompt ファイル・tab を渡す。ランチャーがエージェントプロファイルから argv を組み立て、シェルを介さず `herdr agent start ... --no-focus -- <argv>` を実行し、結果 JSON をそのまま返す。レビューエージェントは当面 `--agent pi` 固定（設定値化は #31）。`{{reviewerModel}}` が空なら `--model` はランチャーが省くので、そのまま渡してよい。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。後続のレビューエージェントを起動する場合も、同じ手順で専用タブを作ってから `--tab` 指定で起動する。
+起動はランチャー `launch-agent` 1 コマンドで行う。まずレビューエージェント名と同じ label の専用タブを作り、出力 JSON の `result.tab.tab_id` を `<tabId>` として保存する。その後、`node {{automationDir}}/launch-agent.ts` にエージェント種別・名前・cwd・レベル・モデル・uuid・prompt ファイル・tab を渡す。ランチャーがエージェントプロファイルから argv を組み立て、シェルを介さず `herdr agent start ... --no-focus -- <argv>` を実行し、結果 JSON をそのまま返す。エージェント種別・実行基盤別の分岐、prompt の渡し方、前提条件検査はランチャーが行うので、司令塔は種別で起動コマンドを分岐しない。`{{reviewerModel}}` が空なら `--model` はランチャーが省くので、そのまま渡してよい。ランチャーが `claude` の前提条件（workspace trust）を検査し、未充足が確定した場合は起動せず解決コマンド付きのエラー JSON を返して終了コードが非 0 になる。その場合は Blocked 報告フォーマットで理由をコメントする。`herdr agent start` に `--workspace <workspaceId>` を直指定して split 起動しない。後続のレビューエージェントを起動する場合も、同じ手順で専用タブを作ってから `--tab` 指定で起動する。
 
 ```bash
 reviewer_name="{{projectId}}-pr-<PR>-reviewer"
 tab_output=$(herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "$reviewer_name" --no-focus)
 tab_id=$(printf '%s' "$tab_output" | jq -r '.result.tab.tab_id')
 node {{automationDir}}/launch-agent.ts \
-  --agent pi \
+  --agent "{{reviewerAgent}}" \
   --name "$reviewer_name" \
   --cwd <worktreePath> \
   --repo-path "{{repoPath}}" \
   --level medium \
   --model "{{reviewerModel}}" \
+  --uuid "$uuid" \
   --prompt-file <promptFile> \
   --tab "$tab_id"
 ```
@@ -329,6 +331,8 @@ helper status ごとの扱い:
 - `none`: Herdr の agent status がまだ working なら待つ。agent status が `idle` / `done` / `blocked` なのに promise ファイルが無い場合は、レビューエージェントに指定済み promise ファイルへ JSON を書くよう1回だけ依頼する。次の確認でも `none` なら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントが完了報告を書かなかった」と Blocked 報告フォーマットでコメントして終了する。
 - `invalid`: レビューエージェントに指定済み promise ファイルへ正しい JSON を書くよう1回だけ依頼する。次の確認でも `invalid` なら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントの完了報告 JSON が不正だった」と Blocked 報告フォーマットでコメントして終了する。
 - 起動失敗または監視 timeout: `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に起動失敗または timeout の内容を Blocked 報告フォーマットでコメントして終了する。
+
+`{{reviewerAgent}}` が `claude` の場合、`none` / `invalid` で promise ファイルへの記入を促す pane 送信の督促は、本文と Enter を別々に送る: `herdr agent send <t> "<本文>"` のあと `herdr agent send <t> $'\r'`。
 
 helper status が `complete` の場合:
 

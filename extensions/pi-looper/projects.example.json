@@ -12,6 +12,7 @@
       "workerInstructions": "AGENTS.md and relevant project docs must be read before making changes.",
       "workerAgent": "pi",
       "workerModel": "anthropic/claude-opus-4-8",
+      "reviewerAgent": "pi",
       "reviewerModel": "",
       "labels": {
         "ready": "ready-for-agent",

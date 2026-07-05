@@ -130,7 +130,8 @@ PI_LOOPER_CONFIG=/path/to/projects.json pi
 - `workerInstructions` — 作業エージェント用プロンプトに差し込むプロジェクト固有指示
 - `workerAgent` — Worker を起動するエージェント種別。列挙値は `"pi"` / `"claude"`、未設定時は `"pi"`。`"claude"` を使う場合は、対象リポジトリのルートで operator が一度 `claude` を対話起動し、Claude Code の workspace trust を受け入れておく
 - `workerModel` — 作業エージェントの使用モデル。選択した `workerAgent` が理解する形式で書く（`pi` は `provider/id`、`claude` は `opus` / `claude-opus-4-8` など）。設定すると司令塔は issue の内容にかかわらず必ずこのモデルで Worker を起動する。未設定なら各エージェントの既定モデルを使う
-- `reviewerModel` — レビューエージェントの使用モデル。現在のレビューエージェントは Pi で起動するため Pi の `provider/id` 形式で書く。実装(重い)とレビュー(軽い)でサブスクリプションの消費先を分けられるよう独立させている
+- `reviewerAgent` — レビューエージェントを起動するエージェント種別。列挙値は `"pi"` / `"claude"`、未設定時は `"pi"`。`"claude"` を使う場合は、対象リポジトリのルートで operator が一度 `claude` を対話起動し、Claude Code の workspace trust を受け入れておく
+- `reviewerModel` — レビューエージェントの使用モデル。選択した `reviewerAgent` が理解する形式で書く（`pi` は `provider/id`、`claude` は `opus` / `claude-opus-4-8` など）。実装(重い)とレビュー(軽い)でサブスクリプションの消費先を分けられるよう独立させている
 - `labels` — Issue / PR のラベル
 - `automations` — schedule、prompt、precheck
 

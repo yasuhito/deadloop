@@ -48,9 +48,11 @@ export type NormalizedAutomation = {
   initialLastScheduledAt: number;
 };
 
-// The worker agent enum is derived from the profile table keys (agent-profiles.cjs),
-// so adding an agent profile is the only place that widens this union.
+// The worker and reviewer agent enums are derived from the profile table keys
+// (agent-profiles.cjs), so adding an agent profile is the only place that widens
+// this union.
 export type WorkerAgent = AgentKind;
+export type ReviewerAgent = AgentKind;
 
 export type RawProject = {
   id?: string;
@@ -65,6 +67,7 @@ export type RawProject = {
   workerLaunchPolicy?: string;
   workerAgent?: string;
   workerModel?: string;
+  reviewerAgent?: string;
   reviewerModel?: string;
   labels?: LabelConfig;
   automations?: RawAutomation[];
@@ -83,6 +86,7 @@ export type NormalizedProject = {
   workerLaunchPolicy: string;
   workerAgent: WorkerAgent;
   workerModel: string;
+  reviewerAgent: ReviewerAgent;
   reviewerModel: string;
   labels: NormalizedLabels;
   automations: NormalizedAutomation[];
@@ -219,11 +223,13 @@ function isPathInside(child: string, parent: string): boolean {
   return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function normalizeWorkerAgent(value: unknown): WorkerAgent {
+// Shared by workerAgent and reviewerAgent: both draw from the same profile-table
+// enum, so the only difference is which field name appears in the error message.
+function normalizeAgentKind(value: unknown, field: string): AgentKind {
   if (value === undefined) return "pi";
   if (isAgentKind(value)) return value;
   const expected = AGENT_KINDS.map((kind) => `"${kind}"`).join(" or ");
-  throw new Error(`invalid workerAgent: ${String(value)} (expected ${expected})`);
+  throw new Error(`invalid ${field}: ${String(value)} (expected ${expected})`);
 }
 
 export function normalizeProject(raw: RawProject): NormalizedProject {
@@ -239,8 +245,9 @@ export function normalizeProject(raw: RawProject): NormalizedProject {
     autoMerge: raw.autoMerge === true,
     workerInstructions: raw.workerInstructions || DEFAULT_WORKER_INSTRUCTIONS,
     workerLaunchPolicy: raw.workerLaunchPolicy || DEFAULT_WORKER_LAUNCH_POLICY,
-    workerAgent: normalizeWorkerAgent(raw.workerAgent),
+    workerAgent: normalizeAgentKind(raw.workerAgent, "workerAgent"),
     workerModel: raw.workerModel || "",
+    reviewerAgent: normalizeAgentKind(raw.reviewerAgent, "reviewerAgent"),
     reviewerModel: raw.reviewerModel || "",
     labels: normalizeLabels(raw.labels || {}),
     automations: [],
@@ -376,6 +383,7 @@ export function templateValues(
     workerLaunchPolicy: project.workerLaunchPolicy || "",
     workerAgent: project.workerAgent,
     workerModel: project.workerModel || "",
+    reviewerAgent: project.reviewerAgent,
     reviewerModel: project.reviewerModel || "",
     readyLabel: project.labels.ready,
     implementLabel: project.labels.implement,

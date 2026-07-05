@@ -73,6 +73,7 @@ describe("deterministic extension core", () => {
         "Worker 起動時は issue の難易度を見てレベルを選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は low、通常の実装は medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は high。判断理由を worker prompt に1行で残す。",
       workerAgent: "pi",
       workerModel: "",
+      reviewerAgent: "pi",
       reviewerModel: "",
       labels: {
         ready: "agent-ready",
@@ -192,6 +193,18 @@ describe("deterministic extension core", () => {
     expect(() => normalizeProject({ workerAgent: "codex" })).toThrow(/invalid workerAgent/);
   });
 
+  it("defaults the reviewer agent to pi", () => {
+    expect(normalizeProject({}).reviewerAgent).toBe("pi");
+  });
+
+  it("preserves the claude reviewer agent selection", () => {
+    expect(normalizeProject({ reviewerAgent: "claude" }).reviewerAgent).toBe("claude");
+  });
+
+  it("rejects invalid reviewer agent values", () => {
+    expect(() => normalizeProject({ reviewerAgent: "codex" })).toThrow(/invalid reviewerAgent/);
+  });
+
   it("keeps the default worker launch policy independent of pi thinking flags", () => {
     expect(DEFAULT_WORKER_LAUNCH_POLICY).not.toContain("--thinking");
   });
@@ -219,6 +232,14 @@ describe("deterministic extension core", () => {
     const project = normalizeProject({ workerAgent: "claude", automations: [{}] });
 
     expect(renderTemplate("{{workerAgent}}", templateValues(project, project.automations[0], "/auto"))).toBe(
+      "claude",
+    );
+  });
+
+  it("exposes the reviewer agent to prompt templates", () => {
+    const project = normalizeProject({ reviewerAgent: "claude", automations: [{}] });
+
+    expect(renderTemplate("{{reviewerAgent}}", templateValues(project, project.automations[0], "/auto"))).toBe(
       "claude",
     );
   });

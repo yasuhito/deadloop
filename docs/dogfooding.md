@@ -58,6 +58,7 @@ See [public-package-setup.md](public-package-setup.md) for the first-time setup 
       "autoMerge": false,
       "workerInstructions": "AGENTS.md, README.md, docs/dogfooding.md, and relevant files must be read before making changes. Follow the one-expectation-per-test rule.",
       "workerAgent": "pi",
+      "reviewerAgent": "pi",
       "automations": [
         {
           "id": "pi-looper:issue-coordinator",

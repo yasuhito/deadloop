@@ -28,6 +28,15 @@ const claudeProject = normalizeProject({
   workerAgent: "claude",
 });
 
+const reviewerClaudeProject = normalizeProject({
+  id: "pi-looper",
+  repoPath: "/repo",
+  githubRepo: "owner/repo",
+  worktreeRoot: "/wt",
+  workerAgent: "pi",
+  reviewerAgent: "claude",
+});
+
 function snapshot(overrides: Partial<Parameters<typeof buildDoctorSnapshot>[0]> = {}) {
   return buildDoctorSnapshot({
     cwd: "/repo",
@@ -202,6 +211,12 @@ describe("pi-looper doctor", () => {
     });
 
     expect(result.findings).toEqual([]);
+  });
+
+  it("reports workspace trust for a claude reviewer even when the worker is pi", () => {
+    const result = snapshot({ projects: [reviewerClaudeProject], claudeConfig: { ok: true, projects: {} } });
+
+    expect(result.findings[0]?.commands).toContain("cd /repo && claude");
   });
 
   it("does not report workspace trust findings for pi projects", () => {

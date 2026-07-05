@@ -471,7 +471,7 @@ function buildWorkspaceTrustFindings(
   project: NormalizedProject,
   claudeConfig: ClaudeConfigResult | undefined,
 ): DoctorFinding[] {
-  if (project.workerAgent !== "claude") return [];
+  if (project.workerAgent !== "claude" && project.reviewerAgent !== "claude") return [];
   const repoPath = project.repoPath;
   if (!repoPath) return [];
 
@@ -485,7 +485,7 @@ function buildWorkspaceTrustFindings(
         type: "workspace_trust",
         title: `workspace trust 状態を確認できません: ${repoPath}`,
         summary:
-          "~/.claude.json を読めないため trust 状態を確認できません。claude Worker は未 trust だと初回起動が trust ダイアログでブロックされます。",
+          "~/.claude.json を読めないため trust 状態を確認できません。claude エージェントは未 trust だと初回起動が trust ダイアログでブロックされます。",
         commands: [
           `jq --arg p ${shellArg(repoPath)} '.projects[$p].hasTrustDialogAccepted' ~/.claude.json`,
         ],
@@ -499,7 +499,7 @@ function buildWorkspaceTrustFindings(
       type: "workspace_trust",
       title: `workspace trust 未受け入れ: ${repoPath}`,
       summary:
-        "claude Worker は対話モードで起動するため、未 trust だと初回起動が trust ダイアログでブロックされます。一度手動で受け入れてください。",
+        "claude エージェントは対話モードで起動するため、未 trust だと初回起動が trust ダイアログでブロックされます。一度手動で受け入れてください。",
       commands: [`cd ${shellArg(repoPath)} && claude`],
     },
   ];

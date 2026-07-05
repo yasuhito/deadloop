@@ -22,6 +22,14 @@ describe("agent launch template migration", () => {
     expect(readTemplate("pr-reviewer.prompt.md")).toMatch(/launch-agent\.ts/);
   });
 
+  it("selects the review agent kind from the reviewerAgent template value", () => {
+    expect(readTemplate("pr-reviewer.prompt.md")).toMatch(/--agent\s+"?\{\{reviewerAgent\}\}"?/);
+  });
+
+  it("keeps no hard-coded pi agent kind in the pr reviewer launch", () => {
+    expect(readTemplate("pr-reviewer.prompt.md")).not.toMatch(/--agent\s+pi\b/);
+  });
+
   it("keeps no raw agent-start launch branch in the issue coordinator", () => {
     expect(readTemplate("issue-coordinator.prompt.md")).not.toMatch(rawLaunchBranch);
   });
