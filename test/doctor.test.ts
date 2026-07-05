@@ -88,6 +88,7 @@ describe("pi-looper doctor", () => {
   it("does not report fresh in-progress issues", () => {
     const result = snapshot({
       issues: [{ number: 2, labels: ["agent:in-progress"], updatedAt: "2026-07-04T00:00:01Z" }],
+      agents: [{ name: "pi-looper-issue-2-worker", agent_status: "working" }],
     });
 
     expect(result.findings).toEqual([]);
@@ -217,6 +218,44 @@ describe("pi-looper doctor", () => {
     );
   });
 
+
+  it("reports a stuck reviewing claim when no reviewer agent is running", () => {
+    const result = snapshot({
+      openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:reviewing"] }],
+      agents: [],
+    });
+
+    expect(result.findings[0]?.commands).toContain("gh pr edit 10 -R owner/repo --remove-label agent:reviewing");
+  });
+
+  it("does not report a reviewing claim when the reviewer agent is working", () => {
+    const result = snapshot({
+      openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:reviewing"] }],
+      agents: [{ name: "pi-looper-pr-10-reviewer", agent_status: "working" }],
+    });
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports a stuck implement claim with a worktree confirmation command when no worker is running", () => {
+    const result = snapshot({
+      issues: [{ number: 11, labels: ["agent:in-progress"] }],
+      worktrees: [{ branch: "agent/issue-11-demo", path: "/wt/agent-issue-11-demo", open_workspace_id: "ws-11" }],
+      agents: [],
+    });
+
+    expect(result.findings[0]?.commands).toContain("git -C /wt/agent-issue-11-demo log origin/main..HEAD --oneline");
+  });
+
+  it("does not report stuck claims when no claim labels are present", () => {
+    const result = snapshot({
+      openPrs: [{ number: 12, headRefName: "agent/issue-12-demo", labels: [] }],
+      issues: [{ number: 13, labels: [] }],
+      agents: [],
+    });
+
+    expect(result.findings).toEqual([]);
+  });
 
   it("prints no-problem message when there are no findings", () => {
     const report = formatDoctorReport(snapshot());
