@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "${PI_LOOPER_REPO_PATH:-${HEADR_REPO_PATH:?}}"
+cd "${PI_LOOPER_REPO_PATH:?}"
 
-repo="${PI_LOOPER_GITHUB_REPO:-${HEADR_GITHUB_REPO:?}}"
-review_label="${PI_LOOPER_REVIEW_LABEL:-${HEADR_REVIEW_LABEL:-agent:review}}"
-reviewing_label="${PI_LOOPER_REVIEWING_LABEL:-${HEADR_REVIEWING_LABEL:-agent:reviewing}}"
-human_label="${PI_LOOPER_HUMAN_LABEL:-${HEADR_HUMAN_LABEL:-ready-for-human}}"
-blocked_label="${PI_LOOPER_BLOCKED_LABEL:-${HEADR_BLOCKED_LABEL:-agent:blocked}}"
-auto_merge="${PI_LOOPER_AUTO_MERGE:-${HEADR_AUTO_MERGE:-0}}"
-external_review_wait_seconds="${PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-${HERDR_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-${HEADR_EXTERNAL_REVIEW_WAIT_SECONDS:-1800}}}"
+repo="${PI_LOOPER_GITHUB_REPO:?}"
+review_label="${PI_LOOPER_REVIEW_LABEL:-agent:review}"
+reviewing_label="${PI_LOOPER_REVIEWING_LABEL:-agent:reviewing}"
+human_label="${PI_LOOPER_HUMAN_LABEL:-ready-for-human}"
+blocked_label="${PI_LOOPER_BLOCKED_LABEL:-agent:blocked}"
+auto_merge="${PI_LOOPER_AUTO_MERGE:-0}"
+external_review_wait_seconds="${PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-1800}"
 automation_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 args=(
@@ -24,8 +24,6 @@ args=(
 )
 if [ -n "${PI_LOOPER_NOW:-}" ]; then
   args+=(--now "${PI_LOOPER_NOW}")
-elif [ -n "${HEADR_NOW:-}" ]; then
-  args+=(--now "${HEADR_NOW}")
 fi
 
 gh pr list -R "${repo}" --state open --limit 100 \

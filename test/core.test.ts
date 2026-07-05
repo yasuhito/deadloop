@@ -28,17 +28,6 @@ describe("deterministic extension core", () => {
     ).toBe("/explicit/projects.json");
   });
 
-  it("uses HERDR_LOOPER_CONFIG when the new config variable is unset", () => {
-    expect(
-      resolveConfigPath({
-        env: { HERDR_LOOPER_CONFIG: "/legacy/projects.json" },
-        stateDir: "/state",
-        extensionDir: "/extension",
-        exists: () => true,
-      }),
-    ).toBe("/legacy/projects.json");
-  });
-
   it("uses the user state config before package-local config", () => {
     expect(
       resolveConfigPath({

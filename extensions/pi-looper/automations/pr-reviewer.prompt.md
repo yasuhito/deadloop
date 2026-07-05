@@ -92,7 +92,7 @@ decision_json=$(python3 {{automationDir}}/pr-reviewer-decisions.py \
   --human-label "{{humanLabel}}" \
   --blocked-label "{{blockedLabel}}" \
   --auto-merge "{{autoMerge}}" \
-  --external-review-wait-seconds "${PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-${HERDR_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-1800}}")
+  --external-review-wait-seconds "${PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-1800}")
 selected=$(printf '%s' "$decision_json" | jq -r '.selected')
 pr_number=$(printf '%s' "$decision_json" | jq -r '.number // empty')
 action=$(printf '%s' "$decision_json" | jq -r '.action // empty')
@@ -147,7 +147,7 @@ head_ref_oid=$(jq -r '.headRefOid' "$pr_json")
 gate_json=$(python3 {{automationDir}}/pr-reviewer-decisions.py \
   --mode external-review-gate \
   --input "$pr_json" \
-  --external-review-wait-seconds "${PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-${HERDR_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-1800}}")
+  --external-review-wait-seconds "${PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS:-1800}")
 gate_action=$(printf '%s' "$gate_json" | jq -r '.action')
 ```
 

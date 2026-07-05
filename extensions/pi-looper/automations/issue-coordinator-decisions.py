@@ -215,10 +215,6 @@ def load_issues(path: str | None) -> list[dict[str, Any]]:
     return [issue for issue in data if isinstance(issue, dict)]
 
 
-def env_value(primary: str, legacy: str, default: str) -> str:
-    return os.environ.get(primary) or os.environ.get(legacy, default)
-
-
 def config_from_args(args: argparse.Namespace) -> IssueDecisionConfig:
     return IssueDecisionConfig(
         ready_label=args.ready_label,
@@ -235,14 +231,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", help="Path to issue JSON. Defaults to stdin.")
     parser.add_argument("--fixture", help="Load issues and dependency states from a fixture JSON file.")
-    parser.add_argument("--repo", default=os.environ.get("PI_LOOPER_GITHUB_REPO") or os.environ.get("HEADR_GITHUB_REPO"))
-    parser.add_argument("--ready-label", default=env_value("PI_LOOPER_READY_LABEL", "HEADR_READY_LABEL", DEFAULT_READY_LABEL))
-    parser.add_argument("--implement-label", default=env_value("PI_LOOPER_IMPLEMENT_LABEL", "HEADR_IMPLEMENT_LABEL", DEFAULT_IMPLEMENT_LABEL))
-    parser.add_argument("--in-progress-label", default=env_value("PI_LOOPER_IN_PROGRESS_LABEL", "HEADR_IN_PROGRESS_LABEL", DEFAULT_IN_PROGRESS_LABEL))
-    parser.add_argument("--blocked-label", default=env_value("PI_LOOPER_BLOCKED_LABEL", "HEADR_BLOCKED_LABEL", DEFAULT_BLOCKED_LABEL))
-    parser.add_argument("--human-label", default=env_value("PI_LOOPER_HUMAN_LABEL", "HEADR_HUMAN_LABEL", DEFAULT_HUMAN_LABEL))
-    parser.add_argument("--needs-info-label", default=env_value("PI_LOOPER_NEEDS_INFO_LABEL", "HEADR_NEEDS_INFO_LABEL", DEFAULT_NEEDS_INFO_LABEL))
-    parser.add_argument("--wontfix-label", default=env_value("PI_LOOPER_WONTFIX_LABEL", "HEADR_WONTFIX_LABEL", DEFAULT_WONTFIX_LABEL))
+    parser.add_argument("--repo", default=os.environ.get("PI_LOOPER_GITHUB_REPO"))
+    parser.add_argument("--ready-label", default=os.environ.get("PI_LOOPER_READY_LABEL", DEFAULT_READY_LABEL))
+    parser.add_argument("--implement-label", default=os.environ.get("PI_LOOPER_IMPLEMENT_LABEL", DEFAULT_IMPLEMENT_LABEL))
+    parser.add_argument("--in-progress-label", default=os.environ.get("PI_LOOPER_IN_PROGRESS_LABEL", DEFAULT_IN_PROGRESS_LABEL))
+    parser.add_argument("--blocked-label", default=os.environ.get("PI_LOOPER_BLOCKED_LABEL", DEFAULT_BLOCKED_LABEL))
+    parser.add_argument("--human-label", default=os.environ.get("PI_LOOPER_HUMAN_LABEL", DEFAULT_HUMAN_LABEL))
+    parser.add_argument("--needs-info-label", default=os.environ.get("PI_LOOPER_NEEDS_INFO_LABEL", DEFAULT_NEEDS_INFO_LABEL))
+    parser.add_argument("--wontfix-label", default=os.environ.get("PI_LOOPER_WONTFIX_LABEL", DEFAULT_WONTFIX_LABEL))
     parser.add_argument("--exit-code", action="store_true", help="Exit 0 only when an issue is selected.")
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
     return parser

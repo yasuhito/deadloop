@@ -214,11 +214,11 @@ def select_cleanup_plan(
 
 def config_from_env() -> Config:
     return Config(
-        repo=os.environ.get("PI_LOOPER_GITHUB_REPO") or os.environ["HEADR_GITHUB_REPO"],
-        repo_path=os.environ.get("PI_LOOPER_REPO_PATH") or os.environ["HEADR_REPO_PATH"],
-        worktree_root=os.environ.get("PI_LOOPER_WORKTREE_ROOT") or os.environ.get("HEADR_WORKTREE_ROOT", ""),
-        review_label=os.environ.get("PI_LOOPER_REVIEW_LABEL") or os.environ.get("HEADR_REVIEW_LABEL", DEFAULT_REVIEW_LABEL),
-        human_label=os.environ.get("PI_LOOPER_HUMAN_LABEL") or os.environ.get("HEADR_HUMAN_LABEL", DEFAULT_HUMAN_LABEL),
+        repo=os.environ["PI_LOOPER_GITHUB_REPO"],
+        repo_path=os.environ["PI_LOOPER_REPO_PATH"],
+        worktree_root=os.environ.get("PI_LOOPER_WORKTREE_ROOT", ""),
+        review_label=os.environ.get("PI_LOOPER_REVIEW_LABEL", DEFAULT_REVIEW_LABEL),
+        human_label=os.environ.get("PI_LOOPER_HUMAN_LABEL", DEFAULT_HUMAN_LABEL),
     )
 
 

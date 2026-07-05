@@ -114,7 +114,6 @@ export type CodeSourceMtime = {
 export function resolveConfigPath(options: ConfigPathOptions): string {
   const env = options.env || {};
   if (env.PI_LOOPER_CONFIG) return env.PI_LOOPER_CONFIG;
-  if (env.HERDR_LOOPER_CONFIG) return env.HERDR_LOOPER_CONFIG;
 
   const joinPath = options.joinPath || ((...parts: string[]) => parts.join("/"));
   const userConfigPath = joinPath(options.stateDir, "projects.json");
