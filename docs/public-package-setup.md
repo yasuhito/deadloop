@@ -94,7 +94,7 @@ Add `generic-pr-reviewer` only after Phase 1 is reliable. Keep:
 "autoMerge": false
 ```
 
-With auto-merge disabled, the reviewer automation can gather external review context, start a `レビューエージェント` session, request fixes, and hand the PR to `ready-for-human` instead of merging.
+With auto-merge disabled, the reviewer automation can gather external review context, start a review agent session, request fixes, and hand the PR to `ready-for-human` instead of merging.
 
 ### Phase 3: Consider auto-merge
 
