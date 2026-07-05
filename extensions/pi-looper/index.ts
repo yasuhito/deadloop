@@ -14,6 +14,7 @@ const {
   nextSlotAfter,
   parseProjectsConfig,
   renderTemplate,
+  resolveAutomationFile,
   resolveConfigPath,
   resolveProjectForTick,
   sanitizeId,
@@ -324,8 +325,23 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`;
 }
 
-async function runPrecheck(pi, project, automation) {
-  const precheckPath = path.join(AUTOMATION_DIR, automation.precheckFile);
+function resolveAutomationFileInDir(kind, automation, requested) {
+  const resolution = resolveAutomationFile(requested, (fileName) =>
+    fs.existsSync(path.join(AUTOMATION_DIR, fileName)),
+  );
+  if (resolution.aliased) {
+    debugLog(
+      "automation file alias",
+      automation.name,
+      kind,
+      `${resolution.requested} -> ${resolution.resolved}`,
+    );
+  }
+  return resolution;
+}
+
+async function runPrecheck(pi, project, automation, precheckFile) {
+  const precheckPath = path.join(AUTOMATION_DIR, precheckFile);
   const env = automationEnv(project, automation);
   const exports = Object.entries(env)
     .filter(([key]) => key.startsWith("PI_LOOPER_") || key.startsWith("HEADR_") || key.startsWith("HERDR_LOOPER_"))
@@ -336,8 +352,8 @@ async function runPrecheck(pi, project, automation) {
   });
 }
 
-function readPrompt(project, automation) {
-  const template = fs.readFileSync(path.join(AUTOMATION_DIR, automation.promptFile), "utf8");
+function readPrompt(project, automation, promptFile) {
+  const template = fs.readFileSync(path.join(AUTOMATION_DIR, promptFile), "utf8");
   return renderTemplate(template, templateValues(project, automation, AUTOMATION_DIR));
 }
 
@@ -530,11 +546,23 @@ async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
   entry.schedule = automation.schedule;
   saveState(state);
 
+  const precheck = resolveAutomationFileInDir("precheck", automation, automation.precheckFile);
+  if (!precheck.found) {
+    entry.lastResult = "precheck_file_missing";
+    entry.lastError = `precheck file not found: ${automation.precheckFile}`;
+    entry.updatedAt = Date.now();
+    saveState(state);
+    try {
+      ctx.ui.notify(`${EXTENSION_NAME} precheck file missing: ${automation.name}`, "warning");
+    } catch {}
+    return;
+  }
+
   setLooperStatus(ctx, `precheck: ${automation.name}`);
 
   let result;
   try {
-    result = await runPrecheck(pi, project, automation);
+    result = await runPrecheck(pi, project, automation, precheck.resolved);
   } catch (error) {
     entry.lastResult = "precheck_error";
     entry.lastError = error?.message || String(error);
@@ -561,8 +589,20 @@ async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
     return;
   }
 
+  const promptResolution = resolveAutomationFileInDir("prompt", automation, automation.promptFile);
+  if (!promptResolution.found) {
+    entry.lastResult = "prompt_file_missing";
+    entry.lastError = `prompt file not found: ${automation.promptFile}`;
+    entry.updatedAt = Date.now();
+    saveState(state);
+    try {
+      ctx.ui.notify(`${EXTENSION_NAME} prompt file missing: ${automation.name}`, "warning");
+    } catch {}
+    return;
+  }
+
   try {
-    const prompt = readPrompt(project, automation);
+    const prompt = readPrompt(project, automation, promptResolution.resolved);
     pi.sendUserMessage(prompt);
     entry.lastResult = "queued";
     entry.lastQueuedAt = Date.now();
