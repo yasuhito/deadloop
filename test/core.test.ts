@@ -237,6 +237,16 @@ describe("deterministic extension core", () => {
     });
   });
 
+  it("does not run a project that differs from the scheduler lock owner", () => {
+    expect(
+      resolveProjectForTick({
+        cwd: "/repo",
+        configText: JSON.stringify({ projects: [{ id: "new-demo", repoPath: "/repo" }] }),
+        lockedProjectId: "demo",
+      }),
+    ).toMatchObject({ ok: false, reason: "active project changed since scheduler lock was acquired" });
+  });
+
   it("warns when extension source mtime is newer than module load time", () => {
     expect(codeFreshnessWarning(1000, [{ path: "extensions/pi-looper/index.ts", mtimeMs: 1001 }])).toBe(
       EXTENSION_CODE_CHANGED_WARNING,

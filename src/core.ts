@@ -223,6 +223,7 @@ export function resolveProjectForTick(input: {
   cwd: string;
   configText: string;
   only?: string | string[];
+  lockedProjectId?: string;
 }): TickProjectResolution {
   const config = parseProjectsConfig(input.configText, input.only);
   if (!config.ok) return { ok: false, reason: config.reason };
@@ -235,6 +236,9 @@ export function resolveProjectForTick(input: {
     }
   });
   if (!project) return { ok: false, reason: "active project is not present in projects.json" };
+  if (input.lockedProjectId && project.id !== input.lockedProjectId) {
+    return { ok: false, reason: "active project changed since scheduler lock was acquired" };
+  }
   return { ok: true, project };
 }
 

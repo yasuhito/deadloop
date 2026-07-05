@@ -15,6 +15,7 @@ const {
   parseProjectsConfig,
   renderTemplate,
   resolveConfigPath,
+  resolveProjectForTick,
   sanitizeId,
   templateValues,
 } = require("../../src/core.ts");
@@ -585,18 +586,24 @@ export default function (pi) {
     if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
     if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return;
 
-    let projects;
+    let configText;
     try {
-      projects = loadProjects();
+      configText = readConfigText();
     } catch (error) {
-      setLooperStatus(ctx, `skipped: ${error?.message || error}`);
+      setLooperStatus(ctx, `skipped: projects.json read error: ${error?.message || error}`);
       return;
     }
-    const project = activeProject(ctx.cwd, projects);
-    if (!project) {
-      setLooperStatus(ctx, "skipped: active project is not present in projects.json");
+    const projectResult = resolveProjectForTick({
+      cwd: ctx.cwd,
+      configText,
+      only: projectFilter(),
+      lockedProjectId: active.project.id,
+    });
+    if (!projectResult.ok) {
+      setLooperStatus(ctx, `skipped: ${projectResult.reason}`);
       return;
     }
+    const project = projectResult.project;
 
     const state = loadState();
     updateStatus(ctx, project, state);
