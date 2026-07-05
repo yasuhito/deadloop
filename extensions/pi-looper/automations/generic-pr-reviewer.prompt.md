@@ -37,6 +37,42 @@
 - レビューループは反復型。修正を push した実行回、外部レビューを依頼した実行回、レビューエージェントが修正 commit を push した実行回ではマージしない。次回の実行回で新しいコメントがないことを確認してから進める。
 - 破壊的な git 操作は禁止。`git reset --hard`、`git clean`、無関係な変更の破棄は禁止。
 
+## Blocked 報告フォーマット
+
+`{{blockedLabel}}` を付けて PR にコメントするすべての経路では、コメント本文に少なくとも次の節をこの順で含める。
+テンプレート内のコマンド例は `{{githubRepo}}`、`{{repoPath}}`、`{{automationDir}}`、`{{blockedLabel}}`、`{{implementLabel}}` などの placeholder を使って定義する。コメント投稿時は、実際の PR 番号、対象 issue 番号、pane ID、workspace ID、worktree path、branch 名などの実行時の値を司令塔が確認して埋め、operator がそのままコピーできるコマンドとして書く。
+復旧手順は operator が原因を確認し、必要な修正を終えたあとに使うもの。`{{blockedLabel}}` は sticky なので、原因確認なしに再実行しない。
+
+````markdown
+## 何が起きたか
+- 事象とエラーの要約を書く。
+- 確認済み事項と、次に必要な判断を書く。
+
+## 復旧手順
+1. 原因を確認する。
+   ```bash
+   gh pr view <PR> -R {{githubRepo}} --comments --json number,title,url,headRefName,headRefOid,labels,commits,statusCheckRollup
+   gh pr checks <PR> -R {{githubRepo}}
+   python3 {{automationDir}}/extract-worker-promise.py --pane-id <paneId> || true
+   herdr pane list
+   ```
+2. 残骸（worktree / branch）を確認し、安全に掃除する。
+   ```bash
+   herdr worktree list --cwd {{repoPath}} --json
+   git -C {{repoPath}} worktree list
+   git -C {{repoPath}} branch --list "<headRefName>"
+   herdr worktree remove --workspace <workspaceId>
+   git -C {{repoPath}} worktree remove <worktreePath>
+   git -C {{repoPath}} branch -d <headRefName>
+   ```
+3. 原因を解消したあと、対象 issue を再 queue する。
+   ```bash
+   gh issue edit <issueNumber> -R {{githubRepo}} --remove-label "{{blockedLabel}}" --add-label "{{implementLabel}}"
+   ```
+````
+
+対象 issue 番号は PR 本文の `Closes #N` / `Fixes #N` / `Resolves #N` から埋める。特定できない場合も再 queue コマンドを省略せず、`<issueNumber>` を埋めるために必要な確認を `## 何が起きたか` に書く。該当しない掃除コマンドがある場合は、そのコマンドを削らず「該当なし: 理由」を直前に添える。掃除コマンドは対象が clean / 不要であることを確認してから実行するよう明記する。
+
 ## ループ
 
 ### 1. Select
@@ -65,7 +101,7 @@ action=$(printf '%s' "$decision_json" | jq -r '.action // empty')
 
 ### 2. Draft gate
 
-対象 PR が draft の場合は自動で ready にしない。まだ同じ通知をしていなければ、PR に日本語で「draft のため自動レビューと自動マージを見送る。準備できたら ready にして `{{reviewLabel}}` を付け直してください」とコメントする。`{{reviewingLabel}}` と `{{reviewLabel}}` を外し、`{{blockedLabel}}` を付けて、この実行回では終了する。
+対象 PR が draft の場合は自動で ready にしない。まだ同じ通知をしていなければ、PR に Blocked 報告フォーマットで「draft のため自動レビューと自動マージを見送る。準備できたら ready にして `{{reviewLabel}}` を付け直してください」と日本語コメントする。`{{reviewingLabel}}` と `{{reviewLabel}}` を外し、`{{blockedLabel}}` を付けて、この実行回では終了する。
 
 ### 3. Claim
 
@@ -208,17 +244,17 @@ python3 {{automationDir}}/extract-worker-promise.py --pane-id <paneId>
 helper status ごとの扱い:
 
 - `complete`: 完了として採用する。
-- `blocked`: `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR にブロッカー、確認済み事項、次に必要な判断を日本語でコメントして終了する。マージしない。
-- `none`: Herdr の agent status がまだ working なら待つ。agent status が `idle` / `done` / `blocked` なのに promise が無い場合は、レビューエージェントに promise 出力を1回だけ依頼する。次の確認でも `none` なら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントが完了 promise を返さなかった」とコメントして終了する。
-- `missing_session` / `missing_pane`: `herdr pane list` と `herdr agent list` で対象 pane / session を再確認する。復旧できない場合は `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントの session を確認できない」とコメントして終了する。
-- 起動失敗または監視 timeout: `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に起動失敗または timeout の内容をコメントして終了する。
+- `blocked`: `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR にブロッカー、確認済み事項、次に必要な判断を Blocked 報告フォーマットで日本語コメントして終了する。マージしない。
+- `none`: Herdr の agent status がまだ working なら待つ。agent status が `idle` / `done` / `blocked` なのに promise が無い場合は、レビューエージェントに promise 出力を1回だけ依頼する。次の確認でも `none` なら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントが完了 promise を返さなかった」と Blocked 報告フォーマットでコメントして終了する。
+- `missing_session` / `missing_pane`: `herdr pane list` と `herdr agent list` で対象 pane / session を再確認する。復旧できない場合は `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に「レビューエージェントの session を確認できない」と Blocked 報告フォーマットでコメントして終了する。
+- 起動失敗または監視 timeout: `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に起動失敗または timeout の内容を Blocked 報告フォーマットでコメントして終了する。
 
 helper status が `complete` の場合:
 
 1. PR、GitHub checks、最新 head SHA を再取得する。
 2. レビューエージェントの worktree で `git status --short` が空であることを確認する。
 3. `git rev-parse HEAD`、`git rev-parse origin/<headRefName>`、PR の `headRefOid` が一致することを確認する。未push commit や未反映のローカル変更があればマージしない。
-4. レビューエージェントの worktree で `{{checkCommand}}` を司令塔が再実行し、終了コード 0 を必須にする。失敗したら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に失敗内容をコメントしてマージしない。
+4. レビューエージェントの worktree で `{{checkCommand}}` を司令塔が再実行し、終了コード 0 を必須にする。失敗したら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に失敗内容を Blocked 報告フォーマットでコメントしてマージしない。
 5. レビューエージェントが push して `head_sha_before` と最新 head SHA が違う場合は、`{{reviewingLabel}}` を外し、`{{reviewLabel}}` は残す。Copilot 再レビューを依頼できるなら依頼し、この実行回ではマージしない。
 6. head SHA が変わっていない場合だけ、次の最終判定へ進む。
 
@@ -252,4 +288,4 @@ helper status が `complete` の場合:
 3. マージ後、可能なら `{{reviewLabel}}`、`{{reviewingLabel}}`、`{{humanLabel}}` を外す。ラベル削除が失敗しても、PR が merged なら成功扱いでよい。
 4. 最後に PR URL と merge 結果を要約する。
 
-マージ不可、checks 失敗、契約不一致、判断不能の場合は、`{{reviewingLabel}}` を外し、必要なら `{{blockedLabel}}` を付け、理由と次に必要な判断を PR に日本語でコメントする。マージしない。
+マージ不可、checks 失敗、契約不一致、判断不能の場合は、`{{reviewingLabel}}` を外し、必要なら `{{blockedLabel}}` を付け、理由と次に必要な判断を PR に Blocked 報告フォーマットで日本語コメントする。マージしない。
