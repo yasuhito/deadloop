@@ -297,9 +297,7 @@ function precheckSkippedCode(result: string): number | null {
 }
 
 function isFailureResult(result: string): boolean {
-  if (result === "queued") return false;
-  if (result === "deferred_busy_after_precheck") return false;
-  return result === "precheck_error" || result === "send_error" || precheckSkippedCode(result) !== null;
+  return result === "precheck_error" || result === "send_error" || result === "precheck_file_missing";
 }
 
 function precheckCheckCommand(automationDir: string, automation: NormalizedAutomation): string {
@@ -340,12 +338,13 @@ function buildAutomationFindings(
     }
 
     const code = precheckSkippedCode(result);
-    if (code !== null && UNAVAILABLE_PRECHECK_CODES.has(code)) {
+    if ((code !== null && UNAVAILABLE_PRECHECK_CODES.has(code)) || result === "precheck_file_missing") {
+      const reason = code !== null ? `code ${code} でスキップされ` : "設定された precheck ファイルが見つからず";
       findings.push({
         id: `automation-unavailable-${automation.id}`,
         type: "automation_unavailable",
         title: `precheck unavailable: ${ref}`,
-        summary: `precheck が code ${code} でスキップされ、自動化が起動していません。precheck スクリプトの不在または実行不能が疑われます。`,
+        summary: `precheck が ${reason}、自動化が起動していません。precheck スクリプトの不在または実行不能が疑われます。`,
         commands: [precheckCheckCommand(automationDir, automation)],
       });
       continue;

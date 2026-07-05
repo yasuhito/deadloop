@@ -534,7 +534,7 @@ async function buildLiveDoctorReport(pi, cwd) {
   return formatDoctorReport(buildDoctorSnapshot(data));
 }
 function isAutomationFailureResult(result) {
-  return result === "precheck_error" || result === "send_error" || /^precheck_skipped:\d+$/.test(result);
+  return result === "precheck_error" || result === "send_error" || result === "precheck_file_missing";
 }
 
 // Records lastResult and keeps failureStreak = number of consecutive identical failures,
@@ -564,7 +564,7 @@ async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
 
   const precheck = resolveAutomationFileInDir("precheck", automation, automation.precheckFile);
   if (!precheck.found) {
-    entry.lastResult = "precheck_file_missing";
+    recordAutomationResult(entry, "precheck_file_missing");
     entry.lastError = `precheck file not found: ${automation.precheckFile}`;
     entry.updatedAt = Date.now();
     saveState(state);

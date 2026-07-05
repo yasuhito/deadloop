@@ -149,12 +149,28 @@ describe("pi-looper doctor", () => {
     expect(result.findings[0]?.commands).toContain("ls /ext/automations/issue-coordinator.precheck.sh");
   });
 
+  it("reports unavailable precheck when the scheduler records a missing precheck file", () => {
+    const result = snapshot(
+      withAutomationState({ lastResult: "precheck_file_missing", lastAttemptAt: NOW, failureStreak: 1 }),
+    );
+
+    expect(result.findings[0]?.commands).toContain("ls /ext/automations/issue-coordinator.precheck.sh");
+  });
+
   it("reports a spinning-loop finding for repeated identical failures", () => {
+    const result = snapshot(
+      withAutomationState({ lastResult: "precheck_error", lastAttemptAt: NOW, failureStreak: 3 }),
+    );
+
+    expect(result.findings[0]?.type).toBe("automation_spinning");
+  });
+
+  it("does not report normal no-work precheck skips as spinning failures", () => {
     const result = snapshot(
       withAutomationState({ lastResult: "precheck_skipped:1", lastAttemptAt: NOW, failureStreak: 3 }),
     );
 
-    expect(result.findings[0]?.type).toBe("automation_spinning");
+    expect(result.findings).toEqual([]);
   });
 
   it("reports a stalled-coordinator finding when attempts stop for 3 slots", () => {
