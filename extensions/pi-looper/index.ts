@@ -32,7 +32,6 @@ const STATE_PATH = path.join(STATE_DIR, "state.json");
 function resolveExtensionDir() {
   const candidates = [
     process.env.PI_LOOPER_EXTENSION_DIR,
-    process.env.HERDR_LOOPER_EXTENSION_DIR,
     __dirname,
     path.join(CONFIG_DIR, "extensions", EXTENSION_NAME),
     path.join(os.homedir(), ".pi", "agent", "extensions", EXTENSION_NAME),
@@ -72,7 +71,7 @@ function writeJsonFile(file, value) {
 }
 
 function debugLog(...args) {
-  if (process.env.PI_LOOPER_DEBUG === "1" || process.env.HERDR_LOOPER_DEBUG === "1") {
+  if (process.env.PI_LOOPER_DEBUG === "1") {
     console.warn(`[${EXTENSION_NAME}]`, ...args);
   }
 }
@@ -87,7 +86,7 @@ function readConfigText() {
 }
 
 function projectFilter() {
-  return process.env.PI_LOOPER_PROJECTS || process.env.HERDR_LOOPER_PROJECTS || "";
+  return process.env.PI_LOOPER_PROJECTS || "";
 }
 
 function loadProjectsResult() {
@@ -275,7 +274,6 @@ function activeProject(cwd, projects) {
 
 function automationEnv(project, automation) {
   const env: Record<string, string | undefined> = {
-    ...process.env,
     PI_LOOPER_PROJECT_ID: project.id,
     PI_LOOPER_REPO_PATH: project.repoPath,
     PI_LOOPER_GITHUB_REPO: project.githubRepo,
@@ -297,26 +295,6 @@ function automationEnv(project, automation) {
     PI_LOOPER_AUTOMATION_NAME: automation.name,
   };
 
-  // Backward-compatible aliases for older local prompts/prechecks.
-  env.HEADR_PROJECT_ID = env.PI_LOOPER_PROJECT_ID;
-  env.HEADR_REPO_PATH = env.PI_LOOPER_REPO_PATH;
-  env.HEADR_GITHUB_REPO = env.PI_LOOPER_GITHUB_REPO;
-  env.HEADR_BASE_BRANCH = env.PI_LOOPER_BASE_BRANCH;
-  env.HEADR_WORKTREE_ROOT = env.PI_LOOPER_WORKTREE_ROOT;
-  env.HEADR_CHECK_COMMAND = env.PI_LOOPER_CHECK_COMMAND;
-  env.HEADR_AUTO_MERGE = env.PI_LOOPER_AUTO_MERGE;
-  env.HEADR_READY_LABEL = env.PI_LOOPER_READY_LABEL;
-  env.HEADR_IMPLEMENT_LABEL = env.PI_LOOPER_IMPLEMENT_LABEL;
-  env.HEADR_IN_PROGRESS_LABEL = env.PI_LOOPER_IN_PROGRESS_LABEL;
-  env.HEADR_BLOCKED_LABEL = env.PI_LOOPER_BLOCKED_LABEL;
-  env.HEADR_REVIEW_LABEL = env.PI_LOOPER_REVIEW_LABEL;
-  env.HEADR_REVIEWING_LABEL = env.PI_LOOPER_REVIEWING_LABEL;
-  env.HEADR_HUMAN_LABEL = env.PI_LOOPER_HUMAN_LABEL;
-  env.HEADR_NEEDS_INFO_LABEL = env.PI_LOOPER_NEEDS_INFO_LABEL;
-  env.HEADR_WONTFIX_LABEL = env.PI_LOOPER_WONTFIX_LABEL;
-  env.HEADR_NEEDS_TRIAGE_LABEL = env.PI_LOOPER_NEEDS_TRIAGE_LABEL;
-  env.HEADR_AUTOMATION_ID = env.PI_LOOPER_AUTOMATION_ID;
-  env.HEADR_AUTOMATION_NAME = env.PI_LOOPER_AUTOMATION_NAME;
   return env;
 }
 
@@ -328,7 +306,7 @@ async function runPrecheck(pi, project, automation) {
   const precheckPath = path.join(AUTOMATION_DIR, automation.precheckFile);
   const env = automationEnv(project, automation);
   const exports = Object.entries(env)
-    .filter(([key]) => key.startsWith("PI_LOOPER_") || key.startsWith("HEADR_") || key.startsWith("HERDR_LOOPER_"))
+    .filter(([key]) => key.startsWith("PI_LOOPER_"))
     .map(([key, value]) => `${key}=${shellQuote(value)}`)
     .join(" ");
   return await pi.exec("bash", ["-lc", `${exports} ${shellQuote(precheckPath)}`], {
@@ -674,12 +652,7 @@ export default function (pi) {
     const project = activeProject(ctx.cwd, projects);
     debugLog("session_start", "cwd", ctx.cwd, "mode", ctx.mode, "project", project?.id || null);
     if (!project) return;
-    if (
-      process.env.PI_LOOPER === "off" ||
-      process.env.PI_LOOPER_AUTOMATIONS === "off" ||
-      process.env.HERDR_LOOPER === "off" ||
-      process.env.HERDR_LOOPER_AUTOMATIONS === "off"
-    ) {
+    if (process.env.PI_LOOPER === "off" || process.env.PI_LOOPER_AUTOMATIONS === "off") {
       return;
     }
 
