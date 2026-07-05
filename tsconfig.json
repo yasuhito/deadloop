@@ -6,7 +6,7 @@
     "lib": ["ES2022"],
     "types": ["node"],
     "allowJs": true,
-    "checkJs": false,
+    "checkJs": true,
     "noEmit": true,
     "strict": false,
     "esModuleInterop": true,
