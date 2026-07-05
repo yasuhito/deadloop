@@ -186,8 +186,6 @@ PI_LOOPER_CONFIG=/path/to/projects.json pi
 PI_LOOPER_DEBUG=1 pi
 ```
 
-旧名からの移行用に、当面は `HERDR_LOOPER_*` も互換として読みます。
-
 ## ラベル運用
 
 実装用の作業エージェントに Issue を拾わせるには、Issue に最低限 `ready-for-agent` と `agent:implement` の両方を付けます。初回は、使うラベルを GitHub 側に作成してください。

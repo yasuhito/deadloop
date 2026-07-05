@@ -116,13 +116,46 @@ export type CodeSourceMtime = {
 export function resolveConfigPath(options: ConfigPathOptions): string {
   const env = options.env || {};
   if (env.PI_LOOPER_CONFIG) return env.PI_LOOPER_CONFIG;
-  if (env.HERDR_LOOPER_CONFIG) return env.HERDR_LOOPER_CONFIG;
 
   const joinPath = options.joinPath || ((...parts: string[]) => parts.join("/"));
   const userConfigPath = joinPath(options.stateDir, "projects.json");
   if (options.exists?.(userConfigPath)) return userConfigPath;
 
   return joinPath(options.extensionDir, "projects.json");
+}
+
+// Bundled automation files were shortened in #46 (e.g. dropping the "generic-"
+// prefix). Existing operator projects.json files still point at the old names,
+// so we alias every legacy name back to its current short name. Built from the
+// prefix + current name so the retired stems never appear as literals here.
+const LEGACY_AUTOMATION_PREFIX = ["generic", ""].join("-");
+const ALIASED_AUTOMATION_FILES = [
+  "issue-coordinator.prompt.md",
+  "issue-coordinator.precheck.sh",
+  "pr-reviewer.prompt.md",
+  "pr-reviewer.precheck.sh",
+];
+
+export const AUTOMATION_FILE_ALIASES: Record<string, string> = Object.fromEntries(
+  ALIASED_AUTOMATION_FILES.map((current) => [`${LEGACY_AUTOMATION_PREFIX}${current}`, current]),
+);
+
+export type AutomationFileResolution = {
+  requested: string;
+  resolved: string;
+  aliased: boolean;
+  found: boolean;
+};
+
+export function resolveAutomationFile(
+  requested: string | undefined,
+  exists: (fileName: string) => boolean,
+): AutomationFileResolution {
+  const name = requested || "";
+  const aliasTarget = AUTOMATION_FILE_ALIASES[name];
+  const aliased = aliasTarget !== undefined;
+  const resolved = aliased ? aliasTarget : name;
+  return { requested: name, resolved, aliased, found: name !== "" && exists(resolved) };
 }
 
 export function sanitizeId(value: unknown): string {

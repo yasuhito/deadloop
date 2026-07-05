@@ -20,6 +20,14 @@ function withAutomationState(entry: Record<string, unknown>) {
   return { state: { automations: { "pi-looper:auto": entry } } };
 }
 
+const claudeProject = normalizeProject({
+  id: "pi-looper",
+  repoPath: "/repo",
+  githubRepo: "owner/repo",
+  worktreeRoot: "/wt",
+  workerAgent: "claude",
+});
+
 function snapshot(overrides: Partial<Parameters<typeof buildDoctorSnapshot>[0]> = {}) {
   return buildDoctorSnapshot({
     cwd: "/repo",
@@ -33,6 +41,10 @@ function snapshot(overrides: Partial<Parameters<typeof buildDoctorSnapshot>[0]> 
     nowMs: NOW,
     ...overrides,
   });
+}
+
+function claudeSnapshot(overrides: Partial<Parameters<typeof buildDoctorSnapshot>[0]> = {}) {
+  return snapshot({ projects: [claudeProject], ...overrides });
 }
 
 describe("pi-looper doctor", () => {
@@ -160,6 +172,35 @@ describe("pi-looper doctor", () => {
 
     expect(result.findings).toEqual([]);
   });
+
+  it("reports the claude workspace trust acceptance command for untrusted repos", () => {
+    const result = claudeSnapshot({ claudeConfig: { ok: true, projects: {} } });
+
+    expect(result.findings[0]?.commands).toContain("cd /repo && claude");
+  });
+
+  it("does not report workspace trust findings for trusted claude repos", () => {
+    const result = claudeSnapshot({
+      claudeConfig: { ok: true, projects: { "/repo": { hasTrustDialogAccepted: true } } },
+    });
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("does not report workspace trust findings for pi projects", () => {
+    const result = snapshot({ claudeConfig: { ok: false } });
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports an inspection command when the claude config is unreadable", () => {
+    const result = claudeSnapshot({ claudeConfig: { ok: false } });
+
+    expect(result.findings[0]?.commands).toContain(
+      "jq --arg p /repo '.projects[$p].hasTrustDialogAccepted' ~/.claude.json",
+    );
+  });
+
 
   it("prints no-problem message when there are no findings", () => {
     const report = formatDoctorReport(snapshot());
