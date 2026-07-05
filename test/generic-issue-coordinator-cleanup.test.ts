@@ -153,4 +153,10 @@ describe("generic issue coordinator cleanup", () => {
       /herdr agent start[^`\n]*--workspace <workspaceId>/,
     );
   });
+
+  it("documents dedicated tab startup for branch update workers", () => {
+    expect(readFileSync("extensions/pi-looper/automations/generic-pr-reviewer.prompt.md", "utf8")).toContain(
+      "branch update worker を起動する場合も、worker 名と同じ label の専用タブを作ってから `herdr agent start ... --tab <tabId> --no-focus`",
+    );
+  });
 });

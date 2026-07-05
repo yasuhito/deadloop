@@ -183,7 +183,55 @@ BLOCKED の場合:
 - issue に、ブロッカー、確認済み事項、次に必要な判断を日本語でコメントする
 - push / PR 作成はしない
 
-### 7. Verify and PR
+### 7. PR branch update gate
+
+COMPLETE の場合、PR 作成前に worker branch が `{{baseBranch}}` を取り込める状態か確認する。判断の決定的な部分は helper に任せる。
+
+```bash
+cd <worktreePath>
+git fetch origin
+git fetch origin <branch>
+update_json=$(python3 {{automationDir}}/pr-branch-update-decision.py --repo <worktreePath> --head HEAD --base {{baseBranch}})
+update_action=$(printf '%s' "$update_json" | jq -r '.action')
+```
+
+- `update_action=blocked`: worktree が clean ではない。PR を作らず、Issue を `{{blockedLabel}}` にして理由をコメントする。
+- `update_action=no_update`: そのまま検証へ進む。
+- `update_action=mechanical_update`: worker を起動せず、司令塔が機械的に更新する。helper が clean worktree を確認済みの場合だけ実行する。fast-forward できる場合は fast-forward し、diverge していて clean に merge できる場合は `{{baseBranch}}` を merge する。更新後に `{{checkCommand}}` を通し、必要なら coordinator が branch update commit を作る。
+- `update_action=delegate_worker`: 衝突あり。worker を 1 体だけ起動して PR branch 更新を委譲する。同一 branch / 同一 PR 相当の更新について後続 worker を多重起動してはならない。既存の branch update worker がいる場合は、新しい worker を起動せず、その worker の `<promise>` を待ってから次の判断を行う。
+
+衝突解消 worker prompt には必ず以下を含める。
+
+```markdown
+PR branch を base branch に追従させてください。
+
+対象:
+- GitHub repo: {{githubRepo}}
+- PR: 未作成（Issue #<N> の worker branch）
+- Head branch: <branch>
+- Base branch: {{baseBranch}}
+
+契約:
+- `<branch>` に `{{baseBranch}}` を取り込み、衝突を解消してください。
+- 解消後に `{{checkCommand}}` を実行し、成功させてください。
+- conventional commit で branch update / conflict resolution commit を作ってください。
+
+禁止事項:
+- push しない。
+- label を編集しない。
+- issue / PR にコメントしない。
+- PR を作らない。
+- issue を閉じない。
+- unrelated な変更を戻さない。
+
+完了出力:
+- 完了したら最後に必ず `<promise>COMPLETE</promise>` を出力してください。
+- 失敗、仕様不足、危険変更、または判断不能なら、最後に必ず `<promise>BLOCKED: 理由</promise>` を日本語で出力してください。
+```
+
+衝突解消 worker の監視も `extract-worker-promise.py` を使う。`BLOCKED` または promise 不在の場合は PR を作らず、Issue を `{{blockedLabel}}` にして理由をコメントする。
+
+### 8. Verify and PR
 
 COMPLETE の場合、worker worktree で次を行う。
 
