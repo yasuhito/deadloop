@@ -207,7 +207,7 @@ gh label create needs-triage --repo owner/repo --color f9d0c4 || true
 | `ready-for-human` | `human` | PR | PR reviewer | 自動処理を終え、人間確認に渡す。`autoMerge: false` ではマージせずこの状態にする。 |
 | `needs-info` | `needsInfo` | Issue | 人間または自動化 | 情報不足のため Issue coordinator の対象から外す。 |
 | `wontfix` | `wontfix` | Issue | 人間 | 対応しない Issue として Issue coordinator の対象から外す。 |
-| `needs-triage` | `needsTriage` | Issue | 人間または自動化 | まだ整理が必要な Issue として Issue coordinator の対象から外す。 |
+| `needs-triage` | `needsTriage` | Issue | 人間または自動化 | まだ整理が必要な Issue であることを示す。契約不足を検出した coordinator は `agent:implement` を外してこのラベルを付ける。 |
 
 ラベル名は、プロジェクトごとに `projects.json` の `labels` object で変更できます。既存チームのラベルを使いたい場合は、設定値だけを差し替えます。新しい仕組みや別名表は不要です。
 
