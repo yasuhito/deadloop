@@ -363,6 +363,11 @@ function worktreesFromHerdrResult(data) {
   return (data?.result || {}).worktrees || [];
 }
 
+function agentsFromHerdrResult(data) {
+  if (Array.isArray(data)) return data;
+  return (data?.result || {}).agents || [];
+}
+
 async function gitText(pi, args) {
   try {
     const result = await pi.exec("git", args, { timeout: 5_000 });
@@ -394,10 +399,11 @@ function readClaudeConfigResult() {
 async function collectLiveSnapshotData(
   pi,
   cwd,
-  options: { includeClosedPrs?: boolean; includeIssueComments?: boolean } = {},
+  options: { includeClosedPrs?: boolean; includeIssueComments?: boolean; includeAgents?: boolean } = {},
 ) {
   const includeClosedPrs = options.includeClosedPrs === true;
   const includeIssueComments = options.includeIssueComments === true;
+  const includeAgents = options.includeAgents === true;
 
   const projectsResult = loadProjectsResult();
   const projects = projectsResult.ok ? projectsResult.projects : [];
@@ -495,6 +501,10 @@ async function collectLiveSnapshotData(
     : { result: { worktrees: [] } };
   const claudeConfig =
     project.workerAgent === "claude" ? readClaudeConfigResult() : undefined;
+  const agentsData = includeAgents
+    ? await execJson(pi, "herdr", ["agent", "list"], { result: { agents: [] } })
+    : { result: { agents: [] } };
+  const agents = agentsFromHerdrResult(agentsData);
   const worktrees = worktreesFromHerdrResult(herdrData);
   const gitStatuses = {};
   const gitHeads = {};
@@ -515,6 +525,7 @@ async function collectLiveSnapshotData(
     openPrs,
     closedPrs: uniquePrs([...(mergedPrs || []), ...(closedPrs || [])]),
     worktrees,
+    agents,
     gitStatuses,
     gitHeads,
     automationDir: AUTOMATION_DIR,
@@ -530,7 +541,7 @@ async function buildLiveStatusReport(pi, cwd) {
 }
 
 async function buildLiveDoctorReport(pi, cwd) {
-  const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true });
+  const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true, includeAgents: true });
   return formatDoctorReport(buildDoctorSnapshot(data));
 }
 function isAutomationFailureResult(result) {
