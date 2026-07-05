@@ -173,7 +173,7 @@ PI_LOOPER_DEBUG=1 pi
 
 ## ラベル運用
 
-初回は必要なラベルを作成してください。
+実装用の作業エージェントに Issue を拾わせるには、Issue に最低限 `ready-for-agent` と `agent:implement` の両方を付けます。初回は、使うラベルを GitHub 側に作成してください。
 
 ```bash
 gh label create ready-for-agent --repo owner/repo --color 0e8a16 || true
@@ -187,19 +187,44 @@ gh label create needs-info --repo owner/repo --color fef2c0 || true
 gh label create needs-triage --repo owner/repo --color f9d0c4 || true
 ```
 
-実装用の作業エージェントに拾わせるには、Issue に次の両方が必要です。
+| 既定のラベル名 | `labels` の設定キー | 場所 | 誰 / 何が付けるか | 意味 |
+| --- | --- | --- | --- | --- |
+| `ready-for-agent` | `ready` | Issue | 人間 | エージェントに渡してよい Issue であることを示す。実装開始には `agent:implement` も必要。 |
+| `agent:implement` | `implement` | Issue | 人間 | 実装対象の Issue であることを示す。実装開始には `ready-for-agent` も必要。 |
+| `agent:in-progress` | `inProgress` | Issue | Issue coordinator | 作業エージェントが実装中であることを示す。 |
+| `agent:review` | `review` | PR | Issue coordinator | PR reviewer の対象 PR であることを示す。 |
+| `agent:reviewing` | `reviewing` | PR | PR reviewer | レビュー自動化が処理中であることを示す。 |
+| `agent:blocked` | `blocked` | 両方 | 人間または自動化 | 自動処理を止め、人間の確認を待つ。 |
+| `ready-for-human` | `human` | PR | PR reviewer | 自動処理を終え、人間確認に渡す。`autoMerge: false` ではマージせずこの状態にする。 |
+| `needs-info` | `needsInfo` | Issue | 人間または自動化 | 情報不足のため Issue coordinator の対象から外す。 |
+| `wontfix` | `wontfix` | Issue | 人間 | 対応しない Issue として Issue coordinator の対象から外す。 |
+| `needs-triage` | `needsTriage` | Issue | 人間または自動化 | まだ整理が必要な Issue として Issue coordinator の対象から外す。 |
 
-- `ready-for-agent`
-- `agent:implement`
+ラベル名は、プロジェクトごとに `projects.json` の `labels` object で変更できます。既存チームのラベルを使いたい場合は、設定値だけを差し替えます。新しい仕組みや別名表は不要です。
 
-主な制御ラベル:
+```json
+{
+  "projects": [
+    {
+      "id": "example-project",
+      "labels": {
+        "ready": "ready",
+        "implement": "implement",
+        "inProgress": "doing",
+        "review": "review-needed",
+        "reviewing": "reviewing",
+        "blocked": "blocked",
+        "human": "human-review",
+        "needsInfo": "needs-info",
+        "wontfix": "wontfix",
+        "needsTriage": "triage"
+      }
+    }
+  ]
+}
+```
 
-- `agent:in-progress` — 実装中
-- `agent:review` — PR レビュー対象
-- `agent:reviewing` — レビュー自動化が処理中
-- `agent:blocked` — 自動処理を止める
-- `ready-for-human` — 人間確認対象
-- `needs-info` — 情報不足
+この例では、実装用の作業エージェントに拾わせる Issue には `ready` と `implement` を付けます。GitHub 側には、設定した名前のラベルを事前に作成してください。pi-looper はラベル作成を自動化しません。
 
 ## 注意
 

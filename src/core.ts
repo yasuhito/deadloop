@@ -226,7 +226,7 @@ export function resolveProjectForTick(input: {
   lockedProjectId?: string;
 }): TickProjectResolution {
   const config = parseProjectsConfig(input.configText, input.only);
-  if (!config.ok) return { ok: false, reason: config.reason };
+  if (config.ok === false) return { ok: false, reason: config.reason };
   const project = config.projects.find((candidate) => {
     if (!candidate.repoPath) return false;
     try {
