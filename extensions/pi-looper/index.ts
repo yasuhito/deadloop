@@ -19,6 +19,10 @@ const {
   sanitizeId,
   templateValues,
 } = require("../../src/core.ts");
+const {
+  buildDoctorSnapshot,
+  formatDoctorReport,
+} = require("../../src/doctor.ts");
 const { buildStatusSnapshot, formatStatusReport } = require("../../src/status.ts");
 
 const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
@@ -375,16 +379,26 @@ async function gitText(pi, args) {
   }
 }
 
-async function buildLiveStatusReport(pi, cwd) {
+async function collectLiveSnapshotData(
+  pi,
+  cwd,
+  options: { includeClosedPrs?: boolean; includeIssueComments?: boolean } = {},
+) {
+  const includeClosedPrs = options.includeClosedPrs === true;
+  const includeIssueComments = options.includeIssueComments === true;
+
   const projectsResult = loadProjectsResult();
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
   const warnings = statusWarnings(projectsResult.ok ? [] : [projectsResult.reason]);
   const project = activeProject(cwd, projects);
   if (!project) {
-    return formatStatusReport(buildStatusSnapshot({ cwd, projects, state, warnings }));
+    return { cwd, projects, state, warnings };
   }
 
+  const issueFields = includeIssueComments
+    ? "number,title,labels,updatedAt,comments"
+    : "number,title,labels,updatedAt";
   const issues = project.githubRepo
     ? await execJson(
         pi,
@@ -399,7 +413,7 @@ async function buildLiveStatusReport(pi, cwd) {
           "--limit",
           "200",
           "--json",
-          "number,title,labels,updatedAt",
+          issueFields,
         ],
         [],
       )
@@ -423,7 +437,7 @@ async function buildLiveStatusReport(pi, cwd) {
         [],
       )
     : [];
-  const mergedPrs = project.githubRepo
+  const mergedPrs = includeClosedPrs && project.githubRepo
     ? await execJson(
         pi,
         "gh",
@@ -442,7 +456,7 @@ async function buildLiveStatusReport(pi, cwd) {
         [],
       )
     : [];
-  const closedPrs = project.githubRepo
+  const closedPrs = includeClosedPrs && project.githubRepo
     ? await execJson(
         pi,
         "gh",
@@ -479,22 +493,29 @@ async function buildLiveStatusReport(pi, cwd) {
     if (head !== undefined) gitHeads[worktreePath] = head.trim();
   }
 
-  return formatStatusReport(
-    buildStatusSnapshot({
-      cwd,
-      projects,
-      state,
-      issues,
-      openPrs,
-      closedPrs: uniquePrs([...(mergedPrs || []), ...(closedPrs || [])]),
-      worktrees,
-      gitStatuses,
-      gitHeads,
-      warnings,
-    }),
-  );
+  return {
+    cwd,
+    projects,
+    state,
+    issues,
+    openPrs,
+    closedPrs: uniquePrs([...(mergedPrs || []), ...(closedPrs || [])]),
+    worktrees,
+    gitStatuses,
+    gitHeads,
+    warnings,
+  };
 }
 
+async function buildLiveStatusReport(pi, cwd) {
+  const data = await collectLiveSnapshotData(pi, cwd, { includeClosedPrs: true });
+  return formatStatusReport(buildStatusSnapshot(data));
+}
+
+async function buildLiveDoctorReport(pi, cwd) {
+  const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true });
+  return formatDoctorReport(buildDoctorSnapshot(data));
+}
 async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
   const now = Date.now();
   const key = automationStateKey(project, automation);
@@ -570,6 +591,18 @@ export default function (pi) {
         console.log(report);
       } else {
         pi.sendMessage({ customType: "pi-looper-status", content: report, display: true });
+      }
+    },
+  });
+
+  pi.registerCommand("pi-looper-doctor", {
+    description: "Diagnose known pi-looper failure modes and show copy-paste recovery or inspection commands",
+    handler: async (_args, ctx) => {
+      const report = await buildLiveDoctorReport(pi, ctx.cwd);
+      if (ctx.mode === "print" || ctx.mode === "json") {
+        console.log(report);
+      } else {
+        pi.sendMessage({ customType: "pi-looper-doctor", content: report, display: true });
       }
     },
   });
