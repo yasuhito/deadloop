@@ -8,7 +8,9 @@ import {
   getDueSlot,
   nextSlotAfter,
   normalizeProject,
+  parseProjectsConfig,
   parseEveryMinutes,
+  REPO_POLICY_FILE,
   renderTemplate,
   resolveConfigPath,
   resolveProjectForTick,
@@ -100,6 +102,13 @@ describe("deterministic extension core", () => {
           initialLastScheduledAt: 0,
         },
       ],
+      configSource: {
+        localPath: undefined,
+        repoPolicyPath: REPO_POLICY_FILE,
+        repoPolicyBaseBranch: "origin/main",
+        repoPolicyStatus: "not-read",
+        repoPolicyAppliedKeys: [],
+      },
     });
   });
 
@@ -268,6 +277,59 @@ describe("deterministic extension core", () => {
     });
 
     expect(workerModels).toEqual(["old-model", "new-model"]);
+  });
+
+  it("keeps existing behavior when the trusted repo policy is absent", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({ status: "missing" }),
+    });
+
+    expect(result.ok && result.projects[0].workerModel).toBe("");
+  });
+
+  it("uses the trusted repo policy worker model when local config omits it", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ workerModel: "repo-model" }) }),
+    });
+
+    expect(result.ok && result.projects[0].workerModel).toBe("repo-model");
+  });
+
+  it("keeps the local worker model above the trusted repo policy", () => {
+    const result = parseProjectsConfig(
+      JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", workerModel: "local-model" }] }),
+      "",
+      {
+        repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ workerModel: "repo-model" }) }),
+      },
+    );
+
+    expect(result.ok && result.projects[0].workerModel).toBe("local-model");
+  });
+
+  it("rejects forbidden trusted repo policy keys", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ autoMerge: true }) }),
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("asks the repo policy provider for the configured base branch", () => {
+    let requested = "";
+
+    parseProjectsConfig(
+      JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", baseBranch: "origin/master" }] }),
+      "",
+      {
+        repoPolicyProvider: (project) => {
+          requested = `${project.baseBranch}:${REPO_POLICY_FILE}`;
+          return { status: "missing" };
+        },
+      },
+    );
+
+    expect(requested).toBe(`origin/master:${REPO_POLICY_FILE}`);
   });
 
   it("returns a status reason when project config cannot be parsed", () => {

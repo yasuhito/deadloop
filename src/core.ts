@@ -4,6 +4,8 @@ import { AGENT_KINDS, type AgentKind, isAgentKind } from "./agent-profiles.cjs";
 
 export const DEFAULT_TIMEZONE = "Asia/Tokyo";
 
+export const REPO_POLICY_FILE = "pi-looper.project.json";
+
 export const DEFAULT_WORKER_INSTRUCTIONS = "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。";
 
 export const DEFAULT_WORKER_LAUNCH_POLICY =
@@ -73,6 +75,22 @@ export type RawProject = {
   automations?: RawAutomation[];
 };
 
+export type RepoPolicyReadResult =
+  | { status: "missing" }
+  | { status: "loaded"; text: string }
+  | { status: "error"; reason: string };
+
+export type RepoPolicyProvider = (project: RawProject) => RepoPolicyReadResult;
+
+export type ProjectConfigSource = {
+  localPath?: string;
+  repoPolicyPath: string;
+  repoPolicyBaseBranch: string;
+  repoPolicyStatus: "not-read" | "missing" | "loaded" | "error";
+  repoPolicyError?: string;
+  repoPolicyAppliedKeys: string[];
+};
+
 export type NormalizedProject = {
   id: string;
   enabled: boolean;
@@ -90,6 +108,7 @@ export type NormalizedProject = {
   reviewerModel: string;
   labels: NormalizedLabels;
   automations: NormalizedAutomation[];
+  configSource: ProjectConfigSource;
 };
 
 export type AutomationStateEntry = {
@@ -112,7 +131,9 @@ export type ConfigPathOptions = {
   joinPath?: (...parts: string[]) => string;
 };
 
-export type ProjectConfigResolution = { ok: true; projects: NormalizedProject[] } | { ok: false; reason: string };
+export type ProjectConfigResolution =
+  | { ok: true; projects: NormalizedProject[]; warnings: string[] }
+  | { ok: false; reason: string; warnings?: string[] };
 
 export type TickProjectResolution = { ok: true; project: NormalizedProject } | { ok: false; reason: string };
 
@@ -223,6 +244,172 @@ function isPathInside(child: string, parent: string): boolean {
   return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function hasOwn(object: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+const REPO_POLICY_PROJECT_KEYS = new Set([
+  "workerAgent",
+  "workerModel",
+  "reviewerAgent",
+  "reviewerModel",
+  "checkCommand",
+  "workerInstructions",
+  "workerLaunchPolicy",
+  "labels",
+  "automations",
+]);
+const REPO_POLICY_LABEL_KEYS = new Set([
+  "ready",
+  "implement",
+  "inProgress",
+  "blocked",
+  "review",
+  "reviewing",
+  "human",
+  "needsInfo",
+  "wontfix",
+  "needsTriage",
+]);
+const REPO_POLICY_AUTOMATION_KEYS = new Set(["id", "name", "promptFile", "precheckFile"]);
+
+function validateObject(value: unknown, context: string): asserts value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+}
+
+function validateRepoPolicy(policy: unknown): RawProject {
+  validateObject(policy, REPO_POLICY_FILE);
+  for (const key of Object.keys(policy)) {
+    if (!REPO_POLICY_PROJECT_KEYS.has(key)) throw new Error(`repo policy key is not allowed: ${key}`);
+  }
+  const labels = (policy as { labels?: unknown }).labels;
+  if (labels !== undefined) {
+    validateObject(labels, "repo policy labels");
+    for (const key of Object.keys(labels)) {
+      if (!REPO_POLICY_LABEL_KEYS.has(key)) throw new Error(`repo policy labels key is not allowed: ${key}`);
+    }
+  }
+  const automations = (policy as { automations?: unknown }).automations;
+  if (automations !== undefined) {
+    if (!Array.isArray(automations)) throw new Error("repo policy automations must be an array");
+    for (const [index, automation] of automations.entries()) {
+      validateObject(automation, `repo policy automations[${index}]`);
+      for (const key of Object.keys(automation)) {
+        if (!REPO_POLICY_AUTOMATION_KEYS.has(key)) {
+          throw new Error(`repo policy automations[${index}] key is not allowed: ${key}`);
+        }
+      }
+    }
+  }
+  return policy as RawProject;
+}
+
+function parseRepoPolicy(text: string): RawProject {
+  try {
+    return validateRepoPolicy(JSON.parse(text || "{}"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`repo policy parse error: ${message}`);
+  }
+}
+
+function mergeIfLocalMissing<T extends Record<string, unknown>>(target: T, local: T, policy: T, keys: string[]): string[] {
+  const applied: string[] = [];
+  for (const key of keys) {
+    if (policy[key] === undefined || hasOwn(local, key)) continue;
+    target[key as keyof T] = policy[key] as T[keyof T];
+    applied.push(key);
+  }
+  return applied;
+}
+
+function mergeLabels(local?: LabelConfig, policy?: LabelConfig): { labels?: LabelConfig; appliedKeys: string[] } {
+  if (!local && !policy) return { appliedKeys: [] };
+  const merged = { ...(policy || {}), ...(local || {}) };
+  const appliedKeys = Object.keys(policy || {}).filter((key) => !hasOwn(local || {}, key));
+  return { labels: merged, appliedKeys: appliedKeys.map((key) => `labels.${key}`) };
+}
+
+function automationKey(automation: RawAutomation, index: number): string {
+  return automation.id || automation.name || `#${index}`;
+}
+
+function mergeAutomations(
+  local: RawAutomation[] | undefined,
+  policy: RawAutomation[] | undefined,
+): { automations?: RawAutomation[]; appliedKeys: string[] } {
+  const localAutomations = local || [];
+  if (!localAutomations.length) return { automations: local, appliedKeys: [] };
+  const policyAutomations = policy || [];
+  const byKey = new Map(policyAutomations.map((automation, index) => [automationKey(automation, index), automation]));
+  const appliedKeys: string[] = [];
+  const automations = localAutomations.map((automation, index) => {
+    const policyAutomation = byKey.get(automationKey(automation, index)) || policyAutomations[index];
+    if (!policyAutomation) return automation;
+    const merged = { ...automation } as Record<string, unknown>;
+    for (const key of REPO_POLICY_AUTOMATION_KEYS) {
+      if (policyAutomation[key as keyof RawAutomation] === undefined || hasOwn(automation, key)) continue;
+      merged[key] = policyAutomation[key as keyof RawAutomation];
+      appliedKeys.push(`automations[${index}].${key}`);
+    }
+    return merged as RawAutomation;
+  });
+  return { automations, appliedKeys };
+}
+
+function mergeRepoPolicy(local: RawProject, policy: RawProject): { project: RawProject; appliedKeys: string[] } {
+  const merged = { ...local } as Record<string, unknown>;
+  const appliedKeys = mergeIfLocalMissing(merged, local as Record<string, unknown>, policy as Record<string, unknown>, [
+    "workerAgent",
+    "workerModel",
+    "reviewerAgent",
+    "reviewerModel",
+    "checkCommand",
+    "workerInstructions",
+    "workerLaunchPolicy",
+  ]);
+  const labels = mergeLabels(local.labels, policy.labels);
+  if (labels.labels) merged.labels = labels.labels;
+  appliedKeys.push(...labels.appliedKeys);
+  const automations = mergeAutomations(local.automations, policy.automations);
+  if (automations.automations) merged.automations = automations.automations;
+  appliedKeys.push(...automations.appliedKeys);
+  return { project: merged as RawProject, appliedKeys };
+}
+
+function defaultConfigSource(raw: RawProject, localPath?: string): ProjectConfigSource {
+  return {
+    localPath,
+    repoPolicyPath: REPO_POLICY_FILE,
+    repoPolicyBaseBranch: raw.baseBranch || "origin/main",
+    repoPolicyStatus: "not-read",
+    repoPolicyAppliedKeys: [],
+  };
+}
+
+export type ProjectsFromConfigOptions = {
+  configPath?: string;
+  repoPolicyProvider?: RepoPolicyProvider;
+};
+
+function applyRepoPolicy(raw: RawProject, options: ProjectsFromConfigOptions = {}): { raw: RawProject; source: ProjectConfigSource } {
+  const source = defaultConfigSource(raw, options.configPath);
+  if (!options.repoPolicyProvider) return { raw, source };
+  const result = options.repoPolicyProvider(raw);
+  source.repoPolicyStatus = result.status;
+  if (result.status === "missing") return { raw, source };
+  if (result.status === "error") {
+    source.repoPolicyError = result.reason;
+    throw new Error(result.reason);
+  }
+  const policy = parseRepoPolicy(result.text);
+  const merged = mergeRepoPolicy(raw, policy);
+  source.repoPolicyAppliedKeys = merged.appliedKeys;
+  return { raw: merged.project, source };
+}
+
 // Shared by workerAgent and reviewerAgent: both draw from the same profile-table
 // enum, so the only difference is which field name appears in the error message.
 function normalizeAgentKind(value: unknown, field: string): AgentKind {
@@ -232,7 +419,7 @@ function normalizeAgentKind(value: unknown, field: string): AgentKind {
   throw new Error(`invalid ${field}: ${String(value)} (expected ${expected})`);
 }
 
-export function normalizeProject(raw: RawProject): NormalizedProject {
+export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSource): NormalizedProject {
   const id = sanitizeId(raw.id || raw.githubRepo || raw.repoPath);
   const project: NormalizedProject = {
     id,
@@ -251,26 +438,42 @@ export function normalizeProject(raw: RawProject): NormalizedProject {
     reviewerModel: raw.reviewerModel || "",
     labels: normalizeLabels(raw.labels || {}),
     automations: [],
+    configSource: configSource || defaultConfigSource(raw),
   };
   project.automations = (raw.automations || []).map((automation) => normalizeAutomation(project, automation));
   return project;
 }
 
-export function projectsFromConfig(config: unknown, only?: string | string[]): NormalizedProject[] {
+export function projectsFromConfig(
+  config: unknown,
+  only?: string | string[],
+  options: ProjectsFromConfigOptions = {},
+): NormalizedProject[] {
   const onlyIds = filterProjectIds(only);
   const projects =
     config && typeof config === "object" && Array.isArray((config as { projects?: unknown }).projects)
       ? (config as { projects: RawProject[] }).projects
       : [];
   return projects
-    .map(normalizeProject)
-    .filter((project) => project.enabled)
-    .filter((project) => !onlyIds.length || onlyIds.includes(project.id));
+    .filter((raw) => {
+      if (!onlyIds.length) return true;
+      const rawId = sanitizeId(raw.id || raw.githubRepo || raw.repoPath);
+      return onlyIds.includes(rawId);
+    })
+    .map((raw) => {
+      const layered = applyRepoPolicy(raw, options);
+      return normalizeProject(layered.raw, layered.source);
+    })
+    .filter((project) => project.enabled);
 }
 
-export function parseProjectsConfig(text: string, only?: string | string[]): ProjectConfigResolution {
+export function parseProjectsConfig(
+  text: string,
+  only?: string | string[],
+  options: ProjectsFromConfigOptions = {},
+): ProjectConfigResolution {
   try {
-    return { ok: true, projects: projectsFromConfig(JSON.parse(text || "{}"), only) };
+    return { ok: true, projects: projectsFromConfig(JSON.parse(text || "{}"), only, options), warnings: [] };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, reason: `projects.json parse error: ${message}` };
@@ -282,8 +485,13 @@ export function resolveProjectForTick(input: {
   configText: string;
   only?: string | string[];
   lockedProjectId?: string;
+  configPath?: string;
+  repoPolicyProvider?: RepoPolicyProvider;
 }): TickProjectResolution {
-  const config = parseProjectsConfig(input.configText, input.only);
+  const config = parseProjectsConfig(input.configText, input.only, {
+    configPath: input.configPath,
+    repoPolicyProvider: input.repoPolicyProvider,
+  });
   if (config.ok === false) return { ok: false, reason: config.reason };
   const project = config.projects.find((candidate) => {
     if (!candidate.repoPath) return false;

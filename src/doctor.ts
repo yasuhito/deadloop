@@ -49,6 +49,7 @@ export type HerdrAgent = {
 export type DoctorInput = {
   cwd: string;
   projects: NormalizedProject[];
+  warnings?: string[];
   issues?: DoctorGithubItem[];
   openPrs?: DoctorGithubItem[];
   worktrees?: HerdrWorktree[];
@@ -83,6 +84,7 @@ export type DoctorFinding = {
 export type DoctorSnapshot = {
   project: NormalizedProject | null;
   cwd: string;
+  warnings: string[];
   findings: DoctorFinding[];
 };
 
@@ -507,7 +509,8 @@ function buildWorkspaceTrustFindings(
 
 export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   const project = resolveActiveProject(input.cwd, input.projects);
-  if (!project) return { project: null, cwd: input.cwd, findings: [] };
+  const warnings = input.warnings || [];
+  if (!project) return { project: null, cwd: input.cwd, warnings, findings: [] };
 
   const issues = input.issues || [];
   const openPrs = input.openPrs || [];
@@ -522,6 +525,7 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   return {
     project,
     cwd: input.cwd,
+    warnings,
     findings: [
       ...buildBlockedIssueFindings(project, issues),
       ...buildStaleInProgressFindings(project, issues, worktrees, nowMs),
@@ -535,15 +539,30 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   };
 }
 
+function formatConfigSource(project: NormalizedProject): string {
+  const source = project.configSource;
+  const local = source.localPath || "unknown local projects.json";
+  const policy = `${source.repoPolicyBaseBranch}:${source.repoPolicyPath}`;
+  const applied = source.repoPolicyAppliedKeys.length ? `; applied=${source.repoPolicyAppliedKeys.join(",")}` : "";
+  const error = source.repoPolicyError ? `; error=${source.repoPolicyError}` : "";
+  return `local=${local}; repoPolicy=${policy} (${source.repoPolicyStatus}${applied}${error})`;
+}
+
 export function formatDoctorReport(snapshot: DoctorSnapshot): string {
   if (!snapshot.project) {
-    return [`pi-looper doctor: no active project`, `cwd: ${snapshot.cwd}`].join("\n");
+    return [
+      `pi-looper doctor: no active project`,
+      `cwd: ${snapshot.cwd}`,
+      ...snapshot.warnings.map((warning) => `warning: ${warning}`),
+    ].join("\n");
   }
 
   const lines = [
     `pi-looper doctor: ${snapshot.project.id}`,
     `repo: ${snapshot.project.githubRepo || "unknown"}`,
     `cwd: ${snapshot.cwd}`,
+    ...snapshot.warnings.map((warning) => `warning: ${warning}`),
+    `config: ${formatConfigSource(snapshot.project)}`,
     "",
   ];
 

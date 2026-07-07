@@ -292,6 +292,15 @@ function formatItems(items: StatusLineItem[]): string {
   return items.map((item) => `#${item.number ?? "?"}${item.title ? ` ${item.title}` : ""}`).join(", ");
 }
 
+function formatConfigSource(project: NormalizedProject): string {
+  const source = project.configSource;
+  const local = source.localPath || "unknown local projects.json";
+  const policy = `${source.repoPolicyBaseBranch}:${source.repoPolicyPath}`;
+  const applied = source.repoPolicyAppliedKeys.length ? `; applied=${source.repoPolicyAppliedKeys.join(",")}` : "";
+  const error = source.repoPolicyError ? `; error=${source.repoPolicyError}` : "";
+  return `local=${local}; repoPolicy=${policy} (${source.repoPolicyStatus}${applied}${error})`;
+}
+
 function formatWorktrees(worktrees: HerdrWorktree[]): string {
   if (!worktrees.length) return "none";
   return worktrees
@@ -328,6 +337,7 @@ export function formatStatusReport(snapshot: StatusSnapshot): string {
     `repo: ${project.githubRepo || "unknown"}`,
     `cwd: ${snapshot.cwd}`,
     ...snapshot.warnings.map((warning) => `warning: ${warning}`),
+    `config: ${formatConfigSource(project)}`,
     `autoMerge: ${project.autoMerge ? "on" : "off"}`,
     "",
     "Automations:",

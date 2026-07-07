@@ -1,3 +1,4 @@
+const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -8,6 +9,7 @@ const TICK_MS = 30_000;
 const MODULE_LOAD_TIME_MS = Date.now();
 const {
   DEFAULT_TIMEZONE,
+  REPO_POLICY_FILE,
   automationStateKey,
   codeFreshnessWarning,
   getDueSlot,
@@ -87,6 +89,31 @@ function readConfigText() {
   }
 }
 
+function gitSync(repoPath, args, timeout = 30_000) {
+  return childProcess.spawnSync("git", ["-C", repoPath, ...args], {
+    encoding: "utf8",
+    timeout,
+    maxBuffer: 1024 * 1024,
+  });
+}
+
+function trustedRepoPolicyProvider(project) {
+  const repoPath = project.repoPath;
+  if (!repoPath) return { status: "missing" };
+  const baseBranch = project.baseBranch || "origin/main";
+
+  const fetch = gitSync(repoPath, ["fetch", "--quiet"], 30_000);
+  if (fetch.status !== 0) {
+    const reason = (fetch.stderr || fetch.stdout || fetch.error?.message || "git fetch failed").trim();
+    return { status: "error", reason: `trusted repo policy fetch failed for ${baseBranch}: ${reason}` };
+  }
+
+  const show = gitSync(repoPath, ["show", `${baseBranch}:${REPO_POLICY_FILE}`], 10_000);
+  if (show.status === 0) return { status: "loaded", text: show.stdout || "{}" };
+  debugLog("trusted repo policy missing", repoPath, baseBranch, String(show.stderr || show.stdout || "").trim());
+  return { status: "missing" };
+}
+
 function projectFilter() {
   return process.env.PI_LOOPER_PROJECTS || "";
 }
@@ -98,7 +125,10 @@ function loadProjectsResult() {
   } catch (error) {
     return { ok: false, reason: `projects.json read error: ${error?.message || error}` };
   }
-  const result = parseProjectsConfig(text, projectFilter());
+  const result = parseProjectsConfig(text, projectFilter(), {
+    configPath: CONFIG_PATH,
+    repoPolicyProvider: trustedRepoPolicyProvider,
+  });
   if (result.ok) {
     debugLog(
       "config",
@@ -391,7 +421,7 @@ async function collectLiveSnapshotData(
   const projectsResult = loadProjectsResult();
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
-  const warnings = statusWarnings(projectsResult.ok ? [] : [projectsResult.reason]);
+  const warnings = statusWarnings(projectsResult.ok ? projectsResult.warnings : [projectsResult.reason]);
   const project = activeProject(cwd, projects);
   if (!project) {
     return { cwd, projects, state, warnings };
@@ -681,6 +711,8 @@ export default function (pi) {
       configText,
       only: projectFilter(),
       lockedProjectId: active.project.id,
+      configPath: CONFIG_PATH,
+      repoPolicyProvider: trustedRepoPolicyProvider,
     });
     if (!projectResult.ok) {
       setLooperStatus(ctx, `skipped: ${projectResult.reason}`);
