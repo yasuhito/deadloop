@@ -70,6 +70,12 @@ describe("deterministic extension core", () => {
       worktreeRoot: "",
       checkCommand: "git diff --check",
       autoMerge: false,
+      ciFallback: {
+        enabled: false,
+        mode: "billing-only",
+        allowAutoMerge: false,
+        localCommands: "",
+      },
       workerInstructions: "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。",
       workerLaunchPolicy:
         "Worker 起動時は issue の難易度を見てレベルを選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は low、通常の実装は medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は high。判断理由を worker prompt に1行で残す。",
@@ -259,6 +265,30 @@ describe("deterministic extension core", () => {
 
   it("preserves explicitly enabled auto merge", () => {
     expect(normalizeProject({ autoMerge: true }).autoMerge).toBe(true);
+  });
+
+  it("defaults CI fallback to disabled billing-only mode", () => {
+    expect(normalizeProject({}).ciFallback).toEqual({
+      enabled: false,
+      mode: "billing-only",
+      allowAutoMerge: false,
+      localCommands: "",
+    });
+  });
+
+  it("normalizes CI fallback local commands for prompt templates", () => {
+    const project = normalizeProject({
+      ciFallback: {
+        enabled: true,
+        allowAutoMerge: true,
+        localCommands: ["git diff --check", "npm test"],
+      },
+      automations: [{}],
+    });
+
+    expect(renderTemplate("{{ciFallbackEnabled}}|{{ciFallbackAllowAutoMerge}}|{{ciFallbackLocalCommands}}", templateValues(project, project.automations[0], "/auto"))).toBe(
+      "true|true|git diff --check\nnpm test",
+    );
   });
 
   it("exposes auto merge state to prompt templates", () => {

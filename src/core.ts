@@ -56,6 +56,20 @@ export type NormalizedAutomation = {
 export type WorkerAgent = AgentKind;
 export type ReviewerAgent = AgentKind;
 
+export type RawCiFallbackConfig = {
+  enabled?: boolean;
+  mode?: string;
+  allowAutoMerge?: boolean;
+  localCommands?: string | string[];
+};
+
+export type NormalizedCiFallbackConfig = {
+  enabled: boolean;
+  mode: string;
+  allowAutoMerge: boolean;
+  localCommands: string;
+};
+
 export type RawProject = {
   id?: string;
   enabled?: boolean;
@@ -65,6 +79,7 @@ export type RawProject = {
   worktreeRoot?: string;
   checkCommand?: string;
   autoMerge?: boolean;
+  ciFallback?: RawCiFallbackConfig;
   workerInstructions?: string;
   workerLaunchPolicy?: string;
   workerAgent?: string;
@@ -100,6 +115,7 @@ export type NormalizedProject = {
   worktreeRoot: string;
   checkCommand: string;
   autoMerge: boolean;
+  ciFallback: NormalizedCiFallbackConfig;
   workerInstructions: string;
   workerLaunchPolicy: string;
   workerAgent: WorkerAgent;
@@ -409,6 +425,19 @@ function applyRepoPolicy(raw: RawProject, options: ProjectsFromConfigOptions = {
   source.repoPolicyAppliedKeys = merged.appliedKeys;
   return { raw: merged.project, source };
 }
+function normalizeLocalCommands(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value.map((command) => String(command).trim()).filter(Boolean).join("\n");
+  return String(value || "").trim();
+}
+
+function normalizeCiFallback(value: RawCiFallbackConfig | undefined): NormalizedCiFallbackConfig {
+  return {
+    enabled: value?.enabled === true,
+    mode: value?.mode || "billing-only",
+    allowAutoMerge: value?.allowAutoMerge === true,
+    localCommands: normalizeLocalCommands(value?.localCommands),
+  };
+}
 
 // Shared by workerAgent and reviewerAgent: both draw from the same profile-table
 // enum, so the only difference is which field name appears in the error message.
@@ -430,6 +459,7 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
     worktreeRoot: raw.worktreeRoot || "",
     checkCommand: raw.checkCommand || "git diff --check",
     autoMerge: raw.autoMerge === true,
+    ciFallback: normalizeCiFallback(raw.ciFallback),
     workerInstructions: raw.workerInstructions || DEFAULT_WORKER_INSTRUCTIONS,
     workerLaunchPolicy: raw.workerLaunchPolicy || DEFAULT_WORKER_LAUNCH_POLICY,
     workerAgent: normalizeAgentKind(raw.workerAgent, "workerAgent"),
@@ -587,6 +617,10 @@ export function templateValues(
     worktreeRoot: project.worktreeRoot || "",
     checkCommand: project.checkCommand || "git diff --check",
     autoMerge: project.autoMerge,
+    ciFallbackEnabled: project.ciFallback.enabled,
+    ciFallbackMode: project.ciFallback.mode,
+    ciFallbackAllowAutoMerge: project.ciFallback.allowAutoMerge,
+    ciFallbackLocalCommands: project.ciFallback.localCommands,
     workerInstructions: project.workerInstructions || "",
     workerLaunchPolicy: project.workerLaunchPolicy || "",
     workerAgent: project.workerAgent,

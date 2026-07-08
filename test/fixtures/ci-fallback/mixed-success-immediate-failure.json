@@ -1,0 +1,38 @@
+{
+  "pullRequest": {
+    "number": 235,
+    "headRefOid": "dddddddddddddddddddddddddddddddddddddddd",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-07-08T00:00:00Z",
+        "completedAt": "2026-07-08T00:00:03Z"
+      },
+      {
+        "name": "lint",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "startedAt": "2026-07-08T00:00:00Z",
+        "completedAt": "2026-07-08T00:00:20Z"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "databaseId": 1004,
+      "jobs": [
+        {
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "startedAt": "2026-07-08T00:00:00Z",
+          "completedAt": "2026-07-08T00:00:03Z",
+          "steps": []
+        }
+      ]
+    }
+  ],
+  "logText": ""
+}

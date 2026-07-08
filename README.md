@@ -129,6 +129,7 @@ PI_LOOPER_CONFIG=/path/to/projects.json pi
 - `worktreeRoot` — Herdr worktree の root
 - `checkCommand` — 作業エージェント / レビューエージェントが最後に通す検証コマンド。pi-looper 自体では `npm test && npm run lint && npm run typecheck && bash -n extensions/pi-looper/automations/*.sh && python3 -m py_compile extensions/pi-looper/automations/*.py && npm pack --dry-run` を標準検証にしています
 - `autoMerge` — `true` のときだけ PR reviewer が条件を満たした PR をマージする。既定値は `false` なので、初回導入では明示的に `false` のままにしてください
+- `ciFallback` — GitHub Actions が課金・quota・Actions 停止などで実行できないと決定論的に判定できる場合だけ、PR reviewer がローカル CI 相当検証を代替として扱う設定。既定は `{ "enabled": false, "mode": "billing-only", "allowAutoMerge": false }` です。`allowAutoMerge: false` では代替検証が成功してもマージせず `ready-for-human` に渡します。`allowAutoMerge: true` でも、GitHub CI が成功していない PR のマージには最新 head SHA への手動承認コメント、dry-run 相当の直前再確認、失敗時停止条件が必要です。必要なら `localCommands` に `git diff --check`、lint、関連テストなどを並べます
 - `workerInstructions` — 作業エージェント用プロンプトに差し込むプロジェクト固有指示
 - `workerAgent` — Worker を起動するエージェント種別。列挙値は `"pi"` / `"claude"`、未設定時は `"pi"`。`"claude"` を使う場合は、対象リポジトリのルートで operator が一度 `claude` を対話起動し、Claude Code の workspace trust を受け入れておく
 - `workerModel` — 作業エージェントの使用モデル。選択した `workerAgent` が理解する形式で書く（`pi` は `provider/id`、`claude` は `opus` / `claude-opus-4-8` など）。設定するとオーケストレータは issue の内容にかかわらず必ずこのモデルで Worker を起動する。未設定なら各エージェントの既定モデルを使う
@@ -204,6 +205,9 @@ PI_LOOPER_AUTOMATIONS=off pi
 PI_LOOPER_PROJECTS=example-project pi
 PI_LOOPER_CONFIG=/path/to/projects.json pi
 PI_LOOPER_DEBUG=1 pi
+PI_LOOPER_CI_FALLBACK_ENABLED=true pi
+PI_LOOPER_CI_FALLBACK_MODE=billing-only pi
+PI_LOOPER_CI_FALLBACK_ALLOW_AUTO_MERGE=false pi
 ```
 
 ## ラベル運用

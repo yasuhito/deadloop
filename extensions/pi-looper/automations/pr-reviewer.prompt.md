@@ -8,6 +8,8 @@
 - Herdr CLI: `herdr`
 - 既定検証コマンド: `{{checkCommand}}`
 - 自動マージ設定: `autoMerge={{autoMerge}}`
+- CI fallback 設定: `enabled={{ciFallbackEnabled}}`, `mode={{ciFallbackMode}}`, `allowAutoMerge={{ciFallbackAllowAutoMerge}}`（環境変数 `PI_LOOPER_CI_FALLBACK_ENABLED` / `PI_LOOPER_CI_FALLBACK_MODE` / `PI_LOOPER_CI_FALLBACK_ALLOW_AUTO_MERGE` があれば実行時の判定ではそれを優先してよい）
+- CI fallback ローカル検証コマンド: `{{ciFallbackLocalCommands}}`（空なら `{{checkCommand}}` とレビューエージェントが選ぶ関連検証を使う）
 - レビューエージェント種別: `{{reviewerAgent}}`（`pi` / `claude`。未設定プロジェクトは `pi`）
 - レビューエージェントのモデル指定: "{{reviewerModel}}"（運用者の設定。空でなければ起動コマンドに必ず `--model {{reviewerModel}}` を付ける。空なら `--model` を付けない。値は選択したエージェントが理解する形式で、`pi` は Pi の `provider/id`、`claude` は Claude Code CLI の `opus` / `claude-opus-4-8` など）
 - レビュー作業は PR branch の Herdr worktree で行う。main workspace を編集しない。
@@ -32,7 +34,9 @@
 - Copilot / CodeRabbit / 人間のレビューが得られない場合でも、そのまま無レビュー扱いでマージしない。レビューエージェントを起動して代替レビューを行う。
 - 代替レビューの観点は、仕様適合、標準適合、テスト不足、過剰な複雑さ、危険な変更の5つとする。指摘があればレビューエージェントが修正し、指摘がなければ代替レビュー完了としてマージ判断に進んでよい。
 - GitHub PR コメントは日本語で書く。
-- `{{checkCommand}}`、関連テスト、GitHub checks が成功していない PR はマージしない。
+- `{{checkCommand}}`、関連テスト、GitHub checks が成功していない PR はマージしない。ただし CI fallback が有効で、決定論的 helper が `ci_infrastructure_failure` と判定し、ローカル CI 相当検証が成功した場合だけ、GitHub checks の代替検証として扱ってよい。
+- CI fallback を使った PR コメントには、必ず「GitHub CI は成功していません」と明記する。GitHub checks failure を無視するのではなく、課金・quota・Actions 停止などで GitHub CI が実行不能だったための代替検証として説明する。
+- CI fallback の `allowAutoMerge` が `true` ではない場合、fallback 検証が成功しても PR は絶対にマージせず、`{{humanLabel}}` に渡す。
 - `autoMerge` が `true` ではない場合、PR は絶対にマージせず、レビューと検証の結果を PR にコメントして `{{humanLabel}}` に渡す。
 - `autoMerge` が `true` の場合だけ、レビュー完了後にマージ可能なら自動でマージしてよい。
 - レビューループは反復型。修正を push した実行回、外部レビューを依頼した実行回、レビューエージェントが修正 commit を push した実行回ではマージしない。次回の実行回で新しいコメントがないことを確認してから進める。
@@ -149,6 +153,40 @@ gh api repos/{{githubRepo}}/pulls/<PR>/comments
 - `mergeable` / `mergeStateStatus` / `reviewDecision`
 
 外部レビューまたは CI が進行中なら、この実行回では修正や合格判定をしない。`{{reviewingLabel}}` を外し、`{{reviewLabel}}` または `{{humanLabel}}` は残して終了する。Copilot の quota / unavailable / disabled / unable to review は進行中ではないため、この条件で待たない。
+
+GitHub checks が failure の場合は、すぐ blocked にせず CI fallback 判定を行う。fallback が無効、または通常の test / lint / build failure と判定された場合は従来どおりレビューエージェントの修正対象にする。fallback を許すのは `ci-fallback-decision.py` が `fallbackAllowed=true` を返した場合だけ。
+
+```bash
+ci_fallback_enabled="${PI_LOOPER_CI_FALLBACK_ENABLED:-{{ciFallbackEnabled}}}"
+ci_fallback_mode="${PI_LOOPER_CI_FALLBACK_MODE:-{{ciFallbackMode}}}"
+ci_fallback_allow_auto_merge="${PI_LOOPER_CI_FALLBACK_ALLOW_AUTO_MERGE:-{{ciFallbackAllowAutoMerge}}}"
+pr_ci_json=$(mktemp)
+runs_ci_json=$(mktemp)
+logs_ci_file=$(mktemp)
+combined_ci_json=$(mktemp)
+printf '[]' > "$runs_ci_json"
+: > "$logs_ci_file"
+
+gh pr view <PR> -R {{githubRepo}} --json number,headRefOid,statusCheckRollup > "$pr_ci_json"
+# detailsUrl から run id を取れる場合だけ job / log 詳細を補強する。取得失敗は helper の evidence に残し、推測で fallback しない。
+for run_id in $(jq -r '.statusCheckRollup[]?.detailsUrl? // empty | capture("/runs/(?<id>[0-9]+)")?.id // empty' "$pr_ci_json" | sort -u); do
+  run_tmp=$(mktemp)
+  if gh run view "$run_id" -R {{githubRepo}} --json databaseId,name,status,conclusion,createdAt,updatedAt,jobs > "$run_tmp" 2>>"$logs_ci_file"; then
+    jq -s '.[0] + [.[1]]' "$runs_ci_json" "$run_tmp" > "$runs_ci_json.next" && mv "$runs_ci_json.next" "$runs_ci_json"
+  fi
+  gh run view "$run_id" -R {{githubRepo}} --log >> "$logs_ci_file" 2>&1 || true
+done
+jq -n --slurpfile pr "$pr_ci_json" --slurpfile runs "$runs_ci_json" --rawfile logs "$logs_ci_file" \
+  '{pullRequest: $pr[0], runs: $runs[0], logText: $logs}' > "$combined_ci_json"
+ci_fallback_json=$(python3 {{automationDir}}/ci-fallback-decision.py \
+  --input "$combined_ci_json" \
+  --enabled "$ci_fallback_enabled" \
+  --mode "$ci_fallback_mode")
+ci_fallback_allowed=$(printf '%s' "$ci_fallback_json" | jq -r '.fallbackAllowed')
+ci_fallback_classification=$(printf '%s' "$ci_fallback_json" | jq -r '.classification')
+```
+
+`ci_fallback_allowed=true` の場合は、この実行回の状態として `ci_fallback_active=true`、判定根拠として `ci_fallback_json` を保持する。`ci_fallback_allowed=false` の場合は、`classification=ordinary_ci_failure` なら通常の CI failure としてレビューエージェントに修正させる。`classification=unknown_ci_failure` / `insufficient_*` 相当なら推測で fallback せず、必要に応じて Blocked 報告フォーマットで人間確認に回す。
 
 ### 5. 外部レビュー依頼 gate
 
@@ -268,7 +306,9 @@ PR #<PR> をレビューしてください。
 - PR URL: <url>
 - Base branch: {{baseBranch}}
 - Head branch: <headRefName>
-- Review mode: <external-comments | fallback-review>
+- Review mode: <external-comments | fallback-review | ci-fallback-local-validation>
+- CI fallback active: <true | false>
+- CI fallback decision: `<ci_fallback_json>`（active の場合だけ、判定理由と evidence を貼る）
 
 契約:
 - PR 本文の `Closes #N` / `Fixes #N` / `Resolves #N` が指す issue を読み、`Agent Brief` / `What to build` と `Acceptance criteria` を実装契約として扱ってください。
@@ -279,6 +319,8 @@ PR #<PR> をレビューしてください。
 - 代替レビューの観点は、仕様適合、標準適合、テスト不足、過剰な複雑さ、危険な変更です。
 - 指摘があれば修正し、関連テストと `{{checkCommand}}` を実行し、conventional commit で追加 commit を作って push してください。
 - 指摘が無い場合も、関連テストと `{{checkCommand}}` を実行してください。
+- CI fallback active の場合は、GitHub CI が billing / quota / Actions 停止らしき理由で実行不可であることを前提に、ローカル CI 相当検証を実行してください。`{{ciFallbackLocalCommands}}` が空でなければその各コマンドを実行し、空なら `git diff --check`、`{{checkCommand}}`、変更に関連する test / lint / typecheck を選んで実行してください。
+- CI fallback active の場合、PR コメントに日本語で「CI fallback を使った理由」「判定根拠」「実行したローカル検証」「成功 / 失敗」「GitHub CI が復旧したら rerun すべきこと」を書き、必ず「GitHub CI は成功していません」と明記してください。
 - 指摘が無ければ、PR に「外部レビューが利用できなかったため代替レビューを行い、追加指摘なし」または「レビューコメントを確認し、追加修正不要」と検証結果を日本語でコメントしてください。
 
 禁止事項:
@@ -352,9 +394,10 @@ helper status が `complete` の場合:
 1. PR、GitHub checks、最新 head SHA を再取得する。
 2. レビューエージェントの worktree で `git status --short` が空であることを確認する。
 3. `git rev-parse HEAD`、`git rev-parse origin/<headRefName>`、PR の `headRefOid` が一致することを確認する。未push commit や未反映のローカル変更があればマージしない。
-4. レビューエージェントの worktree で `{{checkCommand}}` をオーケストレータが再実行し、終了コード 0 を必須にする。失敗したら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に失敗内容を Blocked 報告フォーマットでコメントしてマージしない。
-5. レビューエージェントが push して `head_sha_before` と最新 head SHA が違う場合は、`{{reviewingLabel}}` を外し、`{{reviewLabel}}` は残す。Copilot 再レビューを依頼できるなら依頼し、この実行回ではマージしない。
-6. head SHA が変わっていない場合だけ、次の最終判定へ進む。
+4. レビューエージェントの worktree で `{{checkCommand}}` をオーケストレータが再実行し、終了コード 0 を必須にする。CI fallback active の場合は、`{{ciFallbackLocalCommands}}` が空でなければその各コマンドもオーケストレータが再実行する。失敗したら `{{reviewingLabel}}` を外し、`{{blockedLabel}}` を付け、PR に失敗内容を Blocked 報告フォーマットでコメントしてマージしない。CI fallback active のローカル検証失敗 path では、fallback 理由、判定根拠、実行したローカル検証コマンド、失敗結果、GitHub CI が復旧したら rerun すべきこと、「GitHub CI は成功していません」を Blocked コメントにも必ず含める。
+5. CI fallback active の場合、レビューエージェントの PR コメントに fallback 理由、判定根拠、ローカル検証結果、「GitHub CI は成功していません」が含まれることを確認する。不足していればマージせず、追加コメントまたはレビューエージェントへの追記依頼で補う。
+6. レビューエージェントが push して `head_sha_before` と最新 head SHA が違う場合は、`{{reviewingLabel}}` を外し、`{{reviewLabel}}` は残す。Copilot 再レビューを依頼できるなら依頼し、この実行回ではマージしない。
+7. head SHA が変わっていない場合だけ、次の最終判定へ進む。
 
 ### 10. Final disposition
 
@@ -362,9 +405,9 @@ helper status が `complete` の場合:
 
 - PR が draft ではない。
 - issue 契約を満たしている。
-- GitHub checks が成功している。
-- オーケストレータがレビューエージェントの worktree で再実行した `{{checkCommand}}` が成功している。
-- CI が完了している。
+- GitHub checks が成功している。または、CI fallback active で `ci-fallback-decision.py` が `ci_infrastructure_failure` / `fallbackAllowed=true` を返し、ローカル CI 相当検証が成功している。
+- オーケストレータがレビューエージェントの worktree で再実行した `{{checkCommand}}` が成功している。CI fallback active の場合は、`{{ciFallbackLocalCommands}}` の各コマンドも成功している。
+- CI が完了している。CI fallback active の場合は GitHub CI が成功していないことを承知のうえ、CI infrastructure failure とローカル代替検証完了を PR コメントに残している。
 - `mergeStateStatus` が `CLEAN` または同等のマージ可能状態である。
 - `reviewDecision` が `CHANGES_REQUESTED` ではない。
 - 未解決の必須 review thread がない。
@@ -374,14 +417,22 @@ helper status が `complete` の場合:
 
 `autoMerge` が `true` ではない場合の人間確認手順:
 
-1. PR に日本語で、確認した契約、検証結果、マージ可能と判断した理由、ただし `autoMerge` が無効なので人間確認へ渡すことをコメントする。
+1. PR に日本語で、確認した契約、検証結果、マージ可能と判断した理由、ただし `autoMerge` が無効なので人間確認へ渡すことをコメントする。CI fallback active の場合は fallback 理由、判定根拠、ローカル検証結果、GitHub CI が復旧したら rerun すべきこと、「GitHub CI は成功していません」を必ず含める。
 2. `gh pr edit <PR> -R {{githubRepo}} --add-label "{{humanLabel}}" --remove-label "{{reviewingLabel}}" --remove-label "{{reviewLabel}}"` を実行する。ラベル変更の一部が失敗した場合は、可能な範囲で `{{reviewingLabel}}` を外し `{{humanLabel}}` を付ける。
 3. マージ、head branch 削除、issue close はしない。
 4. 最後に PR URL と人間確認へ渡した結果を要約する。
 
 `autoMerge` が `true` の場合のマージ手順:
 
-1. PR に日本語で、確認した契約、検証結果、マージする判断をコメントする。
+CI fallback active かつ `ci_fallback_allow_auto_merge` が `true` ではない場合は、`autoMerge=true` でもマージしない。PR に日本語で fallback 理由とローカル検証結果、`allowAutoMerge=false` のため人間確認へ渡すこと、GitHub CI が復旧したら rerun すべきことを書き、`{{humanLabel}}` に渡す。branch protection で GitHub checks 必須なら merge が拒否される可能性があるため、この場合も blocked ではなく `{{humanLabel}}` に渡す。
+
+CI fallback active かつ `ci_fallback_allow_auto_merge=true` の場合でも、GitHub CI が成功していない PR の自動マージなので、次の追加 gate をすべて満たすまでマージしない。
+
+- 手動承認: 最新 head SHA に対して、人間 operator の PR コメント `<!-- pi-looper:ci-fallback-auto-merge-approved head=<head_sha> -->` がある。無ければ PR に承認待ち理由をコメントし、`{{humanLabel}}` に渡す。
+- dry-run 相当確認: マージ直前に `gh pr view <PR> -R {{githubRepo}} --json headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup`、`git status --short`、`git rev-parse HEAD`、`git rev-parse origin/<headRefName>` を再実行し、Final disposition 条件と head SHA 一致を再確認する。
+- 失敗時停止条件: 上記確認、ローカル代替検証、`gh pr merge --match-head-commit` のいずれかが失敗したら、再試行で押し切らず `{{humanLabel}}` に渡す。branch protection で GitHub checks 必須のため merge が拒否された場合も blocked にせず `{{humanLabel}}` に渡す。
+
+1. PR に日本語で、確認した契約、検証結果、マージする判断をコメントする。CI fallback active の場合は「GitHub CI は成功していません」と手動承認コメントの head SHA を必ず含める。
 2. 最新 head SHA を取得し、`gh pr merge <PR> -R {{githubRepo}} --squash --delete-branch --match-head-commit <head_sha>` でマージする。確認後に HEAD が変わっていた場合はマージせず、次回の実行回に回す。
 3. マージ後、可能なら `{{reviewLabel}}`、`{{reviewingLabel}}`、`{{humanLabel}}` を外す。ラベル削除が失敗しても、PR が merged なら成功扱いでよい。
 4. 最後に PR URL と merge 結果を要約する。

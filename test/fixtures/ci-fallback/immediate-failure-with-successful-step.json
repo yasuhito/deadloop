@@ -1,0 +1,33 @@
+{
+  "pullRequest": {
+    "number": 236,
+    "headRefOid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-07-08T00:00:00Z",
+        "completedAt": "2026-07-08T00:00:03Z"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "databaseId": 1005,
+      "jobs": [
+        {
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "startedAt": "2026-07-08T00:00:00Z",
+          "completedAt": "2026-07-08T00:00:03Z",
+          "steps": [
+            { "name": "Set up job", "conclusion": "success" }
+          ]
+        }
+      ]
+    }
+  ],
+  "logText": ""
+}

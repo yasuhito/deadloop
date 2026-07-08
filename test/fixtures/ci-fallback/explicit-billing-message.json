@@ -1,0 +1,31 @@
+{
+  "pullRequest": {
+    "number": 233,
+    "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-07-08T00:00:00Z",
+        "completedAt": "2026-07-08T00:00:02Z"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "databaseId": 1003,
+      "jobs": [
+        {
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "startedAt": "2026-07-08T00:00:00Z",
+          "completedAt": "2026-07-08T00:00:02Z",
+          "steps": []
+        }
+      ]
+    }
+  ],
+  "logText": "This workflow run was not started because the account has exceeded the GitHub Actions spending limit."
+}

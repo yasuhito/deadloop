@@ -1,0 +1,61 @@
+{
+  "pullRequest": {
+    "number": 230,
+    "headRefOid": "afee98e100000000000000000000000000000000",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-07-08T00:00:00Z",
+        "completedAt": "2026-07-08T00:00:03Z"
+      },
+      {
+        "name": "lint",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-07-08T00:00:01Z",
+        "completedAt": "2026-07-08T00:00:04Z"
+      },
+      {
+        "name": "typecheck",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-07-08T00:00:01Z",
+        "completedAt": "2026-07-08T00:00:04Z"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "databaseId": 1001,
+      "jobs": [
+        {
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "startedAt": "2026-07-08T00:00:00Z",
+          "completedAt": "2026-07-08T00:00:03Z",
+          "steps": []
+        },
+        {
+          "name": "lint",
+          "status": "completed",
+          "conclusion": "failure",
+          "startedAt": "2026-07-08T00:00:01Z",
+          "completedAt": "2026-07-08T00:00:04Z",
+          "steps": []
+        },
+        {
+          "name": "typecheck",
+          "status": "completed",
+          "conclusion": "failure",
+          "startedAt": "2026-07-08T00:00:01Z",
+          "completedAt": "2026-07-08T00:00:04Z",
+          "steps": []
+        }
+      ]
+    }
+  ],
+  "logText": ""
+}
