@@ -1,0 +1,14 @@
+{
+  "cleanup": {
+    "candidates": [
+      {
+        "branch": "agent/issue-1-cleanup",
+        "path": "/worktrees/repo/agent-issue-1-cleanup",
+        "prNumber": 2,
+        "reason": "merged_pr",
+        "workspaceId": "wW"
+      }
+    ]
+  },
+  "issues": []
+}

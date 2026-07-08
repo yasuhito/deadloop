@@ -18,8 +18,8 @@ function promptCharacterCount(file: string): number {
 const promptBudgets: PromptBudget[] = [
   {
     file: "issue-coordinator.prompt.md",
-    budgetCharacters: 16_000,
-    currentApproxCharacters: "14.6k",
+    budgetCharacters: 4_000,
+    currentApproxCharacters: "1.6k",
   },
   {
     file: "pr-reviewer.prompt.md",

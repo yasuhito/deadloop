@@ -2,14 +2,31 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { renderIssueWorkerPrompt } from "../src/issue-coordinator-renderers";
+
 const contractFiles = [
   "extensions/pi-looper/automations/issue-coordinator.prompt.md",
   "extensions/pi-looper/automations/pr-reviewer.prompt.md",
   "extensions/pi-looper/automations/extract-worker-promise.py",
+  "extensions/pi-looper/automations/issue-coordinator-driver.py",
+  "src/issue-coordinator-renderers.ts",
 ];
 
 function combinedContractText() {
   return contractFiles.map((file) => readFileSync(file, "utf8")).join("\n---FILE---\n");
+}
+
+function issueWorkerPrompt(): string {
+  return renderIssueWorkerPrompt({
+    launchReason: "medium",
+    issueNumber: 1,
+    issueTitle: "Demo",
+    issueUrl: "https://github.com/owner/repo/issues/1",
+    githubRepo: "owner/repo",
+    workerInstructions: "AGENTS.md を読む。",
+    checkCommand: "npm test",
+    promiseFile: "<worktreePath>/.pi-looper/promise-<uuid>.json",
+  });
 }
 
 describe("promise file contract", () => {
@@ -26,20 +43,16 @@ describe("promise file contract", () => {
   });
 
   it("documents unique promise file allocation", () => {
-    expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      "<worktreePath>/.pi-looper/promise-<uuid>.json",
-    );
+    expect(issueWorkerPrompt()).toContain("<worktreePath>/.pi-looper/promise-<uuid>.json");
   });
 
   it("requires blocked workers to write a promise file", () => {
-    expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      '"status":"blocked"',
-    );
+    expect(issueWorkerPrompt()).toContain('"status":"blocked"');
   });
 
   it("uses the promise file as the completion authority", () => {
     expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      "唯一の完了判定の権威",
+      "唯一の権威",
     );
   });
 });

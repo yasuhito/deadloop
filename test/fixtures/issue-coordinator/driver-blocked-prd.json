@@ -1,0 +1,12 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 11,
+      "title": "PRD for token hygiene",
+      "body": "## Agent Brief\nPlan the work.\n\n## Acceptance criteria\n- Plan exists.\n\n## PRD\nThis is not a single implementation slice.",
+      "url": "https://github.com/owner/repo/issues/11",
+      "labels": [{"name": "ready-for-agent"}, {"name": "agent:implement"}]
+    }
+  ]
+}

@@ -90,7 +90,7 @@ Main control labels:
 
 ### Phase 1: Issue coordination only
 
-Start with only `issue-coordinator` enabled in `automations`. It picks an eligible issue, starts a Herdr worktree with a Pi worker, verifies the result, and creates a PR. Humans still review and merge.
+Start with only `issue-coordinator` enabled in `automations`. Its deterministic driver handles no-op, cleanup, and gate cases before any LLM prompt is sent; when implementation is needed it starts a Herdr worktree with a Pi worker, verifies the result, and creates a PR. Humans still review and merge.
 
 Use this phase to check that issue contracts are clear, worker instructions are sufficient, and `checkCommand` catches failures.
 

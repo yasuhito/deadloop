@@ -1,0 +1,12 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 10,
+      "title": "Missing contract",
+      "body": "## Agent Brief\nDo something, but no acceptance heading.",
+      "url": "https://github.com/owner/repo/issues/10",
+      "labels": [{"name": "ready-for-agent"}, {"name": "agent:implement"}]
+    }
+  ]
+}

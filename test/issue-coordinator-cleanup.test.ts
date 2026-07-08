@@ -6,6 +6,19 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const cleanupScript = "extensions/pi-looper/automations/cleanup-completed-worker-worktrees.py";
+const driverScript = "extensions/pi-looper/automations/issue-coordinator-driver.py";
+
+function runDriverFixture(fixtureName: string) {
+  const result = spawnSync("python3", [driverScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName)], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: { ...process.env, PI_LOOPER_PROJECT_ID: "demo", PI_LOOPER_REPO_PATH: "/repo", PI_LOOPER_GITHUB_REPO: "owner/repo" },
+  });
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout);
+  }
+  return JSON.parse(result.stdout);
+}
 
 function runCleanupFixture(fixtureName: string) {
   const result = spawnSync(
@@ -113,27 +126,21 @@ describe("issue coordinator cleanup", () => {
   });
 
   it("passes a unique worker agent name to the launcher", () => {
-    expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      '--name "$worker_name"',
-    );
+    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain('--name "$worker_name"');
   });
 
   it("creates a dedicated tab before starting a worker", () => {
-    expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      'herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "{{projectId}}-issue-<N>-worker" --no-focus',
+    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain(
+      'herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "demo-issue-12-worker" --no-focus',
     );
   });
 
   it("forwards the dedicated tab to the launcher for workers", () => {
-    expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      '--tab "$tab_id"',
-    );
+    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain('--tab "$tab_id"');
   });
 
   it("does not document workspace split startup for workers", () => {
-    expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).not.toMatch(
-      /herdr agent start[^`\n]*--workspace <workspaceId>/,
-    );
+    expect(runDriverFixture("driver-ready-worker.json").prompt).not.toMatch(/herdr agent start[^`\n]*--workspace <workspaceId>/);
   });
 
   it("creates a dedicated tab before starting a review worker", () => {
@@ -159,15 +166,11 @@ describe("issue coordinator cleanup", () => {
   // test/agent-profiles.test.ts. The coordinator keeps only the uuid coupling:
   // the same uuid names the promise file and is handed to the launcher.
   it("hands the shared session uuid to the launcher", () => {
-    expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      '--uuid "$uuid"',
-    );
+    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain('--uuid "$uuid"');
   });
 
-  it("documents separate enter sends when nudging claude workers", () => {
-    expect(readFileSync("extensions/pi-looper/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      "herdr agent send <t> $'\\r'",
-    );
+  it("keeps the promise file as the worker completion authority", () => {
+    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain("only completion authority");
   });
 
   it("documents dedicated tab startup for branch update workers", () => {

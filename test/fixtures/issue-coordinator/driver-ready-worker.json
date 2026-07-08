@@ -1,0 +1,12 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 12,
+      "title": "Implement small feature",
+      "body": "## Agent Brief\nBuild a focused feature.\n\n## Acceptance criteria\n- Tests pass.",
+      "url": "https://github.com/owner/repo/issues/12",
+      "labels": [{"name": "ready-for-agent"}, {"name": "agent:implement"}]
+    }
+  ]
+}

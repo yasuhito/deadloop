@@ -1,9 +1,21 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 const automationDir = path.join(process.cwd(), "extensions/pi-looper/automations");
+const driverScript = path.join(automationDir, "issue-coordinator-driver.py");
+
+function issueCoordinatorWorkerPrompt(): string {
+  const result = spawnSync("python3", [driverScript, "--fixture", "test/fixtures/issue-coordinator/driver-ready-worker.json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: { ...process.env, PI_LOOPER_PROJECT_ID: "demo", PI_LOOPER_REPO_PATH: "/repo", PI_LOOPER_GITHUB_REPO: "owner/repo" },
+  });
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+  return JSON.parse(result.stdout).prompt;
+}
 
 function watchSection(promptFile: string, heading: string): string {
   const template = fs.readFileSync(path.join(automationDir, promptFile), "utf8");
@@ -17,8 +29,7 @@ function watchSection(promptFile: string, heading: string): string {
 
 describe("watch polling break instruction", () => {
   it("tells issue-coordinator watch to break polling once the promise settles", () => {
-    const section = watchSection("issue-coordinator.prompt.md", "### 6. Watch");
-    expect(section).toMatch(/直ちにポーリングを打ち切/);
+    expect(issueCoordinatorWorkerPrompt()).toMatch(/break polling immediately/);
   });
 
   it("tells pr-reviewer watch to break polling once the promise settles", () => {
@@ -27,8 +38,7 @@ describe("watch polling break instruction", () => {
   });
 
   it("shows issue-coordinator watch a break-early loop example", () => {
-    const section = watchSection("issue-coordinator.prompt.md", "### 6. Watch");
-    expect(section).toMatch(/complete\|blocked\) break/);
+    expect(issueCoordinatorWorkerPrompt()).toMatch(/complete\|blocked\) break/);
   });
 
   it("shows pr-reviewer watch a break-early loop example", () => {
