@@ -159,7 +159,7 @@ function draftBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>):
    \`\`\`bash
 gh pr view ${number} -R ${shellQuote(env.githubRepo)} --comments --json number,title,url,headRefName,headRefOid,labels,commits,statusCheckRollup
 gh pr checks ${number} -R ${shellQuote(env.githubRepo)}
-python3 ${shellQuote(env.automationDir)}/extract-worker-promise.py --file '<promiseFile>' || true
+node ${shellQuote(env.automationDir)}/extract-worker-promise.ts --file '<promiseFile>' || true
 herdr agent list
 herdr pane list
 \`\`\`

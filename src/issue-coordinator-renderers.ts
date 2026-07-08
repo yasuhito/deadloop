@@ -95,7 +95,7 @@ ${confirmed}
    ${optionalCommandNote(input.promiseFile, "promise ファイル")}` +
     `\`\`\`bash
 gh issue view ${issue} -R ${shellQuoteForRenderer(input.githubRepo)} --comments
-python3 ${shellQuoteForRenderer(input.automationDir)}/extract-worker-promise.py --file ${shellQuoteForRenderer(promiseFile)} || true
+node ${shellQuoteForRenderer(input.automationDir)}/extract-worker-promise.ts --file ${shellQuoteForRenderer(promiseFile)} || true
 herdr agent list
 herdr pane list
 \`\`\`

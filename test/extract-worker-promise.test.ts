@@ -5,10 +5,11 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-const helperPath = "extensions/pi-looper/automations/extract-worker-promise.py";
+const helperPath = "extensions/pi-looper/automations/extract-worker-promise.ts";
 
-function runHelper(filePath: string) {
-  const result = spawnSync("python3", [helperPath, "--file", filePath], { cwd: process.cwd(), encoding: "utf8" });
+function runHelper(filePath: string, style: "separate" | "equals" = "separate") {
+  const args = style === "equals" ? [helperPath, `--file=${filePath}`] : [helperPath, "--file", filePath];
+  const result = spawnSync("node", args, { cwd: process.cwd(), encoding: "utf8" });
   const output = JSON.parse(result.stdout);
   return { code: result.status, status: output.status };
 }
@@ -34,6 +35,12 @@ describe("extract worker promise helper", () => {
   it("accepts blocked promise files", () => {
     withTempFile('{"status":"blocked","reason":"仕様不足","summary":"確認した。仕様が足りない。判断待ち。"}', (filePath) => {
       expect(runHelper(filePath)).toEqual({ code: 0, status: "blocked" });
+    });
+  });
+
+  it("accepts argparse-style equals file arguments", () => {
+    withTempFile('{"status":"complete","reason":"","summary":"実装した。検証した。残作業なし。"}', (filePath) => {
+      expect(runHelper(filePath, "equals")).toEqual({ code: 0, status: "complete" });
     });
   });
 

@@ -63,7 +63,7 @@ PR を `{{blockedLabel}}` にする場合は、コメント本文に少なくと
    ```bash
    gh pr view <PR> -R {{githubRepo}} --comments --json number,title,url,headRefName,headRefOid,labels,commits,statusCheckRollup
    gh pr checks <PR> -R {{githubRepo}}
-   python3 {{automationDir}}/extract-worker-promise.py --file <promiseFile> || true
+   node {{automationDir}}/extract-worker-promise.ts --file <promiseFile> || true
    herdr agent list
    herdr pane list
    ```

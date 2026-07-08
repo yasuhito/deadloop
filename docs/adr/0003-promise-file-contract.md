@@ -11,7 +11,7 @@ Accepted.
 - 司令塔は Worker 起動ごとに一意な promise ファイルパス(`<worktree>/.pi-looper/promise-<uuid>.json`、uuid は claude の `--session-id` と共用)を採番し、worker prompt で指示する。パスの一意性により、同一 issue のリトライ起動時に前回 worker の古い報告を誤読することを構造的に排除する(Orca の dispatchId 権威に相当)。
 - ペイロードは `{"status":"complete"|"blocked","reason":...,"summary":"3文要約(何をした・何が分かった・何が残っている)"}`。
 - 規約: **失敗も必ず書く。黙って終了しない**(blocked も promise である)。
-- `extract-worker-promise.py` の session JSONL パース・`--pane-id` 解決は廃止し、「指定パスの JSON を読んで検証する」薄い helper に置き換える。`<promise>` テキスト規約も廃止する。
+- `extract-worker-promise.ts` の前身にあった session JSONL パース・`--pane-id` 解決は廃止し、「指定パスの JSON を読んで検証する」薄い helper に置き換える。`<promise>` テキスト規約も廃止する。
 - エージェントの session ファイル・pane 出力・Herdr `agent_status` は完了判定に使わない(監視ヒントのみ)。
 
 ## Considered Options

@@ -7,7 +7,7 @@ const { renderIssueWorkerPrompt } = require("../src/issue-coordinator-renderers.
 const contractFiles = [
   "extensions/pi-looper/automations/issue-coordinator.prompt.md",
   "extensions/pi-looper/automations/pr-reviewer.prompt.md",
-  "extensions/pi-looper/automations/extract-worker-promise.py",
+  "extensions/pi-looper/automations/extract-worker-promise.ts",
   "extensions/pi-looper/automations/issue-coordinator-driver.ts",
   "src/issue-coordinator-renderers.ts",
 ];
