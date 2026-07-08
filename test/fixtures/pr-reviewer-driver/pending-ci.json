@@ -1,0 +1,15 @@
+{
+  "prs": [
+    {
+      "number": 20,
+      "updatedAt": "2026-07-08T00:00:00Z",
+      "headRefOid": "abc123",
+      "isDraft": false,
+      "labels": [{"name": "agent:review"}],
+      "statusCheckRollup": [{"status": "IN_PROGRESS"}],
+      "comments": [],
+      "reviewRequests": []
+    }
+  ],
+  "agents": {"result": {"agents": []}}
+}

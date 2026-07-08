@@ -1,0 +1,20 @@
+{
+  "prs": [
+    {
+      "number": 24,
+      "title": "Needs fallback review",
+      "url": "https://github.com/owner/repo/pull/24",
+      "headRefName": "agent/issue-24-review",
+      "headRefOid": "feed24",
+      "updatedAt": "2026-07-07T23:00:00Z",
+      "isDraft": false,
+      "labels": [{"name": "agent:review"}],
+      "statusCheckRollup": [],
+      "comments": [
+        {"createdAt": "2026-07-07T23:00:00Z", "author": {"login": "pi-looper"}, "body": "@coderabbitai review\n\n<!-- pi-looper:external-review-request head=feed24 -->"}
+      ],
+      "reviewRequests": []
+    }
+  ],
+  "agents": {"result": {"agents": []}}
+}

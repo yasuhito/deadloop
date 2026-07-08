@@ -1,0 +1,17 @@
+{
+  "prs": [
+    {
+      "number": 21,
+      "updatedAt": "2026-07-07T23:55:00Z",
+      "headRefOid": "abc123",
+      "isDraft": false,
+      "labels": [{"name": "agent:review"}],
+      "statusCheckRollup": [],
+      "comments": [
+        {"createdAt": "2026-07-07T23:55:00Z", "author": {"login": "pi-looper"}, "body": "@coderabbitai review\n\n<!-- pi-looper:external-review-request head=abc123 -->"}
+      ],
+      "reviewRequests": []
+    }
+  ],
+  "agents": {"result": {"agents": []}}
+}

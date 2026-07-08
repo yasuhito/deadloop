@@ -96,7 +96,7 @@ Use this phase to check that issue contracts are clear, worker instructions are 
 
 ### Phase 2: Add PR reviewer, still no auto-merge
 
-Add `pr-reviewer` only after Phase 1 is reliable. Keep:
+Add `pr-reviewer` only after Phase 1 is reliable. Its deterministic driver handles no-op, pending-CI, external-review-wait, draft, and external-review-request cases before any LLM prompt is sent. Keep:
 
 ```json
 "autoMerge": false

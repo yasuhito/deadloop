@@ -23,8 +23,8 @@ const promptBudgets: PromptBudget[] = [
   },
   {
     file: "pr-reviewer.prompt.md",
-    budgetCharacters: 25_000,
-    currentApproxCharacters: "23.7k",
+    budgetCharacters: 5_000,
+    currentApproxCharacters: "3.0k",
   },
 ];
 

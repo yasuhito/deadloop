@@ -54,7 +54,7 @@ This seam lets pi-looper keep the extension scheduler small while pushing workfl
 Issue #70 adds the first guardrail without shrinking prompts yet. The initial budgets are deliberately loose so the current repository passes while still making prompt growth visible:
 
 - `issue-coordinator.prompt.md`: initially approximately 14.6k characters with a 16k budget; issue #73 moved the front prompt to a driver wrapper, so the current budget is 4k characters.
-- `pr-reviewer.prompt.md`: current approximately 23.7k characters, budget 25k characters.
+- `pr-reviewer.prompt.md`: initially approximately 23.7k characters with a 25k budget; issue #74 moved the front prompt to a driver wrapper, so the current budget is 5k characters.
 
 Follow-up driver work should continue lowering these budgets as deterministic workflow text moves into scripts.
 

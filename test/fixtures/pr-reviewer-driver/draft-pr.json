@@ -1,0 +1,18 @@
+{
+  "prs": [
+    {
+      "number": 23,
+      "title": "Draft PR",
+      "url": "https://github.com/owner/repo/pull/23",
+      "headRefName": "agent/issue-23-draft",
+      "headRefOid": "draftsha",
+      "updatedAt": "2026-07-08T00:00:00Z",
+      "isDraft": true,
+      "labels": [{"name": "agent:review"}],
+      "statusCheckRollup": [],
+      "comments": [],
+      "reviewRequests": []
+    }
+  ],
+  "agents": {"result": {"agents": []}}
+}

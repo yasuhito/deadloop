@@ -7,7 +7,7 @@
   "type": "commonjs",
   "scripts": {
     "test": "vitest run",
-    "lint": "biome check package.json biome.json test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src extensions/pi-looper/index.ts extensions/pi-looper/automations/launch-agent.ts test/*.ts --files-ignore-unknown=true",
+    "lint": "biome check package.json biome.json test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src extensions/pi-looper/index.ts extensions/pi-looper/automations/*.ts test/*.ts --files-ignore-unknown=true",
     "typecheck": "tsc --noEmit"
   },
   "files": [
@@ -21,7 +21,7 @@
     "extensions/pi-looper/automations/*.md",
     "extensions/pi-looper/automations/*.py",
     "extensions/pi-looper/automations/*.sh",
-    "extensions/pi-looper/automations/launch-agent.ts",
+    "extensions/pi-looper/automations/*.ts",
     "src/**/*.ts",
     "src/**/*.cjs"
   ],

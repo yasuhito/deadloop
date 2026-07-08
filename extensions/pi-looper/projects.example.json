@@ -30,6 +30,7 @@
           "schedule": "*/10 * * * *",
           "promptFile": "pr-reviewer.prompt.md",
           "precheckFile": "pr-reviewer.precheck.sh",
+          "driverFile": "pr-reviewer-driver.ts",
           "precheckTimeoutSeconds": 60
         }
       ]

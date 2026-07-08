@@ -16,7 +16,7 @@
     "src/**/*.ts",
     "src/**/*.cjs",
     "extensions/pi-looper/index.ts",
-    "extensions/pi-looper/automations/launch-agent.ts",
+    "extensions/pi-looper/automations/*.ts",
     "test/**/*.ts"
   ],
   "exclude": ["node_modules", ".pi-subagents"]
