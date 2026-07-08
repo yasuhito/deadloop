@@ -27,7 +27,6 @@ gh pr list -R "${repo}" --state open --limit 100 \
 herdr agent list > "${agents_json}" 2>/dev/null || printf '{"result":{"agents":[]}}' > "${agents_json}"
 
 args=(
-  "${automation_dir}/pr-reviewer-decisions.py"
   --input "${prs_json}"
   --agents "${agents_json}"
   --project-id "${project_id}"
@@ -43,4 +42,4 @@ if [ -n "${PI_LOOPER_NOW:-}" ]; then
   args+=(--now "${PI_LOOPER_NOW}")
 fi
 
-python3 "${args[@]}" >/dev/null
+node "${automation_dir}/pr-reviewer-decisions.ts" "${args[@]}" >/dev/null

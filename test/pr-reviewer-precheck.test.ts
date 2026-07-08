@@ -5,11 +5,17 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
+const decisionScript = "extensions/pi-looper/automations/pr-reviewer-decisions.ts";
+
+function runDecision(args: string[]) {
+  return spawnSync("node", [decisionScript, ...args], { cwd: process.cwd(), encoding: "utf8" });
+}
+
 function runExternalReviewGate(fixtureName: string, now = "2026-07-04T00:30:00Z"): string {
   const result = spawnSync(
-    "python3",
+    "node",
     [
-      "extensions/pi-looper/automations/pr-reviewer-decisions.py",
+      decisionScript,
       "--mode",
       "external-review-gate",
       "--input",
@@ -139,6 +145,36 @@ describe("PR reviewer precheck", () => {
 
   it("falls back after the external-review marker is stale", () => {
     expect(runExternalReviewGate("precheck-stale-external-marker.json")).toBe("fallback_review");
+  });
+
+  it("rejects invalid decision modes", () => {
+    expect(runDecision(["--mode", "typo", "--input", path.join(process.cwd(), "test/fixtures/pr-reviewer/precheck-agent-review.json")]).status).toBe(2);
+  });
+
+  it("rejects invalid external review wait seconds", () => {
+    expect(
+      runDecision([
+        "--mode",
+        "external-review-gate",
+        "--input",
+        path.join(process.cwd(), "test/fixtures/pr-reviewer/precheck-agent-review.json"),
+        "--external-review-wait-seconds",
+        "NaN",
+      ]).status,
+    ).toBe(2);
+  });
+
+  it("rejects non-ISO now timestamps", () => {
+    expect(
+      runDecision([
+        "--mode",
+        "external-review-gate",
+        "--input",
+        path.join(process.cwd(), "test/fixtures/pr-reviewer/precheck-agent-review.json"),
+        "--now",
+        "123",
+      ]).status,
+    ).toBe(2);
   });
 
   it("reclaims a stale reviewing PR when no reviewer agent is running", () => {

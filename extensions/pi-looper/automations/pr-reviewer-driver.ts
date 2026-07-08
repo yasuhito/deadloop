@@ -3,9 +3,13 @@
 // directly under this package's `type: commonjs`, matching launch-agent.ts.
 
 const fs = require("node:fs") as typeof import("node:fs");
-const os = require("node:os") as typeof import("node:os");
-const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const {
+  defaultDecisionConfig,
+  externalReviewGate: decideExternalReviewGate,
+  selectPrForReview,
+  workingReviewerPrNumbers,
+} = require("./pr-reviewer-decisions.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -16,7 +20,6 @@ type DriverResult = {
 };
 
 const SCRIPT_DIR = __dirname;
-const DECISION_SCRIPT = path.join(SCRIPT_DIR, "pr-reviewer-decisions.py");
 
 function driverResult(action: DriverResult["action"], summary: string, extra: JsonObject = {}): DriverResult {
   return { action, summary, ...extra };
@@ -36,12 +39,6 @@ function runText(args: string[], options: { input?: string; check?: boolean } = 
 
 function runJson(args: string[], options: { input?: string } = {}): any {
   return JSON.parse(runText(args, { input: options.input }));
-}
-
-function writeTempJson(value: unknown): string {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pi-looper-pr-driver-")), "input.json");
-  fs.writeFileSync(file, `${JSON.stringify(value)}\n`, "utf8");
-  return file;
 }
 
 function shellQuote(value: string | number): string {
@@ -110,49 +107,33 @@ function liveAgents(): any {
   }
 }
 
+function decisionConfig(env: ReturnType<typeof envConfig>): JsonObject {
+  const externalReviewWaitSeconds = Number(env.externalReviewWaitSeconds || 1800);
+  if (!Number.isFinite(externalReviewWaitSeconds) || externalReviewWaitSeconds < 0) {
+    throw new Error("PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS must be a non-negative number");
+  }
+  if (env.now && !/^\d{4}-\d{2}-\d{2}T/.test(env.now)) throw new Error("PI_LOOPER_NOW must be an ISO-8601 timestamp");
+  const now = env.now ? new Date(env.now) : new Date();
+  if (Number.isNaN(now.getTime())) throw new Error("PI_LOOPER_NOW must be an ISO-8601 timestamp");
+  return defaultDecisionConfig({
+    reviewLabel: env.reviewLabel,
+    reviewingLabel: env.reviewingLabel,
+    humanLabel: env.humanLabel,
+    blockedLabel: env.blockedLabel,
+    autoMerge: env.autoMerge,
+    externalReviewWaitSeconds,
+    projectId: env.projectId,
+    now,
+  });
+}
+
 function selectDecision(prs: JsonObject[], agents: any, env: ReturnType<typeof envConfig>): JsonObject {
-  const prsFile = writeTempJson(prs);
-  const agentsFile = writeTempJson(agents);
-  const args = [
-    "python3",
-    DECISION_SCRIPT,
-    "--input",
-    prsFile,
-    "--agents",
-    agentsFile,
-    "--project-id",
-    env.projectId,
-    "--review-label",
-    env.reviewLabel,
-    "--reviewing-label",
-    env.reviewingLabel,
-    "--human-label",
-    env.humanLabel,
-    "--blocked-label",
-    env.blockedLabel,
-    "--auto-merge",
-    env.autoMerge ? "1" : "0",
-    "--external-review-wait-seconds",
-    env.externalReviewWaitSeconds,
-  ];
-  if (env.now) args.push("--now", env.now);
-  return runJson(args);
+  const config = decisionConfig(env);
+  return selectPrForReview(prs, config, workingReviewerPrNumbers(agents, env.projectId));
 }
 
 function externalReviewGate(pr: JsonObject, env: ReturnType<typeof envConfig>): JsonObject {
-  const prFile = writeTempJson(pr);
-  const args = [
-    "python3",
-    DECISION_SCRIPT,
-    "--mode",
-    "external-review-gate",
-    "--input",
-    prFile,
-    "--external-review-wait-seconds",
-    env.externalReviewWaitSeconds,
-  ];
-  if (env.now) args.push("--now", env.now);
-  return runJson(args);
+  return decideExternalReviewGate(pr, decisionConfig(env));
 }
 
 function selectedPr(prs: JsonObject[], number: number): JsonObject {

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-const script = "extensions/pi-looper/automations/pr-reviewer-decisions.py";
+const script = "extensions/pi-looper/automations/pr-reviewer-decisions.ts";
 
 function runSelect(
   prsFixture: string,
@@ -23,7 +23,7 @@ function runSelect(
   if (options.agents) {
     args.push("--agents", path.join("test/fixtures/pr-reviewer", options.agents));
   }
-  const result = spawnSync("python3", args, { cwd: process.cwd(), encoding: "utf8" });
+  const result = spawnSync("node", args, { cwd: process.cwd(), encoding: "utf8" });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   return JSON.parse(result.stdout);
 }
