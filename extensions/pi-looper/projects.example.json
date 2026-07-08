@@ -7,25 +7,7 @@
       "githubRepo": "owner/repo",
       "baseBranch": "origin/main",
       "worktreeRoot": "/absolute/path/to/herdr/worktrees/example-project/",
-      "checkCommand": "git diff --check",
       "autoMerge": false,
-      "workerInstructions": "AGENTS.md and relevant project docs must be read before making changes.",
-      "workerAgent": "pi",
-      "workerModel": "anthropic/claude-opus-4-8",
-      "reviewerAgent": "pi",
-      "reviewerModel": "",
-      "labels": {
-        "ready": "ready-for-agent",
-        "implement": "agent:implement",
-        "inProgress": "agent:in-progress",
-        "blocked": "agent:blocked",
-        "review": "agent:review",
-        "reviewing": "agent:reviewing",
-        "human": "ready-for-human",
-        "needsInfo": "needs-info",
-        "wontfix": "wontfix",
-        "needsTriage": "needs-triage"
-      },
       "automations": [
         {
           "id": "example-project:issue-coordinator",

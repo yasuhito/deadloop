@@ -46,4 +46,8 @@ describe("pi-looper status report", () => {
   it("shows extension code freshness warnings", () => {
     expect(report([EXTENSION_CODE_CHANGED_WARNING])).toContain(EXTENSION_CODE_CHANGED_WARNING);
   });
+
+  it("shows the layered config source", () => {
+    expect(report()).toContain("config: local=unknown local projects.json; repoPolicy=origin/main:pi-looper.project.json (not-read)");
+  });
 });

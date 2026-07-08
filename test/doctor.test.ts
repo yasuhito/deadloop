@@ -277,4 +277,10 @@ describe("pi-looper doctor", () => {
 
     expect(report).toContain("問題なし");
   });
+
+  it("prints the layered config source", () => {
+    const report = formatDoctorReport(snapshot());
+
+    expect(report).toContain("config: local=unknown local projects.json; repoPolicy=origin/main:pi-looper.project.json (not-read)");
+  });
 });

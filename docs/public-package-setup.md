@@ -34,6 +34,8 @@ For a local development checkout, copy from `/absolute/path/to/pi-looper/extensi
 
 `projects.json` is local configuration. It contains local paths, repository names, and rollout choices, so do **not** commit it. The package includes only `extensions/pi-looper/projects.example.json` as a template.
 
+Optional shared repository policy lives in `pi-looper.project.json` at the target repository root. pi-looper reads it only from the trusted `baseBranch` after `git fetch`; a PR branch cannot change the policy used to decide that PR. Local `projects.json` explicit values win over repo policy, so remove a key locally when you want to inherit the shared value.
+
 If a project uses `workerAgent: "claude"`, run `claude` interactively once from the target repository root and accept Claude Code workspace trust before enabling the automation.
 
 Key fields:
@@ -49,6 +51,8 @@ Key fields:
 - `workerModel` — optional worker model passed through verbatim in the format understood by the selected `workerAgent` (`provider/id` for Pi, `opus` / `claude-opus-4-8` style names for Claude Code CLI).
 - `labels` — GitHub labels used to coordinate issue and PR state.
 - `automations` — scheduled automation entries and their prompt/precheck files.
+
+Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` for locally enabled automations. Keep `enabled`, `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local. Invalid JSON or disallowed keys stop that project safely and appear in `/pi-looper-status` and `/pi-looper-doctor`.
 
 By default pi-looper reads `~/.pi/agent/pi-looper/projects.json`. Use `PI_LOOPER_CONFIG=/path/to/projects.json` only when you intentionally want a different config file.
 
