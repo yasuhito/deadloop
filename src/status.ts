@@ -51,6 +51,7 @@ export type AutomationStatus = {
   name: string;
   schedule: string;
   lastResult: string;
+  lastSummary?: string;
   lastScheduledAt?: number;
   nextScheduledAt: number | null;
 };
@@ -224,6 +225,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
       name: automation.name,
       schedule: automation.schedule,
       lastResult: String(entry.lastResult || "never"),
+      lastSummary: String(entry.lastSummary || "").trim() || undefined,
       lastScheduledAt: Number.isFinite(entry.lastScheduledAt) ? Number(entry.lastScheduledAt) : undefined,
       nextScheduledAt: nextSlotAfter(entry, automation, nowMs),
     };
@@ -322,6 +324,10 @@ function formatCleanupCandidates(candidates: CleanupCandidate[]): string {
     .join("; ");
 }
 
+function formatAutomationSummary(summary: string | undefined): string {
+  return summary ? `; summary=${summary}` : "";
+}
+
 export function formatStatusReport(snapshot: StatusSnapshot): string {
   if (!snapshot.project) {
     return [
@@ -347,8 +353,9 @@ export function formatStatusReport(snapshot: StatusSnapshot): string {
     lines.push("- none");
   } else {
     for (const automation of snapshot.automations) {
+      const summary = formatAutomationSummary(automation.lastSummary);
       lines.push(
-        `- ${automation.name}: ${automation.schedule}; last=${automation.lastResult}; next=${formatTimestamp(automation.nextScheduledAt)}`,
+        `- ${automation.name}: ${automation.schedule}; last=${automation.lastResult}${summary}; next=${formatTimestamp(automation.nextScheduledAt)}`,
       );
     }
   }

@@ -75,22 +75,40 @@ describe("deterministic automation driver runner", () => {
     expect(result.entry.lastResult).toBe("driver_needs_llm_queued");
   });
 
-  it("records invalid driver JSON without sending a prompt", async () => {
+  it("records invalid driver JSON", async () => {
     const result = await exerciseDriver("not json");
 
     expect(result.entry.lastResult).toBe("driver_invalid_json");
   });
 
-  it("records a non-zero driver exit without sending a prompt", async () => {
+  it("skips sending a prompt when the driver returns invalid JSON", async () => {
+    const result = await exerciseDriver("not json");
+
+    expect(result.sent).toEqual([]);
+  });
+
+  it("records a non-zero driver exit", async () => {
     const result = await exerciseDriver("", { code: 2, stderr: "boom" });
 
     expect(result.entry.lastError).toBe("boom");
   });
 
-  it("records a driver error action without sending a prompt", async () => {
+  it("skips sending a prompt when the driver exits non-zero", async () => {
+    const result = await exerciseDriver("", { code: 2, stderr: "boom" });
+
+    expect(result.sent).toEqual([]);
+  });
+
+  it("records a driver error action", async () => {
     const result = await exerciseDriver(JSON.stringify({ action: "error", error: "operator attention required" }));
 
     expect(result.entry.lastError).toBe("operator attention required");
+  });
+
+  it("skips sending a prompt when the driver returns error", async () => {
+    const result = await exerciseDriver(JSON.stringify({ action: "error", error: "operator attention required" }));
+
+    expect(result.sent).toEqual([]);
   });
 
   it("keeps prompt-only automations compatible when no driver is configured", async () => {
