@@ -221,21 +221,56 @@ helper の出力例:
 
 監視手順:
 
-1. 30秒ごとに helper を実行する。
+1. 30秒ごとに promise helper を実行する。
 2. helper status が `complete` または `blocked` なら採用する。この時点で直ちにポーリングを打ち切り、次の手順へ進む。固定回数のループを完走しない。ループを書く場合は判定確定で `break` する形にする。
 3. helper status が `none` または `invalid` なら完了扱いしない。
-4. Herdr の agent status が `idle` / `done` / `blocked` でも、helper status が `none` または `invalid` なら完了扱いしない。Worker に、指定済み promise ファイルへ JSON を書くよう1回依頼する。
+4. `none` / `invalid` のときは、pane close や blocked 判定の前に必ず `worker-watch-decision.py` へ観測値を渡して判断する。観測には最低限、現在時刻、promise status、`.pi-looper/` 以外の worktree 差分有無、督促済みならその時刻、Herdr agent status、Herdr / agent session の最終更新時刻、pane の直近出力時刻を入れる。取得できない項目は `null` にし、推測で古い時刻を入れない。
+5. `worker-watch-decision.py` の仕様はコード定数 `RECENT_WORKER_ACTIVITY_SECONDS = 600` と `MIN_POST_NUDGE_GRACE_SECONDS = 300` を正とする。Worker のファイル読み取り、ツール実行、pane 出力、agent session 更新などがこの範囲で観測できる場合、promise 未作成かつ worktree 差分なしでも pane close しない。`worktreeHasChanges: false` は失敗判定の主因ではなく補助信号に限る。
+6. decision action の扱い:
+   - `promise_settled`: promise helper の結果に従い、判定確定で `break` する。
+   - `continue_waiting`: pane close しない。次のポーリングへ進む。
+   - `nudge_worker`: Worker に、指定済み promise ファイルへ JSON を書くよう1回依頼し、督促時刻を保存してから待つ。督促後すぐに pane close しない。
+   - `collect_observations`: Herdr / agent session の最終更新時刻、実行中状態、pane の直近出力のいずれかをまだ確認できていない。観測を取り直し、pane close しない。
+   - `may_close_pane`: 直近活動なし、督促済み、最低猶予時間経過、pane close 前の必須観測完了を helper が確認した場合に限り、pane close を検討してよい。この場合も Blocked 報告フォーマットの「確認済み事項」に helper の `closeLog` または `observations`（最終活動時刻、猶予経過、promise 状態）を必ず残す。
    - `{{workerAgent}}` が `claude` の場合、pane 送信の督促は本文と Enter を別々に送る: `herdr agent send <t> "<本文>"` のあと `herdr agent send <t> $'\r'`。
-5. `herdr wait agent-status --status done` は補助に留める。唯一の待機条件にしない。
+7. Herdr の agent status が `idle` / `done` / `blocked` でも、helper status が `none` または `invalid` なら完了扱いしない。`herdr wait agent-status --status done` は補助に留める。唯一の待機条件にしない。
+
+観測 JSON の例:
+
+```json
+{
+  "now": "2026-07-07T11:17:37Z",
+  "promiseStatus": "none",
+  "worktreeHasChanges": false,
+  "nudgeSentAt": "2026-07-07T11:15:33Z",
+  "agentStatus": "idle",
+  "activity": [
+    {"kind":"tool","at":"2026-07-07T11:16:20Z"},
+    {"kind":"pane_output","at":"2026-07-07T11:16:20Z"},
+    {"kind":"agent_session","at":"2026-07-07T11:16:20Z"}
+  ]
+}
+```
+
+実行例:
+
+```bash
+watch_decision=$(python3 {{automationDir}}/worker-watch-decision.py --input "$watch_observation_json")
+watch_action=$(printf '%s' "$watch_decision" | jq -r '.action')
+```
 
 望ましいループの形（上限を持ちつつ、判定確定で `break` する）:
 
 ```bash
+nudge_sent_at=""
 for _ in $(seq 40); do
-  status=$(python3 {{automationDir}}/extract-worker-promise.py --file "<promiseFile>" | jq -r '.status')
+  promise_json=$(python3 {{automationDir}}/extract-worker-promise.py --file "<promiseFile>" || true)
+  status=$(printf '%s' "$promise_json" | jq -r '.status')
   case "$status" in
     complete|blocked) break ;;  # 判定確定。直ちに打ち切って次の手順へ
   esac
+  # status が none / invalid の間は worker-watch-decision.py の action に従う。
+  # continue_waiting / nudge_worker では pane close しない。
   sleep 30
 done
 # 決着したら上限を待たず即 break する。決着しないまま上限に達したら無限には待たず抜ける。
