@@ -5,22 +5,26 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-const decisionScript = "extensions/pi-looper/automations/worker-watch-decision.py";
+const decisionScript = "extensions/pi-looper/automations/worker-watch-decision.ts";
 
 type WatchDecision = {
   action: string;
   reason: string;
 };
 
+function runDecisionArgs(args: string[]) {
+  return spawnSync("node", [decisionScript, ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+}
+
 function runDecision(input: Record<string, unknown>): WatchDecision {
   const tempRoot = mkdtempSync(path.join(tmpdir(), "pi-looper-worker-watch-"));
   try {
     const inputPath = path.join(tempRoot, "input.json");
     writeFileSync(inputPath, JSON.stringify(input));
-    const result = spawnSync("python3", [decisionScript, "--input", inputPath], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = runDecisionArgs(["--input", inputPath]);
     if (result.status !== 0) {
       throw new Error(result.stderr || result.stdout);
     }
@@ -103,5 +107,27 @@ describe("worker watch decision", () => {
         agentStatus: "done",
       }).action,
     ).toBe("promise_settled");
+  });
+
+  it("treats timezone-less timestamps as UTC", () => {
+    expect(
+      runDecision({
+        now: "2026-07-07T11:17:00Z",
+        promiseStatus: "none",
+        worktreeHasChanges: false,
+        nudgeSentAt: "2026-07-07T11:00:00",
+        agentStatus: "idle",
+        lastAgentSessionUpdatedAt: "2026-07-07T11:16:00",
+        recentOutputAt: "2026-07-07T11:00:00",
+      }).reason,
+    ).toBe("recent_activity");
+  });
+
+  it("rejects missing input flag values", () => {
+    expect(runDecisionArgs(["--input"]).status).toBe(2);
+  });
+
+  it("rejects missing now flag values", () => {
+    expect(runDecisionArgs(["--now"]).status).toBe(2);
   });
 });
