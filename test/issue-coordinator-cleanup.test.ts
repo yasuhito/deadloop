@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-const cleanupScript = "extensions/pi-looper/automations/cleanup-completed-worker-worktrees.py";
+const cleanupScript = "extensions/pi-looper/automations/cleanup-completed-worker-worktrees.ts";
 const driverScript = "extensions/pi-looper/automations/issue-coordinator-driver.ts";
 
 function runDriverFixture(fixtureName: string) {
@@ -22,7 +22,7 @@ function runDriverFixture(fixtureName: string) {
 
 function runCleanupFixture(fixtureName: string) {
   const result = spawnSync(
-    "python3",
+    "node",
     [cleanupScript, "--fixture", `test/fixtures/issue-coordinator/${fixtureName}`, "--plan", "--json"],
     { cwd: process.cwd(), encoding: "utf8" },
   );
@@ -119,6 +119,14 @@ describe("issue coordinator cleanup", () => {
 
   it("does not select a Herdr worktree without a workspace id", () => {
     expect(runCleanupFixture("cleanup-missing-workspace.json").candidates).toEqual([]);
+  });
+
+  it("does not select the main workspace for cleanup", () => {
+    expect(runCleanupFixture("cleanup-main-workspace.json").skipped[0].reason).toBe("main_workspace");
+  });
+
+  it("does not select a worktree outside the configured root", () => {
+    expect(runCleanupFixture("cleanup-outside-root.json").skipped[0].reason).toBe("outside_worktree_root");
   });
 
   it("wakes the coordinator for cleanup when no issue is required", () => {

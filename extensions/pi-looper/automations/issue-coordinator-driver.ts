@@ -24,7 +24,7 @@ type DriverResult = {
 };
 
 const SCRIPT_DIR = __dirname;
-const CLEANUP_SCRIPT = path.join(SCRIPT_DIR, "cleanup-completed-worker-worktrees.py");
+const CLEANUP_SCRIPT = path.join(SCRIPT_DIR, "cleanup-completed-worker-worktrees.ts");
 
 const CONTRACT_BRIEF_RE = /^##\s*(?:Agent Brief|What to build)\b/im;
 const CONTRACT_ACCEPTANCE_RE = /^##\s*(?:Acceptance criteria|受け入れ条件)\b|\bAcceptance criteria\b|受け入れ条件/im;
@@ -70,12 +70,12 @@ function loadFixture(file: string | undefined): JsonObject | null {
 
 function cleanupPlan(fixture: JsonObject | null): JsonObject {
   if (fixture) return { ...(fixture.cleanup || { candidates: [] }) };
-  return runJson(["python3", CLEANUP_SCRIPT, "--plan", "--json"]);
+  return runJson(["node", CLEANUP_SCRIPT, "--plan", "--json"]);
 }
 
 function applyCleanup(plan: JsonObject, fixture: JsonObject | null): JsonObject {
   if (fixture) return { ...plan, appliedFromFixture: true };
-  return runJson(["python3", CLEANUP_SCRIPT, "--apply", "--json"]);
+  return runJson(["node", CLEANUP_SCRIPT, "--apply", "--json"]);
 }
 
 function issueList(fixture: JsonObject | null, repo: string): JsonObject[] {

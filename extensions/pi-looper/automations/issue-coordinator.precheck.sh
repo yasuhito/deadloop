@@ -6,8 +6,8 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "${PI_LOOPER_REPO_PATH:?}"
 
 cleanup_json=""
-if cleanup_json="$(python3 "$SCRIPT_DIR/cleanup-completed-worker-worktrees.py" --plan --json 2>/dev/null)"; then
-  if python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("candidates") else 1)' <<<"$cleanup_json"; then
+if cleanup_json="$(node "$SCRIPT_DIR/cleanup-completed-worker-worktrees.ts" --plan --json 2>/dev/null)"; then
+  if node -e 'const fs = require("node:fs"); const data = JSON.parse(fs.readFileSync(0, "utf8")); process.exit(data.candidates?.length ? 0 : 1);' <<<"$cleanup_json"; then
     exit 0
   fi
 fi

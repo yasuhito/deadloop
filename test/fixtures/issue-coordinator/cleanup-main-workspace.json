@@ -1,0 +1,24 @@
+{
+  "repo": "owner/repo",
+  "repoPath": "/repo",
+  "worktreeRoot": "/worktrees/repo",
+  "prs": [
+    {
+      "number": 3,
+      "state": "MERGED",
+      "mergedAt": "2026-07-04T00:00:00Z",
+      "headRefName": "agent/issue-3-main",
+      "headRefOid": "final-pr-head",
+      "labels": [{ "name": "agent:review" }]
+    }
+  ],
+  "worktrees": [
+    {
+      "branch": "agent/issue-3-main",
+      "is_linked_worktree": true,
+      "open_workspace_id": "wMain",
+      "path": "/repo"
+    }
+  ],
+  "git": { "statuses": { "/repo": "" } }
+}
