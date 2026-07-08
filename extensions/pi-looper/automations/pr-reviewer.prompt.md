@@ -38,7 +38,8 @@
 
 `needs_llm` prompt は driver が選んだ bounded path です。次を守る。
 
-- レビューエージェントは専用 Herdr tab を作ってから `launch-agent.ts` で起動する。
+- driver がすでにレビューエージェントを起動している場合は、再起動せず promise 監視だけを行う。
+- レビューエージェント起動が未実行なら、専用 Herdr tab を作ってから `launch-agent.ts` で起動する。
 - 例: `herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "$reviewer_name" --no-focus`
 - 例: `node {{automationDir}}/launch-agent.ts --agent "{{reviewerAgent}}" --name "$reviewer_name" --cwd "$worktree_path" --repo-path {{repoPath}} --level "$level" --model "{{reviewerModel}}" --uuid "$uuid" --prompt-file "$prompt_file" --tab "$tab_id"`
 - branch update worker を起動する場合も、worker 名と同じ label の専用タブを作ってから `herdr agent start ... --tab <tabId> --no-focus` で起動する。

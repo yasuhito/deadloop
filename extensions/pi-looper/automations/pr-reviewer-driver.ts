@@ -3,6 +3,8 @@
 // directly under this package's `type: commonjs`, matching launch-agent.ts.
 
 const fs = require("node:fs") as typeof import("node:fs");
+const path = require("node:path") as typeof import("node:path");
+const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const {
   defaultDecisionConfig,
@@ -80,6 +82,7 @@ function envConfig() {
     autoMerge: parseBool(process.env.PI_LOOPER_AUTO_MERGE),
     externalReviewWaitSeconds: process.env.PI_LOOPER_EXTERNAL_REVIEW_WAIT_SECONDS || "1800",
     now: process.env.PI_LOOPER_NOW || "",
+    simulateLaunch: process.env.PI_LOOPER_SIMULATE_LAUNCH === "1",
   };
 }
 
@@ -138,6 +141,149 @@ function externalReviewGate(pr: JsonObject, env: ReturnType<typeof envConfig>): 
 
 function selectedPr(prs: JsonObject[], number: number): JsonObject {
   return prs.find((pr) => Number(pr.number) === number) || { number };
+}
+
+function findStringValue(value: unknown, keys: string[]): string {
+  if (!value || typeof value !== "object") return "";
+  const record = value as JsonObject;
+  for (const key of keys) {
+    if (typeof record[key] === "string" && record[key]) return record[key];
+  }
+  for (const child of Object.values(record)) {
+    const found = findStringValue(child, keys);
+    if (found) return found;
+  }
+  return "";
+}
+
+function shouldSimulateLaunch(fixture: JsonObject | null, env: ReturnType<typeof envConfig>): boolean {
+  return Boolean(fixture && env.simulateLaunch);
+}
+
+function shouldDirectLaunch(fixture: JsonObject | null, env: ReturnType<typeof envConfig>): boolean {
+  return fixture ? shouldSimulateLaunch(fixture, env) : true;
+}
+
+function reviewerMonitorPrompt(pr: JsonObject, env: ReturnType<typeof envConfig>, launch: JsonObject): string {
+  const number = Number(pr.number || 0);
+  return `Deterministic driver launched reviewer for PR #${number}. Do not launch another agent and do not reselect another PR.
+
+Monitor only this promise file. It is the only completion authority:
+- ${launch.promiseFile}
+
+Polling rules:
+- Use \`node ${env.automationDir}/extract-worker-promise.ts --file ${launch.promiseFile}\`.
+- If the promise status is \`complete\` or \`blocked\`, break polling immediately. Do not use Herdr status as completion authority.
+- If the promise is missing while the agent is idle/done, ask the reviewer to write the promise file instead of guessing completion.
+
+After a \`complete\` promise:
+- Re-check GitHub PR state, reviews, and checks before changing labels.
+- Run local validation including \`${env.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork.
+- If autoMerge=false, never merge; hand off by moving PR toward \`${env.humanLabel}\` with review evidence.
+- If autoMerge=true, merge only after review, CI/fallback, and repository safety gates all pass.
+
+After a \`blocked\` promise:
+- Use the promise reason/summary to write the blocked report.
+- Move the PR from \`${env.reviewingLabel}\` to \`${env.blockedLabel}\` only when the blocker is actionable.
+
+Report the resulting action and evidence in concise Japanese.`;
+}
+
+function reviewAgentPrompt(pr: JsonObject, env: ReturnType<typeof envConfig>, promiseFile: string, reason: string): string {
+  const number = Number(pr.number || 0);
+  const title = oneLine(pr.title || "PR review");
+  return `PR #${number} をレビューしてください。
+
+対象:
+- GitHub repo: ${env.githubRepo}
+- PR: #${number} ${title}
+- PR URL: ${pr.url || `https://github.com/${env.githubRepo}/pull/${number}`}
+- Reason: ${reason}
+- autoMerge: ${env.autoMerge ? "true" : "false"}
+
+契約:
+- main workspace ${env.repoPath} は編集しないでください。この worktree 上だけで確認してください。
+- PR の差分、関連 issue / docs、AGENTS.md を読み、仕様適合と標準適合を確認してください。
+- 必要な検証を実行してください。最低限の確認コマンド: ${env.checkCommand}
+- push、ラベル編集、PR コメント、マージ、branch 削除はしないでください。
+- autoMerge=false の場合は、マージ可能そうでも人間へ渡す前提で結果だけまとめてください。
+
+完了報告:
+- 作業終了時は promise ファイル \`${promiseFile.replace(/`/g, "\\`")}\` に必ず JSON を書いてください。
+- 成功時は {"status":"complete","reason":"","summary":"3文要約(何を確認した・結果・残りリスク)"} を書いてください。
+- レビュー不能、危険変更、CI 不明、仕様不明、または判断不能なら {"status":"blocked","reason":"日本語の理由","summary":"3文要約"} を書いてください。
+- 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。`;
+}
+
+function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
+  const number = Number(pr.number || 0);
+  const uuid = shouldSimulateLaunch(fixture, env) ? "fixture-reviewer-uuid" : randomUUID();
+  const reviewerName = `${env.projectId}-pr-${number}-reviewer`;
+  const headRefName = String(pr.headRefName || `pr-${number}`);
+  const simulatedWorktreePath = `/worktrees/${env.projectId}/${headRefName.replace(/\//g, "-")}`;
+
+  if (shouldSimulateLaunch(fixture, env)) {
+    return {
+      reviewerName,
+      headRefName,
+      workspaceId: "fixture-workspace",
+      tabId: "fixture-tab",
+      worktreePath: simulatedWorktreePath,
+      promptFile: `${simulatedWorktreePath}/.pi-looper/reviewer-prompt-${uuid}.md`,
+      promiseFile: `${simulatedWorktreePath}/.pi-looper/promise-${uuid}.json`,
+      simulated: true,
+    };
+  }
+
+  runText(["gh", "pr", "edit", String(number), "-R", env.githubRepo, "--add-label", env.reviewingLabel]);
+  const worktreeResult = runJson([
+    "herdr",
+    "worktree",
+    "open",
+    "--cwd",
+    env.repoPath,
+    "--branch",
+    headRefName,
+    "--label",
+    reviewerName,
+    "--no-focus",
+    "--json",
+  ]);
+  const workspaceId = findStringValue(worktreeResult, ["workspace_id", "workspaceId", "id"]);
+  const worktreePath = findStringValue(worktreeResult, ["path", "worktreePath"]);
+  if (!workspaceId || !worktreePath) throw new Error("herdr worktree open did not return workspace id and path");
+  const tabResult = runJson(["herdr", "tab", "create", "--workspace", workspaceId, "--cwd", worktreePath, "--label", reviewerName, "--no-focus"]);
+  const tabId = findStringValue(tabResult, ["tab_id", "tabId", "id"]);
+  if (!tabId) throw new Error("herdr tab create did not return tab id");
+
+  const stateDir = path.join(worktreePath, ".pi-looper");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const promptFile = path.join(stateDir, `reviewer-prompt-${uuid}.md`);
+  const promiseFile = path.join(stateDir, `promise-${uuid}.json`);
+  fs.writeFileSync(promptFile, reviewAgentPrompt(pr, env, promiseFile, reason), "utf8");
+  const launchOutput = runText([
+    "node",
+    path.join(env.automationDir, "launch-agent.ts"),
+    "--agent",
+    env.reviewerAgent,
+    "--name",
+    reviewerName,
+    "--cwd",
+    worktreePath,
+    "--repo-path",
+    env.repoPath,
+    "--level",
+    "medium",
+    "--model",
+    env.reviewerModel,
+    "--uuid",
+    uuid,
+    "--prompt-file",
+    promptFile,
+    "--tab",
+    tabId,
+  ]);
+  return { reviewerName, headRefName, workspaceId, tabId, worktreePath, promptFile, promiseFile, launchOutput };
 }
 
 function hasSkippedReason(decision: JsonObject, reasons: string[]): boolean {
@@ -274,11 +420,23 @@ function drive(fixturePath: string | undefined): DriverResult {
     });
   }
 
+  const reason = String(gate.reason || decision.reason || "review_required");
+  if (shouldDirectLaunch(fixture, env)) {
+    const launch = launchPrReviewer(pr, env, fixture, reason);
+    return driverResult("needs_llm", `PR #${decision.number} のレビューエージェントを起動しました`, {
+      driverAction: "reviewer_monitor_request",
+      prNumber: decision.number,
+      gate,
+      launch,
+      prompt: reviewerMonitorPrompt(pr, env, launch),
+    });
+  }
+
   return driverResult("needs_llm", `PR #${decision.number} needs review agent work`, {
     driverAction: "reviewer_launch_request",
     prNumber: decision.number,
     gate,
-    prompt: reviewPrompt(pr, env, String(gate.reason || decision.reason || "review_required")),
+    prompt: reviewPrompt(pr, env, reason),
   });
 }
 

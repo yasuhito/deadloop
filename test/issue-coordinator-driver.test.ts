@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const driverScript = "extensions/pi-looper/automations/issue-coordinator-driver.ts";
 
-function runDriverFixture(fixtureName: string) {
+function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> = {}) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName)], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -17,6 +17,7 @@ function runDriverFixture(fixtureName: string) {
       PI_LOOPER_GITHUB_REPO: "owner/repo",
       PI_LOOPER_CHECK_COMMAND: "npm test",
       PI_LOOPER_WORKER_AGENT: "pi",
+      ...extraEnv,
     },
   });
   if (result.status !== 0) {
@@ -60,6 +61,24 @@ describe("issue coordinator deterministic driver", () => {
 
   it("keeps promise files as the worker completion authority", () => {
     expect(runDriverFixture("driver-ready-worker.json").prompt).toContain("only completion authority");
+  });
+
+  it("can launch workers deterministically before asking for monitoring", () => {
+    expect(runDriverFixture("driver-ready-worker.json", { PI_LOOPER_SIMULATE_LAUNCH: "1" }).driverAction).toBe(
+      "worker_monitor_request",
+    );
+  });
+
+  it("reports the deterministic worker promise path", () => {
+    expect(runDriverFixture("driver-ready-worker.json", { PI_LOOPER_SIMULATE_LAUNCH: "1" }).launch.promiseFile).toContain(
+      ".pi-looper/promise-",
+    );
+  });
+
+  it("preserves validation before PR creation after deterministic worker launch", () => {
+    expect(runDriverFixture("driver-ready-worker.json", { PI_LOOPER_SIMULATE_LAUNCH: "1" }).prompt).toContain(
+      "Run validation including `npm test` before creating any PR",
+    );
   });
 
   it("receives worker agent settings from the extension environment", () => {

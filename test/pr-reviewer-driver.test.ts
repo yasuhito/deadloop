@@ -52,6 +52,24 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("fallback-review.json").action).toBe("needs_llm");
   });
 
+  it("can launch reviewers deterministically before asking for monitoring", () => {
+    expect(runDriverFixture("fallback-review.json", { PI_LOOPER_SIMULATE_LAUNCH: "1" }).driverAction).toBe(
+      "reviewer_monitor_request",
+    );
+  });
+
+  it("reports the deterministic reviewer promise path", () => {
+    expect(runDriverFixture("fallback-review.json", { PI_LOOPER_SIMULATE_LAUNCH: "1" }).launch.promiseFile).toContain(
+      ".pi-looper/promise-",
+    );
+  });
+
+  it("preserves autoMerge=false safety after deterministic reviewer launch", () => {
+    expect(runDriverFixture("fallback-review.json", { PI_LOOPER_SIMULATE_LAUNCH: "1" }).prompt).toContain(
+      "If autoMerge=false, never merge",
+    );
+  });
+
   it("keeps review delegation on launch-agent", () => {
     expect(runDriverFixture("fallback-review.json").prompt).toContain("launch-agent.ts");
   });

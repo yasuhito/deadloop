@@ -4,6 +4,7 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
+const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const {
   defaultIssueDecisionConfig,
@@ -13,7 +14,7 @@ const {
   liveDependencyState,
   selectIssueForImplementation,
 } = require("./issue-coordinator-decisions.ts");
-const { renderIssueBlockedComment } = require("../../../src/issue-coordinator-renderers.ts");
+const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -173,6 +174,147 @@ function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comm
   runText(["gh", "issue", "comment", number, "-R", env.githubRepo, "--body", comment]);
 }
 
+function slugForBranch(value: unknown): string {
+  const slug = String(value || "task")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return slug || "task";
+}
+
+function findStringValue(value: unknown, keys: string[]): string {
+  if (!value || typeof value !== "object") return "";
+  const record = value as JsonObject;
+  for (const key of keys) {
+    if (typeof record[key] === "string" && record[key]) return record[key];
+  }
+  for (const child of Object.values(record)) {
+    const found = findStringValue(child, keys);
+    if (found) return found;
+  }
+  return "";
+}
+
+function shouldSimulateLaunch(fixture: JsonObject | null, env: ReturnType<typeof envConfig>): boolean {
+  return Boolean(fixture && env.simulateLaunch);
+}
+
+function shouldDirectLaunch(fixture: JsonObject | null, env: ReturnType<typeof envConfig>): boolean {
+  return fixture ? shouldSimulateLaunch(fixture, env) : true;
+}
+
+function issueMonitorPrompt(issue: JsonObject, env: ReturnType<typeof envConfig>, launch: JsonObject): string {
+  const number = Number(issue.number || 0);
+  return `Deterministic driver launched Worker for Issue #${number}. Do not launch another agent and do not reselect another issue.
+
+Monitor only this promise file. It is the only completion authority:
+- ${launch.promiseFile}
+
+Polling rules:
+- Use \`node ${env.automationDir}/extract-worker-promise.ts --file ${launch.promiseFile}\`.
+- If the promise status is \`complete\` or \`blocked\`, break polling immediately. Do not use Herdr status as completion authority.
+- If the promise is missing while the agent is idle/done, ask the Worker to write the promise file instead of guessing completion.
+
+After a \`complete\` promise:
+- Inspect \`${launch.worktreePath}\` and confirm only Issue #${number} changes are present.
+- Run validation including \`${env.checkCommand}\` before creating any PR.
+- Push only the Worker branch \`${launch.branch}\` without force-push, create a reviewable PR linked to Issue #${number}, and add \`${env.reviewLabel}\`.
+- Do not close the issue or merge the PR.
+
+After a \`blocked\` promise:
+- Use the promise reason/summary to report the blocker.
+- Move the issue from \`${env.inProgressLabel}\` to \`${env.blockedLabel}\` only when the blocker is actionable.
+
+Report the resulting action and evidence in concise Japanese.`;
+}
+
+function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
+  const number = Number(issue.number || 0);
+  const uuid = shouldSimulateLaunch(fixture, env) ? "fixture-worker-uuid" : randomUUID();
+  const workerName = `${env.projectId}-issue-${number}-worker`;
+  const branch = `agent/issue-${number}-${slugForBranch(issue.title)}`;
+  const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
+
+  if (shouldSimulateLaunch(fixture, env)) {
+    return {
+      workerName,
+      branch,
+      workspaceId: "fixture-workspace",
+      tabId: "fixture-tab",
+      worktreePath: simulatedWorktreePath,
+      promptFile: `${simulatedWorktreePath}/.pi-looper/worker-prompt-${uuid}.md`,
+      promiseFile: `${simulatedWorktreePath}/.pi-looper/promise-${uuid}.json`,
+      simulated: true,
+    };
+  }
+
+  runText(["gh", "issue", "edit", String(number), "-R", env.githubRepo, "--remove-label", env.implementLabel, "--add-label", env.inProgressLabel]);
+  const worktreeResult = runJson([
+    "herdr",
+    "worktree",
+    "create",
+    "--cwd",
+    env.repoPath,
+    "--branch",
+    branch,
+    "--base",
+    env.baseBranch,
+    "--label",
+    workerName,
+    "--no-focus",
+    "--json",
+  ]);
+  const workspaceId = findStringValue(worktreeResult, ["workspace_id", "workspaceId", "id"]);
+  const worktreePath = findStringValue(worktreeResult, ["path", "worktreePath"]);
+  if (!workspaceId || !worktreePath) throw new Error("herdr worktree create did not return workspace id and path");
+  const tabResult = runJson(["herdr", "tab", "create", "--workspace", workspaceId, "--cwd", worktreePath, "--label", workerName, "--no-focus"]);
+  const tabId = findStringValue(tabResult, ["tab_id", "tabId", "id"]);
+  if (!tabId) throw new Error("herdr tab create did not return tab id");
+
+  const stateDir = path.join(worktreePath, ".pi-looper");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const promptFile = path.join(stateDir, `worker-prompt-${uuid}.md`);
+  const promiseFile = path.join(stateDir, `promise-${uuid}.json`);
+  fs.writeFileSync(
+    promptFile,
+    renderIssueWorkerPrompt({
+      launchReason: "deterministic issue coordinator launch",
+      issueNumber: number,
+      issueTitle: String(issue.title || "task"),
+      issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
+      githubRepo: env.githubRepo,
+      workerInstructions: env.workerInstructions,
+      checkCommand: env.checkCommand,
+      promiseFile,
+    }),
+    "utf8",
+  );
+  const launchOutput = runText([
+    "node",
+    path.join(env.automationDir, "launch-agent.ts"),
+    "--agent",
+    env.workerAgent,
+    "--name",
+    workerName,
+    "--cwd",
+    worktreePath,
+    "--repo-path",
+    env.repoPath,
+    "--level",
+    "medium",
+    "--model",
+    env.workerModel,
+    "--uuid",
+    uuid,
+    "--prompt-file",
+    promptFile,
+    "--tab",
+    tabId,
+  ]);
+  return { workerName, branch, workspaceId, tabId, worktreePath, promptFile, promiseFile, launchOutput };
+}
+
 function workerLaunchPrompt(issue: JsonObject, env: ReturnType<typeof envConfig>): string {
   const number = Number(issue.number || 0);
   const title = oneLineForDriver(issue.title || "task");
@@ -205,6 +347,7 @@ function envConfig() {
     baseBranch: process.env.PI_LOOPER_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
     checkCommand: process.env.PI_LOOPER_CHECK_COMMAND || "git diff --check",
+    workerInstructions: process.env.PI_LOOPER_WORKER_INSTRUCTIONS || "AGENTS.md を読み、Issue の契約に従ってください。",
     workerAgent: process.env.PI_LOOPER_WORKER_AGENT || "pi",
     workerModel: process.env.PI_LOOPER_WORKER_MODEL || "",
     readyLabel: process.env.PI_LOOPER_READY_LABEL || "ready-for-agent",
@@ -216,6 +359,7 @@ function envConfig() {
     needsInfoLabel: process.env.PI_LOOPER_NEEDS_INFO_LABEL || "needs-info",
     wontfixLabel: process.env.PI_LOOPER_WONTFIX_LABEL || "wontfix",
     needsTriageLabel: process.env.PI_LOOPER_NEEDS_TRIAGE_LABEL || "needs-triage",
+    simulateLaunch: process.env.PI_LOOPER_SIMULATE_LAUNCH === "1",
   };
 }
 
@@ -254,6 +398,16 @@ function drive(fixturePath: string | undefined): DriverResult {
       driverAction: "blocked_comment",
       issueNumber: issue.number,
       comment,
+    });
+  }
+
+  if (shouldDirectLaunch(fixture, env)) {
+    const launch = launchIssueWorker(issue, env, fixture);
+    return driverResult("needs_llm", `Issue #${issue.number} の Worker を起動しました`, {
+      driverAction: "worker_monitor_request",
+      issueNumber: issue.number,
+      launch,
+      prompt: issueMonitorPrompt(issue, env, launch),
     });
   }
 
