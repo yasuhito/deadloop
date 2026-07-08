@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-const script = "extensions/pi-looper/automations/ci-fallback-decision.py";
+const script = "extensions/pi-looper/automations/ci-fallback-decision.ts";
 const fixtureDir = path.join(process.cwd(), "test/fixtures/ci-fallback");
 
 function runDecision(fixtureName: string, options: { enabled?: boolean; mode?: string } = {}) {
@@ -16,7 +16,7 @@ function runDecision(fixtureName: string, options: { enabled?: boolean; mode?: s
     "--mode",
     options.mode ?? "billing-only",
   ];
-  const result = spawnSync("python3", args, { cwd: process.cwd(), encoding: "utf8" });
+  const result = spawnSync("node", args, { cwd: process.cwd(), encoding: "utf8" });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   return JSON.parse(result.stdout);
 }

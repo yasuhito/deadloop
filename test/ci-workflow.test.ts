@@ -29,8 +29,8 @@ describe("GitHub Actions CI workflow", () => {
     expect(workflow).toContain("bash -n extensions/pi-looper/automations/*.sh");
   });
 
-  it("runs Python compile checks", () => {
-    expect(workflow).toContain("python3 -m py_compile extensions/pi-looper/automations/*.py");
+  it("does not require Python automation compile checks", () => {
+    expect(workflow).not.toContain("python3 -m py_compile extensions/pi-looper/automations/*.py");
   });
 
   it("runs npm pack dry run", () => {

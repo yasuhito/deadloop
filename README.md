@@ -127,7 +127,7 @@ PI_LOOPER_CONFIG=/path/to/projects.json pi
 - `githubRepo` — `owner/name`
 - `baseBranch` — worktree の基準 branch
 - `worktreeRoot` — Herdr worktree の root
-- `checkCommand` — 作業エージェント / レビューエージェントが最後に通す検証コマンド。pi-looper 自体では `npm test && npm run lint && npm run typecheck && bash -n extensions/pi-looper/automations/*.sh && python3 -m py_compile extensions/pi-looper/automations/*.py && npm pack --dry-run` を標準検証にしています
+- `checkCommand` — 作業エージェント / レビューエージェントが最後に通す検証コマンド。pi-looper 自体では `npm test && npm run lint && npm run typecheck && bash -n extensions/pi-looper/automations/*.sh && npm pack --dry-run` を標準検証にしています
 - `autoMerge` — `true` のときだけ PR reviewer が条件を満たした PR をマージする。既定値は `false` なので、初回導入では明示的に `false` のままにしてください
 - `ciFallback` — GitHub Actions が課金・quota・Actions 停止などで実行できないと決定論的に判定できる場合だけ、PR reviewer がローカル CI 相当検証を代替として扱う設定。既定は `{ "enabled": false, "mode": "billing-only", "allowAutoMerge": false }` です。`allowAutoMerge: false` では代替検証が成功してもマージせず `ready-for-human` に渡します。`allowAutoMerge: true` でも、GitHub CI が成功していない PR のマージには最新 head SHA への手動承認コメント、dry-run 相当の直前再確認、失敗時停止条件が必要です。必要なら `localCommands` に `git diff --check`、lint、関連テストなどを並べます
 - `workerInstructions` — 作業エージェント用プロンプトに差し込むプロジェクト固有指示

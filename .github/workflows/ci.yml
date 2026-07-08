@@ -39,8 +39,5 @@ jobs:
       - name: Check shell automation syntax
         run: bash -n extensions/pi-looper/automations/*.sh
 
-      - name: Check Python automation syntax
-        run: python3 -m py_compile extensions/pi-looper/automations/*.py
-
       - name: Check package contents
         run: npm pack --dry-run

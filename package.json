@@ -19,7 +19,6 @@
     "extensions/pi-looper/README.md",
     "extensions/pi-looper/projects.example.json",
     "extensions/pi-looper/automations/*.md",
-    "extensions/pi-looper/automations/*.py",
     "extensions/pi-looper/automations/*.sh",
     "extensions/pi-looper/automations/*.ts",
     "src/**/*.ts",

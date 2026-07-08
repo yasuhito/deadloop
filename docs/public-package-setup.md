@@ -132,7 +132,6 @@ npm test
 npm run lint
 npm run typecheck
 bash -n extensions/pi-looper/automations/*.sh
-python3 -m py_compile extensions/pi-looper/automations/*.py
 npm pack --dry-run
 ```
 
