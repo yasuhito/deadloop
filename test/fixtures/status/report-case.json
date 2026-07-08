@@ -28,7 +28,8 @@
     "automations": {
       "pi-looper:pi-looper:issue-coordinator": {
         "lastScheduledAt": 1783209000000,
-        "lastResult": "queued"
+        "lastResult": "queued",
+        "lastSummary": "driver selected Issue #12"
       }
     }
   },

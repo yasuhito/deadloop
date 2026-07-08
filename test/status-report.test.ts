@@ -47,6 +47,10 @@ describe("pi-looper status report", () => {
     expect(report([EXTENSION_CODE_CHANGED_WARNING])).toContain(EXTENSION_CODE_CHANGED_WARNING);
   });
 
+  it("shows the automation driver summary", () => {
+    expect(report()).toContain("summary=driver selected Issue #12");
+  });
+
   it("shows the layered config source", () => {
     expect(report()).toContain("config: local=unknown local projects.json; repoPolicy=origin/main:pi-looper.project.json (not-read)");
   });
