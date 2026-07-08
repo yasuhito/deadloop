@@ -10,6 +10,14 @@ Install from GitHub:
 pi install git:github.com/yasuhito/pi-looper
 ```
 
+If you prefer to start from the Agent Skills ecosystem, install the compatibility skill first:
+
+```bash
+npx skills@latest add yasuhito/pi-looper
+```
+
+The Skills CLI installs a `pi-looper` setup skill for agents. It does not activate the Pi extension by itself, so run `pi install git:github.com/yasuhito/pi-looper` as the package activation step.
+
 For a local checkout or development build:
 
 ```bash
@@ -144,6 +152,7 @@ The published package is controlled by `package.json` `files`. It intentionally 
 - root user docs and metadata: `README.md`, `AGENTS.md`, `LICENSE`
 - public docs under `docs/`
 - the Pi extension entrypoint
+- the Agent Skills compatibility skill under `skills/`
 - automation prompts and deterministic helper scripts
 - `extensions/pi-looper/projects.example.json`
 - TypeScript source under `src/`

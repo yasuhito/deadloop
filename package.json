@@ -21,11 +21,13 @@
     "extensions/pi-looper/automations/*.md",
     "extensions/pi-looper/automations/*.sh",
     "extensions/pi-looper/automations/*.ts",
+    "skills/**/*.md",
     "src/**/*.ts",
     "src/**/*.cjs"
   ],
   "pi": {
-    "extensions": ["./extensions/pi-looper/index.ts"]
+    "extensions": ["./extensions/pi-looper/index.ts"],
+    "skills": ["./skills"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"

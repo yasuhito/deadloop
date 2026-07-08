@@ -26,6 +26,14 @@ pi-looper は GitHub Issue / PR にコメントを書き込み、ラベルを編
    pi install git:github.com/yasuhito/pi-looper
    ```
 
+   If you start from the Agent Skills ecosystem, this repository also exposes a compatibility skill:
+
+   ```bash
+   npx skills@latest add yasuhito/pi-looper
+   ```
+
+   That command installs the setup skill only. To activate the Pi extension, still run `pi install git:github.com/yasuhito/pi-looper`.
+
 2. Create local config outside the repository and edit it for your checkout. If you installed from GitHub, Pi clones the package under `~/.pi/agent/git/github.com/yasuhito/pi-looper`:
 
    ```bash
@@ -87,6 +95,14 @@ GitHub から入れる場合:
 ```bash
 pi install git:github.com/yasuhito/pi-looper
 ```
+
+Agent Skills の入口から導入メモを入れる場合:
+
+```bash
+npx skills@latest add yasuhito/pi-looper
+```
+
+このコマンドは `pi-looper` のセットアップ用 skill を追加するだけで、Pi extension は有効化しません。実際に自動化を読み込ませるには、上の `pi install git:github.com/yasuhito/pi-looper` も実行してください。
 
 一時的に試すだけなら:
 
