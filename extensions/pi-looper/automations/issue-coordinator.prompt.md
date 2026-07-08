@@ -6,7 +6,7 @@
 - GitHub repo: `{{githubRepo}}`
 - Base branch: `{{baseBranch}}`
 - Automation dir: `{{automationDir}}`
-- Driver: `python3 {{automationDir}}/issue-coordinator-driver.py --json`
+- Driver: `{{automationDir}}/issue-coordinator-driver.ts --json`
 
 ## 原則
 
@@ -22,7 +22,7 @@
 ## 実行手順
 
 ```bash
-python3 {{automationDir}}/issue-coordinator-driver.py --json
+{{automationDir}}/issue-coordinator-driver.ts --json
 ```
 
 返り値の扱い:

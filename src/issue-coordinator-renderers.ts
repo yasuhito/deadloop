@@ -1,4 +1,4 @@
-export type IssueBlockedCommentInput = {
+type IssueBlockedCommentInput = {
   issueNumber: number;
   githubRepo: string;
   repoPath: string;
@@ -14,7 +14,7 @@ export type IssueBlockedCommentInput = {
   branch?: string;
 };
 
-export type IssueWorkerPromptInput = {
+type IssueWorkerPromptInput = {
   launchReason: string;
   issueNumber: number;
   issueTitle: string;
@@ -25,16 +25,16 @@ export type IssueWorkerPromptInput = {
   promiseFile: string;
 };
 
-function oneLine(value: string): string {
+function oneLineForRenderer(value: string): string {
   return value.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function bulletLines(values: string[] | undefined, fallback: string): string[] {
-  const lines = (values || []).map((value) => oneLine(value)).filter(Boolean);
+  const lines = (values || []).map((value) => oneLineForRenderer(value)).filter(Boolean);
   return lines.length ? lines.map((line) => `- ${line}`) : [`- ${fallback}`];
 }
 
-function shellQuote(value: string | number): string {
+function shellQuoteForRenderer(value: string | number): string {
   const text = String(value);
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
   return `'${text.replace(/'/g, `'"'"'`)}'`;
@@ -71,10 +71,10 @@ function markdownFence(value: string): string {
 }
 
 function markdownCode(value: string): string {
-  return oneLine(value).replace(/`/g, "\\`");
+  return oneLineForRenderer(value).replace(/`/g, "\\`");
 }
 
-export function renderIssueBlockedComment(input: IssueBlockedCommentInput): string {
+function renderIssueBlockedComment(input: IssueBlockedCommentInput): string {
   const issue = Number(input.issueNumber);
   const promiseFile = optionalValue(input.promiseFile, "<promiseFile>");
   const workspaceId = optionalValue(input.workspaceId, "<workspaceId>");
@@ -82,10 +82,10 @@ export function renderIssueBlockedComment(input: IssueBlockedCommentInput): stri
   const branch = optionalValue(input.branch, "<branch>");
   const branchPattern = input.branch ? input.branch : `agent/issue-${issue}-*`;
   const confirmed = bulletLines(input.confirmed, "追加の確認事項はまだありません。").join("\n");
-  const nextDecision = oneLine(input.nextDecision || "原因を確認し、再 queue してよい状態か operator が判断してください。");
+  const nextDecision = oneLineForRenderer(input.nextDecision || "原因を確認し、再 queue してよい状態か operator が判断してください。");
 
   return `## 何が起きたか
-- ${oneLine(input.summary)}
+- ${oneLineForRenderer(input.summary)}
 - 確認済み事項:
 ${confirmed}
 - 次に必要な判断: ${nextDecision}
@@ -94,8 +94,8 @@ ${confirmed}
 1. 原因を確認する。
    ${optionalCommandNote(input.promiseFile, "promise ファイル")}` +
     `\`\`\`bash
-gh issue view ${issue} -R ${shellQuote(input.githubRepo)} --comments
-python3 ${shellQuote(input.automationDir)}/extract-worker-promise.py --file ${shellQuote(promiseFile)} || true
+gh issue view ${issue} -R ${shellQuoteForRenderer(input.githubRepo)} --comments
+python3 ${shellQuoteForRenderer(input.automationDir)}/extract-worker-promise.py --file ${shellQuoteForRenderer(promiseFile)} || true
 herdr agent list
 herdr pane list
 \`\`\`
@@ -103,25 +103,24 @@ herdr pane list
    掃除コマンドは対象が clean / 不要であることを確認してから実行する。
    ${optionalCommandNote(input.workspaceId, "Herdr workspace")}${optionalCommandNote(input.worktreePath, "worktree path")}${optionalCommandNote(input.branch, "branch")}` +
     `\`\`\`bash
-herdr worktree list --cwd ${shellQuote(input.repoPath)} --json
-git -C ${shellQuote(input.repoPath)} worktree list
-git -C ${shellQuote(input.repoPath)} branch --list ${shellQuote(branchPattern)}
-herdr worktree remove --workspace ${shellQuote(workspaceId)}
-git -C ${shellQuote(input.repoPath)} worktree remove ${shellQuote(worktreePath)}
-git -C ${shellQuote(input.repoPath)} branch -d ${shellQuote(branch)}
+herdr worktree list --cwd ${shellQuoteForRenderer(input.repoPath)} --json
+git -C ${shellQuoteForRenderer(input.repoPath)} worktree list
+git -C ${shellQuoteForRenderer(input.repoPath)} branch --list ${shellQuoteForRenderer(branchPattern)}
+herdr worktree remove --workspace ${shellQuoteForRenderer(workspaceId)}
+git -C ${shellQuoteForRenderer(input.repoPath)} worktree remove ${shellQuoteForRenderer(worktreePath)}
+git -C ${shellQuoteForRenderer(input.repoPath)} branch -d ${shellQuoteForRenderer(branch)}
 \`\`\`
 3. 原因を解消したあと、issue を再 queue する。
    \`\`\`bash
-gh issue edit ${issue} -R ${shellQuote(input.githubRepo)} --remove-label ${shellQuote(input.blockedLabel)} --add-label ${shellQuote(input.implementLabel)}
+gh issue edit ${issue} -R ${shellQuoteForRenderer(input.githubRepo)} --remove-label ${shellQuoteForRenderer(input.blockedLabel)} --add-label ${shellQuoteForRenderer(input.implementLabel)}
 \`\`\``;
 }
 
-export function renderIssueWorkerPrompt(input: IssueWorkerPromptInput): string {
-  const issueTitle = oneLine(input.issueTitle);
-
+function renderIssueWorkerPrompt(input: IssueWorkerPromptInput): string {
+  const issueTitle = oneLineForRenderer(input.issueTitle);
   const validationFence = markdownFence(input.checkCommand);
 
-  return `起動判断: ${oneLine(input.launchReason)}
+  return `起動判断: ${oneLineForRenderer(input.launchReason)}
 
 Issue #${input.issueNumber} を実装してください。
 
@@ -133,7 +132,7 @@ Issue #${input.issueNumber} を実装してください。
 契約:
 - この issue の \`Agent Brief\` または \`What to build\` と \`Acceptance criteria\` を実装契約として扱ってください。
 - \`Out of scope\` / \`対象外\` があれば必ず守ってください。
-- ${oneLine(input.workerInstructions)}
+- ${oneLineForRenderer(input.workerInstructions)}
 - 可能なら red-green-refactor で進めてください。
 - 関連する検証を実行し、最低限次の検証コマンドを通してください。
   ${validationFence}bash
@@ -155,3 +154,5 @@ Issue #${input.issueNumber} を実装してください。
 - 失敗、仕様不足、危険変更、または判断不能なら \`{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}\` を書いてください。
 - 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。`;
 }
+
+module.exports = { renderIssueBlockedComment, renderIssueWorkerPrompt };

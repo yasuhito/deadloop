@@ -2,13 +2,13 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { renderIssueWorkerPrompt } from "../src/issue-coordinator-renderers";
+const { renderIssueWorkerPrompt } = require("../src/issue-coordinator-renderers.ts");
 
 const contractFiles = [
   "extensions/pi-looper/automations/issue-coordinator.prompt.md",
   "extensions/pi-looper/automations/pr-reviewer.prompt.md",
   "extensions/pi-looper/automations/extract-worker-promise.py",
-  "extensions/pi-looper/automations/issue-coordinator-driver.py",
+  "extensions/pi-looper/automations/issue-coordinator-driver.ts",
   "src/issue-coordinator-renderers.ts",
 ];
 

@@ -5,10 +5,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const automationDir = path.join(process.cwd(), "extensions/pi-looper/automations");
-const driverScript = path.join(automationDir, "issue-coordinator-driver.py");
+const driverScript = path.join(automationDir, "issue-coordinator-driver.ts");
 
 function issueCoordinatorWorkerPrompt(): string {
-  const result = spawnSync("python3", [driverScript, "--fixture", "test/fixtures/issue-coordinator/driver-ready-worker.json"], {
+  const result = spawnSync("node", [driverScript, "--fixture", "test/fixtures/issue-coordinator/driver-ready-worker.json"], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: { ...process.env, PI_LOOPER_PROJECT_ID: "demo", PI_LOOPER_REPO_PATH: "/repo", PI_LOOPER_GITHUB_REPO: "owner/repo" },

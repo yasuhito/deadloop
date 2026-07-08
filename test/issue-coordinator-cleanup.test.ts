@@ -6,10 +6,10 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const cleanupScript = "extensions/pi-looper/automations/cleanup-completed-worker-worktrees.py";
-const driverScript = "extensions/pi-looper/automations/issue-coordinator-driver.py";
+const driverScript = "extensions/pi-looper/automations/issue-coordinator-driver.ts";
 
 function runDriverFixture(fixtureName: string) {
-  const result = spawnSync("python3", [driverScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName)], {
+  const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName)], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: { ...process.env, PI_LOOPER_PROJECT_ID: "demo", PI_LOOPER_REPO_PATH: "/repo", PI_LOOPER_GITHUB_REPO: "owner/repo" },

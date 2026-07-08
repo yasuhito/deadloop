@@ -21,7 +21,7 @@
           "schedule": "*/10 * * * *",
           "promptFile": "issue-coordinator.prompt.md",
           "precheckFile": "issue-coordinator.precheck.sh",
-          "driverFile": "issue-coordinator-driver.py",
+          "driverFile": "issue-coordinator-driver.ts",
           "precheckTimeoutSeconds": 60
         },
         {

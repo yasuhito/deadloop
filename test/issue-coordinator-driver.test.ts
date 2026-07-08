@@ -4,10 +4,10 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-const driverScript = "extensions/pi-looper/automations/issue-coordinator-driver.py";
+const driverScript = "extensions/pi-looper/automations/issue-coordinator-driver.ts";
 
 function runDriverFixture(fixtureName: string) {
-  const result = spawnSync("python3", [driverScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName)], {
+  const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName)], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
@@ -68,5 +68,9 @@ describe("issue coordinator deterministic driver", () => {
 
   it("receives worker model settings from the extension environment", () => {
     expect(readFileSync("extensions/pi-looper/index.ts", "utf8")).toContain("PI_LOOPER_WORKER_MODEL");
+  });
+
+  it("uses the TypeScript renderer for blocked comments", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain("renderIssueBlockedComment");
   });
 });

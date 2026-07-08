@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { renderIssueBlockedComment, renderIssueWorkerPrompt } from "../src/issue-coordinator-renderers";
+const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../src/issue-coordinator-renderers.ts");
 
 const blockedInput = {
   issueNumber: 72,

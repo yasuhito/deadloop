@@ -5,14 +5,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const automationDir = path.join(process.cwd(), "extensions/pi-looper/automations");
-const driverScript = path.join(automationDir, "issue-coordinator-driver.py");
+const driverScript = path.join(automationDir, "issue-coordinator-driver.ts");
 
 function readTemplate(name: string): string {
   return fs.readFileSync(path.join(automationDir, name), "utf8");
 }
 
 function issueCoordinatorWorkerPrompt(): string {
-  const result = spawnSync("python3", [driverScript, "--fixture", "test/fixtures/issue-coordinator/driver-ready-worker.json"], {
+  const result = spawnSync("node", [driverScript, "--fixture", "test/fixtures/issue-coordinator/driver-ready-worker.json"], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: { ...process.env, PI_LOOPER_PROJECT_ID: "demo", PI_LOOPER_REPO_PATH: "/repo", PI_LOOPER_GITHUB_REPO: "owner/repo" },
@@ -51,6 +51,6 @@ describe("agent launch template migration", () => {
   });
 
   it("keeps issue coordinator fallback focused on the driver", () => {
-    expect(readTemplate("issue-coordinator.prompt.md")).toMatch(/issue-coordinator-driver\.py/);
+    expect(readTemplate("issue-coordinator.prompt.md")).toMatch(/issue-coordinator-driver\.ts/);
   });
 });
