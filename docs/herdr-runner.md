@@ -1,21 +1,21 @@
-# Herdr 実行基盤
+# Herdr runner
 
-deadloop v0 は Herdr 実行基盤を使います。
+deadloop v0 uses the Herdr runner.
 
-## 役割
+## Responsibilities
 
-- Herdr worktree を作る
-- Pi 作業エージェント / レビューエージェントのセッションを起動する
-- 作業エージェントが書いた promise ファイルから完了報告を確認する
-- マージ / close 後に不要な作業用 workspace / linked worktree を決定論的な補助スクリプトで片付ける
+- Create Herdr worktrees.
+- Start Pi worker-agent and review-agent sessions.
+- Check completion reports from promise files written by worker agents.
+- After merge / close, clean up unnecessary workspaces and linked worktrees with deterministic helper scripts.
 
-## 必要なもの
+## Requirements
 
-- `herdr` CLI
-- `gh` CLI
-- 対象 GitHub repository への読み書き権限
-- 対象リポジトリのローカル作業ツリー
+- `herdr` CLI.
+- `gh` CLI.
+- Read and write access to the target GitHub repository.
+- A local working tree for the target repository.
 
-## 将来の実行基盤
+## Future runners
 
-Herdr 固有の操作は実行基盤として扱います。コード上の実行基盤 seam は `src/runner.ts`、Herdr implementation は `src/herdr-runner.ts` に置きます。将来、tmux や別の端末 / workspace 管理ツールを追加する場合も、GitHub Issue / PR の状態管理は deadloop 側に残します。
+Herdr-specific operations are treated as runner concerns. The runner seam in the code lives in `src/runner.ts`, and the Herdr implementation lives in `src/herdr-runner.ts`. If future versions add tmux or another terminal / workspace management tool, GitHub Issue / PR state management should stay in deadloop.
