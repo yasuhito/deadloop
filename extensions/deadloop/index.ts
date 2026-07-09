@@ -9,6 +9,7 @@ const TICK_MS = 30_000;
 const MODULE_LOAD_TIME_MS = Date.now();
 const {
   DEFAULT_TIMEZONE,
+  DEFAULT_CHECK_COMMAND,
   REPO_POLICY_FILE,
   automationStateKey,
   codeFreshnessWarning,
@@ -374,7 +375,7 @@ function automationEnv(project, automation) {
     DEADLOOP_GITHUB_REPO: project.githubRepo,
     DEADLOOP_BASE_BRANCH: project.baseBranch,
     DEADLOOP_WORKTREE_ROOT: project.worktreeRoot || "",
-    DEADLOOP_CHECK_COMMAND: project.checkCommand || "git diff --check",
+    DEADLOOP_CHECK_COMMAND: project.checkCommand || DEFAULT_CHECK_COMMAND,
     DEADLOOP_WORKER_AGENT: project.workerAgent || "pi",
     DEADLOOP_WORKER_MODEL: project.workerModel || "",
     DEADLOOP_WORKER_INSTRUCTIONS: project.workerInstructions || "",

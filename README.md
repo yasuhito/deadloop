@@ -66,7 +66,7 @@ Local project fields include:
 - `worktreeRoot` — directory where Herdr may create worktrees. Defaults to `~/.herdr/worktrees/<repo>/` for implicit `deadloop.json` projects.
 - `autoMerge` — keep `false` until the repository has proven safeguards.
 
-Shared repository policy lives in `deadloop.json` on the trusted base branch. Standard labels, worker instruction files (`AGENTS.md`, `CONTEXT.md`, `README.md`), and the issue coordinator / PR reviewer automations are defaults, so omit those sections unless you are customizing them. Local `projects.json` values win over repo policy.
+Shared repository policy lives in `deadloop.json` on the trusted base branch. Standard labels, verification (`git diff --check`, then `npm run check` or existing `test` / `lint` / `typecheck` scripts), worker instruction files (`AGENTS.md`, `CONTEXT.md`, `README.md`), and the issue coordinator / PR reviewer automations are defaults, so omit those sections unless you are customizing them. Local `projects.json` values win over repo policy.
 
 ## Create labels
 

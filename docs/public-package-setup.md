@@ -54,7 +54,7 @@ Key fields:
 - `githubRepo` — GitHub repository in `owner/name` form. Inferred from the `origin` remote for implicit `deadloop.json` projects.
 - `baseBranch` — branch or remote ref used as the worktree base, usually `origin/main`. Inferred from the current branch upstream for implicit `deadloop.json` projects.
 - `worktreeRoot` — directory where the Herdr runner may create worker worktrees. Defaults to `~/.herdr/worktrees/<repo>/` for implicit `deadloop.json` projects.
-- `checkCommand` — verification command workers and reviewers must pass before handoff.
+- `checkCommand` — optional verification command workers and reviewers must pass before handoff. Omit this for the standard convention: run `git diff --check`, then `npm run check` when it exists, otherwise the existing `test`, `lint`, and `typecheck` package scripts.
 - `autoMerge` — keep `false` until the repository has proven safeguards. Only `true` allows the PR reviewer automation to squash merge and delete the head branch after its gates pass.
 - `workerInstructionFiles` — optional list of repository instruction files to mention in worker prompts. Omit this to use the standard convention: `AGENTS.md`, `CONTEXT.md`, `README.md`, plus relevant docs.
 - `workerInstructions` — legacy escape hatch for replacing the generated worker instruction text. Prefer repository docs plus `workerInstructionFiles` over long inline strings.

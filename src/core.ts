@@ -6,6 +6,9 @@ export const DEFAULT_TIMEZONE = "Asia/Tokyo";
 
 export const REPO_POLICY_FILE = "deadloop.json";
 
+export const DEFAULT_CHECK_COMMAND =
+  "git diff --check && node -e \"const fs=require('fs'),cp=require('child_process');if(!fs.existsSync('package.json'))process.exit(0);const s=JSON.parse(fs.readFileSync('package.json','utf8')).scripts||{};const skip='echo \\\"Error: no test specified\\\" && exit 1';const names=s.check?['check']:['test','lint','typecheck'].filter((n)=>s[n]&&s[n]!==skip);for(const n of names)cp.execFileSync('npm',['run',n],{stdio:'inherit'});\"";
+
 export const DEFAULT_WORKER_INSTRUCTION_FILES = ["AGENTS.md", "CONTEXT.md", "README.md"] as const;
 
 export const DEFAULT_WORKER_INSTRUCTIONS =
@@ -508,7 +511,7 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
     githubRepo: raw.githubRepo,
     baseBranch: raw.baseBranch || "origin/main",
     worktreeRoot: raw.worktreeRoot || "",
-    checkCommand: raw.checkCommand || "git diff --check",
+    checkCommand: raw.checkCommand || DEFAULT_CHECK_COMMAND,
     autoMerge: raw.autoMerge === true,
     ciFallback: normalizeCiFallback(raw.ciFallback),
     workerInstructions: normalizeWorkerInstructions(raw),
@@ -667,7 +670,7 @@ export function templateValues(
     githubRepo: project.githubRepo,
     baseBranch: project.baseBranch,
     worktreeRoot: project.worktreeRoot || "",
-    checkCommand: project.checkCommand || "git diff --check",
+    checkCommand: project.checkCommand || DEFAULT_CHECK_COMMAND,
     autoMerge: project.autoMerge,
     ciFallbackEnabled: project.ciFallback.enabled,
     ciFallbackMode: project.ciFallback.mode,

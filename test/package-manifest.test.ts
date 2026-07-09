@@ -25,6 +25,12 @@ describe("package manifest files", () => {
     );
   });
 
+  it("defines a conventional check command", () => {
+    expect(packageJson.scripts.check).toBe(
+      "npm test && npm run lint && npm run typecheck && bash -n extensions/deadloop/automations/*.sh && npm pack --dry-run",
+    );
+  });
+
   it("defines a no-emit typecheck command", () => {
     expect(packageJson.scripts.typecheck).toBe("tsc --noEmit");
   });

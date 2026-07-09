@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_CHECK_COMMAND,
   DEFAULT_WORKER_LAUNCH_POLICY,
   EXTENSION_CODE_CHANGED_WARNING,
   codeFreshnessWarning,
@@ -70,7 +71,7 @@ describe("deterministic extension core", () => {
       githubRepo: "owner/repo",
       baseBranch: "origin/main",
       worktreeRoot: "",
-      checkCommand: "git diff --check",
+      checkCommand: DEFAULT_CHECK_COMMAND,
       autoMerge: false,
       ciFallback: {
         enabled: false,
