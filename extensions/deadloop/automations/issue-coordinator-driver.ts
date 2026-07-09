@@ -6,14 +6,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-const {
-  defaultIssueDecisionConfig,
-  fixtureDecision,
-  issueBlockedByNumbers,
-  issueNumberForDecision,
-  liveDependencyState,
-  selectIssueForImplementation,
-} = require("./issue-coordinator-decisions.ts");
+const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
 
@@ -27,12 +20,6 @@ type DriverResult = {
 
 const SCRIPT_DIR = __dirname;
 const CLEANUP_SCRIPT = path.join(SCRIPT_DIR, "cleanup-completed-worker-worktrees.ts");
-
-const CONTRACT_BRIEF_RE = /^##\s*(?:Agent Brief|What to build)\b/im;
-const CONTRACT_ACCEPTANCE_RE = /^##\s*(?:Acceptance criteria|受け入れ条件)\b|\bAcceptance criteria\b|受け入れ条件/im;
-const PLANNING_TITLE_RE = /^\s*(?:PRD|RFC|設計|計画)\b/i;
-const PLANNING_SECTION_RE = /^##\s*(?:PRD|RFC|設計|計画)\b/im;
-const TASK_LIST_RE = /^\s*- \[[ xX]\] .+#\d+/m;
 
 function driverResult(action: DriverResult["action"], summary: string, extra: JsonObject = {}): DriverResult {
   return { action, summary, ...extra };
@@ -96,44 +83,6 @@ function issueList(fixture: JsonObject | null, repo: string): JsonObject[] {
     "--json",
     "number,title,body,labels,updatedAt,url",
   ]);
-}
-
-function decisionConfig(env: ReturnType<typeof envConfig>): JsonObject {
-  return defaultIssueDecisionConfig({
-    readyLabel: env.readyLabel,
-    implementLabel: env.implementLabel,
-    inProgressLabel: env.inProgressLabel,
-    blockedLabel: env.blockedLabel,
-    humanLabel: env.humanLabel,
-    needsInfoLabel: env.needsInfoLabel,
-    wontfixLabel: env.wontfixLabel,
-  });
-}
-
-function decisionForIssues(fixturePath: string | undefined, issues: JsonObject[], repo: string, env: ReturnType<typeof envConfig>): JsonObject {
-  const config = decisionConfig(env);
-  if (fixturePath) return fixtureDecision(fixturePath, config);
-  return selectIssueForImplementation(
-    issues,
-    config,
-    (issue: JsonObject) => issueBlockedByNumbers(repo, issueNumberForDecision(issue)),
-    (number: number) => liveDependencyState(repo, number),
-  );
-}
-
-function selectedIssue(issues: JsonObject[], number: number): JsonObject {
-  return issues.find((issue) => Number(issue.number || 0) === number) || { number, title: "", body: "", url: "" };
-}
-
-function hasImplementationContract(issue: JsonObject): boolean {
-  const body = String(issue.body || "");
-  return CONTRACT_BRIEF_RE.test(body) && CONTRACT_ACCEPTANCE_RE.test(body);
-}
-
-function isBlockedPlanningIssue(issue: JsonObject): boolean {
-  const title = String(issue.title || "");
-  const body = String(issue.body || "");
-  return PLANNING_TITLE_RE.test(title) || PLANNING_SECTION_RE.test(body) || TASK_LIST_RE.test(body);
 }
 
 function gateMissingContractComment(issue: JsonObject): string {
@@ -321,21 +270,22 @@ function drive(fixturePath: string | undefined): DriverResult {
   const env = envConfig();
   if (!env.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
 
-  const plan = cleanupPlan(fixture);
-  const candidates = plan.candidates || [];
+  const cleanup = cleanupPlan(fixture);
+  const candidates = cleanup.candidates || [];
   if (candidates.length) {
     return driverResult("done", `completed worker cleanup: ${candidates.length} candidate(s)`, {
       driverAction: "cleanup_applied",
-      cleanup: applyCleanup(plan, fixture),
+      cleanup: applyCleanup(cleanup, fixture),
     });
   }
 
   const issues = issueList(fixture, env.githubRepo);
   const decision = decisionForIssues(fixturePath, issues, env.githubRepo, env);
-  if (!decision.selected) return driverResult("skip", "No target issue", { driverAction: "no_candidate", decision });
+  const issuePlan = planIssueCoordinatorAction(issues, decision);
+  if (issuePlan.kind === "skip_no_candidate") return driverResult("skip", "No target issue", { driverAction: "no_candidate", decision });
 
-  const issue = selectedIssue(issues, Number(decision.number || 0));
-  if (!hasImplementationContract(issue)) {
+  const issue = issuePlan.issue;
+  if (issuePlan.kind === "contract_missing") {
     applyContractMissing(issue, env, fixture);
     return driverResult("done", `Issue #${issue.number} is missing its contract; moved it to needs-triage`, {
       driverAction: "contract_missing",
@@ -344,7 +294,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     });
   }
 
-  if (isBlockedPlanningIssue(issue)) {
+  if (issuePlan.kind === "planning_blocked") {
     const comment = blockedComment(issue, env, "Skipped automated implementation because this looks like a PRD, design, or parent issue.");
     applyBlocked(issue, env, comment, fixture);
     return driverResult("done", `Issue #${issue.number} is not an implementable unit; marked it blocked`, {
