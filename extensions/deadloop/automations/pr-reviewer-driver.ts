@@ -4,67 +4,27 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
-const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { planPrReviewerAction } = require("./pr-reviewer-flow.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
-const { createHerdrRunner } = require("../../../src/herdr-runner.ts");
+const {
+  createCommandRunner,
+  createHerdrRunnerFromCommandRunner,
+  driverResult,
+  loadFixture,
+  oneLine,
+  parseBool,
+  parseFixtureArg,
+  shellQuote,
+} = require("../../../src/automation-driver-kit.ts");
 
-type JsonObject = Record<string, any>;
-
-type DriverResult = {
-  action: "skip" | "done" | "needs_llm" | "error";
-  summary: string;
-  [key: string]: any;
-};
+import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
 const SCRIPT_DIR = __dirname;
-
-function driverResult(action: DriverResult["action"], summary: string, extra: JsonObject = {}): DriverResult {
-  return { action, summary, ...extra };
-}
-
-function runText(args: string[], options: { input?: string; check?: boolean } = {}): string {
-  const completed = spawnSync(args[0], args.slice(1), {
-    input: options.input,
-    encoding: "utf8",
-    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-  });
-  if (options.check !== false && completed.status !== 0) {
-    throw new Error((completed.stderr || completed.stdout || `command failed: ${args.join(" ")}`).trim());
-  }
-  return completed.stdout || "";
-}
-
-function runJson(args: string[], options: { input?: string } = {}): any {
-  return JSON.parse(runText(args, { input: options.input }));
-}
+const commandRunner = createCommandRunner();
+const { runText, runJson } = commandRunner;
 
 function herdrRunner() {
-  return createHerdrRunner({
-    runText: (command: string, args: string[]) => runText([command, ...args]),
-    runJson: (command: string, args: string[]) => runJson([command, ...args]),
-  });
-}
-
-function shellQuote(value: string | number): string {
-  const text = String(value);
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
-  return `'${text.replace(/'/g, `'"'"'`)}'`;
-}
-
-function oneLine(value: unknown): string {
-  return String(value || "").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function parseBool(value: string | undefined): boolean {
-  return String(value || "").toLowerCase() === "1" || String(value || "").toLowerCase() === "true";
-}
-
-function loadFixture(file: string | undefined): JsonObject | null {
-  if (!file) return null;
-  const data = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("fixture must be a JSON object");
-  return data;
+  return createHerdrRunnerFromCommandRunner(commandRunner);
 }
 
 function envConfig() {
@@ -357,20 +317,9 @@ function drive(fixturePath: string | undefined): DriverResult {
   });
 }
 
-function parseArgs(argv: string[]): { fixture?: string } {
-  const parsed: { fixture?: string } = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === "--fixture") {
-      parsed.fixture = argv[index + 1];
-      index += 1;
-    }
-  }
-  return parsed;
-}
-
 function main(): void {
   try {
-    const args = parseArgs(process.argv.slice(2));
+    const args = parseFixtureArg(process.argv.slice(2));
     process.stdout.write(`${JSON.stringify(drive(args.fixture))}\n`);
   } catch (error) {
     process.stdout.write(

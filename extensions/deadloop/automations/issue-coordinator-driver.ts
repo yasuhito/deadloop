@@ -5,65 +5,28 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
-const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
-const { createHerdrRunner } = require("../../../src/herdr-runner.ts");
+const {
+  createCommandRunner,
+  createHerdrRunnerFromCommandRunner,
+  driverResult,
+  loadFixture,
+  oneLine,
+  parseFixtureArg,
+  shellQuote,
+} = require("../../../src/automation-driver-kit.ts");
 
-type JsonObject = Record<string, any>;
-
-type DriverResult = {
-  action: "skip" | "done" | "needs_llm" | "error";
-  summary: string;
-  [key: string]: any;
-};
+import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
 const SCRIPT_DIR = __dirname;
 const CLEANUP_SCRIPT = path.join(SCRIPT_DIR, "cleanup-completed-worker-worktrees.ts");
-
-function driverResult(action: DriverResult["action"], summary: string, extra: JsonObject = {}): DriverResult {
-  return { action, summary, ...extra };
-}
-
-function runText(args: string[], options: { input?: string; check?: boolean } = {}): string {
-  const completed = spawnSync(args[0], args.slice(1), {
-    input: options.input,
-    encoding: "utf8",
-    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-  });
-  if (options.check !== false && completed.status !== 0) {
-    throw new Error((completed.stderr || completed.stdout || `command failed: ${args.join(" ")}`).trim());
-  }
-  return completed.stdout || "";
-}
-
-function runJson(args: string[], options: { input?: string } = {}): any {
-  return JSON.parse(runText(args, { input: options.input }));
-}
+const commandRunner = createCommandRunner();
+const { runText, runJson } = commandRunner;
 
 function herdrRunner() {
-  return createHerdrRunner({
-    runText: (command: string, args: string[]) => runText([command, ...args]),
-    runJson: (command: string, args: string[]) => runJson([command, ...args]),
-  });
-}
-
-function shellQuoteForDriver(value: string | number): string {
-  const text = String(value);
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
-  return `'${text.replace(/'/g, `'"'"'`)}'`;
-}
-
-function oneLineForDriver(value: unknown): string {
-  return String(value || "").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function loadFixture(file: string | undefined): JsonObject | null {
-  if (!file) return null;
-  const data = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("fixture must be a JSON object");
-  return data;
+  return createHerdrRunnerFromCommandRunner(commandRunner);
 }
 
 function cleanupPlan(fixture: JsonObject | null): JsonObject {
@@ -227,7 +190,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
 
 function workerLaunchPrompt(issue: JsonObject, env: ReturnType<typeof envConfig>): string {
   const number = Number(issue.number || 0);
-  const title = oneLineForDriver(issue.title || "task");
+  const title = oneLine(issue.title || "task");
   const url = String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`);
   const workerName = `${env.projectId}-issue-${number}-worker`;
   return `Deterministic issue-coordinator driver selected Issue #${number}. Continue only this bounded worker-launch path; do not reselect another issue.
@@ -242,7 +205,7 @@ Required safety contract:
 - Use a unique Worker name like \`${workerName}\`; never use the default \`pi\` name.
 - Create a Herdr worktree and then a dedicated tab with \`herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "${workerName}" --no-focus\`.
 - Render the Worker prompt with \`src/issue-coordinator-renderers.ts\` / \`renderIssueWorkerPrompt\` semantics, including promise file \`<worktreePath>/.deadloop/promise-<uuid>.json\`.
-- Start the Worker only through \`node ${env.automationDir}/launch-agent.ts --agent "${env.workerAgent}" --name "$worker_name" --cwd "$worktree_path" --repo-path ${shellQuoteForDriver(env.repoPath)} --level "$level" --model "${env.workerModel}" --uuid "$uuid" --prompt-file "$prompt_file" --tab "$tab_id"\`.
+- Start the Worker only through \`node ${env.automationDir}/launch-agent.ts --agent "${env.workerAgent}" --name "$worker_name" --cwd "$worktree_path" --repo-path ${shellQuote(env.repoPath)} --level "$level" --model "${env.workerModel}" --uuid "$uuid" --prompt-file "$prompt_file" --tab "$tab_id"\`.
 - The promise file is the only completion authority. When \`complete\` or \`blocked\` appears, break polling immediately (\`complete|blocked) break\`). Do not use Herdr status as completion authority.
 - After a complete promise, run validation including \`${env.checkCommand}\`, create a reviewable PR, add \`${env.reviewLabel}\`, and preserve existing safety rules.
 
@@ -329,20 +292,9 @@ function drive(fixturePath: string | undefined): DriverResult {
   });
 }
 
-function parseArgs(argv: string[]): { fixture?: string } {
-  const parsed: { fixture?: string } = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === "--fixture") {
-      parsed.fixture = argv[index + 1];
-      index += 1;
-    }
-  }
-  return parsed;
-}
-
 function main(): void {
   try {
-    const args = parseArgs(process.argv.slice(2));
+    const args = parseFixtureArg(process.argv.slice(2));
     process.stdout.write(`${JSON.stringify(drive(args.fixture))}\n`);
   } catch (error) {
     process.stdout.write(
