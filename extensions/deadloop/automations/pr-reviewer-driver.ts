@@ -3,7 +3,6 @@
 // directly under this package's `type: commonjs`, matching launch-agent.ts.
 
 const fs = require("node:fs") as typeof import("node:fs");
-const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const {
@@ -12,6 +11,7 @@ const {
   selectPrForReview,
   workingReviewerPrNumbers,
 } = require("./pr-reviewer-decisions.ts");
+const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -143,19 +143,6 @@ function selectedPr(prs: JsonObject[], number: number): JsonObject {
   return prs.find((pr) => Number(pr.number) === number) || { number };
 }
 
-function findStringValue(value: unknown, keys: string[]): string {
-  if (!value || typeof value !== "object") return "";
-  const record = value as JsonObject;
-  for (const key of keys) {
-    if (typeof record[key] === "string" && record[key]) return record[key];
-  }
-  for (const child of Object.values(record)) {
-    const found = findStringValue(child, keys);
-    if (found) return found;
-  }
-  return "";
-}
-
 function shouldSimulateLaunch(fixture: JsonObject | null, env: ReturnType<typeof envConfig>): boolean {
   return Boolean(fixture && env.simulateLaunch);
 }
@@ -236,54 +223,22 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
   }
 
   runText(["gh", "pr", "edit", String(number), "-R", env.githubRepo, "--add-label", env.reviewingLabel]);
-  const worktreeResult = runJson([
-    "herdr",
-    "worktree",
-    "open",
-    "--cwd",
-    env.repoPath,
-    "--branch",
-    headRefName,
-    "--label",
-    reviewerName,
-    "--no-focus",
-    "--json",
-  ]);
-  const workspaceId = findStringValue(worktreeResult, ["workspace_id", "workspaceId", "id"]);
-  const worktreePath = findStringValue(worktreeResult, ["path", "worktreePath"]);
-  if (!workspaceId || !worktreePath) throw new Error("herdr worktree open did not return workspace id and path");
-  const tabResult = runJson(["herdr", "tab", "create", "--workspace", workspaceId, "--cwd", worktreePath, "--label", reviewerName, "--no-focus"]);
-  const tabId = findStringValue(tabResult, ["tab_id", "tabId", "id"]);
-  if (!tabId) throw new Error("herdr tab create did not return tab id");
-
-  const stateDir = path.join(worktreePath, ".deadloop");
-  fs.mkdirSync(stateDir, { recursive: true });
-  const promptFile = path.join(stateDir, `reviewer-prompt-${uuid}.md`);
-  const promiseFile = path.join(stateDir, `promise-${uuid}.json`);
-  fs.writeFileSync(promptFile, reviewAgentPrompt(pr, env, promiseFile, reason), "utf8");
-  const launchOutput = runText([
-    "node",
-    path.join(env.automationDir, "launch-agent.ts"),
-    "--agent",
-    env.reviewerAgent,
-    "--name",
-    reviewerName,
-    "--cwd",
-    worktreePath,
-    "--repo-path",
-    env.repoPath,
-    "--level",
-    "medium",
-    "--model",
-    env.reviewerModel,
-    "--uuid",
-    uuid,
-    "--prompt-file",
-    promptFile,
-    "--tab",
-    tabId,
-  ]);
-  return { reviewerName, headRefName, workspaceId, tabId, worktreePath, promptFile, promiseFile, launchOutput };
+  const launch = launchAgentFlow(
+    {
+      worktree: { mode: "open", branch: headRefName },
+      repoPath: env.repoPath,
+      automationDir: env.automationDir,
+      name: reviewerName,
+      agent: env.reviewerAgent,
+      model: env.reviewerModel,
+      level: "medium",
+      uuid,
+      promptFilePrefix: "reviewer-prompt",
+      renderPrompt: ({ promiseFile }: { promiseFile: string }) => reviewAgentPrompt(pr, env, promiseFile, reason),
+    },
+    { mkdirSync: fs.mkdirSync, runJson, runText, writeFileSync: fs.writeFileSync },
+  );
+  return { reviewerName, headRefName, ...launch };
 }
 
 function hasSkippedReason(decision: JsonObject, reasons: string[]): boolean {

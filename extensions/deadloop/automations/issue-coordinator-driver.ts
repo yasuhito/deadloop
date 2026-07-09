@@ -15,6 +15,7 @@ const {
   selectIssueForImplementation,
 } = require("./issue-coordinator-decisions.ts");
 const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
+const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -185,19 +186,6 @@ function slugForBranch(value: unknown): string {
   return slug || "task";
 }
 
-function findStringValue(value: unknown, keys: string[]): string {
-  if (!value || typeof value !== "object") return "";
-  const record = value as JsonObject;
-  for (const key of keys) {
-    if (typeof record[key] === "string" && record[key]) return record[key];
-  }
-  for (const child of Object.values(record)) {
-    const found = findStringValue(child, keys);
-    if (found) return found;
-  }
-  return "";
-}
-
 function shouldSimulateLaunch(fixture: JsonObject | null, env: ReturnType<typeof envConfig>): boolean {
   return Boolean(fixture && env.simulateLaunch);
 }
@@ -252,69 +240,32 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   }
 
   runText(["gh", "issue", "edit", String(number), "-R", env.githubRepo, "--remove-label", env.implementLabel, "--add-label", env.inProgressLabel]);
-  const worktreeResult = runJson([
-    "herdr",
-    "worktree",
-    "create",
-    "--cwd",
-    env.repoPath,
-    "--branch",
-    branch,
-    "--base",
-    env.baseBranch,
-    "--label",
-    workerName,
-    "--no-focus",
-    "--json",
-  ]);
-  const workspaceId = findStringValue(worktreeResult, ["workspace_id", "workspaceId", "id"]);
-  const worktreePath = findStringValue(worktreeResult, ["path", "worktreePath"]);
-  if (!workspaceId || !worktreePath) throw new Error("herdr worktree create did not return workspace id and path");
-  const tabResult = runJson(["herdr", "tab", "create", "--workspace", workspaceId, "--cwd", worktreePath, "--label", workerName, "--no-focus"]);
-  const tabId = findStringValue(tabResult, ["tab_id", "tabId", "id"]);
-  if (!tabId) throw new Error("herdr tab create did not return tab id");
-
-  const stateDir = path.join(worktreePath, ".deadloop");
-  fs.mkdirSync(stateDir, { recursive: true });
-  const promptFile = path.join(stateDir, `worker-prompt-${uuid}.md`);
-  const promiseFile = path.join(stateDir, `promise-${uuid}.json`);
-  fs.writeFileSync(
-    promptFile,
-    renderIssueWorkerPrompt({
-      launchReason: "deterministic issue coordinator launch",
-      issueNumber: number,
-      issueTitle: String(issue.title || "task"),
-      issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
-      githubRepo: env.githubRepo,
-      workerInstructions: env.workerInstructions,
-      checkCommand: env.checkCommand,
-      promiseFile,
-    }),
-    "utf8",
+  const launch = launchAgentFlow(
+    {
+      worktree: { mode: "create", branch, baseBranch: env.baseBranch },
+      repoPath: env.repoPath,
+      automationDir: env.automationDir,
+      name: workerName,
+      agent: env.workerAgent,
+      model: env.workerModel,
+      level: "medium",
+      uuid,
+      promptFilePrefix: "worker-prompt",
+      renderPrompt: ({ promiseFile }: { promiseFile: string }) =>
+        renderIssueWorkerPrompt({
+          launchReason: "deterministic issue coordinator launch",
+          issueNumber: number,
+          issueTitle: String(issue.title || "task"),
+          issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
+          githubRepo: env.githubRepo,
+          workerInstructions: env.workerInstructions,
+          checkCommand: env.checkCommand,
+          promiseFile,
+        }),
+    },
+    { mkdirSync: fs.mkdirSync, runJson, runText, writeFileSync: fs.writeFileSync },
   );
-  const launchOutput = runText([
-    "node",
-    path.join(env.automationDir, "launch-agent.ts"),
-    "--agent",
-    env.workerAgent,
-    "--name",
-    workerName,
-    "--cwd",
-    worktreePath,
-    "--repo-path",
-    env.repoPath,
-    "--level",
-    "medium",
-    "--model",
-    env.workerModel,
-    "--uuid",
-    uuid,
-    "--prompt-file",
-    promptFile,
-    "--tab",
-    tabId,
-  ]);
-  return { workerName, branch, workspaceId, tabId, worktreePath, promptFile, promiseFile, launchOutput };
+  return { workerName, branch, ...launch };
 }
 
 function workerLaunchPrompt(issue: JsonObject, env: ReturnType<typeof envConfig>): string {

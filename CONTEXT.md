@@ -28,6 +28,10 @@ _Avoid_: 外部プロファイル設定、ユーザー定義エージェント
 オーケストレータがエージェント(Worker / レビューエージェント)を起動するときに呼ぶ唯一のコマンド。エージェントプロファイルから argv を組み立て、シェルを介さずに実行基盤の起動コマンドを実行し、前提条件を fail-fast で検査する。
 _Avoid_: プロンプトテンプレート内の起動コマンド分岐、argv 印字ヘルパー
 
+**エージェント起動フロー (Agent launch flow)**:
+オーケストレータが Worker / レビューエージェントを起動するために、実行基盤の worktree / tab を用意し、prompt / promise パスを作り、ランチャーを呼ぶ一連の手順。GitHub Issue / PR の選定やラベル状態遷移は含めない。
+_Avoid_: GitHub Issue / PR の状態遷移、candidate selection、review gate
+
 **モデル指定 (workerModel / reviewerModel)**:
 operator がプロジェクト設定で固定する、Worker・レビューエージェントの使用モデル。サブスクリプション残量などの資源配分に基づく operator の意思決定であり、オーケストレータの裁量ではない。
 _Avoid_: 低コストモデル許可、モデル切替ポリシー
