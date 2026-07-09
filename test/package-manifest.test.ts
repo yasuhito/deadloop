@@ -21,7 +21,7 @@ describe("package manifest files", () => {
 
   it("defines a local lint command", () => {
     expect(packageJson.scripts.lint).toBe(
-      "biome check package.json biome.json deadloop.json test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src extensions/deadloop/index.ts extensions/deadloop/automations/*.ts test/*.ts --files-ignore-unknown=true",
+      "biome check package.json biome.json deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src extensions/deadloop/index.ts extensions/deadloop/automations/*.ts test/*.ts --files-ignore-unknown=true",
     );
   });
 
