@@ -60,6 +60,12 @@ describe("Herdr runner", () => {
     expect(commands[0]).toEqual(["herdr", "tab", "create", "--workspace", "w1", "--cwd", "/wt", "--label", "worker", "--no-focus"]);
   });
 
+  it("ignores Herdr command ids when parsing created tab ids", () => {
+    const runner = createHerdrRunner({ runJson: () => ({ id: "cli:tab:create", result: { tab: { id: "w1:t2" } } }) });
+
+    expect(runner.createTab({ workspaceId: "w1", cwd: "/wt", label: "worker" })).toEqual({ tabId: "w1:t2" });
+  });
+
   it("starts an agent through Herdr", () => {
     const commands: unknown[] = [];
     const runner = createHerdrRunner({

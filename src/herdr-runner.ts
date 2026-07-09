@@ -103,8 +103,14 @@ function parseWorktreeLaunch(operation: string, payload: unknown): RunnerWorktre
   return requireFields(operation, payload, { workspaceId, worktreePath });
 }
 
+function tabObject(payload: unknown): unknown {
+  if (isObject(payload) && isObject(payload.result) && isObject(payload.result.tab)) return payload.result.tab;
+  if (isObject(payload) && isObject(payload.tab)) return payload.tab;
+  return undefined;
+}
+
 function parseTab(operation: string, payload: unknown): RunnerTab {
-  const tabId = firstField(payload, ["tab"], ["tab_id", "tabId", "id"]);
+  const tabId = firstField(payload, ["tab"], ["tab_id", "tabId"]) || stringField(tabObject(payload), ["id"]);
   return requireFields(operation, payload, { tabId });
 }
 
