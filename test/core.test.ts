@@ -78,7 +78,7 @@ describe("deterministic extension core", () => {
         allowAutoMerge: false,
         localCommands: "",
       },
-      workerInstructions: "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。",
+      workerInstructions: "最初に AGENTS.md、CONTEXT.md、README.md と、変更対象に関連する docs を読んでから作業してください。リポジトリ内の指示を優先してください。",
       workerLaunchPolicy:
         "Worker 起動時は issue の難易度を見てレベルを選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は low、通常の実装は medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は high。判断理由を worker prompt に1行で残す。",
       workerAgent: "pi",
@@ -106,6 +106,7 @@ describe("deterministic extension core", () => {
           graceMinutes: 720,
           promptFile: "issue.md",
           precheckFile: undefined,
+          driverFile: undefined,
           precheckTimeoutSeconds: 60,
           initialLastScheduledAt: 0,
         },
@@ -204,6 +205,23 @@ describe("deterministic extension core", () => {
     expect(
       renderTemplate("{{ projectId }} {{githubRepo}} {{automationDir}} {{ missing.value }} {{readyLabel}}", values),
     ).toBe("demo owner/repo /ext/automations  ready-for-agent");
+  });
+
+  it("builds worker instructions from custom instruction files", () => {
+    const project = normalizeProject({ workerInstructionFiles: ["docs/agents.md", "docs/testing.md"] });
+
+    expect(project.workerInstructions).toBe(
+      "最初に docs/agents.md、docs/testing.md と、変更対象に関連する docs を読んでから作業してください。リポジトリ内の指示を優先してください。",
+    );
+  });
+
+  it("keeps explicit worker instructions above instruction files", () => {
+    const project = normalizeProject({
+      workerInstructions: "このリポジトリ固有の手順に従う。",
+      workerInstructionFiles: ["docs/agents.md"],
+    });
+
+    expect(project.workerInstructions).toBe("このリポジトリ固有の手順に従う。");
   });
 
   it("defaults the worker agent to pi", () => {
@@ -344,6 +362,19 @@ describe("deterministic extension core", () => {
     });
 
     expect(result.ok && result.projects[0].workerModel).toBe("repo-model");
+  });
+
+  it("allows trusted repo policy to provide worker instruction files", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({
+        status: "loaded",
+        text: JSON.stringify({ workerInstructionFiles: ["docs/agents.md"] }),
+      }),
+    });
+
+    expect(result.ok && result.projects[0].workerInstructions).toBe(
+      "最初に docs/agents.md と、変更対象に関連する docs を読んでから作業してください。リポジトリ内の指示を優先してください。",
+    );
   });
 
   it("keeps the local worker model above the trusted repo policy", () => {

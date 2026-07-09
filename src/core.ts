@@ -6,7 +6,10 @@ export const DEFAULT_TIMEZONE = "Asia/Tokyo";
 
 export const REPO_POLICY_FILE = "deadloop.json";
 
-export const DEFAULT_WORKER_INSTRUCTIONS = "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。";
+export const DEFAULT_WORKER_INSTRUCTION_FILES = ["AGENTS.md", "CONTEXT.md", "README.md"] as const;
+
+export const DEFAULT_WORKER_INSTRUCTIONS =
+  "最初に AGENTS.md、CONTEXT.md、README.md と、変更対象に関連する docs を読んでから作業してください。リポジトリ内の指示を優先してください。";
 
 export const DEFAULT_WORKER_LAUNCH_POLICY =
   "Worker 起動時は issue の難易度を見てレベルを選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は low、通常の実装は medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は high。判断理由を worker prompt に1行で残す。";
@@ -83,6 +86,7 @@ export type RawProject = {
   autoMerge?: boolean;
   ciFallback?: RawCiFallbackConfig;
   workerInstructions?: string;
+  workerInstructionFiles?: string[];
   workerLaunchPolicy?: string;
   workerAgent?: string;
   workerModel?: string;
@@ -257,6 +261,7 @@ const REPO_POLICY_PROJECT_KEYS = new Set([
   "reviewerModel",
   "checkCommand",
   "workerInstructions",
+  "workerInstructionFiles",
   "workerLaunchPolicy",
   "labels",
   "automations",
@@ -281,10 +286,20 @@ function validateObject(value: unknown, context: string): asserts value is Recor
   }
 }
 
+function validateStringArray(value: unknown, context: string): asserts value is string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`${context} must be an array of strings`);
+  }
+}
+
 function validateRepoPolicy(policy: unknown): RawProject {
   validateObject(policy, REPO_POLICY_FILE);
   for (const key of Object.keys(policy)) {
     if (!REPO_POLICY_PROJECT_KEYS.has(key)) throw new Error(`repo policy key is not allowed: ${key}`);
+  }
+  const workerInstructionFiles = (policy as { workerInstructionFiles?: unknown }).workerInstructionFiles;
+  if (workerInstructionFiles !== undefined) {
+    validateStringArray(workerInstructionFiles, "repo policy workerInstructionFiles");
   }
   const labels = (policy as { labels?: unknown }).labels;
   if (labels !== undefined) {
@@ -383,6 +398,7 @@ function mergeRepoPolicy(local: RawProject, policy: RawProject): { project: RawP
     "reviewerModel",
     "checkCommand",
     "workerInstructions",
+    "workerInstructionFiles",
     "workerLaunchPolicy",
   ]);
   const labels = mergeLabels(local.labels, policy.labels);
@@ -445,6 +461,16 @@ function normalizeCiFallback(value: RawCiFallbackConfig | undefined): Normalized
   };
 }
 
+function normalizeWorkerInstructions(raw: Pick<RawProject, "workerInstructions" | "workerInstructionFiles">): string {
+  if (raw.workerInstructions && raw.workerInstructions.trim()) return raw.workerInstructions;
+  const files = raw.workerInstructionFiles === undefined ? [...DEFAULT_WORKER_INSTRUCTION_FILES] : raw.workerInstructionFiles;
+  const readableFiles = files.map((file) => String(file).trim()).filter(Boolean);
+  if (!readableFiles.length) {
+    return "変更対象に関連する docs を読んでから作業してください。リポジトリ内の指示を優先してください。";
+  }
+  return `最初に ${readableFiles.join("、")} と、変更対象に関連する docs を読んでから作業してください。リポジトリ内の指示を優先してください。`;
+}
+
 function defaultAutomationsForProject(project: Pick<NormalizedProject, "id">): RawAutomation[] {
   return [
     {
@@ -485,7 +511,7 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
     checkCommand: raw.checkCommand || "git diff --check",
     autoMerge: raw.autoMerge === true,
     ciFallback: normalizeCiFallback(raw.ciFallback),
-    workerInstructions: raw.workerInstructions || DEFAULT_WORKER_INSTRUCTIONS,
+    workerInstructions: normalizeWorkerInstructions(raw),
     workerLaunchPolicy: raw.workerLaunchPolicy || DEFAULT_WORKER_LAUNCH_POLICY,
     workerAgent: normalizeAgentKind(raw.workerAgent, "workerAgent"),
     workerModel: raw.workerModel || "",
