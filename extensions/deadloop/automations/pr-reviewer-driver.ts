@@ -16,15 +16,20 @@ const {
   parseFixtureArg,
   shellQuote,
 } = require("../../../src/automation-driver-kit.ts");
+const { createGithubOperations } = require("../../../src/github-operations.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
 const SCRIPT_DIR = __dirname;
 const commandRunner = createCommandRunner();
-const { runText, runJson } = commandRunner;
+const { runText } = commandRunner;
 
 function herdrRunner() {
   return createHerdrRunnerFromCommandRunner(commandRunner);
+}
+
+function githubOperations() {
+  return createGithubOperations(commandRunner);
 }
 
 function envConfig() {
@@ -49,19 +54,7 @@ function envConfig() {
 }
 
 function livePrs(repo: string): JsonObject[] {
-  return runJson([
-    "gh",
-    "pr",
-    "list",
-    "-R",
-    repo,
-    "--state",
-    "open",
-    "--limit",
-    "100",
-    "--json",
-    "number,title,url,updatedAt,headRefName,headRefOid,isDraft,labels,statusCheckRollup,comments,reviewRequests",
-  ]);
+  return githubOperations().listOpenPrs(repo);
 }
 
 function liveAgents(): any {
@@ -147,7 +140,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
     };
   }
 
-  runText(["gh", "pr", "edit", String(number), "-R", env.githubRepo, "--add-label", env.reviewingLabel]);
+  githubOperations().movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
   const launch = launchAgentFlow(
     {
       worktree: { mode: "open", branch: headRefName },
@@ -203,28 +196,21 @@ gh issue edit <issueNumber> -R ${shellQuote(env.githubRepo)} --remove-label ${sh
 function applyDraftGate(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, comment: string): void {
   if (fixture) return;
   const number = String(pr.number);
-  runText(["gh", "pr", "comment", number, "-R", env.githubRepo, "--body", comment]);
-  runText(["gh", "pr", "edit", number, "-R", env.githubRepo, "--remove-label", env.reviewingLabel], { check: false });
-  runText(["gh", "pr", "edit", number, "-R", env.githubRepo, "--remove-label", env.reviewLabel], { check: false });
-  runText(["gh", "pr", "edit", number, "-R", env.githubRepo, "--add-label", env.blockedLabel]);
+  const github = githubOperations();
+  github.commentPr(env.githubRepo, number, comment);
+  github.movePrLabels(env.githubRepo, number, { remove: env.reviewingLabel }, { check: false });
+  github.movePrLabels(env.githubRepo, number, { remove: env.reviewLabel }, { check: false });
+  github.movePrLabels(env.githubRepo, number, { add: env.blockedLabel });
 }
 
 function applyExternalReviewRequest(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): void {
   if (fixture) return;
   const number = String(pr.number);
   const head = String(pr.headRefOid || "");
-  runText(["gh", "pr", "edit", number, "-R", env.githubRepo, "--add-reviewer", "@copilot"], { check: false });
-  runText([
-    "gh",
-    "pr",
-    "comment",
-    number,
-    "-R",
-    env.githubRepo,
-    "--body",
-    `@coderabbitai review\n\n<!-- deadloop:external-review-request head=${head} -->`,
-  ]);
-  runText(["gh", "pr", "edit", number, "-R", env.githubRepo, "--remove-label", env.reviewingLabel], { check: false });
+  const github = githubOperations();
+  github.addPrReviewer(env.githubRepo, number, "@copilot", { check: false });
+  github.commentPr(env.githubRepo, number, `@coderabbitai review\n\n<!-- deadloop:external-review-request head=${head} -->`);
+  github.movePrLabels(env.githubRepo, number, { remove: env.reviewingLabel }, { check: false });
 }
 
 function drive(fixturePath: string | undefined): DriverResult {

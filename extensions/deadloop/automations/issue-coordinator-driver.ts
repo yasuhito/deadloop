@@ -15,6 +15,7 @@ const {
   loadFixture,
   parseFixtureArg,
 } = require("../../../src/automation-driver-kit.ts");
+const { createGithubOperations } = require("../../../src/github-operations.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -25,6 +26,10 @@ const { runText, runJson } = commandRunner;
 
 function herdrRunner() {
   return createHerdrRunnerFromCommandRunner(commandRunner);
+}
+
+function githubOperations() {
+  return createGithubOperations(commandRunner);
 }
 
 function cleanupPlan(fixture: JsonObject | null): JsonObject {
@@ -39,19 +44,7 @@ function applyCleanup(plan: JsonObject, fixture: JsonObject | null): JsonObject 
 
 function issueList(fixture: JsonObject | null, repo: string): JsonObject[] {
   if (fixture) return (fixture.issues || []).filter((issue: unknown) => issue && typeof issue === "object");
-  return runJson([
-    "gh",
-    "issue",
-    "list",
-    "-R",
-    repo,
-    "--state",
-    "open",
-    "--limit",
-    "200",
-    "--json",
-    "number,title,body,labels,updatedAt,url",
-  ]);
+  return githubOperations().listOpenIssues(repo);
 }
 
 function gateMissingContractComment(issue: JsonObject): string {
@@ -69,8 +62,9 @@ function gateMissingContractComment(issue: JsonObject): string {
 function applyContractMissing(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): void {
   if (fixture) return;
   const number = String(issue.number);
-  runText(["gh", "issue", "edit", number, "-R", env.githubRepo, "--remove-label", env.implementLabel, "--add-label", env.needsTriageLabel]);
-  runText(["gh", "issue", "comment", number, "-R", env.githubRepo, "--body", gateMissingContractComment(issue)]);
+  const github = githubOperations();
+  github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.needsTriageLabel });
+  github.commentIssue(env.githubRepo, number, gateMissingContractComment(issue));
 }
 
 function blockedComment(issue: JsonObject, env: ReturnType<typeof envConfig>, reason: string): string {
@@ -91,8 +85,9 @@ function blockedComment(issue: JsonObject, env: ReturnType<typeof envConfig>, re
 function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comment: string, fixture: JsonObject | null): void {
   if (fixture) return;
   const number = String(issue.number);
-  runText(["gh", "issue", "edit", number, "-R", env.githubRepo, "--remove-label", env.implementLabel, "--add-label", env.blockedLabel]);
-  runText(["gh", "issue", "comment", number, "-R", env.githubRepo, "--body", comment]);
+  const github = githubOperations();
+  github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.blockedLabel });
+  github.commentIssue(env.githubRepo, number, comment);
 }
 
 function slugForBranch(value: unknown): string {
@@ -153,7 +148,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     };
   }
 
-  runText(["gh", "issue", "edit", String(number), "-R", env.githubRepo, "--remove-label", env.implementLabel, "--add-label", env.inProgressLabel]);
+  githubOperations().moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel });
   const launch = launchAgentFlow(
     {
       worktree: { mode: "create", branch, baseBranch: env.baseBranch },
