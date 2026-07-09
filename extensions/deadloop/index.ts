@@ -9,8 +9,8 @@ const TICK_MS = 30_000;
 const MODULE_LOAD_TIME_MS = Date.now();
 const {
   DEFAULT_TIMEZONE,
-  DEFAULT_CHECK_COMMAND,
   REPO_POLICY_FILE,
+  automationEnvironment,
   automationStateKey,
   codeFreshnessWarning,
   getDueSlot,
@@ -374,42 +374,6 @@ function activeProject(cwd, projects) {
   );
 }
 
-function automationEnv(project, automation) {
-  const env: Record<string, string | undefined> = {
-    DEADLOOP_PROJECT_ID: project.id,
-    DEADLOOP_REPO_PATH: project.repoPath,
-    DEADLOOP_GITHUB_REPO: project.githubRepo,
-    DEADLOOP_BASE_BRANCH: project.baseBranch,
-    DEADLOOP_WORKTREE_ROOT: project.worktreeRoot || "",
-    DEADLOOP_CHECK_COMMAND: project.checkCommand || DEFAULT_CHECK_COMMAND,
-    DEADLOOP_WORKER_AGENT: project.workerAgent || "pi",
-    DEADLOOP_WORKER_MODEL: project.workerModel || "",
-    DEADLOOP_WORKER_INSTRUCTIONS: project.workerInstructions || "",
-    DEADLOOP_WORKER_LAUNCH_POLICY: project.workerLaunchPolicy || "",
-    DEADLOOP_REVIEWER_AGENT: project.reviewerAgent || "pi",
-    DEADLOOP_REVIEWER_MODEL: project.reviewerModel || "",
-    DEADLOOP_AUTO_MERGE: project.autoMerge ? "1" : "0",
-    DEADLOOP_CI_FALLBACK_ENABLED: project.ciFallback?.enabled ? "1" : "0",
-    DEADLOOP_CI_FALLBACK_MODE: project.ciFallback?.mode || "billing-only",
-    DEADLOOP_CI_FALLBACK_ALLOW_AUTO_MERGE: project.ciFallback?.allowAutoMerge ? "1" : "0",
-    DEADLOOP_CI_FALLBACK_LOCAL_COMMANDS: project.ciFallback?.localCommands || "",
-    DEADLOOP_READY_LABEL: project.labels.ready,
-    DEADLOOP_IMPLEMENT_LABEL: project.labels.implement,
-    DEADLOOP_IN_PROGRESS_LABEL: project.labels.inProgress,
-    DEADLOOP_BLOCKED_LABEL: project.labels.blocked,
-    DEADLOOP_REVIEW_LABEL: project.labels.review,
-    DEADLOOP_REVIEWING_LABEL: project.labels.reviewing,
-    DEADLOOP_HUMAN_LABEL: project.labels.human,
-    DEADLOOP_NEEDS_INFO_LABEL: project.labels.needsInfo,
-    DEADLOOP_WONTFIX_LABEL: project.labels.wontfix,
-    DEADLOOP_NEEDS_TRIAGE_LABEL: project.labels.needsTriage,
-    DEADLOOP_AUTOMATION_ID: automation.id,
-    DEADLOOP_AUTOMATION_NAME: automation.name,
-  };
-
-  return env;
-}
-
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`;
 }
@@ -420,7 +384,7 @@ function resolveAutomationFileInDir(_kind, _automation, requested) {
 
 async function runAutomationScript(pi, project, automation, automationFile) {
   const scriptPath = path.join(AUTOMATION_DIR, automationFile);
-  const env = automationEnv(project, automation);
+  const env = automationEnvironment(project, automation);
   const exports = Object.entries(env)
     .filter(([key]) => key.startsWith("DEADLOOP_"))
     .map(([key, value]) => `${key}=${shellQuote(value)}`)

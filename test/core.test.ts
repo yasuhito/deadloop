@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CHECK_COMMAND,
   DEFAULT_WORKER_LAUNCH_POLICY,
+  automationEnvironment,
   EXTENSION_CODE_CHANGED_WARNING,
   codeFreshnessWarning,
   cronSlotAt,
@@ -207,6 +208,25 @@ describe("deterministic extension core", () => {
     expect(
       renderTemplate("{{ projectId }} {{githubRepo}} {{automationDir}} {{ missing.value }} {{readyLabel}}", values),
     ).toBe("demo owner/repo /ext/automations  ready-for-agent");
+  });
+
+  it("builds automation script environment from the shared runtime values", () => {
+    const project = normalizeProject({
+      id: "demo",
+      repoPath: "/repo",
+      githubRepo: "owner/repo",
+      autoMerge: true,
+      automations: [{ id: "demo:issue", name: "issue coordinator" }],
+    });
+
+    expect(automationEnvironment(project, project.automations[0])).toMatchObject({
+      DEADLOOP_PROJECT_ID: "demo",
+      DEADLOOP_REPO_PATH: "/repo",
+      DEADLOOP_GITHUB_REPO: "owner/repo",
+      DEADLOOP_AUTO_MERGE: "1",
+      DEADLOOP_READY_LABEL: "ready-for-agent",
+      DEADLOOP_AUTOMATION_ID: "demo:issue",
+    });
   });
 
   it("builds worker instructions from custom instruction files", () => {

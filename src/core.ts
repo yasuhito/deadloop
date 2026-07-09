@@ -659,7 +659,7 @@ export function nextSlotAfter(
   return cronSlotAt(nowMs, intervalMinutes) + intervalMs;
 }
 
-export function templateValues(
+function automationRuntimeValues(
   project: NormalizedProject,
   automation: NormalizedAutomation,
   automationDir: string,
@@ -695,6 +695,58 @@ export function templateValues(
     automationId: automation.id,
     automationName: automation.name,
     automationDir,
+  };
+}
+
+export function templateValues(
+  project: NormalizedProject,
+  automation: NormalizedAutomation,
+  automationDir: string,
+): TemplateValueMap {
+  return automationRuntimeValues(project, automation, automationDir);
+}
+
+function envText(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "boolean") return value ? "1" : "0";
+  return String(value ?? "");
+}
+
+export function automationEnvironment(
+  project: NormalizedProject,
+  automation: NormalizedAutomation,
+): Record<string, string | undefined> {
+  const values = automationRuntimeValues(project, automation, "");
+  return {
+    DEADLOOP_PROJECT_ID: envText(values.projectId),
+    DEADLOOP_REPO_PATH: envText(values.repoPath),
+    DEADLOOP_GITHUB_REPO: envText(values.githubRepo),
+    DEADLOOP_BASE_BRANCH: envText(values.baseBranch),
+    DEADLOOP_WORKTREE_ROOT: envText(values.worktreeRoot),
+    DEADLOOP_CHECK_COMMAND: envText(values.checkCommand),
+    DEADLOOP_WORKER_AGENT: envText(values.workerAgent),
+    DEADLOOP_WORKER_MODEL: envText(values.workerModel),
+    DEADLOOP_WORKER_INSTRUCTIONS: envText(values.workerInstructions),
+    DEADLOOP_WORKER_LAUNCH_POLICY: envText(values.workerLaunchPolicy),
+    DEADLOOP_REVIEWER_AGENT: envText(values.reviewerAgent),
+    DEADLOOP_REVIEWER_MODEL: envText(values.reviewerModel),
+    DEADLOOP_AUTO_MERGE: envText(values.autoMerge),
+    DEADLOOP_CI_FALLBACK_ENABLED: envText(values.ciFallbackEnabled),
+    DEADLOOP_CI_FALLBACK_MODE: envText(values.ciFallbackMode),
+    DEADLOOP_CI_FALLBACK_ALLOW_AUTO_MERGE: envText(values.ciFallbackAllowAutoMerge),
+    DEADLOOP_CI_FALLBACK_LOCAL_COMMANDS: envText(values.ciFallbackLocalCommands),
+    DEADLOOP_READY_LABEL: envText(values.readyLabel),
+    DEADLOOP_IMPLEMENT_LABEL: envText(values.implementLabel),
+    DEADLOOP_IN_PROGRESS_LABEL: envText(values.inProgressLabel),
+    DEADLOOP_BLOCKED_LABEL: envText(values.blockedLabel),
+    DEADLOOP_REVIEW_LABEL: envText(values.reviewLabel),
+    DEADLOOP_REVIEWING_LABEL: envText(values.reviewingLabel),
+    DEADLOOP_HUMAN_LABEL: envText(values.humanLabel),
+    DEADLOOP_NEEDS_INFO_LABEL: envText(values.needsInfoLabel),
+    DEADLOOP_WONTFIX_LABEL: envText(values.wontfixLabel),
+    DEADLOOP_NEEDS_TRIAGE_LABEL: envText(values.needsTriageLabel),
+    DEADLOOP_AUTOMATION_ID: envText(values.automationId),
+    DEADLOOP_AUTOMATION_NAME: envText(values.automationName),
   };
 }
 

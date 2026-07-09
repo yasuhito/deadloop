@@ -85,12 +85,12 @@ describe("issue coordinator deterministic driver", () => {
     );
   });
 
-  it("receives worker agent settings from the extension environment", () => {
-    expect(readFileSync("extensions/deadloop/index.ts", "utf8")).toContain("DEADLOOP_WORKER_AGENT");
+  it("receives worker agent settings from the shared automation environment", () => {
+    expect(readFileSync("src/core.ts", "utf8")).toContain("DEADLOOP_WORKER_AGENT");
   });
 
-  it("receives worker model settings from the extension environment", () => {
-    expect(readFileSync("extensions/deadloop/index.ts", "utf8")).toContain("DEADLOOP_WORKER_MODEL");
+  it("receives worker model settings from the shared automation environment", () => {
+    expect(readFileSync("src/core.ts", "utf8")).toContain("DEADLOOP_WORKER_MODEL");
   });
 
   it("uses the TypeScript renderer for blocked comments", () => {
