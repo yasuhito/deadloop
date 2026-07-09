@@ -21,6 +21,7 @@ const { execFileSync } = require("node:child_process") as typeof import("node:ch
 
 const { buildAgentArgv, isAgentKind, AGENT_KINDS, AGENT_PROFILES } = require("../../../src/agent-profiles.cjs");
 const { readClaudeConfig, evaluateWorkspaceTrust } = require("../../../src/agent-trust.cjs");
+const { herdrAgentStartCommand } = require("../../../src/herdr-adapter.ts");
 
 const FLAG_KEYS = ["agent", "name", "cwd", "model", "level", "uuid", "prompt-file", "tab", "repo-path"] as const;
 
@@ -112,12 +113,10 @@ function main(): void {
     fail({ error: "invalid_launch", message: error instanceof Error ? error.message : String(error) });
   }
 
-  const herdrArgs = ["agent", "start", args.name || "", "--cwd", cwd, "--no-focus"];
-  if (args.tab) herdrArgs.push("--tab", args.tab);
-  herdrArgs.push("--", ...agentArgv);
+  const herdrCommand = herdrAgentStartCommand({ name: args.name || "", cwd, tabId: args.tab, agentArgv });
 
   try {
-    const stdout = execFileSync("herdr", herdrArgs, { encoding: "utf8" });
+    const stdout = execFileSync(herdrCommand[0], herdrCommand.slice(1), { encoding: "utf8" });
     process.stdout.write(stdout);
   } catch (error) {
     const err = error as { stdout?: string; stderr?: string; message?: string };

@@ -29,6 +29,12 @@ const {
 const { buildStatusSnapshot, formatStatusReport } = require("../../src/status.ts");
 const { readClaudeConfig } = require("../../src/agent-trust.cjs");
 const { runScheduledAutomation } = require("../../src/automation-runner.ts");
+const {
+  herdrAgentListArgs,
+  herdrAgentsFromResult,
+  herdrWorktreeListArgs,
+  herdrWorktreesFromResult,
+} = require("../../src/herdr-adapter.ts");
 
 const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 const STATE_DIR = path.join(CONFIG_DIR, EXTENSION_NAME);
@@ -452,16 +458,6 @@ function uniquePrs(prs) {
   return unique;
 }
 
-function worktreesFromHerdrResult(data) {
-  if (Array.isArray(data)) return data;
-  return (data?.result || {}).worktrees || [];
-}
-
-function agentsFromHerdrResult(data) {
-  if (Array.isArray(data)) return data;
-  return (data?.result || {}).agents || [];
-}
-
 async function gitText(pi, args) {
   try {
     const result = await pi.exec("git", args, { timeout: 5_000 });
@@ -571,17 +567,17 @@ async function collectLiveSnapshotData(
     : [];
 
   const herdrData = project.repoPath
-    ? await execJson(pi, "herdr", ["worktree", "list", "--cwd", project.repoPath, "--json"], {
+    ? await execJson(pi, "herdr", herdrWorktreeListArgs(project.repoPath), {
         result: { worktrees: [] },
       })
     : { result: { worktrees: [] } };
   const claudeConfig =
     project.workerAgent === "claude" ? readClaudeConfig() : undefined;
   const agentsData = includeAgents
-    ? await execJson(pi, "herdr", ["agent", "list"], { result: { agents: [] } })
+    ? await execJson(pi, "herdr", herdrAgentListArgs(), { result: { agents: [] } })
     : { result: { agents: [] } };
-  const agents = agentsFromHerdrResult(agentsData);
-  const worktrees = worktreesFromHerdrResult(herdrData);
+  const agents = herdrAgentsFromResult(agentsData);
+  const worktrees = herdrWorktreesFromResult(herdrData);
   const gitStatuses = {};
   const gitHeads = {};
   for (const worktree of worktrees) {

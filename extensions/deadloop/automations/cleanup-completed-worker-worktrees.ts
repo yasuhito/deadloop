@@ -6,6 +6,12 @@ const fs = require("node:fs") as typeof import("node:fs");
 const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const {
+  herdrOpenWorkspaceId,
+  herdrWorktreeListCommand,
+  herdrWorktreeRemoveCommand,
+  herdrWorktreesFromResult,
+} = require("../../../src/herdr-adapter.ts");
 
 type CleanupRecord = Record<string, any>;
 
@@ -113,7 +119,7 @@ function skipCleanup(reason: string, pr: CleanupRecord, worktree: CleanupRecord)
     prNumber: pr.number,
     branch: worktree.branch || pr.headRefName,
     path: worktree.path,
-    workspaceId: worktree.open_workspace_id,
+    workspaceId: herdrOpenWorkspaceId(worktree),
   };
 }
 
@@ -122,7 +128,7 @@ function cleanupCandidate(pr: CleanupRecord, worktree: CleanupRecord, reason: st
     prNumber: pr.number,
     branch: worktree.branch,
     path: worktree.path,
-    workspaceId: worktree.open_workspace_id,
+    workspaceId: herdrOpenWorkspaceId(worktree),
     reason,
   };
 }
@@ -167,7 +173,7 @@ function selectCleanupPlan({
       skipped.push(skipCleanup("not_linked_worktree", pr, worktree));
       continue;
     }
-    if (!worktree.open_workspace_id) {
+    if (!herdrOpenWorkspaceId(worktree)) {
       skipped.push(skipCleanup("missing_workspace_id", pr, worktree));
       continue;
     }
@@ -262,8 +268,8 @@ function loadLiveCleanupPlan(config: CleanupConfig): { candidates: CleanupRecord
     }
   }
 
-  const worktreeData = runCleanupJson(["herdr", "worktree", "list", "--cwd", config.repoPath, "--json"]);
-  const worktrees = worktreeData && typeof worktreeData === "object" ? worktreeData.result?.worktrees || [] : [];
+  const worktreeData = runCleanupJson(herdrWorktreeListCommand(config.repoPath));
+  const worktrees = herdrWorktreesFromResult(worktreeData);
   return selectCleanupPlan({ config, prs, worktrees, gitStatuses: {}, live: true });
 }
 
@@ -287,7 +293,7 @@ function applyCleanupPlan(plan: { candidates: CleanupRecord[]; skipped: CleanupR
     const workspaceId = item.workspaceId;
     try {
       if (!workspaceId) throw new Error("missing Herdr workspace id; refusing direct git worktree removal");
-      runCleanupText(["herdr", "worktree", "remove", "--workspace", String(workspaceId), "--json"]);
+      runCleanupText(herdrWorktreeRemoveCommand(String(workspaceId)));
       removed.push(item);
     } catch (error) {
       failed.push({ ...item, error: error instanceof Error ? error.message : String(error) });

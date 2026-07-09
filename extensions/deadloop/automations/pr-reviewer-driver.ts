@@ -12,6 +12,7 @@ const {
   workingReviewerPrNumbers,
 } = require("./pr-reviewer-decisions.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
+const { herdrAgentListCommand } = require("../../../src/herdr-adapter.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -104,7 +105,7 @@ function livePrs(repo: string): JsonObject[] {
 
 function liveAgents(): any {
   try {
-    return runJson(["herdr", "agent", "list"]);
+    return runJson(herdrAgentListCommand());
   } catch {
     return { result: { agents: [] } };
   }

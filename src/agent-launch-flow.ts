@@ -1,6 +1,12 @@
 const path = require("node:path") as typeof import("node:path");
-
-type JsonObject = Record<string, any>;
+const {
+  herdrTabCreateCommand,
+  herdrTabId,
+  herdrWorktreeCreateCommand,
+  herdrWorktreeOpenCommand,
+  herdrWorktreePath,
+  herdrWorkspaceId,
+} = require("./herdr-adapter.ts");
 
 type WorktreeRequest =
   | { mode: "create"; branch: string; baseBranch: string }
@@ -21,7 +27,7 @@ type AgentLaunchFlowInput = {
 
 type AgentLaunchFlowOps = {
   mkdirSync: (dir: string, options: { recursive: true }) => void;
-  runJson: (args: string[]) => JsonObject;
+  runJson: (args: string[]) => Record<string, any>;
   runText: (args: string[]) => string;
   writeFileSync: (file: string, text: string, encoding: "utf8") => void;
 };
@@ -35,75 +41,30 @@ type AgentLaunchFlowResult = {
   launchOutput: string;
 };
 
-function findStringValue(value: unknown, keys: string[]): string {
-  if (!value || typeof value !== "object") return "";
-  const record = value as JsonObject;
-  for (const key of keys) {
-    if (typeof record[key] === "string" && record[key]) return record[key];
-  }
-  for (const child of Object.values(record)) {
-    const found = findStringValue(child, keys);
-    if (found) return found;
-  }
-  return "";
-}
-
 function worktreeCommand(input: AgentLaunchFlowInput): string[] {
   if (input.worktree.mode === "create") {
-    return [
-      "herdr",
-      "worktree",
-      "create",
-      "--cwd",
-      input.repoPath,
-      "--branch",
-      input.worktree.branch,
-      "--base",
-      input.worktree.baseBranch,
-      "--label",
-      input.name,
-      "--no-focus",
-      "--json",
-    ];
+    return herdrWorktreeCreateCommand({
+      repoPath: input.repoPath,
+      branch: input.worktree.branch,
+      baseBranch: input.worktree.baseBranch,
+      label: input.name,
+    });
   }
 
-  return [
-    "herdr",
-    "worktree",
-    "open",
-    "--cwd",
-    input.repoPath,
-    "--branch",
-    input.worktree.branch,
-    "--label",
-    input.name,
-    "--no-focus",
-    "--json",
-  ];
+  return herdrWorktreeOpenCommand({ repoPath: input.repoPath, branch: input.worktree.branch, label: input.name });
 }
 
 function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): AgentLaunchFlowResult {
   const worktreeResult = ops.runJson(worktreeCommand(input));
-  const workspaceId = findStringValue(worktreeResult, ["workspace_id", "workspaceId", "id"]);
-  const worktreePath = findStringValue(worktreeResult, ["path", "worktreePath"]);
+  const workspaceId = herdrWorkspaceId(worktreeResult);
+  const worktreePath = herdrWorktreePath(worktreeResult);
   if (!workspaceId || !worktreePath) {
     const action = input.worktree.mode === "create" ? "create" : "open";
     throw new Error(`herdr worktree ${action} did not return workspace id and path`);
   }
 
-  const tabResult = ops.runJson([
-    "herdr",
-    "tab",
-    "create",
-    "--workspace",
-    workspaceId,
-    "--cwd",
-    worktreePath,
-    "--label",
-    input.name,
-    "--no-focus",
-  ]);
-  const tabId = findStringValue(tabResult, ["tab_id", "tabId", "id"]);
+  const tabResult = ops.runJson(herdrTabCreateCommand({ workspaceId, cwd: worktreePath, label: input.name }));
+  const tabId = herdrTabId(tabResult);
   if (!tabId) throw new Error("herdr tab create did not return tab id");
 
   const stateDir = path.join(worktreePath, ".deadloop");
