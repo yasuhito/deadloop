@@ -29,12 +29,7 @@ const {
 const { buildStatusSnapshot, formatStatusReport } = require("../../src/status.ts");
 const { readClaudeConfig } = require("../../src/agent-trust.cjs");
 const { runScheduledAutomation } = require("../../src/automation-runner.ts");
-const {
-  herdrAgentListArgs,
-  herdrAgentsFromResult,
-  herdrWorktreeListArgs,
-  herdrWorktreesFromResult,
-} = require("../../src/herdr-adapter.ts");
+const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
 
 const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 const STATE_DIR = path.join(CONFIG_DIR, EXTENSION_NAME);
@@ -530,18 +525,13 @@ async function collectLiveSnapshotData(
       )
     : [];
 
-  const herdrData = project.repoPath
-    ? await execJson(pi, "herdr", herdrWorktreeListArgs(project.repoPath), {
-        result: { worktrees: [] },
-      })
-    : { result: { worktrees: [] } };
+  const herdrRunner = createAsyncHerdrRunner({
+    runJson: async (command, args) => await execJson(pi, command, args, null),
+  });
+  const worktrees = project.repoPath ? await herdrRunner.listWorktrees(project.repoPath) : [];
   const claudeConfig =
     project.workerAgent === "claude" ? readClaudeConfig() : undefined;
-  const agentsData = includeAgents
-    ? await execJson(pi, "herdr", herdrAgentListArgs(), { result: { agents: [] } })
-    : { result: { agents: [] } };
-  const agents = herdrAgentsFromResult(agentsData);
-  const worktrees = herdrWorktreesFromResult(herdrData);
+  const agents = includeAgents ? await herdrRunner.listAgents() : [];
   const gitStatuses = {};
   const gitHeads = {};
   for (const worktree of worktrees) {

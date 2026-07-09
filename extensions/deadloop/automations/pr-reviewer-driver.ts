@@ -7,7 +7,7 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { planPrReviewerAction } = require("./pr-reviewer-flow.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
-const { herdrAgentListCommand } = require("../../../src/herdr-adapter.ts");
+const { createHerdrRunner } = require("../../../src/herdr-runner.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -37,6 +37,13 @@ function runText(args: string[], options: { input?: string; check?: boolean } = 
 
 function runJson(args: string[], options: { input?: string } = {}): any {
   return JSON.parse(runText(args, { input: options.input }));
+}
+
+function herdrRunner() {
+  return createHerdrRunner({
+    runText: (command: string, args: string[]) => runText([command, ...args]),
+    runJson: (command: string, args: string[]) => runJson([command, ...args]),
+  });
 }
 
 function shellQuote(value: string | number): string {
@@ -100,9 +107,9 @@ function livePrs(repo: string): JsonObject[] {
 
 function liveAgents(): any {
   try {
-    return runJson(herdrAgentListCommand());
+    return herdrRunner().listAgents();
   } catch {
-    return { result: { agents: [] } };
+    return [];
   }
 }
 
@@ -199,7 +206,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
       promptFilePrefix: "reviewer-prompt",
       renderPrompt: ({ promiseFile }: { promiseFile: string }) => reviewAgentPrompt(pr, env, promiseFile, reason),
     },
-    { mkdirSync: fs.mkdirSync, runJson, runText, writeFileSync: fs.writeFileSync },
+    { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
   );
   return { reviewerName, headRefName, ...launch };
 }

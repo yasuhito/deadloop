@@ -18,4 +18,4 @@ deadloop v0 は Herdr 実行基盤を使います。
 
 ## 将来の実行基盤
 
-Herdr 固有の操作は実行基盤として扱います。将来、tmux や別の端末 / workspace 管理ツールを追加する場合も、GitHub Issue / PR の状態管理は deadloop 側に残します。
+Herdr 固有の操作は実行基盤として扱います。コード上の実行基盤 seam は `src/runner.ts`、Herdr implementation は `src/herdr-runner.ts` に置きます。将来、tmux や別の端末 / workspace 管理ツールを追加する場合も、GitHub Issue / PR の状態管理は deadloop 側に残します。

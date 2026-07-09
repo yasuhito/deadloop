@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 const { launchAgentFlow } = require("../src/agent-launch-flow.ts");
 
 describe("エージェント起動フロー", () => {
-  it("opens a PR worktree, creates a tab, writes prompt and promise paths, and starts the reviewer through the launcher", () => {
-    const commands: string[][] = [];
+  it("opens a PR worktree through the runner, writes prompt and promise paths, and starts the reviewer through the launcher", () => {
+    const calls: string[] = [];
     const writes: Record<string, string> = {};
 
     const result = launchAgentFlow(
@@ -22,14 +22,27 @@ describe("エージェント起動フロー", () => {
       },
       {
         mkdirSync: () => {},
-        runJson: (args) => {
-          commands.push(args);
-          if (args[1] === "worktree") return { workspace_id: "workspace-1", path: "/wt/review" };
-          if (args[1] === "tab") return { tab_id: "tab-1" };
-          throw new Error(`unexpected command: ${args.join(" ")}`);
+        runner: {
+          openWorktree: () => {
+            calls.push("openWorktree");
+            return { workspaceId: "workspace-1", worktreePath: "/wt/review" };
+          },
+          createWorktree: () => {
+            throw new Error("unexpected createWorktree");
+          },
+          createTab: () => {
+            calls.push("createTab");
+            return { tabId: "tab-1" };
+          },
+          startAgent: () => {
+            throw new Error("unexpected startAgent");
+          },
+          listWorktrees: () => [],
+          listAgents: () => [],
+          removeWorktree: () => "",
         },
         runText: (args) => {
-          commands.push(args);
+          calls.push(args.join(" "));
           return "launch output";
         },
         writeFileSync: (file, text) => {
@@ -38,7 +51,7 @@ describe("エージェント起動フロー", () => {
       },
     );
 
-    expect({ result, commands, writes }).toEqual({
+    expect({ result, calls, writes }).toEqual({
       result: {
         workspaceId: "workspace-1",
         tabId: "tab-1",
@@ -47,43 +60,10 @@ describe("エージェント起動フロー", () => {
         promiseFile: "/wt/review/.deadloop/promise-U-review.json",
         launchOutput: "launch output",
       },
-      commands: [
-        [
-          "herdr",
-          "worktree",
-          "open",
-          "--cwd",
-          "/repo",
-          "--branch",
-          "feature/review",
-          "--label",
-          "demo-pr-44-reviewer",
-          "--no-focus",
-          "--json",
-        ],
-        ["herdr", "tab", "create", "--workspace", "workspace-1", "--cwd", "/wt/review", "--label", "demo-pr-44-reviewer", "--no-focus"],
-        [
-          "node",
-          "/automation/launch-agent.ts",
-          "--agent",
-          "pi",
-          "--name",
-          "demo-pr-44-reviewer",
-          "--cwd",
-          "/wt/review",
-          "--repo-path",
-          "/repo",
-          "--level",
-          "medium",
-          "--model",
-          "",
-          "--uuid",
-          "U-review",
-          "--prompt-file",
-          "/wt/review/.deadloop/reviewer-prompt-U-review.md",
-          "--tab",
-          "tab-1",
-        ],
+      calls: [
+        "openWorktree",
+        "createTab",
+        "node /automation/launch-agent.ts --agent pi --name demo-pr-44-reviewer --cwd /wt/review --repo-path /repo --level medium --model  --uuid U-review --prompt-file /wt/review/.deadloop/reviewer-prompt-U-review.md --tab tab-1",
       ],
       writes: {
         "/wt/review/.deadloop/reviewer-prompt-U-review.md": "review promise: /wt/review/.deadloop/promise-U-review.json",
@@ -92,7 +72,7 @@ describe("エージェント起動フロー", () => {
   });
 
   it("creates a Worker worktree from the base branch before starting the Worker through the launcher", () => {
-    const commands: string[][] = [];
+    const calls: string[] = [];
 
     launchAgentFlow(
       {
@@ -109,34 +89,27 @@ describe("エージェント起動フロー", () => {
       },
       {
         mkdirSync: () => {},
-        runJson: (args) => {
-          commands.push(args);
-          if (args[1] === "worktree") return { workspaceId: "workspace-2", worktreePath: "/wt/worker" };
-          if (args[1] === "tab") return { tabId: "tab-2" };
-          throw new Error(`unexpected command: ${args.join(" ")}`);
+        runner: {
+          createWorktree: (input) => {
+            calls.push(`${input.branch}:${input.baseBranch}:${input.label}`);
+            return { workspaceId: "workspace-2", worktreePath: "/wt/worker" };
+          },
+          openWorktree: () => {
+            throw new Error("unexpected openWorktree");
+          },
+          createTab: () => ({ tabId: "tab-2" }),
+          startAgent: () => {
+            throw new Error("unexpected startAgent");
+          },
+          listWorktrees: () => [],
+          listAgents: () => [],
+          removeWorktree: () => "",
         },
-        runText: (args) => {
-          commands.push(args);
-          return "launch output";
-        },
+        runText: () => "launch output",
         writeFileSync: () => {},
       },
     );
 
-    expect(commands[0]).toEqual([
-      "herdr",
-      "worktree",
-      "create",
-      "--cwd",
-      "/repo",
-      "--branch",
-      "agent/issue-12-task",
-      "--base",
-      "origin/main",
-      "--label",
-      "demo-issue-12-worker",
-      "--no-focus",
-      "--json",
-    ]);
+    expect(calls[0]).toBe("agent/issue-12-task:origin/main:demo-issue-12-worker");
   });
 });

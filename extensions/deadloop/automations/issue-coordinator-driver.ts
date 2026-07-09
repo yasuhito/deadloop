@@ -9,6 +9,7 @@ const { spawnSync } = require("node:child_process") as typeof import("node:child
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
+const { createHerdrRunner } = require("../../../src/herdr-runner.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -39,6 +40,13 @@ function runText(args: string[], options: { input?: string; check?: boolean } = 
 
 function runJson(args: string[], options: { input?: string } = {}): any {
   return JSON.parse(runText(args, { input: options.input }));
+}
+
+function herdrRunner() {
+  return createHerdrRunner({
+    runText: (command: string, args: string[]) => runText([command, ...args]),
+    runJson: (command: string, args: string[]) => runJson([command, ...args]),
+  });
 }
 
 function shellQuoteForDriver(value: string | number): string {
@@ -212,7 +220,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
           promiseFile,
         }),
     },
-    { mkdirSync: fs.mkdirSync, runJson, runText, writeFileSync: fs.writeFileSync },
+    { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
   );
   return { workerName, branch, ...launch };
 }

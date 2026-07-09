@@ -1,12 +1,7 @@
 const path = require("node:path") as typeof import("node:path");
-const {
-  herdrTabCreateCommand,
-  herdrTabId,
-  herdrWorktreeCreateCommand,
-  herdrWorktreeOpenCommand,
-  herdrWorktreePath,
-  herdrWorkspaceId,
-} = require("./herdr-adapter.ts");
+const { createHerdrRunner } = require("./herdr-runner.ts");
+
+import type { RunnerAdapter } from "./runner";
 
 type WorktreeRequest =
   | { mode: "create"; branch: string; baseBranch: string }
@@ -27,7 +22,7 @@ type AgentLaunchFlowInput = {
 
 type AgentLaunchFlowOps = {
   mkdirSync: (dir: string, options: { recursive: true }) => void;
-  runJson: (args: string[]) => Record<string, any>;
+  runner?: RunnerAdapter;
   runText: (args: string[]) => string;
   writeFileSync: (file: string, text: string, encoding: "utf8") => void;
 };
@@ -41,9 +36,9 @@ type AgentLaunchFlowResult = {
   launchOutput: string;
 };
 
-function worktreeCommand(input: AgentLaunchFlowInput): string[] {
+function prepareWorktree(input: AgentLaunchFlowInput, runner: RunnerAdapter): { workspaceId: string; worktreePath: string } {
   if (input.worktree.mode === "create") {
-    return herdrWorktreeCreateCommand({
+    return runner.createWorktree({
       repoPath: input.repoPath,
       branch: input.worktree.branch,
       baseBranch: input.worktree.baseBranch,
@@ -51,21 +46,13 @@ function worktreeCommand(input: AgentLaunchFlowInput): string[] {
     });
   }
 
-  return herdrWorktreeOpenCommand({ repoPath: input.repoPath, branch: input.worktree.branch, label: input.name });
+  return runner.openWorktree({ repoPath: input.repoPath, branch: input.worktree.branch, label: input.name });
 }
 
 function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): AgentLaunchFlowResult {
-  const worktreeResult = ops.runJson(worktreeCommand(input));
-  const workspaceId = herdrWorkspaceId(worktreeResult);
-  const worktreePath = herdrWorktreePath(worktreeResult);
-  if (!workspaceId || !worktreePath) {
-    const action = input.worktree.mode === "create" ? "create" : "open";
-    throw new Error(`herdr worktree ${action} did not return workspace id and path`);
-  }
-
-  const tabResult = ops.runJson(herdrTabCreateCommand({ workspaceId, cwd: worktreePath, label: input.name }));
-  const tabId = herdrTabId(tabResult);
-  if (!tabId) throw new Error("herdr tab create did not return tab id");
+  const runner = ops.runner || createHerdrRunner();
+  const { workspaceId, worktreePath } = prepareWorktree(input, runner);
+  const { tabId } = runner.createTab({ workspaceId, cwd: worktreePath, label: input.name });
 
   const stateDir = path.join(worktreePath, ".deadloop");
   ops.mkdirSync(stateDir, { recursive: true });
