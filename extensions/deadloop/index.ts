@@ -18,7 +18,6 @@ const {
   renderTemplate,
   resolveAutomationFile,
   resolveConfigPath,
-  resolveProjectForTick,
   sanitizeId,
   templateValues,
 } = require("../../src/core.ts");
@@ -123,17 +122,76 @@ function projectFilter() {
   return process.env.DEADLOOP_PROJECTS || "";
 }
 
-function loadProjectsResult() {
+function gitOutput(repoPath, args, timeout = 10_000) {
+  const result = gitSync(repoPath, args, timeout);
+  if (result.status !== 0) return "";
+  return String(result.stdout || "").trim();
+}
+
+function inferBaseBranch(repoPath) {
+  return gitOutput(repoPath, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]) || "origin/main";
+}
+
+function inferGithubRepo(repoPath) {
+  const remote = gitOutput(repoPath, ["remote", "get-url", "origin"]);
+  const match = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(remote);
+  return match ? match[1] : "";
+}
+
+function implicitProjectFromCwd(cwd) {
+  const repoPath = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
+  if (!repoPath) return null;
+  const id = sanitizeId(path.basename(repoPath));
+  const raw = {
+    id,
+    enabled: true,
+    repoPath,
+    githubRepo: inferGithubRepo(repoPath),
+    baseBranch: inferBaseBranch(repoPath),
+    worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", id),
+    autoMerge: false,
+  };
+  const policy = trustedRepoPolicyProvider(raw);
+  if (policy.status !== "loaded") return null;
+  const result = parseProjectsConfig(JSON.stringify({ projects: [raw] }), projectFilter(), {
+    configPath: `${repoPath}${path.sep}${REPO_POLICY_FILE}`,
+    repoPolicyProvider: () => policy,
+  });
+  if (!result.ok) return null;
+  return result.projects[0] || null;
+}
+
+function addImplicitProject(cwd, result) {
+  if (!result.ok || !cwd) return result;
+  const implicit = implicitProjectFromCwd(cwd);
+  if (!implicit) return result;
+  const implicitPath = path.resolve(implicit.repoPath || "");
+  const duplicate = result.projects.some((project) => {
+    if (!project.repoPath) return false;
+    try {
+      return path.resolve(project.repoPath) === implicitPath;
+    } catch {
+      return project.repoPath === implicit.repoPath;
+    }
+  });
+  if (duplicate) return result;
+  return { ...result, projects: [...result.projects, implicit] };
+}
+
+function loadProjectsResult(cwd) {
   let text;
   try {
     text = readConfigText();
   } catch (error) {
     return { ok: false, reason: `projects.json read error: ${error?.message || error}` };
   }
-  const result = parseProjectsConfig(text, projectFilter(), {
-    configPath: CONFIG_PATH,
-    repoPolicyProvider: trustedRepoPolicyProvider,
-  });
+  const result = addImplicitProject(
+    cwd,
+    parseProjectsConfig(text, projectFilter(), {
+      configPath: CONFIG_PATH,
+      repoPolicyProvider: trustedRepoPolicyProvider,
+    }),
+  );
   if (result.ok) {
     debugLog(
       "config",
@@ -147,8 +205,8 @@ function loadProjectsResult() {
   return result;
 }
 
-function loadProjects() {
-  const result = loadProjectsResult();
+function loadProjects(cwd) {
+  const result = loadProjectsResult(cwd);
   if (!result.ok) throw new Error(result.reason);
   return result.projects;
 }
@@ -422,7 +480,7 @@ async function collectLiveSnapshotData(
   const includeIssueComments = options.includeIssueComments === true;
   const includeAgents = options.includeAgents === true;
 
-  const projectsResult = loadProjectsResult();
+  const projectsResult = loadProjectsResult(cwd);
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
   const warnings = statusWarnings(projectsResult.ok ? projectsResult.warnings : [projectsResult.reason]);
@@ -624,26 +682,20 @@ export default function (pi) {
     if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
     if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return;
 
-    let configText;
-    try {
-      configText = readConfigText();
-    } catch (error) {
-      setLooperStatus(ctx, `skipped: projects.json read error: ${error?.message || error}`);
+    const projectsResult = loadProjectsResult(ctx.cwd);
+    if (!projectsResult.ok) {
+      setLooperStatus(ctx, `skipped: ${projectsResult.reason}`);
       return;
     }
-    const projectResult = resolveProjectForTick({
-      cwd: ctx.cwd,
-      configText,
-      only: projectFilter(),
-      lockedProjectId: active.project.id,
-      configPath: CONFIG_PATH,
-      repoPolicyProvider: trustedRepoPolicyProvider,
-    });
-    if (!projectResult.ok) {
-      setLooperStatus(ctx, `skipped: ${projectResult.reason}`);
+    const project = activeProject(ctx.cwd, projectsResult.projects);
+    if (!project) {
+      setLooperStatus(ctx, "skipped: active project is not present in projects.json or deadloop.json");
       return;
     }
-    const project = projectResult.project;
+    if (project.id !== active.project.id) {
+      setLooperStatus(ctx, "skipped: active project changed since scheduler lock was acquired");
+      return;
+    }
 
     const state = loadState();
     updateStatus(ctx, project, state);
@@ -673,7 +725,7 @@ export default function (pi) {
     if (ctx.mode === "print" || ctx.mode === "json") return;
     let projects;
     try {
-      projects = loadProjects();
+      projects = loadProjects(ctx.cwd);
     } catch (error) {
       setLooperStatus(ctx, `skipped: ${error?.message || error}`);
       return;

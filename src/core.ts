@@ -348,8 +348,13 @@ function mergeAutomations(
   policy: RawAutomation[] | undefined,
 ): { automations?: RawAutomation[]; appliedKeys: string[] } {
   const localAutomations = local || [];
-  if (!localAutomations.length) return { automations: local, appliedKeys: [] };
   const policyAutomations = policy || [];
+  if (!localAutomations.length) {
+    return {
+      automations: policyAutomations.length ? policyAutomations : local,
+      appliedKeys: policyAutomations.map((_, index) => `automations[${index}]`),
+    };
+  }
   const byKey = new Map(policyAutomations.map((automation, index) => [automationKey(automation, index), automation]));
   const appliedKeys: string[] = [];
   const automations = localAutomations.map((automation, index) => {

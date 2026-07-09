@@ -354,6 +354,17 @@ describe("deterministic extension core", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("allows trusted repo policy to provide locally omitted automations", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({
+        status: "loaded",
+        text: JSON.stringify({ automations: [{ id: "demo:auto", promptFile: "issue-coordinator.prompt.md" }] }),
+      }),
+    });
+
+    expect(result.ok && result.projects[0].automations[0].id).toBe("demo:auto");
+  });
+
   it("allows trusted repo policy to provide automation driver files", () => {
     const result = parseProjectsConfig(
       JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", automations: [{ id: "demo:auto" }] }] }),

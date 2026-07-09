@@ -28,9 +28,11 @@ pi -e /absolute/path/to/deadloop
 
 Pi packages and extensions run with your local user permissions. Install only from source you trust.
 
-## 2. Create local configuration
+## 2. Create repository policy and optional local configuration
 
-Copy the example config to Pi's user state directory and edit it for your repository. If you installed from GitHub, Pi clones the package under `~/.pi/agent/git/github.com/yasuhito/deadloop`:
+For the zero-local-config path, commit `deadloop.json` at the target repository root on the trusted base branch. Start Pi from that checkout and deadloop infers the local checkout path, GitHub repository, base branch, and default Herdr worktree root from the current git repository.
+
+Use Pi's user state config only for local overrides such as `autoMerge`, a custom `worktreeRoot`, or repositories that do not carry `deadloop.json`. If you need those overrides, copy the example config to Pi's user state directory and edit it for your repository. If you installed from GitHub, Pi clones the package under `~/.pi/agent/git/github.com/yasuhito/deadloop`:
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop
@@ -40,18 +42,18 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 For a local development checkout, copy from `/absolute/path/to/deadloop/extensions/deadloop/projects.example.json` instead.
 
-`projects.json` is local configuration. It contains local paths, repository names, and rollout choices, so do **not** commit it. The package includes only `extensions/deadloop/projects.example.json` as a template.
+`projects.json` is local configuration. It contains local paths and rollout choices, so do **not** commit it. The package includes only `extensions/deadloop/projects.example.json` as a template.
 
-Optional shared repository policy lives in `deadloop.json` at the target repository root. deadloop reads it only from the trusted `baseBranch` after `git fetch`; a PR branch cannot change the policy used to decide that PR. Local `projects.json` explicit values win over repo policy, so remove a key locally when you want to inherit the shared value.
+Shared repository policy lives in `deadloop.json` at the target repository root. deadloop reads it only from the trusted `baseBranch` after `git fetch`; a PR branch cannot change the policy used to decide that PR. Local `projects.json` explicit values win over repo policy, so remove a key locally when you want to inherit the shared value.
 
 If a project uses `workerAgent: "claude"` or `reviewerAgent: "claude"`, run `claude` interactively once from the target repository root and accept Claude Code workspace trust before enabling the automation.
 
 Key fields:
 
-- `repoPath` — absolute path to the target repository checkout.
-- `githubRepo` — GitHub repository in `owner/name` form.
-- `baseBranch` — branch or remote ref used as the worktree base, usually `origin/main`.
-- `worktreeRoot` — directory where the Herdr runner may create worker worktrees.
+- `repoPath` — absolute path to the target repository checkout. Optional when the current git repository has `deadloop.json` on the trusted base branch.
+- `githubRepo` — GitHub repository in `owner/name` form. Inferred from the `origin` remote for implicit `deadloop.json` projects.
+- `baseBranch` — branch or remote ref used as the worktree base, usually `origin/main`. Inferred from the current branch upstream for implicit `deadloop.json` projects.
+- `worktreeRoot` — directory where the Herdr runner may create worker worktrees. Defaults to `~/.herdr/worktrees/<repo>/` for implicit `deadloop.json` projects.
 - `checkCommand` — verification command workers and reviewers must pass before handoff.
 - `autoMerge` — keep `false` until the repository has proven safeguards. Only `true` allows the PR reviewer automation to squash merge and delete the head branch after its gates pass.
 - `workerInstructions` — repository-specific instructions injected into worker prompts.
@@ -62,7 +64,7 @@ Key fields:
 - `labels` — GitHub labels used to coordinate issue and PR state.
 - `automations` — scheduled automation entries and their prompt/precheck files. Optional `driverFile` entries run bundled deterministic automation scripts after precheck and before sending any prompt; the driver can return `skip`, `done`, `needs_llm`, or `error` JSON to avoid unnecessary LLM context.
 
-Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` / `driverFile` for locally enabled automations. Keep `enabled`, `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local. Invalid JSON or disallowed keys stop that project safely and appear in `/deadloop-status` and `/deadloop-doctor`.
+Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` / `driverFile` for automations. Keep `enabled`, `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local or inferred. Invalid JSON or disallowed keys stop that project safely and appear in `/deadloop-status` and `/deadloop-doctor`.
 
 By default deadloop reads `~/.pi/agent/deadloop/projects.json`. Use `DEADLOOP_CONFIG=/path/to/projects.json` only when you intentionally want a different config file.
 

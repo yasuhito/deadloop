@@ -12,9 +12,9 @@ Configuration lookup order:
 2. `~/.pi/agent/deadloop/projects.json`
 3. this directory's `projects.json` for local development only
 
-Do not commit `projects.json`; it contains local paths, GitHub repositories, and rollout choices.
+Do not commit `projects.json`; it contains local paths and rollout choices.
 
-Each project overlays explicit local config, trusted base-branch repo policy, and package defaults. The repo policy file is `deadloop.json`. Repo policy is read only from the trusted `baseBranch` after `git fetch`, never from the PR branch being reviewed.
+When the current git repository has `deadloop.json` on the trusted base branch, deadloop can infer the project without a `projects.json` entry. Each project overlays inferred or explicit local config, trusted base-branch repo policy, and package defaults. The repo policy file is `deadloop.json`. Repo policy is read only from the trusted `baseBranch` after `git fetch`, never from the PR branch being reviewed.
 
 ## State
 

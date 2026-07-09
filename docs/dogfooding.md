@@ -40,47 +40,29 @@ See [public-package-setup.md](public-package-setup.md) for the first-time setup 
 - PR 作成までの引き継ぎが読みやすいか
 - Herdr worktree の作成・完了検出・片付けが安定しているか
 
-## 推奨ローカル設定
+## 推奨設定
 
-`projects.json` はローカル設定なので、リポジトリにコミットしません。ローカルパス、対象リポジトリ、`autoMerge` などの展開判断が入るため、公開パッケージには `projects.example.json` だけを含めます。
+対象リポジトリの trusted base branch に `deadloop.json` がある場合、そのリポジトリは deadloop 管理対象として扱います。deadloop は現在の git リポジトリから `repoPath`、GitHub リポジトリ、base branch、標準の Herdr worktree ルートを推定します。
 
-共有してレビューしたい実行方針は、対象リポジトリの trusted base branch にある `deadloop.json` へ移せます。deadloop は `baseBranch` からだけ読み、PR branch 側の変更はその PR 自身の判断に使いません。ローカル `projects.json` に同じ key がある場合はローカル値が優先されるため、共有ポリシーを使う operator は該当 key をローカル設定から削除します。`autoMerge`、`repoPath`、`worktreeRoot`、`schedule` などの安全・環境依存項目はローカル設定のままにします。
+`projects.json` はローカル上書き設定なので、リポジトリにコミットしません。`autoMerge`、独自の `worktreeRoot`、`deadloop.json` を持たないリポジトリなど、ローカルの展開判断が必要な場合だけ使います。
 
-例:
+共有してレビューしたい実行方針は、対象リポジトリの trusted base branch にある `deadloop.json` へ移せます。deadloop は `baseBranch` からだけ読み、PR branch 側の変更はその PR 自身の判断に使いません。ローカル `projects.json` に同じ key がある場合はローカル値が優先されます。
+
+ローカルで `autoMerge` などを上書きする場合の最小例:
 
 ```json
 {
   "projects": [
     {
       "id": "deadloop",
-      "enabled": true,
       "repoPath": "/home/yasuhito/Work/deadloop",
-      "githubRepo": "yasuhito/deadloop",
-      "baseBranch": "origin/main",
-      "worktreeRoot": "/home/yasuhito/Work/herdr-worktrees/deadloop/",
-      "checkCommand": "npm test && npm run lint && npm run typecheck && bash -n extensions/deadloop/automations/*.sh && npm pack --dry-run",
-      "autoMerge": false,
-      "workerInstructions": "AGENTS.md, README.md, docs/dogfooding.md, and relevant files must be read before making changes. Follow the one-expectation-per-test rule.",
-      "workerAgent": "pi",
-      "reviewerAgent": "pi",
-      "automations": [
-        {
-          "id": "deadloop:issue-coordinator",
-          "name": "deadloop issue coordinator",
-          "schedule": "*/10 * * * *",
-          "promptFile": "issue-coordinator.prompt.md",
-          "precheckFile": "issue-coordinator.precheck.sh",
-          "precheckTimeoutSeconds": 60
-        }
-      ]
+      "autoMerge": false
     }
   ]
 }
 ```
 
-`pr-reviewer` は Phase 1 では入れません。レビュー自動化を試す場合だけ、別コミットで有効にします。その場合も最初は `autoMerge: false` のままにし、レビューエージェントの確認と検証が終わった PR を `ready-for-human` に渡す運用で試します。`autoMerge: true` は Phase 3 まで使いません。
-
-既存の古い設定を使っている場合は、必要に応じて `~/.pi/agent/deadloop/projects.json` へ移し、この設定例と同じ短い `issue-coordinator.*` / `pr-reviewer.*` のファイル名へ更新してください。
+`pr-reviewer` を使う場合も最初は `autoMerge: false` のままにし、レビューエージェントの確認と検証が終わった PR を `ready-for-human` に渡す運用で試します。`autoMerge: true` は Phase 3 まで使いません。
 
 ## 起動方法
 
@@ -88,8 +70,6 @@ See [public-package-setup.md](public-package-setup.md) for the first-time setup 
 
 ```bash
 pi install /home/yasuhito/Work/deadloop
-mkdir -p ~/.pi/agent/deadloop
-$EDITOR ~/.pi/agent/deadloop/projects.json
 cd /home/yasuhito/Work/deadloop
 pi
 ```

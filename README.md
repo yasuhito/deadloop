@@ -42,7 +42,9 @@ pi -e /absolute/path/to/deadloop
 
 ## Configure
 
-Copy the example configuration and edit it for the target repository:
+For the zero-local-config path, commit `deadloop.json` at the target repository root on the trusted base branch, then start Pi from that checkout. deadloop infers `repoPath`, the GitHub repository, and a default Herdr worktree root from the current git repository.
+
+Use `~/.pi/agent/deadloop/projects.json` only for local overrides such as `autoMerge`, custom `worktreeRoot`, or managing repositories that do not carry `deadloop.json`. Copy the example configuration and edit it when you need those overrides:
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop
@@ -58,18 +60,15 @@ For a local checkout, copy from:
 
 `projects.json` is local configuration. Do not commit it.
 
-Minimum project fields:
+Local project fields include:
 
-- `repoPath` — absolute path to the target repository checkout.
-- `githubRepo` — GitHub repository in `owner/name` form.
-- `baseBranch` — branch or remote ref used as the worktree base, usually `origin/main`.
-- `worktreeRoot` — directory where Herdr may create worktrees.
-- `checkCommand` — verification command workers and reviewers must pass.
+- `repoPath` — absolute path to the target repository checkout. Optional when the current git repository has `deadloop.json` on the trusted base branch.
+- `githubRepo` — GitHub repository in `owner/name` form. Inferred from the `origin` remote for implicit `deadloop.json` projects.
+- `baseBranch` — branch or remote ref used as the worktree base, usually `origin/main`. Inferred from the current branch upstream for implicit `deadloop.json` projects.
+- `worktreeRoot` — directory where Herdr may create worktrees. Defaults to `~/.herdr/worktrees/<repo>/` for implicit `deadloop.json` projects.
 - `autoMerge` — keep `false` until the repository has proven safeguards.
-- `labels` — GitHub labels used to coordinate issue and PR state.
-- `automations` — scheduled issue coordinator / PR reviewer entries.
 
-Optional shared repository policy may live in `deadloop.json` on the trusted base branch. Local `projects.json` values win over repo policy.
+Shared repository policy lives in `deadloop.json` on the trusted base branch. Local `projects.json` values win over repo policy.
 
 ## Create labels
 
