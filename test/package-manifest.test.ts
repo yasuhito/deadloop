@@ -47,6 +47,10 @@ describe("package manifest files", () => {
     expect(packageJson.files).toContain("docs/*.md");
   });
 
+  it("includes README image assets", () => {
+    expect(packageJson.files).toContain("docs/assets/*.png");
+  });
+
   it("includes the example project config", () => {
     expect(packageJson.files).toContain("extensions/deadloop/projects.example.json");
   });

@@ -1,8 +1,16 @@
+![deadloop banner](docs/assets/deadloop-banner.png)
+
 # deadloop
 
 > Maximum effort. A loop for building loops.
 
 **GitHub Issues in, reviewed PRs out.** deadloop runs a guarded engineering loop for coding agents: it watches labeled GitHub Issues, starts implementation agents, verifies their work, opens PRs, reviews PRs, and can optionally merge only after explicit safety gates pass.
+
+## Install
+
+```bash
+npx skills@latest add yasuhito/deadloop
+```
 
 ## Current status
 
@@ -15,30 +23,6 @@
 Install only from source you trust. deadloop can write GitHub Issue / PR comments, change labels, create PRs, and, when `autoMerge: true` is explicitly enabled, squash-merge PRs and delete head branches.
 
 Start with `autoMerge: false` in a test repository or a repository with known branch protection and permissions.
-
-## Install
-
-Install the Pi package:
-
-```bash
-pi install git:github.com/yasuhito/deadloop
-```
-
-If you start from the Agent Skills ecosystem, install the setup skill first:
-
-```bash
-npx skills@latest add yasuhito/deadloop
-```
-
-The Skills CLI installs agent instructions only. It does **not** activate the Pi extension; run the `pi install` command above to enable deadloop in Pi.
-
-For local development:
-
-```bash
-pi install /absolute/path/to/deadloop
-# or for a one-off run
-pi -e /absolute/path/to/deadloop
-```
 
 ## Configure
 
