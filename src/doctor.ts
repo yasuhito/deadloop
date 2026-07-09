@@ -123,10 +123,10 @@ function newestFirst(comments: GithubComment[]): GithubComment[] {
 
 function blockedCommentSummary(issue: DoctorGithubItem): string {
   const comments = newestFirst(issue.comments || []);
-  const comment = comments.find((candidate) => /blocked|blocker|ブロック|停止/i.test(String(candidate.body || "")))
+  const comment = comments.find((candidate) => /blocked|blocker|stopped|stalled/i.test(String(candidate.body || "")))
     || comments.find((candidate) => compactLine(candidate.body));
   const body = compactLine(comment?.body);
-  if (!body) return "blocked コメントは見つかりませんでした。Issue 本文と最近のコメントを確認してください。";
+  if (!body) return "No blocked comment was found. Inspect the issue body and recent comments.";
   if (body.length <= MAX_COMMENT_SUMMARY_LENGTH) return body;
   return `${body.slice(0, MAX_COMMENT_SUMMARY_LENGTH - 1)}…`;
 }
@@ -220,7 +220,7 @@ function buildStaleInProgressFindings(
         id: `stale-in-progress-${issue.number ?? "unknown"}`,
         type: "stale_in_progress" as const,
         title: `stale in-progress issue: ${issueRef(issue)}`,
-        summary: `24 時間以上更新がありません。updatedAt=${issue.updatedAt || "unknown"}`,
+        summary: `No update for at least 24 hours. updatedAt=${issue.updatedAt || "unknown"}`,
         commands: gitInspectionCommands(project, worktree),
       };
     });
@@ -253,8 +253,8 @@ function buildOrphanWorktreeFindings(
         type: "orphan_worktree" as const,
         title: `orphan linked worktree: ${worktree.branch || "unknown-branch"}`,
         summary: clean
-          ? `対応する open issue / open PR が無く、作業ツリーは clean です: ${currentPath || "unknown-path"}`
-          : `対応する open issue / open PR がありません。未コミット変更の確認が必要です: ${currentPath || "unknown-path"}`,
+          ? `No matching open issue or open PR was found, and the worktree is clean: ${currentPath || "unknown-path"}`
+          : `No matching open issue or open PR was found. Inspect uncommitted changes before cleanup: ${currentPath || "unknown-path"}`,
         commands,
       };
     });
@@ -277,7 +277,7 @@ function buildQueueJamFindings(project: NormalizedProject, issues: DoctorGithubI
         id: `ready-without-implement-${issue.number ?? "unknown"}`,
         type: "queue_jam",
         title: `ready issue missing implement label: ${issueRef(issue)}`,
-        summary: `${project.labels.ready} はありますが ${project.labels.implement} がありません。Worker が拾えるキューに入っていません。`,
+        summary: `${project.labels.ready} is present, but ${project.labels.implement} is missing. Workers will not pick up this issue.`,
         commands: [`gh issue edit ${issue.number ?? "<number>"} --add-label ${shellArg(project.labels.implement)}`],
       });
     }
@@ -286,7 +286,7 @@ function buildQueueJamFindings(project: NormalizedProject, issues: DoctorGithubI
         id: `needs-triage-${issue.number ?? "unknown"}`,
         type: "queue_jam",
         title: `needs-triage issue: ${issueRef(issue)}`,
-        summary: `${project.labels.needsTriage} に降格されています。内容を確認し、実装可能ならラベルを戻してください。`,
+        summary: `Issue is marked ${project.labels.needsTriage}. Review the content and restore the queue labels if it is ready for implementation.`,
         commands: [
           `gh issue view ${issue.number ?? "<number>"}`,
           `gh issue edit ${issue.number ?? "<number>"} --remove-label ${shellArg(project.labels.needsTriage)} --add-label ${shellArg(project.labels.ready)} --add-label ${shellArg(project.labels.implement)}`,
@@ -353,7 +353,7 @@ function buildStuckReviewClaimFindings(
       id: `stuck-review-claim-${pr.number ?? "unknown"}`,
       type: "stuck_claim" as const,
       title: `stuck reviewing claim: ${issueRef(pr)}`,
-      summary: `${project.labels.reviewing} が付いていますが、対応するレビューエージェントが Herdr で working ではありません。レビュー run が中断された残骸の疑いがあります。`,
+      summary: `${project.labels.reviewing} is present, but the matching reviewer agent is not working in Herdr. This may be a stale interrupted review run.`,
       commands: [`gh pr edit ${pr.number ?? "<number>"} -R ${shellArg(repo)} --remove-label ${shellArg(project.labels.reviewing)}`],
     }));
 }
@@ -383,7 +383,7 @@ function buildStuckImplementClaimFindings(
         id: `stuck-implement-claim-${issue.number ?? "unknown"}`,
         type: "stuck_claim" as const,
         title: `stuck implement claim: ${issueRef(issue)}`,
-        summary: `${project.labels.inProgress} が付いていますが、対応する Worker が Herdr に存在しません。実装 run が中断された残骸の疑いがあります。まず未回収コミットを確認してから再 queue してください。`,
+        summary: `${project.labels.inProgress} is present, but the matching Worker is not present in Herdr. This may be a stale interrupted implementation run. Check for uncollected commits before re-queueing.`,
         commands: [confirmCommand, requeueImplementCommand(project, issue.number)],
       };
     });
@@ -436,7 +436,7 @@ function buildAutomationFindings(
         id: `automation-stalled-${automation.id}`,
         type: "coordinator_stalled",
         title: `automation not attempted: ${ref}`,
-        summary: `${STALLED_SLOT_THRESHOLD} スロット以上、試行が途絶えています。オーケストレータセッションが停止している疑いがあります。lastAttemptAt=${new Date(lastAttemptAt).toISOString()}`,
+        summary: `No attempt has run for at least ${STALLED_SLOT_THRESHOLD} slots. The orchestrator session may be stopped. lastAttemptAt=${new Date(lastAttemptAt).toISOString()}`,
         commands: [`cat ${shellArg(statePath)}`],
       });
       continue;
@@ -444,12 +444,12 @@ function buildAutomationFindings(
 
     const code = precheckSkippedCode(result);
     if ((code !== null && UNAVAILABLE_PRECHECK_CODES.has(code)) || result === "precheck_file_missing") {
-      const reason = code !== null ? `code ${code} でスキップされ` : "設定された precheck ファイルが見つからず";
+      const reason = code !== null ? `skipped with code ${code}` : "the configured precheck file was not found";
       findings.push({
         id: `automation-unavailable-${automation.id}`,
         type: "automation_unavailable",
         title: `precheck unavailable: ${ref}`,
-        summary: `precheck が ${reason}、自動化が起動していません。precheck スクリプトの不在または実行不能が疑われます。`,
+        summary: `Precheck ${reason}, so the automation did not start. The precheck script may be missing or not executable.`,
         commands: [precheckCheckCommand(automationDir, automation)],
       });
       continue;
@@ -461,7 +461,7 @@ function buildAutomationFindings(
         id: `automation-spinning-${automation.id}`,
         type: "automation_spinning",
         title: `automation spinning: ${ref}`,
-        summary: `同じ失敗 ${result} が ${failureStreak} 回連続しています。ループが空回りしています。`,
+        summary: `The same failure (${result}) has occurred ${failureStreak} times in a row. The loop is spinning.`,
         commands: [precheckCheckCommand(automationDir, automation)],
       });
     }
@@ -485,9 +485,9 @@ function buildWorkspaceTrustFindings(
       {
         id: `workspace-trust-unknown-${repoPath}`,
         type: "workspace_trust",
-        title: `workspace trust 状態を確認できません: ${repoPath}`,
+        title: `workspace trust status unknown: ${repoPath}`,
         summary:
-          "~/.claude.json を読めないため trust 状態を確認できません。claude エージェントは未 trust だと初回起動が trust ダイアログでブロックされます。",
+          "Cannot read ~/.claude.json to verify workspace trust. Claude agents may block on the trust dialog during first launch if the workspace is not trusted.",
         commands: [
           `jq --arg p ${shellArg(repoPath)} '.projects[$p].hasTrustDialogAccepted' ~/.claude.json`,
         ],
@@ -499,9 +499,9 @@ function buildWorkspaceTrustFindings(
     {
       id: `workspace-trust-${repoPath}`,
       type: "workspace_trust",
-      title: `workspace trust 未受け入れ: ${repoPath}`,
+      title: `workspace trust not accepted: ${repoPath}`,
       summary:
-        "claude エージェントは対話モードで起動するため、未 trust だと初回起動が trust ダイアログでブロックされます。一度手動で受け入れてください。",
+        "Claude agents launch in interactive mode, so an untrusted workspace may block on the trust dialog during first launch. Open Claude manually once and accept the trust prompt.",
       commands: [`cd ${shellArg(repoPath)} && claude`],
     },
   ];
@@ -567,7 +567,7 @@ export function formatDoctorReport(snapshot: DoctorSnapshot): string {
   ];
 
   if (!snapshot.findings.length) {
-    lines.push("Findings: 問題なし");
+    lines.push("Findings: none");
     return lines.join("\n");
   }
 

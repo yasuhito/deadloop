@@ -275,7 +275,7 @@ describe("deadloop doctor", () => {
   it("prints no-problem message when there are no findings", () => {
     const report = formatDoctorReport(snapshot());
 
-    expect(report).toContain("問題なし");
+    expect(report).toContain("Findings: none");
   });
 
   it("prints the layered config source", () => {
