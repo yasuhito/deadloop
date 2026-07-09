@@ -347,13 +347,16 @@ function mergeAutomations(
   local: RawAutomation[] | undefined,
   policy: RawAutomation[] | undefined,
 ): { automations?: RawAutomation[]; appliedKeys: string[] } {
-  const localAutomations = local || [];
+  if (local === undefined) {
+    return {
+      automations: policy,
+      appliedKeys: (policy || []).map((_, index) => `automations[${index}]`),
+    };
+  }
+  const localAutomations = local;
   const policyAutomations = policy || [];
   if (!localAutomations.length) {
-    return {
-      automations: policyAutomations.length ? policyAutomations : local,
-      appliedKeys: policyAutomations.map((_, index) => `automations[${index}]`),
-    };
+    return { automations: local, appliedKeys: [] };
   }
   const byKey = new Map(policyAutomations.map((automation, index) => [automationKey(automation, index), automation]));
   const appliedKeys: string[] = [];
@@ -442,6 +445,25 @@ function normalizeCiFallback(value: RawCiFallbackConfig | undefined): Normalized
   };
 }
 
+function defaultAutomationsForProject(project: Pick<NormalizedProject, "id">): RawAutomation[] {
+  return [
+    {
+      id: `${project.id}:issue-coordinator`,
+      name: `${project.id} issue coordinator`,
+      promptFile: "issue-coordinator.prompt.md",
+      precheckFile: "issue-coordinator.precheck.sh",
+      driverFile: "issue-coordinator-driver.ts",
+    },
+    {
+      id: `${project.id}:pr-reviewer`,
+      name: `${project.id} PR reviewer`,
+      promptFile: "pr-reviewer.prompt.md",
+      precheckFile: "pr-reviewer.precheck.sh",
+      driverFile: "pr-reviewer-driver.ts",
+    },
+  ];
+}
+
 // Shared by workerAgent and reviewerAgent: both draw from the same profile-table
 // enum, so the only difference is which field name appears in the error message.
 function normalizeAgentKind(value: unknown, field: string): AgentKind {
@@ -473,7 +495,8 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
     automations: [],
     configSource: configSource || defaultConfigSource(raw),
   };
-  project.automations = (raw.automations || []).map((automation) => normalizeAutomation(project, automation));
+  const automations = raw.automations === undefined ? defaultAutomationsForProject(project) : raw.automations;
+  project.automations = automations.map((automation) => normalizeAutomation(project, automation));
   return project;
 }
 

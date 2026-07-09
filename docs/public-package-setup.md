@@ -61,8 +61,8 @@ Key fields:
 - `workerModel` — optional worker model passed through verbatim in the format understood by the selected `workerAgent`.
 - `reviewerAgent` — reviewer CLI agent type. Allowed values are `"pi"` and `"claude"`; the default is `"pi"`.
 - `reviewerModel` — optional reviewer model passed through verbatim.
-- `labels` — GitHub labels used to coordinate issue and PR state.
-- `automations` — scheduled automation entries and their prompt/precheck files. Optional `driverFile` entries run bundled deterministic automation scripts after precheck and before sending any prompt; the driver can return `skip`, `done`, `needs_llm`, or `error` JSON to avoid unnecessary LLM context.
+- `labels` — GitHub labels used to coordinate issue and PR state. Omit this when using the standard labels.
+- `automations` — scheduled automation entries and their prompt/precheck files. Omit this to use the standard issue coordinator and PR reviewer. Set an explicit array only when customizing or disabling the standard automation set. Optional `driverFile` entries run bundled deterministic automation scripts after precheck and before sending any prompt; the driver can return `skip`, `done`, `needs_llm`, or `error` JSON to avoid unnecessary LLM context.
 
 Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` / `driverFile` for automations. Keep `enabled`, `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local or inferred. Invalid JSON or disallowed keys stop that project safely and appear in `/deadloop-status` and `/deadloop-doctor`.
 
@@ -93,11 +93,11 @@ An issue is eligible for the issue coordinator only when it has both:
 
 ### Phase 1: Issue coordination only
 
-Start with only `issue-coordinator` enabled in `automations`. Its deterministic driver handles no-op, cleanup, and gate cases before any LLM prompt is sent; when implementation is needed it starts a Herdr worktree with a worker. Humans still review and merge.
+Start by operating only the issue coordinator. The standard automation set includes both the issue coordinator and PR reviewer, so set `automations` explicitly only if you want to temporarily disable the PR reviewer during rollout. The issue coordinator's deterministic driver handles no-op, cleanup, and gate cases before any LLM prompt is sent; when implementation is needed it starts a Herdr worktree with a worker. Humans still review and merge.
 
 ### Phase 2: Add PR reviewer, still no auto-merge
 
-Add `pr-reviewer` only after Phase 1 is reliable. Keep:
+Use the standard `pr-reviewer` only after Phase 1 is reliable. Keep:
 
 ```json
 "autoMerge": false

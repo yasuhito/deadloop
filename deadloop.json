@@ -1,20 +1,4 @@
 {
   "checkCommand": "npm test && npm run lint && npm run typecheck && bash -n extensions/deadloop/automations/*.sh && npm pack --dry-run",
-  "workerInstructions": "最初に README.md、extensions/deadloop/README.md、docs/herdr-runner.md、docs/migration-to-deadloop.md、package.json、必要に応じて extensions/deadloop/automations/ を読む。Pi 拡張 / パッケージ仕様を触る場合は Pi 本体の extensions.md / packages.md も確認する。実装は小さく進め、決定論的に判定できる処理はプロンプトではなく TypeScript / スクリプトへ寄せる。自動マージ、head branch 削除、ラベル変更、コメント投稿は安全側に倒す。変更後は npm test、npm run lint、npm run typecheck、bash -n extensions/deadloop/automations/*.sh、npm pack --dry-run を実行する。",
-  "automations": [
-    {
-      "id": "deadloop:issue-coordinator",
-      "name": "deadloop issue coordinator",
-      "promptFile": "issue-coordinator.prompt.md",
-      "precheckFile": "issue-coordinator.precheck.sh",
-      "driverFile": "issue-coordinator-driver.ts"
-    },
-    {
-      "id": "deadloop:pr-reviewer",
-      "name": "deadloop PR reviewer",
-      "promptFile": "pr-reviewer.prompt.md",
-      "precheckFile": "pr-reviewer.precheck.sh",
-      "driverFile": "pr-reviewer-driver.ts"
-    }
-  ]
+  "workerInstructions": "最初に README.md、extensions/deadloop/README.md、docs/herdr-runner.md、docs/migration-to-deadloop.md、package.json、必要に応じて extensions/deadloop/automations/ を読む。Pi 拡張 / パッケージ仕様を触る場合は Pi 本体の extensions.md / packages.md も確認する。実装は小さく進め、決定論的に判定できる処理はプロンプトではなく TypeScript / スクリプトへ寄せる。自動マージ、head branch 削除、ラベル変更、コメント投稿は安全側に倒す。変更後は npm test、npm run lint、npm run typecheck、bash -n extensions/deadloop/automations/*.sh、npm pack --dry-run を実行する。"
 }

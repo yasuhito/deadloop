@@ -120,6 +120,18 @@ describe("deterministic extension core", () => {
     });
   });
 
+  it("uses standard automations when project configuration omits them", () => {
+    const project = normalizeProject({ id: "demo" });
+
+    expect(project.automations.map((automation) => automation.id)).toEqual(["demo:issue-coordinator", "demo:pr-reviewer"]);
+  });
+
+  it("keeps explicit empty automations disabled", () => {
+    const project = normalizeProject({ id: "demo", automations: [] });
+
+    expect(project.automations).toEqual([]);
+  });
+
   it("parses the supported every-N-minutes cron form", () => {
     expect(parseEveryMinutes("*/15 * * * *")).toBe(15);
   });
@@ -352,6 +364,14 @@ describe("deterministic extension core", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("keeps trusted repo policy explicit empty automations disabled", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ automations: [] }) }),
+    });
+
+    expect(result.ok && result.projects[0].automations).toEqual([]);
   });
 
   it("allows trusted repo policy to provide locally omitted automations", () => {
