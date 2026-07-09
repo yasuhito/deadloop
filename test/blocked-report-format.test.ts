@@ -17,7 +17,7 @@ const prReviewerPrompt = readFileSync("extensions/deadloop/automations/pr-review
 
 describe("blocked report format prompts", () => {
   it("requires the issue coordinator blocked report recovery section", () => {
-    expect(issueBlockedComment).toContain("## 復旧手順");
+    expect(issueBlockedComment).toContain("## Recovery steps");
   });
 
   it("requires the issue coordinator blocked report requeue command", () => {
@@ -27,7 +27,7 @@ describe("blocked report format prompts", () => {
   });
 
   it("requires the PR reviewer blocked report recovery section", () => {
-    expect(prReviewerPrompt).toContain("## 復旧手順");
+    expect(prReviewerPrompt).toContain("## Recovery steps");
   });
 
   it("requires the PR reviewer blocked report requeue command", () => {

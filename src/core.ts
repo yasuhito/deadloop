@@ -12,10 +12,10 @@ export const DEFAULT_CHECK_COMMAND =
 export const DEFAULT_WORKER_INSTRUCTION_FILES = ["AGENTS.md", "CONTEXT.md", "README.md"] as const;
 
 export const DEFAULT_WORKER_INSTRUCTIONS =
-  "最初に AGENTS.md、CONTEXT.md、README.md と、変更対象に関連する docs を読んでから作業してください。リポジトリ内の指示を優先してください。";
+  "Start by reading AGENTS.md, CONTEXT.md, README.md, and docs relevant to the change. Follow repository-local instructions first.";
 
 export const DEFAULT_WORKER_LAUNCH_POLICY =
-  "Worker 起動時は issue の難易度を見てレベルを選ぶ。単純なドキュメント修正・小さなテスト修正・局所的な実装は low、通常の実装は medium、複数コンポーネント・設計判断・データ移行・難しい不具合修正は high。判断理由を worker prompt に1行で残す。";
+  "Choose the Worker level from issue difficulty: low for simple docs, small test fixes, and local code changes; medium for ordinary implementation; high for cross-component work, design judgment, migrations, or difficult bugs. Add one line to the Worker prompt explaining the choice.";
 
 export type LabelConfig = {
   ready?: string;
@@ -469,9 +469,9 @@ function normalizeWorkerInstructions(raw: Pick<RawProject, "workerInstructions" 
   const files = raw.workerInstructionFiles === undefined ? [...DEFAULT_WORKER_INSTRUCTION_FILES] : raw.workerInstructionFiles;
   const readableFiles = files.map((file) => String(file).trim()).filter(Boolean);
   if (!readableFiles.length) {
-    return "変更対象に関連する docs を読んでから作業してください。リポジトリ内の指示を優先してください。";
+    return "Read docs relevant to the change. Follow repository-local instructions first.";
   }
-  return `最初に ${readableFiles.join("、")} と、変更対象に関連する docs を読んでから作業してください。リポジトリ内の指示を優先してください。`;
+  return `Start by reading ${readableFiles.join(", ")}, and docs relevant to the change. Follow repository-local instructions first.`;
 }
 
 function defaultAutomationsForProject(project: Pick<NormalizedProject, "id">): RawAutomation[] {

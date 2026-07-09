@@ -44,7 +44,7 @@ describe("issue coordinator deterministic driver", () => {
   });
 
   it("renders blocked comments for planning issues", () => {
-    expect(runDriverFixture("driver-blocked-prd.json").comment).toContain("## 復旧手順");
+    expect(runDriverFixture("driver-blocked-prd.json").comment).toContain("## Recovery steps");
   });
 
   it("does not block implementable issues that only reference a PRD document path", () => {

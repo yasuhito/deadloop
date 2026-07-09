@@ -11,9 +11,9 @@ const blockedInput = {
   automationDir: "/tmp/auto dir",
   blockedLabel: "agent:blocked label",
   implementLabel: "agent:implement label",
-  summary: "Worker 起動に失敗しました。",
-  confirmed: ["workspace trust が未承認です。"],
-  nextDecision: "operator が trust を受け入れる必要があります。",
+  summary: "Worker launch failed.",
+  confirmed: ["Workspace trust has not been accepted."],
+  nextDecision: "An operator must accept workspace trust.",
   promiseFile: "/tmp/worktree/.deadloop/promise weird.json",
   workspaceId: "workspace-1",
   worktreePath: "/tmp/work tree",
@@ -23,28 +23,28 @@ const blockedInput = {
 const issueCoordinatorPrompt = readFileSync("extensions/deadloop/automations/issue-coordinator.prompt.md", "utf8");
 
 const workerInput = {
-  launchReason: "medium: 通常の実装です。",
+  launchReason: "medium: ordinary implementation.",
   issueNumber: 72,
   issueTitle: "Render worker prompt\nwith `tricky` title",
   issueUrl: "https://github.com/owner/repo/issues/72",
   githubRepo: "owner/repo",
-  workerInstructions: "AGENTS.md を読む。```危険な fence``` を貼らない。",
+  workerInstructions: "Read AGENTS.md. Do not paste unsafe fences.",
   checkCommand: "npm test && echo ```not a fence```",
   promiseFile: "/tmp/worktree/.deadloop/promise-123.json",
 };
 
 describe("issue coordinator renderers", () => {
   it("renders the blocked issue incident section", () => {
-    expect(renderIssueBlockedComment(blockedInput)).toContain("## 何が起きたか");
+    expect(renderIssueBlockedComment(blockedInput)).toContain("## What happened");
   });
 
   it("renders the blocked issue recovery section", () => {
-    expect(renderIssueBlockedComment(blockedInput)).toContain("## 復旧手順");
+    expect(renderIssueBlockedComment(blockedInput)).toContain("## Recovery steps");
   });
 
   it("orders the blocked incident section before recovery", () => {
-    expect(renderIssueBlockedComment(blockedInput).indexOf("## 何が起きたか")).toBeLessThan(
-      renderIssueBlockedComment(blockedInput).indexOf("## 復旧手順"),
+    expect(renderIssueBlockedComment(blockedInput).indexOf("## What happened")).toBeLessThan(
+      renderIssueBlockedComment(blockedInput).indexOf("## Recovery steps"),
     );
   });
 
@@ -64,12 +64,12 @@ describe("issue coordinator renderers", () => {
 
   it("renders the worker implementation contract", () => {
     expect(renderIssueWorkerPrompt(workerInput)).toContain(
-      "この issue の `Agent Brief` または `What to build` と `Acceptance criteria` を実装契約として扱ってください。",
+      "Treat the issue's `Agent Brief` or `What to build` plus `Acceptance criteria` as the implementation contract.",
     );
   });
 
   it("renders worker prohibitions", () => {
-    expect(renderIssueWorkerPrompt(workerInput)).toContain("- push しない。");
+    expect(renderIssueWorkerPrompt(workerInput)).toContain("- Do not push.");
   });
 
   it("renders the worker validation command", () => {
@@ -84,7 +84,7 @@ describe("issue coordinator renderers", () => {
 
   it("renders the worker promise file contract", () => {
     expect(renderIssueWorkerPrompt(workerInput)).toContain(
-      '{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}',
+      '{"status":"blocked","reason":"clear reason","summary":"three-sentence summary"}',
     );
   });
 

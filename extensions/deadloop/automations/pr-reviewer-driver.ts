@@ -186,33 +186,33 @@ After a \`blocked\` promise:
 - Use the promise reason/summary to write the blocked report.
 - Move the PR from \`${env.reviewingLabel}\` to \`${env.blockedLabel}\` only when the blocker is actionable.
 
-Report the resulting action and evidence in concise Japanese.`;
+Report only the resulting action and evidence.`;
 }
 
 function reviewAgentPrompt(pr: JsonObject, env: ReturnType<typeof envConfig>, promiseFile: string, reason: string): string {
   const number = Number(pr.number || 0);
   const title = oneLine(pr.title || "PR review");
-  return `PR #${number} をレビューしてください。
+  return `Review PR #${number}.
 
-対象:
+Target:
 - GitHub repo: ${env.githubRepo}
 - PR: #${number} ${title}
 - PR URL: ${pr.url || `https://github.com/${env.githubRepo}/pull/${number}`}
 - Reason: ${reason}
 - autoMerge: ${env.autoMerge ? "true" : "false"}
 
-契約:
-- main workspace ${env.repoPath} は編集しないでください。この worktree 上だけで確認してください。
-- PR の差分、関連 issue / docs、AGENTS.md を読み、仕様適合と標準適合を確認してください。
-- 必要な検証を実行してください。最低限の確認コマンド: ${env.checkCommand}
-- push、ラベル編集、PR コメント、マージ、branch 削除はしないでください。
-- autoMerge=false の場合は、マージ可能そうでも人間へ渡す前提で結果だけまとめてください。
+Contract:
+- Do not edit the main workspace ${env.repoPath}; inspect only this worktree.
+- Read the PR diff, related issues/docs, and AGENTS.md. Check both spec fit and repository standards.
+- Run needed validation. Minimum check command: ${env.checkCommand}
+- Do not push, edit labels, comment on PRs, merge, or delete branches.
+- If autoMerge=false, summarize the review for human handoff even if the PR looks mergeable.
 
-完了報告:
-- 作業終了時は promise ファイル \`${promiseFile.replace(/`/g, "\\`")}\` に必ず JSON を書いてください。
-- 成功時は {"status":"complete","reason":"","summary":"3文要約(何を確認した・結果・残りリスク)"} を書いてください。
-- レビュー不能、危険変更、CI 不明、仕様不明、または判断不能なら {"status":"blocked","reason":"日本語の理由","summary":"3文要約"} を書いてください。
-- 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。`;
+Promise report:
+- Before stopping, write JSON to the promise file: \`${promiseFile.replace(/`/g, "\\`")}\`.
+- On success, write {"status":"complete","reason":"","summary":"three sentences: what was reviewed, result, remaining risk"}.
+- If review is blocked by unsafe changes, missing CI, unclear spec, or uncertainty, write {"status":"blocked","reason":"clear reason","summary":"three-sentence summary"}.
+- Always write the promise file, even on failure. Do not exit silently.`;
 }
 
 function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
@@ -294,14 +294,14 @@ function hasSkippedReason(decision: JsonObject, reasons: string[]): boolean {
 function draftBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>): string {
   const number = Number(pr.number || 0);
   const headRefName = oneLine(pr.headRefName || "<headRefName>");
-  return `## 何が起きたか
-- draft PR のため、自動レビューと自動マージを見送りました。
-- 確認済み事項:
-- PR #${number} は draft 状態です。
-- 次に必要な判断: 準備できたら ready にして \`${env.reviewLabel}\` を付け直してください。
+  return `## What happened
+- Skipped automated review and auto-merge because the PR is a draft.
+- Confirmed facts:
+- PR #${number} is in draft state.
+- Next decision: mark the PR ready and add \`${env.reviewLabel}\` again when it is ready for review.
 
-## 復旧手順
-1. 原因を確認する。
+## Recovery steps
+1. Inspect the cause.
    \`\`\`bash
 gh pr view ${number} -R ${shellQuote(env.githubRepo)} --comments --json number,title,url,headRefName,headRefOid,labels,commits,statusCheckRollup
 gh pr checks ${number} -R ${shellQuote(env.githubRepo)}
@@ -309,8 +309,8 @@ node ${shellQuote(env.automationDir)}/extract-worker-promise.ts --file '<promise
 herdr agent list
 herdr pane list
 \`\`\`
-2. 残骸（worktree / branch）を確認し、安全に掃除する。
-   該当なし: draft gate では worktree / branch を作成していません。
+2. Inspect leftover worktrees or branches before cleanup.
+   Not applicable: the draft gate did not create a worktree or branch.
    \`\`\`bash
 herdr worktree list --cwd ${shellQuote(env.repoPath)} --json
 git -C ${shellQuote(env.repoPath)} worktree list
@@ -319,7 +319,7 @@ herdr worktree remove --workspace '<workspaceId>'
 git -C ${shellQuote(env.repoPath)} worktree remove '<worktreePath>'
 git -C ${shellQuote(env.repoPath)} branch -d ${shellQuote(headRefName)}
 \`\`\`
-3. 原因を解消したあと、対象 issue を再 queue する。
+3. Re-queue the target issue after fixing the cause.
    \`\`\`bash
 gh issue edit <issueNumber> -R ${shellQuote(env.githubRepo)} --remove-label ${shellQuote(env.blockedLabel)} --add-label ${shellQuote(env.implementLabel)}
 \`\`\``;
@@ -388,7 +388,7 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   if (!decision.selected) {
     const driverAction = hasSkippedReason(decision, ["pending_checks", "external_review_wait"]) ? "wait" : "no_candidate";
-    const summary = driverAction === "wait" ? "PR reviewer is waiting for checks or external review" : "対象 PR なし";
+    const summary = driverAction === "wait" ? "PR reviewer is waiting for checks or external review" : "No target PR";
     return driverResult("skip", summary, { driverAction, decision });
   }
 
@@ -423,7 +423,7 @@ function drive(fixturePath: string | undefined): DriverResult {
   const reason = String(gate.reason || decision.reason || "review_required");
   if (shouldDirectLaunch(fixture, env)) {
     const launch = launchPrReviewer(pr, env, fixture, reason);
-    return driverResult("needs_llm", `PR #${decision.number} のレビューエージェントを起動しました`, {
+    return driverResult("needs_llm", `Launched reviewer agent for PR #${decision.number}`, {
       driverAction: "reviewer_monitor_request",
       prNumber: decision.number,
       gate,

@@ -137,13 +137,13 @@ function isBlockedPlanningIssue(issue: JsonObject): boolean {
 
 function gateMissingContractComment(issue: JsonObject): string {
   return [
-    "実装契約が不足しているため、自動実装の対象から外しました。",
+    "deadloop skipped automated implementation because the issue is missing an implementation contract.",
     "",
-    "不足しているもの:",
-    "- `## Agent Brief` または `## What to build`",
-    "- `## Acceptance criteria` または `## 受け入れ条件`",
+    "Missing:",
+    "- `## Agent Brief` or `## What to build`",
+    "- `## Acceptance criteria`",
     "",
-    `Issue 本文を整えたあと、\`agent:implement\` を付け直してください。対象: #${issue.number}`,
+    `Update the issue body, then add \`agent:implement\` again. Target: #${issue.number}`,
   ].join("\n");
 }
 
@@ -164,8 +164,8 @@ function blockedComment(issue: JsonObject, env: ReturnType<typeof envConfig>, re
     blockedLabel: env.blockedLabel,
     implementLabel: env.implementLabel,
     summary: reason,
-    confirmed: [`Issue #${number} は、単一 Worker に渡せる実装単位ではありません。`],
-    nextDecision: "実装可能な単位の Issue を別に用意するか、この Issue の scope を分割してください。",
+    confirmed: [`Issue #${number} is not a single implementable Worker task.`],
+    nextDecision: "Create a separate implementable issue or split this issue's scope.",
   });
 }
 
@@ -228,7 +228,7 @@ After a \`blocked\` promise:
 - Use the promise reason/summary to report the blocker.
 - Move the issue from \`${env.inProgressLabel}\` to \`${env.blockedLabel}\` only when the blocker is actionable.
 
-Report the resulting action and evidence in concise Japanese.`;
+Report only the resulting action and evidence.`;
 }
 
 function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
@@ -349,7 +349,7 @@ function envConfig() {
     baseBranch: process.env.DEADLOOP_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
     checkCommand: process.env.DEADLOOP_CHECK_COMMAND || "git diff --check",
-    workerInstructions: process.env.DEADLOOP_WORKER_INSTRUCTIONS || "AGENTS.md を読み、Issue の契約に従ってください。",
+    workerInstructions: process.env.DEADLOOP_WORKER_INSTRUCTIONS || "Read AGENTS.md and follow the issue contract.",
     workerAgent: process.env.DEADLOOP_WORKER_AGENT || "pi",
     workerModel: process.env.DEADLOOP_WORKER_MODEL || "",
     readyLabel: process.env.DEADLOOP_READY_LABEL || "ready-for-agent",
@@ -381,12 +381,12 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   const issues = issueList(fixture, env.githubRepo);
   const decision = decisionForIssues(fixturePath, issues, env.githubRepo, env);
-  if (!decision.selected) return driverResult("skip", "対象 issue なし", { driverAction: "no_candidate", decision });
+  if (!decision.selected) return driverResult("skip", "No target issue", { driverAction: "no_candidate", decision });
 
   const issue = selectedIssue(issues, Number(decision.number || 0));
   if (!hasImplementationContract(issue)) {
     applyContractMissing(issue, env, fixture);
-    return driverResult("done", `Issue #${issue.number} は契約不足のため needs-triage に移しました`, {
+    return driverResult("done", `Issue #${issue.number} is missing its contract; moved it to needs-triage`, {
       driverAction: "contract_missing",
       issueNumber: issue.number,
       comment: gateMissingContractComment(issue),
@@ -394,9 +394,9 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   if (isBlockedPlanningIssue(issue)) {
-    const comment = blockedComment(issue, env, "PRD / 設計 / 親 Issue 型のため、自動実装を見送りました。");
+    const comment = blockedComment(issue, env, "Skipped automated implementation because this looks like a PRD, design, or parent issue.");
     applyBlocked(issue, env, comment, fixture);
-    return driverResult("done", `Issue #${issue.number} は実装単位ではないため blocked にしました`, {
+    return driverResult("done", `Issue #${issue.number} is not an implementable unit; marked it blocked`, {
       driverAction: "blocked_comment",
       issueNumber: issue.number,
       comment,
@@ -405,7 +405,7 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   if (shouldDirectLaunch(fixture, env)) {
     const launch = launchIssueWorker(issue, env, fixture);
-    return driverResult("needs_llm", `Issue #${issue.number} の Worker を起動しました`, {
+    return driverResult("needs_llm", `Launched Worker for Issue #${issue.number}`, {
       driverAction: "worker_monitor_request",
       issueNumber: issue.number,
       launch,
@@ -413,7 +413,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     });
   }
 
-  return driverResult("needs_llm", `Issue #${issue.number} の Worker 起動が必要です`, {
+  return driverResult("needs_llm", `Issue #${issue.number} needs Worker launch`, {
     driverAction: "worker_launch_request",
     issueNumber: issue.number,
     prompt: workerLaunchPrompt(issue, env),

@@ -45,7 +45,7 @@ describe("PR reviewer deterministic driver", () => {
   });
 
   it("renders a blocked comment for draft PRs", () => {
-    expect(runDriverFixture("draft-pr.json").comment).toContain("## 復旧手順");
+    expect(runDriverFixture("draft-pr.json").comment).toContain("## Recovery steps");
   });
 
   it("delegates stale external-review fallback to a bounded review prompt", () => {

@@ -45,7 +45,7 @@ function optionalValue(value: string | undefined, placeholder: string): string {
 }
 
 function optionalCommandNote(value: string | undefined, label: string): string {
-  return value && value.trim() ? "" : `   該当なし: ${label} が未作成または未特定です。\n`;
+  return value && value.trim() ? "" : `   Not applicable: ${label} is missing or unknown.\n`;
 }
 
 function longestRun(value: string, character: "`" | "~"): number {
@@ -81,26 +81,26 @@ function renderIssueBlockedComment(input: IssueBlockedCommentInput): string {
   const worktreePath = optionalValue(input.worktreePath, "<worktreePath>");
   const branch = optionalValue(input.branch, "<branch>");
   const branchPattern = input.branch ? input.branch : `agent/issue-${issue}-*`;
-  const confirmed = bulletLines(input.confirmed, "追加の確認事項はまだありません。").join("\n");
-  const nextDecision = oneLineForRenderer(input.nextDecision || "原因を確認し、再 queue してよい状態か operator が判断してください。");
+  const confirmed = bulletLines(input.confirmed, "No additional facts confirmed yet.").join("\n");
+  const nextDecision = oneLineForRenderer(input.nextDecision || "Inspect the cause and decide whether the issue is safe to re-queue.");
 
-  return `## 何が起きたか
+  return `## What happened
 - ${oneLineForRenderer(input.summary)}
-- 確認済み事項:
+- Confirmed facts:
 ${confirmed}
-- 次に必要な判断: ${nextDecision}
+- Next decision: ${nextDecision}
 
-## 復旧手順
-1. 原因を確認する。
-   ${optionalCommandNote(input.promiseFile, "promise ファイル")}` +
+## Recovery steps
+1. Inspect the cause.
+   ${optionalCommandNote(input.promiseFile, "promise file")}` +
     `\`\`\`bash
 gh issue view ${issue} -R ${shellQuoteForRenderer(input.githubRepo)} --comments
 node ${shellQuoteForRenderer(input.automationDir)}/extract-worker-promise.ts --file ${shellQuoteForRenderer(promiseFile)} || true
 herdr agent list
 herdr pane list
 \`\`\`
-2. 残骸（worktree / branch）を確認し、安全に掃除する。
-   掃除コマンドは対象が clean / 不要であることを確認してから実行する。
+2. Inspect leftover worktrees or branches before cleanup.
+   Run cleanup only after confirming the target is clean and no longer needed.
    ${optionalCommandNote(input.workspaceId, "Herdr workspace")}${optionalCommandNote(input.worktreePath, "worktree path")}${optionalCommandNote(input.branch, "branch")}` +
     `\`\`\`bash
 herdr worktree list --cwd ${shellQuoteForRenderer(input.repoPath)} --json
@@ -110,7 +110,7 @@ herdr worktree remove --workspace ${shellQuoteForRenderer(workspaceId)}
 git -C ${shellQuoteForRenderer(input.repoPath)} worktree remove ${shellQuoteForRenderer(worktreePath)}
 git -C ${shellQuoteForRenderer(input.repoPath)} branch -d ${shellQuoteForRenderer(branch)}
 \`\`\`
-3. 原因を解消したあと、issue を再 queue する。
+3. Re-queue the issue after fixing the cause.
    \`\`\`bash
 gh issue edit ${issue} -R ${shellQuoteForRenderer(input.githubRepo)} --remove-label ${shellQuoteForRenderer(input.blockedLabel)} --add-label ${shellQuoteForRenderer(input.implementLabel)}
 \`\`\``;
@@ -120,39 +120,39 @@ function renderIssueWorkerPrompt(input: IssueWorkerPromptInput): string {
   const issueTitle = oneLineForRenderer(input.issueTitle);
   const validationFence = markdownFence(input.checkCommand);
 
-  return `起動判断: ${oneLineForRenderer(input.launchReason)}
+  return `Launch reason: ${oneLineForRenderer(input.launchReason)}
 
-Issue #${input.issueNumber} を実装してください。
+Implement Issue #${input.issueNumber}.
 
-対象:
+Target:
 - GitHub repo: ${input.githubRepo}
 - Issue: #${input.issueNumber} ${issueTitle}
 - Issue URL: ${input.issueUrl}
 
-契約:
-- この issue の \`Agent Brief\` または \`What to build\` と \`Acceptance criteria\` を実装契約として扱ってください。
-- \`Out of scope\` / \`対象外\` があれば必ず守ってください。
+Contract:
+- Treat the issue's \`Agent Brief\` or \`What to build\` plus \`Acceptance criteria\` as the implementation contract.
+- Respect any \`Out of scope\` section.
 - ${oneLineForRenderer(input.workerInstructions)}
-- 可能なら red-green-refactor で進めてください。
-- 関連する検証を実行し、最低限次の検証コマンドを通してください。
+- Prefer a red-green-refactor loop when practical.
+- Run relevant validation and at minimum pass this check command:
   ${validationFence}bash
   ${input.checkCommand}
   ${validationFence}
-- conventional commit で1つ以上 commit してください。
+- Create at least one conventional commit.
 
-禁止事項:
-- push しない。
-- label を編集しない。
-- issue / PR にコメントしない。
-- PR を作らない。
-- issue を閉じない。
-- unrelated な変更を戻さない。
+Hard limits:
+- Do not push.
+- Do not edit labels.
+- Do not comment on issues or PRs.
+- Do not create PRs.
+- Do not close issues.
+- Do not revert unrelated changes.
 
-完了報告:
-- 作業終了時は、オーケストレータが指定した promise ファイル \`${markdownCode(input.promiseFile)}\` に必ず JSON を書いてください。
-- 成功時は \`{"status":"complete","reason":"","summary":"3文要約(何をした・何が分かった・何が残っている)"}\` を書いてください。
-- 失敗、仕様不足、危険変更、または判断不能なら \`{"status":"blocked","reason":"日本語の理由","summary":"3文要約(何をした・何が分かった・何が残っている)"}\` を書いてください。
-- 失敗時も必ず promise ファイルを書いてください。黙って終了しないでください。`;
+Promise report:
+- Before stopping, write JSON to the orchestrator promise file: \`${markdownCode(input.promiseFile)}\`.
+- On success, write \`{"status":"complete","reason":"","summary":"three sentences: what changed, what was verified, remaining risk"}\`.
+- If blocked by failure, missing spec, risky change, or uncertainty, write \`{"status":"blocked","reason":"clear reason","summary":"three-sentence summary"}\`.
+- Always write the promise file, even on failure. Do not exit silently.`;
 }
 
 module.exports = { renderIssueBlockedComment, renderIssueWorkerPrompt };

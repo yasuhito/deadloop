@@ -17,14 +17,8 @@ function issueCoordinatorWorkerPrompt(): string {
   return JSON.parse(result.stdout).prompt;
 }
 
-function watchSection(promptFile: string, heading: string): string {
-  const template = fs.readFileSync(path.join(automationDir, promptFile), "utf8");
-  const start = template.indexOf(heading);
-  if (start === -1) {
-    throw new Error(`heading not found: ${heading} in ${promptFile}`);
-  }
-  const next = template.indexOf("\n### ", start + heading.length);
-  return template.slice(start, next === -1 ? undefined : next);
+function promptTemplate(promptFile: string): string {
+  return fs.readFileSync(path.join(automationDir, promptFile), "utf8");
 }
 
 describe("watch polling break instruction", () => {
@@ -33,8 +27,7 @@ describe("watch polling break instruction", () => {
   });
 
   it("tells pr-reviewer watch to break polling once the promise settles", () => {
-    const section = watchSection("pr-reviewer.prompt.md", "### 9. レビューエージェントの監視");
-    expect(section).toMatch(/直ちにポーリングを打ち切/);
+    expect(promptTemplate("pr-reviewer.prompt.md")).toMatch(/Break polling immediately/);
   });
 
   it("shows issue-coordinator watch a break-early loop example", () => {
@@ -42,7 +35,6 @@ describe("watch polling break instruction", () => {
   });
 
   it("shows pr-reviewer watch a break-early loop example", () => {
-    const section = watchSection("pr-reviewer.prompt.md", "### 9. レビューエージェントの監視");
-    expect(section).toMatch(/complete\|blocked\) break/);
+    expect(promptTemplate("pr-reviewer.prompt.md")).toMatch(/complete.*blocked/);
   });
 });

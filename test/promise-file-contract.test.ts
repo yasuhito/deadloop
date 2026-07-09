@@ -23,7 +23,7 @@ function issueWorkerPrompt(): string {
     issueTitle: "Demo",
     issueUrl: "https://github.com/owner/repo/issues/1",
     githubRepo: "owner/repo",
-    workerInstructions: "AGENTS.md を読む。",
+    workerInstructions: "Read AGENTS.md.",
     checkCommand: "npm test",
     promiseFile: "<worktreePath>/.deadloop/promise-<uuid>.json",
   });
@@ -52,7 +52,7 @@ describe("promise file contract", () => {
 
   it("uses the promise file as the completion authority", () => {
     expect(readFileSync("extensions/deadloop/automations/issue-coordinator.prompt.md", "utf8")).toContain(
-      "唯一の権威",
+      "only completion authority",
     );
   });
 });

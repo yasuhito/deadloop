@@ -183,7 +183,7 @@ describe("issue coordinator cleanup", () => {
 
   it("documents dedicated tab startup for branch update workers", () => {
     expect(readFileSync("extensions/deadloop/automations/pr-reviewer.prompt.md", "utf8")).toContain(
-      "branch update worker を起動する場合も、worker 名と同じ label の専用タブを作ってから `herdr agent start ... --tab <tabId> --no-focus`",
+      "Branch-update workers also need a dedicated tab with the same label as the worker name before `herdr agent start ... --tab <tabId> --no-focus`.",
     );
   });
 });
