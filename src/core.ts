@@ -4,7 +4,7 @@ import { AGENT_KINDS, type AgentKind, isAgentKind } from "./agent-profiles.cjs";
 
 export const DEFAULT_TIMEZONE = "Asia/Tokyo";
 
-export const REPO_POLICY_FILE = "deadloop.project.json";
+export const REPO_POLICY_FILE = "deadloop.json";
 
 export const DEFAULT_WORKER_INSTRUCTIONS = "AGENTS.md、CONTEXT.md、関連 docs/adr/ を読んでから作業する。";
 

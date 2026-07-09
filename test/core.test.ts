@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -342,6 +344,14 @@ describe("deterministic extension core", () => {
     );
 
     expect(result.ok && result.projects[0].workerModel).toBe("local-model");
+  });
+
+  it("accepts this repository's shared policy file", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "deadloop", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({ status: "loaded", text: readFileSync("deadloop.json", "utf8") }),
+    });
+
+    expect(result.ok).toBe(true);
   });
 
   it("allows trusted repo policy to provide automation driver files", () => {

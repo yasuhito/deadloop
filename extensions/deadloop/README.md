@@ -14,7 +14,7 @@ Configuration lookup order:
 
 Do not commit `projects.json`; it contains local paths, GitHub repositories, and rollout choices.
 
-Each project overlays explicit local config, trusted base-branch repo policy, and package defaults. The repo policy file is `deadloop.project.json`. Repo policy is read only from the trusted `baseBranch` after `git fetch`, never from the PR branch being reviewed.
+Each project overlays explicit local config, trusted base-branch repo policy, and package defaults. The repo policy file is `deadloop.json`. Repo policy is read only from the trusted `baseBranch` after `git fetch`, never from the PR branch being reviewed.
 
 ## State
 

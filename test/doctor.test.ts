@@ -281,6 +281,6 @@ describe("deadloop doctor", () => {
   it("prints the layered config source", () => {
     const report = formatDoctorReport(snapshot());
 
-    expect(report).toContain("config: local=unknown local projects.json; repoPolicy=origin/main:deadloop.project.json (not-read)");
+    expect(report).toContain("config: local=unknown local projects.json; repoPolicy=origin/main:deadloop.json (not-read)");
   });
 });

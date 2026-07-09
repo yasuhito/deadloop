@@ -52,6 +52,6 @@ describe("deadloop status report", () => {
   });
 
   it("shows the layered config source", () => {
-    expect(report()).toContain("config: local=unknown local projects.json; repoPolicy=origin/main:deadloop.project.json (not-read)");
+    expect(report()).toContain("config: local=unknown local projects.json; repoPolicy=origin/main:deadloop.json (not-read)");
   });
 });

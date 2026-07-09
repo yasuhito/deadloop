@@ -39,7 +39,7 @@ DEADLOOP_DEBUG=1 pi
 Trusted repository policy file:
 
 ```text
-deadloop.project.json
+deadloop.json
 ```
 
 Internal worker state directory:
@@ -60,7 +60,7 @@ mv ~/.pi/agent/pi-looper/projects.json ~/.pi/agent/deadloop/projects.json
 If your target repository has shared policy, rename it:
 
 ```bash
-git mv pi-looper.project.json deadloop.project.json
+git mv pi-looper.project.json deadloop.json
 ```
 
 Update runbooks and scripts to use `/deadloop-status`, `/deadloop-doctor`, and `DEADLOOP_*` variables.

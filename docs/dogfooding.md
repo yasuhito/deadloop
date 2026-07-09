@@ -44,7 +44,7 @@ See [public-package-setup.md](public-package-setup.md) for the first-time setup 
 
 `projects.json` はローカル設定なので、リポジトリにコミットしません。ローカルパス、対象リポジトリ、`autoMerge` などの展開判断が入るため、公開パッケージには `projects.example.json` だけを含めます。
 
-共有してレビューしたい実行方針は、対象リポジトリの trusted base branch にある `deadloop.project.json` へ移せます。deadloop は `baseBranch` からだけ読み、PR branch 側の変更はその PR 自身の判断に使いません。ローカル `projects.json` に同じ key がある場合はローカル値が優先されるため、共有ポリシーを使う operator は該当 key をローカル設定から削除します。`autoMerge`、`repoPath`、`worktreeRoot`、`schedule` などの安全・環境依存項目はローカル設定のままにします。
+共有してレビューしたい実行方針は、対象リポジトリの trusted base branch にある `deadloop.json` へ移せます。deadloop は `baseBranch` からだけ読み、PR branch 側の変更はその PR 自身の判断に使いません。ローカル `projects.json` に同じ key がある場合はローカル値が優先されるため、共有ポリシーを使う operator は該当 key をローカル設定から削除します。`autoMerge`、`repoPath`、`worktreeRoot`、`schedule` などの安全・環境依存項目はローカル設定のままにします。
 
 例:
 

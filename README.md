@@ -69,7 +69,7 @@ Minimum project fields:
 - `labels` — GitHub labels used to coordinate issue and PR state.
 - `automations` — scheduled issue coordinator / PR reviewer entries.
 
-Optional shared repository policy may live in `deadloop.project.json` on the trusted base branch. Local `projects.json` values win over repo policy.
+Optional shared repository policy may live in `deadloop.json` on the trusted base branch. Local `projects.json` values win over repo policy.
 
 ## Create labels
 

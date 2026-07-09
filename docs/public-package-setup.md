@@ -42,7 +42,7 @@ For a local development checkout, copy from `/absolute/path/to/deadloop/extensio
 
 `projects.json` is local configuration. It contains local paths, repository names, and rollout choices, so do **not** commit it. The package includes only `extensions/deadloop/projects.example.json` as a template.
 
-Optional shared repository policy lives in `deadloop.project.json` at the target repository root. deadloop reads it only from the trusted `baseBranch` after `git fetch`; a PR branch cannot change the policy used to decide that PR. Local `projects.json` explicit values win over repo policy, so remove a key locally when you want to inherit the shared value.
+Optional shared repository policy lives in `deadloop.json` at the target repository root. deadloop reads it only from the trusted `baseBranch` after `git fetch`; a PR branch cannot change the policy used to decide that PR. Local `projects.json` explicit values win over repo policy, so remove a key locally when you want to inherit the shared value.
 
 If a project uses `workerAgent: "claude"` or `reviewerAgent: "claude"`, run `claude` interactively once from the target repository root and accept Claude Code workspace trust before enabling the automation.
 
