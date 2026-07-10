@@ -4,9 +4,21 @@ GitHub Issue から実装・PR 作成・レビュー・マージまでを Pi 上
 
 ## Language
 
+**deadloop core**:
+GitHub Issue / PR の状態遷移、安全ゲート、ループ上の判断を担う、実行環境に依存しない中核。定期実行、worktree / session 管理、エージェント CLI ごとの差異は含めない。
+_Avoid_: 共通実装、Pi 拡張本体、Herdr runner
+
+**Automation host**:
+deadloop core を定期または手動で呼び出し、試行回数と次回実行時刻を管理する実行主体。Issue / PR の選定、再試行可否、安全ゲートは判断せず、deadloop core の結果に従う。Pi 拡張、Claude App、Codex Appはそれぞれ別の Automation host になり得る。
+_Avoid_: スケジューラ(定期実行だけを含意するため)、オーケストレータ(Pi上の具体的なhostだけを指すため)
+
 **オーケストレータ (Orchestrator)**:
-deadloop 拡張を読み込んで動く常駐 Pi セッション。automation を定期実行し、Worker やレビューエージェントを起動・監視する。
+deadloop 拡張を読み込んで動く常駐 Pi セッション。Automation host の一種としてautomationを定期実行し、Worker やレビューエージェントを起動・監視する。
 _Avoid_: オーケストレーター(表記ゆれ。長音符なしに統一)、司令塔(旧称)、コーディネーター(automation の issue coordinator と混同するため)、ルーパー(プロダクト名 deadloop と衝突し、ループの主体は schedule のため)、メインセッション、親エージェント
+
+**試行 (attempt)**:
+一つのIssue実装またはPRレビューを一度遂行する単位。外部副作用より前に一意に識別され、復旧中は同じ試行として追跡される。明確な失敗後に再実行するときは新しい試行となる。完了報告は試行と対象revisionに結び付く。
+_Avoid_: run(定期実行やプロセス起動と混同するため)、session(エージェントの会話状態を指すため)、retry(試行間の関係だけを指すため)
 
 **Worker (作業エージェント)**:
 Issue coordinator が Herdr worktree に起動する、単一 issue を実装する使い捨てのエージェントセッション。どの CLI で動くかはエージェント種別が決める。
@@ -15,6 +27,10 @@ _Avoid_: 実装エージェント、子エージェント、Pi セッション(p
 **レビューエージェント**:
 PR reviewer が起動する、単一 PR をレビューする使い捨てのエージェントセッション。Worker とは別概念で、モデル指定も独立している。
 _Avoid_: レビュワー(automation の PR reviewer と混同するため)、review worker
+
+**実行基盤 (Execution runtime)**:
+試行に結び付いたworkspaceとsessionの所有権を持ち、起動、観測、停止、安全な後片付けを提供する基盤。GitHubの状態や再試行可否は判断せず、未知またはdirtyな作業領域を保全する。Herdrは実行基盤の一種。
+_Avoid_: runner(実装上のinterface名と混同するため)、Automation host(定期実行や試行管理の主体を指すため)、エージェント種別(Pi / Claude / Codexの差異を指すため)
 
 **エージェント種別 (workerAgent)**:
 operator がプロジェクト設定で選ぶ、Worker を動かす CLI エージェントの種類(`pi` / `claude` の列挙)。起動構文・prompt の渡し方・session 形式・promise 抽出方法が連動して決まる分岐キーであり、モデル指定とは独立。未設定は `pi`。
@@ -36,9 +52,13 @@ _Avoid_: GitHub Issue / PR の状態遷移、candidate selection、review gate
 operator がプロジェクト設定で固定する、Worker・レビューエージェントの使用モデル。サブスクリプション残量などの資源配分に基づく operator の意思決定であり、オーケストレータの裁量ではない。
 _Avoid_: 低コストモデル許可、モデル切替ポリシー
 
-**promise (完了報告)**:
-Worker が作業終了時に、オーケストレータが起動ごとに採番した専用パスへ書く構造化された完了報告(complete / blocked)。完了判定の唯一の権威であり、エージェントの session ファイルや画面出力は判定に使わない。失敗時も必ず書く(黙って終了しない)。
-_Avoid_: promise テキスト規約(`<promise>` タグ)、pane grep、session JSONL 抽出
+**完了報告 (Completion report)**:
+Workerまたはレビューエージェントが試行の終了時に提出する、試行、対象revision、結果、要約、検証またはレビュー証拠を含む構造化報告。意味的な完了判定の唯一の権威だが、GitHub状態の変更やmergeを許可する命令ではない。
+_Avoid_: process終了、画面出力、session状態、エージェントの最終回答
+
+**promise**:
+Pi + Herdr経路で、起動ごとの専用パスを使って完了報告を搬送する仕組み。完了報告そのものの形式やdeadloop coreの公開契約とは区別する。
+_Avoid_: 完了報告との同一視、promiseテキスト規約(`<promise>`タグ)、pane grep、session JSONL抽出
 
 **起動ポリシー (workerLaunchPolicy)**:
 issue の難易度から `low` / `medium` / `high` のレベルを選ぶための、オーケストレータ向けの方針文。モデル選択やエージェント固有フラグ名はこのポリシーの管轄外。
