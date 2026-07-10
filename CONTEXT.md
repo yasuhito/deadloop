@@ -12,6 +12,18 @@ _Avoid_: 共通実装、Pi 拡張本体、Herdr runner
 deadloop core を定期または手動で呼び出し、試行回数と次回実行時刻を管理する実行主体。Issue / PR の選定、再試行可否、安全ゲートは判断せず、deadloop core の結果に従う。Pi 拡張、Claude App、Codex Appはそれぞれ別の Automation host になり得る。
 _Avoid_: スケジューラ(定期実行だけを含意するため)、オーケストレータ(Pi上の具体的なhostだけを指すため)
 
+**対応経路 (Support path)**:
+Automation host、実行基盤、Agent programの検証対象となる組み合わせ。製品名単体ではなく、この組み合わせごとに第一級対応または実験的対応を判定する。
+_Avoid_: 対応製品、全組み合わせの暗黙の保証
+
+**第一級対応 (First-class support)**:
+共通の受入契約を満たし、公開文書だけを使った作者以外の完走確認を終えた対応経路。利用者へ推奨できる。
+_Avoid_: 実装済み、動作例あり、公式対応
+
+**実験的対応 (Experimental support)**:
+受入契約の一部が未達または未確認で、既知の制約と未確認能力を明示して試験する対応経路。利用者への推奨や自動マージの許可を含まない。
+_Avoid_: 第一級対応、推奨経路
+
 **オーケストレータ (Orchestrator)**:
 deadloop 拡張を読み込んで動く常駐 Pi セッション。Automation host の一種としてautomationを定期実行し、Worker やレビューエージェントを起動・監視する。
 _Avoid_: オーケストレーター(表記ゆれ。長音符なしに統一)、司令塔(旧称)、コーディネーター(automation の issue coordinator と混同するため)、ルーパー(プロダクト名 deadloop と衝突し、ループの主体は schedule のため)、メインセッション、親エージェント
