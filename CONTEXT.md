@@ -40,6 +40,18 @@ _Avoid_: 実装エージェント、子エージェント、Pi セッション(p
 PR reviewer が起動する、単一 PR をレビューする使い捨てのエージェントセッション。Worker とは別概念で、モデル指定も独立している。
 _Avoid_: レビュワー(automation の PR reviewer と混同するため)、review worker
 
+**外部レビューサービス (External review service)**:
+GitHub PR に対してレビューを行う、deadloop の外部にあるサービス。deadloop のレビューエージェントとは区別する。標準では利用せず、利用者がセットアップ時に選んだ、型付きアダプターを持つサービスだけを自動で呼び出す。
+_Avoid_: レビューエージェント、任意のシェルコマンドで呼び出すレビューBot
+
+**レビュー結果 (Review outcome)**:
+外部レビューサービスまたはdeadloopのレビューエージェントが、対象PRのheadに対して返す共通判定。確認中、問題なし、修正が必要、確認不能を区別し、詳細な指摘本文とは分けて扱う。
+_Avoid_: レビューコメント、マージ命令、headに結び付かない合否
+
+**人間への引き渡し (Human handoff)**:
+deadloopが担当する確認を終え、取得できなかった証拠、修正要求、残る判断とともに次の操作を人間へ渡した状態。`ready-for-human`で表し、マージ可能または人間承認済みであることは意味しない。
+_Avoid_: マージ可能、承認済み、自動化の成功だけを表す状態
+
 **実行基盤 (Execution runtime)**:
 試行に結び付いたworkspaceとsessionの所有権を持ち、起動、観測、停止、安全な後片付けを提供する基盤。GitHubの状態や再試行可否は判断せず、未知またはdirtyな作業領域を保全する。Herdrは実行基盤の一種。
 _Avoid_: runner(実装上のinterface名と混同するため)、Automation host(定期実行や試行管理の主体を指すため)、エージェント種別(Pi / Claude / Codexの差異を指すため)
