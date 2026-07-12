@@ -117,6 +117,18 @@ describe("issue coordinator cleanup", () => {
     expect(runCleanupFixture("cleanup-dirty-worktree.json").candidates).toEqual([]);
   });
 
+  it("ignores generated deadloop artifacts when selecting cleanup candidates", () => {
+    expect(runCleanupFixture("cleanup-generated-artifacts.json").candidates).toEqual([
+      {
+        branch: "agent/issue-1-add-safety-controls-for-dogfooding",
+        path: "/worktrees/repo/agent-issue-1-add-safety-controls-for-dogfooding",
+        prNumber: 2,
+        reason: "merged_pr",
+        workspaceId: "wW",
+      },
+    ]);
+  });
+
   it("does not select a Herdr worktree without a workspace id", () => {
     expect(runCleanupFixture("cleanup-missing-workspace.json").candidates).toEqual([]);
   });

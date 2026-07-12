@@ -96,8 +96,16 @@ function isUnderRootForCleanup(candidatePath: string, root: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function isGeneratedDeadloopArtifactStatusLine(line: string): boolean {
+  return /^\?\?\s+\.deadloop(?:\/|$)/.test(line.trim());
+}
+
 function isCleanStatusForCleanup(status: unknown): boolean {
-  return String(status || "").trim() === "";
+  return String(status || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .every(isGeneratedDeadloopArtifactStatusLine);
 }
 
 function localHeadMatchesClosedPr(

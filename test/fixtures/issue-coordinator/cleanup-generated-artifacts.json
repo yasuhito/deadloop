@@ -1,0 +1,28 @@
+{
+  "repo": "owner/repo",
+  "repoPath": "/repo",
+  "worktreeRoot": "/worktrees/repo",
+  "prs": [
+    {
+      "number": 2,
+      "state": "MERGED",
+      "mergedAt": "2026-07-04T00:00:00Z",
+      "headRefName": "agent/issue-1-add-safety-controls-for-dogfooding",
+      "headRefOid": "final-pr-head",
+      "labels": [{ "name": "agent:review" }]
+    }
+  ],
+  "worktrees": [
+    {
+      "branch": "agent/issue-1-add-safety-controls-for-dogfooding",
+      "is_linked_worktree": true,
+      "open_workspace_id": "wW",
+      "path": "/worktrees/repo/agent-issue-1-add-safety-controls-for-dogfooding"
+    }
+  ],
+  "git": {
+    "statuses": {
+      "/worktrees/repo/agent-issue-1-add-safety-controls-for-dogfooding": "?? .deadloop/promise-worker.json\n?? .deadloop/reviewer-prompt.md\n"
+    }
+  }
+}
