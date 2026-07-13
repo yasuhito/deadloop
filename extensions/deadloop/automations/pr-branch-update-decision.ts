@@ -71,15 +71,22 @@ function decideBranchUpdate(
   };
 }
 
-function decideBranchUpdateLive(repo: string, headRef: string, baseRef: string, expectedHeadRef: string | undefined): BranchUpdateDecision {
+function decideBranchUpdateLive(
+  repo: string,
+  headRef: string,
+  baseRef: string,
+  expectedHeadRef: string | undefined,
+  options: { requireCleanWorktree?: boolean } = {},
+): BranchUpdateDecision {
   const headOid = revParseForBranchUpdate(repo, headRef);
   runGitForBranchUpdate(repo, ["rev-parse", "--verify", baseRef]);
   const expectedHeadOid = expectedHeadRef ? revParseForBranchUpdate(repo, expectedHeadRef) : headOid;
   const ahead = countCommitsForBranchUpdate(repo, `${baseRef}..${headRef}`);
   const behind = countCommitsForBranchUpdate(repo, `${headRef}..${baseRef}`);
   const conflictFree = behind <= 0 || mergeTreeIsClean(repo, headRef, baseRef);
+  const cleanWorktree = options.requireCleanWorktree === false ? true : worktreeIsClean(repo);
   return {
-    ...decideBranchUpdate(ahead, behind, conflictFree, worktreeIsClean(repo), headOid === expectedHeadOid),
+    ...decideBranchUpdate(ahead, behind, conflictFree, cleanWorktree, headOid === expectedHeadOid),
     headRef,
     baseRef,
     headOid,

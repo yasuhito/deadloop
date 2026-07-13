@@ -41,6 +41,10 @@ describe("PR reviewer stale reviewing reclaim", () => {
     expect(runSelect("precheck-reviewing.json", { agents: "agents-reviewer-working.json" }).selected).toBe(false);
   });
 
+  it("skips a reviewing PR while its branch-update worker is working", () => {
+    expect(runSelect("precheck-reviewing.json", { agents: "agents-branch-update-working.json" }).selected).toBe(false);
+  });
+
   it("reclaims a reviewing PR when its reviewer agent is present but idle", () => {
     expect(runSelect("precheck-reviewing.json", { agents: "agents-reviewer-idle.json" }).selected).toBe(true);
   });

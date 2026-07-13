@@ -14,6 +14,16 @@ export type IssueMonitorPromptInput = MonitorPromptBaseInput & {
   blockedLabel: string;
 };
 
+export type BranchUpdateMonitorPromptInput = MonitorPromptBaseInput & {
+  prNumber: number;
+  expectedHeadOid: string;
+  expectedBaseOid: string;
+  branch: string;
+  reviewLabel: string;
+  reviewingLabel: string;
+  blockedLabel: string;
+};
+
 export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   prNumber: number;
   checkCommand: string;
@@ -50,6 +60,28 @@ After a \`blocked\` promise:
 Report only the resulting action and evidence.`;
 }
 
+function renderBranchUpdateMonitorPrompt(input: BranchUpdateMonitorPromptInput): string {
+  return `Deterministic driver launched one branch-update worker for PR #${input.prNumber}. Monitor only this attempt; never launch or select an agent, push a branch, review the PR, or merge it.
+
+Attempt binding:
+- Existing PR branch: ${input.branch}
+- Expected PR head: ${input.expectedHeadOid}
+- Selected base head: ${input.expectedBaseOid}
+- Keep ${input.reviewLabel} and ${input.reviewingLabel} while the update is running.
+
+${renderPromisePollingRules(input)}
+
+Terminal handling:
+- status=complete, reason=branch_updated: re-read the PR and confirm its head changed. Do not change labels; normal PR review resumes on the next automation cycle.
+- status=complete, reason=stale_head: stop without any push, comment, or label change. Keep both review labels so the next cycle re-evaluates the new head.
+- status=blocked: write a concise failure comment, remove ${input.reviewingLabel}, and add ${input.blockedLabel}. This is the only terminal path that may add the blocked label; keep ${input.reviewLabel}.
+- Any malformed completion or unsafe/inconclusive update result is a failed update: report it and add ${input.blockedLabel}; never guess success.
+
+Prohibited in every path: force-push, any monitor-side push, label changes on success/stale, PR creation, PR merge, issue close, branch deletion, or retrying this exact head/base pair.
+
+Report only the terminal action and evidence.`;
+}
+
 function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string {
   return `Deterministic driver launched reviewer for PR #${input.prNumber}. Do not launch another agent and do not reselect another PR.
 
@@ -68,4 +100,4 @@ After a \`blocked\` promise:
 Report only the resulting action and evidence.`;
 }
 
-module.exports = { renderIssueMonitorPrompt, renderPromisePollingRules, renderReviewerMonitorPrompt };
+module.exports = { renderBranchUpdateMonitorPrompt, renderIssueMonitorPrompt, renderPromisePollingRules, renderReviewerMonitorPrompt };

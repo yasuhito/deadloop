@@ -1,0 +1,40 @@
+{
+  "prs": [
+    {
+      "number": 31,
+      "title": "Updated PR",
+      "url": "https://github.com/owner/repo/pull/31",
+      "updatedAt": "2026-07-08T00:00:00Z",
+      "headRefName": "agent/issue-31",
+      "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+      "isCrossRepository": false,
+      "isDraft": false,
+      "labels": [
+        {
+          "name": "agent:review"
+        },
+        {
+          "name": "agent:reviewing"
+        }
+      ],
+      "statusCheckRollup": [],
+      "comments": [
+        {
+          "body": "<!-- deadloop:branch-update-attempt key=63bdfe090637cf9ff5d4 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa base=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->"
+        }
+      ],
+      "reviewRequests": [],
+      "mergeStateStatus": "CONFLICTING"
+    }
+  ],
+  "agents": {
+    "result": {
+      "agents": []
+    }
+  },
+  "branchUpdate": {
+    "action": "no_update",
+    "reason": "head_contains_base",
+    "baseOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}

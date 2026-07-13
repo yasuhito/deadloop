@@ -8,8 +8,10 @@ const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { planPrReviewerAction } = require("./pr-reviewer-flow.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
-const { renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
+const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
+const { decideBranchUpdateLive } = require("./pr-branch-update-decision.ts");
+const { branchUpdateAttemptExists, branchUpdateRetryKey, renderBranchUpdateMarker } = require("./pr-branch-update-state.ts");
 const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
@@ -49,6 +51,9 @@ function envConfig() {
     checkCommand: process.env.DEADLOOP_CHECK_COMMAND || "git diff --check",
     reviewerAgent: process.env.DEADLOOP_REVIEWER_AGENT || "pi",
     reviewerModel: process.env.DEADLOOP_REVIEWER_MODEL || "",
+    branchUpdateAgent: process.env.DEADLOOP_WORKER_AGENT || "pi",
+    branchUpdateModel: process.env.DEADLOOP_WORKER_MODEL || "",
+    branchUpdateRemote: process.env.DEADLOOP_BRANCH_UPDATE_REMOTE || "origin",
     reviewLabel: process.env.DEADLOOP_REVIEW_LABEL || "agent:review",
     reviewingLabel: process.env.DEADLOOP_REVIEWING_LABEL || "agent:reviewing",
     humanLabel: process.env.DEADLOOP_HUMAN_LABEL || "ready-for-human",
@@ -112,6 +117,168 @@ Promise report:
 - On success, write {"status":"complete","reason":"","summary":"three sentences: what was reviewed, result, remaining risk"}.
 - If review is blocked by unsafe changes, missing CI, unclear spec, or uncertainty, write {"status":"blocked","reason":"clear reason","summary":"three-sentence summary"}.
 - Always write the promise file, even on failure. Do not exit silently.`;
+}
+
+function branchUpdateWorkerPrompt(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  promiseFile: string,
+  worktreePath: string,
+  headOid: string,
+  baseOid: string,
+): string {
+  const number = Number(pr.number || 0);
+  const branch = String(pr.headRefName || "");
+  const finalizeCommand = [
+    "node",
+    shellQuote(path.join(env.automationDir, "pr-branch-update-finalize.ts")),
+    "--repo",
+    shellQuote(worktreePath),
+    "--github-repo",
+    shellQuote(env.githubRepo),
+    "--pr",
+    String(number),
+    "--branch",
+    shellQuote(branch),
+    "--expected-head",
+    shellQuote(headOid),
+    "--expected-base",
+    shellQuote(baseOid),
+    "--remote",
+    shellQuote(env.branchUpdateRemote),
+    "--automation-dir",
+    shellQuote(env.automationDir),
+    "--state-dir",
+    shellQuote(env.stateDir),
+    "--check-command",
+    shellQuote(env.checkCommand),
+  ].join(" ");
+  return `Update the existing branch for PR #${number} by merging the selected base head and resolving its conflicts.
+
+Exact target:
+- GitHub repo: ${env.githubRepo}
+- PR: #${number}
+- Only branch you may push: ${branch}
+- Expected PR head: ${headOid}
+- Selected configured base head: ${baseOid}
+
+Safety contract:
+- Work only in ${worktreePath}; never edit the main workspace ${env.repoPath}.
+- First require a clean worktree and require HEAD to equal the expected PR head.
+- Merge ${baseOid} into the existing PR branch. Use git merge, never rebase, and never rewrite existing commits.
+- Resolve only conflicts caused by this merge. Do not widen the PR's scope.
+- Commit the merge resolution before finalization.
+- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, verifies the PR head SHA immediately before the only permitted non-force push, and pushes only the driver-selected branch:
+  ${finalizeCommand}
+- Never force-push. Never push another ref. Never edit labels, create or edit a PR, merge a PR, close an issue, or delete a branch.
+- If the finalizer returns stale_head, stop without pushing or changing GitHub state so the next cycle can re-evaluate.
+
+Promise report:
+- Always write JSON to ${promiseFile} before stopping.
+- After finalizer action=pushed, write {"status":"complete","reason":"branch_updated","summary":"what conflicts were resolved and checks passed"}.
+- After finalizer action=stale_head, write {"status":"complete","reason":"stale_head","summary":"PR head changed; stopped without push"}.
+- On merge, validation, invariant, or push failure, write {"status":"blocked","reason":"specific failure","summary":"what failed and why the update is unsafe"}.
+- Do not claim complete unless the finalizer returned pushed or stale_head.`;
+}
+
+function fixtureBranchUpdateDecision(pr: JsonObject, fixture: JsonObject): JsonObject {
+  const configured = fixture.branchUpdate;
+  if (!configured) return { action: "no_update", reason: "fixture_default", headOid: pr.headRefOid || "", baseOid: "fixture-base" };
+  return { headOid: pr.headRefOid || "", baseOid: configured.baseOid || "fixture-base", ...configured };
+}
+
+function liveBranchUpdateDecision(pr: JsonObject, env: ReturnType<typeof envConfig>): JsonObject {
+  const number = Number(pr.number || 0);
+  const expectedHead = String(pr.headRefOid || "");
+  if (!expectedHead) throw new Error(`PR #${number} has no head SHA`);
+  runText(["git", "-C", env.repoPath, "fetch", "--quiet", "--prune"]);
+  runText(["git", "-C", env.repoPath, "fetch", "--quiet", env.branchUpdateRemote, `pull/${number}/head`]);
+  const baseOid = runText(["git", "-C", env.repoPath, "rev-parse", "--verify", env.baseBranch]).trim();
+  const decision = decideBranchUpdateLive(env.repoPath, expectedHead, baseOid, expectedHead, { requireCleanWorktree: false });
+  return { ...decision, baseOid };
+}
+
+function branchUpdateDecision(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
+  if (String(pr.mergeStateStatus || "").toUpperCase() !== "CONFLICTING") {
+    return { action: "no_update", reason: "pr_not_conflicting", headOid: pr.headRefOid || "", baseOid: "" };
+  }
+  return fixture ? fixtureBranchUpdateDecision(pr, fixture) : liveBranchUpdateDecision(pr, env);
+}
+
+function branchUpdateBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>, reason: string): string {
+  return `## What happened
+- Automatic branch update for PR #${Number(pr.number || 0)} stopped because ${reason}.
+- No force-push was attempted. A human must inspect the existing PR branch before re-queueing it.
+
+## Recovery steps
+1. Inspect the PR head, checks, and branch-update comments.
+   \`\`\`bash
+gh pr view ${Number(pr.number || 0)} -R ${shellQuote(env.githubRepo)} --comments --json number,state,headRefName,headRefOid,labels,statusCheckRollup
+   \`\`\`
+2. Resolve the failure without rewriting the PR branch.
+3. After changing either the PR head or configured base head, remove ${env.blockedLabel}; the new exact head/base pair may be attempted once.`;
+}
+
+function applyBranchUpdateBlocked(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): string {
+  const comment = branchUpdateBlockedComment(pr, env, reason);
+  if (!fixture) {
+    const github = githubOperations();
+    github.commentPr(env.githubRepo, Number(pr.number || 0), comment);
+    github.movePrLabels(env.githubRepo, Number(pr.number || 0), { remove: env.reviewingLabel, add: env.blockedLabel });
+  }
+  return comment;
+}
+
+function launchBranchUpdate(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  decision: JsonObject,
+): JsonObject {
+  const number = Number(pr.number || 0);
+  const branch = String(pr.headRefName || "");
+  const headOid = String(decision.headOid || pr.headRefOid || "");
+  const baseOid = String(decision.baseOid || "");
+  const key = branchUpdateRetryKey(headOid, baseOid);
+  const updaterName = `${env.projectId}-pr-${number}-branch-update-${key}`;
+  const uuid = fixture ? "fixture-branch-update-uuid" : randomUUID();
+  if (fixture) {
+    return {
+      updaterName,
+      headRefName: branch,
+      retryKey: key,
+      workspaceId: "fixture-update-workspace",
+      tabId: "fixture-update-tab",
+      worktreePath: `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`,
+      promptFile: `${env.stateDir}/runs/${uuid}/branch-update-prompt.md`,
+      promiseFile: `${env.stateDir}/runs/${uuid}/promise.json`,
+      simulated: true,
+    };
+  }
+
+  runText(["git", "check-ref-format", "--branch", branch]);
+  const marker = renderBranchUpdateMarker(headOid, baseOid);
+  const github = githubOperations();
+  github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
+  github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
+  const launch = launchAgentFlow(
+    {
+      worktree: { mode: "open", branch },
+      repoPath: env.repoPath,
+      automationDir: env.automationDir,
+      stateDir: env.stateDir,
+      name: updaterName,
+      agent: env.branchUpdateAgent,
+      model: env.branchUpdateModel,
+      level: "medium",
+      uuid,
+      promptFilePrefix: "branch-update-prompt",
+      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+        branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
+    },
+    { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+  );
+  return { updaterName, headRefName: branch, retryKey: key, ...launch };
 }
 
 function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
@@ -230,6 +397,81 @@ function drive(fixturePath: string | undefined): DriverResult {
       prNumber: plan.decision.number,
       comment,
     });
+  }
+
+  const updateDecision = branchUpdateDecision(plan.pr, env, fixture);
+  if (updateDecision.action === "blocked") {
+    if (updateDecision.reason === "stale_head") {
+      return driverResult("skip", `PR #${plan.decision.number} head changed while planning; will re-evaluate next cycle`, {
+        driverAction: "branch_update_stale",
+        prNumber: plan.decision.number,
+        branchUpdate: updateDecision,
+      });
+    }
+    const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, String(updateDecision.reason || "unsafe branch-update state"));
+    return driverResult("done", `PR #${plan.decision.number} branch update is unsafe; marked blocked`, {
+      driverAction: "branch_update_blocked",
+      prNumber: plan.decision.number,
+      branchUpdate: updateDecision,
+      comment,
+    });
+  }
+
+  if (updateDecision.action === "delegate_worker") {
+    const headOid = String(updateDecision.headOid || plan.pr.headRefOid || "");
+    const baseOid = String(updateDecision.baseOid || "");
+    if (Boolean(plan.pr.isCrossRepository)) {
+      const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, "the PR comes from another repository");
+      return driverResult("done", `PR #${plan.decision.number} is cross-repository; marked blocked`, {
+        driverAction: "branch_update_blocked",
+        prNumber: plan.decision.number,
+        branchUpdate: updateDecision,
+        comment,
+      });
+    }
+    const marker = renderBranchUpdateMarker(headOid, baseOid);
+    if (branchUpdateAttemptExists(plan.pr.comments || [], headOid, baseOid)) {
+      const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, "this exact PR head/base head pair already used its one attempt");
+      return driverResult("done", `PR #${plan.decision.number} exact branch-update pair was already attempted; marked blocked`, {
+        driverAction: "branch_update_attempt_exhausted",
+        prNumber: plan.decision.number,
+        retryKey: branchUpdateRetryKey(headOid, baseOid),
+        marker,
+        comment,
+      });
+    }
+    try {
+      const launch = launchBranchUpdate(plan.pr, env, fixture, updateDecision);
+      return driverResult("needs_llm", `Launched branch-update worker for PR #${plan.decision.number}`, {
+        driverAction: "branch_update_monitor_request",
+        prNumber: plan.decision.number,
+        branchUpdate: updateDecision,
+        marker,
+        labelsPreserved: [env.reviewLabel, env.reviewingLabel],
+        launch,
+        prompt: renderBranchUpdateMonitorPrompt({
+          prNumber: Number(plan.pr.number || 0),
+          expectedHeadOid: headOid,
+          expectedBaseOid: baseOid,
+          branch: String(plan.pr.headRefName || ""),
+          automationDir: env.automationDir,
+          promiseFile: String(launch.promiseFile || ""),
+          actorName: "branch-update worker",
+          reviewingLabel: env.reviewingLabel,
+          reviewLabel: env.reviewLabel,
+          blockedLabel: env.blockedLabel,
+        }),
+      });
+    } catch (error) {
+      const reason = `branch-update launch failed: ${error instanceof Error ? error.message : String(error)}`;
+      const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, reason);
+      return driverResult("done", `PR #${plan.decision.number} branch-update launch failed; marked blocked`, {
+        driverAction: "branch_update_launch_failed",
+        prNumber: plan.decision.number,
+        marker,
+        comment,
+      });
+    }
   }
 
   if (plan.kind === "external_review_request") {
