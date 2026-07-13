@@ -41,8 +41,12 @@ describe("PR reviewer stale reviewing reclaim", () => {
     expect(runSelect("precheck-reviewing.json", { agents: "agents-reviewer-working.json" }).selected).toBe(false);
   });
 
-  it("reclaims a reviewing PR when its reviewer agent is present but idle", () => {
-    expect(runSelect("precheck-reviewing.json", { agents: "agents-reviewer-idle.json" }).selected).toBe(true);
+  it("does not relaunch a reviewing PR while its reviewer agent name is still occupied by an idle session", () => {
+    expect(runSelect("precheck-reviewing.json", { agents: "agents-reviewer-idle.json" }).selected).toBe(false);
+  });
+
+  it("reclaims a reviewing PR when its matching reviewer agent is done", () => {
+    expect(runSelect("precheck-reviewing.json", { agents: "agents-reviewer-done.json" }).selected).toBe(true);
   });
 
   it("keeps skipping blocked PRs regardless of reviewer agents", () => {

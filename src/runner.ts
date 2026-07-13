@@ -44,6 +44,7 @@ export type RunnerAdapter = {
   createWorktree(input: RunnerWorktreeCreateRequest): RunnerWorktreeLaunch;
   openWorktree(input: RunnerWorktreeRequest): RunnerWorktreeLaunch;
   createTab(input: RunnerTabCreateRequest): RunnerTab;
+  closeTab(tabId: string): string;
   startAgent(input: RunnerAgentStartRequest): string;
   listWorktrees(repoPath: string): RunnerWorktree[];
   listAgents(): RunnerAgent[];
@@ -54,6 +55,7 @@ export type AsyncRunnerAdapter = {
   createWorktree(input: RunnerWorktreeCreateRequest): Promise<RunnerWorktreeLaunch>;
   openWorktree(input: RunnerWorktreeRequest): Promise<RunnerWorktreeLaunch>;
   createTab(input: RunnerTabCreateRequest): Promise<RunnerTab>;
+  closeTab(tabId: string): Promise<string>;
   startAgent(input: RunnerAgentStartRequest): Promise<string>;
   listWorktrees(repoPath: string): Promise<RunnerWorktree[]>;
   listAgents(): Promise<RunnerAgent[]>;

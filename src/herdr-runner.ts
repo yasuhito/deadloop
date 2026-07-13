@@ -161,6 +161,10 @@ function tabCreateArgs(input: RunnerTabCreateRequest): string[] {
   return ["tab", "create", "--workspace", input.workspaceId, "--cwd", input.cwd, "--label", input.label, "--no-focus"];
 }
 
+function tabCloseArgs(tabId: string): string[] {
+  return ["tab", "close", tabId];
+}
+
 function agentStartArgs(input: RunnerAgentStartRequest): string[] {
   const args = ["agent", "start", input.name, "--cwd", input.cwd, "--no-focus"];
   if (input.tabId) args.push("--tab", input.tabId);
@@ -193,6 +197,9 @@ function createHerdrRunner(ops: SyncHerdrRunnerOps = {}): RunnerAdapter {
     createTab(input) {
       return parseTab("tab create", runJson("herdr", tabCreateArgs(input)));
     },
+    closeTab(tabId) {
+      return runText("herdr", tabCloseArgs(tabId));
+    },
     startAgent(input) {
       return runText("herdr", agentStartArgs(input));
     },
@@ -219,6 +226,9 @@ function createAsyncHerdrRunner(ops: AsyncHerdrRunnerOps): AsyncRunnerAdapter {
     },
     async createTab(input) {
       return parseTab("tab create", await ops.runJson("herdr", tabCreateArgs(input)));
+    },
+    async closeTab(tabId) {
+      return await runText("herdr", tabCloseArgs(tabId));
     },
     async startAgent(input) {
       return await runText("herdr", agentStartArgs(input));

@@ -2,7 +2,7 @@ const {
   defaultDecisionConfig,
   externalReviewGate: decideExternalReviewGate,
   selectPrForReview,
-  workingReviewerPrNumbers,
+  occupiedReviewerPrNumbers,
 } = require("./pr-reviewer-decisions.ts");
 
 type JsonObject = Record<string, any>;
@@ -59,7 +59,7 @@ function selectedPr(prs: JsonObject[], number: number): JsonObject {
 
 function planPrReviewerAction(prs: JsonObject[], agents: JsonObject, env: PrReviewerFlowEnv): PrReviewerPlan {
   const config = decisionConfig(env);
-  const decision = selectPrForReview(prs, config, workingReviewerPrNumbers(agents, env.projectId));
+  const decision = selectPrForReview(prs, config, occupiedReviewerPrNumbers(agents, env.projectId));
 
   if (!decision.selected) {
     if (hasSkippedReason(decision, ["pending_checks", "external_review_wait"])) {

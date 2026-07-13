@@ -16,6 +16,7 @@ export type IssueMonitorPromptInput = MonitorPromptBaseInput & {
 
 export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   prNumber: number;
+  reviewerTabId: string;
   checkCommand: string;
   humanLabel: string;
   reviewingLabel: string;
@@ -64,6 +65,11 @@ After a \`complete\` promise:
 After a \`blocked\` promise:
 - Use the promise reason/summary to write the blocked report.
 - Move the PR from \`${input.reviewingLabel}\` to \`${input.blockedLabel}\` only when the blocker is actionable.
+
+Reviewer cleanup:
+- First persist the review outcome in GitHub comments/labels and confirm the resulting PR state.
+- Only after persistence succeeds, close the dedicated reviewer tab with \`herdr tab close ${input.reviewerTabId}\`.
+- If outcome persistence fails, keep the tab open and report the failure; never discard the only review evidence.
 
 Report only the resulting action and evidence.`;
 }

@@ -1,0 +1,30 @@
+{
+  "prs": [
+    {
+      "number": 24,
+      "title": "Re-review after fixes",
+      "url": "https://github.com/owner/repo/pull/24",
+      "headRefName": "agent/issue-24-review",
+      "headRefOid": "feed25",
+      "updatedAt": "2026-07-08T00:00:00Z",
+      "isDraft": false,
+      "labels": [{"name": "agent:review"}, {"name": "agent:reviewing"}],
+      "statusCheckRollup": [],
+      "comments": [],
+      "reviewRequests": []
+    }
+  ],
+  "agents": {
+    "result": {
+      "agents": [
+        {
+          "name": "demo-pr-24-reviewer",
+          "agent_status": "done",
+          "workspace_id": "w9",
+          "tab_id": "w9:t3",
+          "pane_id": "w9:p5"
+        }
+      ]
+    }
+  }
+}

@@ -71,7 +71,7 @@ function shouldSimulateLaunch(fixture: JsonObject | null): boolean {
   return Boolean(fixture);
 }
 
-function reviewAgentPrompt(pr: JsonObject, env: ReturnType<typeof envConfig>, promiseFile: string, reason: string): string {
+function reviewAgentPrompt(pr: JsonObject, env: ReturnType<typeof envConfig>, promiseFile: string, worktreePath: string, reason: string): string {
   const number = Number(pr.number || 0);
   const title = oneLine(pr.title || "PR review");
   return `Review PR #${number}.
@@ -86,7 +86,7 @@ Target:
 Contract:
 - Do not edit the main workspace ${env.repoPath}; inspect only this worktree.
 - Read the PR diff, related issues/docs, and AGENTS.md. Check both spec fit and repository standards.
-- Run needed validation. Minimum check command: ${env.checkCommand}
+- Run needed validation. Execute the minimum configured check only through the artifact-isolation boundary: `node ${shellQuote(env.automationDir)}/run-project-check.ts --cwd ${shellQuote(worktreePath)} --command-base64 ${Buffer.from(env.checkCommand).toString("base64")}`
 - Do not push, edit labels, comment on PRs, merge, or delete branches.
 - If autoMerge=false, summarize the review for human handoff even if the PR looks mergeable.
 
@@ -97,16 +97,44 @@ Promise report:
 - Always write the promise file, even on failure. Do not exit silently.`;
 }
 
-function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
+function agentRecords(value: unknown): JsonObject[] {
+  if (Array.isArray(value)) return value.filter((item) => item && typeof item === "object");
+  if (!value || typeof value !== "object") return [];
+  const record = value as JsonObject;
+  if (record.result) return agentRecords(record.result);
+  return agentRecords(record.agents);
+}
+
+function replaceDoneReviewer(agents: unknown, reviewerName: string, fixture: JsonObject | null): string {
+  const matches = agentRecords(agents).filter((agent) => String(agent.name || "") === reviewerName);
+  const done = matches.filter((agent) => String(agent.agent_status || "").toLowerCase() === "done");
+  if (matches.length !== done.length) throw new Error(`reviewer ${reviewerName} is still active; refusing replacement`);
+  if (done.length > 1) throw new Error(`multiple completed reviewers named ${reviewerName}; refusing ambiguous replacement`);
+  if (!done.length) return "";
+  const tabId = String(done[0].tab_id || done[0].tabId || "");
+  if (!tabId) throw new Error(`completed reviewer ${reviewerName} has no tab id; refusing replacement`);
+  if (!fixture) herdrRunner().closeTab(tabId);
+  return tabId;
+}
+
+function launchPrReviewer(
+  pr: JsonObject,
+  agents: unknown,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  reason: string,
+): JsonObject {
   const number = Number(pr.number || 0);
   const uuid = shouldSimulateLaunch(fixture) ? "fixture-reviewer-uuid" : randomUUID();
   const reviewerName = `${env.projectId}-pr-${number}-reviewer`;
+  const replacedReviewerTabId = replaceDoneReviewer(agents, reviewerName, fixture);
   const headRefName = String(pr.headRefName || `pr-${number}`);
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${headRefName.replace(/\//g, "-")}`;
 
   if (shouldSimulateLaunch(fixture)) {
     return {
       reviewerName,
+      replacedReviewerTabId,
       headRefName,
       workspaceId: "fixture-workspace",
       tabId: "fixture-tab",
@@ -129,11 +157,12 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
       level: "medium",
       uuid,
       promptFilePrefix: "reviewer-prompt",
-      renderPrompt: ({ promiseFile }: { promiseFile: string }) => reviewAgentPrompt(pr, env, promiseFile, reason),
+      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+        reviewAgentPrompt(pr, env, promiseFile, worktreePath, reason),
     },
     { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
   );
-  return { reviewerName, headRefName, ...launch };
+  return { reviewerName, replacedReviewerTabId, headRefName, ...launch };
 }
 
 function draftBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>): string {
@@ -231,7 +260,7 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   const { pr, gate, reason } = plan;
   const decision = plan.decision;
-  const launch = launchPrReviewer(pr, env, fixture, reason);
+  const launch = launchPrReviewer(pr, agents, env, fixture, reason);
   return driverResult("needs_llm", `Launched reviewer agent for PR #${decision.number}`, {
     driverAction: "reviewer_monitor_request",
     prNumber: decision.number,
@@ -242,6 +271,7 @@ function drive(fixturePath: string | undefined): DriverResult {
       automationDir: env.automationDir,
       promiseFile: String(launch.promiseFile || ""),
       actorName: "reviewer",
+      reviewerTabId: String(launch.tabId || ""),
       checkCommand: env.checkCommand,
       humanLabel: env.humanLabel,
       reviewingLabel: env.reviewingLabel,

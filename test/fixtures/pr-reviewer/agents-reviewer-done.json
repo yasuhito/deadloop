@@ -1,0 +1,13 @@
+{
+  "result": {
+    "agents": [
+      {
+        "name": "demo-pr-13-reviewer",
+        "agent_status": "done",
+        "workspace_id": "w9",
+        "tab_id": "w9:t3",
+        "pane_id": "w9:p5"
+      }
+    ]
+  }
+}

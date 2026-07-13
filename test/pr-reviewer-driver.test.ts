@@ -72,7 +72,21 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).prompt).not.toContain("launch-agent.ts");
   });
 
+  it("identifies the dedicated reviewer tab in cleanup instructions", () => {
+    expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).prompt).toContain(
+      "herdr tab close fixture-tab",
+    );
+  });
+
   it("reports the deterministic reviewer name", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).launch.reviewerName).toBe("demo-pr-24-reviewer");
+  });
+
+  it("replaces one matching done reviewer tab before re-review", () => {
+    expect(runDriverFixture("done-reviewer-reclaim.json").launch.replacedReviewerTabId).toBe("w9:t3");
+  });
+
+  it("refuses ambiguous replacement when multiple done reviewers have the same name", () => {
+    expect(runDriverFixture("ambiguous-done-reviewers.json").action).toBe("error");
   });
 });

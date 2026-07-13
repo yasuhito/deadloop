@@ -66,6 +66,20 @@ describe("Herdr runner", () => {
     expect(runner.createTab({ workspaceId: "w1", cwd: "/wt", label: "worker" })).toEqual({ tabId: "w1:t2" });
   });
 
+  it("closes a completed agent tab through Herdr", () => {
+    const commands: unknown[] = [];
+    const runner = createHerdrRunner({
+      runText: (command: string, args: string[]) => {
+        commands.push([command, ...args]);
+        return "closed";
+      },
+    });
+
+    runner.closeTab("w1:t3");
+
+    expect(commands[0]).toEqual(["herdr", "tab", "close", "w1:t3"]);
+  });
+
   it("starts an agent through Herdr", () => {
     const commands: unknown[] = [];
     const runner = createHerdrRunner({

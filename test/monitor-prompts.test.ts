@@ -60,6 +60,7 @@ describe("monitor prompts", () => {
       automationDir: "/automation",
       promiseFile: "/wt/.deadloop/promise-u.json",
       actorName: "reviewer",
+      reviewerTabId: "workspace:review-tab",
       checkCommand: "npm test",
       humanLabel: "ready-for-human",
       reviewingLabel: "agent:reviewing",
@@ -67,5 +68,37 @@ describe("monitor prompts", () => {
     });
 
     expect(prompt).toContain("If autoMerge=false, never merge");
+  });
+
+  it("closes the dedicated reviewer tab after persisting a completed review outcome", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24,
+      automationDir: "/automation",
+      promiseFile: "/wt/.deadloop/promise-u.json",
+      actorName: "reviewer",
+      reviewerTabId: "workspace:review-tab",
+      checkCommand: "npm test",
+      humanLabel: "ready-for-human",
+      reviewingLabel: "agent:reviewing",
+      blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("herdr tab close workspace:review-tab");
+  });
+
+  it("retains the reviewer tab when persisting its outcome fails", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24,
+      automationDir: "/automation",
+      promiseFile: "/wt/.deadloop/promise-u.json",
+      actorName: "reviewer",
+      reviewerTabId: "workspace:review-tab",
+      checkCommand: "npm test",
+      humanLabel: "ready-for-human",
+      reviewingLabel: "agent:reviewing",
+      blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("If outcome persistence fails, keep the tab open");
   });
 });
