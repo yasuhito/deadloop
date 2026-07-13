@@ -8,7 +8,7 @@ deadloop v0 uses the Herdr runner.
 - Start Pi worker-agent and review-agent sessions.
 - Check completion reports from promise files written by worker agents. Prompts and promise files live in deadloop's state directory, outside target worktrees.
 - Retire a finished same-name agent before a deterministic relaunch, but refuse to close working, ambiguous, or wrong-worktree candidates.
-- After merge / close, clean up unnecessary workspaces and linked worktrees with deterministic helper scripts.
+- After merge / close, clean up unnecessary workspaces and linked worktrees with deterministic helper scripts. Cleanup removes `.deadloop` / `.pi-subagents` only when they contain no tracked files and the worktree is still otherwise clean; otherwise it preserves the worktree and stops safely.
 
 ## Requirements
 
