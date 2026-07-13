@@ -14,6 +14,7 @@ const {
   automationStateKey,
   codeFreshnessWarning,
   getDueSlot,
+  isLinkedGitWorktree,
   nextSlotAfter,
   parseProjectsConfig,
   renderTemplate,
@@ -143,6 +144,8 @@ function inferGithubRepo(repoPath) {
 function implicitProjectFromCwd(cwd) {
   const repoPath = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
   if (!repoPath) return null;
+  const gitCommonDir = gitOutput(cwd, ["rev-parse", "--git-common-dir"]);
+  if (!gitCommonDir || isLinkedGitWorktree(repoPath, gitCommonDir)) return null;
   const id = sanitizeId(path.basename(repoPath));
   const raw = {
     id,

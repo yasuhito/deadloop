@@ -7,6 +7,7 @@ deadloop v0 uses the Herdr runner.
 - Create Herdr worktrees.
 - Start Pi worker-agent and review-agent sessions.
 - Check completion reports from promise files written by worker agents.
+- After persisting a reviewer outcome in GitHub, close its dedicated reviewer tab; keep the tab when persistence fails so review evidence is not discarded.
 - After merge / close, clean up unnecessary workspaces and linked worktrees with deterministic helper scripts.
 
 ## Requirements
