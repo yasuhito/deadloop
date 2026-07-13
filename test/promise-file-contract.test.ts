@@ -23,6 +23,7 @@ function issueWorkerPrompt(): string {
     issueTitle: "Demo",
     issueUrl: "https://github.com/owner/repo/issues/1",
     githubRepo: "owner/repo",
+    automationDir: "/automation",
     workerInstructions: "Read AGENTS.md.",
     checkCommand: "npm test",
     promiseFile: "<worktreePath>/.deadloop/promise-<uuid>.json",

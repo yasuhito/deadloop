@@ -86,7 +86,7 @@ Target:
 Contract:
 - Do not edit the main workspace ${env.repoPath}; inspect only this worktree.
 - Read the PR diff, related issues/docs, and AGENTS.md. Check both spec fit and repository standards.
-- Run needed validation. Execute the minimum configured check only through the artifact-isolation boundary: `node ${shellQuote(env.automationDir)}/run-project-check.ts --cwd ${shellQuote(worktreePath)} --command-base64 ${Buffer.from(env.checkCommand).toString("base64")}`
+- Run needed validation. Run the configured check only through the isolation helper: `node ${shellQuote(`${env.automationDir}/run-project-check.ts`)} --cwd ${shellQuote(worktreePath)} --command ${shellQuote(env.checkCommand)}`
 - Do not push, edit labels, comment on PRs, merge, or delete branches.
 - If autoMerge=false, summarize the review for human handoff even if the PR looks mergeable.
 
@@ -272,6 +272,7 @@ function drive(fixturePath: string | undefined): DriverResult {
       promiseFile: String(launch.promiseFile || ""),
       actorName: "reviewer",
       reviewerTabId: String(launch.tabId || ""),
+      worktreePath: String(launch.worktreePath || ""),
       checkCommand: env.checkCommand,
       humanLabel: env.humanLabel,
       reviewingLabel: env.reviewingLabel,

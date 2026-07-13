@@ -20,6 +20,7 @@ type IssueWorkerPromptInput = {
   issueTitle: string;
   issueUrl: string;
   githubRepo: string;
+  automationDir: string;
   workerInstructions: string;
   checkCommand: string;
   promiseFile: string;
@@ -118,7 +119,8 @@ gh issue edit ${issue} -R ${shellQuoteForRenderer(input.githubRepo)} --remove-la
 
 function renderIssueWorkerPrompt(input: IssueWorkerPromptInput): string {
   const issueTitle = oneLineForRenderer(input.issueTitle);
-  const validationFence = markdownFence(input.checkCommand);
+  const projectCheck = `node ${shellQuoteForRenderer(pathForProjectCheck(input.automationDir))} --command ${shellQuoteForRenderer(input.checkCommand)}`;
+  const validationFence = markdownFence(projectCheck);
 
   return `Launch reason: ${oneLineForRenderer(input.launchReason)}
 
@@ -134,9 +136,9 @@ Contract:
 - Respect any \`Out of scope\` section.
 - ${oneLineForRenderer(input.workerInstructions)}
 - Prefer a red-green-refactor loop when practical.
-- Run relevant validation and at minimum pass this check command:
+- Run relevant validation and run the configured check only through the isolation helper:
   ${validationFence}bash
-  ${input.checkCommand}
+  ${projectCheck}
   ${validationFence}
 - Create at least one conventional commit.
 
@@ -153,6 +155,10 @@ Promise report:
 - On success, write \`{"status":"complete","reason":"","summary":"three sentences: what changed, what was verified, remaining risk"}\`.
 - If blocked by failure, missing spec, risky change, or uncertainty, write \`{"status":"blocked","reason":"clear reason","summary":"three-sentence summary"}\`.
 - Always write the promise file, even on failure. Do not exit silently.`;
+}
+
+function pathForProjectCheck(automationDir: string): string {
+  return `${automationDir.replace(/\/$/, "")}/run-project-check.ts`;
 }
 
 module.exports = { renderIssueBlockedComment, renderIssueWorkerPrompt };

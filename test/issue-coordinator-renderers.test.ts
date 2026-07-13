@@ -28,6 +28,7 @@ const workerInput = {
   issueTitle: "Render worker prompt\nwith `tricky` title",
   issueUrl: "https://github.com/owner/repo/issues/72",
   githubRepo: "owner/repo",
+  automationDir: "/automation",
   workerInstructions: "Read AGENTS.md. Do not paste unsafe fences.",
   checkCommand: "npm test && echo ```not a fence```",
   promiseFile: "/tmp/worktree/.deadloop/promise-123.json",
@@ -72,13 +73,15 @@ describe("issue coordinator renderers", () => {
     expect(renderIssueWorkerPrompt(workerInput)).toContain("- Do not push.");
   });
 
-  it("renders the worker validation command", () => {
-    expect(renderIssueWorkerPrompt(workerInput)).toContain("~~~bash\n  npm test && echo ```not a fence```\n  ~~~");
+  it("renders the worker validation command through the isolation helper", () => {
+    expect(renderIssueWorkerPrompt(workerInput)).toContain(
+      "node /automation/run-project-check.ts --command 'npm test && echo ```not a fence```'",
+    );
   });
 
-  it("uses a safe worker validation fence for longer backtick runs", () => {
+  it("shell-quotes longer backtick runs passed to the isolation helper", () => {
     expect(renderIssueWorkerPrompt({ ...workerInput, checkCommand: "echo ````" })).toContain(
-      "~~~bash\n  echo ````\n  ~~~",
+      "--command 'echo ````'",
     );
   });
 

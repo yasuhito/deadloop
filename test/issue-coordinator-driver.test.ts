@@ -75,7 +75,7 @@ describe("issue coordinator deterministic driver", () => {
 
   it("preserves validation before PR creation after deterministic worker launch", () => {
     expect(runDriverFixture("driver-ready-worker.json").prompt).toContain(
-      "Run validation including `npm test` before creating any PR",
+      "run-project-check.ts --cwd /worktrees/demo/agent-issue-12-implement-small-feature --command 'npm test'", 
     );
   });
 
