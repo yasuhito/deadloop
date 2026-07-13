@@ -106,6 +106,35 @@ describe("project check", () => {
     expect(fs.readFileSync(path.join(cwd, ".pi-subagents", "metadata.json"), "utf8")).toBe("diagnostic output\n");
   });
 
+  it("bounds a timed-out check that ignores SIGTERM", async () => {
+    const cwd = fixtureRepo();
+    const startedAt = Date.now();
+
+    await runProjectCheck({
+      cwd,
+      command: `node -e 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'`,
+      timeoutMs: 20,
+      terminationGraceMs: 20,
+      quarantineRoot: path.join(os.tmpdir(), "deadloop-project-check-quarantine"),
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
+  it("restores artifacts after forcing a timed-out check to stop", async () => {
+    const cwd = fixtureRepo();
+
+    await runProjectCheck({
+      cwd,
+      command: `node -e 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'`,
+      timeoutMs: 20,
+      terminationGraceMs: 20,
+      quarantineRoot: path.join(os.tmpdir(), "deadloop-project-check-quarantine"),
+    });
+
+    expect(fs.readFileSync(path.join(cwd, ".pi-subagents", "metadata.json"), "utf8")).toBe("diagnostic output\n");
+  });
+
   it("restores runtime artifacts when the CLI is interrupted", async () => {
     const cwd = fixtureRepo();
     const child = spawn(

@@ -32,6 +32,7 @@ type ProjectCheckInput = {
   command: string;
   quarantineRoot: string;
   timeoutMs?: number;
+  terminationGraceMs?: number;
   signal?: AbortSignal;
 };
 
@@ -124,14 +125,22 @@ function runShell(
   command: string,
   cwd: string,
   timeoutMs: number | undefined,
+  terminationGraceMs: number,
   signal: AbortSignal | undefined,
 ): Promise<ProjectCheckResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn("bash", ["-lc", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const detached = process.platform !== "win32";
+    const child = spawn("bash", ["-lc", command], {
+      cwd,
+      detached,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
     let interrupted = false;
+    let escalationTimer: NodeJS.Timeout | undefined;
+    let terminationStarted = false;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -141,20 +150,35 @@ function runShell(
       stderr += chunk;
     });
     child.once("error", reject);
+    const kill = (killSignal: NodeJS.Signals) => {
+      try {
+        if (detached && child.pid) process.kill(-child.pid, killSignal);
+        else child.kill(killSignal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    };
+    const terminate = () => {
+      if (terminationStarted) return;
+      terminationStarted = true;
+      kill("SIGTERM");
+      escalationTimer = setTimeout(() => kill("SIGKILL"), terminationGraceMs);
+    };
     const interrupt = () => {
       interrupted = true;
-      child.kill("SIGTERM");
+      terminate();
     };
     signal?.addEventListener("abort", interrupt, { once: true });
     if (signal?.aborted) interrupt();
     const timer = timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          child.kill("SIGTERM");
+          terminate();
         }, timeoutMs)
       : undefined;
     child.once("close", (code) => {
       if (timer) clearTimeout(timer);
+      if (escalationTimer) clearTimeout(escalationTimer);
       signal?.removeEventListener("abort", interrupt);
       resolve({ code: timedOut ? 124 : interrupted ? 130 : (code ?? 1), stdout, stderr, timedOut });
     });
@@ -184,7 +208,7 @@ async function runProjectCheck(input: ProjectCheckInput): Promise<ProjectCheckRe
 
   const hidden = hideRuntimeArtifacts(input.cwd, input.quarantineRoot);
   try {
-    return await runShell(input.command, input.cwd, input.timeoutMs, input.signal);
+    return await runShell(input.command, input.cwd, input.timeoutMs, input.terminationGraceMs ?? 1000, input.signal);
   } finally {
     hidden.restore();
   }
