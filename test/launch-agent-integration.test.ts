@@ -71,7 +71,7 @@ describe("launch-agent integration", () => {
 
     expect(recorded).toEqual([
       "agent", "start", "demo-worker", "--cwd", worktree, "--no-focus", "--tab", "t1",
-      "--", "pi", "--name", "demo-worker", "--thinking", "medium", `@${promptFile}`,
+      "--", "pi", "--name", "demo-worker", "--thinking", "medium", "--approve", `@${promptFile}`,
     ]);
   });
 
