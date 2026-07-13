@@ -24,7 +24,21 @@ describe("agent launch profiles", () => {
         promptFile: "/wt/.deadloop/prompt.md",
         promptText: "unused",
       }),
-    ).toEqual(["pi", "--name", "demo-issue-1-worker", "--thinking", "medium", "@/wt/.deadloop/prompt.md"]);
+    ).toEqual([
+      "pi",
+      "--name",
+      "demo-issue-1-worker",
+      "--thinking",
+      "medium",
+      "--approve",
+      "@/wt/.deadloop/prompt.md",
+    ]);
+  });
+
+  it("approves project trust for unattended pi agents", () => {
+    expect(
+      buildAgentArgv({ agent: "pi", name: "w", level: "low", promptFile: "/p", promptText: "" }),
+    ).toContain("--approve");
   });
 
   it("builds the claude argv with a positional prompt payload", () => {

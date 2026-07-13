@@ -33,7 +33,10 @@ const AGENT_PROFILES = {
     identity: { flag: "--name", source: "name" },
     levelFlag: "--thinking",
     modelFlag: "--model",
-    permissionArgs: [],
+    // deadloop launches only operator-configured repositories in unattended
+    // worktrees. Approve project resources for this run so Pi cannot pause on
+    // its interactive project-trust dialog.
+    permissionArgs: ["--approve"],
     prompt: "file-ref",
     preconditions: [],
   },

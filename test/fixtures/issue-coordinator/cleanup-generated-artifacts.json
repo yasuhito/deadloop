@@ -22,7 +22,7 @@
   ],
   "git": {
     "statuses": {
-      "/worktrees/repo/agent-issue-1-add-safety-controls-for-dogfooding": "?? .deadloop/promise-worker.json\n?? .deadloop/reviewer-prompt.md\n"
+      "/worktrees/repo/agent-issue-1-add-safety-controls-for-dogfooding": "?? .deadloop/promise-worker.json\n?? .deadloop/reviewer-prompt.md\n?? .pi-subagents/artifacts/reviewer-output.md\n"
     }
   }
 }

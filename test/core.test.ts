@@ -10,6 +10,7 @@ import {
   codeFreshnessWarning,
   cronSlotAt,
   getDueSlot,
+  isLinkedGitWorktree,
   nextSlotAfter,
   normalizeProject,
   parseProjectsConfig,
@@ -23,6 +24,14 @@ import {
 } from "../src/core";
 
 describe("deterministic extension core", () => {
+  it("identifies a linked worktree whose common git directory belongs to another checkout", () => {
+    expect(isLinkedGitWorktree("/worktrees/repo/feature", "/repos/repo/.git")).toBe(true);
+  });
+
+  it("does not identify a primary checkout as a linked worktree", () => {
+    expect(isLinkedGitWorktree("/repos/repo", ".git")).toBe(false);
+  });
+
   it("uses DEADLOOP_CONFIG before default config paths", () => {
     expect(
       resolveConfigPath({
