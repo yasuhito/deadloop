@@ -96,8 +96,8 @@ function isUnderRootForCleanup(candidatePath: string, root: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function isGeneratedDeadloopArtifactStatusLine(line: string): boolean {
-  return /^\?\?\s+\.deadloop(?:\/|$)/.test(line.trim());
+function isGeneratedAgentArtifactStatusLine(line: string): boolean {
+  return /^\?\?\s+\.(?:deadloop|pi-subagents)(?:\/|$)/.test(line.trim());
 }
 
 function isCleanStatusForCleanup(status: unknown): boolean {
@@ -105,7 +105,7 @@ function isCleanStatusForCleanup(status: unknown): boolean {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .every(isGeneratedDeadloopArtifactStatusLine);
+    .every(isGeneratedAgentArtifactStatusLine);
 }
 
 function localHeadMatchesClosedPr(
@@ -297,6 +297,12 @@ function loadFixtureCleanupPlan(file: string): { candidates: CleanupRecord[]; sk
   });
 }
 
+function removeGeneratedAgentArtifacts(worktreePath: string): void {
+  for (const directory of [".deadloop", ".pi-subagents"]) {
+    fs.rmSync(path.join(worktreePath, directory), { recursive: true, force: true });
+  }
+}
+
 function applyCleanupPlan(plan: { candidates: CleanupRecord[]; skipped: CleanupRecord[] }, config: CleanupConfig): CleanupRecord {
   runCleanupText(["git", "-C", config.repoPath, "fetch", "--prune"], { check: false });
   const removed: CleanupRecord[] = [];
@@ -306,6 +312,11 @@ function applyCleanupPlan(plan: { candidates: CleanupRecord[]; skipped: CleanupR
     const workspaceId = item.workspaceId;
     try {
       if (!workspaceId) throw new Error("missing Herdr workspace id; refusing direct git worktree removal");
+      const worktreePath = String(item.path || "");
+      if (!worktreePath) throw new Error("missing worktree path; refusing cleanup");
+      removeGeneratedAgentArtifacts(worktreePath);
+      const remainingStatus = runCleanupText(["git", "-C", worktreePath, "status", "--short"]);
+      if (remainingStatus.trim()) throw new Error("worktree became dirty after cleanup planning; refusing removal");
       cleanupHerdrRunner().removeWorktree(String(workspaceId));
       removed.push(item);
     } catch (error) {
