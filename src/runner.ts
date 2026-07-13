@@ -28,7 +28,10 @@ export type RunnerWorktree = Record<string, any> & {
 };
 
 export type RunnerAgent = Record<string, any> & {
+  agentId?: string;
   name?: string;
+  status?: string;
+  cwd?: string;
 };
 
 export type RunnerWorktreeLaunch = {
@@ -47,6 +50,7 @@ export type RunnerAdapter = {
   startAgent(input: RunnerAgentStartRequest): string;
   listWorktrees(repoPath: string): RunnerWorktree[];
   listAgents(): RunnerAgent[];
+  removeAgent(agentId: string): string;
   removeWorktree(workspaceId: string): string;
 };
 
@@ -57,5 +61,6 @@ export type AsyncRunnerAdapter = {
   startAgent(input: RunnerAgentStartRequest): Promise<string>;
   listWorktrees(repoPath: string): Promise<RunnerWorktree[]>;
   listAgents(): Promise<RunnerAgent[]>;
+  removeAgent(agentId: string): Promise<string>;
   removeWorktree(workspaceId: string): Promise<string>;
 };

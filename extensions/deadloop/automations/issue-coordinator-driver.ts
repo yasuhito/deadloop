@@ -3,11 +3,13 @@
 // under this package's `type: commonjs`, matching launch-agent.ts.
 
 const fs = require("node:fs") as typeof import("node:fs");
+const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
+const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const {
   createCommandRunner,
@@ -118,8 +120,8 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       workspaceId: "fixture-workspace",
       tabId: "fixture-tab",
       worktreePath: simulatedWorktreePath,
-      promptFile: `${simulatedWorktreePath}/.deadloop/worker-prompt-${uuid}.md`,
-      promiseFile: `${simulatedWorktreePath}/.deadloop/promise-${uuid}.json`,
+      promptFile: `${env.stateDir}/runs/${uuid}/worker-prompt.md`,
+      promiseFile: `${env.stateDir}/runs/${uuid}/promise.json`,
       simulated: true,
     };
   }
@@ -130,13 +132,14 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       worktree: { mode: "create", branch, baseBranch: env.baseBranch },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
+      stateDir: env.stateDir,
       name: workerName,
       agent: env.workerAgent,
       model: env.workerModel,
       level: "medium",
       uuid,
       promptFilePrefix: "worker-prompt",
-      renderPrompt: ({ promiseFile }: { promiseFile: string }) =>
+      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         renderIssueWorkerPrompt({
           launchReason: "deterministic issue coordinator launch",
           issueNumber: number,
@@ -145,6 +148,12 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
           githubRepo: env.githubRepo,
           workerInstructions: env.workerInstructions,
           checkCommand: env.checkCommand,
+          validationCommand: renderProjectCheckCommand({
+            automationDir: env.automationDir,
+            stateDir: env.stateDir,
+            cwd: worktreePath,
+            command: env.checkCommand,
+          }),
           promiseFile,
         }),
     },
@@ -160,6 +169,9 @@ function envConfig() {
     githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
     baseBranch: process.env.DEADLOOP_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
+    stateDir:
+      process.env.DEADLOOP_STATE_DIR ||
+      path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: process.env.DEADLOOP_CHECK_COMMAND || "git diff --check",
     workerInstructions: process.env.DEADLOOP_WORKER_INSTRUCTIONS || "Read AGENTS.md and follow the issue contract.",
     workerAgent: process.env.DEADLOOP_WORKER_AGENT || "pi",

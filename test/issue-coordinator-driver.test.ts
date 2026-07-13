@@ -67,10 +67,10 @@ describe("issue coordinator deterministic driver", () => {
     expect(runDriverFixture("driver-ready-worker.json").prompt).toContain("only completion authority");
   });
 
-  it("reports the deterministic worker promise path", () => {
-    expect(runDriverFixture("driver-ready-worker.json").launch.promiseFile).toContain(
-      ".deadloop/promise-",
-    );
+  it("reports the deterministic worker promise path outside the worktree", () => {
+    expect(
+      runDriverFixture("driver-ready-worker.json", { DEADLOOP_STATE_DIR: "/state/deadloop" }).launch.promiseFile,
+    ).toBe("/state/deadloop/runs/fixture-worker-uuid/promise.json");
   });
 
   it("preserves validation before PR creation after deterministic worker launch", () => {

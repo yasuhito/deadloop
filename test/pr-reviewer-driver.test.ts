@@ -56,10 +56,13 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).driverAction).toBe("reviewer_monitor_request");
   });
 
-  it("reports the deterministic reviewer promise path", () => {
-    expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).launch.promiseFile).toContain(
-      ".deadloop/promise-",
-    );
+  it("reports the deterministic reviewer promise path outside the worktree", () => {
+    expect(
+      runDriverFixture("fallback-review.json", {
+        DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1",
+        DEADLOOP_STATE_DIR: "/state/deadloop",
+      }).launch.promiseFile,
+    ).toBe("/state/deadloop/runs/fixture-reviewer-uuid/promise.json");
   });
 
   it("preserves autoMerge=false safety after deterministic reviewer launch", () => {

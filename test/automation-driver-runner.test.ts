@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runScheduledAutomation } from "../src/automation-runner";
+import { recordAutomationResult, runScheduledAutomation } from "../src/automation-runner";
 import { normalizeProject, type AutomationFileResolution } from "../src/core";
 
 function foundFile(requested: string | undefined): AutomationFileResolution {
@@ -35,6 +35,14 @@ async function exerciseDriver(stdout: string, options: { code?: number; stderr?:
 }
 
 describe("deterministic automation driver runner", () => {
+  it("clears the current driver error after recovery", () => {
+    const entry = { lastResult: "driver_error", failureStreak: 8, lastError: "agent_name_taken" };
+
+    recordAutomationResult(entry, "driver_needs_llm_queued");
+
+    expect(entry).toEqual({ lastResult: "driver_needs_llm_queued", failureStreak: 0 });
+  });
+
   it("skips sending a prompt when the driver returns skip", async () => {
     const result = await exerciseDriver(JSON.stringify({ action: "skip", summary: "対象なし" }));
 

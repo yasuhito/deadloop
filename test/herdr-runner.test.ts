@@ -92,10 +92,39 @@ describe("Herdr runner", () => {
     expect(runner.listWorktrees("/repo")).toEqual([{ branch: "b" }]);
   });
 
-  it("lists agents", () => {
-    const runner = createHerdrRunner({ runJson: () => ({ result: { agents: [{ name: "worker" }] } }) });
+  it("normalizes agent lifecycle fields", () => {
+    const runner = createHerdrRunner({
+      runJson: () => ({
+        result: {
+          agents: [{ name: "reviewer", agent_status: "Done", cwd: "/wt", pane_id: "pane-1" }],
+        },
+      }),
+    });
 
-    expect(runner.listAgents()).toEqual([{ name: "worker" }]);
+    expect(runner.listAgents()).toEqual([
+      {
+        name: "reviewer",
+        agent_status: "Done",
+        cwd: "/wt",
+        pane_id: "pane-1",
+        agentId: "pane-1",
+        status: "done",
+      },
+    ]);
+  });
+
+  it("removes a finished agent through Herdr", () => {
+    const commands: unknown[] = [];
+    const runner = createHerdrRunner({
+      runText: (command: string, args: string[]) => {
+        commands.push([command, ...args]);
+        return "removed";
+      },
+    });
+
+    runner.removeAgent("pane-1");
+
+    expect(commands[0]).toEqual(["herdr", "pane", "close", "pane-1"]);
   });
 
   it("removes a worktree through Herdr", () => {
