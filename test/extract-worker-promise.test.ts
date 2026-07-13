@@ -32,6 +32,30 @@ describe("extract worker promise helper", () => {
     });
   });
 
+  it("accepts reviewer changes_requested with structured findings", () => {
+    withTempFile(
+      '{"status":"complete","outcome":"changes_requested","reason":"","summary":"lint contract failed","findings":[{"title":"Lint failure","body":"Run formatter on src/a.ts","path":"src/a.ts","line":4,"severity":"major"}]}',
+      (filePath) => {
+        expect(runHelper(filePath)).toEqual({ code: 0, status: "complete" });
+      },
+    );
+  });
+
+  it("keeps legacy complete promises compatible", () => {
+    withTempFile('{"status":"complete","reason":"","summary":"legacy reviewer report"}', (filePath) => {
+      expect(runHelper(filePath).code).toBe(0);
+    });
+  });
+
+  it("rejects changes_requested without findings", () => {
+    withTempFile(
+      '{"status":"complete","outcome":"changes_requested","reason":"","summary":"missing findings"}',
+      (filePath) => {
+        expect(runHelper(filePath).status).toBe("invalid");
+      },
+    );
+  });
+
   it("accepts blocked promise files", () => {
     withTempFile('{"status":"blocked","reason":"仕様不足","summary":"確認した。仕様が足りない。判断待ち。"}', (filePath) => {
       expect(runHelper(filePath)).toEqual({ code: 0, status: "blocked" });

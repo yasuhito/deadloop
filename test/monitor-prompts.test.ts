@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { renderIssueMonitorPrompt, renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
+const { renderIssueMonitorPrompt, renderRepairMonitorPrompt, renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
 
 describe("monitor prompts", () => {
   it("renders shared promise polling rules for Worker monitoring", () => {
@@ -57,15 +57,52 @@ describe("monitor prompts", () => {
   it("renders reviewer-specific completion instructions", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24,
+      expectedHeadOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      branch: "agent/issue-24",
       automationDir: "/automation",
       promiseFile: "/wt/.deadloop/promise-u.json",
       actorName: "reviewer",
       checkCommand: "npm test",
       humanLabel: "ready-for-human",
+      reviewLabel: "agent:review",
       reviewingLabel: "agent:reviewing",
       blockedLabel: "agent:blocked",
     });
 
     expect(prompt).toContain("If autoMerge=false, never merge");
+  });
+
+  it("routes reviewer changes_requested through the repair dispatcher", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24,
+      expectedHeadOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      branch: "agent/issue-24",
+      automationDir: "/automation",
+      promiseFile: "/state/promise.json",
+      actorName: "reviewer",
+      checkCommand: "npm test",
+      humanLabel: "ready-for-human",
+      reviewLabel: "agent:review",
+      reviewingLabel: "agent:reviewing",
+      blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("outcome=changes_requested");
+  });
+
+  it("keeps review labels through successful repair monitoring", () => {
+    const prompt = renderRepairMonitorPrompt({
+      prNumber: 24,
+      expectedHeadOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      branch: "agent/issue-24",
+      automationDir: "/automation",
+      promiseFile: "/state/repair-promise.json",
+      actorName: "review-repair worker",
+      reviewLabel: "agent:review",
+      reviewingLabel: "agent:reviewing",
+      blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("Do not change labels; the changed head starts a new review cycle");
   });
 });

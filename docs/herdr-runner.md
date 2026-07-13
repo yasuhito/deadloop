@@ -5,9 +5,10 @@ deadloop v0 uses the Herdr runner.
 ## Responsibilities
 
 - Create Herdr worktrees.
-- Start Pi worker-agent and review-agent sessions.
+- Start Pi implementation, review, branch-update, and bounded review-repair sessions.
 - Check completion reports from promise files written by worker agents. Prompts and promise files live in deadloop's state directory, outside target worktrees.
 - Retire a finished same-name agent before a deterministic relaunch, but refuse to close working, ambiguous, or wrong-worktree candidates.
+- Open the existing PR worktree for review repair; GitHub outcome semantics, attempt fingerprints, and guarded push finalization remain outside the runner boundary.
 - After merge / close, clean up unnecessary workspaces and linked worktrees with deterministic helper scripts. Cleanup removes `.deadloop` / `.pi-subagents` only when they contain no tracked files and the worktree is still otherwise clean; otherwise it preserves the worktree and stops safely.
 
 ## Requirements

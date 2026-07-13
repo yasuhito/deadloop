@@ -7,6 +7,19 @@ const fs = require("node:fs") as typeof import("node:fs");
 type PromiseValidation = Record<string, any>;
 
 const VALID_PROMISE_STATUSES = new Set(["complete", "blocked"]);
+const VALID_REVIEW_OUTCOMES = new Set(["approved", "changes_requested", "human_required"]);
+const VALID_FINDING_SEVERITIES = new Set(["blocker", "major", "minor"]);
+
+function validFinding(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const finding = value as PromiseValidation;
+  if (typeof finding.title !== "string" || !finding.title.trim()) return false;
+  if (typeof finding.body !== "string" || !finding.body.trim()) return false;
+  if (finding.path !== undefined && (typeof finding.path !== "string" || !finding.path.trim())) return false;
+  if (finding.line !== undefined && (!Number.isInteger(finding.line) || finding.line < 1)) return false;
+  if (finding.severity !== undefined && !VALID_FINDING_SEVERITIES.has(finding.severity)) return false;
+  return true;
+}
 
 function invalidPromise(filePath: string, error: string): PromiseValidation {
   return { status: "invalid", file: filePath, error };
@@ -29,6 +42,16 @@ function validatePromise(filePath: string): PromiseValidation {
   if (!VALID_PROMISE_STATUSES.has(status)) return invalidPromise(filePath, "invalid_status");
   if (typeof promise.reason !== "string") return invalidPromise(filePath, "invalid_reason");
   if (typeof promise.summary !== "string") return invalidPromise(filePath, "invalid_summary");
+  if (promise.outcome !== undefined && !VALID_REVIEW_OUTCOMES.has(promise.outcome)) {
+    return invalidPromise(filePath, "invalid_outcome");
+  }
+  if (promise.findings !== undefined && (!Array.isArray(promise.findings) || !promise.findings.every(validFinding))) {
+    return invalidPromise(filePath, "invalid_findings");
+  }
+  if (promise.outcome === "changes_requested" && (!Array.isArray(promise.findings) || promise.findings.length === 0)) {
+    return invalidPromise(filePath, "changes_requested_requires_findings");
+  }
+  if (status === "blocked" && promise.outcome !== undefined) return invalidPromise(filePath, "blocked_has_outcome");
 
   return { status, file: filePath, promise };
 }

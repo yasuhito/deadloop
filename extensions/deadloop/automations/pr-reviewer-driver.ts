@@ -114,8 +114,11 @@ Contract:
 
 Promise report:
 - Before stopping, write JSON to the promise file: \`${promiseFile.replace(/`/g, "\\`")}\`.
-- On success, write {"status":"complete","reason":"","summary":"three sentences: what was reviewed, result, remaining risk"}.
-- If review is blocked by unsafe changes, missing CI, unclear spec, or uncertainty, write {"status":"blocked","reason":"clear reason","summary":"three-sentence summary"}.
+- Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
+- If no actionable defect remains, write {"status":"complete","outcome":"approved","reason":"","summary":"three sentences: what was reviewed, result, remaining risk","findings":[]}.
+- If actionable defects exist, write {"status":"complete","outcome":"changes_requested","reason":"","summary":"three-sentence summary","findings":[{"title":"concise defect","body":"bounded required correction and evidence","path":"optional/repo/path","line":1,"severity":"blocker|major|minor"}]}.
+- Use outcome=human_required only when a product/spec/safety decision cannot be repaired within the PR. Explain it in reason and optional findings.
+- Findings are the repair worker's entire contract. Include only verified, actionable defects; #243-style lint or repository-contract failures are changes_requested, not blocked.
 - Always write the promise file, even on failure. Do not exit silently.`;
 }
 
@@ -500,6 +503,8 @@ function drive(fixturePath: string | undefined): DriverResult {
     launch,
     prompt: renderReviewerMonitorPrompt({
       prNumber: Number(pr.number || 0),
+      expectedHeadOid: String(pr.headRefOid || ""),
+      branch: String(pr.headRefName || ""),
       automationDir: env.automationDir,
       promiseFile: String(launch.promiseFile || ""),
       actorName: "reviewer",
@@ -510,6 +515,7 @@ function drive(fixturePath: string | undefined): DriverResult {
         command: env.checkCommand,
       }),
       humanLabel: env.humanLabel,
+      reviewLabel: env.reviewLabel,
       reviewingLabel: env.reviewingLabel,
       blockedLabel: env.blockedLabel,
     }),

@@ -26,11 +26,28 @@ export type BranchUpdateMonitorPromptInput = MonitorPromptBaseInput & {
 
 export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   prNumber: number;
+  expectedHeadOid: string;
+  branch: string;
   checkCommand: string;
   humanLabel: string;
+  reviewLabel: string;
   reviewingLabel: string;
   blockedLabel: string;
 };
+
+export type RepairMonitorPromptInput = MonitorPromptBaseInput & {
+  prNumber: number;
+  expectedHeadOid: string;
+  branch: string;
+  reviewLabel: string;
+  reviewingLabel: string;
+  blockedLabel: string;
+};
+
+function shellQuotePrompt(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
 
 function renderPromisePollingRules(input: MonitorPromptBaseInput): string {
   return `Monitor only this promise file. It is the only completion authority:
@@ -85,19 +102,51 @@ Report only the terminal action and evidence.`;
 function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string {
   return `Deterministic driver launched reviewer for PR #${input.prNumber}. Do not launch another agent and do not reselect another PR.
 
+Review binding:
+- Expected PR head: ${input.expectedHeadOid}
+- Existing PR branch: ${input.branch}
+
 ${renderPromisePollingRules(input)}
 
-After a \`complete\` promise:
-- Re-check GitHub PR state, reviews, and checks before changing labels.
+Completion handling:
+- Read the validated promise payload. Legacy complete promises without outcome remain compatible and follow the approved path.
+- A successful review with actionable defects is status=complete, outcome=changes_requested, never status=blocked.
+- For outcome=changes_requested, outcome=human_required, or status=blocked, run the deterministic dispatcher and follow only its returned action/prompt:
+  \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-dispatch.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --branch ${shellQuotePrompt(input.branch)}\`
+- The dispatcher keeps ${input.reviewLabel} and ${input.reviewingLabel} during repair. It adds ${input.blockedLabel} only for human-required or bounded failure paths.
+- For outcome=approved or a legacy complete promise, re-check GitHub PR state, reviews, and checks before changing labels.
 - Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork.
 - If autoMerge=false, never merge; hand off by moving PR toward \`${input.humanLabel}\` with review evidence.
 - If autoMerge=true, merge only after review, CI/fallback, and repository safety gates all pass.
 
-After a \`blocked\` promise:
-- Use the promise reason/summary to write the blocked report.
-- Move the PR from \`${input.reviewingLabel}\` to \`${input.blockedLabel}\` only when the blocker is actionable.
-
 Report only the resulting action and evidence.`;
 }
 
-module.exports = { renderBranchUpdateMonitorPrompt, renderIssueMonitorPrompt, renderPromisePollingRules, renderReviewerMonitorPrompt };
+function renderRepairMonitorPrompt(input: RepairMonitorPromptInput): string {
+  return `Deterministic dispatcher launched one review-repair worker for PR #${input.prNumber}. Monitor only this attempt; never launch another agent or widen the findings contract.
+
+Attempt binding:
+- Existing PR branch: ${input.branch}
+- Expected PR head: ${input.expectedHeadOid}
+- Keep ${input.reviewLabel} and ${input.reviewingLabel} while repair is running.
+
+${renderPromisePollingRules(input)}
+
+Terminal handling:
+- status=complete, reason=repair_pushed: re-read the PR and confirm its head changed. Do not change labels; the changed head starts a new review cycle.
+- status=complete, reason=stale_head: stop without push, comment, or label changes. Keep both review labels for next-cycle re-evaluation.
+- status=blocked: the exact head/review result used its bounded attempt. Write recovery guidance, remove ${input.reviewingLabel}, and add ${input.blockedLabel}.
+- Malformed or inconclusive completion is unsafe and follows the same bounded human-blocked path.
+
+Prohibited in every path: force-push, monitor-side push, label changes on success/stale, PR creation, merge, issue close, branch deletion, or a second attempt for this exact review result.
+
+Report only the terminal action and evidence.`;
+}
+
+module.exports = {
+  renderBranchUpdateMonitorPrompt,
+  renderIssueMonitorPrompt,
+  renderPromisePollingRules,
+  renderRepairMonitorPrompt,
+  renderReviewerMonitorPrompt,
+};

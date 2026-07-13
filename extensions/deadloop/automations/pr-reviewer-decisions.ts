@@ -157,7 +157,7 @@ function iterAgentsForPrReviewer(data: unknown): AnyRecord[] {
 function workingReviewerPrNumbers(agents: unknown, projectId: string): Set<number> {
   if (!projectId) return new Set();
   const pattern = new RegExp(
-    `^${projectId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-pr-(\\d+)-(?:reviewer|branch-update-[0-9a-f]+)$`,
+    `^${projectId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-pr-(\\d+)-(?:reviewer|branch-update-[0-9a-f]+|review-repair-[0-9a-f]+)$`,
   );
   const working = new Set<number>();
   for (const agent of iterAgentsForPrReviewer(agents)) {
