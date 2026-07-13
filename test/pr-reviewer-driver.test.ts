@@ -81,6 +81,30 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).prompt).not.toContain("launch-agent.ts");
   });
 
+  it("routes a merge conflict to one dedicated branch-update worker", () => {
+    expect(runDriverFixture("merge-conflict.json").driverAction).toBe("branch_update_monitor_request");
+  });
+
+  it("uses a deterministic retry-key worker name for the exact head/base pair", () => {
+    expect(runDriverFixture("merge-conflict.json").launch.updaterName).toBe("demo-pr-31-branch-update-63bdfe090637cf9ff5d4");
+  });
+
+  it("preserves both review labels during branch update", () => {
+    expect(runDriverFixture("merge-conflict.json").labelsPreserved).toEqual(["agent:review", "agent:reviewing"]);
+  });
+
+  it("bounds branch update push through the deterministic finalizer", () => {
+    expect(runDriverFixture("merge-conflict.json").prompt).toContain("never launch or select an agent, push a branch, review the PR, or merge it");
+  });
+
+  it("returns an updated conflict branch to normal review", () => {
+    expect(runDriverFixture("merge-conflict-updated.json").driverAction).toBe("reviewer_monitor_request");
+  });
+
+  it("blocks a second attempt for the exact same head/base pair", () => {
+    expect(runDriverFixture("merge-conflict-double-attempt.json").driverAction).toBe("branch_update_attempt_exhausted");
+  });
+
   it("reports the deterministic reviewer name", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).launch.reviewerName).toBe("demo-pr-24-reviewer");
   });

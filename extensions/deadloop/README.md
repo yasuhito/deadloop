@@ -34,7 +34,8 @@ Worker, reviewer, and monitor prompts run the configured project check through `
 Each automation may define a `driverFile`. Drivers run after precheck and before any prompt is sent, with `DEADLOOP_*` environment variables. They return JSON with `action` values `skip`, `done`, `needs_llm`, or `error`.
 
 - `issue-coordinator-driver.ts` handles cleanup, candidate selection gates, worker launch, and bounded monitor handoff.
-- `pr-reviewer-driver.ts` handles no-op, pending CI, external review gates, draft gates, reviewer launch, and bounded monitor handoff.
+- `pr-reviewer-driver.ts` handles no-op, pending CI, external review gates, draft gates, one-attempt merge-conflict recovery, reviewer launch, and bounded monitor handoff.
+- Merge-conflict recovery keeps `agent:review` and `agent:reviewing`, records the exact PR-head/base-head attempt in a PR comment, and uses `pr-branch-update-finalize.ts` as the only permitted push path. Stale heads stop without a push; only failed or unsafe updates add `agent:blocked`.
 - `ci-fallback-decision.ts`, `worker-watch-decision.ts`, and related helpers keep deterministic checks out of prompts.
 
 ## Runner boundary

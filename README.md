@@ -75,6 +75,12 @@ gh label create needs-triage --repo owner/repo --color f9d0c4 || true
 
 An issue is eligible only when it has both `ready-for-agent` and `agent:implement`.
 
+## Merge-conflict recovery
+
+When a selected same-repository PR conflicts with the configured base, deadloop can start one guarded branch-update worker. It merges the selected base commit into the existing PR branch (never rebases), runs the configured checks, re-checks the PR head immediately before a non-force push, and then returns the PR to normal review. Review labels remain in place during the update; no extra label is required.
+
+Each exact PR-head/base-head pair is attempted at most once. A stale PR head stops without pushing and is re-evaluated on the next cycle. Failed or unsafe updates are marked `agent:blocked` with recovery evidence. See [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) for the safety contract.
+
 ## Roll out in phases
 
 1. **Issue coordination only** — start here if you want a slow rollout; humans still review and merge PRs.
