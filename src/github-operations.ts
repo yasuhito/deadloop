@@ -56,7 +56,7 @@ function createGithubOperations(commandRunner: CommandRunner) {
         "--limit",
         "100",
         "--json",
-        "number,title,url,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,labels,statusCheckRollup,comments,reviewRequests",
+        "number,title,url,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,mergeStateStatus,labels,statusCheckRollup,comments,reviewRequests",
       ]);
     },
 
