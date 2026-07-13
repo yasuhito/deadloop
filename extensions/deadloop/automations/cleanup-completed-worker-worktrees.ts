@@ -298,6 +298,14 @@ function loadFixtureCleanupPlan(file: string): { candidates: CleanupRecord[]; sk
 }
 
 function removeGeneratedAgentArtifacts(worktreePath: string): void {
+  const tracked = runCleanupText(["git", "-C", worktreePath, "ls-files", "-z", "--", ".deadloop", ".pi-subagents"])
+    .split("\0")
+    .filter(Boolean);
+  if (tracked.length) throw new Error(`runtime-named directories contain tracked files; refusing cleanup: ${tracked.join(", ")}`);
+
+  const currentStatus = runCleanupText(["git", "-C", worktreePath, "status", "--short"]);
+  if (!isCleanStatusForCleanup(currentStatus)) throw new Error("worktree became dirty after cleanup planning; refusing removal");
+
   for (const directory of [".deadloop", ".pi-subagents"]) {
     fs.rmSync(path.join(worktreePath, directory), { recursive: true, force: true });
   }
