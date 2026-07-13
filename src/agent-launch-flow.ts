@@ -11,6 +11,7 @@ type AgentLaunchFlowInput = {
   worktree: WorktreeRequest;
   repoPath: string;
   automationDir: string;
+  stateDir: string;
   name: string;
   agent: string;
   model: string;
@@ -49,15 +50,30 @@ function prepareWorktree(input: AgentLaunchFlowInput, runner: RunnerAdapter): { 
   return runner.openWorktree({ repoPath: input.repoPath, branch: input.worktree.branch, label: input.name });
 }
 
+function retireFinishedSameNameAgent(name: string, worktreePath: string, runner: RunnerAdapter): void {
+  const matches = runner.listAgents().filter((agent) => agent.name === name);
+  if (!matches.length) return;
+  if (matches.length !== 1) throw new Error(`agent name ${name} has ${matches.length} live candidates; refusing cleanup`);
+
+  const [agent] = matches;
+  if (agent.status !== "done") throw new Error(`agent name ${name} is ${agent.status || "unknown"}; refusing duplicate launch`);
+  if (path.resolve(agent.cwd || "") !== path.resolve(worktreePath)) {
+    throw new Error(`agent name ${name} belongs to a different worktree; refusing cleanup`);
+  }
+  if (!agent.agentId) throw new Error(`agent name ${name} has no removable agent id; refusing cleanup`);
+  runner.removeAgent(agent.agentId);
+}
+
 function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): AgentLaunchFlowResult {
   const runner = ops.runner || createHerdrRunner();
   const { workspaceId, worktreePath } = prepareWorktree(input, runner);
+  retireFinishedSameNameAgent(input.name, worktreePath, runner);
   const { tabId } = runner.createTab({ workspaceId, cwd: worktreePath, label: input.name });
 
-  const stateDir = path.join(worktreePath, ".deadloop");
-  ops.mkdirSync(stateDir, { recursive: true });
-  const promptFile = path.join(stateDir, `${input.promptFilePrefix}-${input.uuid}.md`);
-  const promiseFile = path.join(stateDir, `promise-${input.uuid}.json`);
+  const runDir = path.join(input.stateDir, "runs", path.basename(input.uuid));
+  ops.mkdirSync(runDir, { recursive: true });
+  const promptFile = path.join(runDir, `${input.promptFilePrefix}.md`);
+  const promiseFile = path.join(runDir, "promise.json");
   ops.writeFileSync(promptFile, input.renderPrompt({ promiseFile, worktreePath }), "utf8");
 
   const launchOutput = ops.runText([

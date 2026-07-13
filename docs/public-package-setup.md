@@ -68,6 +68,8 @@ Key fields:
 
 Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `externalReview`, `workerInstructionFiles`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` / `driverFile` for automations. Keep `enabled`, `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local or inferred. Invalid JSON or disallowed keys stop that project safely and appear in `/deadloop-status` and `/deadloop-doctor`.
 
+Per-launch prompts and promise reports live under `~/.pi/agent/deadloop/runs/`, not in the target worktree. The configured project check runs through deadloop's isolation wrapper: untracked `.deadloop` and `.pi-subagents` directories are temporarily hidden and restored on every exit path. Tracked files are never hidden; validation fails closed if either runtime directory contains one.
+
 By default deadloop reads `~/.pi/agent/deadloop/projects.json`. Use `DEADLOOP_CONFIG=/path/to/projects.json` only when you intentionally want a different config file.
 
 ## 3. Create required labels

@@ -384,7 +384,7 @@ function resolveAutomationFileInDir(_kind, _automation, requested) {
 
 async function runAutomationScript(pi, project, automation, automationFile) {
   const scriptPath = path.join(AUTOMATION_DIR, automationFile);
-  const env = automationEnvironment(project, automation);
+  const env = { ...automationEnvironment(project, automation), DEADLOOP_STATE_DIR: STATE_DIR };
   const exports = Object.entries(env)
     .filter(([key]) => key.startsWith("DEADLOOP_"))
     .map(([key, value]) => `${key}=${shellQuote(value)}`)

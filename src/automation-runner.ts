@@ -64,6 +64,7 @@ export function recordAutomationResult(entry: Record<string, unknown>, result: s
     entry.failureStreak = (entry.lastResult === result ? Number(entry.failureStreak || 0) : 0) + 1;
   } else {
     entry.failureStreak = 0;
+    delete entry.lastError;
   }
   entry.lastResult = result;
 }

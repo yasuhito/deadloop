@@ -76,6 +76,15 @@ describe("issue coordinator renderers", () => {
     expect(renderIssueWorkerPrompt(workerInput)).toContain("~~~bash\n  npm test && echo ```not a fence```\n  ~~~");
   });
 
+  it("renders the isolated project validation command when provided", () => {
+    expect(
+      renderIssueWorkerPrompt({
+        ...workerInput,
+        validationCommand: "node /automation/run-project-check.ts --cwd /wt --command 'npm test'",
+      }),
+    ).toContain("node /automation/run-project-check.ts --cwd /wt --command 'npm test'");
+  });
+
   it("uses a safe worker validation fence for longer backtick runs", () => {
     expect(renderIssueWorkerPrompt({ ...workerInput, checkCommand: "echo ````" })).toContain(
       "~~~bash\n  echo ````\n  ~~~",

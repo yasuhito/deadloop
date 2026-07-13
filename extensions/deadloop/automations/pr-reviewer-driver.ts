@@ -3,10 +3,13 @@
 // directly under this package's `type: commonjs`, matching launch-agent.ts.
 
 const fs = require("node:fs") as typeof import("node:fs");
+const os = require("node:os") as typeof import("node:os");
+const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { planPrReviewerAction } = require("./pr-reviewer-flow.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
 const { renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
+const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
@@ -40,6 +43,9 @@ function envConfig() {
     githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
     baseBranch: process.env.DEADLOOP_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
+    stateDir:
+      process.env.DEADLOOP_STATE_DIR ||
+      path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: process.env.DEADLOOP_CHECK_COMMAND || "git diff --check",
     reviewerAgent: process.env.DEADLOOP_REVIEWER_AGENT || "pi",
     reviewerModel: process.env.DEADLOOP_REVIEWER_MODEL || "",
@@ -71,7 +77,13 @@ function shouldSimulateLaunch(fixture: JsonObject | null): boolean {
   return Boolean(fixture);
 }
 
-function reviewAgentPrompt(pr: JsonObject, env: ReturnType<typeof envConfig>, promiseFile: string, reason: string): string {
+function reviewAgentPrompt(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  promiseFile: string,
+  reason: string,
+  worktreePath: string,
+): string {
   const number = Number(pr.number || 0);
   const title = oneLine(pr.title || "PR review");
   return `Review PR #${number}.
@@ -86,7 +98,12 @@ Target:
 Contract:
 - Do not edit the main workspace ${env.repoPath}; inspect only this worktree.
 - Read the PR diff, related issues/docs, and AGENTS.md. Check both spec fit and repository standards.
-- Run needed validation. Minimum check command: ${env.checkCommand}
+- Run needed validation. Minimum check command: ${renderProjectCheckCommand({
+    automationDir: env.automationDir,
+    stateDir: env.stateDir,
+    cwd: worktreePath,
+    command: env.checkCommand,
+  })}
 - Do not push, edit labels, comment on PRs, merge, or delete branches.
 - If autoMerge=false, summarize the review for human handoff even if the PR looks mergeable.
 
@@ -111,8 +128,8 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
       workspaceId: "fixture-workspace",
       tabId: "fixture-tab",
       worktreePath: simulatedWorktreePath,
-      promptFile: `${simulatedWorktreePath}/.deadloop/reviewer-prompt-${uuid}.md`,
-      promiseFile: `${simulatedWorktreePath}/.deadloop/promise-${uuid}.json`,
+      promptFile: `${env.stateDir}/runs/${uuid}/reviewer-prompt.md`,
+      promiseFile: `${env.stateDir}/runs/${uuid}/promise.json`,
       simulated: true,
     };
   }
@@ -123,13 +140,15 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
       worktree: { mode: "open", branch: headRefName },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
+      stateDir: env.stateDir,
       name: reviewerName,
       agent: env.reviewerAgent,
       model: env.reviewerModel,
       level: "medium",
       uuid,
       promptFilePrefix: "reviewer-prompt",
-      renderPrompt: ({ promiseFile }: { promiseFile: string }) => reviewAgentPrompt(pr, env, promiseFile, reason),
+      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+        reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
     },
     { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
   );
@@ -242,7 +261,12 @@ function drive(fixturePath: string | undefined): DriverResult {
       automationDir: env.automationDir,
       promiseFile: String(launch.promiseFile || ""),
       actorName: "reviewer",
-      checkCommand: env.checkCommand,
+      checkCommand: renderProjectCheckCommand({
+        automationDir: env.automationDir,
+        stateDir: env.stateDir,
+        cwd: String(launch.worktreePath || ""),
+        command: env.checkCommand,
+      }),
       humanLabel: env.humanLabel,
       reviewingLabel: env.reviewingLabel,
       blockedLabel: env.blockedLabel,

@@ -22,6 +22,7 @@ type IssueWorkerPromptInput = {
   githubRepo: string;
   workerInstructions: string;
   checkCommand: string;
+  validationCommand?: string;
   promiseFile: string;
 };
 
@@ -118,7 +119,8 @@ gh issue edit ${issue} -R ${shellQuoteForRenderer(input.githubRepo)} --remove-la
 
 function renderIssueWorkerPrompt(input: IssueWorkerPromptInput): string {
   const issueTitle = oneLineForRenderer(input.issueTitle);
-  const validationFence = markdownFence(input.checkCommand);
+  const validationCommand = input.validationCommand || input.checkCommand;
+  const validationFence = markdownFence(validationCommand);
 
   return `Launch reason: ${oneLineForRenderer(input.launchReason)}
 
@@ -136,7 +138,7 @@ Contract:
 - Prefer a red-green-refactor loop when practical.
 - Run relevant validation and at minimum pass this check command:
   ${validationFence}bash
-  ${input.checkCommand}
+  ${validationCommand}
   ${validationFence}
 - Create at least one conventional commit.
 

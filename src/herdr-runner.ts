@@ -94,7 +94,15 @@ function normalizeHerdrWorktreeRecord(record: unknown): RunnerWorktree {
 }
 
 function normalizeHerdrAgentRecord(record: unknown): RunnerAgent {
-  return isObject(record) ? { ...record } : {};
+  if (!isObject(record)) return {};
+  const normalized: RunnerAgent = { ...record };
+  const agentId = stringField(record, ["pane_id", "paneId"]);
+  const status = stringField(record, ["agent_status", "status"]);
+  const cwd = stringField(record, ["cwd", "foreground_cwd"]);
+  if (agentId) normalized.agentId = agentId;
+  if (status) normalized.status = status.toLowerCase();
+  if (cwd) normalized.cwd = cwd;
+  return normalized;
 }
 
 function parseWorktreeLaunch(operation: string, payload: unknown): RunnerWorktreeLaunch {
@@ -176,6 +184,10 @@ function agentListArgs(): string[] {
   return ["agent", "list"];
 }
 
+function agentRemoveArgs(agentId: string): string[] {
+  return ["pane", "close", agentId];
+}
+
 function worktreeRemoveArgs(workspaceId: string): string[] {
   return ["worktree", "remove", "--workspace", workspaceId, "--json"];
 }
@@ -201,6 +213,9 @@ function createHerdrRunner(ops: SyncHerdrRunnerOps = {}): RunnerAdapter {
     },
     listAgents() {
       return parseAgentList(runJson("herdr", agentListArgs()));
+    },
+    removeAgent(agentId) {
+      return runText("herdr", agentRemoveArgs(agentId));
     },
     removeWorktree(workspaceId) {
       return runText("herdr", worktreeRemoveArgs(workspaceId));
@@ -228,6 +243,9 @@ function createAsyncHerdrRunner(ops: AsyncHerdrRunnerOps): AsyncRunnerAdapter {
     },
     async listAgents() {
       return parseAgentList(await ops.runJson("herdr", agentListArgs()));
+    },
+    async removeAgent(agentId) {
+      return await runText("herdr", agentRemoveArgs(agentId));
     },
     async removeWorktree(workspaceId) {
       return await runText("herdr", worktreeRemoveArgs(workspaceId));
