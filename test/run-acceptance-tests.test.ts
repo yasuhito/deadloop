@@ -8,18 +8,20 @@ import { runAcceptanceTests } from "../src/run-acceptance-tests";
 
 const temporaryDirectories: string[] = [];
 
-function fixtureWithUnmatchedCucumberPath(): string {
+function fixtureWithUnmatchedFeatureLanguage(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-zero-scenarios-"));
   temporaryDirectories.push(root);
   fs.mkdirSync(path.join(root, "acceptance/features"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "acceptance/features/present.feature.md"),
-    "# 機能: 検出確認\n\n## シナリオ: 対象が存在する\n\n* 前提 状態がある\n* もし 操作する\n* ならば 結果が見える\n",
+    "# Feature: discovery check\n\n## Scenario: a target exists\n\n* Given a state\n* When an action occurs\n* Then a result is visible\n",
   );
   fs.writeFileSync(
     path.join(root, "cucumber.cjs"),
     `module.exports = { default: {
-  paths: ["acceptance/features/missing/**/*.feature.md"],
+  paths: ["acceptance/features/**/*.feature.md"],
+  requireModule: ["tsx/cjs"],
+  require: ["acceptance/steps/**/*.ts", "acceptance/support/**/*.ts"],
   language: "ja",
   strict: true,
   format: ["progress", \`message:\${process.env.DEADLOOP_CUCUMBER_MESSAGE_PATH}\`],
@@ -33,7 +35,7 @@ afterEach(() => {
 });
 
 describe("acceptance test runner", () => {
-  it("fails when the configured discovery path executes zero scenarios", () => {
-    expect(runAcceptanceTests(fixtureWithUnmatchedCucumberPath(), { quiet: true })).toBe(1);
+  it("fails when the configured language executes zero scenarios", () => {
+    expect(runAcceptanceTests(fixtureWithUnmatchedFeatureLanguage(), { quiet: true })).toBe(1);
   });
 });

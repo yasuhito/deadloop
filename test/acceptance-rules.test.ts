@@ -23,7 +23,11 @@ Then("検証は安全のため拒否される", function () { assert.equal(this.
 
 function sources(overrides: Partial<AcceptanceSource> = {}): AcceptanceSource {
   return {
-    config: { path: "cucumber.cjs", source: "module.exports = { default: { language: 'ja' } };" },
+    config: {
+      path: "cucumber.cjs",
+      source:
+        "module.exports = { default: { paths: ['acceptance/features/**/*.feature.md'], requireModule: ['tsx/cjs'], require: ['acceptance/steps/**/*.ts', 'acceptance/support/**/*.ts'], language: 'ja', strict: true } };",
+    },
     features: [{ path: "acceptance/features/safety.feature.md", source: validFeature }],
     stepDefinitions: [{ path: "acceptance/steps/safety.steps.ts", source: validSteps }],
     helpers: [],
@@ -39,6 +43,12 @@ describe("acceptance test rules", () => {
   it("rejects front matter", () => {
     expect(
       checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source: `---\n${validFeature}` }] })),
+    ).toContain("bad.feature.md: front matter is not allowed");
+  });
+
+  it("rejects TOML front matter", () => {
+    expect(
+      checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source: `+++\n${validFeature}` }] })),
     ).toContain("bad.feature.md: front matter is not allowed");
   });
 
@@ -86,6 +96,20 @@ describe("acceptance test rules", () => {
     );
   });
 
+  it("counts an imported expect matcher as one assertion", () => {
+    const source = validSteps
+      .replace('import assert from "node:assert/strict";', 'import { expect } from "vitest";')
+      .replace("assert.equal(this.code, 1);", "expect(this.code).toBe(1);");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "expect.steps.ts", source }] }))).toEqual([]);
+  });
+
+  it("does not treat an unbound expect name as an assertion", () => {
+    const source = validSteps.replace("assert.equal(this.code, 1);", "expect(this.code);");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:6: Then step definition must contain exactly one direct assertion (found 0)",
+    );
+  });
+
   it("rejects an assertion in an aliased When definition", () => {
     const source = validSteps
       .replace("Given, Then, When", "Given, Then, When as action")
@@ -120,9 +144,43 @@ describe("acceptance test rules", () => {
   });
 
   it("rejects a non-Japanese Cucumber language", () => {
-    const config = { path: "cucumber.cjs", source: "module.exports = { default: { language: 'en' } };" };
+    const config = sources().config;
+    config.source = config.source.replace("language: 'ja'", "language: 'en'");
     expect(checkAcceptanceRules(sources({ config }))).toContain(
       "cucumber.cjs: Cucumber language must be explicitly set to 'ja'",
+    );
+  });
+
+  it("rejects disabled strict mode", () => {
+    const config = sources().config;
+    config.source = config.source.replace("strict: true", "strict: false");
+    expect(checkAcceptanceRules(sources({ config }))).toContain(
+      "cucumber.cjs: Cucumber strict mode must be explicitly enabled",
+    );
+  });
+
+  it("rejects a widened feature path", () => {
+    const config = sources().config;
+    config.source = config.source.replace("acceptance/features/**/*.feature.md", "**/*.feature.md");
+    expect(checkAcceptanceRules(sources({ config }))).toContain(
+      "cucumber.cjs: Cucumber paths must target only acceptance/features/**/*.feature.md",
+    );
+  });
+
+  it("rejects a missing tsx registration", () => {
+    const config = sources().config;
+    config.source = config.source.replace("requireModule: ['tsx/cjs']", "requireModule: []");
+    expect(checkAcceptanceRules(sources({ config }))).toContain("cucumber.cjs: Cucumber must register tsx/cjs");
+  });
+
+  it("rejects missing TypeScript support code paths", () => {
+    const config = sources().config;
+    config.source = config.source.replace(
+      "require: ['acceptance/steps/**/*.ts', 'acceptance/support/**/*.ts']",
+      "require: ['acceptance/steps/**/*.ts']",
+    );
+    expect(checkAcceptanceRules(sources({ config }))).toContain(
+      "cucumber.cjs: Cucumber support code paths must target the TypeScript acceptance directories",
     );
   });
 });

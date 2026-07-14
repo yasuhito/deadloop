@@ -24,7 +24,7 @@ function scenarios(document: GherkinDocument): Scenario[] {
 
 function checkFeature(file: SourceFile): string[] {
   const errors: string[] = [];
-  if (/^\s*---(?:\r?\n|$)/.test(file.source)) errors.push(`${file.path}: front matter is not allowed`);
+  if (/^(?:---|\+\+\+)(?:\r?\n|$)/.test(file.source)) errors.push(`${file.path}: front matter is not allowed`);
   const envelopes = generateMessages(file.source, file.path, SourceMediaType.TEXT_X_CUCUMBER_GHERKIN_MARKDOWN, {
     defaultDialect: "ja",
     includeGherkinDocument: true,
@@ -55,21 +55,44 @@ function checkFeature(file: SourceFile): string[] {
   return errors;
 }
 
-function assertionBindings(sourceFile: ts.SourceFile): { functions: Set<string>; namespaces: Set<string> } {
-  const functions = new Set<string>(["expect"]);
+function assertionBindings(sourceFile: ts.SourceFile): {
+  functions: Set<string>;
+  namespaces: Set<string>;
+  expectations: Set<string>;
+} {
+  const functions = new Set<string>();
   const namespaces = new Set<string>();
+  const expectations = new Set<string>();
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-    if (!statement.moduleSpecifier.text.startsWith("node:assert")) continue;
     const clause = statement.importClause;
-    if (clause?.name) namespaces.add(clause.name.text);
-    if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings))
-      namespaces.add(clause.namedBindings.name.text);
-    if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
-      for (const element of clause.namedBindings.elements) functions.add(element.name.text);
+    if (statement.moduleSpecifier.text.startsWith("node:assert")) {
+      if (clause?.name) namespaces.add(clause.name.text);
+      if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings))
+        namespaces.add(clause.namedBindings.name.text);
+      if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+        for (const element of clause.namedBindings.elements) functions.add(element.name.text);
+      }
+    }
+    if (
+      (statement.moduleSpecifier.text === "vitest" || statement.moduleSpecifier.text === "@jest/globals") &&
+      clause?.namedBindings &&
+      ts.isNamedImports(clause.namedBindings)
+    ) {
+      for (const element of clause.namedBindings.elements) {
+        const imported = element.propertyName?.text ?? element.name.text;
+        if (imported === "expect") expectations.add(element.name.text);
+      }
     }
   }
-  return { functions, namespaces };
+  return { functions, namespaces, expectations };
+}
+
+function isExpectationChain(expression: ts.Expression, expectations: Set<string>): boolean {
+  if (ts.isCallExpression(expression)) {
+    return ts.isIdentifier(expression.expression) && expectations.has(expression.expression.text);
+  }
+  return ts.isPropertyAccessExpression(expression) && isExpectationChain(expression.expression, expectations);
 }
 
 function isAssertionCall(node: ts.CallExpression, bindings: ReturnType<typeof assertionBindings>): boolean {
@@ -77,7 +100,7 @@ function isAssertionCall(node: ts.CallExpression, bindings: ReturnType<typeof as
   if (ts.isPropertyAccessExpression(node.expression)) {
     const owner = node.expression.expression;
     if (ts.isIdentifier(owner) && bindings.namespaces.has(owner.text)) return true;
-    if (ts.isCallExpression(owner)) return isAssertionCall(owner, bindings);
+    return isExpectationChain(owner, bindings.expectations);
   }
   return false;
 }
@@ -94,11 +117,7 @@ function countAssertions(root: ts.FunctionLikeDeclaration, bindings: ReturnType<
 }
 
 function cucumberStepBindings(sourceFile: ts.SourceFile): Map<string, "Given" | "When" | "Then"> {
-  const bindings = new Map<string, "Given" | "When" | "Then">([
-    ["Given", "Given"],
-    ["When", "When"],
-    ["Then", "Then"],
-  ]);
+  const bindings = new Map<string, "Given" | "When" | "Then">();
   for (const statement of sourceFile.statements) {
     if (
       !ts.isImportDeclaration(statement) ||
@@ -166,26 +185,63 @@ function objectProperty(object: ts.ObjectLiteralExpression, name: string): ts.Ex
   return property && ts.isPropertyAssignment(property) ? property.initializer : undefined;
 }
 
-function hasJapaneseLanguage(config: SourceFile): boolean {
+function stringArray(expression: ts.Expression | undefined): string[] | undefined {
+  if (!expression || !ts.isArrayLiteralExpression(expression)) return undefined;
+  const values: string[] = [];
+  for (const element of expression.elements) {
+    if (!ts.isStringLiteral(element)) return undefined;
+    values.push(element.text);
+  }
+  return values;
+}
+
+function sameStrings(actual: string[] | undefined, expected: string[]): boolean {
+  return Boolean(
+    actual && actual.length === expected.length && actual.every((value, index) => value === expected[index]),
+  );
+}
+
+function checkCucumberConfig(config: SourceFile): string[] {
+  const errors: string[] = [];
   const sourceFile = ts.createSourceFile(config.path, config.source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  let profile: ts.ObjectLiteralExpression | undefined;
   for (const statement of sourceFile.statements) {
     if (!ts.isExpressionStatement(statement) || !ts.isBinaryExpression(statement.expression)) continue;
     const assignment = statement.expression;
     if (assignment.operatorToken.kind !== ts.SyntaxKind.EqualsToken || !ts.isObjectLiteralExpression(assignment.right))
       continue;
     if (assignment.left.getText(sourceFile) !== "module.exports") continue;
-    const defaultProfile = objectProperty(assignment.right, "default");
-    if (!defaultProfile || !ts.isObjectLiteralExpression(defaultProfile)) return false;
-    const language = objectProperty(defaultProfile, "language");
-    return Boolean(language && ts.isStringLiteral(language) && language.text === "ja");
+    const candidate = objectProperty(assignment.right, "default");
+    if (candidate && ts.isObjectLiteralExpression(candidate)) profile = candidate;
   }
-  return false;
+  if (!profile) return [`${config.path}: a literal default Cucumber profile is required`];
+
+  const language = objectProperty(profile, "language");
+  if (!language || !ts.isStringLiteral(language) || language.text !== "ja") {
+    errors.push(`${config.path}: Cucumber language must be explicitly set to 'ja'`);
+  }
+  if (objectProperty(profile, "strict")?.kind !== ts.SyntaxKind.TrueKeyword) {
+    errors.push(`${config.path}: Cucumber strict mode must be explicitly enabled`);
+  }
+  if (!sameStrings(stringArray(objectProperty(profile, "paths")), ["acceptance/features/**/*.feature.md"])) {
+    errors.push(`${config.path}: Cucumber paths must target only acceptance/features/**/*.feature.md`);
+  }
+  if (!sameStrings(stringArray(objectProperty(profile, "requireModule")), ["tsx/cjs"])) {
+    errors.push(`${config.path}: Cucumber must register tsx/cjs`);
+  }
+  if (
+    !sameStrings(stringArray(objectProperty(profile, "require")), [
+      "acceptance/steps/**/*.ts",
+      "acceptance/support/**/*.ts",
+    ])
+  ) {
+    errors.push(`${config.path}: Cucumber support code paths must target the TypeScript acceptance directories`);
+  }
+  return errors;
 }
 
 export function checkAcceptanceRules(input: AcceptanceSource): string[] {
-  const errors = hasJapaneseLanguage(input.config)
-    ? []
-    : [`${input.config.path}: Cucumber language must be explicitly set to 'ja'`];
+  const errors = checkCucumberConfig(input.config);
   for (const feature of input.features) errors.push(...checkFeature(feature));
   for (const steps of input.stepDefinitions) errors.push(...checkStepDefinitions(steps));
   for (const helper of input.helpers) errors.push(...checkHelper(helper));
