@@ -75,10 +75,16 @@ function readLivePr(repo: string, prNumber: string): JsonObject {
   ]);
 }
 
+function boundedComment(content: string, suffix = ""): string {
+  if (content.length + suffix.length <= MAX_GITHUB_COMMENT_LENGTH) return content + suffix;
+  const notice = "\n\n> Comment text exceeded the GitHub limit and was truncated.";
+  return content.slice(0, MAX_GITHUB_COMMENT_LENGTH - notice.length - suffix.length) + notice + suffix;
+}
+
 function recoveryComment(prNumber: string, env: ReturnType<typeof envConfig>, reason: string, summary: string): string {
-  return `## What happened
-- Automatic review repair for PR #${prNumber} requires human intervention: ${reason}.
-- ${summary || "The bounded automatic path could not safely continue."}
+  return boundedComment(`## What happened
+- Automatic review repair for PR #${prNumber} requires human intervention: ${safeCommentText(reason)}.
+- ${safeCommentText(summary) || "The bounded automatic path could not safely continue."}
 
 ## Recovery steps
 1. Inspect the current head, review findings, checks, and deadloop attempt markers.
@@ -86,7 +92,7 @@ function recoveryComment(prNumber: string, env: ReturnType<typeof envConfig>, re
 gh pr view ${prNumber} -R ${shellQuote(env.githubRepo)} --comments --json number,state,headRefName,headRefOid,labels,statusCheckRollup
    \`\`\`
 2. Correct the branch or resolve the required decision without rewriting history.
-3. Push a new commit, then remove ${env.blockedLabel}; the changed head can start a new review cycle.`;
+3. Push a new commit, then remove ${env.blockedLabel}; the changed head can start a new review cycle.`);
 }
 
 function applyHumanBlock(prNumber: string, env: ReturnType<typeof envConfig>, reason: string, summary: string): string {
@@ -94,6 +100,45 @@ function applyHumanBlock(prNumber: string, env: ReturnType<typeof envConfig>, re
   github.commentPr(env.githubRepo, prNumber, comment);
   github.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
   return comment;
+}
+
+const MAX_GITHUB_COMMENT_LENGTH = 60_000;
+
+function safeCommentText(value: unknown): string {
+  return String(value || "")
+    .replaceAll("<!--", "&lt;!--")
+    .replaceAll("-->", "--&gt;");
+}
+
+function renderReviewFindingsComment(
+  expectedHead: string,
+  summary: string,
+  findings: JsonObject[],
+  marker: string,
+): string {
+  const renderedFindings = findings
+    .map((finding, index) => {
+      const severity = safeCommentText(finding.severity || "unspecified");
+      const title = safeCommentText(finding.title);
+      const location = finding.path
+        ? ` (\`${safeCommentText(finding.path).replaceAll("`", "\\`")}${finding.line ? `:${finding.line}` : ""}\`)`
+        : "";
+      return `${index + 1}. **[${severity}] ${title}**${location}\n   ${safeCommentText(finding.body)}`;
+    })
+    .join("\n\n");
+  const safeSummary = safeCommentText(summary);
+  const renderedSummary =
+    safeSummary.length <= 4_000 ? safeSummary : `${safeSummary.slice(0, 4_000)}… [summary truncated]`;
+  const content = `## deadloop review findings
+
+Target head: \`${expectedHead}\`
+
+${renderedSummary || "The reviewer found actionable defects."}
+
+${renderedFindings}
+
+Starting one bounded repair for this exact PR head and review result.`;
+  return boundedComment(content, `\n\n${marker}`);
 }
 
 function repairWorkerPrompt(
@@ -151,8 +196,9 @@ Safety contract:
 
 Promise report:
 - Always write JSON to ${promiseFile} before stopping; status remains complete|blocked.
-- After action=pushed, write {"status":"complete","reason":"repair_pushed","summary":"findings fixed, checks passed, repair commit pushed"}.
+- After action=pushed, write {"status":"complete","reason":"repair_pushed","summary":"findings fixed, checks passed, repair commit pushed, and repair comment posted"}.
 - After action=stale_head, write {"status":"complete","reason":"stale_head","summary":"PR head changed; stopped without push or labels"}.
+- After action=pushed_comment_failed, write {"status":"blocked","reason":"repair_comment_failed","summary":"repair commit was pushed, but the required PR repair comment failed after one retry"}.
 - On technical, validation, invariant, or push failure, write {"status":"blocked","reason":"specific failure","summary":"what failed and why a human is now required"}.
 - Do not claim success unless the finalizer returned pushed or stale_head.`;
 }
@@ -220,7 +266,10 @@ function dispatch(args: JsonObject): DriverResult {
       github.commentPr(
         env.githubRepo,
         prNumber,
-        `Reviewer technical failure will be retried once for this head: ${promise.reason || "unknown failure"}.\n\n${renderTechnicalFailureMarker(expectedHead)}`,
+        boundedComment(
+          `Reviewer technical failure will be retried once for this head: ${safeCommentText(promise.reason || "unknown failure")}.`,
+          `\n\n${renderTechnicalFailureMarker(expectedHead)}`,
+        ),
       );
       return driverResult("done", `PR #${prNumber} reviewer technical failure retained review labels for one retry`, {
         driverAction: "review_technical_retry",
@@ -254,7 +303,7 @@ function dispatch(args: JsonObject): DriverResult {
   }
 
   const marker = renderRepairMarker(expectedHead, selection.reviewFingerprint);
-  github.commentPr(env.githubRepo, prNumber, `Starting one bounded repair for this exact PR head and review result.\n\n${marker}`);
+  github.commentPr(env.githubRepo, prNumber, renderReviewFindingsComment(expectedHead, promise.summary, findings, marker));
   github.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
   try {
     const launch = launchRepair(prNumber, branch, expectedHead, findings, selection.key, env);
@@ -301,4 +350,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { dispatch, parseArgs, repairWorkerPrompt };
+module.exports = { dispatch, parseArgs, renderReviewFindingsComment, repairWorkerPrompt };

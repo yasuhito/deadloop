@@ -24,6 +24,7 @@ describe("review repair dispatch integration", () => {
     const worktree = path.join(root, "worktree");
     const state = path.join(root, "state");
     const promise = path.join(root, "review-promise.json");
+    const ghLog = path.join(root, "gh.log");
     fs.mkdirSync(bin);
     fs.mkdirSync(worktree);
     fs.writeFileSync(
@@ -40,7 +41,9 @@ describe("review repair dispatch integration", () => {
     executable(
       path.join(bin, "gh"),
       `#!/usr/bin/env node
+const fs = require("node:fs");
 const args = process.argv.slice(2);
+fs.appendFileSync(process.env.TEST_GH_LOG, JSON.stringify(args) + "\\n");
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,labels:[],comments:[]
 }));
@@ -88,16 +91,24 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
           DEADLOOP_GITHUB_REPO: "owner/repo",
           DEADLOOP_STATE_DIR: state,
           TEST_WORKTREE: worktree,
+          TEST_GH_LOG: ghLog,
         },
       },
     );
     if (result.status !== 0) throw new Error(result.stderr || result.stdout);
     const output = JSON.parse(result.stdout);
 
-    expect({ action: output.action, driverAction: output.driverAction, monitored: output.prompt.includes("review-repair worker") }).toEqual({
+    const ghCalls = fs.readFileSync(ghLog, "utf8");
+    expect({
+      action: output.action,
+      driverAction: output.driverAction,
+      monitored: output.prompt.includes("review-repair worker"),
+      publishedFinding: ghCalls.includes("Lint contract"),
+    }).toEqual({
       action: "needs_llm",
       driverAction: "review_repair_monitor_request",
       monitored: true,
+      publishedFinding: true,
     });
   });
 });

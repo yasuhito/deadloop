@@ -31,6 +31,26 @@ function checked(ops: FinalizeOps, args: string[]): string {
   return result.stdout.trim();
 }
 
+function safeCommentText(value: string): string {
+  return value.replaceAll("<!--", "&lt;!--").replaceAll("-->", "--&gt;");
+}
+
+function renderRepairCompletionComment(expectedHead: string, repairHead: string, subject: string, stat: string): string {
+  const fullSubject = safeCommentText(subject.trim());
+  const safeSubject = fullSubject.length <= 500 ? fullSubject : `${fullSubject.slice(0, 500)}…`;
+  const fullStat = safeCommentText(stat.trim()).replaceAll("```", "` ` `");
+  const safeStat = fullStat.length <= 40_000 ? fullStat : `${fullStat.slice(0, 40_000)}\n… diff statistics truncated`;
+  const details = safeStat
+    ? `\n\n<details>\n<summary>Changed files</summary>\n\n\`\`\`text\n${safeStat}\n\`\`\`\n</details>`
+    : "";
+  return `## deadloop review repair completed
+
+- Reviewed head: \`${expectedHead}\`
+- Repair commit: \`${repairHead}\`
+- Summary: ${safeSubject || "Applied the bounded review repair."}
+- Validation: Configured project checks passed.${details}`;
+}
+
 function decideRepairPushGuard(pr: JsonObject, expectedBranch: string, expectedHead: string): JsonObject {
   if (String(pr.state || "").toUpperCase() !== "OPEN") return { action: "blocked", reason: "pr_not_open" };
   if (Boolean(pr.isCrossRepository)) return { action: "blocked", reason: "cross_repository_pr" };
@@ -77,7 +97,30 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   if (guard.action !== "push") return guard;
 
   checked(ops, ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`]);
-  return { action: "pushed", reason: "repair_pushed", headOid: checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"]) };
+  const headOid = checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"]);
+  const subjectResult = ops.run(["git", "-C", args.repo, "log", "-1", "--format=%s"]);
+  const statResult = ops.run(["git", "-C", args.repo, "diff", "--stat", args.expectedHead, headOid]);
+  if (subjectResult.status !== 0 || statResult.status !== 0) {
+    return { action: "pushed_comment_failed", reason: "repair_comment_metadata_failed", headOid, commentPosted: false };
+  }
+  const subject = subjectResult.stdout;
+  const stat = statResult.stdout;
+  const commentArgs = [
+    "gh",
+    "pr",
+    "comment",
+    args.pr,
+    "-R",
+    args.githubRepo,
+    "--body",
+    renderRepairCompletionComment(args.expectedHead, headOid, subject, stat),
+  ];
+  let comment = ops.run(commentArgs);
+  if (comment.status !== 0) comment = ops.run(commentArgs);
+  if (comment.status !== 0) {
+    return { action: "pushed_comment_failed", reason: "repair_comment_failed", headOid, commentPosted: false };
+  }
+  return { action: "pushed", reason: "repair_pushed", headOid, commentPosted: true };
 }
 
 function required(values: Record<string, string>, name: string): string {
@@ -119,4 +162,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { decideRepairPushGuard, finalizeReviewRepair, parseArgs };
+module.exports = { decideRepairPushGuard, finalizeReviewRepair, parseArgs, renderRepairCompletionComment };
