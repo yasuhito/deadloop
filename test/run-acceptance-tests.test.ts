@@ -168,7 +168,13 @@ describe("acceptance test runner", () => {
 
   it("fails independent discovery after support code forges completed envelopes", () => {
     const root = fixtureWithUnmatchedFeatureLanguage(true);
-    expect([runAcceptanceTests(root, { quiet: true }), fs.existsSync(path.join(root, "forged.txt"))]).toEqual([1, true]);
+    expect(runAcceptanceTests(root, { quiet: true })).toBe(1);
+  });
+
+  it("executes the envelope-forging support code in the independent-discovery fixture", () => {
+    const root = fixtureWithUnmatchedFeatureLanguage(true);
+    runAcceptanceTests(root, { quiet: true });
+    expect(fs.existsSync(path.join(root, "forged.txt"))).toBe(true);
   });
 
   it("rejects a dry-run fixture because no scenario completed", () => {

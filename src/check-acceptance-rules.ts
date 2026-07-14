@@ -102,23 +102,19 @@ function isNodeAssertModule(module: string): boolean {
   return module === "assert" || module === "assert/strict" || module === "node:assert" || module === "node:assert/strict";
 }
 
-function topLevelVariableDeclarations(sourceFile: ts.SourceFile): ts.VariableDeclaration[] {
-  return sourceFile.statements.flatMap((statement) =>
-    ts.isVariableStatement(statement) ? [...statement.declarationList.declarations] : [],
-  );
-}
+type AliasTarget = ts.BindingName | ts.ObjectLiteralExpression;
 
 function assertionAliasAssignments(
   sourceFile: ts.SourceFile,
-): Array<{ name: ts.BindingName; initializer: ts.Expression }> {
-  const assignments: Array<{ name: ts.BindingName; initializer: ts.Expression }> = [];
+): Array<{ name: AliasTarget; initializer: ts.Expression }> {
+  const assignments: Array<{ name: AliasTarget; initializer: ts.Expression }> = [];
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && node.initializer) {
       assignments.push({ name: node.name, initializer: node.initializer });
     } else if (
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      ts.isIdentifier(node.left)
+      (ts.isIdentifier(node.left) || ts.isObjectLiteralExpression(node.left))
     ) {
       assignments.push({ name: node.left, initializer: node.right });
     }
@@ -147,6 +143,33 @@ function accessedProperty(expression: ts.Expression): { owner: string; property:
     }
   }
   return undefined;
+}
+
+function destructuredAliases(
+  target: AliasTarget,
+  sourceFile: ts.SourceFile,
+): Array<{ local: string; property: string }> | undefined {
+  if (ts.isObjectBindingPattern(target)) {
+    return target.elements.flatMap((element) =>
+      ts.isIdentifier(element.name)
+        ? [{ local: element.name.text, property: element.propertyName?.getText(sourceFile) ?? element.name.text }]
+        : [],
+    );
+  }
+  if (!ts.isObjectLiteralExpression(target)) return undefined;
+  return target.properties.flatMap((property) => {
+    if (ts.isShorthandPropertyAssignment(property)) {
+      return [{ local: property.name.text, property: property.name.text }];
+    }
+    if (
+      ts.isPropertyAssignment(property) &&
+      (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
+      ts.isIdentifier(property.initializer)
+    ) {
+      return [{ local: property.initializer.text, property: property.name.text }];
+    }
+    return [];
+  });
 }
 
 function assertionBindings(sourceFile: ts.SourceFile): {
@@ -206,13 +229,12 @@ function assertionBindings(sourceFile: ts.SourceFile): {
     changed = false;
     for (const alias of aliases) {
       const initializer = unparenthesized(alias.initializer);
-      if (ts.isObjectBindingPattern(alias.name) && ts.isIdentifier(initializer) && namespaces.has(initializer.text)) {
-        for (const element of alias.name.elements) {
-          if (!ts.isIdentifier(element.name)) continue;
-          const property = element.propertyName?.getText(sourceFile) ?? element.name.text;
-          const target = property === "strict" ? namespaces : functions;
-          if (!target.has(element.name.text)) {
-            target.add(element.name.text);
+      const destructured = destructuredAliases(alias.name, sourceFile);
+      if (destructured && ts.isIdentifier(initializer) && namespaces.has(initializer.text)) {
+        for (const element of destructured) {
+          const target = element.property === "strict" ? namespaces : functions;
+          if (!target.has(element.local)) {
+            target.add(element.local);
             changed = true;
           }
         }
@@ -271,14 +293,29 @@ function isExpectationChain(expression: ts.Expression, expectations: Set<string>
   return ts.isPropertyAccessExpression(expression) && isExpectationChain(expression.expression, expectations);
 }
 
+function isAssertionFunction(
+  expression: ts.Expression,
+  bindings: ReturnType<typeof assertionBindings>,
+): boolean {
+  const normalized = unparenthesized(expression);
+  if (ts.isIdentifier(normalized)) return bindings.functions.has(normalized.text);
+  const access = accessedProperty(normalized);
+  if (access && bindings.namespaces.has(access.owner)) return access.property !== "strict";
+  if (ts.isPropertyAccessExpression(normalized)) {
+    const directModule = requiredModule(unparenthesized(normalized.expression));
+    return Boolean(directModule && isNodeAssertModule(directModule));
+  }
+  return false;
+}
+
 function isAssertionCall(node: ts.CallExpression, bindings: ReturnType<typeof assertionBindings>): boolean {
   const expression = unparenthesized(node.expression);
-  if (ts.isIdentifier(expression)) return bindings.functions.has(expression.text);
+  if (isAssertionFunction(expression, bindings)) return true;
   if (ts.isPropertyAccessExpression(expression)) {
     const owner = unparenthesized(expression.expression);
-    const directModule = requiredModule(owner);
-    if (directModule && isNodeAssertModule(directModule)) return true;
-    if (ts.isIdentifier(owner) && bindings.namespaces.has(owner.text)) return true;
+    if ((expression.name.text === "call" || expression.name.text === "apply") && isAssertionFunction(owner, bindings)) {
+      return true;
+    }
     return isExpectationChain(owner, bindings.expectations);
   }
   if (ts.isElementAccessExpression(expression)) {
@@ -351,33 +388,19 @@ function cucumberStepBindings(sourceFile: ts.SourceFile): {
     }
   }
 
-  const aliases: Array<{ name: ts.BindingName; initializer: ts.Expression }> = topLevelVariableDeclarations(sourceFile)
-    .filter(
-      (declaration): declaration is ts.VariableDeclaration & { initializer: ts.Expression } =>
-        declaration.initializer !== undefined,
-    )
-    .map((declaration) => ({ name: declaration.name, initializer: declaration.initializer }));
-  for (const statement of sourceFile.statements) {
-    if (
-      ts.isExpressionStatement(statement) &&
-      ts.isBinaryExpression(statement.expression) &&
-      statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      ts.isIdentifier(statement.expression.left)
-    ) {
-      aliases.push({ name: statement.expression.left, initializer: statement.expression.right });
-    }
-  }
+  const aliases = assertionAliasAssignments(sourceFile);
 
   let changed = true;
   while (changed) {
     changed = false;
     for (const alias of aliases) {
       const initializer = unparenthesized(alias.initializer);
-      if (ts.isObjectBindingPattern(alias.name) && ts.isIdentifier(initializer) && namespaces.has(initializer.text)) {
-        for (const element of alias.name.elements) {
-          if (!ts.isIdentifier(element.name) || functions.has(element.name.text)) continue;
-          add(element.name.text, element.propertyName?.getText(sourceFile) ?? element.name.text);
-          if (functions.has(element.name.text)) changed = true;
+      const destructured = destructuredAliases(alias.name, sourceFile);
+      if (destructured && ts.isIdentifier(initializer) && namespaces.has(initializer.text)) {
+        for (const element of destructured) {
+          if (functions.has(element.local)) continue;
+          add(element.local, element.property);
+          if (functions.has(element.local)) changed = true;
         }
         continue;
       }

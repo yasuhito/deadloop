@@ -209,6 +209,25 @@ describe("acceptance test rules", () => {
     );
   });
 
+  it("rejects an assertion invoked with Function.prototype.call in a Given definition", () => {
+    const source = validSteps.replace("this.tracked = true;", "assert.ok.call(assert, true); this.tracked = true;");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:4: Given step definition must not contain assertions",
+    );
+  });
+
+  it("rejects a destructuring-assignment assertion alias in a Given definition", () => {
+    const source = validSteps
+      .replace(
+        'import { Given, Then, When } from "@cucumber/cucumber";',
+        'import { Given, Then, When } from "@cucumber/cucumber";\nlet ok;\n({ ok } = assert);',
+      )
+      .replace("this.tracked = true;", "ok(true); this.tracked = true;");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:6: Given step definition must not contain assertions",
+    );
+  });
+
   it("rejects a destructured assertion from an assertion namespace in Given", () => {
     const source = validSteps
       .replace('import { Given, Then, When } from "@cucumber/cucumber";', 'import { Given, Then, When } from "@cucumber/cucumber";\nconst { ok } = assert;')
@@ -252,17 +271,21 @@ Then("結果", function () { assert.equal(this.code, 1); });
     );
   });
 
-  it("rejects direct-require Cucumber registrations that violate assertion placement", () => {
+  it("rejects an assertion in a direct-require Cucumber Given registration", () => {
     const source = `
 require("@cucumber/cucumber").Given("実行用ディレクトリに追跡ファイルがある", function () { require("node:assert/strict").ok(true); });
-require("@cucumber/cucumber").When("通常検証を開始する", function () { this.code = 1; });
+`;
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:2: Given step definition must not contain assertions",
+    );
+  });
+
+  it("rejects a direct-require Cucumber Then registration without an assertion", () => {
+    const source = `
 require("@cucumber/cucumber").Then("検証は安全のため拒否される", function () {});
 `;
-    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toEqual(
-      expect.arrayContaining([
-        "bad.steps.ts:2: Given step definition must not contain assertions",
-        "bad.steps.ts:4: Then step definition must contain exactly one direct assertion (found 0)",
-      ]),
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:2: Then step definition must contain exactly one direct assertion (found 0)",
     );
   });
 
@@ -373,6 +396,17 @@ outcome("結果", function () { this.observed = this.code; });
       );
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:7: Then step definition must contain exactly one direct assertion (found 0)",
+    );
+  });
+
+  it("rejects a block-local alias of a Then registration without an assertion", () => {
+    const source = `import { Then } from "@cucumber/cucumber";
+{
+  const outcome = Then;
+  outcome("検証は安全のため拒否される", () => {});
+}`;
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:4: Then step definition must contain exactly one direct assertion (found 0)",
     );
   });
 
