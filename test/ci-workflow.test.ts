@@ -13,27 +13,15 @@ describe("GitHub Actions CI workflow", () => {
     expect(workflow).toMatch(/push:[\s\S]*branches:[\s\S]*- main/);
   });
 
-  it("runs npm test", () => {
-    expect(workflow).toContain("npm test");
+  it("runs the complete project check", () => {
+    expect(workflow).toContain("npm run check");
   });
 
-  it("runs lint checks", () => {
-    expect(workflow).toContain("npm run lint");
-  });
-
-  it("runs TypeScript type checks", () => {
-    expect(workflow).toContain("npm run typecheck");
-  });
-
-  it("runs shell syntax checks", () => {
-    expect(workflow).toContain("bash -n extensions/deadloop/automations/*.sh");
+  it("does not bypass the complete project check with a unit-only command", () => {
+    expect(workflow).not.toContain("run: npm run test:unit");
   });
 
   it("does not require Python automation compile checks", () => {
     expect(workflow).not.toContain("python3 -m py_compile extensions/deadloop/automations/*.py");
-  });
-
-  it("runs npm pack dry run", () => {
-    expect(workflow).toContain("npm pack --dry-run");
   });
 });

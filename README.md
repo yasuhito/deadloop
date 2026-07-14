@@ -126,7 +126,11 @@ DEADLOOP_DEBUG=1 pi
 
 ## Verify this repository
 
+The executable acceptance specification lives in [`acceptance/features/`](acceptance/features/). Run Vitest or Cucumber independently when investigating a failure, while `npm test` always runs both serially.
+
 ```bash
+npm run test:unit
+npm run test:acceptance
 npm test
 npm run lint
 npm run typecheck

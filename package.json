@@ -6,9 +6,12 @@
   "license": "MIT",
   "type": "commonjs",
   "scripts": {
-    "test": "vitest run",
-    "check": "npm test && npm run lint && npm run typecheck && bash -n extensions/deadloop/automations/*.sh && npm pack --dry-run",
-    "lint": "biome check package.json biome.json deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src extensions/deadloop/index.ts extensions/deadloop/automations/*.ts test/*.ts --files-ignore-unknown=true",
+    "test:unit": "vitest run",
+    "test:acceptance": "tsx src/run-acceptance-tests.ts",
+    "test": "npm run test:unit && npm run test:acceptance",
+    "check:acceptance-rules": "tsx src/check-acceptance-rules.ts",
+    "check": "npm run check:acceptance-rules && npm test && npm run lint && npm run typecheck && bash -n extensions/deadloop/automations/*.sh && npm pack --dry-run",
+    "lint": "biome check package.json biome.json cucumber.cjs deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src acceptance/**/*.ts extensions/deadloop/index.ts extensions/deadloop/automations/*.ts test/*.ts --files-ignore-unknown=true",
     "typecheck": "tsc --noEmit"
   },
   "files": [
@@ -17,6 +20,9 @@
     "README.md",
     "docs/*.md",
     "docs/assets/*.png",
+    "cucumber.cjs",
+    "acceptance/**/*.feature.md",
+    "acceptance/**/*.ts",
     "extensions/deadloop/index.ts",
     "extensions/deadloop/README.md",
     "extensions/deadloop/projects.example.json",
@@ -36,7 +42,11 @@
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
+    "@cucumber/cucumber": "13.0.0",
+    "@cucumber/gherkin": "39.1.0",
+    "@cucumber/messages": "32.3.1",
     "@types/node": "^26.1.0",
+    "tsx": "4.23.1",
     "typescript": "^6.0.3",
     "vitest": "^3.2.4"
   }
