@@ -173,26 +173,34 @@ function destructuredAliases(
   });
 }
 
-function assertionBindings(sourceFile: ts.SourceFile): {
-  functions: Set<string>;
-  namespaces: Set<string>;
-  expectations: Set<string>;
+function localSymbol(checker: ts.TypeChecker, node: ts.Identifier): ts.Symbol | undefined {
+  return checker.getSymbolAtLocation(node);
+}
+
+function assertionBindings(sourceFile: ts.SourceFile, checker: ts.TypeChecker): {
+  functions: Set<ts.Symbol>;
+  namespaces: Set<ts.Symbol>;
+  expectations: Set<ts.Symbol>;
+  checker: ts.TypeChecker;
 } {
-  const functions = new Set<string>();
-  const namespaces = new Set<string>();
-  const expectations = new Set<string>();
+  const functions = new Set<ts.Symbol>();
+  const namespaces = new Set<ts.Symbol>();
+  const expectations = new Set<ts.Symbol>();
+  const add = (bindings: Set<ts.Symbol>, identifier: ts.Identifier): void => {
+    const symbol = localSymbol(checker, identifier);
+    if (symbol) bindings.add(symbol);
+  };
   for (const statement of sourceFile.statements) {
     if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         const module = requiredModule(declaration.initializer);
         if (!module || !isNodeAssertModule(module)) continue;
-        if (ts.isIdentifier(declaration.name)) namespaces.add(declaration.name.text);
+        if (ts.isIdentifier(declaration.name)) add(namespaces, declaration.name);
         if (ts.isObjectBindingPattern(declaration.name)) {
           for (const element of declaration.name.elements) {
             if (!ts.isIdentifier(element.name)) continue;
             const imported = element.propertyName?.getText(sourceFile) ?? element.name.text;
-            if (imported === "strict") namespaces.add(element.name.text);
-            else functions.add(element.name.text);
+            add(imported === "strict" ? namespaces : functions, element.name);
           }
         }
       }
@@ -201,14 +209,12 @@ function assertionBindings(sourceFile: ts.SourceFile): {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
     const clause = statement.importClause;
     if (isNodeAssertModule(statement.moduleSpecifier.text)) {
-      if (clause?.name) namespaces.add(clause.name.text);
-      if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings))
-        namespaces.add(clause.namedBindings.name.text);
+      if (clause?.name) add(namespaces, clause.name);
+      if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) add(namespaces, clause.namedBindings.name);
       if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
         for (const element of clause.namedBindings.elements) {
           const imported = element.propertyName?.text ?? element.name.text;
-          if (imported === "strict") namespaces.add(element.name.text);
-          else functions.add(element.name.text);
+          add(imported === "strict" ? namespaces : functions, element.name);
         }
       }
     }
@@ -219,10 +225,40 @@ function assertionBindings(sourceFile: ts.SourceFile): {
     ) {
       for (const element of clause.namedBindings.elements) {
         const imported = element.propertyName?.text ?? element.name.text;
-        if (imported === "expect") expectations.add(element.name.text);
+        if (imported === "expect") add(expectations, element.name);
       }
     }
   }
+
+  const symbolForAlias = (target: AliasTarget, local: string): ts.Symbol | undefined => {
+    if (ts.isIdentifier(target)) return localSymbol(checker, target);
+    if (ts.isObjectLiteralExpression(target)) {
+      for (const property of target.properties) {
+        if (ts.isShorthandPropertyAssignment(property) && property.name.text === local) {
+          return checker.getShorthandAssignmentValueSymbol(property);
+        }
+        if (
+          ts.isPropertyAssignment(property) &&
+          ts.isIdentifier(property.initializer) &&
+          property.initializer.text === local
+        ) return localSymbol(checker, property.initializer);
+      }
+    }
+    let found: ts.Symbol | undefined;
+    const visit = (node: ts.Node): void => {
+      if (!found && ts.isIdentifier(node) && node.text === local) found = localSymbol(checker, node);
+      if (!found) ts.forEachChild(node, visit);
+    };
+    visit(target);
+    return found;
+  };
+  const ownerSymbol = (expression: ts.Expression): ts.Symbol | undefined => {
+    const access = unparenthesized(expression);
+    const owner = ts.isPropertyAccessExpression(access) || ts.isElementAccessExpression(access)
+      ? unparenthesized(access.expression)
+      : undefined;
+    return owner && ts.isIdentifier(owner) ? localSymbol(checker, owner) : undefined;
+  };
 
   const aliases = assertionAliasAssignments(sourceFile);
   let changed = true;
@@ -231,35 +267,43 @@ function assertionBindings(sourceFile: ts.SourceFile): {
     for (const alias of aliases) {
       const initializer = unparenthesized(alias.initializer);
       const destructured = destructuredAliases(alias.name, sourceFile);
-      if (destructured && ts.isIdentifier(initializer) && namespaces.has(initializer.text)) {
+      const initializerSymbol = ts.isIdentifier(initializer) ? localSymbol(checker, initializer) : undefined;
+      const initializerModule = requiredModule(initializer);
+      if (
+        destructured &&
+        ((initializerModule && isNodeAssertModule(initializerModule)) ||
+          (initializerSymbol && namespaces.has(initializerSymbol)))
+      ) {
         for (const element of destructured) {
+          const symbol = symbolForAlias(alias.name, element.local);
           const target = element.property === "strict" ? namespaces : functions;
-          if (!target.has(element.local)) {
-            target.add(element.local);
+          if (symbol && !target.has(symbol)) {
+            target.add(symbol);
             changed = true;
           }
         }
         continue;
       }
       if (!ts.isIdentifier(alias.name)) continue;
-      const local = alias.name.text;
-      if (ts.isIdentifier(initializer)) {
-        if (functions.has(initializer.text) && !functions.has(local)) {
-          functions.add(local);
-          changed = true;
-        }
-        if (namespaces.has(initializer.text) && !namespaces.has(local)) {
-          namespaces.add(local);
-          changed = true;
-        }
-        if (expectations.has(initializer.text) && !expectations.has(local)) {
-          expectations.add(local);
-          changed = true;
+      const local = localSymbol(checker, alias.name);
+      if (!local) continue;
+      if (initializerModule && isNodeAssertModule(initializerModule) && !namespaces.has(local)) {
+        namespaces.add(local);
+        changed = true;
+        continue;
+      }
+      if (initializerSymbol) {
+        for (const bindings of [functions, namespaces, expectations]) {
+          if (bindings.has(initializerSymbol) && !bindings.has(local)) {
+            bindings.add(local);
+            changed = true;
+          }
         }
         continue;
       }
       const access = accessedProperty(initializer);
-      if (access && namespaces.has(access.owner)) {
+      const accessOwner = ownerSymbol(initializer);
+      if (access && accessOwner && namespaces.has(accessOwner)) {
         const target = access.property === "strict" ? namespaces : functions;
         if (!target.has(local)) {
           target.add(local);
@@ -274,9 +318,11 @@ function assertionBindings(sourceFile: ts.SourceFile): {
       ) {
         const bound = unparenthesized(initializer.expression.expression);
         const boundAccess = accessedProperty(bound);
+        const boundSymbol = ts.isIdentifier(bound) ? localSymbol(checker, bound) : undefined;
+        const boundOwner = ownerSymbol(bound);
         const isBoundAssertion =
-          (ts.isIdentifier(bound) && functions.has(bound.text)) ||
-          Boolean(boundAccess && namespaces.has(boundAccess.owner) && boundAccess.property !== "strict");
+          Boolean(boundSymbol && functions.has(boundSymbol)) ||
+          Boolean(boundAccess && boundOwner && namespaces.has(boundOwner) && boundAccess.property !== "strict");
         if (isBoundAssertion && !functions.has(local)) {
           functions.add(local);
           changed = true;
@@ -284,14 +330,16 @@ function assertionBindings(sourceFile: ts.SourceFile): {
       }
     }
   }
-  return { functions, namespaces, expectations };
+  return { functions, namespaces, expectations, checker };
 }
 
-function isExpectationChain(expression: ts.Expression, expectations: Set<string>): boolean {
+function isExpectationChain(expression: ts.Expression, bindings: ReturnType<typeof assertionBindings>): boolean {
   if (ts.isCallExpression(expression)) {
-    return ts.isIdentifier(expression.expression) && expectations.has(expression.expression.text);
+    const callee = expression.expression;
+    const symbol = ts.isIdentifier(callee) ? localSymbol(bindings.checker, callee) : undefined;
+    return Boolean(symbol && bindings.expectations.has(symbol));
   }
-  return ts.isPropertyAccessExpression(expression) && isExpectationChain(expression.expression, expectations);
+  return ts.isPropertyAccessExpression(expression) && isExpectationChain(expression.expression, bindings);
 }
 
 function isAssertionFunction(
@@ -299,9 +347,16 @@ function isAssertionFunction(
   bindings: ReturnType<typeof assertionBindings>,
 ): boolean {
   const normalized = unparenthesized(expression);
-  if (ts.isIdentifier(normalized)) return bindings.functions.has(normalized.text);
+  if (ts.isIdentifier(normalized)) {
+    const symbol = localSymbol(bindings.checker, normalized);
+    return Boolean(symbol && bindings.functions.has(symbol));
+  }
   const access = accessedProperty(normalized);
-  if (access && bindings.namespaces.has(access.owner)) return access.property !== "strict";
+  const owner = ts.isPropertyAccessExpression(normalized) || ts.isElementAccessExpression(normalized)
+    ? unparenthesized(normalized.expression)
+    : undefined;
+  const symbol = owner && ts.isIdentifier(owner) ? localSymbol(bindings.checker, owner) : undefined;
+  if (access && symbol && bindings.namespaces.has(symbol)) return access.property !== "strict";
   if (ts.isPropertyAccessExpression(normalized)) {
     const directModule = requiredModule(unparenthesized(normalized.expression));
     return Boolean(directModule && isNodeAssertModule(directModule));
@@ -317,15 +372,13 @@ function isAssertionCall(node: ts.CallExpression, bindings: ReturnType<typeof as
     if ((expression.name.text === "call" || expression.name.text === "apply") && isAssertionFunction(owner, bindings)) {
       return true;
     }
-    return isExpectationChain(owner, bindings.expectations);
+    return isExpectationChain(owner, bindings);
   }
   if (ts.isElementAccessExpression(expression)) {
     const owner = unparenthesized(expression.expression);
     const directModule = requiredModule(owner);
-    return Boolean(
-      (directModule && isNodeAssertModule(directModule)) ||
-        (ts.isIdentifier(owner) && bindings.namespaces.has(owner.text)),
-    );
+    const symbol = ts.isIdentifier(owner) ? localSymbol(bindings.checker, owner) : undefined;
+    return Boolean((directModule && isNodeAssertModule(directModule)) || (symbol && bindings.namespaces.has(symbol)));
   }
   return false;
 }
@@ -571,14 +624,27 @@ function matchedStepKinds(
   return kinds;
 }
 
+function sourceProgram(file: SourceFile): { sourceFile: ts.SourceFile; checker: ts.TypeChecker } {
+  const sourceFile = ts.createSourceFile(file.path, file.source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const baseHost = ts.createCompilerHost({ noResolve: true });
+  const host: ts.CompilerHost = {
+    ...baseHost,
+    fileExists: (name) => name === file.path,
+    readFile: (name) => (name === file.path ? file.source : undefined),
+    getSourceFile: (name) => (name === file.path ? sourceFile : undefined),
+  };
+  const program = ts.createProgram({ rootNames: [file.path], options: { noResolve: true }, host });
+  return { sourceFile: program.getSourceFile(file.path) ?? sourceFile, checker: program.getTypeChecker() };
+}
+
 function checkStepDefinitions(
   file: SourceFile,
   unattributedAssertionMessage = "assertions are not allowed outside step definition callbacks",
   kindsByText: StepKindsByText = new Map(),
 ): string[] {
   const errors: string[] = [];
-  const sourceFile = ts.createSourceFile(file.path, file.source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const bindings = assertionBindings(sourceFile);
+  const { sourceFile, checker } = sourceProgram(file);
+  const bindings = assertionBindings(sourceFile, checker);
   const stepBindings = cucumberStepBindings(sourceFile);
   const assertionsInStepCallbacks = new Set<ts.CallExpression>();
   const visit = (node: ts.Node): void => {

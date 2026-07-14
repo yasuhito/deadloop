@@ -139,6 +139,26 @@ describe("acceptance test rules", () => {
     );
   });
 
+  it("does not count a shadowed assertion namespace in Then", () => {
+    const source = validSteps.replace(
+      "assert.equal(this.code, 1);",
+      "const assert = { ok() {} }; assert.ok(true);",
+    );
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:6: Then step definition must contain exactly one direct assertion (found 0)",
+    );
+  });
+
+  it("rejects a block-local CommonJS assertion in Given", () => {
+    const source = validSteps.replace(
+      "this.tracked = true;",
+      'const hidden = require("node:assert/strict"); hidden.ok(true); this.tracked = true;',
+    );
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:4: Given step definition must not contain assertions",
+    );
+  });
+
   it("rejects a Then definition with two assertions", () => {
     const source = validSteps.replace(
       "assert.equal(this.code, 1);",
