@@ -143,6 +143,24 @@ describe("acceptance test rules", () => {
     );
   });
 
+  it("rejects an assertion in a local helper within a step definition file", () => {
+    const source = validSteps.replace(
+      'Given("実行用ディレクトリに追跡ファイルがある", function () { this.tracked = true; });',
+      'function helper() { assert.ok(false); }\nGiven("実行用ディレクトリに追跡ファイルがある", function () { helper(); this.tracked = true; });',
+    );
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts: assertions are not allowed outside step definition callbacks",
+    );
+  });
+
+  it("rejects enabled Cucumber dry-run mode", () => {
+    const config = sources().config;
+    config.source = config.source.replace("strict: true", "strict: true, dryRun: true");
+    expect(checkAcceptanceRules(sources({ config }))).toContain(
+      "cucumber.cjs: Cucumber dry-run mode must not be enabled",
+    );
+  });
+
   it("rejects a non-Japanese Cucumber language", () => {
     const config = sources().config;
     config.source = config.source.replace("language: 'ja'", "language: 'en'");

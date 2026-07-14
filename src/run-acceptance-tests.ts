@@ -5,14 +5,33 @@ import path from "node:path";
 
 import { checkAcceptanceRules, loadAcceptanceSources } from "./check-acceptance-rules";
 
-export function countStartedTestCases(messagePath: string): number {
+type CucumberEnvelope = {
+  testCaseFinished?: { testCaseStartedId: string; willBeRetried: boolean };
+  testStepFinished?: { testCaseStartedId: string; testStepResult?: { status?: string } };
+};
+
+export function countCompletedTestCases(messagePath: string): number {
   if (!fs.existsSync(messagePath)) return 0;
-  return fs
+  const envelopes = fs
     .readFileSync(messagePath, "utf8")
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as { testCaseStarted?: unknown })
-    .filter((envelope) => envelope.testCaseStarted).length;
+    .map((line) => JSON.parse(line) as CucumberEnvelope);
+  const testCasesWithExecutedSteps = new Set(
+    envelopes
+      .filter(
+        (envelope) =>
+          envelope.testStepFinished?.testStepResult?.status !== undefined &&
+          envelope.testStepFinished.testStepResult.status !== "SKIPPED",
+      )
+      .map((envelope) => envelope.testStepFinished?.testCaseStartedId as string),
+  );
+  return envelopes.filter(
+    (envelope) =>
+      envelope.testCaseFinished &&
+      !envelope.testCaseFinished.willBeRetried &&
+      testCasesWithExecutedSteps.has(envelope.testCaseFinished.testCaseStartedId),
+  ).length;
 }
 
 export function runAcceptanceTests(cwd = process.cwd(), options: { quiet?: boolean } = {}): number {
@@ -39,9 +58,9 @@ export function runAcceptanceTests(cwd = process.cwd(), options: { quiet?: boole
       return 1;
     }
     if ((result.status ?? 1) !== 0) return result.status ?? 1;
-    const started = countStartedTestCases(messagePath);
-    if (started === 0) {
-      reportError("Cucumber executed 0 scenarios; acceptance tests cannot pass without an executed scenario.\n");
+    const completed = countCompletedTestCases(messagePath);
+    if (completed === 0) {
+      reportError("Cucumber completed 0 non-skipped scenarios; acceptance tests cannot pass without an executed scenario.\n");
       return 1;
     }
     return 0;

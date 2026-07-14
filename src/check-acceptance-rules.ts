@@ -105,15 +105,18 @@ function isAssertionCall(node: ts.CallExpression, bindings: ReturnType<typeof as
   return false;
 }
 
-function countAssertions(root: ts.FunctionLikeDeclaration, bindings: ReturnType<typeof assertionBindings>): number {
-  let count = 0;
+function directAssertions(
+  root: ts.FunctionLikeDeclaration,
+  bindings: ReturnType<typeof assertionBindings>,
+): ts.CallExpression[] {
+  const assertions: ts.CallExpression[] = [];
   const visit = (node: ts.Node): void => {
     if (node !== root && ts.isFunctionLike(node)) return;
-    if (ts.isCallExpression(node) && isAssertionCall(node, bindings)) count += 1;
+    if (ts.isCallExpression(node) && isAssertionCall(node, bindings)) assertions.push(node);
     ts.forEachChild(node, visit);
   };
   if (root.body) visit(root.body);
-  return count;
+  return assertions;
 }
 
 function cucumberStepBindings(sourceFile: ts.SourceFile): Map<string, "Given" | "When" | "Then"> {
@@ -141,6 +144,7 @@ function checkStepDefinitions(file: SourceFile): string[] {
   const sourceFile = ts.createSourceFile(file.path, file.source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const bindings = assertionBindings(sourceFile);
   const stepBindings = cucumberStepBindings(sourceFile);
+  const assertionsInStepCallbacks = new Set<ts.CallExpression>();
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && stepBindings.has(node.expression.text)) {
       const kind = stepBindings.get(node.expression.text) as "Given" | "When" | "Then";
@@ -148,18 +152,36 @@ function checkStepDefinitions(file: SourceFile): string[] {
         (argument) => ts.isFunctionExpression(argument) || ts.isArrowFunction(argument),
       );
       const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-      const count = implementation && ts.isFunctionLike(implementation) ? countAssertions(implementation, bindings) : 0;
-      if (kind === "Then" && count !== 1) {
+      const assertions =
+        implementation && ts.isFunctionLike(implementation) ? directAssertions(implementation, bindings) : [];
+      for (const assertion of assertions) assertionsInStepCallbacks.add(assertion);
+      if (kind === "Then" && assertions.length !== 1) {
         errors.push(
-          `${file.path}:${line}: Then step definition must contain exactly one direct assertion (found ${count})`,
+          `${file.path}:${line}: Then step definition must contain exactly one direct assertion (found ${assertions.length})`,
         );
-      } else if (kind !== "Then" && count !== 0) {
+      } else if (kind !== "Then" && assertions.length !== 0) {
         errors.push(`${file.path}:${line}: ${kind} step definition must not contain assertions`);
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
+
+  let assertionOutsideStepCallback = false;
+  const findUnattributedAssertion = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      isAssertionCall(node, bindings) &&
+      !assertionsInStepCallbacks.has(node)
+    ) {
+      assertionOutsideStepCallback = true;
+    }
+    ts.forEachChild(node, findUnattributedAssertion);
+  };
+  findUnattributedAssertion(sourceFile);
+  if (assertionOutsideStepCallback) {
+    errors.push(`${file.path}: assertions are not allowed outside step definition callbacks`);
+  }
   return errors;
 }
 
@@ -222,6 +244,9 @@ function checkCucumberConfig(config: SourceFile): string[] {
   }
   if (objectProperty(profile, "strict")?.kind !== ts.SyntaxKind.TrueKeyword) {
     errors.push(`${config.path}: Cucumber strict mode must be explicitly enabled`);
+  }
+  if (objectProperty(profile, "dryRun")?.kind === ts.SyntaxKind.TrueKeyword) {
+    errors.push(`${config.path}: Cucumber dry-run mode must not be enabled`);
   }
   if (!sameStrings(stringArray(objectProperty(profile, "paths")), ["acceptance/features/**/*.feature.md"])) {
     errors.push(`${config.path}: Cucumber paths must target only acceptance/features/**/*.feature.md`);

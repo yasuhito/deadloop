@@ -1,6 +1,6 @@
 # Cucumber Markdown と JavaScript 実行環境の制約
 
-調査日: 2026-07-14  
+調査日: 2026-07-14
 対象: deadloop Issue [#103](https://github.com/yasuhito/deadloop/issues/103)（親課題 [#102](https://github.com/yasuhito/deadloop/issues/102)）
 
 ## 結論
@@ -16,7 +16,7 @@ Cucumber-JS の Markdown with Gherkin（以下 MDG）は、`.feature.md`、Markd
 
 ### 1. Markdown 形式
 
-**公式に扱える。** MDG は GFM の厳密な上位集合として文書化され、ファイル名は `.feature.md` でなければならない。Cucumber-JS 7.3.0 で「experimental support」として追加され、現在の Cucumber-JS 13.0.0 は `@cucumber/gherkin` 41.0.0 に依存し、既定探索パターンにも `.feature.md` を含めている。[MDG specification](https://github.com/cucumber/gherkin/blob/main/MARKDOWN_WITH_GHERKIN.md) [Cucumber-JS 7.3.0 release](https://github.com/cucumber/cucumber-js/releases/tag/v7.3.0) [Cucumber-JS 13 package manifest](https://github.com/cucumber/cucumber-js/blob/v13.0.0/package.json) [path resolver source](https://github.com/cucumber/cucumber-js/blob/main/src/paths/paths.ts#L58-L78)
+**公式に扱える。** MDG は GFM の厳密な上位集合として文書化され、ファイル名は `.feature.md` でなければならない。Cucumber-JS 7.3.0 で「experimental support」として追加され、現在の Cucumber-JS 13.0.0 は `@cucumber/gherkin` 39.1.0 に依存し、既定探索パターンにも `.feature.md` を含めている。[MDG specification](https://github.com/cucumber/gherkin/blob/main/MARKDOWN_WITH_GHERKIN.md) [Cucumber-JS 7.3.0 release](https://github.com/cucumber/cucumber-js/releases/tag/v7.3.0) [Cucumber-JS 13 package manifest](https://github.com/cucumber/cucumber-js/blob/v13.0.0/package.json) [path resolver source](https://github.com/cucumber/cucumber-js/blob/main/src/paths/paths.ts#L58-L78)
 
 MDG 固有の構文制約は次のとおりである。
 

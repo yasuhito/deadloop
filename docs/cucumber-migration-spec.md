@@ -1,6 +1,6 @@
 # Cucumber 受け入れテスト移行仕様
 
-策定日: 2026-07-14  
+策定日: 2026-07-14
 対象: Issue [#110](https://github.com/yasuhito/deadloop/issues/110)（親課題 [#102](https://github.com/yasuhito/deadloop/issues/102)）
 
 ## 1. 目的
