@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { CucumberExpression, ParameterTypeRegistry } from "@cucumber/cucumber-expressions";
 import { generateMessages } from "@cucumber/gherkin";
 import { IdGenerator, SourceMediaType, type GherkinDocument, type Scenario, type Step } from "@cucumber/messages";
 import ts from "typescript";
@@ -466,6 +467,8 @@ type EffectiveStepKind = Exclude<CucumberStepKind, "defineStep">;
 
 type StepKindsByText = Map<string, Set<EffectiveStepKind>>;
 
+const cucumberParameterTypes = new ParameterTypeRegistry();
+
 function featureStepKinds(files: SourceFile[]): StepKindsByText {
   const kindsByText: StepKindsByText = new Map();
   for (const file of files) {
@@ -515,7 +518,17 @@ function matchedStepKinds(
   if (!expression) return undefined;
   const normalized = unparenthesized(expression);
   if (ts.isStringLiteral(normalized) || ts.isNoSubstitutionTemplateLiteral(normalized)) {
-    return new Set(kindsByText.get(normalized.text) ?? []);
+    let pattern: CucumberExpression;
+    try {
+      pattern = new CucumberExpression(normalized.text, cucumberParameterTypes);
+    } catch {
+      return new Set();
+    }
+    const kinds = new Set<EffectiveStepKind>();
+    for (const [text, textKinds] of kindsByText) {
+      if (pattern.match(text)) for (const kind of textKinds) kinds.add(kind);
+    }
+    return kinds;
   }
   if (!ts.isRegularExpressionLiteral(normalized)) return undefined;
   const match = normalized.text.match(/^\/(.*)\/([a-z]*)$/s);

@@ -4,7 +4,7 @@ This note records the negative source-map check required for the foundation PR. 
 
 ## TypeScript assertion failure and source map
 
-On 2026-07-14, `acceptance/steps/project-check-safety.steps.ts` was temporarily changed from:
+On 2026-07-15, `acceptance/steps/project-check-safety.steps.ts` was temporarily changed from:
 
 ```ts
 assert.equal(this.resultCode, 1);
@@ -26,8 +26,8 @@ The command exited with status 1 and reported the assertion diff, the failing fe
 
 ```text
 Failed scenarios:
-  1) 実行用ディレクトリに追跡ファイルがある場合は検証を拒否する # acceptance/features/project-check-safety.feature.md:5
-       ならば検証は安全のため拒否される # acceptance/steps/project-check-safety.steps.ts:35
+  1) 作業用一時ディレクトリに Git 管理ファイルがある # acceptance/features/project-check-safety.feature.md:9
+       ならばdeadloop は自動チェックを実行しない # acceptance/steps/project-check-safety.steps.ts:35
            AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
 
            1 !== 0
@@ -41,6 +41,7 @@ Failed scenarios:
 
 1 scenario (1 failed)
 4 steps (3 passed, 1 failed)
+0m 0.17s (0m 0.9s executing your code)
 ```
 
 After recording the output, the assertion was restored to `assert.equal(this.resultCode, 1);`. A clean successful acceptance run is part of the normal project verification.

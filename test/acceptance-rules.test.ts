@@ -449,6 +449,38 @@ Given(outcomePattern, () => {});`;
     );
   });
 
+  it("rejects a Then Cucumber Expression registered through Given", () => {
+    const feature = validFeature.replace("検証は安全のため拒否される", "結果 1 がある");
+    const source = validSteps.replace(
+      'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
+      'Given("結果 {int} がある", function () {});',
+    );
+    expect(
+      checkAcceptanceRules(
+        sources({
+          features: [{ path: "acceptance/features/safety.feature.md", source: feature }],
+          stepDefinitions: [{ path: "bad.steps.ts", source }],
+        }),
+      ),
+    ).toContain("bad.steps.ts:6: step definition registered with Given matches a Then step");
+  });
+
+  it("rejects a Then Cucumber Expression without an assertion", () => {
+    const feature = validFeature.replace("検証は安全のため拒否される", "結果 1 がある");
+    const source = validSteps.replace(
+      'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
+      'Then("結果 {int} がある", function () {});',
+    );
+    expect(
+      checkAcceptanceRules(
+        sources({
+          features: [{ path: "acceptance/features/safety.feature.md", source: feature }],
+          stepDefinitions: [{ path: "bad.steps.ts", source }],
+        }),
+      ),
+    ).toContain("bad.steps.ts:6: Then step definition must contain exactly one direct assertion (found 0)");
+  });
+
   it("rejects an aliased defineStep definition without an assertion", () => {
     const source = validSteps
       .replace("Given, Then, When", "Given, defineStep as step, When")
