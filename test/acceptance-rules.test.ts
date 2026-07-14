@@ -218,6 +218,45 @@ outcome("結果", function () { this.observed = this.code; });
     );
   });
 
+  it("rejects an assertion in a namespace-imported Given definition", () => {
+    const source = validSteps
+      .replace(
+        'import { Given, Then, When } from "@cucumber/cucumber";',
+        'import * as cucumber from "@cucumber/cucumber";',
+      )
+      .replaceAll(/\b(Given|Then|When)\(/g, "cucumber.$1(")
+      .replace("this.tracked = true;", "assert.ok(true); this.tracked = true;");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:4: Given step definition must not contain assertions",
+    );
+  });
+
+  it("rejects an assertion in a namespace-imported When definition", () => {
+    const source = validSteps
+      .replace(
+        'import { Given, Then, When } from "@cucumber/cucumber";',
+        'import * as cucumber from "@cucumber/cucumber";',
+      )
+      .replaceAll(/\b(Given|Then|When)\(/g, "cucumber.$1(")
+      .replace("this.code = 1;", "assert.ok(true); this.code = 1;");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:5: When step definition must not contain assertions",
+    );
+  });
+
+  it("rejects a namespace-imported Then definition without an assertion", () => {
+    const source = validSteps
+      .replace(
+        'import { Given, Then, When } from "@cucumber/cucumber";',
+        'import * as cucumber from "@cucumber/cucumber";',
+      )
+      .replaceAll(/\b(Given|Then|When)\(/g, "cucumber.$1(")
+      .replace("assert.equal(this.code, 1);", "this.observed = this.code;");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:6: Then step definition must contain exactly one direct assertion (found 0)",
+    );
+  });
+
   it("rejects an aliased Then definition without an assertion", () => {
     const source = validSteps
       .replace("Given, Then, When", "Given, Then as outcome, When")

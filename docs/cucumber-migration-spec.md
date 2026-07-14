@@ -327,7 +327,7 @@ Cucumber 移行全体は、次をすべて満たしたときに完了する。
 
 ### リポジトリ内
 
-- [Cucumber Markdown と JavaScript 実行環境の制約](research/cucumber-markdown-javascript-constraints.md) — MDG、日本語方言、TypeScript 実行環境の調査根拠
+- [Cucumber Markdown と JavaScript 実行環境の制約](https://github.com/yasuhito/deadloop/blob/main/docs/research/cucumber-markdown-javascript-constraints.md) — MDG、日本語方言、TypeScript 実行環境の調査根拠
 - [既存テストの Cucumber / Vitest / 削除候補分類](cucumber-test-classification.md) — 全399件の分類、根拠、優先グループ
 
 ### GitHub Issues
@@ -344,4 +344,4 @@ Cucumber 移行全体は、次をすべて満たしたときに完了する。
 
 ### 一次資料
 
-外部仕様の一次資料は、版との対応や残余リスクを含めて[調査資料](research/cucumber-markdown-javascript-constraints.md#主な一次資料)から参照する。実装時は採用した Cucumber-JS のタグに対応する configuration、transpiling、MDG 仕様を再確認する。
+外部仕様の一次資料は、版との対応や残余リスクを含めて[調査資料](https://github.com/yasuhito/deadloop/blob/main/docs/research/cucumber-markdown-javascript-constraints.md#主な一次資料)から参照する。実装時は採用した Cucumber-JS のタグに対応する configuration、transpiling、MDG 仕様を再確認する。

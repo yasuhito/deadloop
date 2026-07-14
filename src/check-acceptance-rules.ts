@@ -221,12 +221,16 @@ function cucumberStepBindings(sourceFile: ts.SourceFile): {
       !ts.isImportDeclaration(statement) ||
       !ts.isStringLiteral(statement.moduleSpecifier) ||
       statement.moduleSpecifier.text !== "@cucumber/cucumber" ||
-      !statement.importClause?.namedBindings ||
-      !ts.isNamedImports(statement.importClause.namedBindings)
+      !statement.importClause?.namedBindings
     ) {
       continue;
     }
-    for (const element of statement.importClause.namedBindings.elements) {
+    const namedBindings = statement.importClause.namedBindings;
+    if (ts.isNamespaceImport(namedBindings)) {
+      namespaces.add(namedBindings.name.text);
+      continue;
+    }
+    for (const element of namedBindings.elements) {
       add(element.name.text, element.propertyName?.text ?? element.name.text);
     }
   }
