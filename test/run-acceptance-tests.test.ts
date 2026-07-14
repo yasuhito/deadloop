@@ -2,14 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { countCompletedTestCases, runAcceptanceTests } from "../src/run-acceptance-tests";
 
 const temporaryDirectories: string[] = [];
 
 function fixtureWithDryRun(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-dry-run-"));
+  const root = fs.mkdtempSync(path.join(process.cwd(), ".deadloop-dry-run-"));
   temporaryDirectories.push(root);
   fs.mkdirSync(path.join(root, "acceptance/features"), { recursive: true });
   fs.mkdirSync(path.join(root, "acceptance/steps"), { recursive: true });
@@ -74,7 +74,7 @@ Then("結果がある", function () { assert.ok(true); });
 }
 
 function fixtureWithSkippedScenarioAndPassingHook(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-skipped-hook-"));
+  const root = fs.mkdtempSync(path.join(process.cwd(), ".deadloop-skipped-hook-"));
   temporaryDirectories.push(root);
   fs.mkdirSync(path.join(root, "acceptance/features"), { recursive: true });
   fs.mkdirSync(path.join(root, "acceptance/steps"), { recursive: true });
@@ -135,6 +135,7 @@ function fixtureWithUnmatchedFeatureLanguage(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const directory of temporaryDirectories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
 
@@ -147,12 +148,24 @@ describe("acceptance test runner", () => {
     expect(runAcceptanceTests(fixtureWithUnmatchedFeatureLanguage(), { quiet: true })).toBe(1);
   });
 
-  it("rejects a dry-run fixture whose Given would throw", () => {
-    expect(runAcceptanceTests(fixtureWithDryRun(), { quiet: true })).toBe(1);
+  it("rejects a dry-run fixture because no scenario completed", () => {
+    const errors: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      errors.push(String(chunk));
+      return true;
+    });
+    runAcceptanceTests(fixtureWithDryRun());
+    expect(errors.join("")).toContain("Cucumber completed 0 non-skipped scenarios");
   });
 
-  it("fails when only a hook passes and all scenario steps are skipped", () => {
-    expect(runAcceptanceTests(fixtureWithSkippedScenarioAndPassingHook(), { quiet: true })).toBe(1);
+  it("rejects a fixture whose scenario steps are all skipped", () => {
+    const errors: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      errors.push(String(chunk));
+      return true;
+    });
+    runAcceptanceTests(fixtureWithSkippedScenarioAndPassingHook());
+    expect(errors.join("")).toContain("Cucumber completed 0 non-skipped scenarios");
   });
 
   it("does not count a fully skipped test case as completed", () => {

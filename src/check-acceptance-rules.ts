@@ -216,11 +216,28 @@ function assertionBindings(sourceFile: ts.SourceFile): {
         continue;
       }
       const access = accessedProperty(initializer);
-      if (!access || !namespaces.has(access.owner)) continue;
-      const target = access.property === "strict" ? namespaces : functions;
-      if (!target.has(local)) {
-        target.add(local);
-        changed = true;
+      if (access && namespaces.has(access.owner)) {
+        const target = access.property === "strict" ? namespaces : functions;
+        if (!target.has(local)) {
+          target.add(local);
+          changed = true;
+        }
+        continue;
+      }
+      if (
+        ts.isCallExpression(initializer) &&
+        ts.isPropertyAccessExpression(initializer.expression) &&
+        initializer.expression.name.text === "bind"
+      ) {
+        const bound = unparenthesized(initializer.expression.expression);
+        const boundAccess = accessedProperty(bound);
+        const isBoundAssertion =
+          (ts.isIdentifier(bound) && functions.has(bound.text)) ||
+          Boolean(boundAccess && namespaces.has(boundAccess.owner) && boundAccess.property !== "strict");
+        if (isBoundAssertion && !functions.has(local)) {
+          functions.add(local);
+          changed = true;
+        }
       }
     }
   }
@@ -362,9 +379,79 @@ function cucumberStepKind(
   return undefined;
 }
 
+type EffectiveStepKind = Exclude<CucumberStepKind, "defineStep">;
+
+type StepKindsByText = Map<string, Set<EffectiveStepKind>>;
+
+function featureStepKinds(files: SourceFile[]): StepKindsByText {
+  const kindsByText: StepKindsByText = new Map();
+  for (const file of files) {
+    const envelopes = generateMessages(
+      file.source,
+      file.path,
+      SourceMediaType.TEXT_X_CUCUMBER_GHERKIN_MARKDOWN,
+      {
+        defaultDialect: "ja",
+        includeGherkinDocument: true,
+        includePickles: false,
+        includeSource: false,
+        newId: IdGenerator.incrementing(),
+      },
+    );
+    for (const envelope of envelopes) {
+      if (!envelope.gherkinDocument) continue;
+      for (const { steps } of scenarios(envelope.gherkinDocument)) {
+        let previousKind: EffectiveStepKind | undefined;
+        for (const step of steps) {
+          const kind: EffectiveStepKind | undefined =
+            step.keywordType === "Context"
+              ? "Given"
+              : step.keywordType === "Action"
+                ? "When"
+                : step.keywordType === "Outcome"
+                  ? "Then"
+                  : step.keywordType === "Conjunction"
+                    ? previousKind
+                    : undefined;
+          if (!kind) continue;
+          previousKind = kind;
+          const kinds = kindsByText.get(step.text) ?? new Set<EffectiveStepKind>();
+          kinds.add(kind);
+          kindsByText.set(step.text, kinds);
+        }
+      }
+    }
+  }
+  return kindsByText;
+}
+
+function matchedStepKinds(expression: ts.Expression | undefined, kindsByText: StepKindsByText): Set<EffectiveStepKind> {
+  if (!expression) return new Set();
+  const normalized = unparenthesized(expression);
+  if (ts.isStringLiteral(normalized) || ts.isNoSubstitutionTemplateLiteral(normalized)) {
+    return new Set(kindsByText.get(normalized.text) ?? []);
+  }
+  if (!ts.isRegularExpressionLiteral(normalized)) return new Set();
+  const match = normalized.text.match(/^\/(.*)\/([a-z]*)$/s);
+  if (!match) return new Set();
+  let pattern: RegExp;
+  try {
+    pattern = new RegExp(match[1], match[2]);
+  } catch {
+    return new Set();
+  }
+  const kinds = new Set<EffectiveStepKind>();
+  for (const [text, textKinds] of kindsByText) {
+    pattern.lastIndex = 0;
+    if (pattern.test(text)) for (const kind of textKinds) kinds.add(kind);
+  }
+  return kinds;
+}
+
 function checkStepDefinitions(
   file: SourceFile,
   unattributedAssertionMessage = "assertions are not allowed outside step definition callbacks",
+  kindsByText: StepKindsByText = new Map(),
 ): string[] {
   const errors: string[] = [];
   const sourceFile = ts.createSourceFile(file.path, file.source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -385,8 +472,15 @@ function checkStepDefinitions(
       const assertions =
         implementation && ts.isFunctionLike(implementation) ? directAssertions(implementation, bindings) : [];
       for (const assertion of assertions) assertionsInStepCallbacks.add(assertion);
+      const matchedKinds = matchedStepKinds(node.arguments[0], kindsByText);
       if (kind === "defineStep") {
         errors.push(`${file.path}:${line}: defineStep is not allowed; use Given, When, or Then`);
+      } else if (matchedKinds.size > 1) {
+        errors.push(`${file.path}:${line}: step definition matches multiple Gherkin step kinds`);
+      } else if (matchedKinds.size === 1 && !matchedKinds.has(kind)) {
+        errors.push(
+          `${file.path}:${line}: step definition registered with ${kind} matches a ${[...matchedKinds][0]} step`,
+        );
       } else if (kind === "Then" && assertions.length !== 1) {
         errors.push(
           `${file.path}:${line}: Then step definition must contain exactly one direct assertion (found ${assertions.length})`,
@@ -515,10 +609,11 @@ function checkCucumberConfig(config: SourceFile): string[] {
 
 export function checkAcceptanceRules(input: AcceptanceSource): string[] {
   const errors = checkCucumberConfig(input.config);
+  const kindsByText = featureStepKinds(input.features);
   for (const feature of input.features) errors.push(...checkFeature(feature));
-  for (const steps of input.stepDefinitions) errors.push(...checkStepDefinitions(steps));
+  for (const steps of input.stepDefinitions) errors.push(...checkStepDefinitions(steps, undefined, kindsByText));
   for (const helper of input.helpers) {
-    errors.push(...checkStepDefinitions(helper, "assertions are not allowed in acceptance helpers"));
+    errors.push(...checkStepDefinitions(helper, "assertions are not allowed in acceptance helpers", kindsByText));
   }
   if (input.features.length === 0) errors.push("acceptance/features: at least one .feature.md file is required");
   return errors;

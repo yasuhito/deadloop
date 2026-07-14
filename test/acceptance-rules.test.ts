@@ -159,6 +159,18 @@ describe("acceptance test rules", () => {
     );
   });
 
+  it("rejects a bound assertion alias in a Given definition", () => {
+    const source = validSteps
+      .replace(
+        'import { Given, Then, When } from "@cucumber/cucumber";',
+        'import { Given, Then, When } from "@cucumber/cucumber";\nconst hidden = assert.ok.bind(assert);',
+      )
+      .replace("this.tracked = true;", "hidden(true); this.tracked = true;");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:5: Given step definition must not contain assertions",
+    );
+  });
+
   it("rejects an assertion through a local assertion alias in a Given definition", () => {
     const source = validSteps
       .replace('import { Given, Then, When } from "@cucumber/cucumber";', 'import { Given, Then, When } from "@cucumber/cucumber";\nconst hiddenAssert = assert;')
@@ -315,6 +327,26 @@ outcome("結果", function () { this.observed = this.code; });
       );
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:7: Then step definition must contain exactly one direct assertion (found 0)",
+    );
+  });
+
+  it("rejects a Then phrase registered through Given", () => {
+    const source = validSteps.replace(
+      'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
+      'Given("検証は安全のため拒否される", function () {});',
+    );
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:6: step definition registered with Given matches a Then step",
+    );
+  });
+
+  it("rejects a Then phrase registered through When", () => {
+    const source = validSteps.replace(
+      'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
+      'When("検証は安全のため拒否される", function () {});',
+    );
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:6: step definition registered with When matches a Then step",
     );
   });
 
