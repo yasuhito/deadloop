@@ -108,17 +108,23 @@ function topLevelVariableDeclarations(sourceFile: ts.SourceFile): ts.VariableDec
   );
 }
 
+function unparenthesized(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (ts.isParenthesizedExpression(current)) current = current.expression;
+  return current;
+}
+
 function accessedProperty(expression: ts.Expression): { owner: string; property: string } | undefined {
-  if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
-    return { owner: expression.expression.text, property: expression.name.text };
+  const normalized = unparenthesized(expression);
+  if (ts.isPropertyAccessExpression(normalized)) {
+    const owner = unparenthesized(normalized.expression);
+    if (ts.isIdentifier(owner)) return { owner: owner.text, property: normalized.name.text };
   }
-  if (
-    ts.isElementAccessExpression(expression) &&
-    ts.isIdentifier(expression.expression) &&
-    expression.argumentExpression &&
-    ts.isStringLiteral(expression.argumentExpression)
-  ) {
-    return { owner: expression.expression.text, property: expression.argumentExpression.text };
+  if (ts.isElementAccessExpression(normalized) && normalized.argumentExpression) {
+    const owner = unparenthesized(normalized.expression);
+    if (ts.isIdentifier(owner) && ts.isStringLiteral(normalized.argumentExpression)) {
+      return { owner: owner.text, property: normalized.argumentExpression.text };
+    }
   }
   return undefined;
 }
@@ -178,9 +184,22 @@ function assertionBindings(sourceFile: ts.SourceFile): {
   while (changed) {
     changed = false;
     for (const declaration of topLevelVariableDeclarations(sourceFile)) {
-      if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue;
+      if (!declaration.initializer) continue;
+      const initializer = unparenthesized(declaration.initializer);
+      if (ts.isObjectBindingPattern(declaration.name) && ts.isIdentifier(initializer) && namespaces.has(initializer.text)) {
+        for (const element of declaration.name.elements) {
+          if (!ts.isIdentifier(element.name)) continue;
+          const property = element.propertyName?.getText(sourceFile) ?? element.name.text;
+          const target = property === "strict" ? namespaces : functions;
+          if (!target.has(element.name.text)) {
+            target.add(element.name.text);
+            changed = true;
+          }
+        }
+        continue;
+      }
+      if (!ts.isIdentifier(declaration.name)) continue;
       const local = declaration.name.text;
-      const initializer = declaration.initializer;
       if (ts.isIdentifier(initializer)) {
         if (functions.has(initializer.text) && !functions.has(local)) {
           functions.add(local);
@@ -216,14 +235,15 @@ function isExpectationChain(expression: ts.Expression, expectations: Set<string>
 }
 
 function isAssertionCall(node: ts.CallExpression, bindings: ReturnType<typeof assertionBindings>): boolean {
-  if (ts.isIdentifier(node.expression)) return bindings.functions.has(node.expression.text);
-  if (ts.isPropertyAccessExpression(node.expression)) {
-    const owner = node.expression.expression;
+  const expression = unparenthesized(node.expression);
+  if (ts.isIdentifier(expression)) return bindings.functions.has(expression.text);
+  if (ts.isPropertyAccessExpression(expression)) {
+    const owner = unparenthesized(expression.expression);
     if (ts.isIdentifier(owner) && bindings.namespaces.has(owner.text)) return true;
     return isExpectationChain(owner, bindings.expectations);
   }
-  if (ts.isElementAccessExpression(node.expression)) {
-    const owner = node.expression.expression;
+  if (ts.isElementAccessExpression(expression)) {
+    const owner = unparenthesized(expression.expression);
     return ts.isIdentifier(owner) && bindings.namespaces.has(owner.text);
   }
   return false;
@@ -292,9 +312,18 @@ function cucumberStepBindings(sourceFile: ts.SourceFile): {
   while (changed) {
     changed = false;
     for (const declaration of topLevelVariableDeclarations(sourceFile)) {
-      if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue;
+      if (!declaration.initializer) continue;
+      const initializer = unparenthesized(declaration.initializer);
+      if (ts.isObjectBindingPattern(declaration.name) && ts.isIdentifier(initializer) && namespaces.has(initializer.text)) {
+        for (const element of declaration.name.elements) {
+          if (!ts.isIdentifier(element.name) || functions.has(element.name.text)) continue;
+          add(element.name.text, element.propertyName?.getText(sourceFile) ?? element.name.text);
+          if (functions.has(element.name.text)) changed = true;
+        }
+        continue;
+      }
+      if (!ts.isIdentifier(declaration.name)) continue;
       const local = declaration.name.text;
-      const initializer = declaration.initializer;
       if (ts.isIdentifier(initializer)) {
         const kind = functions.get(initializer.text);
         if (kind && !functions.has(local)) {
@@ -320,19 +349,23 @@ function cucumberStepKind(
   expression: ts.LeftHandSideExpression,
   bindings: ReturnType<typeof cucumberStepBindings>,
 ): CucumberStepKind | undefined {
-  if (ts.isIdentifier(expression)) return bindings.functions.get(expression.text);
+  const normalized = unparenthesized(expression);
+  if (ts.isIdentifier(normalized)) return bindings.functions.get(normalized.text);
   if (
-    ts.isPropertyAccessExpression(expression) &&
-    ts.isIdentifier(expression.expression) &&
-    bindings.namespaces.has(expression.expression.text)
+    ts.isPropertyAccessExpression(normalized) &&
+    ts.isIdentifier(unparenthesized(normalized.expression)) &&
+    bindings.namespaces.has((unparenthesized(normalized.expression) as ts.Identifier).text)
   ) {
-    const name = expression.name.text;
+    const name = normalized.name.text;
     if (name === "Given" || name === "When" || name === "Then" || name === "defineStep") return name;
   }
   return undefined;
 }
 
-function checkStepDefinitions(file: SourceFile): string[] {
+function checkStepDefinitions(
+  file: SourceFile,
+  unattributedAssertionMessage = "assertions are not allowed outside step definition callbacks",
+): string[] {
   const errors: string[] = [];
   const sourceFile = ts.createSourceFile(file.path, file.source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const bindings = assertionBindings(sourceFile);
@@ -378,22 +411,8 @@ function checkStepDefinitions(file: SourceFile): string[] {
     ts.forEachChild(node, findUnattributedAssertion);
   };
   findUnattributedAssertion(sourceFile);
-  if (assertionOutsideStepCallback) {
-    errors.push(`${file.path}: assertions are not allowed outside step definition callbacks`);
-  }
+  if (assertionOutsideStepCallback) errors.push(`${file.path}: ${unattributedAssertionMessage}`);
   return errors;
-}
-
-function checkHelper(file: SourceFile): string[] {
-  const sourceFile = ts.createSourceFile(file.path, file.source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const bindings = assertionBindings(sourceFile);
-  let found = false;
-  const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && isAssertionCall(node, bindings)) found = true;
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  return found ? [`${file.path}: assertions are not allowed in acceptance helpers`] : [];
 }
 
 function objectProperty(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
@@ -454,6 +473,15 @@ function checkCucumberConfig(config: SourceFile): string[] {
   }
   if (!profile) return [`${config.path}: a literal default Cucumber profile is required`];
 
+  const allowedProperties = new Set(["paths", "requireModule", "require", "language", "strict", "format", "dryRun", "retry"]);
+  for (const property of profile.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const name = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) ? property.name.text : undefined;
+    if (name && !allowedProperties.has(name)) {
+      errors.push(`${config.path}: Cucumber default profile property '${name}' is not allowed`);
+    }
+  }
+
   const language = objectProperty(profile, "language");
   if (!language || !ts.isStringLiteral(language) || language.text !== "ja") {
     errors.push(`${config.path}: Cucumber language must be explicitly set to 'ja'`);
@@ -489,7 +517,9 @@ export function checkAcceptanceRules(input: AcceptanceSource): string[] {
   const errors = checkCucumberConfig(input.config);
   for (const feature of input.features) errors.push(...checkFeature(feature));
   for (const steps of input.stepDefinitions) errors.push(...checkStepDefinitions(steps));
-  for (const helper of input.helpers) errors.push(...checkHelper(helper));
+  for (const helper of input.helpers) {
+    errors.push(...checkStepDefinitions(helper, "assertions are not allowed in acceptance helpers"));
+  }
   if (input.features.length === 0) errors.push("acceptance/features: at least one .feature.md file is required");
   return errors;
 }

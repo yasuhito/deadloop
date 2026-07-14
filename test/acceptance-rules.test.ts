@@ -175,6 +175,22 @@ describe("acceptance test rules", () => {
     );
   });
 
+  it("rejects a destructured assertion from an assertion namespace in Given", () => {
+    const source = validSteps
+      .replace('import { Given, Then, When } from "@cucumber/cucumber";', 'import { Given, Then, When } from "@cucumber/cucumber";\nconst { ok } = assert;')
+      .replace("this.tracked = true;", "ok(true); this.tracked = true;");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:5: Given step definition must not contain assertions",
+    );
+  });
+
+  it("rejects a parenthesized assertion namespace call in Given", () => {
+    const source = validSteps.replace("this.tracked = true;", "(assert).ok(true); this.tracked = true;");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:4: Given step definition must not contain assertions",
+    );
+  });
+
   it("counts an imported expect matcher as one assertion", () => {
     const source = validSteps
       .replace('import assert from "node:assert/strict";', 'import { expect } from "vitest";')
@@ -266,6 +282,18 @@ outcome("結果", function () { this.observed = this.code; });
     );
   });
 
+  it("rejects a destructured Then from a Cucumber namespace without an assertion", () => {
+    const source = validSteps
+      .replace(
+        'import { Given, Then, When } from "@cucumber/cucumber";',
+        'import * as cucumber from "@cucumber/cucumber";\nconst { Given, Then, When } = cucumber;',
+      )
+      .replace("assert.equal(this.code, 1);", "this.observed = this.code;");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:7: Then step definition must contain exactly one direct assertion (found 0)",
+    );
+  });
+
   it("rejects an aliased Then definition without an assertion", () => {
     const source = validSteps
       .replace("Given, Then, When", "Given, Then as outcome, When")
@@ -308,6 +336,42 @@ outcome("結果", function () { this.observed = this.code; });
     ];
     expect(checkAcceptanceRules(sources({ helpers }))).toContain(
       "acceptance/support/helper.ts: assertions are not allowed in acceptance helpers",
+    );
+  });
+
+  it("rejects an assertion in a support Given definition", () => {
+    const helpers = [
+      {
+        path: "acceptance/support/steps.ts",
+        source: 'import assert from "node:assert/strict"; import { Given } from "@cucumber/cucumber"; Given("x", () => { assert.ok(true); });',
+      },
+    ];
+    expect(checkAcceptanceRules(sources({ helpers }))).toContain(
+      "acceptance/support/steps.ts:1: Given step definition must not contain assertions",
+    );
+  });
+
+  it("rejects an assertion in a support When definition", () => {
+    const helpers = [
+      {
+        path: "acceptance/support/steps.ts",
+        source: 'import assert from "node:assert/strict"; import { When } from "@cucumber/cucumber"; When("x", () => { assert.ok(true); });',
+      },
+    ];
+    expect(checkAcceptanceRules(sources({ helpers }))).toContain(
+      "acceptance/support/steps.ts:1: When step definition must not contain assertions",
+    );
+  });
+
+  it("rejects a support Then definition without an assertion", () => {
+    const helpers = [
+      {
+        path: "acceptance/support/steps.ts",
+        source: 'import { Then } from "@cucumber/cucumber"; Then("x", () => {});',
+      },
+    ];
+    expect(checkAcceptanceRules(sources({ helpers }))).toContain(
+      "acceptance/support/steps.ts:1: Then step definition must contain exactly one direct assertion (found 0)",
     );
   });
 
@@ -420,6 +484,14 @@ outcome("結果", function () { this.observed = this.code; });
     config.source = config.source.replace("strict: true", "strict: true, retry: 3");
     expect(checkAcceptanceRules(sources({ config }))).toContain(
       "cucumber.cjs: Cucumber retry must be omitted or explicitly set to 0",
+    );
+  });
+
+  it.each(["tags", "name", "nameRegex", "name-regex"])("rejects the Cucumber scenario filter %s", (property) => {
+    const config = sources().config;
+    config.source = config.source.replace("strict: true", `strict: true, '${property}': 'excluded'`);
+    expect(checkAcceptanceRules(sources({ config }))).toContain(
+      `cucumber.cjs: Cucumber default profile property '${property}' is not allowed`,
     );
   });
 

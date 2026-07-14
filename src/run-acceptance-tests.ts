@@ -40,21 +40,28 @@ export function countCompletedTestCases(messagePath: string): number {
       )
       .map((envelope) => [envelope.testCaseStarted.id, envelope.testCaseStarted.testCaseId]),
   );
-  const testCasesWithExecutedPickleSteps = new Set<string>();
+  const pickleStepStatusesByStartedId = new Map<string, Map<string, string>>();
   for (const envelope of envelopes) {
     const finished = envelope.testStepFinished;
-    if (!finished?.testStepResult?.status || finished.testStepResult.status === "SKIPPED") continue;
+    if (!finished?.testStepResult?.status) continue;
     const testCaseId = testCaseIdByStartedId.get(finished.testCaseStartedId);
-    if (testCaseId && pickleStepIdsByTestCase.get(testCaseId)?.has(finished.testStepId)) {
-      testCasesWithExecutedPickleSteps.add(finished.testCaseStartedId);
-    }
+    if (!testCaseId || !pickleStepIdsByTestCase.get(testCaseId)?.has(finished.testStepId)) continue;
+    const statuses = pickleStepStatusesByStartedId.get(finished.testCaseStartedId) ?? new Map<string, string>();
+    statuses.set(finished.testStepId, finished.testStepResult.status);
+    pickleStepStatusesByStartedId.set(finished.testCaseStartedId, statuses);
   }
-  return envelopes.filter(
-    (envelope) =>
-      envelope.testCaseFinished &&
-      !envelope.testCaseFinished.willBeRetried &&
-      testCasesWithExecutedPickleSteps.has(envelope.testCaseFinished.testCaseStartedId),
-  ).length;
+  return envelopes.filter((envelope) => {
+    const finished = envelope.testCaseFinished;
+    if (!finished || finished.willBeRetried) return false;
+    const testCaseId = testCaseIdByStartedId.get(finished.testCaseStartedId);
+    const pickleStepIds = testCaseId ? pickleStepIdsByTestCase.get(testCaseId) : undefined;
+    const statuses = pickleStepStatusesByStartedId.get(finished.testCaseStartedId);
+    return Boolean(
+      pickleStepIds?.size &&
+        statuses &&
+        [...pickleStepIds].every((stepId) => statuses.get(stepId) === "PASSED"),
+    );
+  }).length;
 }
 
 export function runAcceptanceTests(cwd = process.cwd(), options: { quiet?: boolean } = {}): number {

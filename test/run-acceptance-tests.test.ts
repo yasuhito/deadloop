@@ -155,14 +155,69 @@ describe("acceptance test runner", () => {
     expect(runAcceptanceTests(fixtureWithSkippedScenarioAndPassingHook(), { quiet: true })).toBe(1);
   });
 
-  it("does not count a skipped test case as completed", () => {
+  it("does not count a fully skipped test case as completed", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-skipped-messages-"));
     temporaryDirectories.push(root);
     const messagePath = path.join(root, "messages.ndjson");
     fs.writeFileSync(
       messagePath,
       [
-        { testStepFinished: { testCaseStartedId: "started", testStepResult: { status: "SKIPPED" } } },
+        { testCase: { id: "case", testSteps: [{ id: "one", pickleStepId: "pickle-one" }] } },
+        { testCaseStarted: { id: "started", testCaseId: "case" } },
+        {
+          testStepFinished: {
+            testCaseStartedId: "started",
+            testStepId: "one",
+            testStepResult: { status: "SKIPPED" },
+          },
+        },
+        { testCaseFinished: { testCaseStartedId: "started", willBeRetried: false } },
+      ]
+        .map((message) => JSON.stringify(message))
+        .join("\n"),
+    );
+    expect(countCompletedTestCases(messagePath)).toBe(0);
+  });
+
+  it("does not count a partially skipped test case as completed", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-partially-skipped-messages-"));
+    temporaryDirectories.push(root);
+    const messagePath = path.join(root, "messages.ndjson");
+    fs.writeFileSync(
+      messagePath,
+      [
+        {
+          testCase: {
+            id: "case",
+            testSteps: [
+              { id: "one", pickleStepId: "pickle-one" },
+              { id: "two", pickleStepId: "pickle-two" },
+              { id: "three", pickleStepId: "pickle-three" },
+            ],
+          },
+        },
+        { testCaseStarted: { id: "started", testCaseId: "case" } },
+        {
+          testStepFinished: {
+            testCaseStartedId: "started",
+            testStepId: "one",
+            testStepResult: { status: "PASSED" },
+          },
+        },
+        {
+          testStepFinished: {
+            testCaseStartedId: "started",
+            testStepId: "two",
+            testStepResult: { status: "SKIPPED" },
+          },
+        },
+        {
+          testStepFinished: {
+            testCaseStartedId: "started",
+            testStepId: "three",
+            testStepResult: { status: "SKIPPED" },
+          },
+        },
         { testCaseFinished: { testCaseStartedId: "started", willBeRetried: false } },
       ]
         .map((message) => JSON.stringify(message))
