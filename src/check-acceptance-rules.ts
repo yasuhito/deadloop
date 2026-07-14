@@ -419,6 +419,30 @@ function cucumberStepBindings(sourceFile: ts.SourceFile): {
         }
         continue;
       }
+      if (
+        ts.isCallExpression(initializer) &&
+        ts.isPropertyAccessExpression(initializer.expression) &&
+        initializer.expression.name.text === "bind" &&
+        !functions.has(local)
+      ) {
+        const bound = unparenthesized(initializer.expression.expression);
+        const boundAccess = accessedProperty(bound);
+        const kind = ts.isIdentifier(bound)
+          ? functions.get(bound.text)
+          : boundAccess &&
+              namespaces.has(boundAccess.owner) &&
+              (boundAccess.property === "Given" ||
+                boundAccess.property === "When" ||
+                boundAccess.property === "Then" ||
+                boundAccess.property === "defineStep")
+            ? boundAccess.property
+            : undefined;
+        if (kind) {
+          functions.set(local, kind);
+          changed = true;
+        }
+        continue;
+      }
       const access = accessedProperty(initializer);
       if (!access || !namespaces.has(access.owner) || functions.has(local)) continue;
       add(local, access.property);

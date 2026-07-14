@@ -312,6 +312,21 @@ outcome("結果", function () { this.observed = this.code; });
     );
   });
 
+  it("rejects a bound Then registration without an assertion", () => {
+    const source = validSteps
+      .replace(
+        'import { Given, Then, When } from "@cucumber/cucumber";',
+        'import { Given, Then, When } from "@cucumber/cucumber";\nconst outcome = Then.bind(null);',
+      )
+      .replace(
+        'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
+        'outcome("検証は安全のため拒否される", function () {});',
+      );
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:7: Then step definition must contain exactly one direct assertion (found 0)",
+    );
+  });
+
   it("rejects an assertion in an aliased When definition", () => {
     const source = validSteps
       .replace("Given, Then, When", "Given, Then, When as action")
