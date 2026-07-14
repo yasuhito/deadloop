@@ -60,6 +60,16 @@ describe("acceptance test rules", () => {
     ).toContain("bad.feature.md:1: language directives are not allowed");
   });
 
+  it("rejects a language directive after the Feature description", () => {
+    const source = validFeature.replace(
+      "追跡ファイルを隠さないことを保証する。",
+      "追跡ファイルを隠さないことを保証する。\n\n# language: ja",
+    );
+    expect(checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source }] }))).toContain(
+      "bad.feature.md:5: language directives are not allowed",
+    );
+  });
+
   it("rejects prose before the Feature heading", () => {
     expect(
       checkAcceptanceRules(sources({
@@ -139,6 +149,16 @@ describe("acceptance test rules", () => {
     );
   });
 
+  it("counts element-access assertions when rejecting two assertions in Then", () => {
+    const source = validSteps.replace(
+      "assert.equal(this.code, 1);",
+      'assert["equal"](this.code, 1); assert.equal(this.code, 1);',
+    );
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:6: Then step definition must contain exactly one direct assertion (found 2)",
+    );
+  });
+
   it("rejects an assertion in a Given definition", () => {
     const source = validSteps.replace("this.tracked = true;", "assert.ok(true); this.tracked = true;");
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
@@ -160,19 +180,29 @@ describe("acceptance test rules", () => {
     );
   });
 
-  it("enforces step assertion rules for aliased CommonJS bindings", () => {
+  it("rejects assertions for an aliased CommonJS Given binding", () => {
     const source = `
 const assert = require("node:assert/strict");
-const { Given: setup, When, Then: outcome } = require("@cucumber/cucumber");
+const { Given: setup, When, Then } = require("@cucumber/cucumber");
 setup("前提", function () { assert.ok(true); });
+When("操作", function () { this.code = 1; });
+Then("結果", function () { assert.equal(this.code, 1); });
+`;
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:4: Given step definition must not contain assertions",
+    );
+  });
+
+  it("rejects missing assertions for an aliased CommonJS Then binding", () => {
+    const source = `
+const assert = require("node:assert/strict");
+const { Given, When, Then: outcome } = require("@cucumber/cucumber");
+Given("前提", function () { this.tracked = true; });
 When("操作", function () { this.code = 1; });
 outcome("結果", function () { this.observed = this.code; });
 `;
-    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toEqual(
-      expect.arrayContaining([
-        "bad.steps.ts:4: Given step definition must not contain assertions",
-        "bad.steps.ts:6: Then step definition must contain exactly one direct assertion (found 0)",
-      ]),
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:6: Then step definition must contain exactly one direct assertion (found 0)",
     );
   });
 
@@ -218,6 +248,24 @@ outcome("結果", function () { this.observed = this.code; });
     ];
     expect(checkAcceptanceRules(sources({ helpers }))).toContain(
       "acceptance/support/helper.ts: assertions are not allowed in acceptance helpers",
+    );
+  });
+
+  it("rejects an assert/strict assertion in an acceptance helper", () => {
+    const helpers = [
+      { path: "acceptance/support/helper.ts", source: 'import assert from "assert/strict"; assert.ok(true);' },
+    ];
+    expect(checkAcceptanceRules(sources({ helpers }))).toContain(
+      "acceptance/support/helper.ts: assertions are not allowed in acceptance helpers",
+    );
+  });
+
+  it("rejects an assert/strict assertion in a Given definition", () => {
+    const source = validSteps
+      .replace('import assert from "node:assert/strict";', 'import assert from "assert/strict";')
+      .replace("this.tracked = true;", "assert.ok(true); this.tracked = true;");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:4: Given step definition must not contain assertions",
     );
   });
 

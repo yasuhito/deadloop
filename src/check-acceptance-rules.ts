@@ -39,8 +39,10 @@ function checkFeature(file: SourceFile): string[] {
   const errors: string[] = [];
   const lines = file.source.split(/\r?\n/);
   if (/^(?:---|\+\+\+)(?:\r?\n|$)/.test(file.source)) errors.push(`${file.path}: front matter is not allowed`);
-  if (/^\s*#\s*language\s*:/.test(lines[0] ?? "")) {
-    errors.push(`${file.path}:1: language directives are not allowed`);
+  for (const [index, line] of lines.entries()) {
+    if (/^\s*#\s*language\s*:/.test(line)) {
+      errors.push(`${file.path}:${index + 1}: language directives are not allowed`);
+    }
   }
   const envelopes = generateMessages(file.source, file.path, SourceMediaType.TEXT_X_CUCUMBER_GHERKIN_MARKDOWN, {
     defaultDialect: "ja",
@@ -96,6 +98,10 @@ function requiredModule(expression: ts.Expression | undefined): string | undefin
   return expression.arguments[0].text;
 }
 
+function isNodeAssertModule(module: string): boolean {
+  return module === "assert" || module === "assert/strict" || module === "node:assert" || module === "node:assert/strict";
+}
+
 function assertionBindings(sourceFile: ts.SourceFile): {
   functions: Set<string>;
   namespaces: Set<string>;
@@ -108,7 +114,7 @@ function assertionBindings(sourceFile: ts.SourceFile): {
     if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         const module = requiredModule(declaration.initializer);
-        if (!module?.startsWith("node:assert")) continue;
+        if (!module || !isNodeAssertModule(module)) continue;
         if (ts.isIdentifier(declaration.name)) namespaces.add(declaration.name.text);
         if (ts.isObjectBindingPattern(declaration.name)) {
           for (const element of declaration.name.elements) {
@@ -123,7 +129,7 @@ function assertionBindings(sourceFile: ts.SourceFile): {
     }
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
     const clause = statement.importClause;
-    if (statement.moduleSpecifier.text.startsWith("node:assert")) {
+    if (isNodeAssertModule(statement.moduleSpecifier.text)) {
       if (clause?.name) namespaces.add(clause.name.text);
       if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings))
         namespaces.add(clause.namedBindings.name.text);
@@ -162,6 +168,10 @@ function isAssertionCall(node: ts.CallExpression, bindings: ReturnType<typeof as
     const owner = node.expression.expression;
     if (ts.isIdentifier(owner) && bindings.namespaces.has(owner.text)) return true;
     return isExpectationChain(owner, bindings.expectations);
+  }
+  if (ts.isElementAccessExpression(node.expression)) {
+    const owner = node.expression.expression;
+    return ts.isIdentifier(owner) && bindings.namespaces.has(owner.text);
   }
   return false;
 }
