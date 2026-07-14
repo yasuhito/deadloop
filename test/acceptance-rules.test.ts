@@ -180,6 +180,28 @@ describe("acceptance test rules", () => {
     );
   });
 
+  it("rejects a block-local assertion function alias in a Given definition", () => {
+    const source = validSteps.replace(
+      "this.tracked = true;",
+      "const hidden = assert.ok; hidden(true); this.tracked = true;",
+    );
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:4: Given step definition must not contain assertions",
+    );
+  });
+
+  it("rejects an assigned assertion function alias in a Given definition", () => {
+    const source = validSteps
+      .replace(
+        'import { Given, Then, When } from "@cucumber/cucumber";',
+        'import { Given, Then, When } from "@cucumber/cucumber";\nlet hidden = () => {};\nhidden = assert.ok;',
+      )
+      .replace("this.tracked = true;", "hidden(true); this.tracked = true;");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:6: Given step definition must not contain assertions",
+    );
+  });
+
   it("rejects an assertion in a Given definition", () => {
     const source = validSteps.replace("this.tracked = true;", "assert.ok(true); this.tracked = true;");
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(

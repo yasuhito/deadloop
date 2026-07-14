@@ -108,6 +108,26 @@ function topLevelVariableDeclarations(sourceFile: ts.SourceFile): ts.VariableDec
   );
 }
 
+function assertionAliasAssignments(
+  sourceFile: ts.SourceFile,
+): Array<{ name: ts.BindingName; initializer: ts.Expression }> {
+  const assignments: Array<{ name: ts.BindingName; initializer: ts.Expression }> = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      assignments.push({ name: node.name, initializer: node.initializer });
+    } else if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.left)
+    ) {
+      assignments.push({ name: node.left, initializer: node.right });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return assignments;
+}
+
 function unparenthesized(expression: ts.Expression): ts.Expression {
   let current = expression;
   while (ts.isParenthesizedExpression(current)) current = current.expression;
@@ -180,14 +200,14 @@ function assertionBindings(sourceFile: ts.SourceFile): {
     }
   }
 
+  const aliases = assertionAliasAssignments(sourceFile);
   let changed = true;
   while (changed) {
     changed = false;
-    for (const declaration of topLevelVariableDeclarations(sourceFile)) {
-      if (!declaration.initializer) continue;
-      const initializer = unparenthesized(declaration.initializer);
-      if (ts.isObjectBindingPattern(declaration.name) && ts.isIdentifier(initializer) && namespaces.has(initializer.text)) {
-        for (const element of declaration.name.elements) {
+    for (const alias of aliases) {
+      const initializer = unparenthesized(alias.initializer);
+      if (ts.isObjectBindingPattern(alias.name) && ts.isIdentifier(initializer) && namespaces.has(initializer.text)) {
+        for (const element of alias.name.elements) {
           if (!ts.isIdentifier(element.name)) continue;
           const property = element.propertyName?.getText(sourceFile) ?? element.name.text;
           const target = property === "strict" ? namespaces : functions;
@@ -198,8 +218,8 @@ function assertionBindings(sourceFile: ts.SourceFile): {
         }
         continue;
       }
-      if (!ts.isIdentifier(declaration.name)) continue;
-      const local = declaration.name.text;
+      if (!ts.isIdentifier(alias.name)) continue;
+      const local = alias.name.text;
       if (ts.isIdentifier(initializer)) {
         if (functions.has(initializer.text) && !functions.has(local)) {
           functions.add(local);

@@ -136,4 +136,5 @@ npm run lint
 npm run typecheck
 bash -n extensions/deadloop/automations/*.sh
 npm pack --dry-run
+npm run check
 ```
