@@ -137,8 +137,10 @@ function directAssertions(
   return assertions;
 }
 
-function cucumberStepBindings(sourceFile: ts.SourceFile): Map<string, "Given" | "When" | "Then"> {
-  const bindings = new Map<string, "Given" | "When" | "Then">();
+type CucumberStepKind = "Given" | "When" | "Then" | "defineStep";
+
+function cucumberStepBindings(sourceFile: ts.SourceFile): Map<string, CucumberStepKind> {
+  const bindings = new Map<string, CucumberStepKind>();
   for (const statement of sourceFile.statements) {
     if (
       !ts.isImportDeclaration(statement) ||
@@ -151,7 +153,9 @@ function cucumberStepBindings(sourceFile: ts.SourceFile): Map<string, "Given" | 
     }
     for (const element of statement.importClause.namedBindings.elements) {
       const imported = element.propertyName?.text ?? element.name.text;
-      if (imported === "Given" || imported === "When" || imported === "Then") bindings.set(element.name.text, imported);
+      if (imported === "Given" || imported === "When" || imported === "Then" || imported === "defineStep") {
+        bindings.set(element.name.text, imported);
+      }
     }
   }
   return bindings;
@@ -165,7 +169,7 @@ function checkStepDefinitions(file: SourceFile): string[] {
   const assertionsInStepCallbacks = new Set<ts.CallExpression>();
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && stepBindings.has(node.expression.text)) {
-      const kind = stepBindings.get(node.expression.text) as "Given" | "When" | "Then";
+      const kind = stepBindings.get(node.expression.text) as CucumberStepKind;
       const implementation = node.arguments.find(
         (argument) => ts.isFunctionExpression(argument) || ts.isArrowFunction(argument),
       );
@@ -173,7 +177,9 @@ function checkStepDefinitions(file: SourceFile): string[] {
       const assertions =
         implementation && ts.isFunctionLike(implementation) ? directAssertions(implementation, bindings) : [];
       for (const assertion of assertions) assertionsInStepCallbacks.add(assertion);
-      if (kind === "Then" && assertions.length !== 1) {
+      if (kind === "defineStep") {
+        errors.push(`${file.path}:${line}: defineStep is not allowed; use Given, When, or Then`);
+      } else if (kind === "Then" && assertions.length !== 1) {
         errors.push(
           `${file.path}:${line}: Then step definition must contain exactly one direct assertion (found ${assertions.length})`,
         );
@@ -265,6 +271,10 @@ function checkCucumberConfig(config: SourceFile): string[] {
   }
   if (objectProperty(profile, "dryRun")?.kind === ts.SyntaxKind.TrueKeyword) {
     errors.push(`${config.path}: Cucumber dry-run mode must not be enabled`);
+  }
+  const retry = objectProperty(profile, "retry");
+  if (retry && (!ts.isNumericLiteral(retry) || retry.text !== "0")) {
+    errors.push(`${config.path}: Cucumber retry must be omitted or explicitly set to 0`);
   }
   if (!sameStrings(stringArray(objectProperty(profile, "paths")), ["acceptance/features/**/*.feature.md"])) {
     errors.push(`${config.path}: Cucumber paths must target only acceptance/features/**/*.feature.md`);

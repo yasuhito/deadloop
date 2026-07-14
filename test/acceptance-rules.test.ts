@@ -164,6 +164,18 @@ describe("acceptance test rules", () => {
     );
   });
 
+  it("rejects an aliased defineStep definition without an assertion", () => {
+    const source = validSteps
+      .replace("Given, Then, When", "Given, defineStep as step, When")
+      .replace(
+        'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
+        'step("検証は安全のため拒否される", function () { this.observed = this.code; });',
+      );
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:6: defineStep is not allowed; use Given, When, or Then",
+    );
+  });
+
   it("rejects an assertion in an acceptance helper", () => {
     const helpers = [
       { path: "acceptance/support/helper.ts", source: 'import assert from "node:assert/strict"; assert.ok(true);' },
@@ -218,6 +230,14 @@ describe("acceptance test rules", () => {
     config.source = config.source.replace("strict: true", "strict: true, dryRun: true");
     expect(checkAcceptanceRules(sources({ config }))).toContain(
       "cucumber.cjs: Cucumber dry-run mode must not be enabled",
+    );
+  });
+
+  it("rejects Cucumber retries", () => {
+    const config = sources().config;
+    config.source = config.source.replace("strict: true", "strict: true, retry: 3");
+    expect(checkAcceptanceRules(sources({ config }))).toContain(
+      "cucumber.cjs: Cucumber retry must be omitted or explicitly set to 0",
     );
   });
 
