@@ -62,7 +62,15 @@ describe("monitor prompts", () => {
       automationDir: "/automation",
       promiseFile: "/wt/.deadloop/promise-u.json",
       actorName: "reviewer",
+      projectId: "demo",
+      repoPath: "/repo",
+      githubRepo: "owner/repo",
+      stateDir: "/state",
       checkCommand: "npm test",
+      dispatcherCheckCommand: "npm test",
+      workerAgent: "pi",
+      workerModel: "",
+      remote: "origin",
       humanLabel: "ready-for-human",
       reviewLabel: "agent:review",
       reviewingLabel: "agent:reviewing",
@@ -72,22 +80,30 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("If autoMerge=false, never merge");
   });
 
-  it("routes reviewer changes_requested through the repair dispatcher", () => {
+  it("routes reviewer changes_requested through a self-contained repair dispatcher command", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24,
       expectedHeadOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       branch: "agent/issue-24",
-      automationDir: "/automation",
+      automationDir: "/automation path",
       promiseFile: "/state/promise.json",
       actorName: "reviewer",
-      checkCommand: "npm test",
+      projectId: "demo project",
+      repoPath: "/repo path",
+      githubRepo: "owner/repo",
+      stateDir: "/state dir",
+      checkCommand: "npm run test -- --grep 'repair'",
+      dispatcherCheckCommand: "npm run test -- --grep 'repair'",
+      workerAgent: "claude",
+      workerModel: "model with spaces",
+      remote: "fork remote",
       humanLabel: "ready-for-human",
-      reviewLabel: "agent:review",
-      reviewingLabel: "agent:reviewing",
-      blockedLabel: "agent:blocked",
+      reviewLabel: "custom review",
+      reviewingLabel: "custom reviewing",
+      blockedLabel: "custom blocked",
     });
 
-    expect(prompt).toContain("outcome=changes_requested");
+    expect(prompt).toContain("--github-repo owner/repo --repo-path '/repo path' --project-id 'demo project' --state-dir '/state dir' --check-command 'npm run test -- --grep '\"'\"'repair'\"'\"'' --worker-agent claude --worker-model 'model with spaces' --remote 'fork remote' --review-label 'custom review' --reviewing-label 'custom reviewing' --blocked-label 'custom blocked'");
   });
 
   it("keeps review labels through successful repair monitoring", () => {

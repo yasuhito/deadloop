@@ -28,22 +28,30 @@ import type { DriverResult, JsonObject } from "../../../src/automation-driver-ki
 const commandRunner = createCommandRunner();
 const github = createGithubOperations(commandRunner);
 
-function envConfig() {
+function configValue(args: JsonObject, name: string, environmentValue: string | undefined, fallback: string): string {
+  const argumentValue = args[name];
+  return typeof argumentValue === "string" ? argumentValue : environmentValue || fallback;
+}
+
+function envConfig(args: JsonObject = {}) {
   const automationDir = __dirname;
   return {
-    projectId: process.env.DEADLOOP_PROJECT_ID || "project",
-    repoPath: process.env.DEADLOOP_REPO_PATH || ".",
-    githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
-    stateDir:
-      process.env.DEADLOOP_STATE_DIR ||
+    projectId: configValue(args, "projectId", process.env.DEADLOOP_PROJECT_ID, "project"),
+    repoPath: configValue(args, "repoPath", process.env.DEADLOOP_REPO_PATH, "."),
+    githubRepo: configValue(args, "githubRepo", process.env.DEADLOOP_GITHUB_REPO, ""),
+    stateDir: configValue(
+      args,
+      "stateDir",
+      process.env.DEADLOOP_STATE_DIR,
       path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
-    checkCommand: process.env.DEADLOOP_CHECK_COMMAND || "git diff --check",
-    workerAgent: process.env.DEADLOOP_WORKER_AGENT || "pi",
-    workerModel: process.env.DEADLOOP_WORKER_MODEL || "",
-    remote: process.env.DEADLOOP_REVIEW_REPAIR_REMOTE || "origin",
-    reviewLabel: process.env.DEADLOOP_REVIEW_LABEL || "agent:review",
-    reviewingLabel: process.env.DEADLOOP_REVIEWING_LABEL || "agent:reviewing",
-    blockedLabel: process.env.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
+    ),
+    checkCommand: configValue(args, "checkCommand", process.env.DEADLOOP_CHECK_COMMAND, "git diff --check"),
+    workerAgent: configValue(args, "workerAgent", process.env.DEADLOOP_WORKER_AGENT, "pi"),
+    workerModel: configValue(args, "workerModel", process.env.DEADLOOP_WORKER_MODEL, ""),
+    remote: configValue(args, "remote", process.env.DEADLOOP_REVIEW_REPAIR_REMOTE, "origin"),
+    reviewLabel: configValue(args, "reviewLabel", process.env.DEADLOOP_REVIEW_LABEL, "agent:review"),
+    reviewingLabel: configValue(args, "reviewingLabel", process.env.DEADLOOP_REVIEWING_LABEL, "agent:reviewing"),
+    blockedLabel: configValue(args, "blockedLabel", process.env.DEADLOOP_BLOCKED_LABEL, "agent:blocked"),
     automationDir,
   };
 }
@@ -194,7 +202,7 @@ function launchRepair(
 }
 
 function dispatch(args: JsonObject): DriverResult {
-  const env = envConfig();
+  const env = envConfig(args);
   if (!env.githubRepo) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
   const validation = validatePromise(String(args.promise));
   if (validation.status === "none" || validation.status === "invalid") {

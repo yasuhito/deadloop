@@ -28,7 +28,15 @@ export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   prNumber: number;
   expectedHeadOid: string;
   branch: string;
+  projectId: string;
+  repoPath: string;
+  githubRepo: string;
+  stateDir: string;
   checkCommand: string;
+  dispatcherCheckCommand: string;
+  workerAgent: string;
+  workerModel: string;
+  remote: string;
   humanLabel: string;
   reviewLabel: string;
   reviewingLabel: string;
@@ -112,7 +120,39 @@ Completion handling:
 - Read the validated promise payload. Legacy complete promises without outcome remain compatible and follow the approved path.
 - A successful review with actionable defects is status=complete, outcome=changes_requested, never status=blocked.
 - For outcome=changes_requested, outcome=human_required, or status=blocked, run the deterministic dispatcher and follow only its returned action/prompt:
-  \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-dispatch.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --branch ${shellQuotePrompt(input.branch)}\`
+  \`${[
+    "node",
+    shellQuotePrompt(`${input.automationDir}/pr-review-repair-dispatch.ts`),
+    "--promise",
+    shellQuotePrompt(input.promiseFile),
+    "--pr",
+    String(input.prNumber),
+    "--expected-head",
+    shellQuotePrompt(input.expectedHeadOid),
+    "--branch",
+    shellQuotePrompt(input.branch),
+    "--github-repo",
+    shellQuotePrompt(input.githubRepo),
+    "--repo-path",
+    shellQuotePrompt(input.repoPath),
+    "--project-id",
+    shellQuotePrompt(input.projectId),
+    "--state-dir",
+    shellQuotePrompt(input.stateDir),
+    "--check-command",
+    shellQuotePrompt(input.dispatcherCheckCommand),
+    "--worker-agent",
+    shellQuotePrompt(input.workerAgent),
+    ...(input.workerModel ? ["--worker-model", shellQuotePrompt(input.workerModel)] : []),
+    "--remote",
+    shellQuotePrompt(input.remote),
+    "--review-label",
+    shellQuotePrompt(input.reviewLabel),
+    "--reviewing-label",
+    shellQuotePrompt(input.reviewingLabel),
+    "--blocked-label",
+    shellQuotePrompt(input.blockedLabel),
+  ].join(" ")}\`
 - The dispatcher keeps ${input.reviewLabel} and ${input.reviewingLabel} during repair. It adds ${input.blockedLabel} only for human-required or bounded failure paths.
 - For outcome=approved or a legacy complete promise, re-check GitHub PR state, reviews, and checks before changing labels.
 - Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork.

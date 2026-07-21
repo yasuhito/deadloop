@@ -76,6 +76,28 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
         "a".repeat(40),
         "--branch",
         "agent/issue-243",
+        "--project-id",
+        "demo project",
+        "--repo-path",
+        root,
+        "--github-repo",
+        "owner/repo",
+        "--state-dir",
+        state,
+        "--check-command",
+        "npm run test -- --grep repair",
+        "--worker-agent",
+        "pi",
+        "--worker-model",
+        "model with spaces",
+        "--remote",
+        "fork",
+        "--review-label",
+        "custom-review",
+        "--reviewing-label",
+        "custom-reviewing",
+        "--blocked-label",
+        "custom-blocked",
       ],
       {
         cwd: process.cwd(),
@@ -83,21 +105,37 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
         env: {
           ...process.env,
           PATH: `${bin}:${process.env.PATH}`,
-          DEADLOOP_PROJECT_ID: "demo",
-          DEADLOOP_REPO_PATH: root,
-          DEADLOOP_GITHUB_REPO: "owner/repo",
-          DEADLOOP_STATE_DIR: state,
           TEST_WORKTREE: worktree,
+          DEADLOOP_PROJECT_ID: undefined,
+          DEADLOOP_REPO_PATH: undefined,
+          DEADLOOP_GITHUB_REPO: undefined,
+          DEADLOOP_STATE_DIR: undefined,
+          DEADLOOP_CHECK_COMMAND: undefined,
+          DEADLOOP_WORKER_AGENT: undefined,
+          DEADLOOP_WORKER_MODEL: undefined,
+          DEADLOOP_REVIEW_REPAIR_REMOTE: undefined,
+          DEADLOOP_REVIEW_LABEL: undefined,
+          DEADLOOP_REVIEWING_LABEL: undefined,
+          DEADLOOP_BLOCKED_LABEL: undefined,
         },
       },
     );
     if (result.status !== 0) throw new Error(result.stderr || result.stdout);
     const output = JSON.parse(result.stdout);
+    const runDir = path.join(state, "runs", fs.readdirSync(path.join(state, "runs"))[0]);
+    const repairPrompt = fs.readFileSync(path.join(runDir, "review-repair-prompt.md"), "utf8");
 
-    expect({ action: output.action, driverAction: output.driverAction, monitored: output.prompt.includes("review-repair worker") }).toEqual({
+    expect({
+      action: output.action,
+      driverAction: output.driverAction,
+      finalizerConfigured: repairPrompt.includes(`--github-repo owner/repo --pr 243 --branch agent/issue-243 --expected-head ${"a".repeat(40)} --remote fork`) &&
+        repairPrompt.includes(`--state-dir ${state} --check-command 'npm run test -- --grep repair'`),
+      monitorLabels: typeof output.prompt === "string" && output.prompt.includes("custom-review") && output.prompt.includes("custom-reviewing"),
+    }).toEqual({
       action: "needs_llm",
       driverAction: "review_repair_monitor_request",
-      monitored: true,
+      finalizerConfigured: true,
+      monitorLabels: true,
     });
   });
 });

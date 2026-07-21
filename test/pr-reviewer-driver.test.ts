@@ -71,6 +71,15 @@ describe("PR reviewer deterministic driver", () => {
     ).toContain("run-project-check.ts");
   });
 
+  it("passes the raw configured check command to the repair dispatcher", () => {
+    expect(
+      runDriverFixture("fallback-review.json", {
+        DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1",
+        DEADLOOP_CHECK_COMMAND: "npm run check -- --repair",
+      }).prompt,
+    ).toContain("--check-command 'npm run check -- --repair'");
+  });
+
   it("preserves autoMerge=false safety after deterministic reviewer launch", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).prompt).toContain(
       "If autoMerge=false, never merge",
