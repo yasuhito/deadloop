@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { renderIssueMonitorPrompt, renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
+const { renderIssueMonitorPrompt, renderRepairMonitorPrompt, renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
 
 describe("monitor prompts", () => {
   it("renders shared promise polling rules for Worker monitoring", () => {
@@ -57,12 +57,22 @@ describe("monitor prompts", () => {
   it("renders reviewer-specific completion instructions", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24,
+      expectedHeadOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      branch: "agent/issue-24",
       automationDir: "/automation",
       promiseFile: "/wt/.deadloop/promise-u.json",
       actorName: "reviewer",
-      reviewerTabId: "workspace:review-tab",
+      projectId: "demo",
+      repoPath: "/repo",
+      githubRepo: "owner/repo",
+      stateDir: "/state",
       checkCommand: "npm test",
+      dispatcherCheckCommand: "npm test",
+      workerAgent: "pi",
+      workerModel: "",
+      remote: "origin",
       humanLabel: "ready-for-human",
+      reviewLabel: "agent:review",
       reviewingLabel: "agent:reviewing",
       blockedLabel: "agent:blocked",
     });
@@ -70,35 +80,45 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("If autoMerge=false, never merge");
   });
 
-  it("closes the dedicated reviewer tab after persisting a completed review outcome", () => {
+  it("routes reviewer changes_requested through a self-contained repair dispatcher command", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24,
-      automationDir: "/automation",
-      promiseFile: "/wt/.deadloop/promise-u.json",
+      expectedHeadOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      branch: "agent/issue-24",
+      automationDir: "/automation path",
+      promiseFile: "/state/promise.json",
       actorName: "reviewer",
-      reviewerTabId: "workspace:review-tab",
-      checkCommand: "npm test",
+      projectId: "demo project",
+      repoPath: "/repo path",
+      githubRepo: "owner/repo",
+      stateDir: "/state dir",
+      checkCommand: "npm run test -- --grep 'repair'",
+      dispatcherCheckCommand: "npm run test -- --grep 'repair'",
+      workerAgent: "claude",
+      workerModel: "model with spaces",
+      remote: "fork remote",
       humanLabel: "ready-for-human",
-      reviewingLabel: "agent:reviewing",
-      blockedLabel: "agent:blocked",
+      reviewLabel: "custom review",
+      reviewingLabel: "custom reviewing",
+      blockedLabel: "custom blocked",
     });
 
-    expect(prompt).toContain("herdr tab close workspace:review-tab");
+    expect(prompt).toContain("--github-repo owner/repo --repo-path '/repo path' --project-id 'demo project' --state-dir '/state dir' --check-command 'npm run test -- --grep '\"'\"'repair'\"'\"'' --worker-agent claude --worker-model 'model with spaces' --remote 'fork remote' --review-label 'custom review' --reviewing-label 'custom reviewing' --blocked-label 'custom blocked'");
   });
 
-  it("retains the reviewer tab when persisting its outcome fails", () => {
-    const prompt = renderReviewerMonitorPrompt({
+  it("keeps review labels through successful repair monitoring", () => {
+    const prompt = renderRepairMonitorPrompt({
       prNumber: 24,
+      expectedHeadOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      branch: "agent/issue-24",
       automationDir: "/automation",
-      promiseFile: "/wt/.deadloop/promise-u.json",
-      actorName: "reviewer",
-      reviewerTabId: "workspace:review-tab",
-      checkCommand: "npm test",
-      humanLabel: "ready-for-human",
+      promiseFile: "/state/repair-promise.json",
+      actorName: "review-repair worker",
+      reviewLabel: "agent:review",
       reviewingLabel: "agent:reviewing",
       blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("If outcome persistence fails, keep the tab open");
+    expect(prompt).toContain("Do not change labels; the changed head starts a new review cycle");
   });
 });

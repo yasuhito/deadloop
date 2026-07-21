@@ -67,16 +67,18 @@ describe("issue coordinator deterministic driver", () => {
     expect(runDriverFixture("driver-ready-worker.json").prompt).toContain("only completion authority");
   });
 
-  it("reports the deterministic worker promise path", () => {
-    expect(runDriverFixture("driver-ready-worker.json").launch.promiseFile).toContain(
-      ".deadloop/promise-",
-    );
+  it("reports the deterministic worker promise path outside the worktree", () => {
+    expect(
+      runDriverFixture("driver-ready-worker.json", { DEADLOOP_STATE_DIR: "/state/deadloop" }).launch.promiseFile,
+    ).toBe("/state/deadloop/runs/fixture-worker-uuid/promise.json");
   });
 
-  it("preserves validation before PR creation after deterministic worker launch", () => {
-    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain(
-      "run-project-check.ts --cwd /worktrees/demo/agent-issue-12-implement-small-feature --command 'npm test'", 
-    );
+  it("isolates runtime artifacts during monitor validation", () => {
+    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain("run-project-check.ts");
+  });
+
+  it("preserves the validation gate before PR creation", () => {
+    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain("before creating any PR");
   });
 
   it("receives worker agent settings from the shared automation environment", () => {

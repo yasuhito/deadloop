@@ -56,10 +56,28 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).driverAction).toBe("reviewer_monitor_request");
   });
 
-  it("reports the deterministic reviewer promise path", () => {
-    expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).launch.promiseFile).toContain(
-      ".deadloop/promise-",
-    );
+  it("reports the deterministic reviewer promise path outside the worktree", () => {
+    expect(
+      runDriverFixture("fallback-review.json", {
+        DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1",
+        DEADLOOP_STATE_DIR: "/state/deadloop",
+      }).launch.promiseFile,
+    ).toBe("/state/deadloop/runs/fixture-reviewer-uuid/promise.json");
+  });
+
+  it("isolates runtime artifacts during reviewer monitor validation", () => {
+    expect(
+      runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).prompt,
+    ).toContain("run-project-check.ts");
+  });
+
+  it("passes the raw configured check command to the repair dispatcher", () => {
+    expect(
+      runDriverFixture("fallback-review.json", {
+        DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1",
+        DEADLOOP_CHECK_COMMAND: "npm run check -- --repair",
+      }).prompt,
+    ).toContain("--check-command 'npm run check -- --repair'");
   });
 
   it("preserves autoMerge=false safety after deterministic reviewer launch", () => {
@@ -72,21 +90,31 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).prompt).not.toContain("launch-agent.ts");
   });
 
-  it("identifies the dedicated reviewer tab in cleanup instructions", () => {
-    expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).prompt).toContain(
-      "herdr tab close fixture-tab",
-    );
+  it("routes a merge conflict to one dedicated branch-update worker", () => {
+    expect(runDriverFixture("merge-conflict.json").driverAction).toBe("branch_update_monitor_request");
+  });
+
+  it("uses a deterministic retry-key worker name for the exact head/base pair", () => {
+    expect(runDriverFixture("merge-conflict.json").launch.updaterName).toBe("demo-pr-31-branch-update-63bdfe090637cf9ff5d4");
+  });
+
+  it("preserves both review labels during branch update", () => {
+    expect(runDriverFixture("merge-conflict.json").labelsPreserved).toEqual(["agent:review", "agent:reviewing"]);
+  });
+
+  it("bounds branch update push through the deterministic finalizer", () => {
+    expect(runDriverFixture("merge-conflict.json").prompt).toContain("never launch or select an agent, push a branch, review the PR, or merge it");
+  });
+
+  it("returns an updated conflict branch to normal review", () => {
+    expect(runDriverFixture("merge-conflict-updated.json").driverAction).toBe("reviewer_monitor_request");
+  });
+
+  it("blocks a second attempt for the exact same head/base pair", () => {
+    expect(runDriverFixture("merge-conflict-double-attempt.json").driverAction).toBe("branch_update_attempt_exhausted");
   });
 
   it("reports the deterministic reviewer name", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).launch.reviewerName).toBe("demo-pr-24-reviewer");
-  });
-
-  it("replaces one matching done reviewer tab before re-review", () => {
-    expect(runDriverFixture("done-reviewer-reclaim.json").launch.replacedReviewerTabId).toBe("w9:t3");
-  });
-
-  it("refuses ambiguous replacement when multiple done reviewers have the same name", () => {
-    expect(runDriverFixture("ambiguous-done-reviewers.json").action).toBe("error");
   });
 });

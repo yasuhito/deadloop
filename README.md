@@ -55,6 +55,8 @@ Local project fields include:
 
 Shared repository policy lives in `deadloop.json` on the trusted base branch. Standard labels, verification (`git diff --check`, then `npm run check` or existing `test` / `lint` / `typecheck` scripts), worker instruction files (`AGENTS.md`, `CONTEXT.md`, `README.md`), issue coordinator / PR reviewer automations, and disabled external review are defaults, so omit those sections unless you are customizing them. Local `projects.json` values win over repo policy.
 
+Runtime prompts and promise reports are stored under `~/.pi/agent/deadloop/runs/`, outside target worktrees. deadloop also isolates untracked `.deadloop` and `.pi-subagents` while running the configured project check, so generated JSON does not contaminate recursive formatting or lint commands. Tracked files are never hidden; validation fails closed if either runtime directory contains one.
+
 ## Create labels
 
 Create the standard labels once per repository:
@@ -72,6 +74,18 @@ gh label create needs-triage --repo owner/repo --color f9d0c4 || true
 ```
 
 An issue is eligible only when it has both `ready-for-agent` and `agent:implement`.
+
+## Merge-conflict recovery
+
+When a selected same-repository PR conflicts with the configured base, deadloop can start one guarded branch-update worker. It merges the selected base commit into the existing PR branch (never rebases), runs the configured checks, re-checks the PR head immediately before a non-force push, and then returns the PR to normal review. Review labels remain in place during the update; no extra label is required.
+
+Each exact PR-head/base-head pair is attempted at most once. A stale PR head stops without pushing and is re-evaluated on the next cycle. Failed or unsafe updates are marked `agent:blocked` with recovery evidence. See [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) for the safety contract.
+
+## Automatic review repair
+
+When the built-in reviewer reports structured actionable findings, deadloop can start one bounded repair worker on the existing PR branch. Review labels stay in place; no repair label is added. The worker receives only the findings, runs configured checks, re-checks the PR head immediately before a normal push to that exact branch, and never force-pushes or changes GitHub workflow state.
+
+A changed head starts a fresh review cycle. A stale head stops without pushing or changing labels. Repeated findings after the bounded attempt, a required human decision, or an exhausted technical/safety retry adds `agent:blocked` with recovery guidance. See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md).
 
 ## Roll out in phases
 

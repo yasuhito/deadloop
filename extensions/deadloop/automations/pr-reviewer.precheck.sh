@@ -19,7 +19,7 @@ agents_json="$(mktemp)"
 trap 'rm -f "${prs_json}" "${agents_json}"' EXIT
 
 gh pr list -R "${repo}" --state open --limit 100 \
-  --json number,updatedAt,headRefOid,isDraft,labels,statusCheckRollup,comments,reviewRequests \
+  --json number,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,labels,statusCheckRollup,comments,reviewRequests \
   > "${prs_json}"
 
 # A stale `agent:reviewing` claim is reclaimed unless its reviewer agent is still

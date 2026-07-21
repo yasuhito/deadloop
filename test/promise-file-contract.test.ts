@@ -26,7 +26,7 @@ function issueWorkerPrompt(): string {
     automationDir: "/automation",
     workerInstructions: "Read AGENTS.md.",
     checkCommand: "npm test",
-    promiseFile: "<worktreePath>/.deadloop/promise-<uuid>.json",
+    promiseFile: "<deadloopStateDir>/runs/<uuid>/promise.json",
   });
 }
 
@@ -43,8 +43,8 @@ describe("promise file contract", () => {
     expect(combinedContractText()).not.toContain("--pane-id");
   });
 
-  it("documents unique promise file allocation", () => {
-    expect(issueWorkerPrompt()).toContain("<worktreePath>/.deadloop/promise-<uuid>.json");
+  it("documents unique promise file allocation outside the worktree", () => {
+    expect(issueWorkerPrompt()).toContain("<deadloopStateDir>/runs/<uuid>/promise.json");
   });
 
   it("requires blocked workers to write a promise file", () => {

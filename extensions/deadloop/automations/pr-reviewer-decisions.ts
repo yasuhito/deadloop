@@ -154,16 +154,18 @@ function iterAgentsForPrReviewer(data: unknown): AnyRecord[] {
   return Array.isArray(value) ? value.filter((agent: unknown) => agent && typeof agent === "object") : [];
 }
 
-function occupiedReviewerPrNumbers(agents: unknown, projectId: string): Set<number> {
+function workingReviewerPrNumbers(agents: unknown, projectId: string): Set<number> {
   if (!projectId) return new Set();
-  const pattern = new RegExp(`^${projectId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-pr-(\\d+)-reviewer$`);
-  const occupied = new Set<number>();
+  const pattern = new RegExp(
+    `^${projectId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-pr-(\\d+)-(?:reviewer|branch-update-[0-9a-f]+|review-repair-[0-9a-f]+)$`,
+  );
+  const working = new Set<number>();
   for (const agent of iterAgentsForPrReviewer(agents)) {
-    if (String(agent.agent_status || "").toLowerCase() === "done") continue;
+    if (String(agent.agent_status || "").toLowerCase() !== "working") continue;
     const match = pattern.exec(String(agent.name || ""));
-    if (match) occupied.add(Number(match[1]));
+    if (match) working.add(Number(match[1]));
   }
-  return occupied;
+  return working;
 }
 
 function skipForPrReviewer(reason: string, pr: AnyRecord): AnyRecord {
@@ -291,7 +293,7 @@ function main(argv: string[] = process.argv.slice(2)): number {
   const config = cliConfig(args);
   const decision = args.mode === "external-review-gate"
     ? externalReviewGate(loadPr(args.input), config)
-    : selectPrForReview(loadPrs(args.input), config, occupiedReviewerPrNumbers(loadAgents(args.agents), config.projectId));
+    : selectPrForReview(loadPrs(args.input), config, workingReviewerPrNumbers(loadAgents(args.agents), config.projectId));
   process.stdout.write(`${JSON.stringify(decision)}\n`);
   return args.exitCode && !decision.selected ? 1 : 0;
 }
@@ -309,5 +311,5 @@ module.exports = {
   defaultDecisionConfig,
   externalReviewGate,
   selectPrForReview,
-  occupiedReviewerPrNumbers,
+  workingReviewerPrNumbers,
 };

@@ -68,6 +68,8 @@ Key fields:
 
 Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `externalReview`, `workerInstructionFiles`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` / `driverFile` for automations. Keep `enabled`, `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local or inferred. Invalid JSON or disallowed keys stop that project safely and appear in `/deadloop-status` and `/deadloop-doctor`.
 
+Per-launch prompts and promise reports live under `~/.pi/agent/deadloop/runs/`, not in the target worktree. The configured project check runs through deadloop's isolation wrapper: untracked `.deadloop` and `.pi-subagents` directories are temporarily hidden and restored on every exit path. Tracked files are never hidden; validation fails closed if either runtime directory contains one.
+
 By default deadloop reads `~/.pi/agent/deadloop/projects.json`. Use `DEADLOOP_CONFIG=/path/to/projects.json` only when you intentionally want a different config file.
 
 ## 3. Create required labels
@@ -106,6 +108,8 @@ Use the standard `pr-reviewer` only after Phase 1 is reliable. Keep:
 ```
 
 With auto-merge disabled, the reviewer automation starts a review agent session, requests fixes when needed, and hands the PR to `ready-for-human` instead of merging. External review requests are disabled by default; enable `externalReview` only in repositories where the external service is installed and allowed.
+
+Before review, a same-repository PR that conflicts with the configured base is given one guarded merge-update attempt for each exact PR-head/base-head pair. The dedicated worker merges (never rebases), runs `checkCommand`, verifies that the PR head is still unchanged, and non-force pushes only the existing PR branch. Operators do not need another label: `agent:review` and `agent:reviewing` remain during the update. A stale head waits for the next cycle without a push; a failed or unsafe attempt adds `agent:blocked`. To retry after intervention, change the PR head or base head, inspect the recorded `deadloop:branch-update-attempt` PR comment, then remove `agent:blocked`.
 
 ### Phase 3: Consider auto-merge
 

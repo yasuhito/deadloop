@@ -1,0 +1,33 @@
+{
+  "prs": [
+    {
+      "number": 31,
+      "title": "Conflicting PR",
+      "url": "https://github.com/owner/repo/pull/31",
+      "updatedAt": "2026-07-08T00:00:00Z",
+      "headRefName": "agent/issue-31",
+      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "isCrossRepository": false,
+      "isDraft": false,
+      "labels": [
+        {
+          "name": "agent:review"
+        }
+      ],
+      "statusCheckRollup": [],
+      "comments": [],
+      "reviewRequests": [],
+      "mergeStateStatus": "CONFLICTING"
+    }
+  ],
+  "agents": {
+    "result": {
+      "agents": []
+    }
+  },
+  "branchUpdate": {
+    "action": "delegate_worker",
+    "reason": "merge_conflict",
+    "baseOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}

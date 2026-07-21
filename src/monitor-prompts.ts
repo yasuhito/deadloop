@@ -14,15 +14,48 @@ export type IssueMonitorPromptInput = MonitorPromptBaseInput & {
   blockedLabel: string;
 };
 
-export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
+export type BranchUpdateMonitorPromptInput = MonitorPromptBaseInput & {
   prNumber: number;
-  reviewerTabId: string;
-  worktreePath: string;
-  checkCommand: string;
-  humanLabel: string;
+  expectedHeadOid: string;
+  expectedBaseOid: string;
+  branch: string;
+  reviewLabel: string;
   reviewingLabel: string;
   blockedLabel: string;
 };
+
+export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
+  prNumber: number;
+  expectedHeadOid: string;
+  branch: string;
+  projectId: string;
+  repoPath: string;
+  githubRepo: string;
+  stateDir: string;
+  checkCommand: string;
+  dispatcherCheckCommand: string;
+  workerAgent: string;
+  workerModel: string;
+  remote: string;
+  humanLabel: string;
+  reviewLabel: string;
+  reviewingLabel: string;
+  blockedLabel: string;
+};
+
+export type RepairMonitorPromptInput = MonitorPromptBaseInput & {
+  prNumber: number;
+  expectedHeadOid: string;
+  branch: string;
+  reviewLabel: string;
+  reviewingLabel: string;
+  blockedLabel: string;
+};
+
+function shellQuotePrompt(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
 
 function renderPromisePollingRules(input: MonitorPromptBaseInput): string {
   return `Monitor only this promise file. It is the only completion authority:
@@ -34,25 +67,14 @@ Polling rules:
 - If the promise is missing while the agent is idle/done, ask the ${input.actorName} to write the promise file instead of guessing completion.`;
 }
 
-function shellQuoteForMonitor(value: string): string {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
-
-function projectCheckForMonitor(automationDir: string, worktreePath: string, checkCommand: string): string {
-  const helper = `${automationDir.replace(/\/$/, "")}/run-project-check.ts`;
-  return `node ${shellQuoteForMonitor(helper)} --cwd ${shellQuoteForMonitor(worktreePath)} --command ${shellQuoteForMonitor(checkCommand)}`;
-}
-
 function renderIssueMonitorPrompt(input: IssueMonitorPromptInput): string {
-  const projectCheck = projectCheckForMonitor(input.automationDir, input.worktreePath, input.checkCommand);
   return `Deterministic driver launched Worker for Issue #${input.issueNumber}. Do not launch another agent and do not reselect another issue.
 
 ${renderPromisePollingRules(input)}
 
 After a \`complete\` promise:
 - Inspect \`${input.worktreePath}\` and confirm only Issue #${input.issueNumber} changes are present.
-- Run validation through \`${projectCheck}\` before creating any PR.
+- Run validation including \`${input.checkCommand}\` before creating any PR.
 - Push only the Worker branch \`${input.branch}\` without force-push, create a reviewable PR whose body includes \`Closes #${input.issueNumber}\`, and add \`${input.reviewLabel}\`.
 - Do not manually close the issue with GitHub commands, and do not merge the PR.
 
@@ -63,28 +85,108 @@ After a \`blocked\` promise:
 Report only the resulting action and evidence.`;
 }
 
-function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string {
-  const projectCheck = projectCheckForMonitor(input.automationDir, input.worktreePath, input.checkCommand);
-  return `Deterministic driver launched reviewer for PR #${input.prNumber}. Do not launch another agent and do not reselect another PR.
+function renderBranchUpdateMonitorPrompt(input: BranchUpdateMonitorPromptInput): string {
+  return `Deterministic driver launched one branch-update worker for PR #${input.prNumber}. Monitor only this attempt; never launch or select an agent, push a branch, review the PR, or merge it.
+
+Attempt binding:
+- Existing PR branch: ${input.branch}
+- Expected PR head: ${input.expectedHeadOid}
+- Selected base head: ${input.expectedBaseOid}
+- Keep ${input.reviewLabel} and ${input.reviewingLabel} while the update is running.
 
 ${renderPromisePollingRules(input)}
 
-After a \`complete\` promise:
-- Re-check GitHub PR state, reviews, and checks before changing labels.
-- Run local validation through \`${projectCheck}\` when needed for CI fallback; do not ignore failing checks by guesswork.
+Terminal handling:
+- status=complete, reason=branch_updated: re-read the PR and confirm its head changed. Do not change labels; normal PR review resumes on the next automation cycle.
+- status=complete, reason=stale_head: stop without any push, comment, or label change. Keep both review labels so the next cycle re-evaluates the new head.
+- status=blocked: write a concise failure comment, remove ${input.reviewingLabel}, and add ${input.blockedLabel}. This is the only terminal path that may add the blocked label; keep ${input.reviewLabel}.
+- Any malformed completion or unsafe/inconclusive update result is a failed update: report it and add ${input.blockedLabel}; never guess success.
+
+Prohibited in every path: force-push, any monitor-side push, label changes on success/stale, PR creation, PR merge, issue close, branch deletion, or retrying this exact head/base pair.
+
+Report only the terminal action and evidence.`;
+}
+
+function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string {
+  return `Deterministic driver launched reviewer for PR #${input.prNumber}. Do not launch another agent and do not reselect another PR.
+
+Review binding:
+- Expected PR head: ${input.expectedHeadOid}
+- Existing PR branch: ${input.branch}
+
+${renderPromisePollingRules(input)}
+
+Completion handling:
+- Read the validated promise payload. Legacy complete promises without outcome remain compatible and follow the approved path.
+- A successful review with actionable defects is status=complete, outcome=changes_requested, never status=blocked.
+- For outcome=changes_requested, outcome=human_required, or status=blocked, run the deterministic dispatcher and follow only its returned action/prompt:
+  \`${[
+    "node",
+    shellQuotePrompt(`${input.automationDir}/pr-review-repair-dispatch.ts`),
+    "--promise",
+    shellQuotePrompt(input.promiseFile),
+    "--pr",
+    String(input.prNumber),
+    "--expected-head",
+    shellQuotePrompt(input.expectedHeadOid),
+    "--branch",
+    shellQuotePrompt(input.branch),
+    "--github-repo",
+    shellQuotePrompt(input.githubRepo),
+    "--repo-path",
+    shellQuotePrompt(input.repoPath),
+    "--project-id",
+    shellQuotePrompt(input.projectId),
+    "--state-dir",
+    shellQuotePrompt(input.stateDir),
+    "--check-command",
+    shellQuotePrompt(input.dispatcherCheckCommand),
+    "--worker-agent",
+    shellQuotePrompt(input.workerAgent),
+    ...(input.workerModel ? ["--worker-model", shellQuotePrompt(input.workerModel)] : []),
+    "--remote",
+    shellQuotePrompt(input.remote),
+    "--review-label",
+    shellQuotePrompt(input.reviewLabel),
+    "--reviewing-label",
+    shellQuotePrompt(input.reviewingLabel),
+    "--blocked-label",
+    shellQuotePrompt(input.blockedLabel),
+  ].join(" ")}\`
+- The dispatcher keeps ${input.reviewLabel} and ${input.reviewingLabel} during repair. It adds ${input.blockedLabel} only for human-required or bounded failure paths.
+- For outcome=approved or a legacy complete promise, re-check GitHub PR state, reviews, and checks before changing labels.
+- Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork.
 - If autoMerge=false, never merge; hand off by moving PR toward \`${input.humanLabel}\` with review evidence.
 - If autoMerge=true, merge only after review, CI/fallback, and repository safety gates all pass.
-
-After a \`blocked\` promise:
-- Use the promise reason/summary to write the blocked report.
-- Move the PR from \`${input.reviewingLabel}\` to \`${input.blockedLabel}\` only when the blocker is actionable.
-
-Reviewer cleanup:
-- First persist the review outcome in GitHub comments/labels and confirm the resulting PR state.
-- Only after persistence succeeds, close the dedicated reviewer tab with \`herdr tab close ${input.reviewerTabId}\`.
-- If outcome persistence fails, keep the tab open and report the failure; never discard the only review evidence.
 
 Report only the resulting action and evidence.`;
 }
 
-module.exports = { renderIssueMonitorPrompt, renderPromisePollingRules, renderReviewerMonitorPrompt };
+function renderRepairMonitorPrompt(input: RepairMonitorPromptInput): string {
+  return `Deterministic dispatcher launched one review-repair worker for PR #${input.prNumber}. Monitor only this attempt; never launch another agent or widen the findings contract.
+
+Attempt binding:
+- Existing PR branch: ${input.branch}
+- Expected PR head: ${input.expectedHeadOid}
+- Keep ${input.reviewLabel} and ${input.reviewingLabel} while repair is running.
+
+${renderPromisePollingRules(input)}
+
+Terminal handling:
+- status=complete, reason=repair_pushed: re-read the PR and confirm its head changed. Do not change labels; the changed head starts a new review cycle.
+- status=complete, reason=stale_head: stop without push, comment, or label changes. Keep both review labels for next-cycle re-evaluation.
+- status=blocked: the exact head/review result used its bounded attempt. Write recovery guidance, remove ${input.reviewingLabel}, and add ${input.blockedLabel}.
+- Malformed or inconclusive completion is unsafe and follows the same bounded human-blocked path.
+
+Prohibited in every path: force-push, monitor-side push, label changes on success/stale, PR creation, merge, issue close, branch deletion, or a second attempt for this exact review result.
+
+Report only the terminal action and evidence.`;
+}
+
+module.exports = {
+  renderBranchUpdateMonitorPrompt,
+  renderIssueMonitorPrompt,
+  renderPromisePollingRules,
+  renderRepairMonitorPrompt,
+  renderReviewerMonitorPrompt,
+};
