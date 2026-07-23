@@ -789,7 +789,7 @@ async function detectProjectIdentity(pi, cwd) {
   const githubRepo = [...canonicalIdentities][0];
   const upstream = await pi.exec("git", ["-C", repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], { timeout: 15_000 });
   let baseBranch = upstream.code === 0 ? upstream.stdout.trim() : "";
-  if (!baseBranch) {
+  if (!baseBranch.startsWith("origin/")) {
     if (defaultBranches.size !== 1) throw new Error("GitHub default branch could not be resolved unambiguously");
     const defaultBranch = [...defaultBranches][0];
     await commandExec(pi, "git", [
@@ -904,6 +904,8 @@ export default function (pi) {
   let startupTick = null;
   let active = null;
   let ownsLock = false;
+  let stopRequested = false;
+  let pendingStart = null;
 
   async function tick(ctx) {
     if (!active) return;
@@ -940,38 +942,52 @@ export default function (pi) {
     if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
     if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return;
 
-    const state = loadState();
-    updateStatus(ctx, project, state);
+    running = true;
+    try {
+      const state = loadState();
+      updateStatus(ctx, project, state);
 
-    const deps = automationRunnerDeps(pi, ctx, project);
-    for (const automation of project.automations) {
-      const entry = state.automations[automationStateKey(project, automation)] || {};
-      state.automations[automationStateKey(project, automation)] = entry;
-      if (deliverPendingDriverHandoff(entry, state, automation.name, deps)) {
-        saveState(state);
-        return;
+      const deps = automationRunnerDeps(pi, ctx, project);
+      for (const automation of project.automations) {
+        const entry = state.automations[automationStateKey(project, automation)] || {};
+        state.automations[automationStateKey(project, automation)] = entry;
+        if (deliverPendingDriverHandoff(entry, state, automation.name, deps)) {
+          saveState(state);
+          return;
+        }
       }
-    }
 
-    const now = Date.now();
-    for (const automation of project.automations) {
-      const key = automationStateKey(project, automation);
-      const entry = state.automations[key] || {};
-      state.automations[key] = entry;
-      const dueSlot = getDueSlot(automation, entry, now);
-      if (!dueSlot) continue;
+      const now = Date.now();
+      for (const automation of project.automations) {
+        const key = automationStateKey(project, automation);
+        const entry = state.automations[key] || {};
+        state.automations[key] = entry;
+        const dueSlot = getDueSlot(automation, entry, now);
+        if (!dueSlot) continue;
 
-      running = true;
-      try {
         await runAutomation(pi, ctx, project, automation, dueSlot, state);
         updateStatus(ctx, project, state);
-      } finally {
-        running = false;
+        break;
       }
-      break;
-    }
 
-    saveState(state);
+      saveState(state);
+    } finally {
+      running = false;
+      if (stopRequested) {
+        const restart = pendingStart;
+        finishStoppingScheduler(ctx);
+        if (restart) startScheduler(restart.ctx, restart.project);
+      }
+    }
+  }
+
+  function finishStoppingScheduler(ctx) {
+    if (ownsLock && active?.lockPath && active?.lockToken) releaseSchedulerLock(active.lockPath, active.lockToken);
+    ownsLock = false;
+    active = null;
+    stopRequested = false;
+    pendingStart = null;
+    setLooperStatus(ctx, undefined);
   }
 
   function stopScheduler(ctx) {
@@ -979,10 +995,13 @@ export default function (pi) {
     if (startupTick) clearTimeout(startupTick);
     timer = null;
     startupTick = null;
-    if (ownsLock && active?.lockPath && active?.lockToken) releaseSchedulerLock(active.lockPath, active.lockToken);
-    ownsLock = false;
-    active = null;
-    setLooperStatus(ctx, undefined);
+    pendingStart = null;
+    if (running) {
+      stopRequested = true;
+      setLooperStatus(ctx, undefined);
+      return;
+    }
+    finishStoppingScheduler(ctx);
   }
 
   function startScheduler(ctx, project) {
@@ -998,11 +1017,19 @@ export default function (pi) {
       return { started: false, reason: "repository enablement was not retained before scheduler startup" };
     }
     const lockPath = projectLockPath(project);
+    if (stopRequested) {
+      pendingStart = { ctx, project };
+      return { started: true };
+    }
     if (active?.lockPath === lockPath && ownsLock) {
       active.project = project;
       return { started: true };
     }
     stopScheduler(ctx);
+    if (running) {
+      pendingStart = { ctx, project };
+      return { started: true };
+    }
     const lock = acquireSchedulerLock(project);
     ownsLock = lock.acquired;
     active = { project, lockPath: lock.lockPath, lockToken: lock.token };

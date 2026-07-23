@@ -90,6 +90,7 @@ async function loadExtension(
     defaultBranch?: string;
     beforeGithubRepoCheck?: () => Promise<void>;
     afterEnablementSaved?: () => Promise<void>;
+    runAutomationScript?: () => Promise<{ code: number; stdout: string; stderr: string }>;
   } = {},
 ): Promise<{ commands: Map<string, CommandHandler>; ghCommands: string[][]; messages: string[] }> {
   process.env.HOME = root;
@@ -116,6 +117,7 @@ async function loadExtension(
           return { code: 1, stdout: "", stderr: String(error) };
         }
       }
+      if (command === "bash" && options.runAutomationScript) return await options.runAutomationScript();
       if (command === "gh") ghCommands.push(args);
       if (command === "gh" && args[0] === "auth") return { code: 0, stdout: "", stderr: "" };
       if (command === "gh" && args[0] === "repo") {
@@ -344,6 +346,17 @@ describe("enablement command integration", () => {
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
     expect(extension.messages.at(-1)).toContain("deadloop enabled");
+  });
+
+  it("normalizes a non-origin tracking branch to the verified GitHub default branch", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root, { upstream: "upstream/master", defaultBranch: "master" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    expect(state.projects[0].baseBranch).toBe("origin/master");
   });
 
   it("forces a preexisting true auto-merge setting off on first enable", async () => {
@@ -663,6 +676,49 @@ describe("enablement command integration", () => {
 
     const lockName = schedulerLockName({ id: "demo", repoPath, githubRepo: "owner/demo" });
     expect(existsSync(path.join(root, ".pi", "agent", "deadloop", lockName))).toBe(false);
+  });
+
+  it("retains scheduler ownership until a blocked precheck quiesces before re-enable", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.projects[0].automations = [{
+      name: "blocked",
+      schedule: "*/1 * * * *",
+      precheckFile: "issue-coordinator.precheck.sh",
+      promptFile: "issue-coordinator.md",
+    }];
+    writeFileSync(configPath, JSON.stringify(config));
+    let releasePrecheck!: () => void;
+    let precheckStarted!: () => void;
+    const started = new Promise<void>((resolve) => { precheckStarted = resolve; });
+    const blocked = new Promise<void>((resolve) => { releasePrecheck = resolve; });
+    const extension = await loadExtension(root, {
+      runAutomationScript: async () => {
+        precheckStarted();
+        await blocked;
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    });
+    vi.useFakeTimers();
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    const tick = vi.advanceTimersByTimeAsync(3_000);
+    await started;
+    const lockPath = path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ repoPath, githubRepo: "owner/demo" }));
+    const oldToken = JSON.parse(readFileSync(lockPath, "utf8")).token;
+
+    await invoke(extension.commands.get("deadloop-disable")!, repoPath);
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    const tokenWhileBlocked = JSON.parse(readFileSync(lockPath, "utf8")).token;
+    releasePrecheck();
+    await tick;
+    const newToken = JSON.parse(readFileSync(lockPath, "utf8")).token;
+
+    expect({ retained: tokenWhileBlocked === oldToken, replacedAfterQuiescence: newToken !== oldToken }).toEqual({
+      retained: true,
+      replacedAfterQuiescence: true,
+    });
   });
 
   it("releases the scheduler lock after disable even when project configuration is invalid", async () => {
