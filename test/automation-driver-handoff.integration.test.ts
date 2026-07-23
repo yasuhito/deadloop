@@ -14,7 +14,7 @@ function foundFile(requested: string | undefined): AutomationFileResolution {
 }
 
 describe("real driver handoff across disable and re-enable", () => {
-  it("eventually queues the launched promise monitor without sending while disabled", async () => {
+  it("discards a pre-disable Issue monitor handoff so stale state cannot mutate after re-enable", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-driver-handoff-"));
     const statePath = path.join(root, "state.json");
     const project = normalizeProject({
@@ -81,10 +81,15 @@ describe("real driver handoff across disable and re-enable", () => {
 
       expect({
         sentWhileDisabled,
-        consumed: sent[0]?.includes(`${root}/runs/fixture-worker-uuid/promise.json`),
-        currentGeneration: sent[0]?.includes("--enabled-at 2 --"),
+        sentAfterReEnable: sent,
+        result: entry.lastResult,
         pending: entry.pendingDriverHandoff,
-      }).toEqual({ sentWhileDisabled: [], consumed: true, currentGeneration: true, pending: undefined });
+      }).toEqual({
+        sentWhileDisabled: [],
+        sentAfterReEnable: [],
+        result: "driver_handoff_stale_generation",
+        pending: undefined,
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

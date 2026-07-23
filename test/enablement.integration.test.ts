@@ -361,6 +361,37 @@ describe("enablement command integration", () => {
     expect(JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8")).projects[0].enabled).not.toBe(false);
   });
 
+  it("does not let an older preflight failure revoke a later successful concurrent enable", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
+    writeFileSync(statePath, JSON.stringify({
+      projects: [{ repoPath, githubRepo: "owner/demo", ...enabledSafetyFields, enabledAt: 1 }],
+    }));
+    let releaseFirstPreflight!: () => void;
+    let firstPreflightStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { firstPreflightStarted = resolve; });
+    const holdFirst = new Promise<void>((resolve) => { releaseFirstPreflight = resolve; });
+    let repoCheckCount = 0;
+    const extension = await loadExtension(root, {
+      beforeGithubRepoCheck: async () => {
+        repoCheckCount += 1;
+        if (repoCheckCount === 1) {
+          firstPreflightStarted();
+          await holdFirst;
+        }
+      },
+    });
+
+    const firstEnable = invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    await firstStarted;
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    releaseFirstPreflight();
+    await firstEnable;
+
+    expect(JSON.parse(readFileSync(statePath, "utf8")).projects[0].enabled).toBe(true);
+  });
+
   it("infers base branch and worktree root when a configured project omits both", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);

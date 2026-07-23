@@ -396,6 +396,12 @@ async function disableEnablementAttempt(identity, enabledAt, enableAttemptToken)
   await updateEnablementState((state) => removeEnabledProjectAttempt(state, identity, enabledAt, enableAttemptToken));
 }
 
+async function rollbackFailedEnablementAttempt(identity, enabledAt, repoPath, enableAttemptToken) {
+  await updateEnablementState((state) => ownsEnableAttempt(repoPath, enableAttemptToken)
+    ? removeEnabledProjectGeneration(state, identity, enabledAt)
+    : state);
+}
+
 function isProjectEnabled(project) {
   if (!project.repoPath || !project.githubRepo) return false;
   try {
@@ -1134,10 +1140,10 @@ export default function (pi) {
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
       } catch (error) {
-        if (primaryRepoPath) finishEnableAttempt(primaryRepoPath, enableAttemptToken);
-        if (!enablementSaved && identity && previousEnabledAt !== undefined) {
-          await updateEnablementState((state) => removeEnabledProjectGeneration(state, identity, previousEnabledAt));
+        if (!enablementSaved && identity && previousEnabledAt !== undefined && primaryRepoPath) {
+          await rollbackFailedEnablementAttempt(identity, previousEnabledAt, primaryRepoPath, enableAttemptToken);
         }
+        if (primaryRepoPath) finishEnableAttempt(primaryRepoPath, enableAttemptToken);
         const message = `deadloop was not enabled: ${error?.message || error}`;
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
