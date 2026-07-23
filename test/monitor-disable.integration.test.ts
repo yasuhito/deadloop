@@ -17,14 +17,14 @@ function mutationRanAfterDisable(monitor: string, useFabricatedState = false): b
   mkdirSync(repoPath);
   writeFileSync(
     path.join(stateDir, "enabled-projects.json"),
-    JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/repo", enabledAt: 1, enabled: false }] }),
+    JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/repo", enabledAt: 1, firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: false }] }),
   );
   const suppliedStateDir = useFabricatedState ? path.join(root, "fabricated-state") : stateDir;
   if (useFabricatedState) {
     mkdirSync(suppliedStateDir);
     writeFileSync(
       path.join(suppliedStateDir, "enabled-projects.json"),
-      JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/repo", enabledAt: 1 }] }),
+      JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/repo", enabledAt: 1, firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }] }),
     );
   }
   const result = spawnSync(

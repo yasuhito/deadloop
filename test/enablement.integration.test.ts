@@ -16,6 +16,13 @@ const originalPath = process.env.PATH;
 const originalDeadloop = process.env.DEADLOOP;
 const originalDeadloopAutomations = process.env.DEADLOOP_AUTOMATIONS;
 const sandboxes: string[] = [];
+const enabledSafetyFields = {
+  firstEnableAutoMerge: false,
+  firstStartPending: false,
+  lastObservedAutoMerge: false,
+  autoMergeAcknowledged: false,
+  enabled: true,
+};
 
 function git(repoPath: string, args: string[]): string {
   return execFileSync("git", ["-C", repoPath, ...args], { encoding: "utf8" });
@@ -212,7 +219,7 @@ describe("enablement command integration", () => {
     expect(report.includes("unavailable for the current location") && !report.includes("  /deadloop-enable")).toBe(true);
   });
 
-  it.each(["deadloop-status", "deadloop-doctor"])("preserves invalid configuration diagnostics for %s", async (command) => {
+  it.each(["deadloop-status", "deadloop-doctor"])("preserves invalid configuration diagnostics and recommends enablement for %s", async (command) => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
     writeFileSync(path.join(root, ".pi", "agent", "deadloop", "projects.json"), "{");
@@ -221,7 +228,7 @@ describe("enablement command integration", () => {
     await invoke(extension.commands.get(command)!, repoPath);
 
     const report = extension.messages.at(-1) || "";
-    expect(report.includes("warning: projects.json") && !report.includes("  /deadloop-enable")).toBe(true);
+    expect(report.includes("warning: projects.json") && report.includes("  /deadloop-enable")).toBe(true);
   });
 
   it.each(["deadloop-status", "deadloop-doctor"])("recommends enablement for a disabled repository in %s", async (command) => {
@@ -262,7 +269,7 @@ describe("enablement command integration", () => {
     expect(extension.messages.at(-1)).toContain("deadloop enabled");
   });
 
-  it("keeps a preexisting true auto-merge setting off on repeated enable", async () => {
+  it("acknowledges a preexisting true auto-merge setting on repeated enable", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath, { autoMerge: true });
     const extension = await loadExtension(root);
@@ -270,7 +277,7 @@ describe("enablement command integration", () => {
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
-    expect(extension.messages.at(-1)).toContain("autoMerge is off");
+    expect(extension.messages.at(-1)).toContain("autoMerge is on");
   });
 
   it("keeps an in-flight guarded operation authorized after repeated enable", async () => {
@@ -348,9 +355,6 @@ describe("enablement command integration", () => {
     writeConfig(root, repoPath, { autoMerge: true });
     const extension = await loadExtension(root);
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-    writeConfig(root, repoPath, { autoMerge: false });
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-    writeConfig(root, repoPath, { autoMerge: true });
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
     await invoke(extension.commands.get("deadloop-disable")!, repoPath);
 
@@ -473,7 +477,7 @@ describe("enablement command integration", () => {
     git(repoPath, ["worktree", "add", "--quiet", "-b", "linked", linkedPath]);
     writeConfig(root, repoPath);
     const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
-    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", enabledAt: 1 }] }));
+    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", ...enabledSafetyFields, enabledAt: 1 }] }));
     const extension = await loadExtension(root);
 
     await invoke(extension.commands.get("deadloop-disable")!, linkedPath);
@@ -485,7 +489,7 @@ describe("enablement command integration", () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath, { autoMerge: true });
     const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
-    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", enabledAt: 1, firstEnableAutoMerge: true, lastObservedAutoMerge: true }] }));
+    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", ...enabledSafetyFields, enabledAt: 1, firstEnableAutoMerge: true, lastObservedAutoMerge: true }] }));
     const extension = await loadExtension(root);
     const before = readFileSync(statePath, "utf8");
 
@@ -498,7 +502,7 @@ describe("enablement command integration", () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath, { autoMerge: true });
     const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
-    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", enabledAt: 1, firstEnableAutoMerge: true, lastObservedAutoMerge: true }] }));
+    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", ...enabledSafetyFields, enabledAt: 1, firstEnableAutoMerge: true, lastObservedAutoMerge: true }] }));
     const extension = await loadExtension(root);
     const before = readFileSync(statePath, "utf8");
 
@@ -511,7 +515,7 @@ describe("enablement command integration", () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
     const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
-    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", enabledAt: 1 }] }));
+    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", ...enabledSafetyFields, enabledAt: 1 }] }));
     const extension = await loadExtension(root);
     const before = gitReportMutationSnapshot(repoPath);
 
@@ -655,7 +659,7 @@ describe("enablement command integration", () => {
     const stateDir = path.join(root, ".pi", "agent", "deadloop");
     mkdirSync(stateDir, { recursive: true });
     const statePath = path.join(stateDir, "enabled-projects.json");
-    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", enabledAt: 1 }] }));
+    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", ...enabledSafetyFields, enabledAt: 1 }] }));
     let releasePreflight!: () => void;
     let preflightStarted!: () => void;
     const preflight = new Promise<void>((resolve) => { preflightStarted = resolve; });

@@ -30,8 +30,11 @@ function fixture() {
   return { repoPath, stateDir, githubRepo: "owner/repo" };
 }
 
-function writeState(project: ReturnType<typeof fixture>, record: Record<string, unknown>) {
-  writeFileSync(path.join(project.stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{ repoPath: project.repoPath, githubRepo: project.githubRepo, ...record }] }));
+function writeState(project: ReturnType<typeof fixture>, record: Record<string, unknown>, withSafetyFields = true) {
+  const safetyFields = withSafetyFields
+    ? { firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }
+    : {};
+  writeFileSync(path.join(project.stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{ repoPath: project.repoPath, githubRepo: project.githubRepo, ...safetyFields, ...record }] }));
 }
 
 afterEach(() => {
@@ -44,17 +47,18 @@ describe("enablement mutation guards", () => {
   for (const [name, record] of [
     ["missing enabledAt", {}],
     ["invalid enabledAt", { enabledAt: "now" }],
-    ["invalid optional field", { enabledAt: 1, autoMergeAcknowledged: "yes" }],
+    ["missing safety fields", { enabledAt: 1 }],
+    ["invalid safety field", { enabledAt: 1, autoMergeAcknowledged: "yes" }],
   ] as const) {
     it(`rejects ${name} through guarded operations`, () => {
       const project = fixture();
-      writeState(project, record);
+      writeState(project, record, false);
       expect(() => assertEnabled(project)).toThrow("disabled");
     });
 
     it(`rejects ${name} through driver authorization`, () => {
       const project = fixture();
-      writeState(project, record);
+      writeState(project, record, false);
       expect(() => assertDriverEnabled(project)).toThrow("disabled");
     });
   }

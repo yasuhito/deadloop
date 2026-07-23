@@ -37,6 +37,7 @@ const {
 } = require("../../src/scheduler-lock.cjs");
 import { inferredProjectId, schedulerLockName } from "../../src/project-identity";
 import {
+  acknowledgeAutoMerge,
   findEnabledProject,
   normalizeEnablementState,
   observeAutoMerge,
@@ -604,13 +605,13 @@ async function collectLiveSnapshotData(
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
   const project = activeProject(cwd, projects);
-  const repositoryRoot = !project && projectsResult.ok
+  const repositoryRoot = !project
     ? (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim()
     : undefined;
   const repositoryEnablement: RepositoryEnablement = project ? "enabled" : repositoryRoot ? "disabled" : "unavailable";
   const diagnosticWarnings = projectsResult.ok
     ? [...projectsResult.warnings, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])]
-    : [projectsResult.reason];
+    : [projectsResult.reason, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])];
   const warnings = statusWarnings(diagnosticWarnings, project);
   if (!project) {
     return { cwd, projects, state, repositoryEnablement, warnings };
@@ -1012,7 +1013,8 @@ export default function (pi) {
             if (wasEnabled) saveEnablementState(removeEnabledProject(state, identity));
             throw error;
           }
-          const next = upsertEnabledProject(state, identity, Date.now(), firstEnable, enableAttemptToken);
+          const enabled = upsertEnabledProject(state, identity, Date.now(), firstEnable, enableAttemptToken);
+          const next = acknowledgeAutoMerge(enabled, identity, configuredProject.autoMerge);
           enabledAt = findEnabledProject(next, identity)?.enabledAt;
           saveEnablementState(next);
         });

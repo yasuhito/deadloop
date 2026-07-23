@@ -11,6 +11,13 @@ import {
 } from "../src/enablement";
 
 const project = { repoPath: "/repos/demo", githubRepo: "owner/demo" };
+const safetyFields = {
+  firstEnableAutoMerge: false,
+  firstStartPending: false,
+  lastObservedAutoMerge: false,
+  autoMergeAcknowledged: false,
+  enabled: true,
+};
 
 describe("local enablement state", () => {
   it("starts disabled when no state file exists", () => {
@@ -87,22 +94,22 @@ describe("local enablement state", () => {
 
   it("rejects duplicate canonical checkout paths", () => {
     expect(normalizeEnablementState({ projects: [
-      { ...project, enabledAt: 1 },
-      { repoPath: "/repos/other/../demo", githubRepo: "owner/other", enabledAt: 2 },
+      { ...project, ...safetyFields, enabledAt: 1 },
+      { repoPath: "/repos/other/../demo", githubRepo: "owner/other", ...safetyFields, enabledAt: 2 },
     ] })).toBeNull();
   });
 
   it("rejects duplicate GitHub repositories", () => {
     expect(normalizeEnablementState({ projects: [
-      { ...project, enabledAt: 1 },
-      { repoPath: "/repos/other", githubRepo: "OWNER/DEMO", enabledAt: 2 },
+      { ...project, ...safetyFields, enabledAt: 1 },
+      { repoPath: "/repos/other", githubRepo: "OWNER/DEMO", ...safetyFields, enabledAt: 2 },
     ] })).toBeNull();
   });
 
   it("rejects duplicate exact identities", () => {
     expect(normalizeEnablementState({ projects: [
-      { ...project, enabledAt: 1 },
-      { ...project, enabledAt: 2 },
+      { ...project, ...safetyFields, enabledAt: 1 },
+      { ...project, ...safetyFields, enabledAt: 2 },
     ] })).toBeNull();
   });
 });

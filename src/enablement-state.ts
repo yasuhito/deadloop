@@ -9,11 +9,11 @@ type EnabledProjectValue = EnablementIdentityValue & {
   enabledAt: number;
   enableAttemptToken?: string;
   githubAliases?: string[];
-  firstEnableAutoMerge?: boolean;
-  firstStartPending?: boolean;
-  lastObservedAutoMerge?: boolean;
-  autoMergeAcknowledged?: boolean;
-  enabled?: boolean;
+  firstEnableAutoMerge: boolean;
+  firstStartPending: boolean;
+  lastObservedAutoMerge: boolean;
+  autoMergeAcknowledged: boolean;
+  enabled: boolean;
 };
 
 type EnablementStateValue = { projects: EnabledProjectValue[] };
@@ -47,7 +47,7 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
       || record.githubAliases.some((alias) => typeof alias !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(alias))
     )) return null;
     for (const field of ["firstEnableAutoMerge", "firstStartPending", "lastObservedAutoMerge", "autoMergeAcknowledged", "enabled"] as const) {
-      if (record[field] !== undefined && typeof record[field] !== "boolean") return null;
+      if (typeof record[field] !== "boolean") return null;
     }
     const repoPath = path.resolve(record.repoPath);
     const githubRepo = record.githubRepo.toLowerCase();
@@ -60,11 +60,11 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
       enabledAt: Number(record.enabledAt),
       ...(record.enableAttemptToken === undefined ? {} : { enableAttemptToken: record.enableAttemptToken }),
       ...(record.githubAliases === undefined ? {} : { githubAliases: [...new Set(record.githubAliases)] }),
-      ...(record.firstEnableAutoMerge === undefined ? {} : { firstEnableAutoMerge: record.firstEnableAutoMerge }),
-      ...(record.firstStartPending === undefined ? {} : { firstStartPending: record.firstStartPending }),
-      ...(record.lastObservedAutoMerge === undefined ? {} : { lastObservedAutoMerge: record.lastObservedAutoMerge }),
-      ...(record.autoMergeAcknowledged === undefined ? {} : { autoMergeAcknowledged: record.autoMergeAcknowledged }),
-      ...(record.enabled === undefined ? {} : { enabled: record.enabled }),
+      firstEnableAutoMerge: record.firstEnableAutoMerge,
+      firstStartPending: record.firstStartPending,
+      lastObservedAutoMerge: record.lastObservedAutoMerge,
+      autoMergeAcknowledged: record.autoMergeAcknowledged,
+      enabled: record.enabled,
     });
   }
   return { projects: normalized };

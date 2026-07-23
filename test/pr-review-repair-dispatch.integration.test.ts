@@ -27,9 +27,16 @@ function runDispatch(enabled: boolean): { output: Record<string, any>; events: s
   fs.writeFileSync(
     path.join(state, "enabled-projects.json"),
     JSON.stringify({
-      projects: enabled
-        ? [{ repoPath: root, githubRepo: "owner/repo", enabledAt: 1, enabled: true }]
-        : [{ repoPath: root, githubRepo: "owner/repo", enabledAt: 1, enabled: false }],
+      projects: [{
+        repoPath: root,
+        githubRepo: "owner/repo",
+        enabledAt: 1,
+        firstEnableAutoMerge: false,
+        firstStartPending: false,
+        lastObservedAutoMerge: false,
+        autoMergeAcknowledged: false,
+        enabled,
+      }],
     }),
   );
   fs.writeFileSync(

@@ -8,11 +8,11 @@ export type EnabledProject = {
   enabledAt: number;
   enableAttemptToken?: string;
   githubAliases?: string[];
-  firstEnableAutoMerge?: boolean;
-  firstStartPending?: boolean;
-  lastObservedAutoMerge?: boolean;
-  autoMergeAcknowledged?: boolean;
-  enabled?: boolean;
+  firstEnableAutoMerge: boolean;
+  firstStartPending: boolean;
+  lastObservedAutoMerge: boolean;
+  autoMergeAcknowledged: boolean;
+  enabled: boolean;
 };
 
 export type EnablementState = { projects: EnabledProject[] };
@@ -41,7 +41,7 @@ export function upsertEnabledProject(
   state: EnablementState | null,
   identity: ProjectIdentity,
   now = Date.now(),
-  firstEnable: Pick<EnabledProject, "firstEnableAutoMerge"> = {},
+  firstEnable: Pick<EnabledProject, "firstEnableAutoMerge"> = { firstEnableAutoMerge: false },
   enableAttemptToken?: string,
 ): EnablementState {
   if (!validIdentity(identity)) throw new Error("invalid project identity");
@@ -56,16 +56,35 @@ export function upsertEnabledProject(
     projects: [
       ...retained,
       {
-        ...(previous || firstEnable),
+        ...(previous || {
+          ...firstEnable,
+          firstStartPending: true,
+          lastObservedAutoMerge: firstEnable.firstEnableAutoMerge,
+          autoMergeAcknowledged: false,
+        }),
         repoPath,
         githubRepo: identity.githubRepo,
         enabledAt,
         ...(enableAttemptToken ? { enableAttemptToken } : {}),
         ...(identity.githubAliases ? { githubAliases: identity.githubAliases } : {}),
-        ...(previous ? {} : { firstStartPending: true, lastObservedAutoMerge: firstEnable.firstEnableAutoMerge }),
         enabled: true,
       },
     ],
+  };
+}
+
+export function acknowledgeAutoMerge(state: EnablementState, identity: ProjectIdentity, autoMerge: boolean): EnablementState {
+  if (!validIdentity(identity)) throw new Error("invalid project identity");
+  const repoPath = normalizedPath(identity.repoPath);
+  return {
+    projects: state.projects.map((project) =>
+      project.repoPath === repoPath
+      && project.githubRepo === identity.githubRepo
+      && project.firstStartPending === false
+      && autoMerge
+        ? { ...project, lastObservedAutoMerge: true, autoMergeAcknowledged: true }
+        : project,
+    ),
   };
 }
 

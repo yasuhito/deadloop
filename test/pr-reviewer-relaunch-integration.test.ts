@@ -30,7 +30,7 @@ describe("PR reviewer relaunch integration", () => {
     fs.mkdirSync(worktree);
     fs.mkdirSync(state, { recursive: true });
     fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
-      projects: [{ repoPath: root, githubRepo: "owner/repo", enabledAt: 1 }],
+      projects: [{ repoPath: root, githubRepo: "owner/repo", enabledAt: 1, firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }],
     }));
     const pr = {
       number: 44,
