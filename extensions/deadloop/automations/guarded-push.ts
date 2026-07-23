@@ -81,7 +81,7 @@ function assertAuthorizedSource(args: Args, enabled: EnabledProject, ops: Comman
 function runGuardedPush(args: Args, ops: CommandOps = defaultOps()): number {
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
-    (enabled: EnabledProject) => {
+    (enabled: EnabledProject, recheck: () => void) => {
       assertAuthorizedSource(args, enabled, ops);
       const destination = resolveVerifiedPushDestination(
         ops,
@@ -92,6 +92,7 @@ function runGuardedPush(args: Args, ops: CommandOps = defaultOps()): number {
         MAX_GUARDED_OPERATION_MS,
       );
       const ref = `refs/heads/${args.branch}`;
+      recheck();
       const result = ops.run(["git", "-C", args.worktree, "push", "--porcelain", destination, `HEAD:${ref}`], MAX_GUARDED_OPERATION_MS);
       if (result.status !== 0) throw new Error((result.stderr || result.stdout || "push failed").trim());
       return 0;

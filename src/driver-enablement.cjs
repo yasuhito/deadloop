@@ -2,7 +2,6 @@ const {
   MAX_GUARDED_OPERATION_MS,
   MAX_ORIGIN_IDENTITIES,
   assertEnabled,
-  assertLocallyEnabled,
   withEnabledProjectLock,
 } = require("./enabled-operation.cjs");
 
@@ -30,11 +29,10 @@ function withEnabledDriverLock(project, operation, options) {
 }
 
 function withEnabledDriverLaunch(project, mutateWorkflowState, launchAgent, options = {}) {
-  return withEnabledProjectLock(project, () => {
-    const recheck = () => assertLocallyEnabled(project);
+  return withEnabledProjectLock(project, (_enabled, recheck) => {
     options.revalidate?.();
     recheck();
-    mutateWorkflowState();
+    mutateWorkflowState(recheck);
     recheck();
     return launchAgent(recheck);
   }, options);

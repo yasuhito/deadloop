@@ -34,8 +34,8 @@ function herdrRunner() {
   return createHerdrRunnerFromCommandRunner(commandRunner);
 }
 
-function githubOperations() {
-  return createGithubOperations(commandRunner);
+function githubOperations(beforeMutation?: () => void) {
+  return createGithubOperations(commandRunner, beforeMutation);
 }
 
 function cleanupPlan(fixture: JsonObject | null): JsonObject {
@@ -74,8 +74,8 @@ function applyIssueTransition(
 ): boolean {
   if (fixture) return true;
   try {
-    return withEnabledDriverLock(env, () => {
-      const github = githubOperations();
+    return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+      const github = githubOperations(recheck);
       const live = github.getIssue(env.githubRepo, issue.number);
       if (String(live.state || "").toUpperCase() !== "OPEN") throw new StaleLaunchError(`Issue #${issue.number} is no longer open`);
       assertSameLaunchTarget(issue, live, "issue");
@@ -161,7 +161,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
 
   const launch = withEnabledDriverLaunch(
     env,
-    () => githubOperations().moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel }),
+    (recheck: () => void) => githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel }),
     (recheck: () => void) => launchAgentFlow(
       {
         worktree: { mode: "create", branch, baseBranch: env.baseBranch },

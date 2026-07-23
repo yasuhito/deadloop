@@ -93,8 +93,9 @@ function withEnabledProjectLock(project, operation, options = {}) {
   const lock = acquireLockSync(lockPath, { ...options, busyMessage: "enablement state is busy; operation stopped" });
   try {
     const enabled = assertEnabled(project);
+    const recheck = () => assertLocallyEnabled(project);
     options.afterAuthorization?.();
-    return operation(enabled);
+    return operation(enabled, recheck);
   } finally {
     releaseOwned(lockPath, lock.token);
   }

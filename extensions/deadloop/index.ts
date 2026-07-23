@@ -1074,7 +1074,7 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
       try {
         return withEnabledProjectLock(
           { repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt },
-          () => (pi.sendUserMessage(prompt), true),
+          (_enabled, recheck) => (recheck(), pi.sendUserMessage(prompt), true),
         );
       } catch (error) {
         if (error instanceof Error && error.message === "deadloop is disabled for this repository") return false;

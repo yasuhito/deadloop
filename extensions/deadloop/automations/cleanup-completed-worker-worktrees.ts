@@ -312,7 +312,10 @@ function withCleanupMutation<T>(config: CleanupConfig, mutation: () => T): T {
     githubRepo: config.repo,
     stateDir: config.stateDir,
     enabledAt: config.enabledAt,
-  }, mutation);
+  }, (_enabled: unknown, recheck: () => void) => {
+    recheck();
+    return mutation();
+  });
 }
 
 function removeGeneratedAgentArtifacts(worktreePath: string, config: CleanupConfig): void {

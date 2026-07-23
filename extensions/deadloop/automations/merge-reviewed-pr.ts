@@ -31,7 +31,7 @@ type MergeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   isAutoMergeEnabled?: (args: MergeArgs) => boolean;
   validateReviewPromise?: (file: string) => PromiseValidation;
-  withLock?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }, operation: (enabled: EnabledProject) => number) => number;
+  withLock?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }, operation: (enabled: EnabledProject, recheck: () => void) => number) => number;
 };
 
 function defaultRun(args: string[], timeoutMs?: number): CommandResult {
@@ -181,12 +181,13 @@ function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
 
 function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): number {
   const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
-  const operation = (enabled: EnabledProject) => {
+  const operation = (enabled: EnabledProject, recheck: () => void = () => {}) => {
     const autoMergeEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
     if (!autoMergeEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
     assertMergeAuthorized(enabled);
     assertReviewApproved(args, ops);
     assertCurrentPrEligible(args, ops);
+    recheck();
     const result = ops.run([
       "gh", "pr", "merge", args.pr, "-R", args.githubRepo,
       "--squash", "--delete-branch", "--match-head-commit", args.expectedHead,

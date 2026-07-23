@@ -513,11 +513,8 @@ process.stdout.write(JSON.stringify(args[0] === "repo"
     expect(result.output.driverAction).toBe("review_repair_ambiguous_worktree");
   });
 
-  it("keeps the human-block comment and label transition in one lock when disable begins during the mutation", () => {
-    expect(runTerminalMutationRace("disable_during_human_block").mutations).toEqual([
-      "pr comment 243",
-      "pr edit 243",
-    ]);
+  it("stops the remaining human-block mutation when disable begins after the comment", () => {
+    expect(runTerminalMutationRace("disable_during_human_block").mutations).toEqual(["pr comment 243"]);
   });
 
   it("does not write a technical-retry comment after the PR head changes", () => {

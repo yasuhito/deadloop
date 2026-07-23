@@ -83,7 +83,8 @@ function runGuarded(args: Args, spawn = spawnSync): number {
   assertApprovedCommand(args.command, args.githubRepo);
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
-    () => {
+    (_enabled: unknown, recheck: () => void) => {
+      recheck();
       const result = spawn(args.command[0], args.command.slice(1), {
         stdio: "inherit",
         timeout: GUARDED_OPERATION_TIMEOUT_MS,

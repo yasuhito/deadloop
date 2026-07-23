@@ -124,6 +124,35 @@ describe("enablement mutation guards", () => {
     expect(mutated).toBe(false);
   });
 
+  it("defers mutation to a later enablement cycle when disable intent arrives after authorization", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const events: string[] = [];
+    const disableGenerationPath = path.join(project.stateDir, "disable-generation.json");
+
+    try {
+      withEnabledProjectLock(
+        { ...project, enabledAt: 1 },
+        (_enabled: unknown, recheck: () => void) => {
+          recheck();
+          events.push("mutated-before-reenable");
+        },
+        { afterAuthorization: () => writeFileSync(disableGenerationPath, JSON.stringify({
+          generation: 0,
+          generations: { [path.resolve(project.repoPath)]: 1 },
+        })) },
+      );
+    } catch {}
+
+    writeState(project, { enabledAt: 2, disableGeneration: 1 });
+    withEnabledProjectLock({ ...project, enabledAt: 2 }, (_enabled: unknown, recheck: () => void) => {
+      recheck();
+      events.push("mutated-after-reenable");
+    });
+
+    expect(events).toEqual(["mutated-after-reenable"]);
+  });
+
   it.each(["issue worker", "PR reviewer", "branch update", "review repair"])(
     "keeps disable excluded between the %s mutation and launch",
     () => {

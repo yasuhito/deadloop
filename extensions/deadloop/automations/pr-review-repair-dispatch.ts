@@ -127,12 +127,12 @@ function withRevalidatedPrMutation(
   prNumber: string,
   env: ReturnType<typeof envConfig>,
   expectedPr: JsonObject,
-  mutation: () => void,
+  mutation: (guardedGithub: ReturnType<typeof createGithubOperations>) => void,
 ): void {
-  withEnabledDriverLock(env, () => {
+  withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
     const livePr = readLivePr(env.githubRepo, prNumber);
     assertSameLaunchTarget(expectedPr, livePr, "pr");
-    mutation();
+    mutation(createGithubOperations(commandRunner, recheck));
   });
 }
 
@@ -144,9 +144,9 @@ function applyHumanBlock(
   summary: string,
 ): string {
   const comment = recoveryComment(prNumber, env, reason, summary);
-  withRevalidatedPrMutation(prNumber, env, expectedPr, () => {
-    github.commentPr(env.githubRepo, prNumber, comment);
-    github.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+  withRevalidatedPrMutation(prNumber, env, expectedPr, (guardedGithub) => {
+    guardedGithub.commentPr(env.githubRepo, prNumber, comment);
+    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
   });
   return comment;
 }
@@ -279,7 +279,7 @@ function dispatch(args: JsonObject): DriverResult {
     }
     const technicalDecision = decideTechnicalReviewFailure(pr.comments || [], expectedHead);
     if (technicalDecision.action === "retry") {
-      withRevalidatedPrMutation(prNumber, env, pr, () => github.commentPr(
+      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub) => guardedGithub.commentPr(
         env.githubRepo,
         prNumber,
         `Reviewer technical failure will be retried once for this head: ${promise.reason || "unknown failure"}.\n\n${renderTechnicalFailureMarker(expectedHead)}`,
@@ -407,9 +407,10 @@ function dispatch(args: JsonObject): DriverResult {
   try {
     const launch = withEnabledDriverLaunch(
       env,
-      () => {
-        github.commentPr(env.githubRepo, prNumber, `Starting one bounded repair for this exact PR head and review result.\n\n${marker}`);
-        github.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
+      (recheck: () => void) => {
+        const guardedGithub = createGithubOperations(commandRunner, recheck);
+        guardedGithub.commentPr(env.githubRepo, prNumber, `Starting one bounded repair for this exact PR head and review result.\n\n${marker}`);
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
       },
       (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck),
       {

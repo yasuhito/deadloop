@@ -52,6 +52,7 @@ function pushConditionally(
   branch: string,
   expectedHead: string,
   candidateOid: string,
+  recheck: () => void,
 ): boolean {
   const ref = `refs/heads/${branch}`;
   if (checked(ops, ["git", "-C", repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
@@ -59,6 +60,7 @@ function pushConditionally(
   }
   const remoteBeforePush = checked(ops, ["git", "ls-remote", destination, ref], MAX_GUARDED_OPERATION_MS).split(/\s+/)[0] || "";
   if (remoteBeforePush.toLowerCase() !== expectedHead.toLowerCase()) return false;
+  recheck();
   const push = ops.run(
     ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
@@ -106,7 +108,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   }
 
   const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
-  const guardAndPush = (enabled: EnabledProject) => {
+  const guardAndPush = (enabled: EnabledProject, recheck: () => void = () => {}) => {
     assertAuthorizedSource(
       { projectRepo: args.projectRepo, worktree: args.repo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt, remote: args.remote, branch: args.branch },
       enabled,
@@ -134,7 +136,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       enabled.githubRepositoryId,
       MAX_GUARDED_OPERATION_MS,
     );
-    if (!pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid)) {
+    if (!pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid, recheck)) {
       return { action: "stale_head", reason: "head_sha_changed_during_push" };
     }
     return {

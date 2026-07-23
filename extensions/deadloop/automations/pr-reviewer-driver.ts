@@ -36,8 +36,8 @@ function herdrRunner() {
   return createHerdrRunnerFromCommandRunner(commandRunner);
 }
 
-function githubOperations() {
-  return createGithubOperations(commandRunner);
+function githubOperations(beforeMutation?: () => void) {
+  return createGithubOperations(commandRunner, beforeMutation);
 }
 
 function envConfig() {
@@ -239,8 +239,8 @@ function applyPrTransition(
 ): boolean {
   if (fixture) return true;
   try {
-    return withEnabledDriverLock(env, () => {
-      const github = githubOperations();
+    return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+      const github = githubOperations(recheck);
       const live = github.getPr(env.githubRepo, pr.number);
       if (String(live.state || "").toUpperCase() !== "OPEN") throw new StaleLaunchError(`PR #${pr.number} is no longer open`);
       assertSameLaunchTarget(pr, live, "pr");
@@ -301,10 +301,10 @@ function launchBranchUpdate(
 
   runText(["git", "check-ref-format", "--branch", branch]);
   const marker = renderBranchUpdateMarker(headOid, baseOid);
-  const github = githubOperations();
   const launch = withEnabledDriverLaunch(
     env,
-    () => {
+    (recheck: () => void) => {
+      const github = githubOperations(recheck);
       github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
       github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
     },
@@ -365,7 +365,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
 
   const launch = withEnabledDriverLaunch(
     env,
-    () => githubOperations().movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }),
+    (recheck: () => void) => githubOperations(recheck).movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }),
     (recheck: () => void) => launchAgentFlow(
       {
         worktree: { mode: "open", branch: headRefName },
