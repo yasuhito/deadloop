@@ -10,7 +10,7 @@ const { planPrReviewerAction } = require("./pr-reviewer-flow.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
 const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
-const { decideBranchUpdate, decideBranchUpdateLive } = require("./pr-branch-update-decision.ts");
+const { decideBranchUpdateLive } = require("./pr-branch-update-decision.ts");
 const { branchUpdateAttemptExists, branchUpdateRetryKey, renderBranchUpdateMarker } = require("./pr-branch-update-state.ts");
 const {
   createCommandRunner,
@@ -187,19 +187,6 @@ Promise report:
 function fixtureBranchUpdateDecision(pr: JsonObject, fixture: JsonObject): JsonObject {
   const configured = fixture.branchUpdate;
   if (!configured) return { action: "no_update", reason: "fixture_default", headOid: pr.headRefOid || "", baseOid: "fixture-base" };
-  if (configured.ahead !== undefined || configured.behind !== undefined) {
-    return {
-      ...decideBranchUpdate(
-        Number(configured.ahead || 0),
-        Number(configured.behind || 0),
-        configured.conflictFree === undefined ? true : Boolean(configured.conflictFree),
-        configured.cleanWorktree === undefined ? true : Boolean(configured.cleanWorktree),
-        configured.headMatchesExpected === undefined ? true : Boolean(configured.headMatchesExpected),
-      ),
-      headOid: pr.headRefOid || "",
-      baseOid: configured.baseOid || "fixture-base",
-    };
-  }
   return { headOid: pr.headRefOid || "", baseOid: configured.baseOid || "fixture-base", ...configured };
 }
 

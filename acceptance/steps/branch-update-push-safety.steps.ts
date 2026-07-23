@@ -18,6 +18,7 @@ type SafetyWorld = {
   actualHead?: string;
   crossRepository?: boolean;
   commands?: string[][];
+  dirtyWorktree?: boolean;
   finalizeResult?: Record<string, unknown>;
   temporaryRoots?: string[];
   trustLaunchMarker?: string;
@@ -27,41 +28,48 @@ type SafetyWorld = {
 function finalize(world: SafetyWorld): void {
   const commands: string[][] = [];
   world.commands = commands;
-  world.finalizeResult = finalizeBranchUpdate(
-    {
-      repo: "/worktree",
-      githubRepo: "owner/repo",
-      pr: "31",
-      branch,
-      expectedHead: head,
-      expectedBase: base,
-      remote: "origin",
-      automationDir: "/automation",
-      stateDir: "/state",
-      checkCommand: "npm test",
-    },
-    {
-      run: (args: string[]) => {
-        commands.push(args);
-        if (args[0] === "gh") {
-          return {
-            status: 0,
-            stdout: JSON.stringify({
-              state: "OPEN",
-              isCrossRepository: world.crossRepository ?? false,
-              headRefName: branch,
-              headRefOid: world.actualHead ?? head,
-            }),
-            stderr: "",
-          };
-        }
-        if (args.at(-1) === "HEAD" && args.includes("rev-parse")) {
-          return { status: 0, stdout: "cccccccccccccccccccccccccccccccccccccccc\n", stderr: "" };
-        }
-        return { status: 0, stdout: "", stderr: "" };
+  try {
+    world.finalizeResult = finalizeBranchUpdate(
+      {
+        repo: "/worktree",
+        githubRepo: "owner/repo",
+        pr: "31",
+        branch,
+        expectedHead: head,
+        expectedBase: base,
+        remote: "origin",
+        automationDir: "/automation",
+        stateDir: "/state",
+        checkCommand: "npm test",
       },
-    },
-  );
+      {
+        run: (args: string[]) => {
+          commands.push(args);
+          if (args[0] === "gh") {
+            return {
+              status: 0,
+              stdout: JSON.stringify({
+                state: "OPEN",
+                isCrossRepository: world.crossRepository ?? false,
+                headRefName: branch,
+                headRefOid: world.actualHead ?? head,
+              }),
+              stderr: "",
+            };
+          }
+          if (args.includes("status") && args.includes("--porcelain")) {
+            return { status: 0, stdout: world.dirtyWorktree ? " M tracked-file\n" : "", stderr: "" };
+          }
+          if (args.at(-1) === "HEAD" && args.includes("rev-parse")) {
+            return { status: 0, stdout: "cccccccccccccccccccccccccccccccccccccccc\n", stderr: "" };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+  } catch (error) {
+    if (!world.dirtyWorktree) throw error;
+  }
 }
 
 function pushCommand(world: SafetyWorld): string[] | undefined {
@@ -72,16 +80,8 @@ function pushed(world: SafetyWorld): boolean {
   return pushCommand(world) !== undefined;
 }
 
-function pushedUpdates(world: SafetyWorld): string[] {
-  return pushCommand(world)?.filter((argument) => argument.includes(":refs/heads/")) ?? [];
-}
-
-function forcePushArguments(world: SafetyWorld): string[] {
-  return (
-    pushCommand(world)?.filter(
-      (argument) => argument === "-f" || argument.startsWith("--force") || argument.startsWith("+"),
-    ) ?? []
-  );
+function expectedPushCommand(): string[] {
+  return ["git", "-C", "/worktree", "push", "--porcelain", "origin", `HEAD:refs/heads/${branch}`];
 }
 
 function temporaryRoot(world: SafetyWorld, prefix: string): string {
@@ -97,6 +97,12 @@ Given("更新前に確認した pull request head がある", function (this: Sa
 
 Given("自動チェック後に pull request head が変わる", function (this: SafetyWorld) {
   this.actualHead = base;
+});
+
+Given("更新対象の作業場所に未コミットの変更がある", function (this: SafetyWorld) {
+  this.actualHead = head;
+  this.crossRepository = false;
+  this.dirtyWorktree = true;
 });
 
 Given("pull request が別リポジトリから作られている", function (this: SafetyWorld) {
@@ -163,11 +169,11 @@ Then("作業エージェントは起動されない", function (this: SafetyWorl
 });
 
 Then("選択された branch だけが push の対象になる", function (this: SafetyWorld) {
-  assert.deepEqual(pushedUpdates(this), [`HEAD:refs/heads/${branch}`]);
+  assert.deepEqual(pushCommand(this), expectedPushCommand());
 });
 
 Then("branch は強制せずに push される", function (this: SafetyWorld) {
-  assert.deepEqual(forcePushArguments(this), []);
+  assert.deepEqual(pushCommand(this), expectedPushCommand());
 });
 
 After(function (this: SafetyWorld) {
