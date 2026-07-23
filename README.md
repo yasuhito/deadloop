@@ -4,7 +4,7 @@ English | [日本語](README.ja.md)
 
 # deadloop
 
-> Maximum effort. A loop for building loops.
+> A loop for building loops, maximum effort.
 
 **GitHub Issues in, reviewed PRs out.** deadloop runs a guarded engineering loop for coding agents: it watches labeled GitHub Issues, starts implementation agents, verifies their work, opens PRs, reviews PRs, and can optionally merge only after explicit safety gates pass.
 
