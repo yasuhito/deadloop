@@ -18,7 +18,6 @@ export type AutomationState = {
 };
 
 export type AutomationRunnerDeps = {
-  currentEnabledAt?: () => number | undefined;
   isEnabled?: () => boolean;
   isIdle?: () => boolean;
   notify?: (message: string, level: "info" | "warning" | "error") => void;
@@ -60,7 +59,7 @@ export function deliverPendingDriverHandoff(
   deps: Pick<
     AutomationRunnerDeps,
     "isEnabled" | "notify" | "now" | "saveState" | "sendUserMessage" | "sendUserMessageIfEnabled"
-  > & Pick<AutomationRunnerDeps, "currentEnabledAt">,
+  >,
 ): boolean {
   const handoff = entry.pendingDriverHandoff;
   if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) return false;
@@ -68,9 +67,8 @@ export function deliverPendingDriverHandoff(
   const pendingPrompt = payload.prompt;
   let prompt = typeof pendingPrompt === "string" ? pendingPrompt : "";
   if (payload.monitorHandoff && typeof payload.monitorHandoff === "object" && !Array.isArray(payload.monitorHandoff)) {
-    const currentEnabledAt = deps.currentEnabledAt?.();
     try {
-      prompt = renderPendingMonitorHandoff(payload.monitorHandoff, currentEnabledAt);
+      prompt = renderPendingMonitorHandoff(payload.monitorHandoff);
     } catch (error) {
       delete entry.pendingDriverHandoff;
       recordAutomationResult(entry, "driver_invalid_result");

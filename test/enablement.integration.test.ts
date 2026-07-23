@@ -841,7 +841,7 @@ describe("enablement command integration", () => {
     expect(existsSync(path.join(root, ".pi", "agent", "deadloop", lockName))).toBe(false);
   });
 
-  it("keeps scheduler ownership until a blocked stale precheck settles before takeover", async () => {
+  it("reports disable success only after a blocked scheduler tick releases its lock", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
     const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
@@ -869,29 +869,29 @@ describe("enablement command integration", () => {
     const tick = vi.advanceTimersByTimeAsync(3_000);
     await started;
     const lockPath = path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ githubRepositoryId: "R_demo" }));
-    const oldToken = JSON.parse(readFileSync(lockPath, "utf8")).token;
+    const enablementLockPath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json.lock");
+    const messageCount = extension.messages.length;
+    let disableResolved = false;
 
-    await invoke(extension.commands.get("deadloop-disable")!, repoPath);
-    const tokenWhileBlocked = JSON.parse(readFileSync(lockPath, "utf8")).token;
-    const schedulerStatePath = path.join(root, ".pi", "agent", "deadloop", "state.json");
-    const stateAfterDisable = JSON.parse(readFileSync(schedulerStatePath, "utf8"));
-    const resultAfterDisable = (Object.values(stateAfterDisable.automations)[0] as { lastResult?: string }).lastResult;
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-    const tokenAfterTakeoverAttempt = JSON.parse(readFileSync(lockPath, "utf8")).token;
+    const disabling = invoke(extension.commands.get("deadloop-disable")!, repoPath).then(() => { disableResolved = true; });
+    await vi.waitFor(() => {
+      const enablementState = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+      if (enablementState.projects.some((project: { enabled?: boolean }) => project.enabled !== false) || existsSync(enablementLockPath)) {
+        throw new Error("disable state update is still locked");
+      }
+    });
+    const beforeRelease = {
+      disableResolved,
+      schedulerLockExists: existsSync(lockPath),
+      successReported: extension.messages.length > messageCount,
+    };
     releasePrecheck();
-    await tick;
-    const newToken = JSON.parse(readFileSync(lockPath, "utf8")).token;
+    await Promise.all([tick, disabling]);
 
-    expect({
-      lockRetainedWhileBlocked: tokenWhileBlocked === oldToken,
-      takeoverWaitedForQuiescence: tokenAfterTakeoverAttempt === oldToken,
-      staleRunDidNotSave: (Object.values(JSON.parse(readFileSync(schedulerStatePath, "utf8")).automations)[0] as { lastResult?: string }).lastResult === resultAfterDisable,
-      restartedAfterQuiescence: newToken !== oldToken,
-    }).toEqual({
-      lockRetainedWhileBlocked: true,
-      takeoverWaitedForQuiescence: true,
-      staleRunDidNotSave: true,
-      restartedAfterQuiescence: true,
+    expect({ beforeRelease, schedulerLockExistsAfterResponse: existsSync(lockPath), successReportedAfterRelease: extension.messages.length > messageCount }).toEqual({
+      beforeRelease: { disableResolved: false, schedulerLockExists: true, successReported: false },
+      schedulerLockExistsAfterResponse: false,
+      successReportedAfterRelease: true,
     });
   });
 

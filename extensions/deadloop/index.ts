@@ -929,7 +929,6 @@ async function prepareGithub(pi, identity, repoPath, enableAttemptToken) {
 }
 function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => true) {
   return {
-    currentEnabledAt: () => project.enabledAt,
     isEnabled: () => isCurrentSchedulerRun() && isProjectEnabled(project),
     isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
     notify: (message, level) => {
@@ -1227,6 +1226,7 @@ export default function (pi) {
     handler: async (_args, ctx) => {
       try {
         let message;
+        let schedulerStop = Promise.resolve();
         const repoPath = await detectPrimaryCheckout(pi, ctx.cwd, true);
         const attemptPath = enableAttemptPath(repoPath);
         const attempt = readJsonFile(attemptPath, null);
@@ -1237,11 +1237,14 @@ export default function (pi) {
           const state = loadEnablementState();
           const enabled = state.projects.find((project) => project.repoPath === path.resolve(repoPath) && project.enabled !== false);
           saveEnablementState(removeEnabledProjectAtPath(state, repoPath));
-          if (active?.project?.repoPath && path.resolve(active.project.repoPath) === path.resolve(repoPath)) stopScheduler(ctx);
+          if (active?.project?.repoPath && path.resolve(active.project.repoPath) === path.resolve(repoPath)) {
+            schedulerStop = stopScheduler(ctx);
+          }
           message = enabled
             ? `deadloop disabled for ${enabled.githubRepo}. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.`
             : "deadloop disabled for this checkout. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.";
         });
+        await schedulerStop;
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-disable", content: message, display: true });
       } catch (error) {
