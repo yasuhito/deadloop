@@ -195,7 +195,7 @@ function addImplicitProject(cwd, result) {
   return { ...result, projects: [...result.projects, implicit] };
 }
 
-function loadProjectsResult(cwd) {
+function loadProjectsResult(cwd, options: { includeDisabled?: boolean } = {}) {
   let text;
   try {
     text = readConfigText();
@@ -208,7 +208,7 @@ function loadProjectsResult(cwd) {
   });
   const result = addImplicitProject(cwd, parsed);
   if (result.ok) {
-    result.projects = result.projects.filter((project) => isProjectEnabled(project));
+    if (!options.includeDisabled) result.projects = result.projects.filter((project) => isProjectEnabled(project));
     debugLog(
       "config",
       CONFIG_PATH,
@@ -231,10 +231,11 @@ function loadEnablementState() {
   try {
     const text = fs.readFileSync(ENABLEMENT_PATH, "utf8");
     const state = normalizeEnablementState(JSON.parse(text));
-    return state || null;
+    if (!state) throw new Error("schema is invalid");
+    return state;
   } catch (error) {
     if (error?.code === "ENOENT") return { projects: [] };
-    return null;
+    throw new Error(`enablement state is invalid at ${ENABLEMENT_PATH}: ${error?.message || error}. Inspect and move the file aside, then run /deadloop-enable again to recover.`);
   }
 }
 
@@ -242,7 +243,7 @@ function saveEnablementState(state) {
   writeJsonFile(ENABLEMENT_PATH, state);
 }
 
-function updateEnablementState(update) {
+async function updateEnablementState(update) {
   const lockPath = `${ENABLEMENT_PATH}.lock`;
   fs.mkdirSync(STATE_DIR, { recursive: true });
   for (let attempt = 0; attempt < 20; attempt++) {
@@ -254,7 +255,7 @@ function updateEnablementState(update) {
         fs.closeSync(fd);
       }
       try {
-        const next = update(loadEnablementState());
+        const next = await update(loadEnablementState());
         saveEnablementState(next);
         return next;
       } finally {
@@ -267,10 +268,25 @@ function updateEnablementState(update) {
         try { fs.unlinkSync(lockPath); } catch {}
         continue;
       }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
   throw new Error("enablement state is busy; retry the command");
+}
+
+function configMtimeMs() {
+  try {
+    return fs.statSync(CONFIG_PATH).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function applyFirstEnableAutoMergeGate(project) {
+  const enabled = findEnabledProject(loadEnablementState(), project);
+  if (!enabled || enabled.firstEnableAutoMerge === undefined) return project;
+  if (enabled.firstEnableConfigMtimeMs === configMtimeMs()) project.autoMerge = false;
+  return project;
 }
 
 function isProjectEnabled(project) {
@@ -425,19 +441,18 @@ function activeProject(cwd, projects) {
   } catch {
     resolvedCwd = cwd;
   }
-  return (
-    projects.find((project) => {
-      try {
-        const repoPath = path.resolve(project.repoPath);
-        const matches = resolvedCwd === repoPath || resolvedCwd.startsWith(`${repoPath}${path.sep}`);
-        debugLog("project candidate", project.id, "repoPath", repoPath, "cwd", resolvedCwd, "matches", matches);
-        return matches;
-      } catch (error) {
-        debugLog("project candidate error", project.id, error?.message || error);
-        return cwd === project.repoPath;
-      }
-    }) || null
-  );
+  const project = projects.find((candidate) => {
+    try {
+      const repoPath = path.resolve(candidate.repoPath);
+      const matches = resolvedCwd === repoPath || resolvedCwd.startsWith(`${repoPath}${path.sep}`);
+      debugLog("project candidate", candidate.id, "repoPath", repoPath, "cwd", resolvedCwd, "matches", matches);
+      return matches;
+    } catch (error) {
+      debugLog("project candidate error", candidate.id, error?.message || error);
+      return cwd === candidate.repoPath;
+    }
+  });
+  return project ? applyFirstEnableAutoMergeGate(project) : null;
 }
 
 function shellQuote(value) {
@@ -822,15 +837,22 @@ export default function (pi) {
     handler: async (_args, ctx) => {
       try {
         const identity = await detectProjectIdentity(pi, ctx.cwd);
-        const existing = findEnabledProject(loadEnablementState(), identity);
-        if (!existing) {
+        const configuredProject = activeProject(ctx.cwd, loadProjectsResult(ctx.cwd, { includeDisabled: true }).projects);
+        const firstEnable = {
+          firstEnableAutoMerge: Boolean(configuredProject?.autoMerge),
+          firstEnableConfigMtimeMs: configMtimeMs() ?? undefined,
+        };
+        let newlyEnabled = false;
+        await updateEnablementState(async (state) => {
+          if (findEnabledProject(state, identity)) return state;
           await prepareGithub(pi, identity.githubRepo);
-          updateEnablementState((state) => upsertEnabledProject(state, identity));
-        }
+          newlyEnabled = true;
+          return upsertEnabledProject(state, identity, Date.now(), firstEnable);
+        });
         const projects = loadProjects(ctx.cwd);
         const project = activeProject(ctx.cwd, projects);
         if (!project) throw new Error("enabled repository configuration could not be resolved safely");
-        if (!existing) project.autoMerge = false;
+        if (newlyEnabled) project.autoMerge = false;
         startScheduler(ctx, project);
         const owner = ownsLock ? "this session" : `another session (pid ${readLock(projectLockPath(project))?.pid || "unknown"})`;
         const message = `deadloop enabled for ${identity.githubRepo}; scheduler owner: ${owner}. autoMerge is ${project.autoMerge ? "on (existing local setting preserved)" : "off"}.`;
@@ -853,14 +875,14 @@ export default function (pi) {
           identity = await detectProjectIdentity(pi, ctx.cwd);
         } catch {
           const repoPath = (await commandExec(pi, "git", ["-C", ctx.cwd, "rev-parse", "--show-toplevel"])).stdout.trim();
-          updateEnablementState((state) => removeEnabledProjectAtPath(state, repoPath));
+          await updateEnablementState((state) => removeEnabledProjectAtPath(state, repoPath));
           if (active?.project?.repoPath && path.resolve(active.project.repoPath) === path.resolve(repoPath)) stopScheduler(ctx);
           const message = "deadloop disabled for this checkout. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.";
           if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
           else pi.sendMessage({ customType: "deadloop-disable", content: message, display: true });
           return;
         }
-        updateEnablementState((state) => removeEnabledProjectAtPath(removeEnabledProject(state, identity), identity.repoPath));
+        await updateEnablementState((state) => removeEnabledProjectAtPath(removeEnabledProject(state, identity), identity.repoPath));
         if (active?.project?.githubRepo === identity.githubRepo && path.resolve(active.project.repoPath) === path.resolve(identity.repoPath)) stopScheduler(ctx);
         const message = `deadloop disabled for ${identity.githubRepo}. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.`;
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);

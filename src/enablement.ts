@@ -4,6 +4,8 @@ export type EnabledProject = {
   repoPath: string;
   githubRepo: string;
   enabledAt: number;
+  firstEnableConfigMtimeMs?: number;
+  firstEnableAutoMerge?: boolean;
 };
 
 export type EnablementState = { projects: EnabledProject[] };
@@ -27,8 +29,18 @@ export function normalizeEnablementState(value: unknown): EnablementState | null
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
     const project = candidate as Partial<EnabledProject>;
     const enabledAt = project.enabledAt;
+    const firstEnableConfigMtimeMs = project.firstEnableConfigMtimeMs;
+    const firstEnableAutoMerge = project.firstEnableAutoMerge;
     if (!validIdentity(project) || !Number.isFinite(enabledAt)) return null;
-    normalized.push({ repoPath: normalizedPath(project.repoPath), githubRepo: project.githubRepo, enabledAt: Number(enabledAt) });
+    if (firstEnableConfigMtimeMs !== undefined && !Number.isFinite(firstEnableConfigMtimeMs)) return null;
+    if (firstEnableAutoMerge !== undefined && typeof firstEnableAutoMerge !== "boolean") return null;
+    normalized.push({
+      repoPath: normalizedPath(project.repoPath),
+      githubRepo: project.githubRepo,
+      enabledAt: Number(enabledAt),
+      ...(firstEnableConfigMtimeMs === undefined ? {} : { firstEnableConfigMtimeMs: Number(firstEnableConfigMtimeMs) }),
+      ...(firstEnableAutoMerge === undefined ? {} : { firstEnableAutoMerge }),
+    });
   }
   return { projects: normalized };
 }
@@ -43,12 +55,17 @@ export function isEnabledProjectState(state: EnablementState | null, identity: P
   return findEnabledProject(state, identity) !== null;
 }
 
-export function upsertEnabledProject(state: EnablementState | null, identity: ProjectIdentity, now = Date.now()): EnablementState {
+export function upsertEnabledProject(
+  state: EnablementState | null,
+  identity: ProjectIdentity,
+  now = Date.now(),
+  firstEnable: Pick<EnabledProject, "firstEnableConfigMtimeMs" | "firstEnableAutoMerge"> = {},
+): EnablementState {
   if (!validIdentity(identity)) throw new Error("invalid project identity");
   const repoPath = normalizedPath(identity.repoPath);
   const existing = state?.projects || [];
   const retained = existing.filter((project) => project.githubRepo !== identity.githubRepo && project.repoPath !== repoPath);
-  return { projects: [...retained, { repoPath, githubRepo: identity.githubRepo, enabledAt: now }] };
+  return { projects: [...retained, { repoPath, githubRepo: identity.githubRepo, enabledAt: now, ...firstEnable }] };
 }
 
 export function removeEnabledProject(state: EnablementState | null, identity: ProjectIdentity): EnablementState {

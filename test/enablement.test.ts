@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   findEnabledProject,
   isEnabledProjectState,
+  normalizeEnablementState,
   removeEnabledProject,
   upsertEnabledProject,
 } from "../src/enablement";
@@ -30,5 +31,15 @@ describe("local enablement state", () => {
     const state = upsertEnabledProject(upsertEnabledProject(null, project), { repoPath: "/repos/other", githubRepo: "owner/other" });
 
     expect(removeEnabledProject(state, project).projects).toHaveLength(1);
+  });
+
+  it("preserves the first-enable auto-merge gate metadata", () => {
+    const state = upsertEnabledProject(null, project, 1, { firstEnableAutoMerge: true, firstEnableConfigMtimeMs: 2 });
+
+    expect(findEnabledProject(state, project)?.firstEnableAutoMerge).toBe(true);
+  });
+
+  it("rejects invalid first-enable auto-merge gate metadata", () => {
+    expect(normalizeEnablementState({ projects: [{ ...project, enabledAt: 1, firstEnableAutoMerge: "true" }] })).toBeNull();
   });
 });
