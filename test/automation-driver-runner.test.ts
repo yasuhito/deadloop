@@ -278,6 +278,10 @@ describe("deterministic automation driver runner", () => {
       issueBody: "## Acceptance criteria\n- Done",
       readyLabel: "ready-for-agent",
       inProgressLabel: "agent:in-progress",
+      blockedLabel: "agent:blocked",
+      humanLabel: "ready-for-human",
+      needsInfoLabel: "needs-info",
+      wontfixLabel: "wontfix",
     },
   };
   const eligibleIssue = {
@@ -295,6 +299,16 @@ describe("deterministic automation driver runner", () => {
   it("rejects an issue missing a required label during pending handoff revalidation", () => {
     expect(isPendingIssueHandoffEligible(issueHandoff, { ...eligibleIssue, labels: [{ name: "agent:in-progress" }] })).toBe(false);
   });
+
+  it.each(["agent:blocked", "needs-info", "ready-for-human", "wontfix"])(
+    "rejects an issue with the %s blocking label during pending handoff revalidation",
+    (blockingLabel) => {
+      expect(isPendingIssueHandoffEligible(issueHandoff, {
+        ...eligibleIssue,
+        labels: [...eligibleIssue.labels, { name: blockingLabel }],
+      })).toBe(false);
+    },
+  );
 
   it("rejects an issue whose title changed during pending handoff revalidation", () => {
     expect(isPendingIssueHandoffEligible(issueHandoff, { ...eligibleIssue, title: "Different feature" })).toBe(false);

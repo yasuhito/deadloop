@@ -123,10 +123,31 @@ gh pr view ${prNumber} -R ${shellQuote(env.githubRepo)} --comments --json number
 3. Push a new commit, then remove ${env.blockedLabel}; the changed head can start a new review cycle.`;
 }
 
-function applyHumanBlock(prNumber: string, env: ReturnType<typeof envConfig>, reason: string, summary: string): string {
+function withRevalidatedPrMutation(
+  prNumber: string,
+  env: ReturnType<typeof envConfig>,
+  expectedPr: JsonObject,
+  mutation: () => void,
+): void {
+  withEnabledDriverLock(env, () => {
+    const livePr = readLivePr(env.githubRepo, prNumber);
+    assertSameLaunchTarget(expectedPr, livePr, "pr");
+    mutation();
+  });
+}
+
+function applyHumanBlock(
+  prNumber: string,
+  env: ReturnType<typeof envConfig>,
+  expectedPr: JsonObject,
+  reason: string,
+  summary: string,
+): string {
   const comment = recoveryComment(prNumber, env, reason, summary);
-  withEnabledDriverLock(env, () => github.commentPr(env.githubRepo, prNumber, comment));
-  withEnabledDriverLock(env, () => github.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel }));
+  withRevalidatedPrMutation(prNumber, env, expectedPr, () => {
+    github.commentPr(env.githubRepo, prNumber, comment);
+    github.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+  });
   return comment;
 }
 
@@ -245,7 +266,7 @@ function dispatch(args: JsonObject): DriverResult {
   const pr = readLivePr(env.githubRepo, prNumber);
 
   if (String(pr.state || "").toUpperCase() !== "OPEN" || Boolean(pr.isCrossRepository) || String(pr.headRefName || "") !== branch) {
-    const comment = applyHumanBlock(prNumber, env, "the selected PR is no longer a safe same-repository branch target", promise.summary);
+    const comment = applyHumanBlock(prNumber, env, pr, "the selected PR is no longer a safe same-repository branch target", promise.summary);
     return driverResult("done", `PR #${prNumber} requires human intervention`, { driverAction: "review_human_blocked", comment });
   }
   if (validation.status === "blocked") {
@@ -256,7 +277,7 @@ function dispatch(args: JsonObject): DriverResult {
     }
     const technicalDecision = decideTechnicalReviewFailure(pr.comments || [], expectedHead);
     if (technicalDecision.action === "retry") {
-      withEnabledDriverLock(env, () => github.commentPr(
+      withRevalidatedPrMutation(prNumber, env, pr, () => github.commentPr(
         env.githubRepo,
         prNumber,
         `Reviewer technical failure will be retried once for this head: ${promise.reason || "unknown failure"}.\n\n${renderTechnicalFailureMarker(expectedHead)}`,
@@ -265,7 +286,7 @@ function dispatch(args: JsonObject): DriverResult {
         driverAction: "review_technical_retry",
       });
     }
-    const comment = applyHumanBlock(prNumber, env, "the reviewer failed technically twice on the same PR head", promise.summary);
+    const comment = applyHumanBlock(prNumber, env, pr, "the reviewer failed technically twice on the same PR head", promise.summary);
     return driverResult("done", `PR #${prNumber} exhausted its technical review retry`, {
       driverAction: "review_technical_retry_exhausted",
       comment,
@@ -286,7 +307,7 @@ function dispatch(args: JsonObject): DriverResult {
         driverAction: "review_stale_head",
       });
     }
-    const comment = applyHumanBlock(prNumber, env, promise.reason || "the reviewer requested a human decision", promise.summary);
+    const comment = applyHumanBlock(prNumber, env, pr, promise.reason || "the reviewer requested a human decision", promise.summary);
     return driverResult("done", `PR #${prNumber} review requires a human`, { driverAction: "review_human_blocked", comment });
   }
 
@@ -301,6 +322,7 @@ function dispatch(args: JsonObject): DriverResult {
     const comment = applyHumanBlock(
       prNumber,
       env,
+      refreshedPr,
       "the selected PR stopped being a safe same-repository branch target before repair dispatch",
       promise.summary,
     );
@@ -313,6 +335,7 @@ function dispatch(args: JsonObject): DriverResult {
     const comment = applyHumanBlock(
       prNumber,
       env,
+      refreshedPr,
       "more than one worktree claims the repair branch",
       "Worktree ownership must be made unambiguous before another repair starts.",
     );
@@ -325,6 +348,7 @@ function dispatch(args: JsonObject): DriverResult {
     const comment = applyHumanBlock(
       prNumber,
       env,
+      refreshedPr,
       "the existing repair worktree is dirty",
       "The existing repair worktree must be inspected before another repair starts.",
     );
@@ -344,6 +368,7 @@ function dispatch(args: JsonObject): DriverResult {
     const comment = applyHumanBlock(
       prNumber,
       env,
+      refreshedPr,
       "the refreshed PR head does not have one matching clean repair worktree",
       "The PR branch and worktree ownership must be reconciled before another repair starts.",
     );
@@ -356,6 +381,7 @@ function dispatch(args: JsonObject): DriverResult {
     const comment = applyHumanBlock(
       prNumber,
       env,
+      refreshedPr,
       "the clean repair worktree and current PR head do not match",
       "The existing worktree must be reconciled without rewriting history before another repair starts.",
     );
@@ -367,7 +393,7 @@ function dispatch(args: JsonObject): DriverResult {
 
   const selection = selectRepairAttempt(refreshedPr.comments || [], expectedHead, findings);
   if (selection.action !== "launch_repair") {
-    const comment = applyHumanBlock(prNumber, env, "the same review findings remained after their bounded repair attempt", promise.summary);
+    const comment = applyHumanBlock(prNumber, env, refreshedPr, "the same review findings remained after their bounded repair attempt", promise.summary);
     return driverResult("done", `PR #${prNumber} repeated the same findings; marked blocked`, {
       driverAction: "review_repair_repeated",
       selection,
@@ -432,6 +458,7 @@ function dispatch(args: JsonObject): DriverResult {
     const comment = applyHumanBlock(
       prNumber,
       env,
+      refreshedPr,
       `the bounded repair launch failed after its attempt marker was recorded: ${error instanceof Error ? error.message : String(error)}`,
       promise.summary,
     );

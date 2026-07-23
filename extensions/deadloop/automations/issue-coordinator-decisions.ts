@@ -4,6 +4,7 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const { passesIssueLabelGate } = require("../../../src/issue-eligibility.cjs");
 
 type IssueDecisionRecord = Record<string, any>;
 
@@ -112,17 +113,17 @@ function selectIssueForImplementation(
   relationshipDependencies: (issue: IssueDecisionRecord) => Set<number>,
   dependencyState: (number: number) => string | null | undefined,
 ): IssueDecisionRecord {
-  const requiredLabels = new Set([config.readyLabel, config.implementLabel]);
-  const skipLabels = new Set([config.inProgressLabel, config.blockedLabel, config.needsInfoLabel, config.humanLabel, config.wontfixLabel]);
+  const requiredLabels = [config.readyLabel, config.implementLabel];
+  const skipLabels = [config.inProgressLabel, config.blockedLabel, config.needsInfoLabel, config.humanLabel, config.wontfixLabel];
   const skipped: IssueDecisionRecord[] = [];
 
   for (const issue of [...issues].sort((left, right) => issueNumberForDecision(left) - issueNumberForDecision(right))) {
     const labels = labelsOfIssue(issue);
-    if (![...requiredLabels].every((label) => labels.has(label))) {
+    if (!requiredLabels.every((label) => labels.has(label))) {
       skipped.push(skipIssueForDecision("missing_required_label", issue));
       continue;
     }
-    if ([...skipLabels].some((label) => labels.has(label))) {
+    if (!passesIssueLabelGate(issue, { required: requiredLabels, blocked: skipLabels })) {
       skipped.push(skipIssueForDecision("skip_label", issue));
       continue;
     }

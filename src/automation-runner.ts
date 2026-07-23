@@ -4,7 +4,7 @@ import {
   type NormalizedAutomation,
   type NormalizedProject,
 } from "./core";
-
+const { passesIssueLabelGate } = require("./issue-eligibility.cjs");
 const { renderPendingMonitorHandoff } = require("./monitor-prompts.ts");
 
 export type AutomationExecResult = {
@@ -54,11 +54,8 @@ export function isPendingIssueHandoffEligible(
     return false;
   }
   const input = handoff.input as Record<string, unknown>;
-  const labels = new Set(
-    (Array.isArray(issue.labels) ? issue.labels : []).map((label) =>
-      label && typeof label === "object" && !Array.isArray(label) ? String((label as Record<string, unknown>).name || "") : "",
-    ),
-  );
+  const labelKeys = ["readyLabel", "inProgressLabel", "blockedLabel", "humanLabel", "needsInfoLabel", "wontfixLabel"];
+  if (!labelKeys.every((key) => typeof input[key] === "string" && input[key])) return false;
   return (
     Number.isInteger(input.issueNumber) &&
     issue.number === input.issueNumber &&
@@ -67,10 +64,10 @@ export function isPendingIssueHandoffEligible(
     typeof input.issueBody === "string" &&
     issue.body === input.issueBody &&
     issue.state === "OPEN" &&
-    typeof input.readyLabel === "string" &&
-    labels.has(input.readyLabel) &&
-    typeof input.inProgressLabel === "string" &&
-    labels.has(input.inProgressLabel)
+    passesIssueLabelGate(issue, {
+      required: [input.readyLabel as string, input.inProgressLabel as string],
+      blocked: [input.blockedLabel as string, input.humanLabel as string, input.needsInfoLabel as string, input.wontfixLabel as string],
+    })
   );
 }
 

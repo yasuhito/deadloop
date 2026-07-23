@@ -315,9 +315,13 @@ function drive(fixturePath: string | undefined): DriverResult {
       command: env.checkCommand,
     }),
     readyLabel: env.readyLabel,
+    implementLabel: env.implementLabel,
     reviewLabel: env.reviewLabel,
     inProgressLabel: env.inProgressLabel,
     blockedLabel: env.blockedLabel,
+    humanLabel: env.humanLabel,
+    needsInfoLabel: env.needsInfoLabel,
+    wontfixLabel: env.wontfixLabel,
   };
   return driverResult("needs_llm", `Launched Worker for Issue #${issue.number}`, {
     driverAction: "worker_monitor_request",

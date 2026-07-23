@@ -270,6 +270,83 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
   };
 }
 
+function runTerminalMutationRace(
+  mode: "disable_during_human_block" | "head_change" | "label_change",
+): { output: Record<string, any>; mutations: string[] } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-terminal-race-"));
+  tempDirs.push(root);
+  const bin = path.join(root, "bin");
+  const configDir = path.join(root, "config");
+  const state = path.join(configDir, "deadloop");
+  const promise = path.join(root, "review-promise.json");
+  const ghCount = path.join(root, "gh-count");
+  const mutationLog = path.join(root, "mutations.log");
+  const enabledFile = path.join(state, "enabled-projects.json");
+  fs.mkdirSync(bin);
+  fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(enabledFile, JSON.stringify({ projects: [{
+    repoPath: root, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
+    firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
+    autoMergeAcknowledged: false, enabled: true,
+  }] }));
+  fs.writeFileSync(promise, JSON.stringify(mode === "disable_during_human_block"
+    ? { status: "complete", outcome: "human_required", reason: "decision required", summary: "human review" }
+    : { status: "blocked", reason: "reviewer failed", summary: "technical failure" }));
+
+  executable(path.join(bin, "gh"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "view") {
+  const count = fs.existsSync(process.env.TEST_GH_COUNT) ? Number(fs.readFileSync(process.env.TEST_GH_COUNT, "utf8")) : 0;
+  fs.writeFileSync(process.env.TEST_GH_COUNT, String(count + 1));
+  const changed = count > 0;
+  process.stdout.write(JSON.stringify({
+    number: 243, state: "OPEN", headRefName: "agent/issue-243",
+    headRefOid: changed && process.env.TEST_MODE === "head_change" ? "${"b".repeat(40)}" : "${"a".repeat(40)}",
+    isCrossRepository: false,
+    labels: changed && process.env.TEST_MODE === "label_change"
+      ? [{name:"agent:review"},{name:"agent:reviewing"},{name:"agent:blocked"}]
+      : [{name:"agent:review"},{name:"agent:reviewing"}],
+    comments: [],
+  }));
+} else if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({id:"R_repo"}));
+} else {
+  fs.appendFileSync(process.env.TEST_MUTATION_LOG, args.slice(0, 3).join(" ") + "\\n");
+  if (args[0] === "pr" && args[1] === "comment" && process.env.TEST_MODE === "disable_during_human_block") {
+    const data = JSON.parse(fs.readFileSync(process.env.TEST_ENABLED_FILE, "utf8"));
+    data.projects[0].enabled = false;
+    fs.writeFileSync(process.env.TEST_ENABLED_FILE, JSON.stringify(data));
+  }
+}
+`);
+  executable(path.join(bin, "git"), `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+`);
+
+  const result = spawnSync("node", [
+    "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+    "--promise", promise,
+    "--pr", "243",
+    "--expected-head", "a".repeat(40),
+    "--branch", "agent/issue-243",
+  ], {
+    cwd: process.cwd(), encoding: "utf8",
+    env: {
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir,
+      DEADLOOP_REPO_PATH: root, DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1",
+      DEADLOOP_STATE_DIR: state, TEST_ENABLED_FILE: enabledFile, TEST_GH_COUNT: ghCount,
+      TEST_MODE: mode, TEST_MUTATION_LOG: mutationLog,
+    },
+  });
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+  return {
+    output: JSON.parse(result.stdout),
+    mutations: fs.existsSync(mutationLog) ? fs.readFileSync(mutationLog, "utf8").trim().split("\n").filter(Boolean) : [],
+  };
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -434,6 +511,21 @@ process.stdout.write(JSON.stringify(args[0] === "repo"
     );
 
     expect(result.output.driverAction).toBe("review_repair_ambiguous_worktree");
+  });
+
+  it("keeps the human-block comment and label transition in one lock when disable begins during the mutation", () => {
+    expect(runTerminalMutationRace("disable_during_human_block").mutations).toEqual([
+      "pr comment 243",
+      "pr edit 243",
+    ]);
+  });
+
+  it("does not write a technical-retry comment after the PR head changes", () => {
+    expect(runTerminalMutationRace("head_change").mutations).toEqual([]);
+  });
+
+  it("does not write a technical-retry comment after the PR labels change", () => {
+    expect(runTerminalMutationRace("label_change").mutations).toEqual([]);
   });
 
   it("blocks an advanced dirty repair worktree", () => {

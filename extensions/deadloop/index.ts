@@ -29,6 +29,12 @@ import {
   runScheduledAutomation,
 } from "../../src/automation-runner";
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
+const {
+  defaultIssueDecisionConfig,
+  issueBlockedByNumbers,
+  liveDependencyState,
+  selectIssueForImplementation,
+} = require("./automations/issue-coordinator-decisions.ts");
 const { loadAutomationState, saveAutomationState } = require("../../src/automation-state.cjs");
 const { acquireLock, releaseOwned } = require("../../src/enablement-lock.cjs");
 const {
@@ -1006,7 +1012,12 @@ function revalidatePendingIssueHandoff(handoff) {
     typeof input.issueTitle !== "string" ||
     typeof input.issueBody !== "string" ||
     !input.readyLabel ||
-    !input.inProgressLabel
+    !input.implementLabel ||
+    !input.inProgressLabel ||
+    !input.blockedLabel ||
+    !input.humanLabel ||
+    !input.needsInfoLabel ||
+    !input.wontfixLabel
   ) return false;
   const result = childProcess.spawnSync(
     "gh",
@@ -1015,7 +1026,27 @@ function revalidatePendingIssueHandoff(handoff) {
   );
   if (result.status !== 0) return false;
   try {
-    return isPendingIssueHandoffEligible(handoff, JSON.parse(result.stdout || "{}"));
+    const issue = JSON.parse(result.stdout || "{}");
+    if (!isPendingIssueHandoffEligible(handoff, issue)) return false;
+    const labels = (Array.isArray(issue.labels) ? issue.labels : [])
+      .map((label) => typeof label === "string" ? label : String(label?.name || ""))
+      .filter((label) => label && label !== input.inProgressLabel && label !== input.implementLabel);
+    labels.push(input.implementLabel);
+    const decision = selectIssueForImplementation(
+      [{ ...issue, labels }],
+      defaultIssueDecisionConfig({
+        readyLabel: input.readyLabel,
+        implementLabel: input.implementLabel,
+        inProgressLabel: input.inProgressLabel,
+        blockedLabel: input.blockedLabel,
+        humanLabel: input.humanLabel,
+        needsInfoLabel: input.needsInfoLabel,
+        wontfixLabel: input.wontfixLabel,
+      }),
+      (candidate) => issueBlockedByNumbers(input.githubRepo, Number(candidate.number)),
+      (number) => liveDependencyState(input.githubRepo, number),
+    );
+    return decision.selected === true && decision.number === input.issueNumber;
   } catch {
     return false;
   }

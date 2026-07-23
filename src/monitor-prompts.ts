@@ -15,9 +15,13 @@ export type IssueMonitorPromptInput = MonitorPromptBaseInput & {
   branch: string;
   checkCommand: string;
   readyLabel: string;
+  implementLabel?: string;
   reviewLabel: string;
   inProgressLabel: string;
   blockedLabel: string;
+  humanLabel?: string;
+  needsInfoLabel?: string;
+  wontfixLabel?: string;
 };
 
 export type BranchUpdateMonitorPromptInput = MonitorPromptBaseInput & {
