@@ -4,16 +4,16 @@ This note records the negative source-map check required for the foundation PR. 
 
 ## TypeScript assertion failure and source map
 
-On 2026-07-15, `acceptance/steps/project-check-safety.steps.ts` was temporarily changed from:
+On 2026-07-23, `acceptance/steps/project-check-safety.steps.ts` was temporarily changed from:
 
 ```ts
-assert.equal(this.resultCode, 1);
+assert.equal(fs.existsSync(path.join(this.projectRoot, checkMarker)), false);
 ```
 
 to:
 
 ```ts
-assert.equal(this.resultCode, 0);
+assert.equal(fs.existsSync(path.join(this.projectRoot, checkMarker)), true);
 ```
 
 Then this command was run from the repository root:
@@ -26,22 +26,22 @@ The command exited with status 1 and reported the assertion diff, the failing fe
 
 ```text
 Failed scenarios:
-  1) 作業用一時ディレクトリに Git 管理ファイルがある # acceptance/features/project-check-safety.feature.md:9
-       ならばdeadloop は自動チェックを実行しない # acceptance/steps/project-check-safety.steps.ts:35
+  1) `.deadloop` に Git 管理ファイルがある場合は自動チェックを実行しない # acceptance/features/project-check-safety.feature.md:12
+       ならばdeadloop は自動チェックを実行しない # acceptance/steps/project-check-safety.steps.ts:40
            AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
 
-           1 !== 0
+           false !== true
 
                + expected - actual
 
-               -1
-               +0
+               -false
+               +true
 
-               at World.<anonymous> (.../acceptance/steps/project-check-safety.steps.ts:36:10)
+               at World.<anonymous> (.../acceptance/steps/project-check-safety.steps.ts:42:10)
 
 1 scenario (1 failed)
-4 steps (3 passed, 1 failed)
-0m 0.17s (0m 0.9s executing your code)
+5 steps (4 passed, 1 failed)
+0m 0.18s (0m 0.10s executing your code)
 ```
 
-After recording the output, the assertion was restored to `assert.equal(this.resultCode, 1);`. A clean successful acceptance run is part of the normal project verification.
+After recording the output, the assertion was restored to require that the marker file does not exist. A clean successful acceptance run is part of the normal project verification.

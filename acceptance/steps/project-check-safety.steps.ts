@@ -14,13 +14,18 @@ type SafetyWorld = {
 
 const checkMarker = ".deadloop-check-ran";
 
-Given("deadloop の作業用一時ディレクトリに Git 管理ファイルがある", function (this: SafetyWorld) {
+Given("deadloop が自動チェックするプロジェクトがある", function (this: SafetyWorld) {
   this.projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-acceptance-"));
   fs.writeFileSync(path.join(this.projectRoot, "package.json"), '{"name":"acceptance-fixture"}\n');
+  execFileSync("git", ["init", "-q", this.projectRoot]);
+  execFileSync("git", ["-C", this.projectRoot, "add", "package.json"]);
+});
+
+Given("`.deadloop` ディレクトリに Git 管理ファイルがある", function (this: SafetyWorld) {
+  if (!this.projectRoot) throw new Error("project precondition is missing");
   fs.mkdirSync(path.join(this.projectRoot, ".deadloop"));
   fs.writeFileSync(path.join(this.projectRoot, ".deadloop", "product.json"), "tracked product data\n");
-  execFileSync("git", ["init", "-q", this.projectRoot]);
-  execFileSync("git", ["-C", this.projectRoot, "add", "package.json", ".deadloop/product.json"]);
+  execFileSync("git", ["-C", this.projectRoot, "add", ".deadloop/product.json"]);
 });
 
 When("deadloop が自動チェックを開始しようとする", async function (this: SafetyWorld) {
