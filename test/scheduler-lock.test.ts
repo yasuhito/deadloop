@@ -18,6 +18,17 @@ afterEach(() => {
 });
 
 describe("scheduler lock", () => {
+  it("lets only one contender acquire while the original creator is delayed before publication", () => {
+    const lockPath = lockFixture();
+    let contender: ReturnType<typeof acquireSchedulerLock> | undefined;
+
+    const creator = acquireSchedulerLock(lockPath, {}, {
+      beforePublish: () => { contender = acquireSchedulerLock(lockPath, {}); },
+    });
+
+    expect([creator, contender].filter((result) => result?.acquired)).toHaveLength(1);
+  });
+
   it("does not delete a replacement lock installed by another contender during stale reclamation", () => {
     const lockPath = lockFixture();
     writeFileSync(lockPath, JSON.stringify({ pid: 999_999_999, token: "stale" }));

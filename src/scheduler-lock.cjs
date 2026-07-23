@@ -15,13 +15,17 @@ function readOwner(lockPath) {
 function acquireSchedulerLock(lockPath, metadata, hooks = {}) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = crypto.randomUUID();
+    const pendingPath = `${lockPath}.${process.pid}.${token}.pending`;
     try {
-      const fd = fs.openSync(lockPath, "wx");
+      const fd = fs.openSync(pendingPath, "wx");
       try {
         fs.writeFileSync(fd, JSON.stringify({ ...metadata, pid: process.pid, token }));
+        fs.fsyncSync(fd);
       } finally {
         fs.closeSync(fd);
       }
+      hooks.beforePublish?.();
+      fs.linkSync(pendingPath, lockPath);
       return { acquired: true, owner: process.pid, lockPath, token };
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
@@ -29,6 +33,8 @@ function acquireSchedulerLock(lockPath, metadata, hooks = {}) {
       if (!reclaimStale(lockPath, hooks)) {
         return { acquired: false, owner: owner?.pid || null, lockPath, token: null };
       }
+    } finally {
+      try { fs.unlinkSync(pendingPath); } catch {}
     }
   }
   return { acquired: false, owner: readOwner(lockPath)?.pid || null, lockPath, token: null };

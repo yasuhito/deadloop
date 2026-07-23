@@ -25,6 +25,10 @@ import { readClaudeConfig } from "../../src/agent-trust.cjs";
 import { runScheduledAutomation } from "../../src/automation-runner";
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
 const { acquireLock, releaseOwned } = require("../../src/enablement-lock.cjs");
+const {
+  DISABLE_LOCK_ATTEMPTS,
+  DISABLE_LOCK_DELAY_MS,
+} = require("../../src/driver-enablement.cjs");
 const { assertEnabled, withEnabledProjectLock } = require("../../src/enabled-operation.cjs");
 const {
   acquireSchedulerLock: acquireSchedulerFileLock,
@@ -281,7 +285,11 @@ function saveEnablementState(state) {
 async function withEnablementStateLock(operation) {
   const lockPath = `${ENABLEMENT_PATH}.lock`;
   fs.mkdirSync(STATE_DIR, { recursive: true });
-  const lock = await acquireLock(lockPath, { busyMessage: "enablement state is busy; retry the command" });
+  const lock = await acquireLock(lockPath, {
+    attempts: DISABLE_LOCK_ATTEMPTS,
+    delayMs: DISABLE_LOCK_DELAY_MS,
+    busyMessage: "enablement state is busy; retry the command",
+  });
   try {
     return await operation();
   } finally {

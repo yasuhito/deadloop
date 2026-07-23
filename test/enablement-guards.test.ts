@@ -5,7 +5,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { assertEnabled, withEnabledProjectLock } = require("../src/enabled-operation.cjs");
-const { assertDriverEnabled, withEnabledDriverLaunch } = require("../src/driver-enablement.cjs");
+const {
+  DISABLE_LOCK_ATTEMPTS,
+  DISABLE_LOCK_DELAY_MS,
+  assertDriverEnabled,
+  withEnabledDriverLaunch,
+} = require("../src/driver-enablement.cjs");
 const { acquireLockSync, reclaimStale } = require("../src/enablement-lock.cjs");
 const { GUARDED_OPERATION_TIMEOUT_MS, runGuarded } = require("../extensions/deadloop/automations/guarded-operation.ts");
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
@@ -100,6 +105,10 @@ describe("enablement mutation guards", () => {
       expect(events).toEqual(["mutated", "disable-excluded", "launched"]);
     },
   );
+
+  it("lets disable outwait the maximum multi-command launch duration", () => {
+    expect(DISABLE_LOCK_ATTEMPTS * DISABLE_LOCK_DELAY_MS).toBeGreaterThan(7 * 20_000);
+  });
 
   it("bounds the command while holding the enablement lock", () => {
     const project = fixture();
