@@ -7,6 +7,7 @@ export type EnabledProject = {
   githubRepo: string;
   enabledAt: number;
   firstEnableAutoMerge?: boolean;
+  firstStartPending?: boolean;
   lastObservedAutoMerge?: boolean;
   autoMergeAcknowledged?: boolean;
   enabled?: boolean;
@@ -45,6 +46,7 @@ export function upsertEnabledProject(
   const existing = state?.projects || [];
   const previous = existing.find((project) => project.githubRepo === identity.githubRepo && project.repoPath === repoPath);
   const retained = existing.filter((project) => project.githubRepo !== identity.githubRepo && project.repoPath !== repoPath);
+  const enabledAt = Math.max(now, (previous?.enabledAt ?? 0) + 1);
   return {
     projects: [
       ...retained,
@@ -52,8 +54,8 @@ export function upsertEnabledProject(
         ...(previous || firstEnable),
         repoPath,
         githubRepo: identity.githubRepo,
-        enabledAt: now,
-        ...(previous ? {} : { lastObservedAutoMerge: firstEnable.firstEnableAutoMerge }),
+        enabledAt,
+        ...(previous ? {} : { firstStartPending: true, lastObservedAutoMerge: firstEnable.firstEnableAutoMerge }),
         enabled: true,
       },
     ],
@@ -72,6 +74,15 @@ export function observeAutoMerge(state: EnablementState, identity: ProjectIdenti
       return { ...project, lastObservedAutoMerge: autoMerge, autoMergeAcknowledged };
     }),
   };
+}
+
+export function removeEnabledProjectGeneration(
+  state: EnablementState | null,
+  identity: ProjectIdentity,
+  enabledAt: number,
+): EnablementState {
+  const enabled = findEnabledProject(state, identity);
+  return enabled?.enabledAt === enabledAt ? removeEnabledProject(state, identity) : state || { projects: [] };
 }
 
 export function removeEnabledProject(state: EnablementState | null, identity: ProjectIdentity): EnablementState {

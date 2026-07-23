@@ -35,6 +35,7 @@ function envConfig() {
     projectId: process.env.DEADLOOP_PROJECT_ID || "project",
     repoPath: process.env.DEADLOOP_REPO_PATH || ".",
     githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
+    enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
     stateDir:
       process.env.DEADLOOP_STATE_DIR ||
       path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
@@ -127,6 +128,8 @@ function repairWorkerPrompt(
     shellQuote(env.automationDir),
     "--state-dir",
     shellQuote(env.stateDir),
+    "--enabled-at",
+    String(env.enabledAt),
     "--check-command",
     shellQuote(env.checkCommand),
   ].join(" ");
@@ -281,6 +284,7 @@ function dispatch(args: JsonObject): DriverResult {
         repoPath: env.repoPath,
         githubRepo: env.githubRepo,
         stateDir: env.stateDir,
+        enabledAt: env.enabledAt,
         reviewLabel: env.reviewLabel,
         reviewingLabel: env.reviewingLabel,
         blockedLabel: env.blockedLabel,

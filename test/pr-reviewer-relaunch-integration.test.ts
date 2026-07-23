@@ -92,6 +92,7 @@ if (args[0] === "agent" && args[1] === "list") {
           DEADLOOP_PROJECT_ID: "demo",
           DEADLOOP_REPO_PATH: root,
           DEADLOOP_GITHUB_REPO: "owner/repo",
+          DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
           GH_TEST_PR_STATE: prState,
           HERDR_TEST_LOG: log,

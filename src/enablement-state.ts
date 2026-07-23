@@ -8,6 +8,7 @@ type EnablementIdentityValue = {
 type EnabledProjectValue = EnablementIdentityValue & {
   enabledAt: number;
   firstEnableAutoMerge?: boolean;
+  firstStartPending?: boolean;
   lastObservedAutoMerge?: boolean;
   autoMergeAcknowledged?: boolean;
   enabled?: boolean;
@@ -35,7 +36,7 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate) || !validIdentity(candidate)) return null;
     const record = candidate as EnabledProjectValue;
     if (!Number.isFinite(record.enabledAt)) return null;
-    for (const field of ["firstEnableAutoMerge", "lastObservedAutoMerge", "autoMergeAcknowledged", "enabled"] as const) {
+    for (const field of ["firstEnableAutoMerge", "firstStartPending", "lastObservedAutoMerge", "autoMergeAcknowledged", "enabled"] as const) {
       if (record[field] !== undefined && typeof record[field] !== "boolean") return null;
     }
     normalized.push({
@@ -43,6 +44,7 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
       githubRepo: record.githubRepo,
       enabledAt: Number(record.enabledAt),
       ...(record.firstEnableAutoMerge === undefined ? {} : { firstEnableAutoMerge: record.firstEnableAutoMerge }),
+      ...(record.firstStartPending === undefined ? {} : { firstStartPending: record.firstStartPending }),
       ...(record.lastObservedAutoMerge === undefined ? {} : { lastObservedAutoMerge: record.lastObservedAutoMerge }),
       ...(record.autoMergeAcknowledged === undefined ? {} : { autoMergeAcknowledged: record.autoMergeAcknowledged }),
       ...(record.enabled === undefined ? {} : { enabled: record.enabled }),

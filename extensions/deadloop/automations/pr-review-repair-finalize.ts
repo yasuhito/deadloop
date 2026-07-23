@@ -17,12 +17,13 @@ type FinalizeArgs = {
   remote: string;
   automationDir: string;
   stateDir: string;
+  enabledAt: number;
   checkCommand: string;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
-  assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string }) => void;
+  assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => void;
 };
 
 function defaultRun(args: string[], timeoutMs?: number): CommandResult {
@@ -70,7 +71,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   ]);
   if (checked(ops, ["git", "-C", args.repo, "status", "--porcelain"])) throw new Error("repair worktree is dirty after checks");
 
-  const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir };
+  const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
   const guardAndPush = () => {
     const pr = JSON.parse(
       checked(ops, [
@@ -119,6 +120,7 @@ function parseArgs(argv: string[]): FinalizeArgs {
     remote: required(values, "remote"),
     automationDir: required(values, "automationDir"),
     stateDir: required(values, "stateDir"),
+    enabledAt: Number(required(values, "enabledAt")),
     checkCommand: required(values, "checkCommand"),
   };
 }

@@ -171,6 +171,7 @@ function envConfig() {
     projectId: process.env.DEADLOOP_PROJECT_ID || "project",
     repoPath: process.env.DEADLOOP_REPO_PATH || ".",
     githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
+    enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
     baseBranch: process.env.DEADLOOP_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
     stateDir:
@@ -245,6 +246,7 @@ function drive(fixturePath: string | undefined): DriverResult {
       repoPath: env.repoPath,
       githubRepo: env.githubRepo,
       stateDir: env.stateDir,
+      enabledAt: env.enabledAt,
       worktreePath: String(launch.worktreePath || ""),
       branch: String(launch.branch || ""),
       checkCommand: renderProjectCheckCommand({

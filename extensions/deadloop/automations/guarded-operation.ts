@@ -7,7 +7,7 @@ const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../s
 
 const GUARDED_OPERATION_TIMEOUT_MS = MAX_GUARDED_OPERATION_MS;
 
-type Args = { projectRepo: string; githubRepo: string; stateDir: string; command: string[] };
+type Args = { projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; command: string[] };
 
 function parseArgs(argv: string[]): Args {
   const separator = argv.indexOf("--");
@@ -19,13 +19,16 @@ function parseArgs(argv: string[]): Args {
     if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs before --");
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
-  if (!values.projectRepo || !values.githubRepo || !values.stateDir) throw new Error("--project-repo, --github-repo, and --state-dir are required");
-  return { projectRepo: values.projectRepo, githubRepo: values.githubRepo, stateDir: values.stateDir, command: argv.slice(separator + 1) };
+  const enabledAt = Number(values.enabledAt);
+  if (!values.projectRepo || !values.githubRepo || !values.stateDir || !Number.isFinite(enabledAt)) {
+    throw new Error("--project-repo, --github-repo, --state-dir, and --enabled-at are required");
+  }
+  return { projectRepo: values.projectRepo, githubRepo: values.githubRepo, stateDir: values.stateDir, enabledAt, command: argv.slice(separator + 1) };
 }
 
 function runGuarded(args: Args, spawn = spawnSync): number {
   return withEnabledProjectLock(
-    { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir },
+    { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
     () => {
       const result = spawn(args.command[0], args.command.slice(1), {
         stdio: "inherit",

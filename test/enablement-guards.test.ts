@@ -60,7 +60,18 @@ describe("enablement mutation guards", () => {
     assertDriverEnabled(project);
     writeState(project, { enabledAt: 1, enabled: false });
     let mutated = false;
-    try { withEnabledProjectLock(project, () => { mutated = true; }); } catch {}
+    try { withEnabledProjectLock({ ...project, enabledAt: 1 }, () => { mutated = true; }); } catch {}
+    expect(mutated).toBe(false);
+  });
+
+  it("rejects a pre-disable operation after a new enablement generation", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    writeState(project, { enabledAt: 2 });
+    let mutated = false;
+
+    try { withEnabledProjectLock({ ...project, enabledAt: 1 }, () => { mutated = true; }); } catch {}
+
     expect(mutated).toBe(false);
   });
 
@@ -73,7 +84,7 @@ describe("enablement mutation guards", () => {
       const events: string[] = [];
 
       withEnabledDriverLaunch(
-        project,
+        { ...project, enabledAt: 1 },
         () => {
           events.push("mutated");
           try {
@@ -96,7 +107,7 @@ describe("enablement mutation guards", () => {
     let timeout: number | undefined;
 
     runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, command: ["mutation"] },
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["mutation"] },
       (_command: string, _args: string[], options: { timeout?: number }) => {
         timeout = options.timeout;
         return { status: 0 };

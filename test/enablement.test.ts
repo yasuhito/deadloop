@@ -6,6 +6,7 @@ import {
   normalizeEnablementState,
   observeAutoMerge,
   removeEnabledProject,
+  removeEnabledProjectGeneration,
   upsertEnabledProject,
 } from "../src/enablement";
 
@@ -38,6 +39,25 @@ describe("local enablement state", () => {
     const state = upsertEnabledProject(null, project, 1, { firstEnableAutoMerge: true });
 
     expect(findEnabledProject(state, project)?.firstEnableAutoMerge).toBe(true);
+  });
+
+  it("persists a pending first scheduler start independently of auto-merge configuration", () => {
+    const state = upsertEnabledProject(null, project, 1, { firstEnableAutoMerge: false });
+
+    expect(findEnabledProject(state, project)?.firstStartPending).toBe(true);
+  });
+
+  it("gives a later enable attempt a newer generation", () => {
+    const initial = upsertEnabledProject(null, project, 10);
+
+    expect(findEnabledProject(upsertEnabledProject(initial, project, 10), project)?.enabledAt).toBe(11);
+  });
+
+  it("does not let failed cleanup from an earlier enable disable a later enable", () => {
+    const first = upsertEnabledProject(null, project, 10);
+    const second = upsertEnabledProject(first, project, 10);
+
+    expect(isEnabledProjectState(removeEnabledProjectGeneration(second, project, 10), project)).toBe(true);
   });
 
   it("acknowledges auto-merge only after the setting changes from false to true", () => {

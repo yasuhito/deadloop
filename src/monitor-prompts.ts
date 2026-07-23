@@ -5,6 +5,7 @@ type MonitorPromptBaseInput = {
   repoPath?: string;
   githubRepo?: string;
   stateDir?: string;
+  enabledAt?: number;
 };
 
 export type IssueMonitorPromptInput = MonitorPromptBaseInput & {
@@ -53,7 +54,7 @@ function shellQuotePrompt(value: string): string {
 }
 
 function renderPromisePollingRules(input: MonitorPromptBaseInput): string {
-  const guardedOperation = `node ${shellQuotePrompt(`${input.automationDir}/guarded-operation.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --`;
+  const guardedOperation = `node ${shellQuotePrompt(`${input.automationDir}/guarded-operation.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --`;
   return `Monitor only this promise file. It is the only completion authority:
 - ${input.promiseFile}
 

@@ -98,6 +98,7 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
         DEADLOOP_PROJECT_ID: "demo",
         DEADLOOP_REPO_PATH: root,
         DEADLOOP_GITHUB_REPO: "owner/repo",
+        DEADLOOP_ENABLED_AT: "1",
         DEADLOOP_STATE_DIR: state,
         TEST_WORKTREE: worktree,
         EVENT_LOG: eventLog,

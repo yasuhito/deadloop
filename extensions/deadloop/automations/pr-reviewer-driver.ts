@@ -44,6 +44,7 @@ function envConfig() {
     projectId: process.env.DEADLOOP_PROJECT_ID || "project",
     repoPath: process.env.DEADLOOP_REPO_PATH || ".",
     githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
+    enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
     baseBranch: process.env.DEADLOOP_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
     stateDir:
@@ -156,6 +157,8 @@ function branchUpdateWorkerPrompt(
     shellQuote(env.automationDir),
     "--state-dir",
     shellQuote(env.stateDir),
+    "--enabled-at",
+    String(env.enabledAt),
     "--check-command",
     shellQuote(env.checkCommand),
   ].join(" ");
@@ -474,6 +477,7 @@ function drive(fixturePath: string | undefined): DriverResult {
           repoPath: env.repoPath,
           githubRepo: env.githubRepo,
           stateDir: env.stateDir,
+          enabledAt: env.enabledAt,
           reviewingLabel: env.reviewingLabel,
           reviewLabel: env.reviewLabel,
           blockedLabel: env.blockedLabel,
@@ -525,6 +529,7 @@ function drive(fixturePath: string | undefined): DriverResult {
       repoPath: env.repoPath,
       githubRepo: env.githubRepo,
       stateDir: env.stateDir,
+      enabledAt: env.enabledAt,
       checkCommand: renderProjectCheckCommand({
         automationDir: env.automationDir,
         stateDir: env.stateDir,

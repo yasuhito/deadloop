@@ -43,13 +43,19 @@ function assertEnabled(project) {
     const enabled = state.projects.find((candidate) =>
       candidate.repoPath === path.resolve(project.repoPath) && candidate.githubRepo === project.githubRepo && candidate.enabled !== false,
     );
-    if (enabled) return;
+    if (enabled) {
+      if (project.enabledAt !== undefined && enabled.enabledAt !== project.enabledAt) {
+        throw new Error("deadloop enablement generation changed; operation stopped");
+      }
+      return enabled;
+    }
   } catch {}
   throw new Error("deadloop is disabled for this repository");
 }
 
 function withEnabledProjectLock(project, operation, options = {}) {
   assertCanonicalStateDir(project.stateDir);
+  if (!Number.isFinite(project.enabledAt)) throw new Error("deadloop enablement generation is required");
   const lockPath = path.join(project.stateDir, "enabled-projects.json.lock");
   fs.mkdirSync(project.stateDir, { recursive: true });
   const lock = acquireLockSync(lockPath, { ...options, busyMessage: "enablement state is busy; operation stopped" });

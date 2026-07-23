@@ -37,6 +37,7 @@ import {
   observeAutoMerge,
   removeEnabledProject,
   removeEnabledProjectAtPath,
+  removeEnabledProjectGeneration,
   upsertEnabledProject,
 } from "../../src/enablement";
 
@@ -298,16 +299,36 @@ async function updateEnablementState(update) {
 
 async function applyFirstEnableAutoMergeGate(project) {
   let forceAutoMergeOff = false;
+  let enabledAt;
   await updateEnablementState((state) => {
     const enabled = findEnabledProject(state, project);
-    if (!enabled || enabled.firstEnableAutoMerge !== true || enabled.autoMergeAcknowledged) return state;
+    if (!enabled) return state;
+    enabledAt = enabled.enabledAt;
+    if (enabled.firstStartPending) forceAutoMergeOff = true;
+    if (enabled.firstEnableAutoMerge !== true || enabled.autoMergeAcknowledged) return state;
 
     const observed = observeAutoMerge(state, project, project.autoMerge);
     if (!findEnabledProject(observed, project)?.autoMergeAcknowledged) forceAutoMergeOff = true;
     return observed;
   });
-  if (forceAutoMergeOff) project.autoMerge = false;
-  return project;
+  if (enabledAt === undefined) return null;
+  return { ...project, enabledAt, ...(forceAutoMergeOff ? { autoMerge: false } : {}) };
+}
+
+async function completeFirstSchedulerStart(project) {
+  await updateEnablementState((state) => ({
+    projects: state.projects.map((candidate) =>
+      candidate.repoPath === path.resolve(project.repoPath)
+      && candidate.githubRepo === project.githubRepo
+      && candidate.enabledAt === project.enabledAt
+        ? { ...candidate, firstStartPending: false }
+        : candidate,
+    ),
+  }));
+}
+
+async function disableEnablementGeneration(identity, enabledAt) {
+  await updateEnablementState((state) => removeEnabledProjectGeneration(state, identity, enabledAt));
 }
 
 function isProjectEnabled(project) {
@@ -455,7 +476,11 @@ function resolveAutomationFileInDir(_kind, _automation, requested) {
 
 async function runAutomationScript(pi, project, automation, automationFile) {
   const scriptPath = path.join(AUTOMATION_DIR, automationFile);
-  const env = { ...automationEnvironment(project, automation), DEADLOOP_STATE_DIR: STATE_DIR };
+  const env = {
+    ...automationEnvironment(project, automation),
+    DEADLOOP_STATE_DIR: STATE_DIR,
+    DEADLOOP_ENABLED_AT: String(project.enabledAt),
+  };
   const exports = Object.entries(env)
     .filter(([key]) => key.startsWith("DEADLOOP_"))
     .map(([key, value]) => `${key}=${shellQuote(value)}`)
@@ -718,7 +743,7 @@ async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
     sendUserMessageIfEnabled: (prompt) => {
       try {
         return withEnabledProjectLock(
-          { repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR },
+          { repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt },
           () => (pi.sendUserMessage(prompt), true),
         );
       } catch (error) {
@@ -844,7 +869,10 @@ export default function (pi) {
       return;
     }
     const lockPath = projectLockPath(project);
-    if (active?.lockPath === lockPath && ownsLock) return;
+    if (active?.lockPath === lockPath && ownsLock) {
+      active.project = project;
+      return;
+    }
     stopScheduler(ctx);
     const lock = acquireSchedulerLock(project);
     ownsLock = lock.acquired;
@@ -867,6 +895,7 @@ export default function (pi) {
     handler: async (_args, ctx) => {
       try {
         let identity;
+        let enabledAt;
         await withEnablementStateLock(async () => {
           identity = await detectProjectIdentity(pi, ctx.cwd);
           const state = loadEnablementState();
@@ -887,8 +916,9 @@ export default function (pi) {
             if (wasEnabled) saveEnablementState(removeEnabledProject(state, identity));
             throw error;
           }
-          const enabled = findEnabledProject(state, identity);
-          if (!enabled) saveEnablementState(upsertEnabledProject(state, identity, Date.now(), firstEnable));
+          const next = upsertEnabledProject(state, identity, Date.now(), firstEnable);
+          enabledAt = findEnabledProject(next, identity)?.enabledAt;
+          saveEnablementState(next);
         });
         let project;
         try {
@@ -896,8 +926,9 @@ export default function (pi) {
           project = await activeSchedulerProject(ctx.cwd, projects);
           if (!project) throw new Error("enabled repository configuration could not be resolved safely");
           startScheduler(ctx, project);
+          await completeFirstSchedulerStart(project);
         } catch (error) {
-          await updateEnablementState((state) => removeEnabledProject(state, identity));
+          await disableEnablementGeneration(identity, enabledAt);
           throw error;
         }
         const owner = ownsLock ? "this session" : `another session (pid ${readLock(projectLockPath(project))?.pid || "unknown"})`;
