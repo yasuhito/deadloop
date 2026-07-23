@@ -60,7 +60,7 @@ function trackedFileSurvivesCleanup(): boolean {
       "exit 2",
     ]);
 
-    spawnSync("node", [cleanupScript, "--apply", "--json"], {
+    const cleanupResult = spawnSync("node", [cleanupScript, "--apply", "--json"], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: {
@@ -71,6 +71,15 @@ function trackedFileSurvivesCleanup(): boolean {
         DEADLOOP_WORKTREE_ROOT: worktreeRoot,
       },
     });
+    if (cleanupResult.error) throw cleanupResult.error;
+    if (cleanupResult.status !== 0 && cleanupResult.status !== 1) {
+      throw new Error(`cleanup command failed with status ${cleanupResult.status}: ${cleanupResult.stderr}`);
+    }
+    try {
+      JSON.parse(cleanupResult.stdout);
+    } catch {
+      throw new Error(`cleanup command returned invalid JSON: ${cleanupResult.stderr || cleanupResult.stdout}`);
+    }
     return existsSync(runtimeFile);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });

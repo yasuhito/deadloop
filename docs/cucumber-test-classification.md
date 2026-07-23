@@ -380,7 +380,7 @@
 | T187 | `worktree-cleanup-safety.feature.md` の「マージ済みで変更のない作業場所は片付け候補になる」。同じ候補選定の観測結果を Cucumber へ移し、Vitest を削除。 |
 | T188 | `worktree-cleanup-safety.feature.md` の「変更中の作業場所は片付け候補にならない」。同じ候補選定の観測結果を Cucumber へ移し、Vitest を削除。 |
 | T189 | Vitest 継続。生成された一時ファイルだけを除外する低レベルの Git status 解釈は、失敗位置を絞れる既存テストの診断価値を保つ。 |
-| T190 | `worktree-cleanup-safety.feature.md` の「Git 管理ファイルを含む作業場所は片付け候補にならない」。 |
+| T190 | `worktree-cleanup-safety.feature.md` の「Git 管理ファイルは片付け後も残る」。 |
 | T191 | Vitest 継続。`.pi-subagents` 固有の削除防止は実際のファイル操作を検証する診断価値を保つ。 |
 | T192 | Vitest 継続。停止理由の文言は実際の削除処理に近い診断を必要とする。 |
 | T193 | Vitest 継続。停止時に Herdr workspace を削除しない副作用を直接診断する。 |
