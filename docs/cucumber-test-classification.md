@@ -612,7 +612,7 @@
 |---:|---|---|
 | T357 | `does not expose deadloop runtime artifacts to recursive JSON validation` | `未追跡の実行時成果物を隔離して再帰的な検証を成功させる` |
 | T358 | `still fails recursive JSON validation for a tracked product file` | `Git 管理された製品ファイルは再帰的な検証で失敗する` |
-| T359 | `fails closed instead of hiding a tracked file in a runtime directory` | 「`.deadloop` に Git 管理ファイルがある場合は自動チェックを実行しない」 |
+| T359 | `fails closed instead of hiding a tracked file in a runtime directory` | 「`.deadloop` に Git 管理ファイルがある場合は安全停止する」 |
 | T360 | `restores promise evidence after a failed check` | `失敗した自動チェック後に完了報告を復元する` |
 | T361 | `restores subagent diagnostics after a timed-out check` | `時間切れの自動チェック後に診断情報を復元する` |
 | T362 | `bounds a timed-out check that ignores SIGTERM` | `終了要求を無視した時間切れの自動チェックを停止する` |

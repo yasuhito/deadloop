@@ -167,6 +167,10 @@ Then("deadloop は自動チェックを実行しない", function (this: SafetyW
   assert.equal(fs.existsSync(path.join(projectRoot(this), checkMarker)), false);
 });
 
+Then("自動チェックは失敗結果を返す", function (this: SafetyWorld) {
+  assert.equal(this.result?.code, 1);
+});
+
 Then("診断情報は元の内容で復元される", function (this: SafetyWorld) {
   assert.equal(fs.readFileSync(runtimePath(projectRoot(this), ".pi-subagents", "metadata.json"), "utf8"), diagnosticReport);
 });
