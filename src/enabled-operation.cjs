@@ -12,6 +12,7 @@ function githubRepoFromRemote(remote) {
 }
 
 const MAX_GUARDED_OPERATION_MS = 25_000;
+const MAX_ORIGIN_IDENTITIES = 8;
 
 function originIdentities(repoPath) {
   const urls = [];
@@ -23,7 +24,8 @@ function originIdentities(repoPath) {
     if (result.status !== 0) return [];
     urls.push(...String(result.stdout || "").split(/\r?\n/).filter(Boolean));
   }
-  return urls.map(githubRepoFromRemote);
+  const identities = [...new Set(urls.map(githubRepoFromRemote))];
+  return identities.length <= MAX_ORIGIN_IDENTITIES ? identities : [];
 }
 
 function githubRepositoryId(identity) {
@@ -88,4 +90,10 @@ function withEnabledProjectLock(project, operation, options = {}) {
   }
 }
 
-module.exports = { MAX_GUARDED_OPERATION_MS, assertEnabled, canonicalStateDir, withEnabledProjectLock };
+module.exports = {
+  MAX_GUARDED_OPERATION_MS,
+  MAX_ORIGIN_IDENTITIES,
+  assertEnabled,
+  canonicalStateDir,
+  withEnabledProjectLock,
+};

@@ -72,7 +72,9 @@ function isOldMalformedLock(file) {
 function clearReclaimRemnant(lockPath) {
   const claimPath = `${lockPath}.reclaim`;
   if (!fs.existsSync(claimPath)) return;
-  if (fs.existsSync(lockPath) && !sameFile(lockPath, claimPath)) return;
+  // A claim for a different inode can only describe an owner that has already
+  // been replaced. Retiring it is safe: that reclaimer's inode checks prevent
+  // it from unlinking the replacement lock.
   try { fs.unlinkSync(claimPath); } catch (error) { if (error.code !== "ENOENT") throw error; }
 }
 

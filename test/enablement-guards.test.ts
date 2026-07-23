@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { assertEnabled, withEnabledProjectLock } = require("../src/enabled-operation.cjs");
+const { MAX_ORIGIN_IDENTITIES, assertEnabled, withEnabledProjectLock } = require("../src/enabled-operation.cjs");
 const {
   DISABLE_LOCK_ATTEMPTS,
   DISABLE_LOCK_DELAY_MS,
+  MAX_GUARDED_LAUNCH_DURATION_MS,
   assertDriverEnabled,
   withEnabledDriverLaunch,
 } = require("../src/driver-enablement.cjs");
@@ -32,14 +33,16 @@ function fixture() {
   mkdirSync(binDir);
   writeFileSync(repositoryIdPath, "R_repo\n");
   const ghPath = path.join(binDir, "gh");
+  const ghCallsPath = path.join(root, "gh-calls");
   writeFileSync(ghPath, `#!/bin/sh
+printf '%s\\n' "$*" >> '${ghCallsPath}'
 printf '{"id":"%s"}\\n' "$(cat '${repositoryIdPath}')"
 `);
   execFileSync("chmod", ["+x", ghPath]);
   process.env.PATH = `${binDir}:${originalPath || ""}`;
   execFileSync("git", ["-C", repoPath, "init", "--quiet"]);
   execFileSync("git", ["-C", repoPath, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
-  return { repoPath, stateDir, githubRepo: "owner/repo", repositoryIdPath };
+  return { repoPath, stateDir, githubRepo: "owner/repo", repositoryIdPath, ghCallsPath };
 }
 
 function writeState(project: ReturnType<typeof fixture>, record: Record<string, unknown>, withSafetyFields = true) {
@@ -132,8 +135,33 @@ describe("enablement mutation guards", () => {
     },
   );
 
-  it("lets disable outwait the maximum multi-command launch duration", () => {
-    expect(DISABLE_LOCK_ATTEMPTS * DISABLE_LOCK_DELAY_MS).toBeGreaterThan(7 * 20_000);
+  it("lets disable outwait the maximum authorization and multi-command launch duration", () => {
+    expect(DISABLE_LOCK_ATTEMPTS * DISABLE_LOCK_DELAY_MS).toBeGreaterThan(MAX_GUARDED_LAUNCH_DURATION_MS);
+  });
+
+  it("deduplicates identity checks at the maximum supported origin URL path", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    execFileSync("git", ["-C", project.repoPath, "remote", "set-url", "--add", "origin", "https://github.com/owner/repo.git"]);
+    for (let index = 1; index < MAX_ORIGIN_IDENTITIES; index++) {
+      execFileSync("git", ["-C", project.repoPath, "remote", "set-url", "--add", "--push", "origin", `https://github.com/old-${index}/repo.git`]);
+    }
+
+    assertEnabled(project);
+
+    expect(readFileSync(project.ghCallsPath, "utf8").trim().split("\n")).toHaveLength(MAX_ORIGIN_IDENTITIES);
+  });
+
+  it("rejects origins beyond the supported identity cap before GitHub lookups", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    for (let index = 0; index < MAX_ORIGIN_IDENTITIES; index++) {
+      execFileSync("git", ["-C", project.repoPath, "remote", "set-url", "--add", "--push", "origin", `https://github.com/extra-${index}/repo.git`]);
+    }
+
+    try { assertEnabled(project); } catch {}
+
+    expect(() => readFileSync(project.ghCallsPath, "utf8")).toThrow();
   });
 
   it.each(["issue worker", "PR reviewer", "branch update", "review repair"])(
@@ -228,6 +256,17 @@ describe("enablement mutation guards", () => {
     const lockPath = path.join(project.stateDir, "enabled-projects.json.lock");
     writeFileSync(lockPath, JSON.stringify({ pid: 999_999_999, token: "stale" }));
     linkSync(lockPath, `${lockPath}.reclaim`);
+
+    expect(acquireLockSync(lockPath, { attempts: 3, delayMs: 1 }).token).toEqual(expect.any(String));
+  });
+
+  it("reclaims after an obsolete claim survives a replacement owner's lifetime", () => {
+    const project = fixture();
+    const lockPath = path.join(project.stateDir, "enabled-projects.json.lock");
+    writeFileSync(lockPath, JSON.stringify({ pid: 999_999_999, token: "first-owner" }));
+    linkSync(lockPath, `${lockPath}.reclaim`);
+    rmSync(lockPath);
+    writeFileSync(lockPath, JSON.stringify({ pid: 999_999_998, token: "second-owner" }));
 
     expect(acquireLockSync(lockPath, { attempts: 3, delayMs: 1 }).token).toEqual(expect.any(String));
   });

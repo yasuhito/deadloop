@@ -58,7 +58,12 @@ function finalizeWith(
         commands.push(args);
         timeouts.push(timeoutMs);
         if (args.includes("get-url")) return { status: 0, stdout: `${pushUrl}\n`, stderr: "" };
-        if (args.includes("push") && raceRemoteHead) return { status: 1, stdout: "", stderr: "rejected (stale info)" };
+        if (args.includes("push") && raceRemoteHead) {
+          const lease = args.find((arg) => arg.startsWith("--force-with-lease="));
+          if (lease && !lease.endsWith(`:${raceRemoteHead}`)) {
+            return { status: 1, stdout: "", stderr: "rejected (stale info)" };
+          }
+        }
         if (args.includes("ls-remote")) return { status: 0, stdout: `${raceRemoteHead || head}\trefs/heads/agent/issue-243\n`, stderr: "" };
         if (args[0] === "gh" && args[1] === "repo") {
           return { status: 0, stdout: JSON.stringify({ id: repositoryIds[args[3]] || (args[3] === "other/repo" ? "R_other" : "R_repo") }), stderr: "" };
@@ -207,6 +212,7 @@ describe("automatic PR review repair", () => {
       "/worktree",
       "push",
       "--porcelain",
+      `--force-with-lease=refs/heads/agent/issue-243:${head}`,
       "https://github.com/owner/repo.git",
       "HEAD:refs/heads/agent/issue-243",
     ]);
@@ -222,7 +228,7 @@ describe("automatic PR review repair", () => {
     const commands: string[][] = [];
     finalizeWith(commands, head, undefined, [], "https://github.com/old/repo.git");
 
-    expect(commands.find((command) => command.includes("push"))?.[5]).toBe("https://github.com/old/repo.git");
+    expect(commands.find((command) => command.includes("push"))?.[6]).toBe("https://github.com/old/repo.git");
   });
 
   it("rejects a recorded repair alias when its repository name has been reused", () => {
@@ -235,10 +241,10 @@ describe("automatic PR review repair", () => {
     const commands: string[][] = [];
     finalizeWith(commands);
 
-    expect(commands.find((command) => command.includes("push"))?.[5]).toBe("https://github.com/owner/repo.git");
+    expect(commands.find((command) => command.includes("push"))?.[6]).toBe("https://github.com/owner/repo.git");
   });
 
-  it("returns stale head when the concurrently advanced remote is an ancestor of local HEAD", () => {
+  it("does not update a remote concurrently rewound from the expected head to an ancestor", () => {
     const commands: string[][] = [];
     const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, "c".repeat(40));
 
