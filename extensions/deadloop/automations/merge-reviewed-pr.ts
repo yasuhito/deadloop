@@ -6,6 +6,7 @@ const { spawnSync } = require("node:child_process") as typeof import("node:child
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { validatePromise } = require("./extract-worker-promise.ts");
 
 type MergeArgs = {
   projectRepo: string;
@@ -14,6 +15,7 @@ type MergeArgs = {
   enabledAt: number;
   pr: string;
   expectedHead: string;
+  reviewPromise: string;
   reviewLabel: string;
   reviewingLabel: string;
   blockedLabel: string;
@@ -24,9 +26,11 @@ type EnabledProject = {
   autoMergeAcknowledged: boolean;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
+type PromiseValidation = { status?: unknown; promise?: Record<string, unknown> };
 type MergeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   isAutoMergeEnabled?: (args: MergeArgs) => boolean;
+  validateReviewPromise?: (file: string) => PromiseValidation;
   withLock?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }, operation: (enabled: EnabledProject) => number) => number;
 };
 
@@ -92,13 +96,66 @@ function assertMergeAuthorized(enabled: EnabledProject): void {
   }
 }
 
+function assertReviewApproved(args: MergeArgs, ops: MergeOps): void {
+  const validation = ops.validateReviewPromise
+    ? ops.validateReviewPromise(args.reviewPromise)
+    : validatePromise(args.reviewPromise);
+  if (validation.status !== "complete" || !validation.promise) {
+    throw new Error("validated reviewer approval is missing; automatic merge stopped");
+  }
+  if (validation.promise.status !== "complete" || validation.promise.outcome !== "approved") {
+    throw new Error("review result is not approved; automatic merge stopped");
+  }
+  if (validation.promise.reviewedHead !== args.expectedHead) {
+    throw new Error("reviewed head does not match the guarded merge head; automatic merge stopped");
+  }
+  if (!Array.isArray(validation.promise.findings) || validation.promise.findings.length !== 0) {
+    throw new Error("approved review findings are missing or non-empty; automatic merge stopped");
+  }
+}
+
+const SUCCESSFUL_CHECK_RESULTS = new Set(["SUCCESS", "SUCCESSFUL", "NEUTRAL", "SKIPPED"]);
+const PENDING_CHECK_STATES = new Set(["QUEUED", "IN_PROGRESS", "PENDING", "EXPECTED", "WAITING", "REQUESTED"]);
+
+function assertChecksPassed(value: unknown): void {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("CI checks are missing; automatic merge stopped");
+  }
+  for (const check of value) {
+    if (!check || typeof check !== "object" || Array.isArray(check)) {
+      throw new Error("CI check state is unknown; automatic merge stopped");
+    }
+    const record = check as { status?: unknown; state?: unknown; conclusion?: unknown };
+    const status = String(record.status || "").toUpperCase();
+    const state = String(record.state || "").toUpperCase();
+    const conclusion = String(record.conclusion || "").toUpperCase();
+    if (PENDING_CHECK_STATES.has(status) || PENDING_CHECK_STATES.has(state)) {
+      throw new Error("CI checks have not completed; automatic merge stopped");
+    }
+    if (!status && !state && !conclusion) {
+      throw new Error("CI check state is unknown; automatic merge stopped");
+    }
+    if (!SUCCESSFUL_CHECK_RESULTS.has(conclusion) && !SUCCESSFUL_CHECK_RESULTS.has(state)) {
+      throw new Error("CI checks did not pass; automatic merge stopped");
+    }
+  }
+}
+
 function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
   const result = ops.run([
     "gh", "pr", "view", args.pr, "-R", args.githubRepo,
-    "--json", "state,isDraft,headRefOid,labels",
+    "--json", "state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,labels",
   ], MAX_GUARDED_OPERATION_MS);
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || "PR state could not be revalidated").trim());
-  let pr: { state?: unknown; isDraft?: unknown; headRefOid?: unknown; labels?: unknown };
+  let pr: {
+    state?: unknown;
+    isDraft?: unknown;
+    headRefOid?: unknown;
+    mergeable?: unknown;
+    mergeStateStatus?: unknown;
+    statusCheckRollup?: unknown;
+    labels?: unknown;
+  };
   try {
     pr = JSON.parse(result.stdout || "{}");
   } catch {
@@ -113,6 +170,9 @@ function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
   if (pr.state !== "OPEN") throw new Error("PR is no longer open; automatic merge stopped");
   if (pr.isDraft !== false) throw new Error("PR is draft or its draft state is unknown; automatic merge stopped");
   if (pr.headRefOid !== args.expectedHead) throw new Error("PR head changed; automatic merge stopped");
+  if (pr.mergeable !== "MERGEABLE") throw new Error("PR mergeability is not confirmed; automatic merge stopped");
+  if (pr.mergeStateStatus !== "CLEAN") throw new Error("PR merge state is not clean; automatic merge stopped");
+  assertChecksPassed(pr.statusCheckRollup);
   if (!labels.has(args.reviewLabel) || !labels.has(args.reviewingLabel)) {
     throw new Error("required review labels are no longer present; automatic merge stopped");
   }
@@ -125,6 +185,7 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     const autoMergeEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
     if (!autoMergeEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
     assertMergeAuthorized(enabled);
+    assertReviewApproved(args, ops);
     assertCurrentPrEligible(args, ops);
     const result = ops.run([
       "gh", "pr", "merge", args.pr, "-R", args.githubRepo,
@@ -145,8 +206,8 @@ function parseArgs(argv: string[]): MergeArgs {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  if (!values.projectRepo || !values.githubRepo || !values.stateDir || !values.pr || !values.expectedHead || !values.reviewLabel || !values.reviewingLabel || !values.blockedLabel || !Number.isFinite(enabledAt)) {
-    throw new Error("--project-repo, --github-repo, --state-dir, --enabled-at, --pr, --expected-head, --review-label, --reviewing-label, and --blocked-label are required");
+  if (!values.projectRepo || !values.githubRepo || !values.stateDir || !values.pr || !values.expectedHead || !values.reviewPromise || !values.reviewLabel || !values.reviewingLabel || !values.blockedLabel || !Number.isFinite(enabledAt)) {
+    throw new Error("--project-repo, --github-repo, --state-dir, --enabled-at, --pr, --expected-head, --review-promise, --review-label, --reviewing-label, and --blocked-label are required");
   }
   return {
     projectRepo: values.projectRepo,
@@ -155,6 +216,7 @@ function parseArgs(argv: string[]): MergeArgs {
     enabledAt,
     pr: values.pr,
     expectedHead: values.expectedHead,
+    reviewPromise: values.reviewPromise,
     reviewLabel: values.reviewLabel,
     reviewingLabel: values.reviewingLabel,
     blockedLabel: values.blockedLabel,

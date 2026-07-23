@@ -101,6 +101,7 @@ Target:
 - PR: #${number} ${title}
 - PR URL: ${pr.url || `https://github.com/${env.githubRepo}/pull/${number}`}
 - Reason: ${reason}
+- Expected PR head: ${String(pr.headRefOid || "")}
 - autoMerge: ${env.autoMerge ? "true" : "false"}
 
 Contract:
@@ -118,7 +119,7 @@ Contract:
 Promise report:
 - Before stopping, write JSON to the promise file: \`${promiseFile.replace(/`/g, "\\`")}\`.
 - Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
-- If no actionable defect remains, write {"status":"complete","outcome":"approved","reason":"","summary":"three sentences: what was reviewed, result, remaining risk","findings":[]}.
+- If no actionable defect remains, write {"status":"complete","outcome":"approved","reviewedHead":"${String(pr.headRefOid || "")}","reason":"","summary":"three sentences: what was reviewed, result, remaining risk","findings":[]}.
 - If actionable defects exist, write {"status":"complete","outcome":"changes_requested","reason":"","summary":"three-sentence summary","findings":[{"title":"concise defect","body":"bounded required correction and evidence","path":"optional/repo/path","line":1,"severity":"blocker|major|minor"}]}.
 - Use outcome=human_required only when a product/spec/safety decision cannot be repaired within the PR. Explain it in reason and optional findings.
 - Findings are the repair worker's entire contract. Include only verified, actionable defects; #243-style lint or repository-contract failures are changes_requested, not blocked.

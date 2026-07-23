@@ -35,7 +35,7 @@ From a normal Git checkout, explicitly enable the local scheduler:
 /deadloop-enable
 ```
 
-deadloop infers the checkout path, GitHub repository, base branch, and default Herdr worktree root. Enablement is local state under `~/.pi/agent/deadloop/`; neither `deadloop.json` nor `projects.json` starts automation by itself. `/deadloop-enable` verifies GitHub write access and creates only missing standard labels. It always starts a newly enabled repository with `autoMerge: false`. To enable auto-merge after the initial safe start, explicitly set `autoMerge` to `false` and then to `true`; repeating `/deadloop-enable` does not acknowledge a preexisting `true` setting.
+deadloop infers the checkout path, GitHub repository, base branch, and default Herdr worktree root. Enablement is local state under `~/.pi/agent/deadloop/`; neither `deadloop.json` nor `projects.json` starts automation by itself. `/deadloop-enable` verifies GitHub write access and creates only missing standard labels. It always starts a newly enabled repository with `autoMerge: false`. After that initial safe start completes, an explicit `autoMerge: true` setting is honored without requiring an intermediate `false` setting. Keep it `false` until you intend to enable automatic merge.
 
 Use `/deadloop-disable` to stop scheduling without stopping active agents or removing GitHub state, worktrees, or run artifacts. Re-enable each repository after upgrading from older releases.
 

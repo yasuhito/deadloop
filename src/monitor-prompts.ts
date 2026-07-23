@@ -135,7 +135,7 @@ function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): str
 }
 
 function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string {
-  const guardedMerge = `node ${shellQuotePrompt(`${input.automationDir}/merge-reviewed-pr.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-label ${shellQuotePrompt(input.reviewLabel)} --reviewing-label ${shellQuotePrompt(input.reviewingLabel)} --blocked-label ${shellQuotePrompt(input.blockedLabel)}`;
+  const guardedMerge = `node ${shellQuotePrompt(`${input.automationDir}/merge-reviewed-pr.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-promise ${shellQuotePrompt(input.promiseFile)} --review-label ${shellQuotePrompt(input.reviewLabel)} --reviewing-label ${shellQuotePrompt(input.reviewingLabel)} --blocked-label ${shellQuotePrompt(input.blockedLabel)}`;
   return `Deterministic driver launched reviewer for PR #${input.prNumber}. Do not launch another agent and do not reselect another PR.
 
 Review binding:
@@ -145,15 +145,15 @@ Review binding:
 ${renderPromisePollingRules(input)}
 
 Completion handling:
-- Read the validated promise payload. Legacy complete promises without outcome remain compatible and follow the approved path.
+- Read the validated promise payload. Only an explicit head-bound \`outcome=approved\` result may enter the automatic merge path; legacy complete promises may be handed to a human but cannot authorize a merge.
 - A successful review with actionable defects is status=complete, outcome=changes_requested, never status=blocked.
 - For outcome=changes_requested, outcome=human_required, or status=blocked, run the deterministic dispatcher and follow only its returned action/prompt:
   \`${renderReviewerDispatcherCommand(input)}\`
 - The dispatcher keeps ${input.reviewLabel} and ${input.reviewingLabel} during repair. It adds ${input.blockedLabel} only for human-required or bounded failure paths.
 - For outcome=approved or a legacy complete promise, re-check GitHub PR state, reviews, and checks before changing labels.
-- Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork.
+- Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork. A local fallback may support human handoff, but it does not authorize automatic merge while GitHub reports missing, pending, failed, or ambiguous checks.
 - If autoMerge=false, never merge; hand off by moving PR toward \`${input.humanLabel}\` with review evidence.
-- If autoMerge=true, merge only after review, CI/fallback, and repository safety gates all pass. Perform the merge only by running exactly \`${guardedMerge}\`; never run \`gh pr merge\` directly. This binds GitHub's mutation to the reviewed head while holding the enablement guard.
+- If autoMerge=true, merge only after the head-bound review approval, reported GitHub CI checks, and repository mergeability gates all pass. Perform the merge only by running exactly \`${guardedMerge}\`; never run \`gh pr merge\` directly. This binds GitHub's mutation to the reviewed head while holding the enablement guard.
 
 Report only the resulting action and evidence.`;
 }

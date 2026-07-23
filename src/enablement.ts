@@ -75,7 +75,10 @@ export function upsertEnabledProject(
         ...(previous || {
           ...firstEnable,
           firstStartPending: true,
-          lastObservedAutoMerge: firstEnable.firstEnableAutoMerge,
+          // The effective value during the mandatory first start is always false.
+          // Recording that enforced value lets a true setting be acknowledged on
+          // the first observation after the safe start, without a false rewrite.
+          lastObservedAutoMerge: false,
           autoMergeAcknowledged: false,
         }),
         repoPath,
@@ -98,9 +101,13 @@ export function observeAutoMerge(state: EnablementState, identity: ProjectIdenti
     projects: state.projects.map((project) => {
       if (project.repoPath !== repoPath || project.githubRepo !== identity.githubRepo) return project;
       const autoMergeAcknowledged = project.autoMergeAcknowledged || (
-        project.firstEnableAutoMerge === true && project.lastObservedAutoMerge === false && autoMerge === true
+        project.firstEnableAutoMerge === true
+        && project.firstStartPending === false
+        && project.lastObservedAutoMerge === false
+        && autoMerge === true
       );
-      return { ...project, lastObservedAutoMerge: autoMerge, autoMergeAcknowledged };
+      const lastObservedAutoMerge = project.firstStartPending ? false : autoMerge;
+      return { ...project, lastObservedAutoMerge, autoMergeAcknowledged };
     }),
   };
 }
