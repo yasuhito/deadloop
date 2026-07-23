@@ -373,6 +373,23 @@
 | T207 | `test/issue-coordinator-cleanup.test.ts` | `keeps the promise file as the worker completion authority` | **Cucumber候補** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 | T208 | `test/issue-coordinator-cleanup.test.ts` | `documents dedicated tab startup for branch update workers` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
 
+#### Issue #112 の移行追跡
+
+| ID | 移行先または Vitest 継続理由 |
+|---:|---|
+| T187 | `worktree-cleanup-safety.feature.md` の「マージ済みで変更のない作業場所は片付け候補になる」。同じ候補選定の観測結果を Cucumber へ移し、Vitest を削除。 |
+| T188 | `worktree-cleanup-safety.feature.md` の「変更中の作業場所は片付け候補にならない」。同じ候補選定の観測結果を Cucumber へ移し、Vitest を削除。 |
+| T189 | Vitest 継続。生成された一時ファイルだけを除外する低レベルの Git status 解釈は、失敗位置を絞れる既存テストの診断価値を保つ。 |
+| T190 | `worktree-cleanup-safety.feature.md` の「Git 管理ファイルは片付け後も残る」。 |
+| T191 | Vitest 継続。`.pi-subagents` 固有の削除防止は実際のファイル操作を検証する診断価値を保つ。 |
+| T192 | Vitest 継続。停止理由の文言は実際の削除処理に近い診断を必要とする。 |
+| T193 | Vitest 継続。停止時に Herdr workspace を削除しない副作用を直接診断する。 |
+| T194 | Vitest 継続。一時ファイルだけを消して workspace を削除する実際の副作用を直接診断する。 |
+| T195 | Vitest 継続。workspace ID の正規化と欠落時の停止は実行基盤アダプターに近い診断を必要とする。 |
+| T196 | Vitest 継続。main workspace の停止理由を直接診断する。 |
+| T197 | `worktree-cleanup-safety.feature.md` の「別のリポジトリの作業場所は片付け候補にならない」。 |
+| T198 | Vitest 継続。cleanup 後に issue coordinator を起動する低レベルの precheck 結合を診断する。 |
+
 ### `test/issue-coordinator-driver.test.ts`（16件）
 
 | ID | 現在のファイル名 | 現在のテスト名 | 分類 | 守る契約 | 根拠 |
