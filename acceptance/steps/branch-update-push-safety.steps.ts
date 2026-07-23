@@ -14,8 +14,16 @@ const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const branch = "agent/issue-31";
 
+type BranchPush = {
+  repo: string;
+  remote: string;
+  updates: { source: string; destination: string }[];
+  mode: "normal";
+};
+
 type SafetyWorld = {
   actualHead?: string;
+  branchPushes?: BranchPush[];
   crossRepository?: boolean;
   commands?: string[][];
   branchUpdateInput?: { cleanWorktree: boolean; headMatchesExpected: boolean };
@@ -61,28 +69,16 @@ function finalize(world: SafetyWorld): void {
         }
         return { status: 0, stdout: "", stderr: "" };
       },
+      pushBranch: (push: BranchPush) => {
+        world.branchPushes = [...(world.branchPushes ?? []), push];
+        return { status: 0, stdout: "", stderr: "" };
+      },
     },
   );
 }
 
-function pushCommands(world: SafetyWorld): string[][] {
-  return world.commands?.filter((command) => command[0] === "git" && command.includes("push")) ?? [];
-}
-
 function pushed(world: SafetyWorld): boolean {
-  return pushCommands(world).length > 0;
-}
-
-function isForceArgument(argument: string): boolean {
-  return (
-    argument === "--force" ||
-    argument.startsWith("--force=") ||
-    argument === "--force-with-lease" ||
-    argument.startsWith("--force-with-lease=") ||
-    argument === "--force-if-includes" ||
-    /^-[^-]*f/.test(argument) ||
-    argument.startsWith("+")
-  );
+  return (world.branchPushes?.length ?? 0) > 0;
 }
 
 function temporaryRoot(world: SafetyWorld, prefix: string): string {
@@ -223,16 +219,14 @@ Then("自動チェックは pull request head 確認より先に実行される"
 });
 
 Then("選択された branch だけが push の対象になる", function (this: SafetyWorld) {
-  assert.deepEqual(pushCommands(this), [
-    ["git", "-C", "/worktree", "push", "--porcelain", "origin", `HEAD:refs/heads/${branch}`],
-  ]);
+  assert.deepEqual(
+    this.branchPushes?.flatMap((push) => push.updates.map((update) => update.destination)) ?? [],
+    [`refs/heads/${branch}`],
+  );
 });
 
 Then("branch は強制せずに push される", function (this: SafetyWorld) {
-  assert.equal(
-    pushCommands(this).some((command) => command.slice(command.indexOf("push") + 1).some(isForceArgument)),
-    false,
-  );
+  assert.deepEqual(this.branchPushes?.map((push) => push.mode) ?? [], ["normal"]);
 });
 
 After(function (this: SafetyWorld) {

@@ -19,17 +19,44 @@ type FinalizeArgs = {
   checkCommand: string;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
-type FinalizeOps = { run(args: string[]): CommandResult };
+type BranchPush = {
+  repo: string;
+  remote: string;
+  updates: { source: string; destination: string }[];
+  mode: "normal";
+};
+type FinalizeOps = {
+  run(args: string[]): CommandResult;
+  pushBranch?(push: BranchPush): CommandResult;
+};
 
 function defaultRun(args: string[]): CommandResult {
   const result = spawnSync(args[0], args.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
 }
 
-function checked(ops: FinalizeOps, args: string[]): string {
-  const result = ops.run(args);
-  if (result.status !== 0) throw new Error((result.stderr || result.stdout || `command failed: ${args.join(" ")}`).trim());
+function checkedResult(result: CommandResult, failureMessage: string): string {
+  if (result.status !== 0) throw new Error((result.stderr || result.stdout || failureMessage).trim());
   return result.stdout.trim();
+}
+
+function checked(ops: FinalizeOps, args: string[]): string {
+  return checkedResult(ops.run(args), `command failed: ${args.join(" ")}`);
+}
+
+function pushBranch(ops: FinalizeOps, push: BranchPush): string {
+  const result = ops.pushBranch
+    ? ops.pushBranch(push)
+    : ops.run([
+        "git",
+        "-C",
+        push.repo,
+        "push",
+        "--porcelain",
+        push.remote,
+        ...push.updates.map((update) => `${update.source}:${update.destination}`),
+      ]);
+  return checkedResult(result, "branch push failed");
 }
 
 function decidePushGuard(pr: JsonObject, expectedBranch: string, expectedHead: string): JsonObject {
@@ -74,7 +101,12 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   const guard = decidePushGuard(pr, args.branch, args.expectedHead);
   if (guard.action !== "push") return guard;
 
-  checked(ops, ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`]);
+  pushBranch(ops, {
+    repo: args.repo,
+    remote: args.remote,
+    updates: [{ source: "HEAD", destination: `refs/heads/${args.branch}` }],
+    mode: "normal",
+  });
   return { action: "pushed", reason: "branch_updated", headOid: checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"]) };
 }
 
