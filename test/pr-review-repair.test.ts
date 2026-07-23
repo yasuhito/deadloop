@@ -58,9 +58,8 @@ function finalizeWith(
         commands.push(args);
         timeouts.push(timeoutMs);
         if (args.includes("get-url")) return { status: 0, stdout: `${pushUrl}\n`, stderr: "" };
-        const expectedLease = `--force-with-lease=refs/heads/agent/issue-243:${head}`;
-        if (args.includes("push") && raceRemoteHead !== undefined && raceRemoteHead !== head && args.includes(expectedLease)) {
-          return { status: 1, stdout: "", stderr: "rejected (stale info)" };
+        if (args.includes("push") && raceRemoteHead !== undefined && raceRemoteHead !== head) {
+          return { status: 1, stdout: "", stderr: "rejected (non-fast-forward)" };
         }
         if (args.includes("ls-remote")) {
           const remoteLine = raceRemoteHead === null ? "" : `${raceRemoteHead ?? head}\trefs/heads/agent/issue-243\n`;
@@ -203,7 +202,7 @@ describe("automatic PR review repair", () => {
     expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000]);
   });
 
-  it("pushes only the exact existing branch with an expected-head lease", () => {
+  it("pushes only the exact existing branch without force", () => {
     const commands: string[][] = [];
     finalizeWith(commands);
 
@@ -213,7 +212,6 @@ describe("automatic PR review repair", () => {
       "/worktree",
       "push",
       "--porcelain",
-      `--force-with-lease=refs/heads/agent/issue-243:${head}`,
       "https://github.com/owner/repo.git",
       "HEAD:refs/heads/agent/issue-243",
     ]);
@@ -245,7 +243,7 @@ describe("automatic PR review repair", () => {
     expect(commands.find((command) => command.includes("push"))).toContain("https://github.com/owner/repo.git");
   });
 
-  it("does not update a remote concurrently fast-forwarded to a local ancestor", () => {
+  it("reports stale when a concurrent remote update rejects the push", () => {
     const commands: string[][] = [];
     const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, "c".repeat(40));
 

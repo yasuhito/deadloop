@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // Validate and push a review repair. This is the repair worker's only push path.
-// It re-checks the open PR head, then atomically requires that exact head
-// during the push.
+// It re-checks the open PR head, then uses a normal fast-forward-only push.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
@@ -44,7 +43,7 @@ function checked(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
   return result.stdout.trim();
 }
 
-function pushWithExpectedHeadLease(
+function pushNormally(
   ops: FinalizeOps,
   repo: string,
   destination: string,
@@ -53,7 +52,7 @@ function pushWithExpectedHeadLease(
 ): boolean {
   const ref = `refs/heads/${branch}`;
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `HEAD:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", destination, `HEAD:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return true;
@@ -118,7 +117,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       enabled.githubRepositoryId,
       MAX_GUARDED_OPERATION_MS,
     );
-    if (!pushWithExpectedHeadLease(ops, args.repo, pushDestination, args.branch, args.expectedHead)) {
+    if (!pushNormally(ops, args.repo, pushDestination, args.branch, args.expectedHead)) {
       return { action: "stale_head", reason: "head_sha_changed_during_push" };
     }
     return {
