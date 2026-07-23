@@ -138,6 +138,8 @@ function branchUpdateWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-branch-update-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-repo",
+    shellQuote(env.repoPath),
     "--github-repo",
     shellQuote(env.githubRepo),
     "--pr",

@@ -14,6 +14,7 @@ function finalizeWith(commands: string[][], actualHead = head) {
   return finalizeBranchUpdate(
     {
       repo: "/worktree",
+      projectRepo: "/repo",
       githubRepo: "owner/repo",
       pr: "31",
       branch: "agent/issue-31",
@@ -25,6 +26,7 @@ function finalizeWith(commands: string[][], actualHead = head) {
       checkCommand: "npm test",
     },
     {
+      assertEnabled: () => {},
       run: (args: string[]) => {
         commands.push(args);
         if (args[0] === "gh") {
@@ -108,5 +110,58 @@ describe("PR branch-update safety", () => {
     finalizeWith(commands, base);
 
     expect(commands.some((command) => command.includes("push"))).toBe(false);
+  });
+
+  it("does not push when deadloop is disabled before finalization", () => {
+    const commands: string[][] = [];
+    let error = "";
+    try {
+      finalizeBranchUpdate(
+        {
+          repo: "/worktree",
+          projectRepo: "/repo",
+          githubRepo: "owner/repo",
+          pr: "31",
+          branch: "agent/issue-31",
+          expectedHead: head,
+          expectedBase: base,
+          remote: "origin",
+          automationDir: "/automation",
+          stateDir: "/state",
+          checkCommand: "npm test",
+        },
+        {
+          assertEnabled: () => {
+            throw new Error("deadloop is disabled for this repository");
+          },
+          run: (args: string[]) => {
+            commands.push(args);
+            if (args[0] === "gh") {
+              return {
+                status: 0,
+                stdout: JSON.stringify({
+                  state: "OPEN",
+                  isCrossRepository: false,
+                  headRefName: "agent/issue-31",
+                  headRefOid: head,
+                }),
+                stderr: "",
+              };
+            }
+            if (args.at(-1) === "HEAD" && args.includes("rev-parse")) {
+              return { status: 0, stdout: "cccccccccccccccccccccccccccccccccccccccc\n", stderr: "" };
+            }
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+      );
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+    }
+
+    expect({ error, pushed: commands.some((command) => command.includes("push")) }).toEqual({
+      error: "deadloop is disabled for this repository",
+      pushed: false,
+    });
   });
 });

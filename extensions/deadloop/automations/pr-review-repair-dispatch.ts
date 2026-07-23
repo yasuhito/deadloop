@@ -22,6 +22,7 @@ const {
   shellQuote,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { assertDriverEnabled } = require("../../../src/driver-enablement.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -91,7 +92,9 @@ gh pr view ${prNumber} -R ${shellQuote(env.githubRepo)} --comments --json number
 
 function applyHumanBlock(prNumber: string, env: ReturnType<typeof envConfig>, reason: string, summary: string): string {
   const comment = recoveryComment(prNumber, env, reason, summary);
+  assertDriverEnabled(env);
   github.commentPr(env.githubRepo, prNumber, comment);
+  assertDriverEnabled(env);
   github.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
   return comment;
 }
@@ -110,6 +113,8 @@ function repairWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-review-repair-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-repo",
+    shellQuote(env.repoPath),
     "--github-repo",
     shellQuote(env.githubRepo),
     "--pr",
@@ -217,6 +222,7 @@ function dispatch(args: JsonObject): DriverResult {
   if (validation.status === "blocked") {
     const technicalDecision = decideTechnicalReviewFailure(pr.comments || [], expectedHead);
     if (technicalDecision.action === "retry") {
+      assertDriverEnabled(env);
       github.commentPr(
         env.githubRepo,
         prNumber,
@@ -254,9 +260,12 @@ function dispatch(args: JsonObject): DriverResult {
   }
 
   const marker = renderRepairMarker(expectedHead, selection.reviewFingerprint);
+  assertDriverEnabled(env);
   github.commentPr(env.githubRepo, prNumber, `Starting one bounded repair for this exact PR head and review result.\n\n${marker}`);
+  assertDriverEnabled(env);
   github.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
   try {
+    assertDriverEnabled(env);
     const launch = launchRepair(prNumber, branch, expectedHead, findings, selection.key, env);
     return driverResult("needs_llm", `Launched review-repair worker for PR #${prNumber}`, {
       driverAction: "review_repair_monitor_request",
