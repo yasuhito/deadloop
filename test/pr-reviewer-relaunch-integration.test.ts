@@ -30,7 +30,7 @@ describe("PR reviewer relaunch integration", () => {
     fs.mkdirSync(worktree);
     fs.mkdirSync(state, { recursive: true });
     fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
-      projects: [{ repoPath: root, githubRepo: "owner/repo", enabledAt: 1, firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }],
+      projects: [{ repoPath: root, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1, firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }],
     }));
     const pr = {
       number: 44,
@@ -53,6 +53,8 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "list") {
   process.stdout.write(fs.readFileSync(process.env.GH_TEST_PR_STATE, "utf8"));
+} else if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({id:"R_repo"}));
 }
 `,
     );

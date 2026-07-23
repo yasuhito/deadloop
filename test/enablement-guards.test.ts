@@ -14,6 +14,7 @@ const {
 const { acquireLockSync, reclaimStale } = require("../src/enablement-lock.cjs");
 const { GUARDED_OPERATION_TIMEOUT_MS, runGuarded } = require("../extensions/deadloop/automations/guarded-operation.ts");
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
+const originalPath = process.env.PATH;
 const sandboxes: string[] = [];
 
 function fixture() {
@@ -25,14 +26,24 @@ function fixture() {
   process.env.PI_CODING_AGENT_DIR = configDir;
   mkdirSync(repoPath);
   mkdirSync(stateDir, { recursive: true });
+  const binDir = path.join(root, "bin");
+  const repositoryIdPath = path.join(root, "repository-id");
+  mkdirSync(binDir);
+  writeFileSync(repositoryIdPath, "R_repo\n");
+  const ghPath = path.join(binDir, "gh");
+  writeFileSync(ghPath, `#!/bin/sh
+printf '{"id":"%s"}\\n' "$(cat '${repositoryIdPath}')"
+`);
+  execFileSync("chmod", ["+x", ghPath]);
+  process.env.PATH = `${binDir}:${originalPath || ""}`;
   execFileSync("git", ["-C", repoPath, "init", "--quiet"]);
   execFileSync("git", ["-C", repoPath, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
-  return { repoPath, stateDir, githubRepo: "owner/repo" };
+  return { repoPath, stateDir, githubRepo: "owner/repo", repositoryIdPath };
 }
 
 function writeState(project: ReturnType<typeof fixture>, record: Record<string, unknown>, withSafetyFields = true) {
   const safetyFields = withSafetyFields
-    ? { firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }
+    ? { githubRepositoryId: "R_repo", firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }
     : {};
   writeFileSync(path.join(project.stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{ repoPath: project.repoPath, githubRepo: project.githubRepo, ...safetyFields, ...record }] }));
 }
@@ -40,6 +51,8 @@ function writeState(project: ReturnType<typeof fixture>, record: Record<string, 
 afterEach(() => {
   if (originalConfigDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = originalConfigDir;
+  if (originalPath === undefined) delete process.env.PATH;
+  else process.env.PATH = originalPath;
   for (const sandbox of sandboxes.splice(0)) rmSync(sandbox, { recursive: true, force: true });
 });
 
@@ -62,6 +75,14 @@ describe("enablement mutation guards", () => {
       expect(() => assertDriverEnabled(project)).toThrow("disabled");
     });
   }
+
+  it("rejects a reused repository name after the enabled repository transfers", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1, githubAliases: ["owner/repo"] });
+    writeFileSync(project.repositoryIdPath, "R_reused\n");
+
+    expect(() => assertEnabled(project)).toThrow("disabled");
+  });
 
   it("does not mutate when disable wins after an earlier driver authorization", () => {
     const project = fixture();

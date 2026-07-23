@@ -6,6 +6,7 @@ type EnablementIdentityValue = {
 };
 
 type EnabledProjectValue = EnablementIdentityValue & {
+  githubRepositoryId: string;
   enabledAt: number;
   enableAttemptToken?: string;
   githubAliases?: string[];
@@ -40,6 +41,7 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate) || !validIdentity(candidate)) return null;
     const record = candidate as EnabledProjectValue;
+    if (typeof record.githubRepositoryId !== "string" || !record.githubRepositoryId) return null;
     if (!Number.isFinite(record.enabledAt)) return null;
     if (record.enableAttemptToken !== undefined && (typeof record.enableAttemptToken !== "string" || !record.enableAttemptToken)) return null;
     if (record.githubAliases !== undefined && (
@@ -61,6 +63,7 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
     normalized.push({
       repoPath,
       githubRepo: record.githubRepo,
+      githubRepositoryId: record.githubRepositoryId,
       enabledAt: Number(record.enabledAt),
       ...(record.enableAttemptToken === undefined ? {} : { enableAttemptToken: record.enableAttemptToken }),
       ...(record.githubAliases === undefined ? {} : { githubAliases: [...new Set(record.githubAliases)] }),

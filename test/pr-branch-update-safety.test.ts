@@ -16,6 +16,7 @@ function finalizeWith(
   headAfterAuthorization?: string,
   timeouts: Array<number | undefined> = [],
   pushUrl = "https://github.com/owner/repo.git",
+  repositoryIds: Record<string, string> = {},
 ) {
   let observedHead = actualHead;
   return finalizeBranchUpdate(
@@ -36,12 +37,15 @@ function finalizeWith(
     {
       assertEnabled: () => {
         if (headAfterAuthorization) observedHead = headAfterAuthorization;
-        return { githubRepo: "owner/repo", githubAliases: ["old/repo"] };
+        return { githubRepo: "owner/repo", githubRepositoryId: "R_repo" };
       },
       run: (args: string[], timeoutMs?: number) => {
         commands.push(args);
         timeouts.push(timeoutMs);
         if (args.includes("get-url")) return { status: 0, stdout: `${pushUrl}\n`, stderr: "" };
+        if (args[0] === "gh" && args[1] === "repo") {
+          return { status: 0, stdout: JSON.stringify({ id: repositoryIds[args[3]] || (args[3] === "other/repo" ? "R_other" : "R_repo") }), stderr: "" };
+        }
         if (args[0] === "gh") {
           return {
             status: 0,
@@ -135,7 +139,7 @@ describe("PR branch-update safety", () => {
     finalizeWith(commands, head, undefined, timeouts);
     const firstGuardedCommand = commands.findIndex((command) => command[0] === "gh");
 
-    expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000, 25_000]);
+    expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000]);
   });
 
   it("pushes only the selected existing branch without force", () => {
@@ -164,6 +168,12 @@ describe("PR branch-update safety", () => {
     finalizeWith(commands, head, undefined, [], "https://github.com/old/repo.git");
 
     expect(commands.find((command) => command.includes("push"))?.[5]).toBe("https://github.com/old/repo.git");
+  });
+
+  it("rejects a recorded branch-update alias when its repository name has been reused", () => {
+    expect(() => finalizeWith([], head, undefined, [], "https://github.com/old/repo.git", { "old/repo": "R_reused" })).toThrow(
+      "push remote origin does not resolve exclusively to owner/repo",
+    );
   });
 
   it("pins the verified branch-update destination before a mutable remote can redirect the push", () => {

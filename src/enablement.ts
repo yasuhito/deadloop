@@ -5,6 +5,7 @@ const { normalizeEnablementStateValue, validIdentity } = require("./enablement-s
 export type EnabledProject = {
   repoPath: string;
   githubRepo: string;
+  githubRepositoryId: string;
   enabledAt: number;
   enableAttemptToken?: string;
   githubAliases?: string[];
@@ -18,7 +19,8 @@ export type EnabledProject = {
 
 export type EnablementState = { projects: EnabledProject[] };
 
-export type ProjectIdentity = Pick<EnabledProject, "repoPath" | "githubRepo" | "githubAliases" | "baseBranch">;
+export type ProjectIdentity = Pick<EnabledProject, "repoPath" | "githubRepo"> &
+  Partial<Pick<EnabledProject, "githubRepositoryId" | "githubAliases" | "baseBranch">>;
 
 function normalizedPath(value: string): string {
   return path.resolve(value);
@@ -45,7 +47,9 @@ export function upsertEnabledProject(
   firstEnable: Pick<EnabledProject, "firstEnableAutoMerge"> = { firstEnableAutoMerge: false },
   enableAttemptToken?: string,
 ): EnablementState {
-  if (!validIdentity(identity)) throw new Error("invalid project identity");
+  if (!validIdentity(identity) || typeof identity.githubRepositoryId !== "string" || !identity.githubRepositoryId) {
+    throw new Error("invalid project identity");
+  }
   const repoPath = normalizedPath(identity.repoPath);
   const existing = state?.projects || [];
   const previous = existing.find((project) => project.githubRepo === identity.githubRepo && project.repoPath === repoPath);
@@ -65,6 +69,7 @@ export function upsertEnabledProject(
         }),
         repoPath,
         githubRepo: identity.githubRepo,
+        githubRepositoryId: identity.githubRepositoryId,
         enabledAt,
         ...(enableAttemptToken ? { enableAttemptToken } : {}),
         ...(identity.githubAliases ? { githubAliases: identity.githubAliases } : {}),

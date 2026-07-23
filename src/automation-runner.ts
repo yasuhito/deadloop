@@ -68,23 +68,7 @@ export function deliverPendingDriverHandoff(
   const pendingPrompt = payload.prompt;
   let prompt = typeof pendingPrompt === "string" ? pendingPrompt : "";
   if (payload.monitorHandoff && typeof payload.monitorHandoff === "object" && !Array.isArray(payload.monitorHandoff)) {
-    const monitorHandoff = payload.monitorHandoff as { kind?: unknown; input?: unknown };
-    const monitorInput = monitorHandoff.input;
-    const handoffEnabledAt = monitorInput && typeof monitorInput === "object" && !Array.isArray(monitorInput)
-      ? Number((monitorInput as { enabledAt?: unknown }).enabledAt)
-      : Number.NaN;
     const currentEnabledAt = deps.currentEnabledAt?.();
-    if (
-      Number.isFinite(handoffEnabledAt)
-      && Number.isFinite(currentEnabledAt)
-      && currentEnabledAt !== handoffEnabledAt
-    ) {
-      delete entry.pendingDriverHandoff;
-      recordAutomationResult(entry, "driver_handoff_stale_generation");
-      entry.updatedAt = deps.now();
-      deps.saveState(state);
-      return true;
-    }
     try {
       prompt = renderPendingMonitorHandoff(payload.monitorHandoff, currentEnabledAt);
     } catch (error) {

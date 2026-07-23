@@ -14,7 +14,7 @@ function foundFile(requested: string | undefined): AutomationFileResolution {
 }
 
 describe("real driver handoff across disable and re-enable", () => {
-  it("discards a pre-disable Issue monitor handoff so stale state cannot mutate after re-enable", async () => {
+  it("re-queues a pre-disable Issue monitor handoff with the new generation after re-enable", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-driver-handoff-"));
     const statePath = path.join(root, "state.json");
     const project = normalizeProject({
@@ -81,13 +81,13 @@ describe("real driver handoff across disable and re-enable", () => {
 
       expect({
         sentWhileDisabled,
-        sentAfterReEnable: sent,
+        queuedCurrentGeneration: sent.length === 1 && sent[0].includes("--enabled-at 2"),
         result: entry.lastResult,
         pending: entry.pendingDriverHandoff,
       }).toEqual({
         sentWhileDisabled: [],
-        sentAfterReEnable: [],
-        result: "driver_handoff_stale_generation",
+        queuedCurrentGeneration: true,
+        result: "driver_needs_llm_queued",
         pending: undefined,
       });
     } finally {

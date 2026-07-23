@@ -824,10 +824,17 @@ async function revalidateLocalProjectIdentity(pi, identity) {
   if (path.resolve(repoPath) !== path.resolve(identity.repoPath)) throw new Error("repository checkout identity changed during enablement");
   const fetchRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--all", "origin"], 5_000)).stdout.split(/\r?\n/).filter(Boolean);
   const pushRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--push", "--all", "origin"], 5_000)).stdout.split(/\r?\n/).filter(Boolean);
-  const allowed = new Set(identity.githubAliases || []);
   const identities = [...fetchRemotes, ...pushRemotes].map(githubRepoFromRemote);
-  if (identities.length === 0 || identities.some((candidate) => !candidate || !allowed.has(candidate))) {
+  if (identities.length === 0 || identities.some((candidate) => !candidate)) {
     throw new Error("origin identity changed during enablement");
+  }
+  for (const remoteIdentity of new Set(identities)) {
+    const view = JSON.parse(
+      (await commandExec(pi, "gh", ["repo", "view", remoteIdentity, "--json", "id"])).stdout || "{}",
+    );
+    if (!view.id || String(view.id) !== identity.githubRepositoryId) {
+      throw new Error("origin GitHub repository identity changed during enablement");
+    }
   }
 }
 
@@ -840,19 +847,22 @@ async function detectProjectIdentity(pi, cwd) {
     throw new Error("all origin fetch and push URLs must identify GitHub repositories");
   }
   const canonicalIdentities = new Set<string>();
+  const repositoryIds = new Set<string>();
   const defaultBranches = new Set<string>();
   for (const remoteIdentity of new Set(identities)) {
     const view = JSON.parse(
-      (await commandExec(pi, "gh", ["repo", "view", remoteIdentity, "--json", "nameWithOwner,defaultBranchRef"])).stdout || "{}",
+      (await commandExec(pi, "gh", ["repo", "view", remoteIdentity, "--json", "id,nameWithOwner,defaultBranchRef"])).stdout || "{}",
     );
-    if (!view.nameWithOwner) throw new Error(`GitHub repository identity could not be resolved for ${remoteIdentity}`);
+    if (!view.id || !view.nameWithOwner) throw new Error(`GitHub repository identity could not be resolved for ${remoteIdentity}`);
+    repositoryIds.add(String(view.id));
     canonicalIdentities.add(String(view.nameWithOwner));
     if (view.defaultBranchRef?.name) defaultBranches.add(String(view.defaultBranchRef.name));
   }
-  if (canonicalIdentities.size !== 1) {
+  if (canonicalIdentities.size !== 1 || repositoryIds.size !== 1) {
     throw new Error("all origin fetch and push URLs must resolve to exactly the same GitHub repository");
   }
   const githubRepo = [...canonicalIdentities][0];
+  const githubRepositoryId = [...repositoryIds][0];
   const upstream = await pi.exec("git", ["-C", repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], { timeout: 15_000 });
   let baseBranch = upstream.code === 0 ? upstream.stdout.trim() : "";
   if (!baseBranch.startsWith("origin/")) {
@@ -873,6 +883,7 @@ async function detectProjectIdentity(pi, cwd) {
   return {
     repoPath,
     githubRepo,
+    githubRepositoryId,
     githubAliases: [...new Set(identities)],
     baseBranch,
     id,
@@ -880,22 +891,22 @@ async function detectProjectIdentity(pi, cwd) {
   };
 }
 
-async function prepareGithub(pi, githubRepo) {
+async function prepareGithub(pi, identity) {
   await commandExec(pi, "gh", ["auth", "status"]);
-  const view = JSON.parse((await commandExec(pi, "gh", ["repo", "view", githubRepo, "--json", "viewerPermission,nameWithOwner"])).stdout || "{}");
-  if (view.nameWithOwner !== githubRepo) {
+  const view = JSON.parse((await commandExec(pi, "gh", ["repo", "view", identity.githubRepo, "--json", "id,viewerPermission,nameWithOwner"])).stdout || "{}");
+  if (view.nameWithOwner !== identity.githubRepo || String(view.id || "") !== identity.githubRepositoryId) {
     throw new Error("GitHub repository identity changed during enablement");
   }
   if (!["ADMIN", "MAINTAIN", "WRITE"].includes(String(view.viewerPermission || "").toUpperCase())) {
     throw new Error("GitHub write permission is required to enable deadloop");
   }
   for (const [name, color] of STANDARD_LABELS) {
-    const lookup = await pi.exec("gh", ["api", "--silent", `repos/${githubRepo}/labels/${encodeURIComponent(name)}`], { timeout: 15_000 });
+    const lookup = await pi.exec("gh", ["api", "--silent", `repos/${identity.githubRepo}/labels/${encodeURIComponent(name)}`], { timeout: 15_000 });
     if (lookup.code === 0) continue;
     if (!/HTTP 404\b/.test(`${lookup.stderr || ""}\n${lookup.stdout || ""}`)) {
       throw new Error((lookup.stderr || lookup.stdout || `label lookup failed for ${name}`).trim());
     }
-    await commandExec(pi, "gh", ["label", "create", name, "-R", githubRepo, "--color", color]);
+    await commandExec(pi, "gh", ["label", "create", name, "-R", identity.githubRepo, "--color", color]);
   }
 }
 function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => true) {
@@ -1139,7 +1150,7 @@ export default function (pi) {
         previousEnabledAt = await withEnablementStateLock(async () => findEnabledProject(loadEnablementState(), identity)?.enabledAt);
         const configuredProject = resolveEnableProject(ctx.cwd, identity);
         const firstEnable = { firstEnableAutoMerge: Boolean(configuredProject.autoMerge) };
-        await prepareGithub(pi, identity.githubRepo);
+        await prepareGithub(pi, identity);
         await withEnablementStateLock(async () => {
           if (!ownsEnableAttempt(primaryRepoPath, enableAttemptToken)) {
             throw new Error("enablement was revoked while preflight was running");

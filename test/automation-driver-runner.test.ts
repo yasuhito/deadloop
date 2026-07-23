@@ -214,7 +214,7 @@ describe("deterministic automation driver runner", () => {
     expect({ sent, pending: entry.pendingDriverHandoff }).toEqual({ sent: ["driver prompt"], pending: undefined });
   });
 
-  it.each(["reviewer", "branch-update", "repair"])("discards a stale %s monitor handoff", (kind) => {
+  it.each(["issue", "reviewer", "branch-update", "repair"])("re-renders a stale %s monitor handoff for the current generation", (kind) => {
     const entry: Record<string, unknown> = {
       pendingDriverHandoff: {
         action: "needs_llm",
@@ -233,10 +233,10 @@ describe("deterministic automation driver runner", () => {
       sendUserMessage: (prompt) => sent.push(prompt),
     });
 
-    expect({ result: entry.lastResult, pending: entry.pendingDriverHandoff, sent }).toEqual({
-      result: "driver_handoff_stale_generation",
+    expect({ result: entry.lastResult, pending: entry.pendingDriverHandoff, queuedCurrentGeneration: sent.length === 1 && sent[0].includes("--enabled-at 2") }).toEqual({
+      result: "driver_needs_llm_queued",
       pending: undefined,
-      sent: [],
+      queuedCurrentGeneration: true,
     });
   });
 

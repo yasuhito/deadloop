@@ -17,6 +17,7 @@ const originalDeadloop = process.env.DEADLOOP;
 const originalDeadloopAutomations = process.env.DEADLOOP_AUTOMATIONS;
 const sandboxes: string[] = [];
 const enabledSafetyFields = {
+  githubRepositoryId: "R_demo",
   firstEnableAutoMerge: false,
   firstStartPending: false,
   lastObservedAutoMerge: false,
@@ -74,6 +75,15 @@ else
 fi
 `);
   chmodSync(gitPath, 0o755);
+  const ghPath = path.join(binDir, "gh");
+  writeFileSync(ghPath, `#!/bin/sh
+case "$*" in
+  "repo view other/"*" --json id") printf '%s\\n' '{"id":"R_other"}' ;;
+  "repo view "*" --json id") printf '%s\\n' '{"id":"R_demo"}' ;;
+  *) exit 1 ;;
+esac
+`);
+  chmodSync(ghPath, 0o755);
   return { root, repoPath };
 }
 
@@ -86,6 +96,7 @@ async function loadExtension(
     fetchRemote?: string;
     pushRemote?: string;
     canonicalRepos?: Record<string, string>;
+    repositoryIds?: Record<string, string>;
     upstream?: string;
     noUpstream?: boolean;
     defaultBranch?: string;
@@ -127,6 +138,7 @@ async function loadExtension(
         return {
           code: 0,
           stdout: JSON.stringify({
+            id: options.repositoryIds?.[requestedRepo] || "R_demo",
             viewerPermission: options.viewerPermission || "WRITE",
             nameWithOwner: options.canonicalRepos?.[requestedRepo] || "owner/demo",
             defaultBranchRef: { name: options.defaultBranch || "master" },
@@ -464,6 +476,19 @@ describe("enablement command integration", () => {
     const extension = await loadExtension(root, {
       pushRemote: "https://github.com/other/target.git",
       canonicalRepos: { "owner/demo": "owner/demo", "other/target": "other/target" },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("all origin fetch and push URLs must resolve to exactly the same GitHub repository");
+  });
+
+  it("rejects origin aliases with the same name when their immutable repository IDs differ", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, {
+      pushRemote: "https://github.com/old/demo.git",
+      canonicalRepos: { "owner/demo": "owner/demo", "old/demo": "owner/demo" },
+      repositoryIds: { "owner/demo": "R_demo", "old/demo": "R_reused" },
     });
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);

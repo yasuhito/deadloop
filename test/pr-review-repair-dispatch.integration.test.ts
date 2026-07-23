@@ -32,6 +32,7 @@ function runDispatch(enabled: boolean): { output: Record<string, any>; events: s
       projects: [{
         repoPath: root,
         githubRepo: "owner/repo",
+        githubRepositoryId: "R_repo",
         enabledAt: 1,
         firstEnableAutoMerge: false,
         firstStartPending: false,
@@ -60,6 +61,7 @@ const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,labels:[],comments:[]
 }));
+else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
 else fs.appendFileSync(process.env.EVENT_LOG, "github-mutation\\n");
 `,
   );
@@ -135,11 +137,18 @@ describe("review repair dispatch integration", () => {
     fs.mkdirSync(bin);
     fs.mkdirSync(state);
     fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
-      projects: [{ repoPath: root, githubRepo: "owner/repo", enabledAt: 7, enabled: true }],
+      projects: [{
+        repoPath: root, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 7,
+        firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
+        autoMergeAcknowledged: false, enabled: true,
+      }],
     }));
     fs.writeFileSync(promise, JSON.stringify({ status: "complete", outcome: "approved", reason: "", summary: "approved", findings: [] }));
     executable(path.join(bin, "gh"), `#!/usr/bin/env node
-process.stdout.write(JSON.stringify({number:143,state:"OPEN",headRefName:"agent/issue-142",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,labels:[],comments:[]}));
+const args = process.argv.slice(2);
+process.stdout.write(JSON.stringify(args[0] === "repo"
+  ? {id:"R_repo"}
+  : {number:143,state:"OPEN",headRefName:"agent/issue-142",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,labels:[],comments:[]}));
 `);
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 143, expectedHeadOid: "a".repeat(40), branch: "agent/issue-142",

@@ -11,17 +11,34 @@ function githubRepoFromRemote(remote) {
   return match ? match[1] : "";
 }
 
+const MAX_GUARDED_OPERATION_MS = 25_000;
+
 function originIdentities(repoPath) {
   const urls = [];
   for (const mode of [[], ["--push"]]) {
-    const result = childProcess.spawnSync("git", ["-C", repoPath, "remote", "get-url", ...mode, "--all", "origin"], { encoding: "utf8" });
+    const result = childProcess.spawnSync("git", ["-C", repoPath, "remote", "get-url", ...mode, "--all", "origin"], {
+      encoding: "utf8",
+      timeout: MAX_GUARDED_OPERATION_MS,
+    });
     if (result.status !== 0) return [];
     urls.push(...String(result.stdout || "").split(/\r?\n/).filter(Boolean));
   }
   return urls.map(githubRepoFromRemote);
 }
 
-const MAX_GUARDED_OPERATION_MS = 25_000;
+function githubRepositoryId(identity) {
+  if (!identity) return "";
+  const result = childProcess.spawnSync("gh", ["repo", "view", identity, "--json", "id"], {
+    encoding: "utf8",
+    timeout: MAX_GUARDED_OPERATION_MS,
+  });
+  if (result.status !== 0) return "";
+  try {
+    return String(JSON.parse(result.stdout || "{}").id || "");
+  } catch {
+    return "";
+  }
+}
 
 function canonicalStateDir() {
   const configDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
@@ -43,8 +60,10 @@ function assertEnabled(project) {
     );
     if (enabled) {
       const identities = originIdentities(project.repoPath);
-      const allowedIdentities = new Set([enabled.githubRepo, ...(enabled.githubAliases || [])]);
-      if (identities.length === 0 || identities.some((identity) => !allowedIdentities.has(identity))) throw new Error("origin identity mismatch");
+      if (
+        identities.length === 0
+        || identities.some((identity) => githubRepositoryId(identity) !== enabled.githubRepositoryId)
+      ) throw new Error("origin identity mismatch");
       if (project.enabledAt !== undefined && enabled.enabledAt !== project.enabledAt) {
         throw new Error("deadloop enablement generation changed; operation stopped");
       }

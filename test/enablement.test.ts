@@ -10,7 +10,7 @@ import {
   upsertEnabledProject,
 } from "../src/enablement";
 
-const project = { repoPath: "/repos/demo", githubRepo: "owner/demo" };
+const project = { repoPath: "/repos/demo", githubRepo: "owner/demo", githubRepositoryId: "R_demo" };
 const safetyFields = {
   firstEnableAutoMerge: false,
   firstStartPending: false,
@@ -37,7 +37,7 @@ describe("local enablement state", () => {
   });
 
   it("disables the selected project without removing its safety history", () => {
-    const state = upsertEnabledProject(upsertEnabledProject(null, project), { repoPath: "/repos/other", githubRepo: "owner/other" });
+    const state = upsertEnabledProject(upsertEnabledProject(null, project), { repoPath: "/repos/other", githubRepo: "owner/other", githubRepositoryId: "R_other" });
 
     expect(isEnabledProjectState(removeEnabledProject(state, project), project)).toBe(false);
   });

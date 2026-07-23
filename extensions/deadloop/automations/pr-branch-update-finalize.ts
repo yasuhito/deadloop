@@ -23,7 +23,7 @@ type FinalizeArgs = {
   checkCommand: string;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
-type EnabledProject = { githubRepo: string; githubAliases?: string[] };
+type EnabledProject = { githubRepo: string; githubRepositoryId: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => EnabledProject;
@@ -92,7 +92,7 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       args.repo,
       args.remote,
       enabled.githubRepo,
-      enabled.githubAliases || [],
+      enabled.githubRepositoryId,
       MAX_GUARDED_OPERATION_MS,
     );
     checked(ops, ["git", "-C", args.repo, "push", "--porcelain", pushDestination, `HEAD:refs/heads/${args.branch}`], MAX_GUARDED_OPERATION_MS);
