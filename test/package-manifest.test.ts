@@ -48,7 +48,7 @@ describe("package manifest files", () => {
   });
 
   it("includes README image assets", () => {
-    expect(packageJson.files).toContain("docs/assets/*.png");
+    expect(packageJson.files).toContain("docs/assets/*.webp");
   });
 
   it("includes the example project config", () => {
