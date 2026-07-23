@@ -24,6 +24,7 @@ const {
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -291,6 +292,20 @@ function launchBranchUpdate(
       },
       { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
     ),
+    {
+      revalidate: () => {
+        const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
+        if (!("pr" in livePlan)) throw new StaleLaunchError(`PR #${number} is no longer eligible`);
+        assertSameLaunchTarget(pr, livePlan.pr, "pr");
+        const liveDecision = branchUpdateDecision(livePlan.pr, env, null);
+        if (
+          liveDecision.action !== "delegate_worker"
+          || String(liveDecision.headOid || "") !== headOid
+          || String(liveDecision.baseOid || "") !== baseOid
+          || branchUpdateAttemptExists(livePlan.pr.comments || [], headOid, baseOid)
+        ) throw new StaleLaunchError(`PR #${number} branch-update target changed before launch`);
+      },
+    },
   );
   return { updaterName, headRefName: branch, retryKey: key, ...launch };
 }
@@ -335,6 +350,16 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
       },
       { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
     ),
+    {
+      revalidate: () => {
+        const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
+        if (livePlan.kind !== "review_required") throw new StaleLaunchError(`PR #${number} is no longer eligible for reviewer launch`);
+        assertSameLaunchTarget(pr, livePlan.pr, "pr");
+        if (branchUpdateDecision(livePlan.pr, env, null).action !== "no_update") {
+          throw new StaleLaunchError(`PR #${number} branch-update state changed before reviewer launch`);
+        }
+      },
+    },
   );
   return { reviewerName, headRefName, ...launch };
 }
@@ -487,6 +512,12 @@ function drive(fixturePath: string | undefined): DriverResult {
         prompt: renderBranchUpdateMonitorPrompt(monitorInput),
       });
     } catch (error) {
+      if (isStaleLaunchError(error)) {
+        return driverResult("skip", `PR #${plan.decision.number} changed before branch-update launch; no workflow state was mutated`, {
+          driverAction: "branch_update_launch_stale",
+          prNumber: plan.decision.number,
+        });
+      }
       const reason = `branch-update launch failed: ${error instanceof Error ? error.message : String(error)}`;
       const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, reason);
       return driverResult("done", `PR #${plan.decision.number} branch-update launch failed; marked blocked`, {
@@ -516,7 +547,18 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   const { pr, gate, reason } = plan;
   const decision = plan.decision;
-  const launch = launchPrReviewer(pr, env, fixture, reason);
+  let launch: JsonObject;
+  try {
+    launch = launchPrReviewer(pr, env, fixture, reason);
+  } catch (error) {
+    if (isStaleLaunchError(error)) {
+      return driverResult("skip", `PR #${decision.number} changed before reviewer launch; no workflow state was mutated`, {
+        driverAction: "reviewer_launch_stale",
+        prNumber: decision.number,
+      });
+    }
+    throw error;
+  }
   const monitorInput = {
     prNumber: Number(pr.number || 0),
     expectedHeadOid: String(pr.headRefOid || ""),

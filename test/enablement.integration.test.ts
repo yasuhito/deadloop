@@ -803,16 +803,13 @@ describe("enablement command integration", () => {
     writeConfig(root, repoPath);
     const stateDir = path.join(root, ".pi", "agent", "deadloop");
     const lockPath = path.join(stateDir, schedulerLockName({ githubRepositoryId: "R_demo" }));
-    writeFileSync(lockPath, JSON.stringify({ pid: 4242, token: "owner" }));
-    vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: number | string) => {
-      if (pid === 4242 && signal === 0) return true;
-      return true;
-    }) as typeof process.kill);
+    const { processStartIdentity } = require("../src/enablement-lock.cjs");
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startIdentity: processStartIdentity(process.pid), token: "owner" }));
     const extension = await loadExtension(root);
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
-    expect(extension.messages.at(-1)).toContain("another session (pid 4242)");
+    expect(extension.messages.at(-1)).toContain(`another session (pid ${process.pid})`);
   });
 
   it("takes scheduler ownership after the original owner releases its lock", async () => {
@@ -820,11 +817,8 @@ describe("enablement command integration", () => {
     writeConfig(root, repoPath);
     const stateDir = path.join(root, ".pi", "agent", "deadloop");
     const lockPath = path.join(stateDir, schedulerLockName({ githubRepositoryId: "R_demo" }));
-    writeFileSync(lockPath, JSON.stringify({ pid: 4242, token: "owner" }));
-    vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: number | string) => {
-      if (pid === 4242 && signal === 0) return true;
-      return true;
-    }) as typeof process.kill);
+    const { processStartIdentity } = require("../src/enablement-lock.cjs");
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startIdentity: processStartIdentity(process.pid), token: "owner" }));
     const extension = await loadExtension(root);
     vi.useFakeTimers();
     await invoke(extension.commands.get("deadloop-enable")!, repoPath, { isIdle: () => false });

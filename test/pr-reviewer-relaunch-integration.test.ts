@@ -118,6 +118,7 @@ if (args[0] === "agent" && args[1] === "list") {
     expect(actions).toEqual([
       "agent list",
       "agent list",
+      "agent list",
       "worktree open",
       "agent list",
       "pane close pane-old",

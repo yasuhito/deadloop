@@ -1,14 +1,25 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 
-function isPidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+function processStartIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return "";
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error && error.code === "EPERM";
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fieldsAfterCommand = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+    return fieldsAfterCommand[19] || "";
+  } catch {
+    return "";
   }
+}
+
+function isLockOwnerAlive(owner) {
+  if (!owner?.startIdentity) return false;
+  try {
+    process.kill(owner.pid, 0);
+  } catch (error) {
+    if (!error || error.code !== "EPERM") return false;
+  }
+  return processStartIdentity(owner.pid) === owner.startIdentity;
 }
 
 function readMetadata(file) {
@@ -64,7 +75,7 @@ function reclaimStale(lockPath, hooks = {}) {
   }
   try {
     const owner = readMetadata(claimPath);
-    if ((!owner && !isOldMalformedLock(claimPath)) || (owner && isPidAlive(owner.pid)) || !sameFile(lockPath, claimPath)) return false;
+    if ((!owner && !isOldMalformedLock(claimPath)) || (owner && isLockOwnerAlive(owner)) || !sameFile(lockPath, claimPath)) return false;
     hooks.beforeStaleUnlink?.();
     if (!sameFile(lockPath, claimPath)) return false;
     if (owner ? readMetadata(lockPath)?.token !== owner.token : !isOldMalformedLock(lockPath)) return false;
@@ -82,7 +93,9 @@ function tryAcquire(lockPath, hooks = {}) {
   try {
     const fd = fs.openSync(pendingPath, "wx");
     try {
-      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, token }));
+      const startIdentity = processStartIdentity(process.pid);
+      if (!startIdentity) throw new Error("process start identity is unavailable");
+      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, startIdentity, token }));
       fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);
@@ -121,4 +134,4 @@ async function acquireLock(lockPath, options = {}) {
   throw new Error(options.busyMessage || "enablement state is busy");
 }
 
-module.exports = { acquireLock, acquireLockSync, reclaimStale, releaseOwned };
+module.exports = { acquireLock, acquireLockSync, processStartIdentity, reclaimStale, releaseOwned };

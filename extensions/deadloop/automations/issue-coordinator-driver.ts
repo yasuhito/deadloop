@@ -20,6 +20,7 @@ const {
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -162,6 +163,17 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       },
       { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
     ),
+    {
+      revalidate: () => {
+        const liveIssues = issueList(null, env.githubRepo);
+        const livePlan = planIssueCoordinatorAction(
+          liveIssues,
+          decisionForIssues(undefined, liveIssues, env.githubRepo, env),
+        );
+        if (livePlan.kind !== "worker_required") throw new StaleLaunchError("selected issue is no longer eligible");
+        assertSameLaunchTarget(issue, livePlan.issue, "issue");
+      },
+    },
   );
   return { workerName, branch, ...launch };
 }
@@ -233,7 +245,18 @@ function drive(fixturePath: string | undefined): DriverResult {
     });
   }
 
-  const launch = launchIssueWorker(issue, env, fixture);
+  let launch: JsonObject;
+  try {
+    launch = launchIssueWorker(issue, env, fixture);
+  } catch (error) {
+    if (isStaleLaunchError(error)) {
+      return driverResult("skip", `Issue #${issue.number} changed before launch; no workflow state was mutated`, {
+        driverAction: "worker_launch_stale",
+        issueNumber: issue.number,
+      });
+    }
+    throw error;
+  }
   const monitorInput = {
     issueNumber: Number(issue.number || 0),
     automationDir: env.automationDir,

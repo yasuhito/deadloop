@@ -15,8 +15,9 @@ function withEnabledDriverLock(project, operation, options) {
   return withEnabledProjectLock(project, operation, options);
 }
 
-function withEnabledDriverLaunch(project, mutateWorkflowState, launchAgent, options) {
+function withEnabledDriverLaunch(project, mutateWorkflowState, launchAgent, options = {}) {
   return withEnabledProjectLock(project, () => {
+    options.revalidate?.();
     mutateWorkflowState();
     return launchAgent();
   }, options);

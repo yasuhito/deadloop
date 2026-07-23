@@ -23,6 +23,7 @@ const {
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -268,6 +269,20 @@ function dispatch(args: JsonObject): DriverResult {
         github.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
       },
       () => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env),
+      {
+        revalidate: () => {
+          const livePr = readLivePr(env.githubRepo, prNumber);
+          assertSameLaunchTarget(pr, livePr, "pr");
+          const labels = labelNames(livePr.labels);
+          if (!labels.includes(env.reviewLabel) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)) {
+            throw new StaleLaunchError(`PR #${prNumber} is no longer eligible for repair`);
+          }
+          const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings);
+          if (liveSelection.action !== "launch_repair" || liveSelection.key !== selection.key) {
+            throw new StaleLaunchError(`PR #${prNumber} repair attempt state changed before launch`);
+          }
+        },
+      },
     );
     const monitorInput = {
       prNumber: Number(prNumber),
@@ -294,6 +309,11 @@ function dispatch(args: JsonObject): DriverResult {
       prompt: renderRepairMonitorPrompt(monitorInput),
     });
   } catch (error) {
+    if (isStaleLaunchError(error)) {
+      return driverResult("done", `PR #${prNumber} changed before repair launch; left workflow state untouched`, {
+        driverAction: "review_repair_launch_stale",
+      });
+    }
     const comment = applyHumanBlock(
       prNumber,
       env,

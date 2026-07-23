@@ -27,6 +27,9 @@ function parseArgs(argv: string[]): Args {
 }
 
 function runGuarded(args: Args, spawn = spawnSync): number {
+  if (/(^|[/\\])git(?:\.exe)?$/.test(args.command[0]) && args.command.slice(1).includes("push")) {
+    throw new Error("git push must use guarded-push.ts");
+  }
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
     () => {

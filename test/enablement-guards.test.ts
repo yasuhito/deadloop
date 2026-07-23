@@ -13,6 +13,7 @@ const {
 } = require("../src/driver-enablement.cjs");
 const { acquireLockSync, reclaimStale } = require("../src/enablement-lock.cjs");
 const { GUARDED_OPERATION_TIMEOUT_MS, runGuarded } = require("../extensions/deadloop/automations/guarded-operation.ts");
+const { runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.ts");
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
 const sandboxes: string[] = [];
@@ -135,6 +136,26 @@ describe("enablement mutation guards", () => {
     expect(DISABLE_LOCK_ATTEMPTS * DISABLE_LOCK_DELAY_MS).toBeGreaterThan(7 * 20_000);
   });
 
+  it.each(["issue worker", "PR reviewer", "branch update", "review repair"])(
+    "aborts a stale %s target before mutation or launch",
+    () => {
+      const project = fixture();
+      writeState(project, { enabledAt: 1 });
+      const events: string[] = [];
+
+      try {
+        withEnabledDriverLaunch(
+          { ...project, enabledAt: 1 },
+          () => events.push("mutated"),
+          () => events.push("launched"),
+          { revalidate: () => { events.push("revalidated"); throw new Error("stale target"); } },
+        );
+      } catch {}
+
+      expect(events).toEqual(["revalidated"]);
+    },
+  );
+
   it("bounds the command while holding the enablement lock", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
@@ -149,6 +170,31 @@ describe("enablement mutation guards", () => {
     );
 
     expect(timeout).toBe(GUARDED_OPERATION_TIMEOUT_MS);
+  });
+
+  it("rejects git push through the generic guarded operation", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    expect(() => runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["git", "push", "origin"] },
+    )).toThrow("guarded-push.ts");
+  });
+
+  it("pushes to the verified URL even if origin changes after authorization", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    let pushedDestination = "";
+    const ops = { run: (args: string[]) => {
+      if (args.includes("get-url")) return { status: 0, stdout: "https://github.com/owner/repo.git\n", stderr: "" };
+      if (args[0] === "gh") return { status: 0, stdout: '{"id":"R_repo"}', stderr: "" };
+      pushedDestination = args[5] || "";
+      execFileSync("git", ["-C", project.repoPath, "remote", "set-url", "origin", "https://github.com/attacker/wrong.git"]);
+      return { status: 0, stdout: "", stderr: "" };
+    } };
+
+    runGuardedPush({ projectRepo: project.repoPath, worktree: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, remote: "origin", branch: "agent/test" }, ops);
+
+    expect(pushedDestination).toBe("https://github.com/owner/repo.git");
   });
 
   it("recovers an old empty lock left before metadata was written", () => {
@@ -182,6 +228,14 @@ describe("enablement mutation guards", () => {
     const lockPath = path.join(project.stateDir, "enabled-projects.json.lock");
     writeFileSync(lockPath, JSON.stringify({ pid: 999_999_999, token: "stale" }));
     linkSync(lockPath, `${lockPath}.reclaim`);
+
+    expect(acquireLockSync(lockPath, { attempts: 3, delayMs: 1 }).token).toEqual(expect.any(String));
+  });
+
+  it("reclaims a lock whose PID belongs to a different process lifetime", () => {
+    const project = fixture();
+    const lockPath = path.join(project.stateDir, "enabled-projects.json.lock");
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startIdentity: "different-start", token: "stale" }));
 
     expect(acquireLockSync(lockPath, { attempts: 3, delayMs: 1 }).token).toEqual(expect.any(String));
   });

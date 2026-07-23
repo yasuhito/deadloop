@@ -59,7 +59,7 @@ function runDispatch(enabled: boolean): { output: Record<string, any>; events: s
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
-  number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,labels:[],comments:[]
+  number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,labels:[{name:"agent:review"},{name:"agent:reviewing"}],comments:[]
 }));
 else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
 else fs.appendFileSync(process.env.EVENT_LOG, "github-mutation\\n");

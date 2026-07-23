@@ -69,11 +69,13 @@ Polling rules:
 - If the promise is missing while the agent is idle/done, ask the ${input.actorName} to write the promise file instead of guessing completion.
 
 Enablement guard:
-- Immediately before every monitor-side \`git push\` and every mutating \`gh\` command (including PR creation, comments, labels, handoff, merge, and blocked paths), run the whole command through this prefix: \`${guardedOperation}\`.
-- Never run those mutations directly. Each guarded operation is synchronized with \`/deadloop-disable\`; if it reports that deadloop is disabled, stop without that mutation. Re-evaluate only on a later scheduler cycle after re-enable.`;
+- Immediately before every mutating \`gh\` command (including PR creation, comments, labels, handoff, merge, and blocked paths), run the whole command through this prefix: \`${guardedOperation}\`.
+- Never run those mutations directly. Each guarded operation is synchronized with \`/deadloop-disable\`; if it reports that deadloop is disabled, stop without that mutation. Re-evaluate only on a later scheduler cycle after re-enable.
+- Never pass \`git push\` through \`guarded-operation.ts\`; issue-worker pushes use the destination-bound command below.`;
 }
 
 function renderIssueMonitorPrompt(input: IssueMonitorPromptInput): string {
+  const guardedPush = `node ${shellQuotePrompt(`${input.automationDir}/guarded-push.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --worktree ${shellQuotePrompt(input.worktreePath)} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --remote origin --branch ${shellQuotePrompt(input.branch)}`;
   return `Deterministic driver launched Worker for Issue #${input.issueNumber}. Do not launch another agent and do not reselect another issue.
 
 ${renderPromisePollingRules(input)}
@@ -81,7 +83,7 @@ ${renderPromisePollingRules(input)}
 After a \`complete\` promise:
 - Inspect \`${input.worktreePath}\` and confirm only Issue #${input.issueNumber} changes are present.
 - Run validation including \`${input.checkCommand}\` before creating any PR.
-- Push only the Worker branch \`${input.branch}\` without force-push, create a reviewable PR whose body includes \`Closes #${input.issueNumber}\`, and add \`${input.reviewLabel}\`.
+- Push only the Worker branch \`${input.branch}\` without force-push by running exactly \`${guardedPush}\`. This resolves and verifies the repository, then pushes to that explicit destination rather than mutable remote configuration; create a reviewable PR whose body includes \`Closes #${input.issueNumber}\`, and add \`${input.reviewLabel}\`.
 - Do not manually close the issue with GitHub commands, and do not merge the PR.
 
 After a \`blocked\` promise:

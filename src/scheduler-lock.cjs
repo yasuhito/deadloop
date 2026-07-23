@@ -1,7 +1,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 
-const { reclaimStale, releaseOwned } = require("./enablement-lock.cjs");
+const { processStartIdentity, reclaimStale, releaseOwned } = require("./enablement-lock.cjs");
 
 function readOwner(lockPath) {
   try {
@@ -19,7 +19,9 @@ function acquireSchedulerLock(lockPath, metadata, hooks = {}) {
     try {
       const fd = fs.openSync(pendingPath, "wx");
       try {
-        fs.writeFileSync(fd, JSON.stringify({ ...metadata, pid: process.pid, token }));
+        const startIdentity = processStartIdentity(process.pid);
+        if (!startIdentity) throw new Error("process start identity is unavailable");
+        fs.writeFileSync(fd, JSON.stringify({ ...metadata, pid: process.pid, startIdentity, token }));
         fs.fsyncSync(fd);
       } finally {
         fs.closeSync(fd);
