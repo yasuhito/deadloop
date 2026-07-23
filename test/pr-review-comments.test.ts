@@ -11,6 +11,7 @@ const {
   reviewCommentExists,
   repairResultCommentExists,
 } = require("../extensions/deadloop/automations/pr-review-comments.ts");
+const { sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
 
 function fixture(name: string) {
   return JSON.parse(fs.readFileSync(path.join("test/fixtures/pr-review-comments", name), "utf8"));
@@ -70,6 +71,20 @@ describe("PR review public comments", () => {
 
   it("detects an existing review result marker", () => {
     expect(reviewCommentExists([{ body: "<!-- deadloop:review-result head=abc review=def outcome=approved -->" }], "abc", "def", "approved")).toBe(true);
+  });
+
+  it("redacts internal promise paths from public review text", () => {
+    expect(
+      renderApprovedReviewComment({
+        headOid: "a".repeat(40),
+        summary: "Read /home/user/.pi/agent/deadloop/promise.json",
+        reviewFingerprint: "1".repeat(20),
+      }),
+    ).not.toContain("/home/user");
+  });
+
+  it("requires one structured repair for every original finding", () => {
+    expect(sameFindingTitles([{ title: "First" }], ["First", "Second"])).toBe(false);
   });
 
   it("detects an existing repair result marker", () => {

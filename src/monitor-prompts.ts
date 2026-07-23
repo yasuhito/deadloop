@@ -137,7 +137,7 @@ ${renderPromisePollingRules(input)}
 
 Terminal handling:
 - As soon as validation returns complete or blocked, run this deterministic completion handler exactly once and follow its result:
-  \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-complete.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --result ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/finalizer-result.json`)} --github-repo ${shellQuotePrompt(input.githubRepo)} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --attempt-key ${shellQuotePrompt(input.attemptKey)} --reviewing-label ${shellQuotePrompt(input.reviewingLabel)} --blocked-label ${shellQuotePrompt(input.blockedLabel)}\`
+  \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-complete.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --result ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/finalizer-result.json`)} --contract ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/review-contract.json`)} --github-repo ${shellQuotePrompt(input.githubRepo)} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --attempt-key ${shellQuotePrompt(input.attemptKey)} --reviewing-label ${shellQuotePrompt(input.reviewingLabel)} --blocked-label ${shellQuotePrompt(input.blockedLabel)}\`
 - The handler posts a success comment only when the structured promise, finalizer receipt, and live new head agree. It posts idempotent recovery guidance for blocked or inconclusive completion and posts nothing for stale_head.
 - Do not independently render comments, infer changes from git diffs or logs, or change labels.
 

@@ -5,6 +5,21 @@ type JsonObject = Record<string, any>;
 const REVIEW_RESULT_RE = /<!--\s*deadloop:review-result\s+head=([0-9a-f]+)\s+review=([0-9a-f]+)\s+outcome=(approved|changes_requested|human_required)\s*-->/gi;
 const REPAIR_RESULT_RE = /<!--\s*deadloop:review-repair-result\s+key=([0-9a-f]+)\s+head=([0-9a-f]+)\s*-->/gi;
 
+const INTERNAL_DETAIL_RE = /(?:^|[\s`'"(])(?:\/(?:home|tmp|Users|private|var|root)\/|[A-Za-z]:\\)|(?:\.pi|\.deadloop)[\\/]|(?:worker|review-repair)-prompt(?:\.md)?|promise\.json|[\\/]prompts?[\\/]|review-repair worker|deterministic dispatcher/i;
+
+function publicText(value: unknown, fallback: string): string {
+  const text = String(value || "").trim();
+  if (!text || INTERNAL_DETAIL_RE.test(text) || text.includes("<!-- deadloop:")) return fallback;
+  return text;
+}
+
+function publicRepoPath(value: unknown): string {
+  const candidate = String(value || "").trim();
+  if (!candidate || candidate.startsWith("/") || candidate.startsWith("\\") || /^[A-Za-z]:\\/.test(candidate)) return "Not specified";
+  if (candidate.split(/[\\/]/).includes("..") || INTERNAL_DETAIL_RE.test(candidate)) return "Not specified";
+  return candidate;
+}
+
 function code(value: unknown): string {
   return `\`${String(value || "unknown").replace(/`/g, "")}\``;
 }
@@ -15,8 +30,9 @@ function reviewMarker(input: JsonObject): string {
 
 function renderChangesRequestedComment(input: JsonObject): string {
   const findings = (input.findings || []).map((finding: JsonObject) => {
-    const location = finding.line ? `${finding.path || "Not specified"}:${finding.line}` : finding.path || "Not specified";
-    return `### ${finding.title} — ${finding.severity || "unspecified"}\n- File: ${code(location)}\n- Reason: ${finding.body}`;
+    const path = publicRepoPath(finding.path);
+    const location = finding.line && path !== "Not specified" ? `${path}:${finding.line}` : path;
+    return `### ${publicText(finding.title, "Review finding")} — ${finding.severity || "unspecified"}\n- File: ${code(location)}\n- Reason: ${publicText(finding.body, "The detailed evidence contained internal runtime information and was omitted.")}`;
   });
   const marker = renderRepairMarker(input.headOid, input.reviewFingerprint);
   const nextStep = input.repairAlreadyStarted
@@ -40,7 +56,7 @@ function renderApprovedReviewComment(input: JsonObject): string {
   return `## Review result: approved
 
 - Reviewed commit: ${code(input.headOid)}
-- Reason: ${input.summary || input.reason || "No actionable defects were found."}
+- Reason: ${publicText(input.summary || input.reason, "No actionable defects were found.")}
 
 ## Next step
 The reviewed head is approved. The configured handoff or merge safety checks can continue.
@@ -52,8 +68,8 @@ function renderHumanRequiredComment(input: JsonObject): string {
   return `## Review result: human decision required
 
 - Reviewed commit: ${code(input.headOid)}
-- Reason: ${input.reason || "The reviewer could not safely decide or repair this result."}
-- Context: ${input.summary || "Review the findings and choose the safe next action."}
+- Reason: ${publicText(input.reason, "The reviewer could not safely decide or repair this result.")}
+- Context: ${publicText(input.summary, "Review the findings and choose the safe next action.")}
 
 ## Recovery steps
 Resolve the decision above, push a new commit if code changes are needed, then remove ${code(input.blockedLabel || "agent:blocked")} so the new head can be reviewed.
@@ -64,9 +80,11 @@ ${reviewMarker({ ...input, outcome: "human_required" })}`;
 function renderRepairSuccessComment(input: JsonObject): string {
   const repairs = (input.repairs || []).map(
     (repair: JsonObject) =>
-      `### ${repair.title}\n- Changed: ${repair.summary}\n- Files: ${(repair.paths || []).map(code).join(", ") || "None reported"}`,
+      `### ${publicText(repair.title, "Review finding")}\n- Changed: ${publicText(repair.summary, "The detailed repair summary contained internal runtime information and was omitted.")}\n- Files: ${(repair.paths || []).map(publicRepoPath).map(code).join(", ") || "None reported"}`,
   );
-  const checks = (input.checks || []).map((check: JsonObject) => `- ${code(check.command)}: ${check.result}`);
+  const checks = (input.checks || []).map(
+    (check: JsonObject) => `- ${code(publicText(check.command, "Configured project check"))}: ${check.result}`,
+  );
   return `## Automatic review repair completed
 
 - Review findings from: ${code(input.originalHeadOid)}
@@ -106,6 +124,7 @@ module.exports = {
   renderChangesRequestedComment,
   renderHumanRequiredComment,
   renderRepairSuccessComment,
+  publicText,
   repairResultCommentExists,
   reviewCommentExists,
 };

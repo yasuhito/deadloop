@@ -10,23 +10,34 @@ const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
 const key = "abcdef1234567890abcd";
 
-function runCompletion(options: { promise: Record<string, unknown>; receipt?: Record<string, unknown>; comments?: { body: string }[] }) {
+function runCompletion(options: {
+  promise: Record<string, unknown>;
+  receipt?: Record<string, unknown> | string;
+  comments?: { body: string }[];
+}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-repair-complete-"));
   roots.push(root);
   const bin = path.join(root, "bin");
   const promiseFile = path.join(root, "promise.json");
   const resultFile = path.join(root, "result.json");
+  const contractFile = path.join(root, "contract.json");
   const postedFile = path.join(root, "posted.txt");
   fs.mkdirSync(bin);
   fs.writeFileSync(promiseFile, JSON.stringify(options.promise));
-  if (options.receipt) fs.writeFileSync(resultFile, JSON.stringify(options.receipt));
+  fs.writeFileSync(
+    contractFile,
+    JSON.stringify({ attemptKey: key, expectedHead: oldHead, findingTitles: ["Unsafe fallback"] }),
+  );
+  if (options.receipt) {
+    fs.writeFileSync(resultFile, typeof options.receipt === "string" ? options.receipt : JSON.stringify(options.receipt));
+  }
   const gh = path.join(bin, "gh");
   fs.writeFileSync(
     gh,
     `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:"OPEN",headRefOid:"${newHead}",comments:${JSON.stringify(options.comments || [])}}));
+if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:"OPEN",headRefOid:"${newHead}",labels:[{name:"agent:reviewing"}],comments:${JSON.stringify(options.comments || [])}}));
 if (args[0] === "pr" && args[1] === "comment") fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
 `,
   );
@@ -39,6 +50,8 @@ if (args[0] === "pr" && args[1] === "comment") fs.writeFileSync(process.env.POST
       promiseFile,
       "--result",
       resultFile,
+      "--contract",
+      contractFile,
       "--github-repo",
       "owner/repo",
       "--pr",
@@ -77,6 +90,15 @@ describe("review repair deterministic completion", () => {
     });
 
     expect(result.posted).toContain(`New commit: \`${newHead}\``);
+  });
+
+  it("turns a malformed finalizer receipt into recovery instead of an exception", () => {
+    const result = runCompletion({
+      promise: { status: "blocked", reason: "check_failed", summary: "checks stopped" },
+      receipt: "{",
+    });
+
+    expect(result.output.driverAction).toBe("repair_human_blocked");
   });
 
   it("does not post repair success for stale_head", () => {

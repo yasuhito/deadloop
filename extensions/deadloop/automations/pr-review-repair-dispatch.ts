@@ -14,6 +14,7 @@ const {
   selectRepairAttempt,
 } = require("./pr-review-repair-state.ts");
 const {
+  publicText,
   renderApprovedReviewComment,
   renderChangesRequestedComment,
   renderHumanRequiredComment,
@@ -83,8 +84,8 @@ function readLivePr(repo: string, prNumber: string): JsonObject {
 
 function recoveryComment(prNumber: string, env: ReturnType<typeof envConfig>, reason: string, summary: string): string {
   return `## What happened
-- Automatic review repair for PR #${prNumber} requires human intervention: ${reason}.
-- ${summary || "The bounded automatic path could not safely continue."}
+- Automatic review repair for PR #${prNumber} requires human intervention: ${publicText(reason, "the bounded automatic path could not safely continue")}.
+- ${publicText(summary, "The bounded automatic path could not safely continue.")}
 
 ## Recovery steps
 1. Inspect the current head, review findings, checks, and deadloop attempt markers.
@@ -177,6 +178,13 @@ function launchRepair(
 ): JsonObject {
   commandRunner.runText(["git", "check-ref-format", "--branch", branch]);
   const uuid = randomUUID();
+  const runDir = path.join(env.stateDir, "runs", uuid);
+  fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(
+    path.join(runDir, "review-contract.json"),
+    `${JSON.stringify({ attemptKey: key, expectedHead, findingTitles: findings.map((finding) => String(finding.title)) })}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
   const repairName = `${env.projectId}-pr-${prNumber}-review-repair-${key}`;
   const launch = launchAgentFlow(
     {
@@ -230,7 +238,7 @@ function dispatch(args: JsonObject): DriverResult {
       github.commentPr(
         env.githubRepo,
         prNumber,
-        `Reviewer technical failure will be retried once for this head: ${promise.reason || "unknown failure"}.\n\n${renderTechnicalFailureMarker(expectedHead)}`,
+        `Reviewer technical failure will be retried once for this head: ${publicText(promise.reason, "technical review failure")}.\n\n${renderTechnicalFailureMarker(expectedHead)}`,
       );
       return driverResult("done", `PR #${prNumber} reviewer technical failure retained review labels for one retry`, {
         driverAction: "review_technical_retry",
@@ -267,7 +275,10 @@ function dispatch(args: JsonObject): DriverResult {
       comment = renderHumanRequiredComment(commentInput);
       github.commentPr(env.githubRepo, prNumber, comment);
     }
-    github.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+    const labelNames = (pr.labels || []).map((label: JsonObject) => String(label.name || label));
+    if (labelNames.includes(env.reviewingLabel) || !labelNames.includes(env.blockedLabel)) {
+      github.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+    }
     return driverResult("done", `PR #${prNumber} review requires a human`, { driverAction: "review_human_blocked", comment });
   }
 

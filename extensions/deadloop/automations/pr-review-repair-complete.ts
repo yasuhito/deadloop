@@ -4,7 +4,7 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const { validatePromise } = require("./extract-worker-promise.ts");
-const { renderRepairSuccessComment, repairResultCommentExists } = require("./pr-review-comments.ts");
+const { publicText, renderRepairSuccessComment, repairResultCommentExists } = require("./pr-review-comments.ts");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 
@@ -18,7 +18,7 @@ function parseArgs(argv: string[]): JsonObject {
     if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs");
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
-  for (const name of ["promise", "result", "githubRepo", "pr", "expectedHead", "attemptKey", "reviewingLabel", "blockedLabel"]) {
+  for (const name of ["promise", "result", "contract", "githubRepo", "pr", "expectedHead", "attemptKey", "reviewingLabel", "blockedLabel"]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
   return values;
@@ -28,8 +28,8 @@ function recoveryComment(args: JsonObject, reason: string, summary: string): str
   return `## Automatic review repair stopped
 
 - Review findings from: \`${String(args.expectedHead).toLowerCase()}\`
-- Reason: ${reason}
-- Detail: ${summary || "The bounded repair could not safely complete."}
+- Reason: ${publicText(reason, "The bounded repair could not safely complete.")}
+- Detail: ${publicText(summary, "The bounded repair could not safely complete.")}
 
 ## Recovery steps
 Inspect the current PR head and checks, correct the branch without rewriting published history, push a new commit, then remove \`${args.blockedLabel}\` so review can resume.
@@ -37,11 +37,28 @@ Inspect the current PR head and checks, correct the branch without rewriting pub
 <!-- deadloop:review-repair-stop key=${String(args.attemptKey).toLowerCase()} -->`;
 }
 
+function readJson(filePath: string): JsonObject | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameFindingTitles(repairs: JsonObject[], findingTitles: unknown): boolean {
+  if (!Array.isArray(findingTitles) || repairs.length !== findingTitles.length) return false;
+  const actual = repairs.map((repair) => String(repair.title)).sort();
+  const expected = findingTitles.map(String).sort();
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
 function completion(args: JsonObject): DriverResult {
   const runner = createCommandRunner();
   const github = createGithubOperations(runner);
   const validation = validatePromise(String(args.promise));
-  const receipt = fs.existsSync(String(args.result)) ? JSON.parse(fs.readFileSync(String(args.result), "utf8")) : null;
+  const receipt = readJson(String(args.result));
+  const contract = readJson(String(args.contract));
   const pr = runner.runJson([
     "gh",
     "pr",
@@ -50,9 +67,11 @@ function completion(args: JsonObject): DriverResult {
     "-R",
     String(args.githubRepo),
     "--json",
-    "state,headRefOid,comments",
+    "state,headRefOid,labels,comments",
   ]);
   const comments = (pr.comments || []) as JsonObject[];
+  const labelNames = (pr.labels || []).map((label: JsonObject) => String(label.name || label));
+  const needsHumanLabels = labelNames.includes(String(args.reviewingLabel)) || !labelNames.includes(String(args.blockedLabel));
   const stopMarker = `<!-- deadloop:review-repair-stop key=${String(args.attemptKey).toLowerCase()} -->`;
 
   if (validation.status === "complete" && validation.promise?.reason === "stale_head") {
@@ -63,6 +82,10 @@ function completion(args: JsonObject): DriverResult {
     validation.status === "complete" &&
     validation.promise?.reason === "repair_pushed" &&
     receipt?.action === "pushed" &&
+    contract?.attemptKey === args.attemptKey &&
+    String(contract?.expectedHead || "").toLowerCase() === String(args.expectedHead).toLowerCase() &&
+    sameFindingTitles(validation.promise.repairs, contract?.findingTitles) &&
+    String(pr.state || "").toUpperCase() === "OPEN" &&
     String(receipt.originalHeadOid || "").toLowerCase() === String(args.expectedHead).toLowerCase() &&
     String(receipt.headOid || "").toLowerCase() === String(pr.headRefOid || "").toLowerCase() &&
     JSON.stringify(validation.promise.checks) === JSON.stringify(receipt.checks);
@@ -83,13 +106,24 @@ function completion(args: JsonObject): DriverResult {
   }
 
   if (comments.some((comment) => String(comment?.body || "").includes(stopMarker))) {
+    if (needsHumanLabels) {
+      github.movePrLabels(String(args.githubRepo), String(args.pr), {
+        remove: String(args.reviewingLabel),
+        add: String(args.blockedLabel),
+      });
+    }
     return driverResult("done", `PR #${args.pr} repair stop was already posted`, { driverAction: "repair_stop_duplicate" });
   }
   const reason = validation.promise?.reason || validation.error || receipt?.reason || "inconclusive_repair_completion";
   const summary = validation.promise?.summary || "The finalizer receipt and structured repair report did not confirm the same successful push.";
   const comment = recoveryComment(args, reason, summary);
   github.commentPr(String(args.githubRepo), String(args.pr), comment);
-  github.movePrLabels(String(args.githubRepo), String(args.pr), { remove: String(args.reviewingLabel), add: String(args.blockedLabel) });
+  if (needsHumanLabels) {
+    github.movePrLabels(String(args.githubRepo), String(args.pr), {
+      remove: String(args.reviewingLabel),
+      add: String(args.blockedLabel),
+    });
+  }
   return driverResult("done", `PR #${args.pr} repair requires human recovery`, { driverAction: "repair_human_blocked", comment });
 }
 
@@ -105,4 +139,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { completion, parseArgs, recoveryComment };
+module.exports = { completion, parseArgs, readJson, recoveryComment, sameFindingTitles };
