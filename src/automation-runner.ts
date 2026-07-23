@@ -293,6 +293,13 @@ export async function runScheduledAutomation(
     return;
   }
 
+  if (deps.isEnabled && !deps.isEnabled()) {
+    recordAutomationResult(entry, "disabled_before_driver");
+    entry.updatedAt = deps.now();
+    deps.saveState(state);
+    return;
+  }
+
   if (await runConfiguredDriver(project, automation, entry, state, deps)) return;
 
   const promptResolution = deps.resolveAutomationFileInDir("prompt", automation, automation.promptFile);

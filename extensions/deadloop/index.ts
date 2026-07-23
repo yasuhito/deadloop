@@ -273,19 +273,17 @@ async function updateEnablementState(update) {
   throw new Error("enablement state is busy; retry the command");
 }
 
-function applyFirstEnableAutoMergeGate(project) {
-  const state = loadEnablementState();
-  const enabled = findEnabledProject(state, project);
-  if (!enabled || enabled.firstEnableAutoMerge !== true || enabled.autoMergeAcknowledged) return project;
+async function applyFirstEnableAutoMergeGate(project) {
+  let forceAutoMergeOff = false;
+  await updateEnablementState((state) => {
+    const enabled = findEnabledProject(state, project);
+    if (!enabled || enabled.firstEnableAutoMerge !== true || enabled.autoMergeAcknowledged) return state;
 
-  const observed = observeAutoMerge(state, project, project.autoMerge);
-  const updated = findEnabledProject(observed, project);
-  if (updated?.autoMergeAcknowledged) {
-    saveEnablementState(observed);
-    return project;
-  }
-  if (updated?.lastObservedAutoMerge !== enabled.lastObservedAutoMerge) saveEnablementState(observed);
-  project.autoMerge = false;
+    const observed = observeAutoMerge(state, project, project.autoMerge);
+    if (!findEnabledProject(observed, project)?.autoMergeAcknowledged) forceAutoMergeOff = true;
+    return observed;
+  });
+  if (forceAutoMergeOff) project.autoMerge = false;
   return project;
 }
 
@@ -452,7 +450,12 @@ function activeProject(cwd, projects) {
       return cwd === candidate.repoPath;
     }
   });
-  return project ? applyFirstEnableAutoMergeGate(project) : null;
+  return project || null;
+}
+
+async function activeSchedulerProject(cwd, projects) {
+  const project = activeProject(cwd, projects);
+  return project ? await applyFirstEnableAutoMergeGate(project) : null;
 }
 
 function shellQuote(value) {
@@ -694,7 +697,7 @@ async function prepareGithub(pi, githubRepo) {
   if (!["ADMIN", "MAINTAIN", "WRITE"].includes(String(view.viewerPermission || "").toUpperCase())) {
     throw new Error("GitHub write permission is required to enable deadloop");
   }
-  const labels = JSON.parse((await commandExec(pi, "gh", ["label", "list", "-R", githubRepo, "--limit", "100", "--json", "name"])).stdout || "[]");
+  const labels = JSON.parse((await commandExec(pi, "gh", ["label", "list", "-R", githubRepo, "--limit", "1000", "--json", "name"])).stdout || "[]");
   const existing = new Set(labels.map((label) => label.name));
   for (const [name, color] of STANDARD_LABELS) {
     if (!existing.has(name)) await commandExec(pi, "gh", ["label", "create", name, "-R", githubRepo, "--color", color]);
@@ -769,7 +772,7 @@ export default function (pi) {
       setLooperStatus(ctx, `skipped: ${projectsResult.reason}`);
       return;
     }
-    const project = activeProject(ctx.cwd, projectsResult.projects);
+    const project = await activeSchedulerProject(ctx.cwd, projectsResult.projects);
     if (!project) {
       stopScheduler(ctx);
       setLooperStatus(ctx, "deadloop is not enabled for this repository");
@@ -850,7 +853,7 @@ export default function (pi) {
           return upsertEnabledProject(state, identity, Date.now(), firstEnable);
         });
         const projects = loadProjects(ctx.cwd);
-        const project = activeProject(ctx.cwd, projects);
+        const project = await activeSchedulerProject(ctx.cwd, projects);
         if (!project) throw new Error("enabled repository configuration could not be resolved safely");
         if (newlyEnabled && !findEnabledProject(loadEnablementState(), identity)?.autoMergeAcknowledged) project.autoMerge = false;
         startScheduler(ctx, project);
@@ -903,7 +906,7 @@ export default function (pi) {
   pi.on("session_start", async (_event, ctx) => {
     if (ctx.mode === "print" || ctx.mode === "json") return;
     try {
-      const project = activeProject(ctx.cwd, loadProjects(ctx.cwd));
+      const project = await activeSchedulerProject(ctx.cwd, loadProjects(ctx.cwd));
       debugLog("session_start", "cwd", ctx.cwd, "mode", ctx.mode, "project", project?.id || null);
       if (project) startScheduler(ctx, project);
     } catch (error) {

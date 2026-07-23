@@ -40,14 +40,15 @@ function fixtureRepository() {
 
 async function loadExtension(
   root: string,
-  options: { failLabel?: boolean } = {},
-): Promise<{ commands: Map<string, CommandHandler>; messages: string[] }> {
+  options: { failLabel?: boolean; labels?: unknown[] } = {},
+): Promise<{ commands: Map<string, CommandHandler>; ghCommands: string[][]; messages: string[] }> {
   process.env.HOME = root;
   process.env.PI_CODING_AGENT_DIR = path.join(root, ".pi", "agent");
   process.env.PATH = `${path.join(root, "bin")}:${originalPath || ""}`;
   vi.resetModules();
   const commands = new Map<string, CommandHandler>();
   const messages: string[] = [];
+  const ghCommands: string[][] = [];
   // @ts-expect-error Vitest transforms this runtime extension import.
   const extension = (await import("../extensions/deadloop/index")).default;
   extension({
@@ -63,9 +64,10 @@ async function loadExtension(
           return { code: 1, stdout: "", stderr: String(error) };
         }
       }
+      if (command === "gh") ghCommands.push(args);
       if (command === "gh" && args[0] === "auth") return { code: 0, stdout: "", stderr: "" };
       if (command === "gh" && args[0] === "repo") return { code: 0, stdout: '{"viewerPermission":"WRITE"}', stderr: "" };
-      if (command === "gh" && args[0] === "label" && args[1] === "list") return { code: 0, stdout: "[]", stderr: "" };
+      if (command === "gh" && args[0] === "label" && args[1] === "list") return { code: 0, stdout: JSON.stringify(options.labels || []), stderr: "" };
       if (command === "gh" && args[0] === "label" && args[1] === "create") {
         return options.failLabel ? { code: 1, stdout: "", stderr: "label denied" } : { code: 0, stdout: "", stderr: "" };
       }
@@ -76,7 +78,7 @@ async function loadExtension(
     sendMessage: (message: { content: string }) => messages.push(message.content),
     sendUserMessage: () => undefined,
   });
-  return { commands, messages };
+  return { commands, ghCommands, messages };
 }
 
 function writeConfig(root: string, repoPath: string, options: { autoMerge?: boolean; worktreeRoot?: string } = {}): void {
@@ -149,6 +151,18 @@ describe("enablement command integration", () => {
     expect(extension.messages.at(-1)).toContain("autoMerge is on");
   });
 
+  it("does not create a standard label that appears after the first 100 labels", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const labels = Array.from({ length: 100 }, (_, index) => ({ name: `label-${index}` }));
+    labels.push({ name: "needs-triage" });
+    const extension = await loadExtension(root, { labels });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.ghCommands.some((args) => args[0] === "label" && args[1] === "create" && args[2] === "needs-triage")).toBe(false);
+  });
+
   it("does not record enablement when label preparation fails", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
@@ -171,6 +185,32 @@ describe("enablement command integration", () => {
     await invoke(extension.commands.get("deadloop-disable")!, linkedPath);
 
     expect(JSON.parse(readFileSync(statePath, "utf8")).projects).toHaveLength(1);
+  });
+
+  it("keeps enablement state unchanged when status is reported", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath, { autoMerge: true });
+    const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
+    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", enabledAt: 1, firstEnableAutoMerge: true, lastObservedAutoMerge: true }] }));
+    const extension = await loadExtension(root);
+    const before = readFileSync(statePath, "utf8");
+
+    await invoke(extension.commands.get("deadloop-status")!, repoPath);
+
+    expect(readFileSync(statePath, "utf8")).toBe(before);
+  });
+
+  it("keeps enablement state unchanged when doctor is reported", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath, { autoMerge: true });
+    const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
+    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", enabledAt: 1, firstEnableAutoMerge: true, lastObservedAutoMerge: true }] }));
+    const extension = await loadExtension(root);
+    const before = readFileSync(statePath, "utf8");
+
+    await invoke(extension.commands.get("deadloop-doctor")!, repoPath);
+
+    expect(readFileSync(statePath, "utf8")).toBe(before);
   });
 
   it("reports another live lock owner as standby", async () => {

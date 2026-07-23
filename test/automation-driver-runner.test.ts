@@ -153,6 +153,17 @@ describe("deterministic automation driver runner", () => {
     expect(result.sent).toEqual([]);
   });
 
+  it("does not start a side-effecting driver when enablement changes after the post-precheck gate", async () => {
+    let checks = 0;
+    let driverStarted = false;
+    await exerciseDriver(JSON.stringify({ action: "needs_llm", prompt: "driver prompt" }), {
+      isEnabled: () => ++checks === 1,
+      runDriver: () => { driverStarted = true; },
+    });
+
+    expect(driverStarted).toBe(false);
+  });
+
   it("does not dispatch a driver prompt after enablement is removed during driver execution", async () => {
     let enabled = true;
     const result = await exerciseDriver(JSON.stringify({ action: "needs_llm", prompt: "driver prompt" }), {

@@ -27,6 +27,10 @@ describe("PR reviewer relaunch integration", () => {
     const prState = path.join(root, "pr-state.json");
     fs.mkdirSync(bin);
     fs.mkdirSync(worktree);
+    fs.mkdirSync(state);
+    fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
+      projects: [{ repoPath: root, githubRepo: "owner/repo", enabledAt: 1 }],
+    }));
     const pr = {
       number: 44,
       title: "Requeued review",

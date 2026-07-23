@@ -19,6 +19,7 @@ const {
   parseFixtureArg,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { assertDriverEnabled } = require("../../../src/driver-enablement.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -66,7 +67,9 @@ function applyContractMissing(issue: JsonObject, env: ReturnType<typeof envConfi
   if (fixture) return;
   const number = String(issue.number);
   const github = githubOperations();
+  assertDriverEnabled(env);
   github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.needsTriageLabel });
+  assertDriverEnabled(env);
   github.commentIssue(env.githubRepo, number, gateMissingContractComment(issue));
 }
 
@@ -89,7 +92,9 @@ function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comm
   if (fixture) return;
   const number = String(issue.number);
   const github = githubOperations();
+  assertDriverEnabled(env);
   github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.blockedLabel });
+  assertDriverEnabled(env);
   github.commentIssue(env.githubRepo, number, comment);
 }
 
@@ -126,7 +131,9 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     };
   }
 
+  assertDriverEnabled(env);
   githubOperations().moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel });
+  assertDriverEnabled(env);
   const launch = launchAgentFlow(
     {
       worktree: { mode: "create", branch, baseBranch: env.baseBranch },
@@ -196,6 +203,7 @@ function drive(fixturePath: string | undefined): DriverResult {
   const cleanup = cleanupPlan(fixture);
   const candidates = cleanup.candidates || [];
   if (candidates.length) {
+    if (!fixture) assertDriverEnabled(env);
     return driverResult("done", `completed worker cleanup: ${candidates.length} candidate(s)`, {
       driverAction: "cleanup_applied",
       cleanup: applyCleanup(cleanup, fixture),
