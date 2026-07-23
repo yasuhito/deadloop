@@ -2,6 +2,7 @@ type MonitorPromptBaseInput = {
   automationDir: string;
   promiseFile: string;
   actorName: string;
+  projectId?: string;
   repoPath?: string;
   githubRepo?: string;
   stateDir?: string;
@@ -33,6 +34,10 @@ export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   expectedHeadOid: string;
   branch: string;
   checkCommand: string;
+  projectCheckCommand?: string;
+  workerAgent?: string;
+  workerModel?: string;
+  repairRemote?: string;
   humanLabel: string;
   reviewLabel: string;
   reviewingLabel: string;
@@ -108,6 +113,24 @@ Prohibited in every path: force-push, any monitor-side push, label changes on su
 Report only the terminal action and evidence.`;
 }
 
+function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): string {
+  const environment = [
+    ["DEADLOOP_GITHUB_REPO", input.githubRepo || "<githubRepo>"],
+    ["DEADLOOP_ENABLED_AT", String(input.enabledAt ?? "<enabledAt>")],
+    ["DEADLOOP_PROJECT_ID", input.projectId || "<projectId>"],
+    ["DEADLOOP_REPO_PATH", input.repoPath || "<projectRepo>"],
+    ["DEADLOOP_STATE_DIR", input.stateDir || "<stateDir>"],
+    ["DEADLOOP_CHECK_COMMAND", input.projectCheckCommand || input.checkCommand],
+    ["DEADLOOP_WORKER_AGENT", input.workerAgent || "pi"],
+    ["DEADLOOP_WORKER_MODEL", input.workerModel || ""],
+    ["DEADLOOP_REVIEW_REPAIR_REMOTE", input.repairRemote || "origin"],
+    ["DEADLOOP_REVIEW_LABEL", input.reviewLabel],
+    ["DEADLOOP_REVIEWING_LABEL", input.reviewingLabel],
+    ["DEADLOOP_BLOCKED_LABEL", input.blockedLabel],
+  ].map(([name, value]) => `${name}=${shellQuotePrompt(value)}`).join(" ");
+  return `${environment} node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-dispatch.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --branch ${shellQuotePrompt(input.branch)}`;
+}
+
 function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string {
   return `Deterministic driver launched reviewer for PR #${input.prNumber}. Do not launch another agent and do not reselect another PR.
 
@@ -121,7 +144,7 @@ Completion handling:
 - Read the validated promise payload. Legacy complete promises without outcome remain compatible and follow the approved path.
 - A successful review with actionable defects is status=complete, outcome=changes_requested, never status=blocked.
 - For outcome=changes_requested, outcome=human_required, or status=blocked, run the deterministic dispatcher and follow only its returned action/prompt:
-  \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-dispatch.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --branch ${shellQuotePrompt(input.branch)}\`
+  \`${renderReviewerDispatcherCommand(input)}\`
 - The dispatcher keeps ${input.reviewLabel} and ${input.reviewingLabel} during repair. It adds ${input.blockedLabel} only for human-required or bounded failure paths.
 - For outcome=approved or a legacy complete promise, re-check GitHub PR state, reviews, and checks before changing labels.
 - Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork.
@@ -152,16 +175,27 @@ Prohibited in every path: force-push, monitor-side push, label changes on succes
 Report only the terminal action and evidence.`;
 }
 
-type PendingMonitorHandoff = {
-  kind: "issue";
-  input: IssueMonitorPromptInput;
-};
+type PendingMonitorHandoff =
+  | { kind: "issue"; input: IssueMonitorPromptInput }
+  | { kind: "reviewer"; input: ReviewerMonitorPromptInput }
+  | { kind: "branch-update"; input: BranchUpdateMonitorPromptInput }
+  | { kind: "repair"; input: RepairMonitorPromptInput };
 
 function renderPendingMonitorHandoff(handoff: PendingMonitorHandoff, enabledAt?: number): string {
-  if (handoff.kind !== "issue" || !handoff.input || typeof handoff.input !== "object") {
-    throw new Error("unsupported pending monitor handoff");
+  if (!handoff.input || typeof handoff.input !== "object") throw new Error("unsupported pending monitor handoff");
+  if (handoff.kind === "issue") {
+    return renderIssueMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
   }
-  return renderIssueMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
+  if (handoff.kind === "reviewer") {
+    return renderReviewerMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
+  }
+  if (handoff.kind === "branch-update") {
+    return renderBranchUpdateMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
+  }
+  if (handoff.kind === "repair") {
+    return renderRepairMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
+  }
+  throw new Error("unsupported pending monitor handoff");
 }
 
 module.exports = {

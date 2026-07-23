@@ -760,7 +760,7 @@ describe("enablement command integration", () => {
     expect(existsSync(path.join(root, ".pi", "agent", "deadloop", lockName))).toBe(false);
   });
 
-  it("releases scheduler ownership promptly without overlapping a blocked stale precheck", async () => {
+  it("keeps scheduler ownership until a blocked stale precheck settles before takeover", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
     const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
@@ -791,24 +791,24 @@ describe("enablement command integration", () => {
     const oldToken = JSON.parse(readFileSync(lockPath, "utf8")).token;
 
     await invoke(extension.commands.get("deadloop-disable")!, repoPath);
-    const releasedWhileBlocked = !existsSync(lockPath);
+    const tokenWhileBlocked = JSON.parse(readFileSync(lockPath, "utf8")).token;
     const schedulerStatePath = path.join(root, ".pi", "agent", "deadloop", "state.json");
     const stateAfterDisable = JSON.parse(readFileSync(schedulerStatePath, "utf8"));
     const resultAfterDisable = (Object.values(stateAfterDisable.automations)[0] as { lastResult?: string }).lastResult;
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-    const noOverlapWhileBlocked = !existsSync(lockPath);
+    const tokenAfterTakeoverAttempt = JSON.parse(readFileSync(lockPath, "utf8")).token;
     releasePrecheck();
     await tick;
     const newToken = JSON.parse(readFileSync(lockPath, "utf8")).token;
 
     expect({
-      releasedWhileBlocked,
-      noOverlapWhileBlocked,
+      lockRetainedWhileBlocked: tokenWhileBlocked === oldToken,
+      takeoverWaitedForQuiescence: tokenAfterTakeoverAttempt === oldToken,
       staleRunDidNotSave: (Object.values(JSON.parse(readFileSync(schedulerStatePath, "utf8")).automations)[0] as { lastResult?: string }).lastResult === resultAfterDisable,
       restartedAfterQuiescence: newToken !== oldToken,
     }).toEqual({
-      releasedWhileBlocked: true,
-      noOverlapWhileBlocked: true,
+      lockRetainedWhileBlocked: true,
+      takeoverWaitedForQuiescence: true,
       staleRunDidNotSave: true,
       restartedAfterQuiescence: true,
     });

@@ -214,6 +214,32 @@ describe("deterministic automation driver runner", () => {
     expect({ sent, pending: entry.pendingDriverHandoff }).toEqual({ sent: ["driver prompt"], pending: undefined });
   });
 
+  it.each(["reviewer", "branch-update", "repair"])("discards a stale %s monitor handoff", (kind) => {
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "needs_llm",
+        monitorHandoff: { kind, input: { enabledAt: 1 } },
+        prompt: "stale prompt",
+      },
+    };
+    const state = { automations: { auto: entry } };
+    const sent: string[] = [];
+
+    deliverPendingDriverHandoff(entry, state, "auto", {
+      currentEnabledAt: () => 2,
+      isEnabled: () => true,
+      now: () => 456,
+      saveState: () => undefined,
+      sendUserMessage: (prompt) => sent.push(prompt),
+    });
+
+    expect({ result: entry.lastResult, pending: entry.pendingDriverHandoff, sent }).toEqual({
+      result: "driver_handoff_stale_generation",
+      pending: undefined,
+      sent: [],
+    });
+  });
+
   it("does not dispatch a driver prompt when disable wins the enqueue lock", async () => {
     const result = await exerciseDriver(JSON.stringify({ action: "needs_llm", prompt: "driver prompt" }), {
       isEnabled: () => true,

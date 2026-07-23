@@ -25,6 +25,7 @@ import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } fr
 import { readClaudeConfig } from "../../src/agent-trust.cjs";
 import { deliverPendingDriverHandoff, runScheduledAutomation } from "../../src/automation-runner";
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
+const { loadAutomationState, saveAutomationState } = require("../../src/automation-state.cjs");
 const { acquireLock, releaseOwned } = require("../../src/enablement-lock.cjs");
 const {
   DISABLE_LOCK_ATTEMPTS,
@@ -445,17 +446,15 @@ function setLooperStatus(ctx, text) {
 }
 
 function loadState() {
-  const state = readJsonFile(STATE_PATH, { automations: {} });
-  if (!state || typeof state !== "object") return { automations: {} };
-  if (!state.automations || typeof state.automations !== "object") state.automations = {};
-  return state;
+  return loadAutomationState(STATE_PATH);
 }
 
 function saveState(state) {
   try {
-    writeJsonFile(STATE_PATH, state);
+    return saveAutomationState(STATE_PATH, state);
   } catch (error) {
     console.warn(`[${EXTENSION_NAME}] failed to save state:`, error?.message || error);
+    return state;
   }
 }
 
@@ -1024,12 +1023,12 @@ export default function (pi) {
       const state = loadState();
       updateStatus(ctx, project, state);
 
-      const deps = automationRunnerDeps(pi, ctx, project, () => active === schedulerRun && ownsLock);
+      const deps = automationRunnerDeps(pi, ctx, project, () => active === schedulerRun && ownsLock && !stopRequested);
       for (const automation of project.automations) {
         const entry = state.automations[automationStateKey(project, automation)] || {};
         state.automations[automationStateKey(project, automation)] = entry;
         if (deliverPendingDriverHandoff(entry, state, automation.name, deps)) {
-          saveState(state);
+          if (active === schedulerRun && ownsLock && !stopRequested) saveState(state);
           return;
         }
       }
@@ -1043,11 +1042,11 @@ export default function (pi) {
         if (!dueSlot) continue;
 
         await runAutomation(pi, ctx, project, automation, dueSlot, state, deps);
-        if (active === schedulerRun && ownsLock) updateStatus(ctx, project, state);
+        if (active === schedulerRun && ownsLock && !stopRequested) updateStatus(ctx, project, state);
         break;
       }
 
-      if (active === schedulerRun && ownsLock) saveState(state);
+      if (active === schedulerRun && ownsLock && !stopRequested) saveState(state);
     } finally {
       running = false;
       if (stopRequested) {
@@ -1075,9 +1074,6 @@ export default function (pi) {
     pendingStart = null;
     if (running) {
       stopRequested = true;
-      if (ownsLock && active?.lockPath && active?.lockToken) releaseSchedulerLock(active.lockPath, active.lockToken);
-      ownsLock = false;
-      active = null;
       setLooperStatus(ctx, undefined);
       return;
     }

@@ -269,26 +269,29 @@ function dispatch(args: JsonObject): DriverResult {
       },
       () => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env),
     );
+    const monitorInput = {
+      prNumber: Number(prNumber),
+      expectedHeadOid: expectedHead,
+      branch,
+      automationDir: env.automationDir,
+      promiseFile: launch.promiseFile,
+      actorName: "review-repair worker",
+      projectId: env.projectId,
+      repoPath: env.repoPath,
+      githubRepo: env.githubRepo,
+      stateDir: env.stateDir,
+      enabledAt: env.enabledAt,
+      reviewLabel: env.reviewLabel,
+      reviewingLabel: env.reviewingLabel,
+      blockedLabel: env.blockedLabel,
+    };
     return driverResult("needs_llm", `Launched review-repair worker for PR #${prNumber}`, {
       driverAction: "review_repair_monitor_request",
       selection,
       labelsPreserved: [env.reviewLabel, env.reviewingLabel],
       launch,
-      prompt: renderRepairMonitorPrompt({
-        prNumber: Number(prNumber),
-        expectedHeadOid: expectedHead,
-        branch,
-        automationDir: env.automationDir,
-        promiseFile: launch.promiseFile,
-        actorName: "review-repair worker",
-        repoPath: env.repoPath,
-        githubRepo: env.githubRepo,
-        stateDir: env.stateDir,
-        enabledAt: env.enabledAt,
-        reviewLabel: env.reviewLabel,
-        reviewingLabel: env.reviewingLabel,
-        blockedLabel: env.blockedLabel,
-      }),
+      monitorHandoff: { kind: "repair", input: monitorInput },
+      prompt: renderRepairMonitorPrompt(monitorInput),
     });
   } catch (error) {
     const comment = applyHumanBlock(

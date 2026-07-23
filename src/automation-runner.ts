@@ -75,8 +75,7 @@ export function deliverPendingDriverHandoff(
       : Number.NaN;
     const currentEnabledAt = deps.currentEnabledAt?.();
     if (
-      monitorHandoff.kind === "issue"
-      && Number.isFinite(handoffEnabledAt)
+      Number.isFinite(handoffEnabledAt)
       && Number.isFinite(currentEnabledAt)
       && currentEnabledAt !== handoffEnabledAt
     ) {

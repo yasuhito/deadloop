@@ -5,6 +5,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
+
 const tempDirs: string[] = [];
 
 function executable(file: string, content: string): void {
@@ -124,12 +126,51 @@ afterEach(() => {
 });
 
 describe("review repair dispatch integration", () => {
+  it("executes the exact rendered monitor dispatcher command in a clean environment", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-rendered-dispatch-"));
+    tempDirs.push(root);
+    const bin = path.join(root, "bin");
+    const state = path.join(root, "state");
+    const promise = path.join(root, "promise.json");
+    fs.mkdirSync(bin);
+    fs.mkdirSync(state);
+    fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
+      projects: [{ repoPath: root, githubRepo: "owner/repo", enabledAt: 7, enabled: true }],
+    }));
+    fs.writeFileSync(promise, JSON.stringify({ status: "complete", outcome: "approved", reason: "", summary: "approved", findings: [] }));
+    executable(path.join(bin, "gh"), `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({number:143,state:"OPEN",headRefName:"agent/issue-142",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,labels:[],comments:[]}));
+`);
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 143, expectedHeadOid: "a".repeat(40), branch: "agent/issue-142",
+      automationDir: path.resolve("extensions/deadloop/automations"), promiseFile: promise, actorName: "reviewer",
+      projectId: "demo", repoPath: root, githubRepo: "owner/repo", stateDir: state, enabledAt: 7,
+      projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
+      checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review",
+      reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+    });
+    const command = prompt.match(/run the deterministic dispatcher[^`]*:\n  `([^`]+)`/)?.[1];
+    if (!command) throw new Error("rendered dispatcher command was not found");
+
+    const result = spawnSync("bash", ["-lc", command], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { PATH: `${bin}:${process.env.PATH}` },
+    });
+
+    expect(JSON.parse(result.stdout).action).toBe("done");
+  });
+
   it("requests LLM monitoring after launching a repair", () => {
     expect(runDispatch(true).output.action).toBe("needs_llm");
   });
 
   it("identifies the bounded repair monitor action", () => {
     expect(runDispatch(true).output.driverAction).toBe("review_repair_monitor_request");
+  });
+
+  it("returns repair monitor input as a generation-bound handoff", () => {
+    expect(runDispatch(true).output.monitorHandoff.kind).toBe("repair");
   });
 
   it("returns the dedicated repair monitor prompt", () => {

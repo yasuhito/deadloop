@@ -90,6 +90,18 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("outcome=changes_requested");
   });
 
+  it("renders the reviewer dispatcher with its complete authorization context", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
+      promiseFile: "/state/promise.json", actorName: "reviewer", projectId: "demo", repoPath: "/repo path",
+      githubRepo: "owner/repo", stateDir: "/state", enabledAt: 123, projectCheckCommand: "npm test",
+      workerAgent: "pi", workerModel: "model", repairRemote: "origin", checkCommand: "npm test",
+      humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("DEADLOOP_GITHUB_REPO=owner/repo DEADLOOP_ENABLED_AT=123");
+  });
+
   it("routes issue monitor mutations through the enablement guard", () => {
     const prompt = renderIssueMonitorPrompt({
       issueNumber: 12, automationDir: "/automation", promiseFile: "/state/promise.json", actorName: "Worker",

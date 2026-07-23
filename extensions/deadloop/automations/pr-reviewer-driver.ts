@@ -459,6 +459,23 @@ function drive(fixturePath: string | undefined): DriverResult {
     }
     try {
       const launch = launchBranchUpdate(plan.pr, env, fixture, updateDecision);
+      const monitorInput = {
+        prNumber: Number(plan.pr.number || 0),
+        expectedHeadOid: headOid,
+        expectedBaseOid: baseOid,
+        branch: String(plan.pr.headRefName || ""),
+        automationDir: env.automationDir,
+        promiseFile: String(launch.promiseFile || ""),
+        actorName: "branch-update worker",
+        projectId: env.projectId,
+        repoPath: env.repoPath,
+        githubRepo: env.githubRepo,
+        stateDir: env.stateDir,
+        enabledAt: env.enabledAt,
+        reviewingLabel: env.reviewingLabel,
+        reviewLabel: env.reviewLabel,
+        blockedLabel: env.blockedLabel,
+      };
       return driverResult("needs_llm", `Launched branch-update worker for PR #${plan.decision.number}`, {
         driverAction: "branch_update_monitor_request",
         prNumber: plan.decision.number,
@@ -466,22 +483,8 @@ function drive(fixturePath: string | undefined): DriverResult {
         marker,
         labelsPreserved: [env.reviewLabel, env.reviewingLabel],
         launch,
-        prompt: renderBranchUpdateMonitorPrompt({
-          prNumber: Number(plan.pr.number || 0),
-          expectedHeadOid: headOid,
-          expectedBaseOid: baseOid,
-          branch: String(plan.pr.headRefName || ""),
-          automationDir: env.automationDir,
-          promiseFile: String(launch.promiseFile || ""),
-          actorName: "branch-update worker",
-          repoPath: env.repoPath,
-          githubRepo: env.githubRepo,
-          stateDir: env.stateDir,
-          enabledAt: env.enabledAt,
-          reviewingLabel: env.reviewingLabel,
-          reviewLabel: env.reviewLabel,
-          blockedLabel: env.blockedLabel,
-        }),
+        monitorHandoff: { kind: "branch-update", input: monitorInput },
+        prompt: renderBranchUpdateMonitorPrompt(monitorInput),
       });
     } catch (error) {
       const reason = `branch-update launch failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -514,33 +517,40 @@ function drive(fixturePath: string | undefined): DriverResult {
   const { pr, gate, reason } = plan;
   const decision = plan.decision;
   const launch = launchPrReviewer(pr, env, fixture, reason);
+  const monitorInput = {
+    prNumber: Number(pr.number || 0),
+    expectedHeadOid: String(pr.headRefOid || ""),
+    branch: String(pr.headRefName || ""),
+    automationDir: env.automationDir,
+    promiseFile: String(launch.promiseFile || ""),
+    actorName: "reviewer",
+    projectId: env.projectId,
+    repoPath: env.repoPath,
+    githubRepo: env.githubRepo,
+    stateDir: env.stateDir,
+    enabledAt: env.enabledAt,
+    checkCommand: renderProjectCheckCommand({
+      automationDir: env.automationDir,
+      stateDir: env.stateDir,
+      cwd: String(launch.worktreePath || ""),
+      command: env.checkCommand,
+    }),
+    projectCheckCommand: env.checkCommand,
+    workerAgent: env.branchUpdateAgent,
+    workerModel: env.branchUpdateModel,
+    repairRemote: env.branchUpdateRemote,
+    humanLabel: env.humanLabel,
+    reviewLabel: env.reviewLabel,
+    reviewingLabel: env.reviewingLabel,
+    blockedLabel: env.blockedLabel,
+  };
   return driverResult("needs_llm", `Launched reviewer agent for PR #${decision.number}`, {
     driverAction: "reviewer_monitor_request",
     prNumber: decision.number,
     gate,
     launch,
-    prompt: renderReviewerMonitorPrompt({
-      prNumber: Number(pr.number || 0),
-      expectedHeadOid: String(pr.headRefOid || ""),
-      branch: String(pr.headRefName || ""),
-      automationDir: env.automationDir,
-      promiseFile: String(launch.promiseFile || ""),
-      actorName: "reviewer",
-      repoPath: env.repoPath,
-      githubRepo: env.githubRepo,
-      stateDir: env.stateDir,
-      enabledAt: env.enabledAt,
-      checkCommand: renderProjectCheckCommand({
-        automationDir: env.automationDir,
-        stateDir: env.stateDir,
-        cwd: String(launch.worktreePath || ""),
-        command: env.checkCommand,
-      }),
-      humanLabel: env.humanLabel,
-      reviewLabel: env.reviewLabel,
-      reviewingLabel: env.reviewingLabel,
-      blockedLabel: env.blockedLabel,
-    }),
+    monitorHandoff: { kind: "reviewer", input: monitorInput },
+    prompt: renderReviewerMonitorPrompt(monitorInput),
   });
 }
 
