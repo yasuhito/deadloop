@@ -620,6 +620,12 @@
 | T364 | `restores runtime artifacts when the CLI is interrupted` | `CLI を中断した後に診断情報を復元する` |
 | T365 | `reports an interrupted check without losing restoration control` | `中断した自動チェックは中断として報告する` |
 
+#### T357-T365 の移行確認記録
+
+2026-07-23 に、削除前の `test/project-check.test.ts` を残した状態で `npm test` を実行し、Vitest の対象9件を含む496件と Cucumber の11シナリオ（55ステップ）がすべて成功した（Vitest 2.05秒、Cucumber 0.473秒）。
+
+続いて `完了報告は元の内容で復元される` の期待値だけを一時的に `intentionally broken` へ変更し、`npx cucumber-js --name '^失敗した自動チェック後に完了報告を復元する$'` を実行した。対象シナリオは終了コード1となり、`acceptance/features/project-check-safety.feature.md:41` とステップ定義の位置、および実際値 `pending` と誤った期待値 `intentionally broken` の差を表示して失敗した。期待値を元へ戻した後に同じコマンドを再実行し、1シナリオ、5ステップが成功した（0.72秒）。この確認後に、置換済みのVitest 9件を削除した。
+
 ### `test/promise-file-contract.test.ts`（6件）
 
 | ID | 現在のファイル名 | 現在のテスト名 | 分類 | 守る契約 | 根拠 |
