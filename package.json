@@ -16,7 +16,7 @@
     "LICENSE",
     "README.md",
     "docs/*.md",
-    "docs/assets/*.png",
+    "docs/assets/*.webp",
     "extensions/deadloop/index.ts",
     "extensions/deadloop/README.md",
     "extensions/deadloop/projects.example.json",
