@@ -10,7 +10,7 @@
 |---|---|---|
 | T021 | 移行済み | 信頼されていない作業場所では作業エージェントを起動しない |
 | T283 | 移行済み | 変更中の作業場所では branch 更新を開始しない |
-| T284 | 同じ保証へ統合 | push 直前に pull request head が変わった場合は branch を更新しない |
+| T284 | 移行済み | 選択後に head が変わった pull request は branch 更新を開始しない |
 | T288 | 同じ保証へ統合 | push 直前に pull request head が変わった場合は branch を更新しない |
 | T289 | 移行済み | 別リポジトリの pull request は branch を更新しない |
 | T290 | 移行済み | 自動チェックは push 直前の head 確認より先に実行される |

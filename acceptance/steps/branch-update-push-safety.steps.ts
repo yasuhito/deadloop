@@ -23,6 +23,7 @@ type SafetyWorld = {
   commands?: string[][];
   decision?: { action: string; reason: string };
   dirtyWorktree?: boolean;
+  selectedHeadIsCurrent?: boolean;
   trustRoot?: string;
   launcherResult?: ReturnType<typeof spawnSync>;
 };
@@ -96,8 +97,12 @@ Given("更新対象の作業場所に未コミットの変更がある", functio
   this.dirtyWorktree = true;
 });
 
+Given("選択した pull request head が更新前に変わっている", function (this: SafetyWorld) {
+  this.selectedHeadIsCurrent = false;
+});
+
 When("deadloop が branch 更新を判断する", function (this: SafetyWorld) {
-  this.decision = decideBranchUpdate(1, 1, true, !this.dirtyWorktree, true);
+  this.decision = decideBranchUpdate(1, 1, true, !this.dirtyWorktree, this.selectedHeadIsCurrent ?? true);
 });
 
 Then("branch 更新は停止される", function (this: SafetyWorld) {
@@ -140,21 +145,14 @@ Then("作業エージェントは起動されない", function (this: SafetyWorl
 });
 
 Then("自動チェックは pull request head 確認より先に実行される", function (this: SafetyWorld) {
-  assert.ok(
-    (this.commands?.findIndex((command) => command[0] === "node") ?? -1) <
-      (this.commands?.findIndex((command) => command[0] === "gh") ?? -1),
-  );
+  const checkIndex = this.commands?.findIndex((command) => command[0] === "node") ?? -1;
+  const headQueryIndex = this.commands?.findIndex((command) => command[0] === "gh") ?? -1;
+  assert.ok(checkIndex >= 0 && checkIndex < headQueryIndex);
 });
 
 Then("選択された branch だけへ非強制で push される", function (this: SafetyWorld) {
-  assert.deepEqual(this.commands?.find((command) => command.includes("push")), [
-    "git",
-    "-C",
-    "/worktree",
-    "push",
-    "--porcelain",
-    "origin",
-    `HEAD:refs/heads/${branch}`,
+  assert.deepEqual(this.commands?.filter((command) => command.includes("push")), [
+    ["git", "-C", "/worktree", "push", "--porcelain", "origin", `HEAD:refs/heads/${branch}`],
   ]);
 });
 
