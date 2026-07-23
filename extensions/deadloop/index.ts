@@ -43,6 +43,11 @@ const {
 } = require("../../src/driver-enablement.cjs");
 const { assertEnabled, withEnabledProjectLock } = require("../../src/enabled-operation.cjs");
 const {
+  advanceDisableGeneration,
+  disableGenerationForRepo,
+  loadDisableGenerations,
+} = require("../../src/disable-generation.cjs");
+const {
   acquireSchedulerLock: acquireSchedulerFileLock,
   releaseSchedulerLock: releaseSchedulerFileLock,
 } = require("../../src/scheduler-lock.cjs");
@@ -364,47 +369,6 @@ function saveEnablementState(state) {
   writeJsonFile(ENABLEMENT_PATH, state);
 }
 
-const DISABLE_GENERATION_PATH = path.join(STATE_DIR, "disable-generation.json");
-
-function loadDisableGenerations() {
-  try {
-    const value = JSON.parse(fs.readFileSync(DISABLE_GENERATION_PATH, "utf8"));
-    const generation = value?.generation;
-    const generations = value?.generations ?? {};
-    if (
-      !value ||
-      typeof value !== "object" ||
-      Array.isArray(value) ||
-      !Number.isSafeInteger(generation) ||
-      generation < 0 ||
-      !generations ||
-      typeof generations !== "object" ||
-      Array.isArray(generations) ||
-      Object.values(generations).some((entry) => typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0)
-    ) {
-      throw new Error("schema is invalid");
-    }
-    return { generation, generations };
-  } catch (error) {
-    if (error?.code === "ENOENT") return { generation: 0, generations: {} };
-    throw new Error(`disable generation state is invalid at ${DISABLE_GENERATION_PATH}: ${error?.message || error}. Inspect and move the file aside, then retry the command to recover.`);
-  }
-}
-
-function disableGenerationForRepo(state, repoPath) {
-  return state.generations[path.resolve(repoPath)] ?? state.generation;
-}
-
-function advanceDisableGeneration(repoPath) {
-  const state = loadDisableGenerations();
-  const resolvedRepoPath = path.resolve(repoPath);
-  const generation = disableGenerationForRepo(state, resolvedRepoPath) + 1;
-  writeJsonFile(DISABLE_GENERATION_PATH, {
-    generation: state.generation,
-    generations: { ...state.generations, [resolvedRepoPath]: generation },
-  });
-  return generation;
-}
 
 async function withEnablementStateLock(operation) {
   const lockPath = `${ENABLEMENT_PATH}.lock`;
@@ -1017,7 +981,7 @@ async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disable
     await withEnablementStateLock(async () => {
       if (
         !ownsEnableAttempt(repoPath, enableAttemptToken) ||
-        disableGenerationForRepo(loadDisableGenerations(), repoPath) !== disableGeneration
+        disableGenerationForRepo(loadDisableGenerations(STATE_DIR), repoPath) !== disableGeneration
       ) {
         throw new Error("enablement was revoked while preflight was running");
       }
@@ -1369,11 +1333,11 @@ export default function (pi) {
       const enableAttemptToken = crypto.randomUUID();
       try {
         let enabledAt;
-        const disableGenerations = await withEnablementStateLock(async () => loadDisableGenerations());
+        const disableGenerations = await withEnablementStateLock(async () => loadDisableGenerations(STATE_DIR));
         primaryRepoPath = await detectPrimaryCheckout(pi, ctx.cwd);
         const disableGeneration = disableGenerationForRepo(disableGenerations, primaryRepoPath);
         await withEnablementStateLock(async () => {
-          if (disableGenerationForRepo(loadDisableGenerations(), primaryRepoPath) !== disableGeneration) {
+          if (disableGenerationForRepo(loadDisableGenerations(STATE_DIR), primaryRepoPath) !== disableGeneration) {
             throw new Error("enablement was revoked while checkout detection was running");
           }
           writeEnableAttempt(primaryRepoPath, enableAttemptToken);
@@ -1385,14 +1349,14 @@ export default function (pi) {
         await withEnablementStateLock(async () => {
           if (
             !ownsEnableAttempt(primaryRepoPath, enableAttemptToken) ||
-            disableGenerationForRepo(loadDisableGenerations(), primaryRepoPath) !== disableGeneration
+            disableGenerationForRepo(loadDisableGenerations(STATE_DIR), primaryRepoPath) !== disableGeneration
           ) {
             throw new Error("enablement was revoked while preflight was running");
           }
           await revalidateLocalProjectIdentity(pi, identity);
           const configuredProject = resolveEnableProject(ctx.cwd, identity);
           const firstEnable = { firstEnableAutoMerge: Boolean(configuredProject.autoMerge) };
-          const next = upsertEnabledProject(loadEnablementState(), identity, Date.now(), firstEnable, enableAttemptToken);
+          const next = upsertEnabledProject(loadEnablementState(), { ...identity, disableGeneration }, Date.now(), firstEnable, enableAttemptToken);
           enabledAt = findEnabledProject(next, identity)?.enabledAt;
           saveEnablementState(next);
           enablementSaved = true;
@@ -1434,13 +1398,13 @@ export default function (pi) {
       try {
         let message;
         const repoPath = await detectPrimaryCheckout(pi, ctx.cwd, true);
+        advanceDisableGeneration(STATE_DIR, repoPath, writeJsonFile);
         await pi.testing?.beforeDisableLock?.();
         await withEnablementStateLock(async () => {
           const attempt = readJsonFile(enableAttemptPath(repoPath), null);
           if (attempt?.repoPath === path.resolve(repoPath) && attempt?.token) {
             writeEnableAttempt(repoPath, attempt.token, true);
           }
-          advanceDisableGeneration(repoPath);
           const state = loadEnablementState();
           const enabled = state.projects.find((project) => project.repoPath === path.resolve(repoPath) && project.enabled !== false);
           saveEnablementState(removeEnabledProjectAtPath(state, repoPath));

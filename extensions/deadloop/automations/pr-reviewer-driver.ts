@@ -308,7 +308,7 @@ function launchBranchUpdate(
       github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
       github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
     },
-    () => launchAgentFlow(
+    (recheck: () => void) => launchAgentFlow(
       {
         worktree: { mode: "open", branch },
         repoPath: env.repoPath,
@@ -323,7 +323,7 @@ function launchBranchUpdate(
         renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
           branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
       },
-      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
     ),
     {
       revalidate: () => {
@@ -366,7 +366,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
   const launch = withEnabledDriverLaunch(
     env,
     () => githubOperations().movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }),
-    () => launchAgentFlow(
+    (recheck: () => void) => launchAgentFlow(
       {
         worktree: { mode: "open", branch: headRefName },
         repoPath: env.repoPath,
@@ -381,7 +381,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
         renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
           reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
       },
-      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
     ),
     {
       revalidate: () => {

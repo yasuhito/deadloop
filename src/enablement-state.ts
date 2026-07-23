@@ -8,6 +8,7 @@ type EnablementIdentityValue = {
 type EnabledProjectValue = EnablementIdentityValue & {
   githubRepositoryId: string;
   enabledAt: number;
+  disableGeneration: number;
   enableAttemptToken?: string;
   githubAliases?: string[];
   baseBranch?: string;
@@ -44,6 +45,7 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
     const record = candidate as EnabledProjectValue;
     if (typeof record.githubRepositoryId !== "string" || !record.githubRepositoryId) return null;
     if (!Number.isFinite(record.enabledAt)) return null;
+    if (record.disableGeneration !== undefined && (!Number.isSafeInteger(record.disableGeneration) || record.disableGeneration < 0)) return null;
     if (record.enableAttemptToken !== undefined && (typeof record.enableAttemptToken !== "string" || !record.enableAttemptToken)) return null;
     if (record.githubAliases !== undefined && (
       !Array.isArray(record.githubAliases)
@@ -67,6 +69,7 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
       githubRepo: record.githubRepo,
       githubRepositoryId: record.githubRepositoryId,
       enabledAt: Number(record.enabledAt),
+      disableGeneration: record.disableGeneration ?? 0,
       ...(record.enableAttemptToken === undefined ? {} : { enableAttemptToken: record.enableAttemptToken }),
       ...(record.githubAliases === undefined ? {} : { githubAliases: [...new Set(record.githubAliases)] }),
       ...(record.baseBranch === undefined ? {} : { baseBranch: record.baseBranch }),

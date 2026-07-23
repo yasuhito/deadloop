@@ -158,7 +158,7 @@ describe("PR branch-update safety", () => {
     expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 25_000]);
   });
 
-  it("pushes the selected branch with an exact-head lease", () => {
+  it("pushes the selected branch without forcing", () => {
     const commands: string[][] = [];
     finalizeWith(commands);
 
@@ -168,7 +168,6 @@ describe("PR branch-update safety", () => {
       "/worktree",
       "push",
       "--porcelain",
-      "--force-with-lease=refs/heads/agent/issue-31:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "https://github.com/owner/repo.git",
       "cccccccccccccccccccccccccccccccccccccccc:refs/heads/agent/issue-31",
     ]);

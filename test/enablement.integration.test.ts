@@ -463,16 +463,11 @@ describe("enablement command integration", () => {
     let enableCheckoutStarted!: () => void;
     let releaseDisableLock!: () => void;
     let disableReachedLock!: () => void;
-    let releaseGithubCheck!: () => void;
-    let githubCheckStarted!: () => void;
     const enableCheckout = new Promise<void>((resolve) => { enableCheckoutStarted = resolve; });
     const holdEnableCheckout = new Promise<void>((resolve) => { releaseEnableCheckout = resolve; });
     const disableLock = new Promise<void>((resolve) => { disableReachedLock = resolve; });
     const holdDisableLock = new Promise<void>((resolve) => { releaseDisableLock = resolve; });
-    const githubCheck = new Promise<void>((resolve) => { githubCheckStarted = resolve; });
-    const holdGithubCheck = new Promise<void>((resolve) => { releaseGithubCheck = resolve; });
     let firstDetection = true;
-    let firstGithubCheck = true;
     const extension = await loadExtension(root, {
       beforePrimaryCheckout: async () => {
         if (!firstDetection) return;
@@ -484,12 +479,6 @@ describe("enablement command integration", () => {
         disableReachedLock();
         await holdDisableLock;
       },
-      beforeGithubRepoCheck: async () => {
-        if (!firstGithubCheck) return;
-        firstGithubCheck = false;
-        githubCheckStarted();
-        await holdGithubCheck;
-      },
     });
 
     const enabling = invoke(extension.commands.get("deadloop-enable")!, repoPath);
@@ -497,16 +486,15 @@ describe("enablement command integration", () => {
     const disabling = invoke(extension.commands.get("deadloop-disable")!, repoPath);
     await disableLock;
     releaseEnableCheckout();
-    await githubCheck;
+    await enabling;
+    const enableMessage = extension.messages.at(-1);
     releaseDisableLock();
     await disabling;
-    releaseGithubCheck();
-    await enabling;
 
     const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
-    expect({ enabledProjects: state.projects.length, finalMessage: extension.messages.at(-1) }).toEqual({
+    expect({ enabledProjects: state.projects.length, enableMessage }).toEqual({
       enabledProjects: 0,
-      finalMessage: "deadloop was not enabled: enablement was revoked while preflight was running",
+      enableMessage: "deadloop was not enabled: enablement was revoked while checkout detection was running",
     });
   });
 
@@ -538,6 +526,38 @@ describe("enablement command integration", () => {
       disabled: true,
       finalMessage: "deadloop was not enabled: enablement was revoked while preflight was running",
     });
+  });
+
+  it("publishes disable intent before waiting for the guarded-operation lock", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    let releaseDisable!: () => void;
+    let disableIntentPublished!: () => void;
+    const published = new Promise<void>((resolve) => { disableIntentPublished = resolve; });
+    const stalled = new Promise<void>((resolve) => { releaseDisable = resolve; });
+    const extension = await loadExtension(root, {
+      beforeDisableLock: async () => {
+        disableIntentPublished();
+        await stalled;
+      },
+    });
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    const stateDir = path.join(root, ".pi", "agent", "deadloop");
+    const enabledAt = JSON.parse(readFileSync(path.join(stateDir, "enabled-projects.json"), "utf8")).projects[0].enabledAt;
+
+    const disabling = invoke(extension.commands.get("deadloop-disable")!, repoPath);
+    await published;
+    let authorized = true;
+    try {
+      withEnabledProjectLock({ repoPath, githubRepo: "owner/demo", stateDir, enabledAt }, () => undefined);
+    } catch {
+      authorized = false;
+    }
+    const stillPersistedEnabled = JSON.parse(readFileSync(path.join(stateDir, "enabled-projects.json"), "utf8")).projects[0].enabled;
+    releaseDisable();
+    await disabling;
+
+    expect({ authorized, stillPersistedEnabled }).toEqual({ authorized: false, stillPersistedEnabled: true });
   });
 
   it("waits for an authorized label creation to settle before disable returns", async () => {

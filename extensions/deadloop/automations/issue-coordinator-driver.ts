@@ -162,7 +162,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   const launch = withEnabledDriverLaunch(
     env,
     () => githubOperations().moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel }),
-    () => launchAgentFlow(
+    (recheck: () => void) => launchAgentFlow(
       {
         worktree: { mode: "create", branch, baseBranch: env.baseBranch },
         repoPath: env.repoPath,
@@ -192,7 +192,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
             promiseFile,
           }),
       },
-      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
     ),
     {
       revalidate: () => {

@@ -2,14 +2,15 @@ const {
   MAX_GUARDED_OPERATION_MS,
   MAX_ORIGIN_IDENTITIES,
   assertEnabled,
+  assertLocallyEnabled,
   withEnabledProjectLock,
 } = require("./enabled-operation.cjs");
 
 // Authorization runs two bounded Git commands and at most one bounded GitHub
 // lookup per distinct supported origin identity. A guarded launch can then run
-// up to seven sequential 20-second driver commands (the GitHub mutation plus
-// worktree, agent cleanup, tab, and start commands). Include one extra guarded
-// timeout as scheduling margin so disable always outwaits a slow live launch.
+// up to seven sequential 20-second driver commands. Disable publishes its
+// generation before waiting for this lock, so every launch stage can stop even
+// while an earlier stage is stalled.
 const DRIVER_COMMAND_TIMEOUT_MS = 20_000;
 const MAX_DRIVER_LAUNCH_COMMANDS = 7;
 const MAX_DRIVER_REVALIDATION_MS = 25_000;
@@ -30,9 +31,12 @@ function withEnabledDriverLock(project, operation, options) {
 
 function withEnabledDriverLaunch(project, mutateWorkflowState, launchAgent, options = {}) {
   return withEnabledProjectLock(project, () => {
+    const recheck = () => assertLocallyEnabled(project);
     options.revalidate?.();
+    recheck();
     mutateWorkflowState();
-    return launchAgent();
+    recheck();
+    return launchAgent(recheck);
   }, options);
 }
 

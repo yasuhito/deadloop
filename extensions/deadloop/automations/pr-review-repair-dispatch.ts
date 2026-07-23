@@ -223,6 +223,7 @@ function launchRepair(
   findings: JsonObject[],
   key: string,
   env: ReturnType<typeof envConfig>,
+  beforeAgentStart?: () => void,
 ): JsonObject {
   commandRunner.runText(["git", "check-ref-format", "--branch", branch]);
   const uuid = randomUUID();
@@ -247,6 +248,7 @@ function launchRepair(
       runner: createHerdrRunnerFromCommandRunner(commandRunner),
       runText: commandRunner.runText,
       writeFileSync: fs.writeFileSync,
+      beforeAgentStart,
     },
   );
   return { repairName, ...launch };
@@ -409,7 +411,7 @@ function dispatch(args: JsonObject): DriverResult {
         github.commentPr(env.githubRepo, prNumber, `Starting one bounded repair for this exact PR head and review result.\n\n${marker}`);
         github.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
       },
-      () => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env),
+      (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck),
       {
         revalidate: () => {
           const livePr = readLivePr(env.githubRepo, prNumber);

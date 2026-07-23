@@ -150,6 +150,33 @@ describe("enablement mutation guards", () => {
     },
   );
 
+  it("stops final agent start when disable intent arrives during launch preparation", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const events: string[] = [];
+
+    let error = "";
+    try {
+      withEnabledDriverLaunch(
+        { ...project, enabledAt: 1 },
+        () => events.push("mutated"),
+        (recheck: () => void) => {
+          events.push("prepared");
+          writeFileSync(path.join(project.stateDir, "disable-generation.json"), JSON.stringify({
+            generation: 0,
+            generations: { [path.resolve(project.repoPath)]: 1 },
+          }));
+          recheck();
+          events.push("launched");
+        },
+      );
+    } catch (caught) {
+      error = String(caught);
+    }
+
+    expect({ error: error.includes("disabled"), events }).toEqual({ error: true, events: ["mutated", "prepared"] });
+  });
+
   it("lets disable outwait the maximum authorization, revalidation, and multi-command launch duration", () => {
     expect(DISABLE_LOCK_ATTEMPTS * DISABLE_LOCK_DELAY_MS).toBeGreaterThan(MAX_GUARDED_LAUNCH_DURATION_MS);
   });

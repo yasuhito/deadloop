@@ -7,6 +7,7 @@ export type EnabledProject = {
   githubRepo: string;
   githubRepositoryId: string;
   enabledAt: number;
+  disableGeneration: number;
   enableAttemptToken?: string;
   githubAliases?: string[];
   baseBranch?: string;
@@ -20,7 +21,7 @@ export type EnabledProject = {
 export type EnablementState = { projects: EnabledProject[] };
 
 export type ProjectIdentity = Pick<EnabledProject, "repoPath" | "githubRepo"> &
-  Partial<Pick<EnabledProject, "githubRepositoryId" | "githubAliases" | "baseBranch">>;
+  Partial<Pick<EnabledProject, "githubRepositoryId" | "githubAliases" | "baseBranch" | "disableGeneration">>;
 
 function normalizedPath(value: string): string {
   return path.resolve(value);
@@ -84,6 +85,7 @@ export function upsertEnabledProject(
         githubRepo: identity.githubRepo,
         githubRepositoryId: identity.githubRepositoryId,
         enabledAt,
+        disableGeneration: identity.disableGeneration ?? previous?.disableGeneration ?? 0,
         ...(enableAttemptToken ? { enableAttemptToken } : {}),
         ...(githubAliases ? { githubAliases } : {}),
         ...(identity.baseBranch ? { baseBranch: identity.baseBranch } : {}),

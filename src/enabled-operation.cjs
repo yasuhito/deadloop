@@ -5,6 +5,7 @@ const path = require("node:path");
 // @ts-expect-error Node loads this CommonJS-style TypeScript module with built-in type stripping.
 const { normalizeEnablementStateValue } = require("./enablement-state.ts");
 const { acquireLockSync, releaseOwned } = require("./enablement-lock.cjs");
+const { currentDisableGeneration } = require("./disable-generation.cjs");
 
 function githubRepoFromRemote(remote) {
   const match = /^(?:git@github\.com:|https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(String(remote || ""));
@@ -63,6 +64,9 @@ function assertLocallyEnabled(project) {
     if (enabled) {
       if (project.enabledAt !== undefined && enabled.enabledAt !== project.enabledAt) {
         throw new Error("deadloop enablement generation changed; operation stopped");
+      }
+      if (currentDisableGeneration(project.stateDir, project.repoPath) !== enabled.disableGeneration) {
+        throw new Error("deadloop disable was requested for this repository");
       }
       return enabled;
     }
