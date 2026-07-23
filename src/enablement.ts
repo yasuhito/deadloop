@@ -73,21 +73,6 @@ export function upsertEnabledProject(
   };
 }
 
-export function acknowledgeAutoMerge(state: EnablementState, identity: ProjectIdentity, autoMerge: boolean): EnablementState {
-  if (!validIdentity(identity)) throw new Error("invalid project identity");
-  const repoPath = normalizedPath(identity.repoPath);
-  return {
-    projects: state.projects.map((project) =>
-      project.repoPath === repoPath
-      && project.githubRepo === identity.githubRepo
-      && project.firstStartPending === false
-      && autoMerge
-        ? { ...project, lastObservedAutoMerge: true, autoMergeAcknowledged: true }
-        : project,
-    ),
-  };
-}
-
 export function observeAutoMerge(state: EnablementState, identity: ProjectIdentity, autoMerge: boolean): EnablementState {
   if (!validIdentity(identity)) throw new Error("invalid project identity");
   const repoPath = normalizedPath(identity.repoPath);

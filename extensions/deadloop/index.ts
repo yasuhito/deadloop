@@ -37,7 +37,6 @@ const {
 } = require("../../src/scheduler-lock.cjs");
 import { inferredProjectId, schedulerLockName } from "../../src/project-identity";
 import {
-  acknowledgeAutoMerge,
   findEnabledProject,
   normalizeEnablementState,
   observeAutoMerge,
@@ -398,7 +397,7 @@ async function disableEnablementAttempt(identity, enabledAt, enableAttemptToken)
 function isProjectEnabled(project) {
   if (!project.repoPath || !project.githubRepo) return false;
   try {
-    assertEnabled({ repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR });
+    assertEnabled({ repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt });
     return true;
   } catch {
     return false;
@@ -1013,8 +1012,7 @@ export default function (pi) {
             if (wasEnabled) saveEnablementState(removeEnabledProject(state, identity));
             throw error;
           }
-          const enabled = upsertEnabledProject(state, identity, Date.now(), firstEnable, enableAttemptToken);
-          const next = acknowledgeAutoMerge(enabled, identity, configuredProject.autoMerge);
+          const next = upsertEnabledProject(state, identity, Date.now(), firstEnable, enableAttemptToken);
           enabledAt = findEnabledProject(next, identity)?.enabledAt;
           saveEnablementState(next);
         });

@@ -35,7 +35,7 @@ npx skills@latest add yasuhito/deadloop
 /deadloop-enable
 ```
 
-deadloop はチェックアウト先、GitHub リポジトリ、基準ブランチ、Herdr のワークツリー保存先を自動的に取得します。実行許可は `~/.pi/agent/deadloop/` 配下のローカル状態に保存され、`deadloop.json` や `projects.json` が存在するだけでは自動処理を開始しません。`/deadloop-enable` は GitHub への書き込み権限を確認し、不足している標準ラベルだけを作成します。新規の有効化は必ず `autoMerge: false` で始まります。`projects.json` ですでに `autoMerge: true` を明示している場合は、最初の安全な起動を確認してから `/deadloop-enable` をもう一度実行し、その設定を承認します。
+deadloop はチェックアウト先、GitHub リポジトリ、基準ブランチ、Herdr のワークツリー保存先を自動的に取得します。実行許可は `~/.pi/agent/deadloop/` 配下のローカル状態に保存され、`deadloop.json` や `projects.json` が存在するだけでは自動処理を開始しません。`/deadloop-enable` は GitHub への書き込み権限を確認し、不足している標準ラベルだけを作成します。新規の有効化は必ず `autoMerge: false` で始まります。最初の安全な起動後に自動マージを有効化するには、`autoMerge` を明示的に `false` に設定してから `true` に変更してください。`/deadloop-enable` を繰り返しても、既存の `true` 設定は承認されません。
 
 `/deadloop-disable` は実行中エージェントを停止せず、GitHub の状態、ワークツリー、実行成果物を削除せずにスケジューリングを止めます。旧版から更新した場合は、リポジトリごとに再度有効化してください。
 

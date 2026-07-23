@@ -269,7 +269,7 @@ describe("enablement command integration", () => {
     expect(extension.messages.at(-1)).toContain("deadloop enabled");
   });
 
-  it("acknowledges a preexisting true auto-merge setting on repeated enable", async () => {
+  it("does not acknowledge a preexisting true auto-merge setting on repeated enable", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath, { autoMerge: true });
     const extension = await loadExtension(root);
@@ -277,7 +277,7 @@ describe("enablement command integration", () => {
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
-    expect(extension.messages.at(-1)).toContain("autoMerge is on");
+    expect(extension.messages.at(-1)).toContain("autoMerge is off");
   });
 
   it("keeps an in-flight guarded operation authorized after repeated enable", async () => {
@@ -350,11 +350,14 @@ describe("enablement command integration", () => {
     expect(extension.messages.at(-1)).toContain("autoMerge is off");
   });
 
-  it("preserves explicit auto-merge confirmation across disable and re-enable", async () => {
+  it("preserves a post-enable false-to-true auto-merge confirmation across disable and re-enable", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath, { autoMerge: true });
     const extension = await loadExtension(root);
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    writeConfig(root, repoPath, { autoMerge: false });
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    writeConfig(root, repoPath, { autoMerge: true });
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
     await invoke(extension.commands.get("deadloop-disable")!, repoPath);
 
@@ -627,6 +630,26 @@ describe("enablement command integration", () => {
     const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
     const state = JSON.parse(readFileSync(statePath, "utf8"));
     state.projects[0].enabled = false;
+    writeFileSync(statePath, JSON.stringify(state));
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const lockName = schedulerLockName({ id: "demo", repoPath, githubRepo: "owner/demo" });
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", lockName))).toBe(false);
+  });
+
+  it("releases the scheduler lock after another session disables and re-enables with a newer generation", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+    vi.useFakeTimers();
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath, { isIdle: () => false });
+    const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    state.projects[0].enabled = false;
+    writeFileSync(statePath, JSON.stringify(state));
+    state.projects[0].enabled = true;
+    state.projects[0].enabledAt += 1;
     writeFileSync(statePath, JSON.stringify(state));
 
     await vi.advanceTimersByTimeAsync(30_000);
