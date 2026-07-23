@@ -37,12 +37,13 @@ function gitReportMutationSnapshot(repoPath: string): string {
   });
 }
 
-function fixtureRepository() {
+function fixtureRepository(options: { separateGitDir?: boolean } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-enablement-"));
   sandboxes.push(root);
   const repoPath = path.join(root, "primary");
   mkdirSync(repoPath);
-  git(repoPath, ["init", "--quiet"]);
+  const separateGitDir = path.join(root, "external.git");
+  git(repoPath, ["init", "--quiet", ...(options.separateGitDir ? [`--separate-git-dir=${separateGitDir}`] : [])]);
   git(repoPath, ["config", "user.email", "test@example.com"]);
   git(repoPath, ["config", "user.name", "Test"]);
   writeFileSync(path.join(repoPath, "README.md"), "fixture\n");
@@ -492,6 +493,15 @@ describe("enablement command integration", () => {
     await invoke(extension.commands.get("deadloop-enable")!, linkedPath);
 
     expect(extension.messages.at(-1)).toContain("linked worktrees cannot be enabled");
+  });
+
+  it("enables a primary checkout with an external separate Git directory", async () => {
+    const { root, repoPath } = fixtureRepository({ separateGitDir: true });
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("deadloop enabled for owner/demo");
   });
 
   it("rejects disable from a linked worktree without removing primary enablement", async () => {

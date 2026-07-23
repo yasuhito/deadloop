@@ -169,8 +169,9 @@ function inferGithubRepo(repoPath) {
 function implicitProjectFromCwd(cwd, options: { fetchPolicy?: boolean } = {}) {
   const repoPath = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
   if (!repoPath) return null;
+  const gitDir = gitOutput(cwd, ["rev-parse", "--git-dir"]);
   const gitCommonDir = gitOutput(cwd, ["rev-parse", "--git-common-dir"]);
-  if (!gitCommonDir || isLinkedGitWorktree(repoPath, gitCommonDir)) return null;
+  if (!gitDir || !gitCommonDir || isLinkedGitWorktree(cwd, gitDir, gitCommonDir)) return null;
   const enabledIdentity = loadEnablementState().projects.find((project) =>
     project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repoPath)
   );
@@ -763,9 +764,10 @@ async function commandExec(pi, command, args, timeout = 15_000) {
 
 async function detectProjectIdentity(pi, cwd) {
   const repoPath = (await commandExec(pi, "git", ["-C", cwd, "rev-parse", "--show-toplevel"])).stdout.trim();
+  const gitDir = (await commandExec(pi, "git", ["-C", cwd, "rev-parse", "--git-dir"])).stdout.trim();
   const commonDir = (await commandExec(pi, "git", ["-C", cwd, "rev-parse", "--git-common-dir"])).stdout.trim();
-  if (isLinkedGitWorktree(repoPath, commonDir)) {
-    throw new Error(`linked worktrees cannot be enabled; run /deadloop-enable from the primary checkout: ${path.dirname(path.resolve(repoPath, commonDir))}`);
+  if (isLinkedGitWorktree(cwd, gitDir, commonDir)) {
+    throw new Error(`linked worktrees cannot be enabled; run /deadloop-enable from the primary checkout: ${path.dirname(path.resolve(cwd, commonDir))}`);
   }
   const fetchRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--all", "origin"])).stdout.split(/\r?\n/).filter(Boolean);
   const pushRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--push", "--all", "origin"])).stdout.split(/\r?\n/).filter(Boolean);
@@ -1114,8 +1116,9 @@ export default function (pi) {
             identity = await detectProjectIdentity(pi, ctx.cwd);
           } catch {
             const repoPath = (await commandExec(pi, "git", ["-C", ctx.cwd, "rev-parse", "--show-toplevel"])).stdout.trim();
+            const gitDir = (await commandExec(pi, "git", ["-C", ctx.cwd, "rev-parse", "--git-dir"])).stdout.trim();
             const commonDir = (await commandExec(pi, "git", ["-C", ctx.cwd, "rev-parse", "--git-common-dir"])).stdout.trim();
-            if (isLinkedGitWorktree(repoPath, commonDir)) {
+            if (isLinkedGitWorktree(ctx.cwd, gitDir, commonDir)) {
               const primaryCheckout = path.dirname(path.resolve(ctx.cwd, commonDir));
               throw new Error(`linked worktrees cannot be disabled; run /deadloop-disable from the primary checkout: ${primaryCheckout}`);
             }
