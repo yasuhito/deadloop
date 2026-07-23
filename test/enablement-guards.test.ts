@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { assertEnabled, withEnabledProjectLock } = require("../src/enabled-operation.cjs");
-const { assertDriverEnabled } = require("../src/driver-enablement.cjs");
+const { assertDriverEnabled, withEnabledDriverLaunch } = require("../src/driver-enablement.cjs");
 const { acquireLockSync, reclaimStale } = require("../src/enablement-lock.cjs");
 const { GUARDED_OPERATION_TIMEOUT_MS, runGuarded } = require("../extensions/deadloop/automations/guarded-operation.ts");
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
@@ -63,6 +63,32 @@ describe("enablement mutation guards", () => {
     try { withEnabledProjectLock(project, () => { mutated = true; }); } catch {}
     expect(mutated).toBe(false);
   });
+
+  it.each(["issue worker", "PR reviewer", "branch update", "review repair"])(
+    "keeps disable excluded between the %s mutation and launch",
+    () => {
+      const project = fixture();
+      writeState(project, { enabledAt: 1 });
+      const lockPath = path.join(project.stateDir, "enabled-projects.json.lock");
+      const events: string[] = [];
+
+      withEnabledDriverLaunch(
+        project,
+        () => {
+          events.push("mutated");
+          try {
+            acquireLockSync(lockPath, { attempts: 1, delayMs: 1 });
+            events.push("disable-acquired");
+          } catch {
+            events.push("disable-excluded");
+          }
+        },
+        () => events.push("launched"),
+      );
+
+      expect(events).toEqual(["mutated", "disable-excluded", "launched"]);
+    },
+  );
 
   it("bounds the command while holding the enablement lock", () => {
     const project = fixture();

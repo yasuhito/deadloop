@@ -23,7 +23,7 @@ const {
   shellQuote,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
-const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -265,25 +265,30 @@ function launchBranchUpdate(
   runText(["git", "check-ref-format", "--branch", branch]);
   const marker = renderBranchUpdateMarker(headOid, baseOid);
   const github = githubOperations();
-  withEnabledDriverLock(env, () => github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`));
-  withEnabledDriverLock(env, () => github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }));
-  const launch = withEnabledDriverLock(env, () => launchAgentFlow(
-    {
-      worktree: { mode: "open", branch },
-      repoPath: env.repoPath,
-      automationDir: env.automationDir,
-      stateDir: env.stateDir,
-      name: updaterName,
-      agent: env.branchUpdateAgent,
-      model: env.branchUpdateModel,
-      level: "medium",
-      uuid,
-      promptFilePrefix: "branch-update-prompt",
-      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-        branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
+  const launch = withEnabledDriverLaunch(
+    env,
+    () => {
+      github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
+      github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
     },
-    { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
-  ));
+    () => launchAgentFlow(
+      {
+        worktree: { mode: "open", branch },
+        repoPath: env.repoPath,
+        automationDir: env.automationDir,
+        stateDir: env.stateDir,
+        name: updaterName,
+        agent: env.branchUpdateAgent,
+        model: env.branchUpdateModel,
+        level: "medium",
+        uuid,
+        promptFilePrefix: "branch-update-prompt",
+        renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+          branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
+      },
+      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+    ),
+  );
   return { updaterName, headRefName: branch, retryKey: key, ...launch };
 }
 
@@ -307,24 +312,27 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
     };
   }
 
-  withEnabledDriverLock(env, () => githubOperations().movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }));
-  const launch = withEnabledDriverLock(env, () => launchAgentFlow(
-    {
-      worktree: { mode: "open", branch: headRefName },
-      repoPath: env.repoPath,
-      automationDir: env.automationDir,
-      stateDir: env.stateDir,
-      name: reviewerName,
-      agent: env.reviewerAgent,
-      model: env.reviewerModel,
-      level: "medium",
-      uuid,
-      promptFilePrefix: "reviewer-prompt",
-      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-        reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
-    },
-    { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
-  ));
+  const launch = withEnabledDriverLaunch(
+    env,
+    () => githubOperations().movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }),
+    () => launchAgentFlow(
+      {
+        worktree: { mode: "open", branch: headRefName },
+        repoPath: env.repoPath,
+        automationDir: env.automationDir,
+        stateDir: env.stateDir,
+        name: reviewerName,
+        agent: env.reviewerAgent,
+        model: env.reviewerModel,
+        level: "medium",
+        uuid,
+        promptFilePrefix: "reviewer-prompt",
+        renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+          reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
+      },
+      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+    ),
+  );
   return { reviewerName, headRefName, ...launch };
 }
 

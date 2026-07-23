@@ -18,6 +18,15 @@ function git(repoPath: string, args: string[]): string {
   return execFileSync("git", ["-C", repoPath, ...args], { encoding: "utf8" });
 }
 
+function gitReportMutationSnapshot(repoPath: string): string {
+  const gitDir = git(repoPath, ["rev-parse", "--git-dir"]).trim();
+  const fetchHead = path.join(repoPath, gitDir, "FETCH_HEAD");
+  return JSON.stringify({
+    refs: git(repoPath, ["show-ref"]),
+    fetchHead: existsSync(fetchHead) ? readFileSync(fetchHead, "utf8") : null,
+  });
+}
+
 function fixtureRepository() {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-enablement-"));
   sandboxes.push(root);
@@ -314,6 +323,19 @@ describe("enablement command integration", () => {
     await invoke(extension.commands.get("deadloop-doctor")!, repoPath);
 
     expect(readFileSync(statePath, "utf8")).toBe(before);
+  });
+
+  it.each(["deadloop-status", "deadloop-doctor"])("does not update refs or FETCH_HEAD for %s", async (command) => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
+    writeFileSync(statePath, JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/demo", enabledAt: 1 }] }));
+    const extension = await loadExtension(root);
+    const before = gitReportMutationSnapshot(repoPath);
+
+    await invoke(extension.commands.get(command)!, repoPath);
+
+    expect(gitReportMutationSnapshot(repoPath)).toBe(before);
   });
 
   it("reports another live lock owner as standby", async () => {

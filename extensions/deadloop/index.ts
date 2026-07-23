@@ -119,15 +119,17 @@ function gitSync(repoPath, args, timeout = 30_000) {
   });
 }
 
-function trustedRepoPolicyProvider(project) {
+function trustedRepoPolicyProvider(project, options: { fetch?: boolean } = {}) {
   const repoPath = project.repoPath;
   if (!repoPath) return { status: "missing" as const };
   const baseBranch = project.baseBranch || "origin/main";
 
-  const fetch = gitSync(repoPath, ["fetch", "--quiet"], 30_000);
-  if (fetch.status !== 0) {
-    const reason = (fetch.stderr || fetch.stdout || fetch.error?.message || "git fetch failed").trim();
-    return { status: "error" as const, reason: `trusted repo policy fetch failed for ${baseBranch}: ${reason}` };
+  if (options.fetch !== false) {
+    const fetch = gitSync(repoPath, ["fetch", "--quiet"], 30_000);
+    if (fetch.status !== 0) {
+      const reason = (fetch.stderr || fetch.stdout || fetch.error?.message || "git fetch failed").trim();
+      return { status: "error" as const, reason: `trusted repo policy fetch failed for ${baseBranch}: ${reason}` };
+    }
   }
 
   const show = gitSync(repoPath, ["show", `${baseBranch}:${REPO_POLICY_FILE}`], 10_000);
@@ -159,7 +161,7 @@ function inferGithubRepo(repoPath) {
   return githubRepoFromRemote(gitOutput(repoPath, ["remote", "get-url", "origin"]));
 }
 
-function implicitProjectFromCwd(cwd) {
+function implicitProjectFromCwd(cwd, options: { fetchPolicy?: boolean } = {}) {
   const repoPath = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
   if (!repoPath) return null;
   const gitCommonDir = gitOutput(cwd, ["rev-parse", "--git-common-dir"]);
@@ -176,7 +178,7 @@ function implicitProjectFromCwd(cwd) {
     worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", id),
     autoMerge: false,
   };
-  const policy = trustedRepoPolicyProvider(raw);
+  const policy = trustedRepoPolicyProvider(raw, { fetch: options.fetchPolicy });
   if (policy.status === "error") return null;
   const result = parseProjectsConfig(JSON.stringify({ projects: [raw] }), projectFilter(), {
     configPath: `${repoPath}${path.sep}${REPO_POLICY_FILE}`,
@@ -186,9 +188,9 @@ function implicitProjectFromCwd(cwd) {
   return result.projects[0] || null;
 }
 
-function addImplicitProject(cwd, result) {
+function addImplicitProject(cwd, result, options: { fetchPolicy?: boolean } = {}) {
   if (!result.ok || !cwd) return result;
-  const implicit = implicitProjectFromCwd(cwd);
+  const implicit = implicitProjectFromCwd(cwd, options);
   if (!implicit || !isProjectEnabled(implicit)) return result;
   const implicitPath = path.resolve(implicit.repoPath || "");
   const duplicate = result.projects.some((project) => {
@@ -203,7 +205,7 @@ function addImplicitProject(cwd, result) {
   return { ...result, projects: [...result.projects, implicit] };
 }
 
-function loadProjectsResult(cwd, options: { includeDisabled?: boolean } = {}) {
+function loadProjectsResult(cwd, options: { includeDisabled?: boolean; fetchPolicy?: boolean } = {}) {
   let text;
   try {
     text = readConfigText();
@@ -212,9 +214,9 @@ function loadProjectsResult(cwd, options: { includeDisabled?: boolean } = {}) {
   }
   const parsed = parseProjectsConfig(text, projectFilter(), {
     configPath: CONFIG_PATH,
-    repoPolicyProvider: trustedRepoPolicyProvider,
+    repoPolicyProvider: (project) => trustedRepoPolicyProvider(project, { fetch: options.fetchPolicy }),
   });
-  const result = addImplicitProject(cwd, parsed);
+  const result = addImplicitProject(cwd, parsed, options);
   if (result.ok) {
     if (!options.includeDisabled) result.projects = result.projects.filter((project) => isProjectEnabled(project));
     debugLog(
@@ -511,7 +513,7 @@ async function collectLiveSnapshotData(
   const includeIssueComments = options.includeIssueComments === true;
   const includeAgents = options.includeAgents === true;
 
-  const projectsResult = loadProjectsResult(cwd);
+  const projectsResult = loadProjectsResult(cwd, { fetchPolicy: false });
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
   const project = activeProject(cwd, projects);

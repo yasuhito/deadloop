@@ -22,7 +22,7 @@ const {
   shellQuote,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
-const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -257,10 +257,15 @@ function dispatch(args: JsonObject): DriverResult {
   }
 
   const marker = renderRepairMarker(expectedHead, selection.reviewFingerprint);
-  withEnabledDriverLock(env, () => github.commentPr(env.githubRepo, prNumber, `Starting one bounded repair for this exact PR head and review result.\n\n${marker}`));
-  withEnabledDriverLock(env, () => github.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] }));
   try {
-    const launch = withEnabledDriverLock(env, () => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env));
+    const launch = withEnabledDriverLaunch(
+      env,
+      () => {
+        github.commentPr(env.githubRepo, prNumber, `Starting one bounded repair for this exact PR head and review result.\n\n${marker}`);
+        github.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
+      },
+      () => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env),
+    );
     return driverResult("needs_llm", `Launched review-repair worker for PR #${prNumber}`, {
       driverAction: "review_repair_monitor_request",
       selection,

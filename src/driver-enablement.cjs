@@ -8,4 +8,11 @@ function withEnabledDriverLock(project, operation, options) {
   return withEnabledProjectLock(project, operation, options);
 }
 
-module.exports = { assertDriverEnabled, withEnabledDriverLock };
+function withEnabledDriverLaunch(project, mutateWorkflowState, launchAgent, options) {
+  return withEnabledProjectLock(project, () => {
+    mutateWorkflowState();
+    return launchAgent();
+  }, options);
+}
+
+module.exports = { assertDriverEnabled, withEnabledDriverLaunch, withEnabledDriverLock };

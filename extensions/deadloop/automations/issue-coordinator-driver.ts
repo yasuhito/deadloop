@@ -19,7 +19,7 @@ const {
   parseFixtureArg,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
-const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -127,39 +127,42 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     };
   }
 
-  withEnabledDriverLock(env, () => githubOperations().moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel }));
-  const launch = withEnabledDriverLock(env, () => launchAgentFlow(
-    {
-      worktree: { mode: "create", branch, baseBranch: env.baseBranch },
-      repoPath: env.repoPath,
-      automationDir: env.automationDir,
-      stateDir: env.stateDir,
-      name: workerName,
-      agent: env.workerAgent,
-      model: env.workerModel,
-      level: "medium",
-      uuid,
-      promptFilePrefix: "worker-prompt",
-      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-        renderIssueWorkerPrompt({
-          launchReason: "deterministic issue coordinator launch",
-          issueNumber: number,
-          issueTitle: String(issue.title || "task"),
-          issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
-          githubRepo: env.githubRepo,
-          workerInstructions: env.workerInstructions,
-          checkCommand: env.checkCommand,
-          validationCommand: renderProjectCheckCommand({
-            automationDir: env.automationDir,
-            stateDir: env.stateDir,
-            cwd: worktreePath,
-            command: env.checkCommand,
+  const launch = withEnabledDriverLaunch(
+    env,
+    () => githubOperations().moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel }),
+    () => launchAgentFlow(
+      {
+        worktree: { mode: "create", branch, baseBranch: env.baseBranch },
+        repoPath: env.repoPath,
+        automationDir: env.automationDir,
+        stateDir: env.stateDir,
+        name: workerName,
+        agent: env.workerAgent,
+        model: env.workerModel,
+        level: "medium",
+        uuid,
+        promptFilePrefix: "worker-prompt",
+        renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+          renderIssueWorkerPrompt({
+            launchReason: "deterministic issue coordinator launch",
+            issueNumber: number,
+            issueTitle: String(issue.title || "task"),
+            issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
+            githubRepo: env.githubRepo,
+            workerInstructions: env.workerInstructions,
+            checkCommand: env.checkCommand,
+            validationCommand: renderProjectCheckCommand({
+              automationDir: env.automationDir,
+              stateDir: env.stateDir,
+              cwd: worktreePath,
+              command: env.checkCommand,
+            }),
+            promiseFile,
           }),
-          promiseFile,
-        }),
-    },
-    { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
-  ));
+      },
+      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+    ),
+  );
   return { workerName, branch, ...launch };
 }
 
