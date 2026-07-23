@@ -715,6 +715,30 @@ describe("enablement command integration", () => {
     expect(extension.messages.at(-1)).toContain("autoMerge is off");
   });
 
+  it("reports the gated auto-merge setting off on first enable", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath, { autoMerge: true });
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    await invoke(extension.commands.get("deadloop-status")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("autoMerge: off");
+  });
+
+  it("discovers a user configuration created after enablement", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root);
+    vi.useFakeTimers();
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    writeConfig(root, repoPath, { autoMerge: true });
+    await invoke(extension.commands.get("deadloop-status")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("autoMerge: on");
+  });
+
   it("keeps auto-merge off through the first actual scheduler tick", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath, { autoMerge: true });

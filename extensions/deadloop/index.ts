@@ -89,14 +89,17 @@ const CODE_FRESHNESS_SOURCE_PATHS = [
   path.resolve(__dirname, "../../src/core.ts"),
   path.resolve(__dirname, "../../src/automation-runner.ts"),
 ];
-const CONFIG_PATH = resolveConfigPath({
-  env: process.env,
-  stateDir: STATE_DIR,
-  extensionDir: EXTENSION_DIR,
-  exists: fs.existsSync,
-  joinPath: path.join,
-});
 const AUTOMATION_DIR = path.join(EXTENSION_DIR, "automations");
+
+function currentConfigPath() {
+  return resolveConfigPath({
+    env: process.env,
+    stateDir: STATE_DIR,
+    extensionDir: EXTENSION_DIR,
+    exists: fs.existsSync,
+    joinPath: path.join,
+  });
+}
 
 function readJsonFile(file, fallback) {
   try {
@@ -120,10 +123,11 @@ function debugLog(...args) {
 }
 
 function readConfigText() {
+  const configPath = currentConfigPath();
   try {
-    return fs.readFileSync(CONFIG_PATH, "utf8");
+    return { text: fs.readFileSync(configPath, "utf8"), configPath };
   } catch (error) {
-    if (error?.code === "ENOENT") return "{}";
+    if (error?.code === "ENOENT") return { text: "{}", configPath };
     throw error;
   }
 }
@@ -256,8 +260,9 @@ function loadProjectsResult(
   } = {},
 ) {
   let text;
+  let configPath;
   try {
-    text = readConfigText();
+    ({ text, configPath } = readConfigText());
     let enableIdentity = options.enableIdentity;
     if (!enableIdentity && cwd) {
       const repoPath = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
@@ -279,7 +284,7 @@ function loadProjectsResult(
     return { ok: false, reason: `projects.json read error: ${error?.message || error}` };
   }
   const parsed = parseProjectsConfig(text, projectFilter(), {
-    configPath: CONFIG_PATH,
+    configPath,
     repoPolicyProvider: (project) => trustedRepoPolicyProvider(project, { fetch: options.fetchPolicy }),
   });
   const result = addImplicitProject(cwd, parsed, options);
@@ -296,12 +301,12 @@ function loadProjectsResult(
     if (!options.includeDisabled) result.projects = result.projects.filter((project) => isProjectEnabled(project));
     debugLog(
       "config",
-      CONFIG_PATH,
+      configPath,
       "projects",
       result.projects.map((project) => project.id || project.repoPath),
     );
   } else {
-    debugLog("config", CONFIG_PATH, result.reason);
+    debugLog("config", configPath, result.reason);
   }
   return result;
 }
@@ -424,22 +429,30 @@ async function updateEnablementState(update) {
   });
 }
 
-async function applyFirstEnableAutoMergeGate(project) {
-  let forceAutoMergeOff = false;
-  let enabledAt;
-  await updateEnablementState((state) => {
-    const enabled = findEnabledProject(state, project);
-    if (!enabled) return state;
-    enabledAt = enabled.enabledAt;
-    if (enabled.firstStartPending) forceAutoMergeOff = true;
-    if (enabled.firstEnableAutoMerge !== true || enabled.autoMergeAcknowledged) return state;
+function firstEnableAutoMergeGate(state, project) {
+  const enabled = findEnabledProject(state, project);
+  if (!enabled) return { state, project: null };
 
-    const observed = observeAutoMerge(state, project, project.autoMerge);
+  let observed = state;
+  let forceAutoMergeOff = enabled.firstStartPending;
+  if (enabled.firstEnableAutoMerge === true && !enabled.autoMergeAcknowledged) {
+    observed = observeAutoMerge(state, project, project.autoMerge);
     if (!findEnabledProject(observed, project)?.autoMergeAcknowledged) forceAutoMergeOff = true;
-    return observed;
+  }
+  return {
+    state: observed,
+    project: { ...project, enabledAt: enabled.enabledAt, ...(forceAutoMergeOff ? { autoMerge: false } : {}) },
+  };
+}
+
+async function applyFirstEnableAutoMergeGate(project) {
+  let effectiveProject = null;
+  await updateEnablementState((state) => {
+    const gated = firstEnableAutoMergeGate(state, project);
+    effectiveProject = gated.project;
+    return gated.state;
   });
-  if (enabledAt === undefined) return null;
-  return { ...project, enabledAt, ...(forceAutoMergeOff ? { autoMerge: false } : {}) };
+  return effectiveProject;
 }
 
 async function completeFirstSchedulerStart(project) {
@@ -688,7 +701,10 @@ async function collectLiveSnapshotData(
   const projectsResult = loadProjectsResult(cwd, { fetchPolicy: false });
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
-  const project = activeProject(cwd, projects);
+  const configuredProject = activeProject(cwd, projects);
+  const project = configuredProject
+    ? firstEnableAutoMergeGate(loadEnablementState(), configuredProject).project
+    : null;
   const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
   const repositoryEnablement = repositoryEnablementForRoot(repositoryRoot);
   const diagnosticWarnings = projectsResult.ok
