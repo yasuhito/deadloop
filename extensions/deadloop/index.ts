@@ -1166,7 +1166,7 @@ export default function (pi) {
       debugLog("scheduler enablement check failed", error?.message || error);
     }
     if (!remainsEnabled) {
-      stopScheduler(ctx);
+      invalidateSchedulerRun(ctx, schedulerRun);
       setLooperStatus(ctx, "deadloop is not enabled for this repository");
       return;
     }
@@ -1178,12 +1178,12 @@ export default function (pi) {
     }
     const project = await activeSchedulerProject(ctx.cwd, projectsResult.projects);
     if (!project) {
-      stopScheduler(ctx);
+      invalidateSchedulerRun(ctx, schedulerRun);
       setLooperStatus(ctx, "deadloop is not enabled for this repository");
       return;
     }
-    if (projectLockPath(project) !== active.lockPath) {
-      stopScheduler(ctx);
+    if (projectLockPath(project) !== schedulerRun.lockPath) {
+      invalidateSchedulerRun(ctx, schedulerRun);
       setLooperStatus(ctx, "skipped: active project identity changed since scheduler lock was acquired");
       return;
     }
@@ -1257,6 +1257,39 @@ export default function (pi) {
     setLooperStatus(ctx, undefined);
   }
 
+  function invalidateSchedulerRun(ctx, schedulerRun = active) {
+    if (!schedulerRun || active !== schedulerRun) return;
+    if (timer) clearInterval(timer);
+    if (startupTick) clearTimeout(startupTick);
+    timer = null;
+    startupTick = null;
+    pendingStart = null;
+    if (ownsLock && schedulerRun.lockPath && schedulerRun.lockToken) {
+      releaseSchedulerLock(schedulerRun.lockPath, schedulerRun.lockToken);
+    }
+    ownsLock = false;
+    active = null;
+    stopRequested = false;
+    setLooperStatus(ctx, undefined);
+  }
+
+  function pollScheduler(ctx) {
+    const schedulerRun = active;
+    if (!schedulerRun) return Promise.resolve();
+    let remainsEnabled = false;
+    try {
+      remainsEnabled = isProjectEnabled(schedulerRun.project);
+    } catch (error) {
+      debugLog("scheduler polling enablement check failed", error?.message || error);
+    }
+    if (!remainsEnabled) {
+      invalidateSchedulerRun(ctx, schedulerRun);
+      setLooperStatus(ctx, "deadloop is not enabled for this repository");
+      return Promise.resolve();
+    }
+    return runTick(ctx);
+  }
+
   function stopScheduler(ctx) {
     if (timer) clearInterval(timer);
     if (startupTick) clearTimeout(startupTick);
@@ -1308,9 +1341,9 @@ export default function (pi) {
       return { started: true };
     }
     updateStatus(ctx, project, loadState());
-    timer = setInterval(() => runTick(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] tick failed:`, error?.message || error)), TICK_MS);
+    timer = setInterval(() => pollScheduler(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] tick failed:`, error?.message || error)), TICK_MS);
     timer.unref?.();
-    startupTick = setTimeout(() => runTick(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] startup tick failed:`, error?.message || error)), 3000);
+    startupTick = setTimeout(() => pollScheduler(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] startup tick failed:`, error?.message || error)), 3000);
     startupTick.unref?.();
     return { started: true };
   }
@@ -1389,7 +1422,6 @@ export default function (pi) {
     handler: async (_args, ctx) => {
       try {
         let message;
-        let schedulerStop = Promise.resolve();
         const repoPath = await detectPrimaryCheckout(pi, ctx.cwd, true);
         await pi.testing?.beforeDisableLock?.();
         await withEnablementStateLock(async () => {
@@ -1402,13 +1434,12 @@ export default function (pi) {
           const enabled = state.projects.find((project) => project.repoPath === path.resolve(repoPath) && project.enabled !== false);
           saveEnablementState(removeEnabledProjectAtPath(state, repoPath));
           if (active?.project?.repoPath && path.resolve(active.project.repoPath) === path.resolve(repoPath)) {
-            schedulerStop = stopScheduler(ctx);
+            invalidateSchedulerRun(ctx, active);
           }
           message = enabled
             ? `deadloop disabled for ${enabled.githubRepo}. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.`
             : "deadloop disabled for this checkout. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.";
         });
-        await schedulerStop;
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-disable", content: message, display: true });
       } catch (error) {

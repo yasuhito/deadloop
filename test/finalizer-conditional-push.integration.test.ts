@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -43,7 +43,12 @@ function fixture() {
 
 function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind") {
   const { repo, remote, rootOid, expectedHead, configPath } = fixture();
-  let raced = false;
+  const hookPath = path.join(repo, ".git", "hooks", "pre-push");
+  const updateRef = race === "delete"
+    ? `git --git-dir='${remote}' update-ref -d '${ref}'`
+    : `git --git-dir='${remote}' update-ref '${ref}' '${rootOid}'`;
+  writeFileSync(hookPath, `#!/bin/sh\n${updateRef}\n`);
+  chmodSync(hookPath, 0o755);
   const run = (args: string[]) => {
     if (args[0] === "node") return { status: 0, stdout: "", stderr: "" };
     if (args[0] === "git" && args.includes("get-url")) {
@@ -57,10 +62,6 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
       };
     }
     if (args[0] === "gh" && args[1] === "repo") {
-      if (!raced) {
-        raced = true;
-        execFileSync("git", ["--git-dir", remote, "update-ref", ...(race === "delete" ? ["-d", ref] : [ref, rootOid])]);
-      }
       return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
     }
     const result = spawnSync(args[0], args.slice(1), {

@@ -1141,11 +1141,12 @@ describe("enablement command integration", () => {
   });
 
   it.each([
-    ["keeps disable pending while the scheduler tick holds its lock", (result: { disableResolvedBeforeRelease: boolean }) => result.disableResolvedBeforeRelease, false],
-    ["keeps the scheduler lock while the tick is blocked", (result: { lockExistsBeforeRelease: boolean }) => result.lockExistsBeforeRelease, true],
-    ["does not report disable success before lock release", (result: { successReportedBeforeRelease: boolean }) => result.successReportedBeforeRelease, false],
-    ["releases the scheduler lock before the disable response", (result: { lockExistsAfterResponse: boolean }) => result.lockExistsAfterResponse, false],
-    ["reports disable success after lock release", (result: { successReportedAfterRelease: boolean }) => result.successReportedAfterRelease, true],
+    ["completes disable while the scheduler tick remains blocked", (result: { disableResolvedBeforeRelease: boolean }) => result.disableResolvedBeforeRelease, true],
+    ["releases the scheduler lock while the tick remains blocked", (result: { lockExistsBeforeRelease: boolean }) => result.lockExistsBeforeRelease, false],
+    ["reports disable success after releasing the lock", (result: { successReportedBeforeRelease: boolean }) => result.successReportedBeforeRelease, true],
+    ["keeps the scheduler lock released after the disable response", (result: { lockExistsAfterResponse: boolean }) => result.lockExistsAfterResponse, false],
+    ["retains the disable success response after blocked work finishes", (result: { successReportedAfterRelease: boolean }) => result.successReportedAfterRelease, true],
+    ["does not let the old run clear a newer owner's lock", (result: { newerOwnerRetained: boolean }) => result.newerOwnerRetained, true],
   ])("%s", async (_name, observation, expected) => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
@@ -1188,15 +1189,19 @@ describe("enablement command integration", () => {
     const disableResolvedBeforeRelease = disableResolved;
     const lockExistsBeforeRelease = existsSync(lockPath);
     const successReportedBeforeRelease = extension.messages.length > messageCount;
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: "new-owner" }));
     releasePrecheck();
     await Promise.all([tick, disabling]);
+    const newerOwnerRetained = existsSync(lockPath);
+    rmSync(lockPath, { force: true });
 
     expect(observation({
       disableResolvedBeforeRelease,
       lockExistsBeforeRelease,
       successReportedBeforeRelease,
-      lockExistsAfterResponse: existsSync(lockPath),
+      lockExistsAfterResponse: lockExistsBeforeRelease,
       successReportedAfterRelease: extension.messages.length > messageCount,
+      newerOwnerRetained,
     })).toBe(expected);
   });
 
