@@ -75,17 +75,27 @@ function reclaimStale(lockPath, hooks = {}) {
   }
 }
 
-function tryAcquire(lockPath, hooks) {
+function tryAcquire(lockPath, hooks = {}) {
   clearReclaimRemnant(lockPath);
   const token = crypto.randomUUID();
+  const pendingPath = `${lockPath}.${process.pid}.${token}.pending`;
   try {
-    const fd = fs.openSync(lockPath, "wx");
-    try { fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, token })); } finally { fs.closeSync(fd); }
+    const fd = fs.openSync(pendingPath, "wx");
+    try {
+      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, token }));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    hooks.beforePublish?.();
+    fs.linkSync(pendingPath, lockPath);
     return { lockPath, token };
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
     reclaimStale(lockPath, hooks);
     return null;
+  } finally {
+    try { fs.unlinkSync(pendingPath); } catch {}
   }
 }
 

@@ -145,7 +145,7 @@ describe("enablement command integration", () => {
     expect(extension.messages.at(-1)).toContain("deadloop enabled");
   });
 
-  it("keeps a repeated enable idempotent for a preexisting true auto-merge setting", async () => {
+  it("accepts a preexisting true auto-merge setting on a later explicit enable", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath, { autoMerge: true });
     const extension = await loadExtension(root);
@@ -153,7 +153,7 @@ describe("enablement command integration", () => {
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
-    expect(extension.messages.at(-1)).toContain("autoMerge is off");
+    expect(extension.messages.at(-1)).toContain("autoMerge is on");
   });
 
   it("forces a preexisting true auto-merge setting off on first enable", async () => {

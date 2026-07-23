@@ -90,6 +90,22 @@ describe("enablement mutation guards", () => {
     expect(acquireLockSync(lockPath, { attempts: 3, delayMs: 1 }).token).toEqual(expect.any(String));
   });
 
+  it("does not let a delayed live creator split lock ownership", () => {
+    const project = fixture();
+    const lockPath = path.join(project.stateDir, "enabled-projects.json.lock");
+    let competitor: { token: string } | undefined;
+
+    try {
+      acquireLockSync(lockPath, {
+        attempts: 1,
+        delayMs: 1,
+        hooks: { beforePublish: () => { competitor = acquireLockSync(lockPath, { attempts: 1, delayMs: 1 }); } },
+      });
+    } catch {}
+
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).token).toBe(competitor?.token);
+  });
+
   it("recovers an orphaned reclaim hard link", () => {
     const project = fixture();
     const lockPath = path.join(project.stateDir, "enabled-projects.json.lock");

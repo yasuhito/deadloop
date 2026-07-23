@@ -10,6 +10,14 @@ English | [日本語](README.ja.md)
 
 ## Install
 
+Install and activate the Pi package:
+
+```bash
+pi install git:github.com/yasuhito/deadloop
+```
+
+Optionally install the setup skill for guided configuration:
+
 ```bash
 npx skills@latest add yasuhito/deadloop
 ```
