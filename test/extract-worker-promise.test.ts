@@ -56,6 +56,24 @@ describe("extract worker promise helper", () => {
     );
   });
 
+  it("accepts a structured successful repair report", () => {
+    withTempFile(
+      '{"status":"complete","reason":"repair_pushed","summary":"fixed","repairs":[{"title":"Unsafe fallback","summary":"Removed fallback","paths":["src/review.ts"]}],"checks":[{"command":"npm test","result":"passed"}]}',
+      (filePath) => {
+        expect(runHelper(filePath).status).toBe("complete");
+      },
+    );
+  });
+
+  it("rejects a successful repair without per-finding summaries", () => {
+    withTempFile(
+      '{"status":"complete","reason":"repair_pushed","summary":"fixed","checks":[{"command":"npm test","result":"passed"}]}',
+      (filePath) => {
+        expect(runHelper(filePath).status).toBe("invalid");
+      },
+    );
+  });
+
   it("accepts blocked promise files", () => {
     withTempFile('{"status":"blocked","reason":"仕様不足","summary":"確認した。仕様が足りない。判断待ち。"}', (filePath) => {
       expect(runHelper(filePath)).toEqual({ code: 0, status: "blocked" });

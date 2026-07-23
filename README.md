@@ -75,6 +75,8 @@ Each exact PR-head/base-head pair is attempted at most once. A stale PR head sto
 
 When the built-in reviewer reports structured actionable findings, deadloop can start one bounded repair worker on the existing PR branch. Review labels stay in place; no repair label is added. The worker receives only the findings, runs configured checks, re-checks the PR head immediately before a normal push to that exact branch, and never force-pushes or changes GitHub workflow state.
 
+The review result is recorded as a readable PR comment with the reviewed commit, reasons, findings, and next action. After a confirmed repair push, deadloop adds a separate result comment with per-finding changes, the new commit, checks, and the re-review handoff; stale or failed repairs never receive a success comment.
+
 A changed head starts a fresh review cycle. A stale head stops without pushing or changing labels. Repeated findings after the bounded attempt, a required human decision, or an exhausted technical/safety retry adds `agent:blocked` with recovery guidance. See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md).
 
 ## Roll out in phases

@@ -95,6 +95,8 @@ describe("monitor prompts", () => {
       prNumber: 24,
       expectedHeadOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       branch: "agent/issue-24",
+      githubRepo: "owner/repo",
+      attemptKey: "abcdef1234567890abcd",
       automationDir: "/automation",
       promiseFile: "/state/repair-promise.json",
       actorName: "review-repair worker",
@@ -103,6 +105,6 @@ describe("monitor prompts", () => {
       blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("Do not change labels; the changed head starts a new review cycle");
+    expect(prompt).toContain("pr-review-repair-complete.ts");
   });
 });

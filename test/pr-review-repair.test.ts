@@ -61,7 +61,7 @@ function finalizeWith(commands: string[][], actualHead = head) {
 }
 
 function prompt() {
-  return repairWorkerPrompt("243", "agent/issue-243", head, findings, "/state/promise.json", "/worktree", {
+  return repairWorkerPrompt("243", "agent/issue-243", head, findings, "attempt-key", "/state/promise.json", "/worktree", {
     projectId: "demo",
     repoPath: "/repo",
     githubRepo: "owner/repo",
@@ -86,6 +86,13 @@ describe("automatic PR review repair", () => {
     const fingerprint = reviewResultFingerprint(findings);
 
     expect(renderRepairMarker(head, fingerprint)).toContain(`head=${head} review=${fingerprint}`);
+  });
+
+  it("does not relaunch an already-recorded exact repair attempt", () => {
+    const fingerprint = reviewResultFingerprint(findings);
+    const comments = [{ body: renderRepairMarker(head, fingerprint) }];
+
+    expect(selectRepairAttempt(comments, head, findings).action).toBe("already_attempted");
   });
 
   it("requires a human when the same findings recur after repair", () => {

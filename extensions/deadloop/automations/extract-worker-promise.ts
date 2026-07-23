@@ -21,6 +21,26 @@ function validFinding(value: unknown): boolean {
   return true;
 }
 
+function validRepair(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const repair = value as PromiseValidation;
+  return (
+    typeof repair.title === "string" &&
+    Boolean(repair.title.trim()) &&
+    typeof repair.summary === "string" &&
+    Boolean(repair.summary.trim()) &&
+    Array.isArray(repair.paths) &&
+    repair.paths.length > 0 &&
+    repair.paths.every((entry: unknown) => typeof entry === "string" && Boolean(entry.trim()))
+  );
+}
+
+function validCheck(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const check = value as PromiseValidation;
+  return typeof check.command === "string" && Boolean(check.command.trim()) && check.result === "passed";
+}
+
 function invalidPromise(filePath: string, error: string): PromiseValidation {
   return { status: "invalid", file: filePath, error };
 }
@@ -52,6 +72,18 @@ function validatePromise(filePath: string): PromiseValidation {
     return invalidPromise(filePath, "changes_requested_requires_findings");
   }
   if (status === "blocked" && promise.outcome !== undefined) return invalidPromise(filePath, "blocked_has_outcome");
+  if (
+    promise.reason === "repair_pushed" &&
+    (!Array.isArray(promise.repairs) || promise.repairs.length === 0 || !promise.repairs.every(validRepair))
+  ) {
+    return invalidPromise(filePath, "repair_pushed_requires_repairs");
+  }
+  if (
+    promise.reason === "repair_pushed" &&
+    (!Array.isArray(promise.checks) || promise.checks.length === 0 || !promise.checks.every(validCheck))
+  ) {
+    return invalidPromise(filePath, "repair_pushed_requires_passed_checks");
+  }
 
   return { status, file: filePath, promise };
 }

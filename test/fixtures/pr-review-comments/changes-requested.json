@@ -1,0 +1,22 @@
+{
+  "headOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "outcome": "changes_requested",
+  "reason": "",
+  "summary": "Two defects require correction.",
+  "findings": [
+    {
+      "title": "Unsafe fallback",
+      "severity": "blocker",
+      "path": "src/review.ts",
+      "line": 17,
+      "body": "The fallback can approve a failed review."
+    },
+    {
+      "title": "Missing validation",
+      "severity": "major",
+      "path": "src/promise.ts",
+      "body": "The repair report is accepted without checking its fields."
+    }
+  ],
+  "reviewFingerprint": "1234567890abcdef1234"
+}

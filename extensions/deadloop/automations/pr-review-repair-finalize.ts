@@ -3,6 +3,7 @@
 // It always re-checks the open PR head immediately before a non-force push.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 
 type JsonObject = Record<string, any>;
@@ -16,6 +17,7 @@ type FinalizeArgs = {
   automationDir: string;
   stateDir: string;
   checkCommand: string;
+  resultFile?: string;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
 type FinalizeOps = { run(args: string[]): CommandResult };
@@ -74,10 +76,16 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     ]),
   );
   const guard = decideRepairPushGuard(pr, args.branch, args.expectedHead);
-  if (guard.action !== "push") return guard;
+  if (guard.action !== "push") return { ...guard, originalHeadOid: args.expectedHead };
 
   checked(ops, ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`]);
-  return { action: "pushed", reason: "repair_pushed", headOid: checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"]) };
+  return {
+    action: "pushed",
+    reason: "repair_pushed",
+    originalHeadOid: args.expectedHead.toLowerCase(),
+    headOid: checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"]).toLowerCase(),
+    checks: [{ command: args.checkCommand, result: "passed" }],
+  };
 }
 
 function required(values: Record<string, string>, name: string): string {
@@ -103,12 +111,15 @@ function parseArgs(argv: string[]): FinalizeArgs {
     automationDir: required(values, "automationDir"),
     stateDir: required(values, "stateDir"),
     checkCommand: required(values, "checkCommand"),
+    resultFile: required(values, "resultFile"),
   };
 }
 
 function main(): void {
   try {
-    const result = finalizeReviewRepair(parseArgs(process.argv.slice(2)));
+    const args = parseArgs(process.argv.slice(2));
+    const result = finalizeReviewRepair(args);
+    fs.writeFileSync(String(args.resultFile), `${JSON.stringify(result)}\n`, { encoding: "utf8", mode: 0o600 });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (result.action === "blocked") process.exitCode = 3;
   } catch (error) {

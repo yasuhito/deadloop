@@ -39,6 +39,8 @@ export type RepairMonitorPromptInput = MonitorPromptBaseInput & {
   prNumber: number;
   expectedHeadOid: string;
   branch: string;
+  githubRepo: string;
+  attemptKey: string;
   reviewLabel: string;
   reviewingLabel: string;
   blockedLabel: string;
@@ -111,8 +113,9 @@ ${renderPromisePollingRules(input)}
 Completion handling:
 - Read the validated promise payload. Legacy complete promises without outcome remain compatible and follow the approved path.
 - A successful review with actionable defects is status=complete, outcome=changes_requested, never status=blocked.
-- For outcome=changes_requested, outcome=human_required, or status=blocked, run the deterministic dispatcher and follow only its returned action/prompt:
+- For every validated completion, including approved and legacy complete promises, run the deterministic dispatcher so it can record the public review result exactly once:
   \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-dispatch.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --branch ${shellQuotePrompt(input.branch)}\`
+- Follow the dispatcher's returned repair or human-block action. When it returns driverAction=review_approved, continue the approved path below; do not stop merely because comment recording is done.
 - The dispatcher keeps ${input.reviewLabel} and ${input.reviewingLabel} during repair. It adds ${input.blockedLabel} only for human-required or bounded failure paths.
 - For outcome=approved or a legacy complete promise, re-check GitHub PR state, reviews, and checks before changing labels.
 - Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork.
@@ -133,12 +136,12 @@ Attempt binding:
 ${renderPromisePollingRules(input)}
 
 Terminal handling:
-- status=complete, reason=repair_pushed: re-read the PR and confirm its head changed. Do not change labels; the changed head starts a new review cycle.
-- status=complete, reason=stale_head: stop without push, comment, or label changes. Keep both review labels for next-cycle re-evaluation.
-- status=blocked: the exact head/review result used its bounded attempt. Write recovery guidance, remove ${input.reviewingLabel}, and add ${input.blockedLabel}.
-- Malformed or inconclusive completion is unsafe and follows the same bounded human-blocked path.
+- As soon as validation returns complete or blocked, run this deterministic completion handler exactly once and follow its result:
+  \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-complete.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --result ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/finalizer-result.json`)} --contract ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/review-contract.json`)} --github-repo ${shellQuotePrompt(input.githubRepo)} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --attempt-key ${shellQuotePrompt(input.attemptKey)} --reviewing-label ${shellQuotePrompt(input.reviewingLabel)} --blocked-label ${shellQuotePrompt(input.blockedLabel)}\`
+- The handler posts a success comment only when the structured promise, finalizer receipt, and live new head agree. It posts idempotent recovery guidance for blocked or inconclusive completion and posts nothing for stale_head.
+- Do not independently render comments, infer changes from git diffs or logs, or change labels.
 
-Prohibited in every path: force-push, monitor-side push, label changes on success/stale, PR creation, merge, issue close, branch deletion, or a second attempt for this exact review result.
+Prohibited in every path: force-push, monitor-side push, label changes outside the completion handler, PR creation, merge, issue close, branch deletion, or a second attempt for this exact review result.
 
 Report only the terminal action and evidence.`;
 }

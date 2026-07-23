@@ -9,10 +9,17 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { validatePromise } = require("./extract-worker-promise.ts");
 const {
   decideTechnicalReviewFailure,
-  renderRepairMarker,
   renderTechnicalFailureMarker,
+  reviewOutcomeFingerprint,
   selectRepairAttempt,
 } = require("./pr-review-repair-state.ts");
+const {
+  publicText,
+  renderApprovedReviewComment,
+  renderChangesRequestedComment,
+  renderHumanRequiredComment,
+  reviewCommentExists,
+} = require("./pr-review-comments.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
 const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const {
@@ -77,8 +84,8 @@ function readLivePr(repo: string, prNumber: string): JsonObject {
 
 function recoveryComment(prNumber: string, env: ReturnType<typeof envConfig>, reason: string, summary: string): string {
   return `## What happened
-- Automatic review repair for PR #${prNumber} requires human intervention: ${reason}.
-- ${summary || "The bounded automatic path could not safely continue."}
+- Automatic review repair for PR #${prNumber} requires human intervention: ${publicText(reason, "the bounded automatic path could not safely continue")}.
+- ${publicText(summary, "The bounded automatic path could not safely continue.")}
 
 ## Recovery steps
 1. Inspect the current head, review findings, checks, and deadloop attempt markers.
@@ -101,6 +108,7 @@ function repairWorkerPrompt(
   branch: string,
   expectedHead: string,
   findings: JsonObject[],
+  attemptKey: string,
   promiseFile: string,
   worktreePath: string,
   env: ReturnType<typeof envConfig>,
@@ -126,6 +134,8 @@ function repairWorkerPrompt(
     shellQuote(env.stateDir),
     "--check-command",
     shellQuote(env.checkCommand),
+    "--result-file",
+    shellQuote(path.join(path.dirname(promiseFile), "finalizer-result.json")),
   ].join(" ");
   return `Repair only the actionable review findings below on existing PR #${prNumber}.
 
@@ -151,7 +161,8 @@ Safety contract:
 
 Promise report:
 - Always write JSON to ${promiseFile} before stopping; status remains complete|blocked.
-- After action=pushed, write {"status":"complete","reason":"repair_pushed","summary":"findings fixed, checks passed, repair commit pushed"}.
+- After action=pushed, read the finalizer result file beside the promise and write {"status":"complete","reason":"repair_pushed","summary":"findings fixed, checks passed, repair commit pushed","repairs":[{"title":"exact finding title","summary":"specific change made for this finding","paths":["changed/repo/path"]}],"checks":[{"command":"exact finalizer check command","result":"passed"}]}. Include exactly one repair entry for every finding and only files actually changed for that finding. Copy the finalizer-confirmed check command and result; do not infer them from logs.
+- This attempt key is ${attemptKey}; do not place it or any local path in public text.
 - After action=stale_head, write {"status":"complete","reason":"stale_head","summary":"PR head changed; stopped without push or labels"}.
 - On technical, validation, invariant, or push failure, write {"status":"blocked","reason":"specific failure","summary":"what failed and why a human is now required"}.
 - Do not claim success unless the finalizer returned pushed or stale_head.`;
@@ -167,6 +178,13 @@ function launchRepair(
 ): JsonObject {
   commandRunner.runText(["git", "check-ref-format", "--branch", branch]);
   const uuid = randomUUID();
+  const runDir = path.join(env.stateDir, "runs", uuid);
+  fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(
+    path.join(runDir, "review-contract.json"),
+    `${JSON.stringify({ attemptKey: key, expectedHead, findingTitles: findings.map((finding) => String(finding.title)) })}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
   const repairName = `${env.projectId}-pr-${prNumber}-review-repair-${key}`;
   const launch = launchAgentFlow(
     {
@@ -181,7 +199,7 @@ function launchRepair(
       uuid,
       promptFilePrefix: "review-repair-prompt",
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-        repairWorkerPrompt(prNumber, branch, expectedHead, findings, promiseFile, worktreePath, env),
+        repairWorkerPrompt(prNumber, branch, expectedHead, findings, key, promiseFile, worktreePath, env),
     },
     {
       mkdirSync: fs.mkdirSync,
@@ -220,7 +238,7 @@ function dispatch(args: JsonObject): DriverResult {
       github.commentPr(
         env.githubRepo,
         prNumber,
-        `Reviewer technical failure will be retried once for this head: ${promise.reason || "unknown failure"}.\n\n${renderTechnicalFailureMarker(expectedHead)}`,
+        `Reviewer technical failure will be retried once for this head: ${publicText(promise.reason, "technical review failure")}.\n\n${renderTechnicalFailureMarker(expectedHead)}`,
       );
       return driverResult("done", `PR #${prNumber} reviewer technical failure retained review labels for one retry`, {
         driverAction: "review_technical_retry",
@@ -233,19 +251,69 @@ function dispatch(args: JsonObject): DriverResult {
     });
   }
 
-  const outcome = promise.outcome || "approved";
+  const outcome = String(promise.outcome || "approved");
+  const findings = (promise.findings || []) as JsonObject[];
+  const reviewFingerprint = reviewOutcomeFingerprint(outcome, promise.reason || "", promise.summary || "", findings);
+  const commentInput = {
+    headOid: expectedHead,
+    reason: promise.reason || "",
+    summary: promise.summary || "",
+    findings,
+    reviewFingerprint,
+    blockedLabel: env.blockedLabel,
+  };
+
   if (outcome === "approved") {
+    if (!reviewCommentExists(pr.comments || [], expectedHead, reviewFingerprint, outcome)) {
+      github.commentPr(env.githubRepo, prNumber, renderApprovedReviewComment(commentInput));
+    }
     return driverResult("done", `PR #${prNumber} review completed without actionable findings`, { driverAction: "review_approved" });
   }
   if (outcome === "human_required") {
-    const comment = applyHumanBlock(prNumber, env, promise.reason || "the reviewer requested a human decision", promise.summary);
+    let comment = "Review result comment already exists.";
+    if (!reviewCommentExists(pr.comments || [], expectedHead, reviewFingerprint, outcome)) {
+      comment = renderHumanRequiredComment(commentInput);
+      github.commentPr(env.githubRepo, prNumber, comment);
+    }
+    const labelNames = (pr.labels || []).map((label: JsonObject) => String(label.name || label));
+    if (labelNames.includes(env.reviewingLabel) || !labelNames.includes(env.blockedLabel)) {
+      github.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+    }
     return driverResult("done", `PR #${prNumber} review requires a human`, { driverAction: "review_human_blocked", comment });
   }
 
-  const findings = promise.findings as JsonObject[];
   const selection = selectRepairAttempt(pr.comments || [], expectedHead, findings);
+  if (selection.action === "already_attempted") {
+    if (!reviewCommentExists(pr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
+      github.commentPr(
+        env.githubRepo,
+        prNumber,
+        renderChangesRequestedComment({
+          ...commentInput,
+          reviewFingerprint: selection.reviewFingerprint,
+          repairAlreadyStarted: true,
+        }),
+      );
+    }
+    return driverResult("done", `PR #${prNumber} review result was already dispatched; repair was not relaunched`, {
+      driverAction: "review_repair_duplicate",
+      selection,
+    });
+  }
   if (selection.action !== "launch_repair") {
-    const comment = applyHumanBlock(prNumber, env, "the same review findings remained after their bounded repair attempt", promise.summary);
+    let comment = "Review result comment already exists.";
+    if (!reviewCommentExists(pr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
+      comment = renderChangesRequestedComment({
+        ...commentInput,
+        reviewFingerprint: selection.reviewFingerprint,
+        repairUnavailable: true,
+      });
+      github.commentPr(env.githubRepo, prNumber, comment);
+    }
+    const labelNames = (pr.labels || []).map((label: JsonObject) => String(label.name || label));
+    if (labelNames.includes(env.reviewingLabel) || !labelNames.includes(env.blockedLabel)) {
+      github.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+    }
     return driverResult("done", `PR #${prNumber} repeated the same findings; marked blocked`, {
       driverAction: "review_repair_repeated",
       selection,
@@ -253,8 +321,7 @@ function dispatch(args: JsonObject): DriverResult {
     });
   }
 
-  const marker = renderRepairMarker(expectedHead, selection.reviewFingerprint);
-  github.commentPr(env.githubRepo, prNumber, `Starting one bounded repair for this exact PR head and review result.\n\n${marker}`);
+  github.commentPr(env.githubRepo, prNumber, renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }));
   github.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
   try {
     const launch = launchRepair(prNumber, branch, expectedHead, findings, selection.key, env);
@@ -273,6 +340,8 @@ function dispatch(args: JsonObject): DriverResult {
         reviewLabel: env.reviewLabel,
         reviewingLabel: env.reviewingLabel,
         blockedLabel: env.blockedLabel,
+        attemptKey: selection.key,
+        githubRepo: env.githubRepo,
       }),
     });
   } catch (error) {

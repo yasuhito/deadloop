@@ -23,6 +23,14 @@ function reviewResultFingerprint(findings: JsonObject[]): string {
   return createHash("sha256").update(`${JSON.stringify(canonical)}\n`).digest("hex").slice(0, 20);
 }
 
+function reviewOutcomeFingerprint(outcome: string, reason: string, summary: string, findings: JsonObject[] = []): string {
+  if (outcome === "changes_requested") return reviewResultFingerprint(findings);
+  return createHash("sha256")
+    .update(`${JSON.stringify({ outcome, reason: reason.trim(), summary: summary.trim() })}\n`)
+    .digest("hex")
+    .slice(0, 20);
+}
+
 function repairAttemptKey(headOid: string, reviewFingerprint: string): string {
   return createHash("sha256")
     .update(`${headOid.toLowerCase()}\n${reviewFingerprint.toLowerCase()}\n`)
@@ -50,11 +58,11 @@ function selectRepairAttempt(comments: JsonObject[], headOid: string, findings: 
   const reviewFingerprint = reviewResultFingerprint(findings);
   const key = repairAttemptKey(headOid, reviewFingerprint);
   const attempts = repairAttempts(comments);
+  if (attempts.some((attempt) => attempt.key === key)) {
+    return { action: "already_attempted", reason: "duplicate_dispatch", key, reviewFingerprint };
+  }
   if (attempts.some((attempt) => attempt.reviewFingerprint === reviewFingerprint)) {
     return { action: "human_required", reason: "repeated_findings", key, reviewFingerprint };
-  }
-  if (attempts.some((attempt) => attempt.key === key)) {
-    return { action: "human_required", reason: "attempt_exhausted", key, reviewFingerprint };
   }
   return { action: "launch_repair", reason: "actionable_findings", key, reviewFingerprint };
 }
@@ -88,6 +96,7 @@ module.exports = {
   renderTechnicalFailureMarker,
   repairAttemptKey,
   repairAttempts,
+  reviewOutcomeFingerprint,
   reviewResultFingerprint,
   selectRepairAttempt,
   technicalFailureCount,
