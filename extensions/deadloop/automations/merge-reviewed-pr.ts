@@ -3,6 +3,8 @@
 // The mutation is serialized with /deadloop-disable through the enablement lock.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const fs = require("node:fs") as typeof import("node:fs");
+const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 
 type MergeArgs = {
@@ -16,6 +18,7 @@ type MergeArgs = {
 type CommandResult = { status: number; stdout: string; stderr: string };
 type MergeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
+  isAutoMergeEnabled?: (args: MergeArgs) => boolean;
   withLock?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }, operation: () => number) => number;
 };
 
@@ -28,9 +31,57 @@ function defaultRun(args: string[], timeoutMs?: number): CommandResult {
   return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
 }
 
+function currentAutoMergeEnabled(args: MergeArgs): boolean {
+  const configPath = process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json");
+  let text: string;
+  try {
+    text = fs.readFileSync(configPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw new Error(`projects.json read error: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let config: unknown;
+  try {
+    config = JSON.parse(text || "{}");
+  } catch (error) {
+    throw new Error(`projects.json parse error: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("projects.json must contain an object; automatic merge stopped");
+  }
+  const configuredProjects = (config as { projects?: unknown }).projects;
+  if (configuredProjects !== undefined && !Array.isArray(configuredProjects)) {
+    throw new Error("projects.json projects must be an array; automatic merge stopped");
+  }
+  const rawProjects: unknown[] = Array.isArray(configuredProjects) ? configuredProjects : [];
+  const selectedIds = new Set(String(process.env.DEADLOOP_PROJECTS || "").split(",").map((value) => value.trim()).filter(Boolean));
+  const matches = rawProjects.filter((candidate: unknown) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error("projects.json contains an invalid project; automatic merge stopped");
+    }
+    const project = candidate as { id?: unknown; repoPath?: unknown; githubRepo?: unknown };
+    const projectId = String(project.id || project.githubRepo || project.repoPath || "project")
+      .toLowerCase()
+      .replace(/[^a-z0-9_.-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "project";
+    if (selectedIds.size > 0 && !selectedIds.has(projectId)) return false;
+    return typeof project.repoPath === "string"
+      && path.resolve(project.repoPath) === path.resolve(args.projectRepo)
+      && project.githubRepo === args.githubRepo;
+  }) as Array<{ autoMerge?: unknown }>;
+  if (matches.length > 1) throw new Error("current project configuration is ambiguous; automatic merge stopped");
+  if (matches.length !== 1) return false;
+  if (matches[0].autoMerge !== undefined && typeof matches[0].autoMerge !== "boolean") {
+    throw new Error("current autoMerge setting is invalid; automatic merge stopped");
+  }
+  return matches[0].autoMerge === true;
+}
+
 function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): number {
   const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
   const operation = () => {
+    const autoMergeEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
+    if (!autoMergeEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
     const result = ops.run([
       "gh", "pr", "merge", args.pr, "-R", args.githubRepo,
       "--squash", "--delete-branch", "--match-head-commit", args.expectedHead,
@@ -66,4 +117,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { mergeReviewedPr, parseArgs };
+module.exports = { currentAutoMergeEnabled, mergeReviewedPr, parseArgs };

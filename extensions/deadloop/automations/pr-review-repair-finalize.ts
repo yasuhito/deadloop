@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Validate and push a review repair. This is the repair worker's only push path.
-// It re-checks the open PR head, then normally pushes the immutable validated
-// candidate as a fast-forward.
+// It re-checks the open PR head, then updates it with an exact-head
+// compare-and-swap lease.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
@@ -57,7 +57,7 @@ function pushConditionally(
     throw new Error("repair HEAD changed immediately before push");
   }
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return true;

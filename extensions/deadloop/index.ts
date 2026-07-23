@@ -633,6 +633,14 @@ async function gitText(pi, args) {
   }
 }
 
+function repositoryEnablementForRoot(repositoryRoot: string | undefined): RepositoryEnablement {
+  if (!repositoryRoot) return "unavailable";
+  const enabled = loadEnablementState().projects.some((project) =>
+    project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repositoryRoot)
+  );
+  return enabled ? "enabled" : "disabled";
+}
+
 async function collectLiveSnapshotData(
   pi,
   cwd,
@@ -647,7 +655,7 @@ async function collectLiveSnapshotData(
   const state = loadState();
   const project = activeProject(cwd, projects);
   const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
-  const repositoryEnablement: RepositoryEnablement = project ? "enabled" : repositoryRoot ? "disabled" : "unavailable";
+  const repositoryEnablement = repositoryEnablementForRoot(repositoryRoot);
   const diagnosticWarnings = projectsResult.ok
     ? [...projectsResult.warnings, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])]
     : [projectsResult.reason, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])];

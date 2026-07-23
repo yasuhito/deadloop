@@ -128,10 +128,15 @@ DEADLOOP_DEBUG=1 pi
 
 ## このリポジトリを検証する
 
+実行可能な受け入れ仕様は [`acceptance/features/`](acceptance/features/) にあります。問題を調べる際は Vitest と Cucumber を個別に実行できます。`npm test` は常に両方を直列に実行します。
+
 ```bash
+npm run test:unit
+npm run test:acceptance
 npm test
 npm run lint
 npm run typecheck
 bash -n extensions/deadloop/automations/*.sh
 npm pack --dry-run
+npm run check
 ```

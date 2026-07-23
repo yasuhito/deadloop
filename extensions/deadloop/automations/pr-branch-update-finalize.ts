@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Run the configured check, revalidate the exact PR head, and perform the only
 // push allowed to a branch-update worker. It re-checks the validated PR head,
-// then normally pushes the immutable validated candidate as a fast-forward.
+// then updates it with an exact-head compare-and-swap lease.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
@@ -58,7 +58,7 @@ function pushConditionally(
     throw new Error("branch-update HEAD changed immediately before push");
   }
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return true;

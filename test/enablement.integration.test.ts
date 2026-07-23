@@ -284,6 +284,19 @@ describe("enablement command integration", () => {
     expect(report.includes("warning: projects.json") && report.includes("  /deadloop-enable")).toBe(true);
   });
 
+  it.each(["deadloop-status", "deadloop-doctor"])("keeps enabled identity separate from invalid configuration for %s", async (command) => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    writeFileSync(path.join(root, ".pi", "agent", "deadloop", "projects.json"), "{");
+
+    await invoke(extension.commands.get(command)!, repoPath);
+
+    const report = extension.messages.at(-1) || "";
+    expect(report.includes("warning: projects.json") && !report.includes("  /deadloop-enable")).toBe(true);
+  });
+
   it.each(["deadloop-status", "deadloop-doctor"])("recommends enablement for a disabled repository in %s", async (command) => {
     const { root, repoPath } = fixtureRepository();
     const extension = await loadExtension(root);
