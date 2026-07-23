@@ -10,6 +10,10 @@ describe("guarded launch revalidation wiring", () => {
     expect(issueDriver).toMatch(/withEnabledDriverLaunch[\s\S]*revalidate:[\s\S]*planIssueCoordinatorAction/);
   });
 
+  it("bounds launch revalidation to the exact selected issue", () => {
+    expect(issueDriver).toMatch(/revalidate:[\s\S]*issueDecisionDeadline\(\)[\s\S]*getIssue\(env\.githubRepo, number\)/);
+  });
+
   it("revalidates PR eligibility inside the reviewer launch guard", () => {
     expect(reviewerDriver).toMatch(/function launchPrReviewer[\s\S]*withEnabledDriverLaunch[\s\S]*revalidate:[\s\S]*planPrReviewerAction/);
   });

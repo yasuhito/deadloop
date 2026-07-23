@@ -297,6 +297,18 @@ describe("enablement command integration", () => {
     expect(report.includes("warning: projects.json") && !report.includes("  /deadloop-enable")).toBe(true);
   });
 
+  it.each(["deadloop-status", "deadloop-doctor"])("reports remote identity drift as disabled in %s", async (command) => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    git(repoPath, ["remote", "set-url", "origin", "https://github.com/other/repo.git"]);
+
+    await invoke(extension.commands.get(command)!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("/deadloop-enable");
+  });
+
   it.each(["deadloop-status", "deadloop-doctor"])("recommends enablement for a disabled repository in %s", async (command) => {
     const { root, repoPath } = fixtureRepository();
     const extension = await loadExtension(root);
@@ -1074,7 +1086,7 @@ describe("enablement command integration", () => {
     expect(JSON.parse(readFileSync(lockPath, "utf8")).pid).toBe(process.pid);
   });
 
-  it("keeps scheduler liveness local when an origin push URL targets another repository", async () => {
+  it("stops scheduler liveness when an origin push URL targets another repository", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
     const extension = await loadExtension(root);
@@ -1085,10 +1097,10 @@ describe("enablement command integration", () => {
     await vi.advanceTimersByTimeAsync(3_000);
 
     const lockName = schedulerLockName({ githubRepositoryId: "R_demo" });
-    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", lockName))).toBe(true);
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", lockName))).toBe(false);
   });
 
-  it("keeps scheduler liveness local when an origin push URL is unparseable", async () => {
+  it("stops scheduler liveness when an origin push URL is unparseable", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
     const extension = await loadExtension(root);
@@ -1099,7 +1111,7 @@ describe("enablement command integration", () => {
     await vi.advanceTimersByTimeAsync(3_000);
 
     const lockName = schedulerLockName({ githubRepositoryId: "R_demo" });
-    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", lockName))).toBe(true);
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", lockName))).toBe(false);
   });
 
   it("releases the scheduler lock after another session disables a busy owner", async () => {
@@ -1343,6 +1355,20 @@ fs.writeFileSync(reportPath, JSON.stringify({ reads, errors }));
     await invoke(extension.commands.get("deadloop-disable")!, repoPath);
 
     expect(JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8")).projects[0].enabled).toBe(false);
+  });
+
+  it("does not start the scheduler after the enabled origin identity drifts", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    const context = { cwd: repoPath, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined } };
+    await extension.events.get("session_shutdown")!({}, context);
+    git(repoPath, ["remote", "set-url", "origin", "https://github.com/other/repo.git"]);
+
+    await extension.events.get("session_start")!({}, context);
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ githubRepositoryId: "R_demo" })))).toBe(false);
   });
 
   it("does not start the parent scheduler from a nested independent repository", async () => {

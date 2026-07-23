@@ -41,7 +41,7 @@ const {
   DISABLE_LOCK_ATTEMPTS,
   DISABLE_LOCK_DELAY_MS,
 } = require("../../src/driver-enablement.cjs");
-const { assertLocallyEnabled, withEnabledProjectLock } = require("../../src/enabled-operation.cjs");
+const { assertEnabled, withEnabledProjectLock } = require("../../src/enabled-operation.cjs");
 const {
   acquireSchedulerLock: acquireSchedulerFileLock,
   releaseSchedulerLock: releaseSchedulerFileLock,
@@ -480,7 +480,7 @@ async function rollbackFailedEnablementAttempt(identity, enabledAt, repoPath, en
 function isProjectEnabled(project) {
   if (!project.repoPath || !project.githubRepo) return false;
   try {
-    assertLocallyEnabled({ repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt });
+    assertEnabled({ repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt });
     return true;
   } catch {
     return false;
@@ -683,10 +683,21 @@ async function gitText(pi, args) {
 
 function repositoryEnablementForRoot(repositoryRoot: string | undefined): RepositoryEnablement {
   if (!repositoryRoot) return "unavailable";
-  const enabled = loadEnablementState().projects.some((project) =>
+  const enabled = loadEnablementState().projects.find((project) =>
     project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repositoryRoot)
   );
-  return enabled ? "enabled" : "disabled";
+  if (!enabled) return "disabled";
+  try {
+    assertEnabled({
+      repoPath: enabled.repoPath,
+      githubRepo: enabled.githubRepo,
+      stateDir: STATE_DIR,
+      enabledAt: enabled.enabledAt,
+    });
+    return "enabled";
+  } catch {
+    return "disabled";
+  }
 }
 
 async function collectLiveSnapshotData(

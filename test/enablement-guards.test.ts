@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { MAX_ORIGIN_IDENTITIES, assertEnabled, withEnabledProjectLock } = require("../src/enabled-operation.cjs");
+const { MAX_GUARDED_OPERATION_MS, MAX_ORIGIN_IDENTITIES, assertEnabled, withEnabledProjectLock } = require("../src/enabled-operation.cjs");
 const {
   DISABLE_LOCK_ATTEMPTS,
   DISABLE_LOCK_DELAY_MS,
+  MAX_DRIVER_REVALIDATION_MS,
   MAX_GUARDED_LAUNCH_DURATION_MS,
   assertDriverEnabled,
   withEnabledDriverLaunch,
@@ -149,8 +150,14 @@ describe("enablement mutation guards", () => {
     },
   );
 
-  it("lets disable outwait the maximum authorization and multi-command launch duration", () => {
+  it("lets disable outwait the maximum authorization, revalidation, and multi-command launch duration", () => {
     expect(DISABLE_LOCK_ATTEMPTS * DISABLE_LOCK_DELAY_MS).toBeGreaterThan(MAX_GUARDED_LAUNCH_DURATION_MS);
+  });
+
+  it("includes the enforced issue revalidation deadline in the disable wait budget", () => {
+    expect(MAX_GUARDED_LAUNCH_DURATION_MS).toBe(
+      (2 + MAX_ORIGIN_IDENTITIES + 1) * MAX_GUARDED_OPERATION_MS + MAX_DRIVER_REVALIDATION_MS + 7 * 20_000,
+    );
   });
 
   it("deduplicates identity checks at the maximum supported origin URL path", () => {
@@ -204,7 +211,7 @@ describe("enablement mutation guards", () => {
     let timeout: number | undefined;
 
     runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["mutation"] },
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "issue", "comment", "1", "-R", project.githubRepo, "--body", "done"] },
       (_command: string, _args: string[], options: { timeout?: number }) => {
         timeout = options.timeout;
         return { status: 0 };
@@ -214,12 +221,28 @@ describe("enablement mutation guards", () => {
     expect(timeout).toBe(GUARDED_OPERATION_TIMEOUT_MS);
   });
 
-  it("rejects git push through the generic guarded operation", () => {
+  it("rejects merge through the generic guarded operation", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     expect(() => runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["git", "push", "origin"] },
-    )).toThrow("guarded-push.ts");
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "pr", "merge", "1", "-R", project.githubRepo] },
+    )).toThrow("not approved");
+  });
+
+  it("rejects a GitHub mutation targeting another repository", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    expect(() => runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "issue", "comment", "1", "-R", "other/repo", "--body", "done"] },
+    )).toThrow("does not match enabled repository");
+  });
+
+  it("rejects branch deletion through the generic guarded operation", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    expect(() => runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["git", "branch", "-D", "agent/issue-1"] },
+    )).toThrow("only approved gh mutations");
   });
 
   it("pushes to the verified URL even if origin changes after authorization", () => {

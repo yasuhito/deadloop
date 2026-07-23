@@ -43,14 +43,20 @@ function issueDecisionConfig(env: IssueCoordinatorFlowEnv): JsonObject {
   });
 }
 
-function decisionForIssues(fixturePath: string | undefined, issues: JsonObject[], repo: string, env: IssueCoordinatorFlowEnv): JsonObject {
+function decisionForIssues(
+  fixturePath: string | undefined,
+  issues: JsonObject[],
+  repo: string,
+  env: IssueCoordinatorFlowEnv,
+  deadline?: number,
+): JsonObject {
   const config = issueDecisionConfig(env);
   if (fixturePath) return fixtureDecision(fixturePath, config);
   return selectIssueForImplementation(
     issues,
     config,
-    (issue: JsonObject) => issueBlockedByNumbers(repo, issueNumberForDecision(issue)),
-    (number: number) => liveDependencyState(repo, number),
+    (issue: JsonObject) => issueBlockedByNumbers(repo, issueNumberForDecision(issue), deadline),
+    (number: number) => liveDependencyState(repo, number, deadline),
   );
 }
 

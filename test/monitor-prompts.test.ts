@@ -112,14 +112,14 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("guarded-operation.ts");
   });
 
-  it("routes approved reviewer handoff and merge through the enablement guard", () => {
+  it("routes only approved non-merge reviewer mutations through the generic enablement guard", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
       checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("including PR creation, comments, labels, handoff, merge, and blocked paths");
+    expect(prompt).toContain("Never pass merge, push, branch deletion, `gh api`, or arbitrary commands through `guarded-operation.ts`");
   });
 
   it("binds auto-merge to the reviewed PR head", () => {

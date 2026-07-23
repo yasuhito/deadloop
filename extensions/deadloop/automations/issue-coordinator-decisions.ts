@@ -5,6 +5,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { passesIssueLabelGate } = require("../../../src/issue-eligibility.cjs");
+const { MAX_DRIVER_REVALIDATION_MS } = require("../../../src/driver-enablement.cjs");
 
 type IssueDecisionRecord = Record<string, any>;
 
@@ -30,6 +31,20 @@ const INLINE_DEPENDENCY_RE = /(?:Depends on|Blocked by|依存:|ブロック:)\s*
 const DEPENDENCY_SECTION_RE = /^##\s*(?:Blocked by|Depends on|依存|ブロック)\b[\s\S]*?(?=^##|(?![\s\S]))/gim;
 const NONE_LINE_RE = /^\s*none\s*(?:-|$)/im;
 const ISSUE_REFERENCE_RE = /#(\d+)/g;
+const DEPENDENCY_QUERY_TIMEOUT_MS = 5_000;
+
+class IssueDecisionDeadlineError extends Error {}
+
+function issueDecisionDeadline(now = Date.now()): number {
+  return now + MAX_DRIVER_REVALIDATION_MS;
+}
+
+function remainingIssueDecisionTimeout(deadline: number | undefined, now = Date.now()): number {
+  if (deadline === undefined) return DEPENDENCY_QUERY_TIMEOUT_MS;
+  const remaining = deadline - now;
+  if (remaining <= 0) throw new IssueDecisionDeadlineError("issue launch revalidation deadline exceeded");
+  return Math.min(DEPENDENCY_QUERY_TIMEOUT_MS, remaining);
+}
 
 function defaultIssueDecisionConfig(overrides: Partial<IssueDecisionConfig> = {}): IssueDecisionConfig {
   return {
@@ -44,16 +59,24 @@ function defaultIssueDecisionConfig(overrides: Partial<IssueDecisionConfig> = {}
   };
 }
 
-function runTextForIssueDecision(args: string[], options: { check?: boolean } = {}): string {
-  const result = spawnSync(args[0], args.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+function runTextForIssueDecision(args: string[], options: { check?: boolean; deadline?: number } = {}): string {
+  const result = spawnSync(args[0], args.slice(1), {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: remainingIssueDecisionTimeout(options.deadline),
+    killSignal: "SIGKILL",
+  });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+    throw new IssueDecisionDeadlineError("issue dependency query timed out");
+  }
   if (options.check !== false && result.status !== 0) {
     throw new Error((result.stderr || result.stdout || `command failed: ${args.join(" ")}`).trim());
   }
   return result.stdout || "";
 }
 
-function runJsonForIssueDecision(args: string[]): any {
-  return JSON.parse(runTextForIssueDecision(args));
+function runJsonForIssueDecision(args: string[], deadline?: number): any {
+  return JSON.parse(runTextForIssueDecision(args, { deadline }));
 }
 
 function labelsOfIssue(issue: IssueDecisionRecord): Set<string> {
@@ -176,7 +199,7 @@ function fixtureDecision(file: string, config: IssueDecisionConfig): IssueDecisi
   );
 }
 
-function issueBlockedByNumbers(repo: string, number: number): Set<number> {
+function issueBlockedByNumbers(repo: string, number: number, deadline?: number): Set<number> {
   const [owner, name] = repo.split("/", 2);
   if (!owner || !name) return new Set();
   try {
@@ -192,19 +215,21 @@ function issueBlockedByNumbers(repo: string, number: number): Set<number> {
       `number=${number}`,
       "-f",
       "query=query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { issue(number:$number) { blockedBy(first:20) { nodes { number } } } } }",
-    ]);
+    ], deadline);
     const nodes = data?.data?.repository?.issue?.blockedBy?.nodes || [];
     return new Set(nodes.filter((node: unknown) => node && typeof node === "object" && (node as IssueDecisionRecord).number !== undefined).map((node: IssueDecisionRecord) => Number(node.number)));
-  } catch {
+  } catch (error) {
+    if (error instanceof IssueDecisionDeadlineError) throw error;
     return new Set();
   }
 }
 
-function liveDependencyState(repo: string, number: number): string | null {
+function liveDependencyState(repo: string, number: number, deadline?: number): string | null {
   try {
-    const data = runJsonForIssueDecision(["gh", "issue", "view", String(number), "-R", repo, "--json", "state"]);
+    const data = runJsonForIssueDecision(["gh", "issue", "view", String(number), "-R", repo, "--json", "state"], deadline);
     return data && typeof data === "object" && data.state ? String(data.state) : null;
-  } catch {
+  } catch (error) {
+    if (error instanceof IssueDecisionDeadlineError) throw error;
     return null;
   }
 }
@@ -298,11 +323,12 @@ function main(argv: string[] = process.argv.slice(2)): number {
     const repo = args.repo || process.env.DEADLOOP_GITHUB_REPO || "";
     if (!repo) throw new Error("--repo or DEADLOOP_GITHUB_REPO is required");
     const issues = loadIssues(args.input);
+    const deadline = issueDecisionDeadline();
     decision = selectIssueForImplementation(
       issues,
       config,
-      (issue) => issueBlockedByNumbers(repo, issueNumberForDecision(issue)),
-      (number) => liveDependencyState(repo, number),
+      (issue) => issueBlockedByNumbers(repo, issueNumberForDecision(issue), deadline),
+      (number) => liveDependencyState(repo, number, deadline),
     );
   }
 
@@ -325,8 +351,12 @@ module.exports = {
   bodyDependencyNumbers,
   defaultIssueDecisionConfig,
   fixtureDecision,
+  DEPENDENCY_QUERY_TIMEOUT_MS,
+  IssueDecisionDeadlineError,
   issueBlockedByNumbers,
+  issueDecisionDeadline,
   issueNumberForDecision,
   liveDependencyState,
+  remainingIssueDecisionTimeout,
   selectIssueForImplementation,
 };

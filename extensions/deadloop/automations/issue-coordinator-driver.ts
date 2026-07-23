@@ -7,6 +7,7 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
+const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
 const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
@@ -195,10 +196,11 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     ),
     {
       revalidate: () => {
-        const liveIssues = issueList(null, env.githubRepo);
+        const deadline = issueDecisionDeadline();
+        const liveIssue = githubOperations().getIssue(env.githubRepo, number);
         const livePlan = planIssueCoordinatorAction(
-          liveIssues,
-          decisionForIssues(undefined, liveIssues, env.githubRepo, env),
+          [liveIssue],
+          decisionForIssues(undefined, [liveIssue], env.githubRepo, env, deadline),
         );
         if (livePlan.kind !== "worker_required") throw new StaleLaunchError("selected issue is no longer eligible");
         assertSameLaunchTarget(issue, livePlan.issue, "issue");

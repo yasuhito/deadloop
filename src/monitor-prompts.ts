@@ -74,9 +74,9 @@ Polling rules:
 - If the promise is missing while the agent is idle/done, ask the ${input.actorName} to write the promise file instead of guessing completion.
 
 Enablement guard:
-- Immediately before every mutating \`gh\` command (including PR creation, comments, labels, handoff, merge, and blocked paths), run the whole command through this prefix: \`${guardedOperation}\`.
+- Run only approved non-merge GitHub mutations through this prefix: \`${guardedOperation}\`. Approved forms are \`gh issue edit\` for labels, \`gh issue comment\`, \`gh pr create\`, \`gh pr edit\` for labels, and \`gh pr comment\`; every command must explicitly use \`-R ${input.githubRepo || "<githubRepo>"}\`.
 - Never run those mutations directly. Each guarded operation is synchronized with \`/deadloop-disable\`; if it reports that deadloop is disabled, stop without that mutation. Re-evaluate only on a later scheduler cycle after re-enable.
-- Never pass \`git push\` through \`guarded-operation.ts\`; issue-worker pushes use the destination-bound command below.`;
+- Never pass merge, push, branch deletion, \`gh api\`, or arbitrary commands through \`guarded-operation.ts\`. Automatic merge must use \`merge-reviewed-pr.ts\`, and issue-worker pushes use the destination-bound command below.`;
 }
 
 function renderIssueMonitorPrompt(input: IssueMonitorPromptInput): string {
