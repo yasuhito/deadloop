@@ -37,7 +37,12 @@ describe("issue coordinator deterministic driver", () => {
     expect(runDriverFixture("driver-cleanup-candidate.json").driverAction).toBe("cleanup_applied");
   });
 
-  it("prevents cleanup mutations after disable revokes enablement", async () => {
+  it.each([
+    ["starts cleanup before disable", (result: { cleanupStarted: boolean }) => result.cleanupStarted, true],
+    ["completes disable while cleanup is blocked", (result: { disableCompleted: boolean }) => result.disableCompleted, true],
+    ["preserves the worker artifact", (result: { artifactExists: boolean }) => result.artifactExists, true],
+    ["does not remove the workspace", (result: { workspaceRemoved: boolean }) => result.workspaceRemoved, false],
+  ])("%s", async (_name, observation, expected) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cleanup-disable-"));
     const repo = path.join(root, "repo");
     const worktree = path.join(root, "worktree");
@@ -120,12 +125,12 @@ exit 2
       writeFileSync(release, "release");
       await new Promise<void>((resolve) => child.once("exit", () => resolve()));
 
-      expect({ cleanupStarted: existsSync(started), disableCompleted, artifactExists: existsSync(artifact), workspaceRemoved: existsSync(removed) }).toEqual({
-        cleanupStarted: true,
-        disableCompleted: true,
-        artifactExists: true,
-        workspaceRemoved: false,
-      });
+      expect(observation({
+        cleanupStarted: existsSync(started),
+        disableCompleted,
+        artifactExists: existsSync(artifact),
+        workspaceRemoved: existsSync(removed),
+      })).toBe(expected);
     } finally {
       writeFileSync(release, "release");
       child.kill("SIGKILL");
@@ -155,6 +160,14 @@ exit 2
 
   it("reports the deterministic Worker name", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
+  });
+
+  it("persists the launch-time issue title for monitor revalidation", () => {
+    expect(runDriverFixture("driver-ready-worker.json").monitorHandoff.input.issueTitle).toBe("Implement small feature");
+  });
+
+  it("persists the launch-time issue body for monitor revalidation", () => {
+    expect(runDriverFixture("driver-ready-worker.json").monitorHandoff.input.issueBody).toContain("Build a focused feature.");
   });
 
   it("does not ask the LLM to run launch-agent", () => {

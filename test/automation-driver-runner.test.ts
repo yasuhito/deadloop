@@ -270,42 +270,42 @@ describe("deterministic automation driver runner", () => {
     expect(entry.lastResult).toBe("driver_handoff_revalidation_required");
   });
 
-  it("rejects a closed issue during pending handoff revalidation", () => {
-    const handoff = {
-      kind: "issue",
-      input: { issueNumber: 12, readyLabel: "ready-for-agent", inProgressLabel: "agent:in-progress" },
-    };
-    const issue = {
-      number: 12,
-      state: "CLOSED",
-      labels: [{ name: "ready-for-agent" }, { name: "agent:in-progress" }],
-    };
+  const issueHandoff = {
+    kind: "issue",
+    input: {
+      issueNumber: 12,
+      issueTitle: "Implement feature",
+      issueBody: "## Acceptance criteria\n- Done",
+      readyLabel: "ready-for-agent",
+      inProgressLabel: "agent:in-progress",
+    },
+  };
+  const eligibleIssue = {
+    number: 12,
+    title: "Implement feature",
+    body: "## Acceptance criteria\n- Done",
+    state: "OPEN",
+    labels: [{ name: "ready-for-agent" }, { name: "agent:in-progress" }],
+  };
 
-    expect(isPendingIssueHandoffEligible(handoff, issue)).toBe(false);
+  it("rejects a closed issue during pending handoff revalidation", () => {
+    expect(isPendingIssueHandoffEligible(issueHandoff, { ...eligibleIssue, state: "CLOSED" })).toBe(false);
   });
 
   it("rejects an issue missing a required label during pending handoff revalidation", () => {
-    const handoff = {
-      kind: "issue",
-      input: { issueNumber: 12, readyLabel: "ready-for-agent", inProgressLabel: "agent:in-progress" },
-    };
-    const issue = { number: 12, state: "OPEN", labels: [{ name: "agent:in-progress" }] };
+    expect(isPendingIssueHandoffEligible(issueHandoff, { ...eligibleIssue, labels: [{ name: "agent:in-progress" }] })).toBe(false);
+  });
 
-    expect(isPendingIssueHandoffEligible(handoff, issue)).toBe(false);
+  it("rejects an issue whose title changed during pending handoff revalidation", () => {
+    expect(isPendingIssueHandoffEligible(issueHandoff, { ...eligibleIssue, title: "Different feature" })).toBe(false);
+  });
+
+  it("rejects an issue whose body changed during pending handoff revalidation", () => {
+    expect(isPendingIssueHandoffEligible(issueHandoff, { ...eligibleIssue, body: "Different contract" })).toBe(false);
   });
 
   it("accepts the same open in-progress issue during pending handoff revalidation", () => {
-    const handoff = {
-      kind: "issue",
-      input: { issueNumber: 12, readyLabel: "ready-for-agent", inProgressLabel: "agent:in-progress" },
-    };
-    const issue = {
-      number: 12,
-      state: "OPEN",
-      labels: [{ name: "ready-for-agent" }, { name: "agent:in-progress" }],
-    };
-
-    expect(isPendingIssueHandoffEligible(handoff, issue)).toBe(true);
+    expect(isPendingIssueHandoffEligible(issueHandoff, eligibleIssue)).toBe(true);
   });
 
   it("discards a pre-disable issue handoff when current eligibility cannot be confirmed", () => {

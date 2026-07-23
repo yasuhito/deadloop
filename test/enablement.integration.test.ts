@@ -955,7 +955,13 @@ describe("enablement command integration", () => {
     expect(existsSync(path.join(root, ".pi", "agent", "deadloop", lockName))).toBe(false);
   });
 
-  it("reports disable success only after a blocked scheduler tick releases its lock", async () => {
+  it.each([
+    ["keeps disable pending while the scheduler tick holds its lock", (result: { disableResolvedBeforeRelease: boolean }) => result.disableResolvedBeforeRelease, false],
+    ["keeps the scheduler lock while the tick is blocked", (result: { lockExistsBeforeRelease: boolean }) => result.lockExistsBeforeRelease, true],
+    ["does not report disable success before lock release", (result: { successReportedBeforeRelease: boolean }) => result.successReportedBeforeRelease, false],
+    ["releases the scheduler lock before the disable response", (result: { lockExistsAfterResponse: boolean }) => result.lockExistsAfterResponse, false],
+    ["reports disable success after lock release", (result: { successReportedAfterRelease: boolean }) => result.successReportedAfterRelease, true],
+  ])("%s", async (_name, observation, expected) => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
     const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
@@ -994,19 +1000,19 @@ describe("enablement command integration", () => {
         throw new Error("disable state update is still locked");
       }
     });
-    const beforeRelease = {
-      disableResolved,
-      schedulerLockExists: existsSync(lockPath),
-      successReported: extension.messages.length > messageCount,
-    };
+    const disableResolvedBeforeRelease = disableResolved;
+    const lockExistsBeforeRelease = existsSync(lockPath);
+    const successReportedBeforeRelease = extension.messages.length > messageCount;
     releasePrecheck();
     await Promise.all([tick, disabling]);
 
-    expect({ beforeRelease, schedulerLockExistsAfterResponse: existsSync(lockPath), successReportedAfterRelease: extension.messages.length > messageCount }).toEqual({
-      beforeRelease: { disableResolved: false, schedulerLockExists: true, successReported: false },
-      schedulerLockExistsAfterResponse: false,
-      successReportedAfterRelease: true,
-    });
+    expect(observation({
+      disableResolvedBeforeRelease,
+      lockExistsBeforeRelease,
+      successReportedBeforeRelease,
+      lockExistsAfterResponse: existsSync(lockPath),
+      successReportedAfterRelease: extension.messages.length > messageCount,
+    })).toBe(expected);
   });
 
   it("waits for a blocked scheduler tick and lock release during session shutdown", async () => {

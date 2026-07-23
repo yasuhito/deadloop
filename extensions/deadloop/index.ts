@@ -960,10 +960,17 @@ async function prepareGithub(pi, identity, repoPath, enableAttemptToken) {
 function revalidatePendingIssueHandoff(handoff) {
   if (handoff.kind !== "issue" || !handoff.input || typeof handoff.input !== "object") return true;
   const input = handoff.input;
-  if (!input.githubRepo || !Number.isInteger(input.issueNumber) || !input.readyLabel || !input.inProgressLabel) return false;
+  if (
+    !input.githubRepo ||
+    !Number.isInteger(input.issueNumber) ||
+    typeof input.issueTitle !== "string" ||
+    typeof input.issueBody !== "string" ||
+    !input.readyLabel ||
+    !input.inProgressLabel
+  ) return false;
   const result = childProcess.spawnSync(
     "gh",
-    ["issue", "view", String(input.issueNumber), "-R", input.githubRepo, "--json", "number,state,labels"],
+    ["issue", "view", String(input.issueNumber), "-R", input.githubRepo, "--json", "number,title,body,state,labels"],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 25_000, killSignal: "SIGKILL" },
   );
   if (result.status !== 0) return false;

@@ -62,6 +62,10 @@ export function isPendingIssueHandoffEligible(
   return (
     Number.isInteger(input.issueNumber) &&
     issue.number === input.issueNumber &&
+    typeof input.issueTitle === "string" &&
+    issue.title === input.issueTitle &&
+    typeof input.issueBody === "string" &&
+    issue.body === input.issueBody &&
     issue.state === "OPEN" &&
     typeof input.readyLabel === "string" &&
     labels.has(input.readyLabel) &&

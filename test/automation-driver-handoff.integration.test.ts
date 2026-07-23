@@ -14,7 +14,12 @@ function foundFile(requested: string | undefined): AutomationFileResolution {
 }
 
 describe("real driver handoff across disable and re-enable", () => {
-  it("hands a completed pre-disable worker to a monitor bound to the re-enabled generation", async () => {
+  it.each([
+    ["does not deliver the handoff while disabled", (result: { sentWhileDisabled: string[] }) => result.sentWhileDisabled, []],
+    ["binds the monitor to the re-enabled generation", (result: { queuedCurrentGeneration: boolean }) => result.queuedCurrentGeneration, true],
+    ["reports that the monitor was queued", (result: { lastResult: unknown }) => result.lastResult, "driver_needs_llm_queued"],
+    ["clears the pending handoff after queuing", (result: { pending: unknown }) => result.pending, undefined],
+  ])("%s", async (_name, observation, expected) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-driver-handoff-"));
     const statePath = path.join(root, "state.json");
     const project = normalizeProject({
@@ -84,17 +89,12 @@ describe("real driver handoff across disable and re-enable", () => {
         sendUserMessage: (prompt) => sent.push(prompt),
       });
 
-      expect({
+      expect(observation({
         sentWhileDisabled,
         queuedCurrentGeneration: sent.length === 1 && sent[0].includes("--enabled-at 2"),
-        result: entry.lastResult,
+        lastResult: entry.lastResult,
         pending: entry.pendingDriverHandoff,
-      }).toEqual({
-        sentWhileDisabled: [],
-        queuedCurrentGeneration: true,
-        result: "driver_needs_llm_queued",
-        pending: undefined,
-      });
+      })).toEqual(expected);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -259,6 +259,8 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
   const monitorInput = {
     issueNumber: Number(issue.number || 0),
+    issueTitle: String(issue.title || ""),
+    issueBody: String(issue.body || ""),
     automationDir: env.automationDir,
     promiseFile: String(launch.promiseFile || ""),
     actorName: "Worker",
