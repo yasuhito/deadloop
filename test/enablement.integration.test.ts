@@ -105,6 +105,7 @@ async function loadExtension(
     beforeGithubRepoCheck?: () => Promise<void>;
     beforeLabelLookup?: (name: string) => Promise<void>;
     beforeLabelCreate?: (name: string) => Promise<void>;
+    beforeDisableLock?: () => Promise<void>;
     afterEnablementSaved?: () => Promise<void>;
     runAutomationScript?: () => Promise<{ code: number; stdout: string; stderr: string }>;
   } = {},
@@ -169,7 +170,9 @@ async function loadExtension(
     on: (name: string, handler: EventHandler) => events.set(name, handler),
     sendMessage: (message: { content: string }) => messages.push(message.content),
     sendUserMessage: () => undefined,
-    testing: options.afterEnablementSaved ? { afterEnablementSaved: options.afterEnablementSaved } : undefined,
+    testing: options.beforeDisableLock || options.afterEnablementSaved
+      ? { beforeDisableLock: options.beforeDisableLock, afterEnablementSaved: options.afterEnablementSaved }
+      : undefined,
   });
   return { commands, events, ghCommands, messages };
 }
@@ -368,6 +371,60 @@ describe("enablement command integration", () => {
     await enabling;
 
     expect(extension.messages.at(-1)).toBe("deadloop was not enabled: enablement was revoked while checkout detection was running");
+  });
+
+  it("does not let disable miss an enable attempt published before its locked mutation", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    let releaseEnableCheckout!: () => void;
+    let enableCheckoutStarted!: () => void;
+    let releaseDisableLock!: () => void;
+    let disableReachedLock!: () => void;
+    let releaseGithubCheck!: () => void;
+    let githubCheckStarted!: () => void;
+    const enableCheckout = new Promise<void>((resolve) => { enableCheckoutStarted = resolve; });
+    const holdEnableCheckout = new Promise<void>((resolve) => { releaseEnableCheckout = resolve; });
+    const disableLock = new Promise<void>((resolve) => { disableReachedLock = resolve; });
+    const holdDisableLock = new Promise<void>((resolve) => { releaseDisableLock = resolve; });
+    const githubCheck = new Promise<void>((resolve) => { githubCheckStarted = resolve; });
+    const holdGithubCheck = new Promise<void>((resolve) => { releaseGithubCheck = resolve; });
+    let firstDetection = true;
+    let firstGithubCheck = true;
+    const extension = await loadExtension(root, {
+      beforePrimaryCheckout: async () => {
+        if (!firstDetection) return;
+        firstDetection = false;
+        enableCheckoutStarted();
+        await holdEnableCheckout;
+      },
+      beforeDisableLock: async () => {
+        disableReachedLock();
+        await holdDisableLock;
+      },
+      beforeGithubRepoCheck: async () => {
+        if (!firstGithubCheck) return;
+        firstGithubCheck = false;
+        githubCheckStarted();
+        await holdGithubCheck;
+      },
+    });
+
+    const enabling = invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    await enableCheckout;
+    const disabling = invoke(extension.commands.get("deadloop-disable")!, repoPath);
+    await disableLock;
+    releaseEnableCheckout();
+    await githubCheck;
+    releaseDisableLock();
+    await disabling;
+    releaseGithubCheck();
+    await enabling;
+
+    const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    expect({ enabledProjects: state.projects.length, finalMessage: extension.messages.at(-1) }).toEqual({
+      enabledProjects: 0,
+      finalMessage: "deadloop was not enabled: enablement was revoked while preflight was running",
+    });
   });
 
   it("records disable promptly while an enable preflight is stalled", async () => {

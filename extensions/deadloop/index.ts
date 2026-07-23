@@ -926,7 +926,7 @@ async function detectProjectIdentity(pi, cwd) {
   };
 }
 
-async function prepareGithub(pi, identity, repoPath, enableAttemptToken) {
+async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disableGeneration) {
   await commandExec(pi, "gh", ["auth", "status"]);
   const view = JSON.parse((await commandExec(pi, "gh", ["repo", "view", identity.githubRepo, "--json", "id,viewerPermission,nameWithOwner"])).stdout || "{}");
   if (view.nameWithOwner !== identity.githubRepo || String(view.id || "") !== identity.githubRepositoryId) {
@@ -945,7 +945,7 @@ async function prepareGithub(pi, identity, repoPath, enableAttemptToken) {
       throw new Error((lookup.stderr || lookup.stdout || `label lookup failed for ${name}`).trim());
     }
     await withEnablementStateLock(async () => {
-      if (!ownsEnableAttempt(repoPath, enableAttemptToken)) {
+      if (!ownsEnableAttempt(repoPath, enableAttemptToken) || loadDisableGeneration() !== disableGeneration) {
         throw new Error("enablement was revoked while preflight was running");
       }
       const lockedLookup = await pi.exec("gh", ["api", "--silent", `repos/${identity.githubRepo}/labels/${encodeURIComponent(name)}`], { timeout: 15_000 });
@@ -1242,9 +1242,9 @@ export default function (pi) {
         identity = await detectProjectIdentity(pi, primaryRepoPath);
         previousEnabledAt = await withEnablementStateLock(async () => findEnabledProject(loadEnablementState(), identity)?.enabledAt);
         resolveEnableProject(ctx.cwd, identity);
-        await prepareGithub(pi, identity, primaryRepoPath, enableAttemptToken);
+        await prepareGithub(pi, identity, primaryRepoPath, enableAttemptToken, disableGeneration);
         await withEnablementStateLock(async () => {
-          if (!ownsEnableAttempt(primaryRepoPath, enableAttemptToken)) {
+          if (!ownsEnableAttempt(primaryRepoPath, enableAttemptToken) || loadDisableGeneration() !== disableGeneration) {
             throw new Error("enablement was revoked while preflight was running");
           }
           await revalidateLocalProjectIdentity(pi, identity);
@@ -1294,12 +1294,12 @@ export default function (pi) {
         let message;
         let schedulerStop = Promise.resolve();
         const repoPath = await detectPrimaryCheckout(pi, ctx.cwd, true);
-        const attemptPath = enableAttemptPath(repoPath);
-        const attempt = readJsonFile(attemptPath, null);
-        if (attempt?.repoPath === path.resolve(repoPath) && attempt?.token) {
-          writeEnableAttempt(repoPath, attempt.token, true);
-        }
+        await pi.testing?.beforeDisableLock?.();
         await withEnablementStateLock(async () => {
+          const attempt = readJsonFile(enableAttemptPath(repoPath), null);
+          if (attempt?.repoPath === path.resolve(repoPath) && attempt?.token) {
+            writeEnableAttempt(repoPath, attempt.token, true);
+          }
           advanceDisableGeneration();
           const state = loadEnablementState();
           const enabled = state.projects.find((project) => project.repoPath === path.resolve(repoPath) && project.enabled !== false);
