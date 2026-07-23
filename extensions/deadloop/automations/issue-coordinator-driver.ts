@@ -213,7 +213,10 @@ function drive(fixturePath: string | undefined): DriverResult {
   const cleanup = cleanupPlan(fixture);
   const candidates = cleanup.candidates || [];
   if (candidates.length) {
-    const appliedCleanup = fixture ? applyCleanup(cleanup, fixture) : withEnabledDriverLock(env, () => applyCleanup(cleanup, fixture));
+    // Cleanup may wait on git or Herdr, so authorize it under the enablement lock
+    // but do not prevent /deadloop-disable from persisting revocation while it runs.
+    if (!fixture) withEnabledDriverLock(env, () => undefined);
+    const appliedCleanup = applyCleanup(cleanup, fixture);
     return driverResult("done", `completed worker cleanup: ${candidates.length} candidate(s)`, {
       driverAction: "cleanup_applied",
       cleanup: appliedCleanup,

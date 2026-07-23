@@ -107,19 +107,20 @@ export function deliverPendingDriverHandoff(
         ? Number((input as Record<string, unknown>).enabledAt)
         : Number.NaN;
       const currentEnabledAt = deps.enabledAt?.();
-      if (
-        monitorHandoff.kind === "issue" &&
+      const generationChanged =
         Number.isFinite(previousEnabledAt) &&
         Number.isFinite(currentEnabledAt) &&
-        previousEnabledAt !== currentEnabledAt &&
-        !deps.revalidatePendingDriverHandoff?.(monitorHandoff)
-      ) {
+        previousEnabledAt !== currentEnabledAt;
+      const canRebind =
+        !generationChanged ||
+        (monitorHandoff.kind === "issue" && deps.revalidatePendingDriverHandoff?.(monitorHandoff) === true);
+      if (!canRebind) {
         delete entry.pendingDriverHandoff;
         recordAutomationResult(entry, "driver_handoff_revalidation_required");
-        entry.lastSummary = "pre-disable issue handoff was discarded because current issue eligibility was not confirmed";
+        entry.lastSummary = `pre-disable ${String(monitorHandoff.kind || "monitor")} handoff was discarded for current-state re-evaluation`;
         entry.updatedAt = deps.now();
         deps.saveState(state);
-        deps.notify?.(`deadloop discarded stale issue handoff: ${automationName}`, "warning");
+        deps.notify?.(`deadloop discarded stale monitor handoff: ${automationName}`, "warning");
         return true;
       }
       prompt = renderPendingMonitorHandoff(monitorHandoff, currentEnabledAt);

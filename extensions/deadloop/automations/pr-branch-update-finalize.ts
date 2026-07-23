@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Run the configured check, revalidate the exact PR head, and perform the only
 // push allowed to a branch-update worker. It re-checks the validated PR head,
-// then uses only a normal non-force push so Git rejects a concurrent update.
+// then atomically compares the remote ref with that exact reviewed head.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
@@ -54,7 +54,7 @@ function pushWithExpectedRemoteHead(
 ): boolean {
   const ref = `refs/heads/${branch}`;
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", destination, `HEAD:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `HEAD:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return true;
