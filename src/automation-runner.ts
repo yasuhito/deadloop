@@ -103,17 +103,20 @@ export function deliverPendingDriverHandoff(
     try {
       const monitorHandoff = payload.monitorHandoff as Record<string, unknown>;
       const input = monitorHandoff.input;
-      const previousEnabledAt = input && typeof input === "object" && !Array.isArray(input)
-        ? Number((input as Record<string, unknown>).enabledAt)
-        : Number.NaN;
+      const persistedEnabledAt = input && typeof input === "object" && !Array.isArray(input)
+        ? (input as Record<string, unknown>).enabledAt
+        : undefined;
       const currentEnabledAt = deps.enabledAt?.();
-      const generationChanged =
-        Number.isFinite(previousEnabledAt) &&
-        Number.isFinite(currentEnabledAt) &&
-        previousEnabledAt !== currentEnabledAt;
+      const generationsAreValid =
+        typeof persistedEnabledAt === "number" &&
+        Number.isFinite(persistedEnabledAt) &&
+        typeof currentEnabledAt === "number" &&
+        Number.isFinite(currentEnabledAt);
+      const generationChanged = generationsAreValid && persistedEnabledAt !== currentEnabledAt;
       const canRebind =
-        !generationChanged ||
-        (monitorHandoff.kind === "issue" && deps.revalidatePendingDriverHandoff?.(monitorHandoff) === true);
+        generationsAreValid &&
+        (!generationChanged ||
+          (monitorHandoff.kind === "issue" && deps.revalidatePendingDriverHandoff?.(monitorHandoff) === true));
       if (!canRebind) {
         delete entry.pendingDriverHandoff;
         recordAutomationResult(entry, "driver_handoff_revalidation_required");

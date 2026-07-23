@@ -244,6 +244,32 @@ describe("deterministic automation driver runner", () => {
     });
   });
 
+  it.each([
+    ["missing", undefined],
+    ["null", null],
+    ["nonnumeric", "invalid"],
+  ])("discards a monitor handoff with a %s persisted generation", (_description, enabledAt) => {
+    const input = enabledAt === undefined ? {} : { enabledAt };
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "needs_llm",
+        monitorHandoff: { kind: "reviewer", input },
+        prompt: "stale prompt",
+      },
+    };
+    const state = { automations: { auto: entry } };
+
+    deliverPendingDriverHandoff(entry, state, "auto", {
+      enabledAt: () => 2,
+      isEnabled: () => true,
+      now: () => 456,
+      saveState: () => undefined,
+      sendUserMessage: () => undefined,
+    });
+
+    expect(entry.lastResult).toBe("driver_handoff_revalidation_required");
+  });
+
   it("rejects a closed issue during pending handoff revalidation", () => {
     const handoff = {
       kind: "issue",

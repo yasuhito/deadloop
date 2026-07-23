@@ -34,6 +34,7 @@ describe("real driver handoff across disable and re-enable", () => {
 
     try {
       await runScheduledAutomation(project, project.automations[0], 123, state, {
+        enabledAt: () => 1,
         isEnabled: () => enabled,
         now: () => 456,
         readPrompt: () => "unused",
