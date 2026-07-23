@@ -10,7 +10,7 @@ Before starting normal PR review, deadloop compares the selected PR head with th
 
 An HTML comment records a deterministic key derived from the exact PR-head/base-head pair. That pair gets at most one update attempt; a change to either commit creates a new key and may be tried once. `agent:review` is retained and `agent:reviewing` is retained or added while the update runs. No branch-update label is introduced.
 
-The worker may push only through the deterministic finalizer. The finalizer requires the updated commit to contain both selected commits, runs the configured project check, requires a clean worktree, immediately re-reads the open same-repository PR head, and performs a non-force push only to the driver-selected existing branch. A changed PR head returns `stale_head` without pushing, commenting, or changing labels. Non-force push remains the final race guard.
+The worker may push only through the deterministic finalizer. The finalizer requires the updated commit to contain both selected commits, runs the configured project check, requires a clean worktree, immediately re-reads the open same-repository PR head, and atomically updates only the driver-selected existing branch if its remote head still equals the validated commit. A changed PR head returns `stale_head` without updating, commenting, or changing labels. The exact-head lease remains the final race guard.
 
 A successful push leaves review labels unchanged so a later cycle resumes normal review. A stale head also leaves them unchanged for re-evaluation. Only a failed, malformed, or unsafe update adds `agent:blocked`; branch-update workers and monitors may not create PRs, merge PRs, change labels themselves, close issues, or delete branches.
 

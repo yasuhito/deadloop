@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Run the configured check, revalidate the exact PR head, and perform the only
-// push allowed to a branch-update worker. The push is always non-force.
+// push allowed to a branch-update worker. The remote ref update is conditional
+// on the validated PR head still being current.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
@@ -42,6 +43,25 @@ function checked(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
   const result = ops.run(args, timeoutMs);
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || `command failed: ${args.join(" ")}`).trim());
   return result.stdout.trim();
+}
+
+function pushWithExpectedRemoteHead(
+  ops: FinalizeOps,
+  repo: string,
+  destination: string,
+  branch: string,
+  expectedHead: string,
+): boolean {
+  const ref = `refs/heads/${branch}`;
+  const push = ops.run([
+    "git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `HEAD:${ref}`,
+  ], MAX_GUARDED_OPERATION_MS);
+  if (push.status === 0) return true;
+
+  const remoteLine = checked(ops, ["git", "ls-remote", destination, ref], MAX_GUARDED_OPERATION_MS);
+  const remoteHead = remoteLine.split(/\s+/)[0] || "";
+  if (remoteHead.toLowerCase() !== expectedHead.toLowerCase()) return false;
+  throw new Error((push.stderr || push.stdout || "conditional push failed").trim());
 }
 
 function decidePushGuard(pr: JsonObject, expectedBranch: string, expectedHead: string): JsonObject {
@@ -95,7 +115,9 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       enabled.githubRepositoryId,
       MAX_GUARDED_OPERATION_MS,
     );
-    checked(ops, ["git", "-C", args.repo, "push", "--porcelain", pushDestination, `HEAD:refs/heads/${args.branch}`], MAX_GUARDED_OPERATION_MS);
+    if (!pushWithExpectedRemoteHead(ops, args.repo, pushDestination, args.branch, args.expectedHead)) {
+      return { action: "stale_head", reason: "head_sha_changed_during_push" };
+    }
     return {
       action: "pushed",
       reason: "branch_updated",

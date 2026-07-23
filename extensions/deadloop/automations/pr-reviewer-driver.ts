@@ -177,7 +177,7 @@ Safety contract:
 - Merge ${baseOid} into the existing PR branch. Use git merge, never rebase, and never rewrite existing commits.
 - Resolve only conflicts caused by this merge. Do not widen the PR's scope.
 - Commit the merge resolution before finalization.
-- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, verifies the PR head SHA immediately before the only permitted non-force push, and pushes only the driver-selected branch:
+- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks and atomically updates only the driver-selected branch if its head still equals the validated PR head:
   ${finalizeCommand}
 - Never force-push. Never push another ref. Never edit labels, create or edit a PR, merge a PR, close an issue, or delete a branch.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state so the next cycle can re-evaluate.

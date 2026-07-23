@@ -935,6 +935,7 @@ async function prepareGithub(pi, identity, repoPath, enableAttemptToken) {
 function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => true) {
   const ownedAutomationKeys = project.automations.map((automation) => automationStateKey(project, automation));
   return {
+    enabledAt: () => project.enabledAt,
     isEnabled: () => isCurrentSchedulerRun() && isProjectEnabled(project),
     isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
     notify: (message, level) => {

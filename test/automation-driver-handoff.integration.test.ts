@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -14,7 +14,7 @@ function foundFile(requested: string | undefined): AutomationFileResolution {
 }
 
 describe("real driver handoff across disable and re-enable", () => {
-  it("re-queues a pre-disable Issue monitor handoff with its original generation after re-enable", async () => {
+  it("hands a completed pre-disable worker to a monitor bound to the re-enabled generation", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-driver-handoff-"));
     const statePath = path.join(root, "state.json");
     const project = normalizeProject({
@@ -69,9 +69,13 @@ describe("real driver handoff across disable and re-enable", () => {
 
       const reloaded = JSON.parse(readFileSync(statePath, "utf8")) as AutomationState;
       const entry = reloaded.automations["demo:demo:issue-coordinator"];
+      const handoff = entry.pendingDriverHandoff as { monitorHandoff: { input: { promiseFile: string } } };
+      mkdirSync(path.dirname(handoff.monitorHandoff.input.promiseFile), { recursive: true });
+      writeFileSync(handoff.monitorHandoff.input.promiseFile, JSON.stringify({ status: "complete", reason: "implemented" }));
       const sentWhileDisabled = [...sent];
       enabled = true;
       deliverPendingDriverHandoff(entry, reloaded, "issue coordinator", {
+        enabledAt: () => 2,
         isEnabled: () => enabled,
         now: () => 789,
         saveState: (next) => writeFileSync(statePath, JSON.stringify(next)),
@@ -80,12 +84,12 @@ describe("real driver handoff across disable and re-enable", () => {
 
       expect({
         sentWhileDisabled,
-        queuedOriginalGeneration: sent.length === 1 && sent[0].includes("--enabled-at 1"),
+        queuedCurrentGeneration: sent.length === 1 && sent[0].includes("--enabled-at 2"),
         result: entry.lastResult,
         pending: entry.pendingDriverHandoff,
       }).toEqual({
         sentWhileDisabled: [],
-        queuedOriginalGeneration: true,
+        queuedCurrentGeneration: true,
         result: "driver_needs_llm_queued",
         pending: undefined,
       });
