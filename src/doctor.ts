@@ -551,7 +551,11 @@ function formatConfigSource(project: NormalizedProject): string {
 export function formatDoctorReport(snapshot: DoctorSnapshot): string {
   if (!snapshot.project) {
     return [
-      `deadloop doctor: no active project`,
+      "deadloop is not enabled for this repository.",
+      "",
+      "Enable it:",
+      "  /deadloop-enable",
+      "",
       `cwd: ${snapshot.cwd}`,
       ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     ].join("\n");

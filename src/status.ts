@@ -331,7 +331,11 @@ function formatAutomationSummary(summary: string | undefined): string {
 export function formatStatusReport(snapshot: StatusSnapshot): string {
   if (!snapshot.project) {
     return [
-      `deadloop status: no active project`,
+      "deadloop is not enabled for this repository.",
+      "",
+      "Enable it:",
+      "  /deadloop-enable",
+      "",
       `cwd: ${snapshot.cwd}`,
       ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     ].join("\n");

@@ -31,10 +31,19 @@ const { buildStatusSnapshot, formatStatusReport } = require("../../src/status.ts
 const { readClaudeConfig } = require("../../src/agent-trust.cjs");
 const { runScheduledAutomation } = require("../../src/automation-runner.ts");
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
+const {
+  findEnabledProject,
+  isEnabledProjectState,
+  normalizeEnablementState,
+  removeEnabledProject,
+  removeEnabledProjectAtPath,
+  upsertEnabledProject,
+} = require("../../src/enablement.ts");
 
 const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 const STATE_DIR = path.join(CONFIG_DIR, EXTENSION_NAME);
 const STATE_PATH = path.join(STATE_DIR, "state.json");
+const ENABLEMENT_PATH = path.join(STATE_DIR, "enabled-projects.json");
 
 function resolveExtensionDir() {
   const candidates = [
@@ -76,7 +85,7 @@ function readJsonFile(file, fallback) {
 
 function writeJsonFile(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   fs.renameSync(tmp, file);
 }
@@ -135,10 +144,13 @@ function inferBaseBranch(repoPath) {
   return gitOutput(repoPath, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]) || "origin/main";
 }
 
-function inferGithubRepo(repoPath) {
-  const remote = gitOutput(repoPath, ["remote", "get-url", "origin"]);
-  const match = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(remote);
+function githubRepoFromRemote(remote) {
+  const match = /^(?:git@github\.com:|https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(String(remote || ""));
   return match ? match[1] : "";
+}
+
+function inferGithubRepo(repoPath) {
+  return githubRepoFromRemote(gitOutput(repoPath, ["remote", "get-url", "origin"]));
 }
 
 function implicitProjectFromCwd(cwd) {
@@ -157,7 +169,7 @@ function implicitProjectFromCwd(cwd) {
     autoMerge: false,
   };
   const policy = trustedRepoPolicyProvider(raw);
-  if (policy.status !== "loaded") return null;
+  if (policy.status === "error") return null;
   const result = parseProjectsConfig(JSON.stringify({ projects: [raw] }), projectFilter(), {
     configPath: `${repoPath}${path.sep}${REPO_POLICY_FILE}`,
     repoPolicyProvider: () => policy,
@@ -169,7 +181,7 @@ function implicitProjectFromCwd(cwd) {
 function addImplicitProject(cwd, result) {
   if (!result.ok || !cwd) return result;
   const implicit = implicitProjectFromCwd(cwd);
-  if (!implicit) return result;
+  if (!implicit || !isProjectEnabled(implicit)) return result;
   const implicitPath = path.resolve(implicit.repoPath || "");
   const duplicate = result.projects.some((project) => {
     if (!project.repoPath) return false;
@@ -190,14 +202,13 @@ function loadProjectsResult(cwd) {
   } catch (error) {
     return { ok: false, reason: `projects.json read error: ${error?.message || error}` };
   }
-  const result = addImplicitProject(
-    cwd,
-    parseProjectsConfig(text, projectFilter(), {
-      configPath: CONFIG_PATH,
-      repoPolicyProvider: trustedRepoPolicyProvider,
-    }),
-  );
+  const parsed = parseProjectsConfig(text, projectFilter(), {
+    configPath: CONFIG_PATH,
+    repoPolicyProvider: trustedRepoPolicyProvider,
+  });
+  const result = addImplicitProject(cwd, parsed);
   if (result.ok) {
+    result.projects = result.projects.filter((project) => isProjectEnabled(project));
     debugLog(
       "config",
       CONFIG_PATH,
@@ -214,6 +225,58 @@ function loadProjects(cwd) {
   const result = loadProjectsResult(cwd);
   if (!result.ok) throw new Error(result.reason);
   return result.projects;
+}
+
+function loadEnablementState() {
+  try {
+    const text = fs.readFileSync(ENABLEMENT_PATH, "utf8");
+    const state = normalizeEnablementState(JSON.parse(text));
+    return state || null;
+  } catch (error) {
+    if (error?.code === "ENOENT") return { projects: [] };
+    return null;
+  }
+}
+
+function saveEnablementState(state) {
+  writeJsonFile(ENABLEMENT_PATH, state);
+}
+
+function updateEnablementState(update) {
+  const lockPath = `${ENABLEMENT_PATH}.lock`;
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      try {
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid }));
+      } finally {
+        fs.closeSync(fd);
+      }
+      try {
+        const next = update(loadEnablementState());
+        saveEnablementState(next);
+        return next;
+      } finally {
+        try { fs.unlinkSync(lockPath); } catch {}
+      }
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const owner = Number(readJsonFile(lockPath, null)?.pid);
+      if (!isPidAlive(owner)) {
+        try { fs.unlinkSync(lockPath); } catch {}
+        continue;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  throw new Error("enablement state is busy; retry the command");
+}
+
+function isProjectEnabled(project) {
+  if (!project.repoPath || !project.githubRepo) return false;
+  if (inferGithubRepo(project.repoPath) !== project.githubRepo) return false;
+  return isEnabledProjectState(loadEnablementState(), { repoPath: project.repoPath, githubRepo: project.githubRepo });
 }
 
 function extensionCodeWarning() {
@@ -578,6 +641,50 @@ async function buildLiveDoctorReport(pi, cwd) {
   const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true, includeAgents: true });
   return formatDoctorReport(buildDoctorSnapshot(data));
 }
+
+const STANDARD_LABELS = [
+  ["ready-for-agent", "0e8a16"],
+  ["agent:implement", "1d76db"],
+  ["agent:in-progress", "fbca04"],
+  ["agent:review", "5319e7"],
+  ["agent:reviewing", "c2e0c6"],
+  ["agent:blocked", "b60205"],
+  ["ready-for-human", "d93f0b"],
+  ["needs-info", "fef2c0"],
+  ["needs-triage", "f9d0c4"],
+];
+
+async function commandExec(pi, command, args, timeout = 15_000) {
+  const result = await pi.exec(command, args, { timeout });
+  if (result.code !== 0) throw new Error((result.stderr || result.stdout || `${command} failed`).trim());
+  return result;
+}
+
+async function detectProjectIdentity(pi, cwd) {
+  const repoPath = (await commandExec(pi, "git", ["-C", cwd, "rev-parse", "--show-toplevel"])).stdout.trim();
+  const commonDir = (await commandExec(pi, "git", ["-C", cwd, "rev-parse", "--git-common-dir"])).stdout.trim();
+  if (isLinkedGitWorktree(repoPath, commonDir)) {
+    throw new Error(`linked worktrees cannot be enabled; run /deadloop-enable from the primary checkout: ${path.dirname(path.resolve(repoPath, commonDir))}`);
+  }
+  const remote = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "origin"])).stdout.trim();
+  const githubRepo = githubRepoFromRemote(remote);
+  if (!githubRepo) throw new Error("origin must identify exactly one GitHub repository");
+  const baseBranch = (await commandExec(pi, "git", ["-C", repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])).stdout.trim() || "origin/main";
+  return { repoPath, githubRepo, baseBranch, id: sanitizeId(path.basename(repoPath)), worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", sanitizeId(path.basename(repoPath))) };
+}
+
+async function prepareGithub(pi, githubRepo) {
+  await commandExec(pi, "gh", ["auth", "status"]);
+  const view = JSON.parse((await commandExec(pi, "gh", ["repo", "view", githubRepo, "--json", "viewerPermission"])).stdout || "{}");
+  if (!["ADMIN", "MAINTAIN", "WRITE"].includes(String(view.viewerPermission || "").toUpperCase())) {
+    throw new Error("GitHub write permission is required to enable deadloop");
+  }
+  const labels = JSON.parse((await commandExec(pi, "gh", ["label", "list", "-R", githubRepo, "--limit", "100", "--json", "name"])).stdout || "[]");
+  const existing = new Set(labels.map((label) => label.name));
+  for (const [name, color] of STANDARD_LABELS) {
+    if (!existing.has(name)) await commandExec(pi, "gh", ["label", "create", name, "-R", githubRepo, "--color", color]);
+  }
+}
 async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
   await runScheduledAutomation(project, automation, dueSlot, state, {
     isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
@@ -648,7 +755,8 @@ export default function (pi) {
     }
     const project = activeProject(ctx.cwd, projectsResult.projects);
     if (!project) {
-      setLooperStatus(ctx, "skipped: active project is not present in projects.json or deadloop.json");
+      stopScheduler(ctx);
+      setLooperStatus(ctx, "deadloop is not enabled for this repository");
       return;
     }
     if (project.id !== active.project.id) {
@@ -680,25 +788,21 @@ export default function (pi) {
     saveState(state);
   }
 
-  pi.on("session_start", async (_event, ctx) => {
-    if (ctx.mode === "print" || ctx.mode === "json") return;
-    let projects;
-    try {
-      projects = loadProjects(ctx.cwd);
-    } catch (error) {
-      setLooperStatus(ctx, `skipped: ${error?.message || error}`);
-      return;
-    }
-    const project = activeProject(ctx.cwd, projects);
-    debugLog("session_start", "cwd", ctx.cwd, "mode", ctx.mode, "project", project?.id || null);
-    if (!project) return;
-    if (
-      process.env.DEADLOOP === "off" ||
-      process.env.DEADLOOP_AUTOMATIONS === "off"
-    ) {
-      return;
-    }
+  function stopScheduler(ctx) {
+    if (timer) clearInterval(timer);
+    if (startupTick) clearTimeout(startupTick);
+    timer = null;
+    startupTick = null;
+    if (ownsLock && active?.project) releaseSchedulerLock(active.project);
+    ownsLock = false;
+    active = null;
+    setLooperStatus(ctx, undefined);
+  }
 
+  function startScheduler(ctx, project) {
+    if (process.env.DEADLOOP === "off" || process.env.DEADLOOP_AUTOMATIONS === "off") return;
+    if (active?.project?.id === project.id) return;
+    stopScheduler(ctx);
     const lock = acquireSchedulerLock(project);
     ownsLock = lock.acquired;
     active = { project, lockPath: lock.lockPath };
@@ -706,38 +810,79 @@ export default function (pi) {
       setLooperStatus(ctx, `${project.id} standby: owner pid ${lock.owner ?? "unknown"}`);
       return;
     }
-
-    const state = loadState();
-    updateStatus(ctx, project, state);
-
-    if (timer) clearInterval(timer);
-    if (startupTick) clearTimeout(startupTick);
-
-    timer = setInterval(() => {
-      tick(ctx).catch((error) => {
-        console.warn(`[${EXTENSION_NAME}] tick failed:`, error?.message || error);
-      });
-    }, TICK_MS);
+    updateStatus(ctx, project, loadState());
+    timer = setInterval(() => tick(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] tick failed:`, error?.message || error)), TICK_MS);
     timer.unref?.();
-
-    startupTick = setTimeout(() => {
-      tick(ctx).catch((error) => {
-        console.warn(`[${EXTENSION_NAME}] startup tick failed:`, error?.message || error);
-      });
-    }, 3000);
+    startupTick = setTimeout(() => tick(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] startup tick failed:`, error?.message || error)), 3000);
     startupTick.unref?.();
+  }
+
+  pi.registerCommand("deadloop-enable", {
+    description: "Enable deadloop locally for this primary Git checkout",
+    handler: async (_args, ctx) => {
+      try {
+        const identity = await detectProjectIdentity(pi, ctx.cwd);
+        const existing = findEnabledProject(loadEnablementState(), identity);
+        if (!existing) {
+          await prepareGithub(pi, identity.githubRepo);
+          updateEnablementState((state) => upsertEnabledProject(state, identity));
+        }
+        const projects = loadProjects(ctx.cwd);
+        const project = activeProject(ctx.cwd, projects);
+        if (!project) throw new Error("enabled repository configuration could not be resolved safely");
+        if (!existing) project.autoMerge = false;
+        startScheduler(ctx, project);
+        const owner = ownsLock ? "this session" : `another session (pid ${readLock(projectLockPath(project))?.pid || "unknown"})`;
+        const message = `deadloop enabled for ${identity.githubRepo}; scheduler owner: ${owner}. autoMerge is ${project.autoMerge ? "on (existing local setting preserved)" : "off"}.`;
+        if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
+        else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
+      } catch (error) {
+        const message = `deadloop was not enabled: ${error?.message || error}`;
+        if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
+        else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
+      }
+    },
   });
 
-  pi.on("session_shutdown", async (_event, ctx) => {
-    if (timer) clearInterval(timer);
-    if (startupTick) clearTimeout(startupTick);
-    timer = null;
-    startupTick = null;
-    if (ownsLock && active?.project) {
-      releaseSchedulerLock(active.project);
-      ownsLock = false;
-    }
-    active = null;
-    setLooperStatus(ctx, undefined);
+  pi.registerCommand("deadloop-disable", {
+    description: "Disable local deadloop scheduling for this repository without stopping active agents",
+    handler: async (_args, ctx) => {
+      try {
+        let identity;
+        try {
+          identity = await detectProjectIdentity(pi, ctx.cwd);
+        } catch {
+          const repoPath = (await commandExec(pi, "git", ["-C", ctx.cwd, "rev-parse", "--show-toplevel"])).stdout.trim();
+          updateEnablementState((state) => removeEnabledProjectAtPath(state, repoPath));
+          if (active?.project?.repoPath && path.resolve(active.project.repoPath) === path.resolve(repoPath)) stopScheduler(ctx);
+          const message = "deadloop disabled for this checkout. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.";
+          if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
+          else pi.sendMessage({ customType: "deadloop-disable", content: message, display: true });
+          return;
+        }
+        updateEnablementState((state) => removeEnabledProjectAtPath(removeEnabledProject(state, identity), identity.repoPath));
+        if (active?.project?.githubRepo === identity.githubRepo && path.resolve(active.project.repoPath) === path.resolve(identity.repoPath)) stopScheduler(ctx);
+        const message = `deadloop disabled for ${identity.githubRepo}. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.`;
+        if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
+        else pi.sendMessage({ customType: "deadloop-disable", content: message, display: true });
+      } catch (error) {
+        const message = `deadloop was not disabled: ${error?.message || error}`;
+        if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
+        else pi.sendMessage({ customType: "deadloop-disable", content: message, display: true });
+      }
+    },
   });
+
+  pi.on("session_start", async (_event, ctx) => {
+    if (ctx.mode === "print" || ctx.mode === "json") return;
+    try {
+      const project = activeProject(ctx.cwd, loadProjects(ctx.cwd));
+      debugLog("session_start", "cwd", ctx.cwd, "mode", ctx.mode, "project", project?.id || null);
+      if (project) startScheduler(ctx, project);
+    } catch (error) {
+      setLooperStatus(ctx, `skipped: ${error?.message || error}`);
+    }
+  });
+
+  pi.on("session_shutdown", async (_event, ctx) => stopScheduler(ctx));
 }

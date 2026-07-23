@@ -28,11 +28,17 @@ pi -e /absolute/path/to/deadloop
 
 Pi packages and extensions run with your local user permissions. Install only from source you trust.
 
-## 2. Create repository policy and optional local configuration
+## 2. Enable the local scheduler and add optional policy
 
-For the zero-local-config path, commit `deadloop.json` at the target repository root on the trusted base branch. Start Pi from that checkout and deadloop infers the local checkout path, GitHub repository, base branch, and default Herdr worktree root from the current git repository.
+Start Pi from a normal (non-linked) Git checkout and run:
 
-Use Pi's user state config only for local overrides such as `autoMerge`, a custom `worktreeRoot`, or repositories that do not carry `deadloop.json`. If you need those overrides, copy the example config to Pi's user state directory and edit it for your repository. If you installed from GitHub, Pi clones the package under `~/.pi/agent/git/github.com/yasuhito/deadloop`:
+```text
+/deadloop-enable
+```
+
+The command infers the local checkout, GitHub repository, base branch, and default Herdr worktree root. It checks `gh` authentication and write permission, then creates only missing standard labels. Only after those steps succeed does it save local execution permission under `~/.pi/agent/deadloop/`. `deadloop.json` and `projects.json` are optional policy/override files and never start automation merely by existing. A newly enabled repository always starts with `autoMerge: false`; configure `autoMerge: true` explicitly later only after the safety checks in this guide.
+
+Use Pi's user state config only for local overrides such as `autoMerge` or a custom `worktreeRoot`. If you need those overrides, copy the example config to Pi's user state directory and edit it for your repository. If you installed from GitHub, Pi clones the package under `~/.pi/agent/git/github.com/yasuhito/deadloop`:
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop
@@ -72,9 +78,9 @@ Per-launch prompts and promise reports live under `~/.pi/agent/deadloop/runs/`, 
 
 By default deadloop reads `~/.pi/agent/deadloop/projects.json`. Use `DEADLOOP_CONFIG=/path/to/projects.json` only when you intentionally want a different config file.
 
-## 3. Create required labels
+## 3. Standard labels
 
-Create the standard labels once per repository:
+`/deadloop-enable` creates only missing standard labels and never changes an existing label. To prepare them manually instead, use:
 
 ```bash
 gh label create ready-for-agent --repo owner/repo --color 0e8a16 || true
@@ -133,9 +139,13 @@ pi
 Useful commands:
 
 ```text
+/deadloop-enable
+/deadloop-disable
 /deadloop-status
 /deadloop-doctor
 ```
+
+`/deadloop-disable` removes local execution permission, stops the scheduler and releases its lock without killing active agents or deleting GitHub state, worktrees, or run artifacts. Another session owning the lock notices the removal on its next polling tick. To migrate from releases that activated from configuration files, run `/deadloop-enable` once in each repository.
 
 ## Verification commands
 

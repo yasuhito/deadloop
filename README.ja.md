@@ -21,13 +21,15 @@ npx skills@latest add yasuhito/deadloop
 
 ## 設定
 
-標準設定で始めるには、対象リポジトリのルートに `deadloop.json` を作成し、基準ブランチへコミットします。
+通常の Git チェックアウトから、ローカルのスケジューラーを明示的に有効化します。
 
-```json
-{}
+```text
+/deadloop-enable
 ```
 
-deadloop は現在の Git リポジトリから、ローカルのチェックアウト先、GitHub リポジトリ、基準ブランチ、Herdr のワークツリー保存先を自動的に取得します。最初の実行にローカル設定は必要ありません。
+deadloop はチェックアウト先、GitHub リポジトリ、基準ブランチ、Herdr のワークツリー保存先を自動的に取得します。実行許可は `~/.pi/agent/deadloop/` 配下のローカル状態に保存され、`deadloop.json` や `projects.json` が存在するだけでは自動処理を開始しません。`/deadloop-enable` は GitHub への書き込み権限を確認し、不足している標準ラベルだけを作成します。新規の有効化は必ず `autoMerge: false` で始まります。
+
+`/deadloop-disable` は実行中エージェントを停止せず、GitHub の状態、ワークツリー、実行成果物を削除せずにスケジューリングを止めます。旧版から更新した場合は、リポジトリごとに再度有効化してください。
 
 `autoMerge` やワークツリー保存先などを変更する場合だけ、設定例を Pi のローカル設定へコピーします。
 
@@ -95,6 +97,8 @@ pi
 利用できるコマンド:
 
 ```text
+/deadloop-enable
+/deadloop-disable
 /deadloop-status
 /deadloop-doctor
 ```

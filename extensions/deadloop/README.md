@@ -14,7 +14,7 @@ Configuration lookup order:
 
 Do not commit `projects.json`; it contains local paths and rollout choices.
 
-When the current git repository has `deadloop.json` on the trusted base branch, deadloop can infer the project without a `projects.json` entry. Each project overlays inferred or explicit local config, trusted base-branch repo policy, and package defaults. Standard labels, verification command inference, worker instruction files, and the issue coordinator / PR reviewer automations come from package defaults unless explicitly overridden. The repo policy file is `deadloop.json`. Repo policy is read only from the trusted `baseBranch` after `git fetch`, never from the PR branch being reviewed.
+`deadloop.json` is an optional shared policy and `projects.json` is an optional local override; neither enables scheduling. `/deadloop-enable` records the execution permission in `~/.pi/agent/deadloop/enabled-projects.json` only after repository identity, primary checkout status, GitHub authentication, write permission, and missing-label creation succeed. Each project overlays inferred or explicit local config, trusted base-branch repo policy, and package defaults. `/deadloop-disable` removes only that permission and lets running agents finish their promise reports. The repo policy file is `deadloop.json`. Repo policy is read only from the trusted `baseBranch` after `git fetch`, never from the PR branch being reviewed.
 
 ## State
 

@@ -21,13 +21,15 @@ npx skills@latest add yasuhito/deadloop
 
 ## Configure
 
-To start with the defaults, create `deadloop.json` at the target repository root and commit it to the base branch:
+From a normal Git checkout, explicitly enable the local scheduler:
 
-```json
-{}
+```text
+/deadloop-enable
 ```
 
-deadloop infers the local checkout path, GitHub repository, base branch, and default Herdr worktree root from the current Git repository. The first run needs no local configuration.
+deadloop infers the checkout path, GitHub repository, base branch, and default Herdr worktree root. Enablement is local state under `~/.pi/agent/deadloop/`; neither `deadloop.json` nor `projects.json` starts automation by itself. `/deadloop-enable` verifies GitHub write access and creates only missing standard labels. It always starts a newly enabled repository with `autoMerge: false`.
+
+Use `/deadloop-disable` to stop scheduling without stopping active agents or removing GitHub state, worktrees, or run artifacts. Re-enable each repository after upgrading from older releases.
 
 Copy the example into Pi's local state only when you need overrides such as `autoMerge` or a custom `worktreeRoot`:
 
@@ -95,6 +97,8 @@ pi
 Useful commands:
 
 ```text
+/deadloop-enable
+/deadloop-disable
 /deadloop-status
 /deadloop-doctor
 ```
