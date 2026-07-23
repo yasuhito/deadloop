@@ -14,6 +14,7 @@ export type IssueMonitorPromptInput = MonitorPromptBaseInput & {
   worktreePath: string;
   branch: string;
   checkCommand: string;
+  readyLabel: string;
   reviewLabel: string;
   inProgressLabel: string;
   blockedLabel: string;

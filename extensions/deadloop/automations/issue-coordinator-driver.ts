@@ -274,6 +274,7 @@ function drive(fixturePath: string | undefined): DriverResult {
       cwd: String(launch.worktreePath || ""),
       command: env.checkCommand,
     }),
+    readyLabel: env.readyLabel,
     reviewLabel: env.reviewLabel,
     inProgressLabel: env.inProgressLabel,
     blockedLabel: env.blockedLabel,

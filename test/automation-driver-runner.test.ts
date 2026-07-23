@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { deliverPendingDriverHandoff, runScheduledAutomation } from "../src/automation-runner";
+import {
+  deliverPendingDriverHandoff,
+  isPendingIssueHandoffEligible,
+  runScheduledAutomation,
+} from "../src/automation-runner";
 import { normalizeProject, type AutomationFileResolution } from "../src/core";
 
 function foundFile(requested: string | undefined): AutomationFileResolution {
@@ -214,7 +218,7 @@ describe("deterministic automation driver runner", () => {
     expect({ sent, pending: entry.pendingDriverHandoff }).toEqual({ sent: ["driver prompt"], pending: undefined });
   });
 
-  it.each(["issue", "reviewer", "branch-update", "repair"])("rebinds a persisted %s monitor handoff to the current generation", (kind) => {
+  it.each(["reviewer", "branch-update", "repair"])("rebinds a persisted %s monitor handoff to the current generation", (kind) => {
     const entry: Record<string, unknown> = {
       pendingDriverHandoff: {
         action: "needs_llm",
@@ -238,6 +242,88 @@ describe("deterministic automation driver runner", () => {
       pending: undefined,
       queuedCurrentGeneration: true,
     });
+  });
+
+  it("rejects a closed issue during pending handoff revalidation", () => {
+    const handoff = {
+      kind: "issue",
+      input: { issueNumber: 12, readyLabel: "ready-for-agent", inProgressLabel: "agent:in-progress" },
+    };
+    const issue = {
+      number: 12,
+      state: "CLOSED",
+      labels: [{ name: "ready-for-agent" }, { name: "agent:in-progress" }],
+    };
+
+    expect(isPendingIssueHandoffEligible(handoff, issue)).toBe(false);
+  });
+
+  it("rejects an issue missing a required label during pending handoff revalidation", () => {
+    const handoff = {
+      kind: "issue",
+      input: { issueNumber: 12, readyLabel: "ready-for-agent", inProgressLabel: "agent:in-progress" },
+    };
+    const issue = { number: 12, state: "OPEN", labels: [{ name: "agent:in-progress" }] };
+
+    expect(isPendingIssueHandoffEligible(handoff, issue)).toBe(false);
+  });
+
+  it("accepts the same open in-progress issue during pending handoff revalidation", () => {
+    const handoff = {
+      kind: "issue",
+      input: { issueNumber: 12, readyLabel: "ready-for-agent", inProgressLabel: "agent:in-progress" },
+    };
+    const issue = {
+      number: 12,
+      state: "OPEN",
+      labels: [{ name: "ready-for-agent" }, { name: "agent:in-progress" }],
+    };
+
+    expect(isPendingIssueHandoffEligible(handoff, issue)).toBe(true);
+  });
+
+  it("discards a pre-disable issue handoff when current eligibility cannot be confirmed", () => {
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "needs_llm",
+        monitorHandoff: { kind: "issue", input: { enabledAt: 1 } },
+        prompt: "stale prompt",
+      },
+    };
+    const state = { automations: { auto: entry } };
+
+    deliverPendingDriverHandoff(entry, state, "auto", {
+      enabledAt: () => 2,
+      isEnabled: () => true,
+      now: () => 456,
+      saveState: () => undefined,
+      sendUserMessage: () => undefined,
+    });
+
+    expect(entry.lastResult).toBe("driver_handoff_revalidation_required");
+  });
+
+  it("rebinds a pre-disable issue handoff after deterministic eligibility revalidation", () => {
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "needs_llm",
+        monitorHandoff: { kind: "issue", input: { enabledAt: 1 } },
+        prompt: "stale prompt",
+      },
+    };
+    const state = { automations: { auto: entry } };
+    const sent: string[] = [];
+
+    deliverPendingDriverHandoff(entry, state, "auto", {
+      enabledAt: () => 2,
+      isEnabled: () => true,
+      now: () => 456,
+      revalidatePendingDriverHandoff: () => true,
+      saveState: () => undefined,
+      sendUserMessage: (prompt) => sent.push(prompt),
+    });
+
+    expect(sent[0]).toContain("--enabled-at 2");
   });
 
   it("does not dispatch a driver prompt when disable wins the enqueue lock", async () => {

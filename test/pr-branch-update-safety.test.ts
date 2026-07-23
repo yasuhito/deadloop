@@ -145,7 +145,7 @@ describe("PR branch-update safety", () => {
     expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000]);
   });
 
-  it("pushes only the selected existing branch with an exact-head lease", () => {
+  it("pushes only the selected existing branch without force", () => {
     const commands: string[][] = [];
     finalizeWith(commands);
 
@@ -155,7 +155,6 @@ describe("PR branch-update safety", () => {
       "/worktree",
       "push",
       "--porcelain",
-      `--force-with-lease=refs/heads/agent/issue-31:${head}`,
       "https://github.com/owner/repo.git",
       "HEAD:refs/heads/agent/issue-31",
     ]);
@@ -171,7 +170,7 @@ describe("PR branch-update safety", () => {
     const commands: string[][] = [];
     finalizeWith(commands, head, undefined, [], "https://github.com/old/repo.git");
 
-    expect(commands.find((command) => command.includes("push"))?.[6]).toBe("https://github.com/old/repo.git");
+    expect(commands.find((command) => command.includes("push"))?.[5]).toBe("https://github.com/old/repo.git");
   });
 
   it("rejects a recorded branch-update alias when its repository name has been reused", () => {
@@ -184,7 +183,7 @@ describe("PR branch-update safety", () => {
     const commands: string[][] = [];
     finalizeWith(commands);
 
-    expect(commands.find((command) => command.includes("push"))?.[6]).toBe("https://github.com/owner/repo.git");
+    expect(commands.find((command) => command.includes("push"))?.[5]).toBe("https://github.com/owner/repo.git");
   });
 
   it("does not update a remote ref changed between validation and push", () => {

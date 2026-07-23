@@ -151,7 +151,7 @@ Safety contract:
 - First require a clean worktree and HEAD exactly equal to ${expectedHead}.
 - Change only what is needed to resolve every listed finding. Do not add features, reinterpret the issue, or widen scope.
 - Run focused tests while editing, then commit the repair normally. Never amend, rebase, reset published history, or force-push.
-- Do not run git push directly. After committing, run exactly this finalizer; it runs configured checks and atomically updates the exact branch only if its head still equals the validated PR head:
+- Do not run git push directly. After committing, run exactly this finalizer; it runs configured checks, rechecks the validated PR head, and performs the only permitted normal non-force push to the exact branch:
   ${finalizer}
 - Never edit labels or PR metadata, create a PR, merge, close an issue, delete a branch, or invoke another agent.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state.

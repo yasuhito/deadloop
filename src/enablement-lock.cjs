@@ -1,12 +1,24 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
 
-function processStartIdentity(pid) {
+function processStartIdentity(pid, hooks = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return "";
   try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const stat = (hooks.readFileSync || fs.readFileSync)(`/proc/${pid}/stat`, "utf8");
     const fieldsAfterCommand = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
-    return fieldsAfterCommand[19] || "";
+    if (fieldsAfterCommand[19]) return fieldsAfterCommand[19];
+  } catch {}
+
+  const platform = hooks.platform || process.platform;
+  const command = platform === "win32" ? "powershell.exe" : "ps";
+  const args = platform === "win32"
+    ? ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`]
+    : ["-o", "lstart=", "-p", String(pid)];
+  try {
+    const result = (hooks.spawnSync || spawnSync)(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const identity = result.status === 0 ? String(result.stdout || "").trim() : "";
+    return identity ? `${platform}:${identity}` : "";
   } catch {
     return "";
   }

@@ -23,7 +23,11 @@ import {
 import { buildDoctorSnapshot, formatDoctorReport } from "../../src/doctor";
 import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } from "../../src/status";
 import { readClaudeConfig } from "../../src/agent-trust.cjs";
-import { deliverPendingDriverHandoff, runScheduledAutomation } from "../../src/automation-runner";
+import {
+  deliverPendingDriverHandoff,
+  isPendingIssueHandoffEligible,
+  runScheduledAutomation,
+} from "../../src/automation-runner";
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
 const { loadAutomationState, saveAutomationState } = require("../../src/automation-state.cjs");
 const { acquireLock, releaseOwned } = require("../../src/enablement-lock.cjs");
@@ -932,6 +936,23 @@ async function prepareGithub(pi, identity, repoPath, enableAttemptToken) {
     });
   }
 }
+function revalidatePendingIssueHandoff(handoff) {
+  if (handoff.kind !== "issue" || !handoff.input || typeof handoff.input !== "object") return true;
+  const input = handoff.input;
+  if (!input.githubRepo || !Number.isInteger(input.issueNumber) || !input.readyLabel || !input.inProgressLabel) return false;
+  const result = childProcess.spawnSync(
+    "gh",
+    ["issue", "view", String(input.issueNumber), "-R", input.githubRepo, "--json", "number,state,labels"],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 25_000, killSignal: "SIGKILL" },
+  );
+  if (result.status !== 0) return false;
+  try {
+    return isPendingIssueHandoffEligible(handoff, JSON.parse(result.stdout || "{}"));
+  } catch {
+    return false;
+  }
+}
+
 function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => true) {
   const ownedAutomationKeys = project.automations.map((automation) => automationStateKey(project, automation));
   return {
@@ -946,6 +967,7 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
     },
     now: () => Date.now(),
     readPrompt,
+    revalidatePendingDriverHandoff: revalidatePendingIssueHandoff,
     resolveAutomationFileInDir,
     runDriver: async (driverProject, driverAutomation, driverFile) =>
       await runAutomationScript(pi, driverProject, driverAutomation, driverFile),

@@ -24,6 +24,7 @@ export type AutomationRunnerDeps = {
   notify?: (message: string, level: "info" | "warning" | "error") => void;
   now: () => number;
   readPrompt: (project: NormalizedProject, automation: NormalizedAutomation, promptFile: string) => string;
+  revalidatePendingDriverHandoff?: (handoff: Record<string, unknown>) => boolean;
   resolveAutomationFileInDir: (
     kind: "precheck" | "prompt" | "driver",
     automation: NormalizedAutomation,
@@ -45,6 +46,30 @@ export type AutomationRunnerDeps = {
   setStatus?: (text: string) => void;
 };
 
+export function isPendingIssueHandoffEligible(
+  handoff: Record<string, unknown>,
+  issue: Record<string, unknown>,
+): boolean {
+  if (handoff.kind !== "issue" || !handoff.input || typeof handoff.input !== "object" || Array.isArray(handoff.input)) {
+    return false;
+  }
+  const input = handoff.input as Record<string, unknown>;
+  const labels = new Set(
+    (Array.isArray(issue.labels) ? issue.labels : []).map((label) =>
+      label && typeof label === "object" && !Array.isArray(label) ? String((label as Record<string, unknown>).name || "") : "",
+    ),
+  );
+  return (
+    Number.isInteger(input.issueNumber) &&
+    issue.number === input.issueNumber &&
+    issue.state === "OPEN" &&
+    typeof input.readyLabel === "string" &&
+    labels.has(input.readyLabel) &&
+    typeof input.inProgressLabel === "string" &&
+    labels.has(input.inProgressLabel)
+  );
+}
+
 type DriverPayload = {
   action?: unknown;
   summary?: unknown;
@@ -59,7 +84,14 @@ export function deliverPendingDriverHandoff(
   automationName: string,
   deps: Pick<
     AutomationRunnerDeps,
-    "enabledAt" | "isEnabled" | "notify" | "now" | "saveState" | "sendUserMessage" | "sendUserMessageIfEnabled"
+    | "enabledAt"
+    | "isEnabled"
+    | "notify"
+    | "now"
+    | "revalidatePendingDriverHandoff"
+    | "saveState"
+    | "sendUserMessage"
+    | "sendUserMessageIfEnabled"
   >,
 ): boolean {
   const handoff = entry.pendingDriverHandoff;
@@ -69,7 +101,28 @@ export function deliverPendingDriverHandoff(
   let prompt = typeof pendingPrompt === "string" ? pendingPrompt : "";
   if (payload.monitorHandoff && typeof payload.monitorHandoff === "object" && !Array.isArray(payload.monitorHandoff)) {
     try {
-      prompt = renderPendingMonitorHandoff(payload.monitorHandoff, deps.enabledAt?.());
+      const monitorHandoff = payload.monitorHandoff as Record<string, unknown>;
+      const input = monitorHandoff.input;
+      const previousEnabledAt = input && typeof input === "object" && !Array.isArray(input)
+        ? Number((input as Record<string, unknown>).enabledAt)
+        : Number.NaN;
+      const currentEnabledAt = deps.enabledAt?.();
+      if (
+        monitorHandoff.kind === "issue" &&
+        Number.isFinite(previousEnabledAt) &&
+        Number.isFinite(currentEnabledAt) &&
+        previousEnabledAt !== currentEnabledAt &&
+        !deps.revalidatePendingDriverHandoff?.(monitorHandoff)
+      ) {
+        delete entry.pendingDriverHandoff;
+        recordAutomationResult(entry, "driver_handoff_revalidation_required");
+        entry.lastSummary = "pre-disable issue handoff was discarded because current issue eligibility was not confirmed";
+        entry.updatedAt = deps.now();
+        deps.saveState(state);
+        deps.notify?.(`deadloop discarded stale issue handoff: ${automationName}`, "warning");
+        return true;
+      }
+      prompt = renderPendingMonitorHandoff(monitorHandoff, currentEnabledAt);
     } catch (error) {
       delete entry.pendingDriverHandoff;
       recordAutomationResult(entry, "driver_invalid_result");

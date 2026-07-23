@@ -78,6 +78,7 @@ describe("real driver handoff across disable and re-enable", () => {
         enabledAt: () => 2,
         isEnabled: () => enabled,
         now: () => 789,
+        revalidatePendingDriverHandoff: () => true,
         saveState: (next) => writeFileSync(statePath, JSON.stringify(next)),
         sendUserMessage: (prompt) => sent.push(prompt),
       });
