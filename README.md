@@ -6,7 +6,7 @@ English | [日本語](README.ja.md)
 
 > A loop for building loops, maximum effort.
 
-**GitHub Issues in, reviewed PRs out.** deadloop runs a guarded engineering loop for coding agents: it watches labeled GitHub Issues, starts implementation agents, verifies their work, opens PRs, reviews PRs, and can optionally merge only after explicit safety gates pass.
+**GitHub Issues in, reviewed PRs out.** deadloop watches Issues and automates implementation, pull requests, review, and merge—with safety controls built in.
 
 ## Install
 
