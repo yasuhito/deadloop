@@ -6,6 +6,7 @@ export type EnabledProject = {
   repoPath: string;
   githubRepo: string;
   enabledAt: number;
+  githubAliases?: string[];
   firstEnableAutoMerge?: boolean;
   firstStartPending?: boolean;
   lastObservedAutoMerge?: boolean;
@@ -15,7 +16,7 @@ export type EnabledProject = {
 
 export type EnablementState = { projects: EnabledProject[] };
 
-export type ProjectIdentity = Pick<EnabledProject, "repoPath" | "githubRepo">;
+export type ProjectIdentity = Pick<EnabledProject, "repoPath" | "githubRepo" | "githubAliases">;
 
 function normalizedPath(value: string): string {
   return path.resolve(value);
@@ -46,7 +47,9 @@ export function upsertEnabledProject(
   const existing = state?.projects || [];
   const previous = existing.find((project) => project.githubRepo === identity.githubRepo && project.repoPath === repoPath);
   const retained = existing.filter((project) => project.githubRepo !== identity.githubRepo && project.repoPath !== repoPath);
-  const enabledAt = Math.max(now, (previous?.enabledAt ?? 0) + 1);
+  const enabledAt = previous && previous.enabled !== false
+    ? previous.enabledAt
+    : Math.max(now, (previous?.enabledAt ?? 0) + 1);
   return {
     projects: [
       ...retained,
@@ -55,6 +58,7 @@ export function upsertEnabledProject(
         repoPath,
         githubRepo: identity.githubRepo,
         enabledAt,
+        ...(identity.githubAliases ? { githubAliases: identity.githubAliases } : {}),
         ...(previous ? {} : { firstStartPending: true, lastObservedAutoMerge: firstEnable.firstEnableAutoMerge }),
         enabled: true,
       },

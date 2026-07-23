@@ -35,8 +35,6 @@ function assertCanonicalStateDir(stateDir) {
 function assertEnabled(project) {
   assertCanonicalStateDir(project.stateDir);
   try {
-    const identities = originIdentities(project.repoPath);
-    if (identities.length === 0 || identities.some((identity) => identity !== project.githubRepo)) throw new Error("origin identity mismatch");
     const raw = JSON.parse(fs.readFileSync(path.join(project.stateDir, "enabled-projects.json"), "utf8"));
     const state = normalizeEnablementStateValue(raw);
     if (!state) throw new Error("invalid enablement schema");
@@ -44,6 +42,9 @@ function assertEnabled(project) {
       candidate.repoPath === path.resolve(project.repoPath) && candidate.githubRepo === project.githubRepo && candidate.enabled !== false,
     );
     if (enabled) {
+      const identities = originIdentities(project.repoPath);
+      const allowedIdentities = new Set([enabled.githubRepo, ...(enabled.githubAliases || [])]);
+      if (identities.length === 0 || identities.some((identity) => !allowedIdentities.has(identity))) throw new Error("origin identity mismatch");
       if (project.enabledAt !== undefined && enabled.enabledAt !== project.enabledAt) {
         throw new Error("deadloop enablement generation changed; operation stopped");
       }

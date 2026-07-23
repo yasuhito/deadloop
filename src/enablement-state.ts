@@ -7,6 +7,7 @@ type EnablementIdentityValue = {
 
 type EnabledProjectValue = EnablementIdentityValue & {
   enabledAt: number;
+  githubAliases?: string[];
   firstEnableAutoMerge?: boolean;
   firstStartPending?: boolean;
   lastObservedAutoMerge?: boolean;
@@ -32,17 +33,30 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
   const candidates = (value as { projects?: unknown }).projects;
   if (!Array.isArray(candidates)) return null;
   const normalized: EnabledProjectValue[] = [];
+  const repoPaths = new Set<string>();
+  const githubRepos = new Set<string>();
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate) || !validIdentity(candidate)) return null;
     const record = candidate as EnabledProjectValue;
     if (!Number.isFinite(record.enabledAt)) return null;
+    if (record.githubAliases !== undefined && (
+      !Array.isArray(record.githubAliases)
+      || record.githubAliases.length === 0
+      || record.githubAliases.some((alias) => typeof alias !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(alias))
+    )) return null;
     for (const field of ["firstEnableAutoMerge", "firstStartPending", "lastObservedAutoMerge", "autoMergeAcknowledged", "enabled"] as const) {
       if (record[field] !== undefined && typeof record[field] !== "boolean") return null;
     }
+    const repoPath = path.resolve(record.repoPath);
+    const githubRepo = record.githubRepo.toLowerCase();
+    if (repoPaths.has(repoPath) || githubRepos.has(githubRepo)) return null;
+    repoPaths.add(repoPath);
+    githubRepos.add(githubRepo);
     normalized.push({
-      repoPath: path.resolve(record.repoPath),
+      repoPath,
       githubRepo: record.githubRepo,
       enabledAt: Number(record.enabledAt),
+      ...(record.githubAliases === undefined ? {} : { githubAliases: [...new Set(record.githubAliases)] }),
       ...(record.firstEnableAutoMerge === undefined ? {} : { firstEnableAutoMerge: record.firstEnableAutoMerge }),
       ...(record.firstStartPending === undefined ? {} : { firstStartPending: record.firstStartPending }),
       ...(record.lastObservedAutoMerge === undefined ? {} : { lastObservedAutoMerge: record.lastObservedAutoMerge }),

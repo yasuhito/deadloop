@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { schedulerLockName } from "../src/project-identity";
+const { withEnabledProjectLock } = require("../src/enabled-operation.cjs");
 
 type CommandContext = { cwd: string; mode: string; ui: { notify: () => void; setStatus: () => void }; isIdle?: () => boolean; hasPendingMessages?: () => boolean };
 type CommandHandler = (_args: string, ctx: CommandContext) => Promise<void>;
@@ -41,7 +42,11 @@ function fixtureRepository() {
   const barePath = path.join(root, "origin.git");
   execFileSync("git", ["clone", "--quiet", "--bare", repoPath, barePath]);
   git(repoPath, ["remote", "add", "origin", "https://github.com/owner/demo.git"]);
-  writeFileSync(path.join(root, ".gitconfig"), `[url "file://${barePath}"]\n\tinsteadOf = https://github.com/owner/demo.git\n`);
+  writeFileSync(path.join(root, ".gitconfig"), `[url "file://${barePath}"]
+\tinsteadOf = https://github.com/owner/demo.git
+\tinsteadOf = https://github.com/old/demo.git
+\tinsteadOf = https://github.com/new/demo.git
+`);
   const binDir = path.join(root, "bin");
   mkdirSync(binDir);
   const gitPath = path.join(binDir, "git");
@@ -64,7 +69,17 @@ fi
 
 async function loadExtension(
   root: string,
-  options: { failLabel?: boolean; labels?: unknown[]; viewerPermission?: string; pushRemote?: string; noUpstream?: boolean; beforeGithubRepoCheck?: () => Promise<void> } = {},
+  options: {
+    failLabel?: boolean;
+    labels?: unknown[];
+    viewerPermission?: string;
+    fetchRemote?: string;
+    pushRemote?: string;
+    canonicalRepos?: Record<string, string>;
+    upstream?: string;
+    noUpstream?: boolean;
+    beforeGithubRepoCheck?: () => Promise<void>;
+  } = {},
 ): Promise<{ commands: Map<string, CommandHandler>; ghCommands: string[][]; messages: string[] }> {
   process.env.HOME = root;
   process.env.PI_CODING_AGENT_DIR = path.join(root, ".pi", "agent");
@@ -79,10 +94,10 @@ async function loadExtension(
     exec: async (command: string, args: string[]) => {
       if (command === "git") {
         if (args.includes("get-url")) {
-          const remote = args.includes("--push") ? options.pushRemote || "https://github.com/owner/demo.git" : "https://github.com/owner/demo.git";
+          const remote = args.includes("--push") ? options.pushRemote || "https://github.com/owner/demo.git" : options.fetchRemote || "https://github.com/owner/demo.git";
           return { code: 0, stdout: `${remote}\n`, stderr: "" };
         }
-        if (args.includes("--symbolic-full-name")) return options.noUpstream ? { code: 128, stdout: "", stderr: "no upstream" } : { code: 0, stdout: "", stderr: "" };
+        if (args.includes("--symbolic-full-name")) return options.noUpstream ? { code: 128, stdout: "", stderr: "no upstream" } : { code: 0, stdout: `${options.upstream || ""}\n`, stderr: "" };
         if (args.includes("fetch")) return { code: 0, stdout: "", stderr: "" };
         if (args.includes("show")) return { code: 1, stdout: "", stderr: "missing" };
         try {
@@ -95,7 +110,15 @@ async function loadExtension(
       if (command === "gh" && args[0] === "auth") return { code: 0, stdout: "", stderr: "" };
       if (command === "gh" && args[0] === "repo") {
         await options.beforeGithubRepoCheck?.();
-        return { code: 0, stdout: JSON.stringify({ viewerPermission: options.viewerPermission || "WRITE" }), stderr: "" };
+        const requestedRepo = args[2];
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            viewerPermission: options.viewerPermission || "WRITE",
+            nameWithOwner: options.canonicalRepos?.[requestedRepo] || "owner/demo",
+          }),
+          stderr: "",
+        };
       }
       if (command === "gh" && args[0] === "label" && args[1] === "list") return { code: 0, stdout: JSON.stringify(options.labels || []), stderr: "" };
       if (command === "gh" && args[0] === "label" && args[1] === "create") {
@@ -193,6 +216,38 @@ describe("enablement command integration", () => {
     expect(extension.messages.at(-1)).toContain("autoMerge is off");
   });
 
+  it("keeps an in-flight guarded operation authorized after repeated enable", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root);
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    const stateDir = path.join(root, ".pi", "agent", "deadloop");
+    const enabledAt = JSON.parse(readFileSync(path.join(stateDir, "enabled-projects.json"), "utf8")).projects[0].enabledAt;
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    let authorized = false;
+
+    withEnabledProjectLock({ repoPath, githubRepo: "owner/demo", stateDir, enabledAt }, () => { authorized = true; });
+
+    expect(authorized).toBe(true);
+  });
+
+  it("infers base branch and worktree root when a configured project omits both", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    git(repoPath, ["checkout", "--quiet", "-b", "invalid-main"]);
+    writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({ workerAgent: "invalid" }));
+    git(repoPath, ["add", "deadloop.json"]);
+    git(repoPath, ["commit", "--quiet", "-m", "invalid main policy"]);
+    git(repoPath, ["push", "--quiet", path.join(root, "origin.git"), "HEAD:refs/heads/main"]);
+    git(repoPath, ["checkout", "--quiet", "master"]);
+    git(repoPath, ["update-ref", "refs/remotes/origin/master", "master"]);
+    git(repoPath, ["branch", "--set-upstream-to=origin/master", "master"]);
+    const extension = await loadExtension(root, { upstream: "origin/master" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("deadloop enabled");
+  });
+
   it("forces a preexisting true auto-merge setting off on first enable", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath, { autoMerge: true });
@@ -232,11 +287,14 @@ describe("enablement command integration", () => {
   it("rejects a different configured origin push repository", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
-    const extension = await loadExtension(root, { pushRemote: "https://github.com/other/target.git" });
+    const extension = await loadExtension(root, {
+      pushRemote: "https://github.com/other/target.git",
+      canonicalRepos: { "owner/demo": "owner/demo", "other/target": "other/target" },
+    });
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
-    expect(extension.messages.at(-1)).toContain("all origin fetch and push URLs must identify exactly the same GitHub repository");
+    expect(extension.messages.at(-1)).toContain("all origin fetch and push URLs must resolve to exactly the same GitHub repository");
   });
 
   it("disables an existing enablement when repeated preflight loses write permission", async () => {
@@ -377,14 +435,24 @@ describe("enablement command integration", () => {
     expect(gitReportMutationSnapshot(repoPath)).toBe(before);
   });
 
-  it("keeps one scheduler owner across distinct primary clones of one GitHub repository", async () => {
+  it("keeps one scheduler owner across old and new aliases of one GitHub repository", async () => {
     const { root, repoPath } = fixtureRepository();
+    git(repoPath, ["remote", "set-url", "origin", "https://github.com/old/demo.git"]);
     const secondRepoPath = path.join(root, "second-primary");
     execFileSync("git", ["clone", "--quiet", path.join(root, "origin.git"), secondRepoPath]);
-    git(secondRepoPath, ["remote", "set-url", "origin", "https://github.com/owner/demo.git"]);
-    const firstExtension = await loadExtension(root);
+    git(secondRepoPath, ["remote", "set-url", "origin", "https://github.com/new/demo.git"]);
+    const aliases = { "old/demo": "owner/demo", "new/demo": "owner/demo", "owner/demo": "owner/demo" };
+    const firstExtension = await loadExtension(root, {
+      fetchRemote: "https://github.com/old/demo.git",
+      pushRemote: "https://github.com/old/demo.git",
+      canonicalRepos: aliases,
+    });
     await invoke(firstExtension.commands.get("deadloop-enable")!, repoPath);
-    const secondExtension = await loadExtension(root);
+    const secondExtension = await loadExtension(root, {
+      fetchRemote: "https://github.com/new/demo.git",
+      pushRemote: "https://github.com/new/demo.git",
+      canonicalRepos: aliases,
+    });
 
     await invoke(secondExtension.commands.get("deadloop-enable")!, secondRepoPath);
 

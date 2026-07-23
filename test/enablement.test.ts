@@ -47,15 +47,22 @@ describe("local enablement state", () => {
     expect(findEnabledProject(state, project)?.firstStartPending).toBe(true);
   });
 
-  it("gives a later enable attempt a newer generation", () => {
+  it("preserves the generation on repeated enable", () => {
     const initial = upsertEnabledProject(null, project, 10);
 
-    expect(findEnabledProject(upsertEnabledProject(initial, project, 10), project)?.enabledAt).toBe(11);
+    expect(findEnabledProject(upsertEnabledProject(initial, project, 20), project)?.enabledAt).toBe(10);
+  });
+
+  it("gives a disabled-to-enabled transition a newer generation", () => {
+    const first = upsertEnabledProject(null, project, 10);
+    const second = upsertEnabledProject(removeEnabledProject(first, project), project, 10);
+
+    expect(findEnabledProject(second, project)?.enabledAt).toBe(11);
   });
 
   it("does not let failed cleanup from an earlier enable disable a later enable", () => {
     const first = upsertEnabledProject(null, project, 10);
-    const second = upsertEnabledProject(first, project, 10);
+    const second = upsertEnabledProject(removeEnabledProject(first, project), project, 10);
 
     expect(isEnabledProjectState(removeEnabledProjectGeneration(second, project, 10), project)).toBe(true);
   });
@@ -76,5 +83,26 @@ describe("local enablement state", () => {
 
   it("rejects invalid first-enable auto-merge gate metadata", () => {
     expect(normalizeEnablementState({ projects: [{ ...project, enabledAt: 1, firstEnableAutoMerge: "true" }] })).toBeNull();
+  });
+
+  it("rejects duplicate canonical checkout paths", () => {
+    expect(normalizeEnablementState({ projects: [
+      { ...project, enabledAt: 1 },
+      { repoPath: "/repos/other/../demo", githubRepo: "owner/other", enabledAt: 2 },
+    ] })).toBeNull();
+  });
+
+  it("rejects duplicate GitHub repositories", () => {
+    expect(normalizeEnablementState({ projects: [
+      { ...project, enabledAt: 1 },
+      { repoPath: "/repos/other", githubRepo: "OWNER/DEMO", enabledAt: 2 },
+    ] })).toBeNull();
+  });
+
+  it("rejects duplicate exact identities", () => {
+    expect(normalizeEnablementState({ projects: [
+      { ...project, enabledAt: 1 },
+      { ...project, enabledAt: 2 },
+    ] })).toBeNull();
   });
 });

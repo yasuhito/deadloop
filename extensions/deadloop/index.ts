@@ -170,7 +170,10 @@ function implicitProjectFromCwd(cwd, options: { fetchPolicy?: boolean } = {}) {
   if (!repoPath) return null;
   const gitCommonDir = gitOutput(cwd, ["rev-parse", "--git-common-dir"]);
   if (!gitCommonDir || isLinkedGitWorktree(repoPath, gitCommonDir)) return null;
-  const githubRepo = inferGithubRepo(repoPath);
+  const enabledIdentity = loadEnablementState().projects.find((project) =>
+    project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repoPath)
+  );
+  const githubRepo = enabledIdentity?.githubRepo || inferGithubRepo(repoPath);
   if (!githubRepo) return null;
   const id = inferredProjectId(repoPath, githubRepo);
   const raw = {
@@ -209,10 +212,55 @@ function addImplicitProject(cwd, result, options: { fetchPolicy?: boolean } = {}
   return { ...result, projects: [...result.projects, implicit] };
 }
 
-function loadProjectsResult(cwd, options: { includeDisabled?: boolean; fetchPolicy?: boolean } = {}) {
+function overlayEnableIdentityDefaults(text, identity) {
+  const config = JSON.parse(text || "{}");
+  if (!Array.isArray(config?.projects)) return text;
+  const repoPath = path.resolve(identity.repoPath);
+  return JSON.stringify({
+    ...config,
+    projects: config.projects.map((project) => {
+      try {
+        if (path.resolve(project?.repoPath) !== repoPath || project?.githubRepo !== identity.githubRepo) return project;
+      } catch {
+        return project;
+      }
+      return {
+        ...project,
+        ...(Object.hasOwn(project, "baseBranch") ? {} : { baseBranch: identity.baseBranch }),
+        ...(Object.hasOwn(project, "worktreeRoot") ? {} : { worktreeRoot: identity.worktreeRoot }),
+      };
+    }),
+  });
+}
+
+function loadProjectsResult(
+  cwd,
+  options: {
+    includeDisabled?: boolean;
+    fetchPolicy?: boolean;
+    enableIdentity?: { repoPath: string; githubRepo: string; baseBranch: string; worktreeRoot: string };
+  } = {},
+) {
   let text;
   try {
     text = readConfigText();
+    let enableIdentity = options.enableIdentity;
+    if (!enableIdentity && cwd) {
+      const repoPath = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
+      const enabled = loadEnablementState().projects.find((project) =>
+        project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repoPath)
+      );
+      if (enabled) {
+        const id = inferredProjectId(repoPath, enabled.githubRepo);
+        enableIdentity = {
+          repoPath,
+          githubRepo: enabled.githubRepo,
+          baseBranch: inferBaseBranch(repoPath),
+          worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", id),
+        };
+      }
+    }
+    if (enableIdentity) text = overlayEnableIdentityDefaults(text, enableIdentity);
   } catch (error) {
     return { ok: false, reason: `projects.json read error: ${error?.message || error}` };
   }
@@ -242,7 +290,7 @@ function loadProjects(cwd) {
 }
 
 function resolveEnableProject(cwd, identity) {
-  const result = loadProjectsResult(cwd, { includeDisabled: true });
+  const result = loadProjectsResult(cwd, { includeDisabled: true, enableIdentity: identity });
   if (!result.ok) throw new Error(result.reason);
   const repoPath = path.resolve(identity.repoPath);
   const configuredAtPath = result.projects.filter((project) => {
@@ -259,11 +307,17 @@ function resolveEnableProject(cwd, identity) {
     }
     return exact[0];
   }
-  const implicit = implicitProjectFromCwd(cwd);
-  if (!implicit || path.resolve(implicit.repoPath) !== repoPath || implicit.githubRepo !== identity.githubRepo) {
+  const raw = { ...identity, enabled: true, autoMerge: false };
+  const policy = trustedRepoPolicyProvider(raw);
+  if (policy.status === "error") throw new Error(policy.reason);
+  const implicit = parseProjectsConfig(JSON.stringify({ projects: [raw] }), projectFilter(), {
+    configPath: `${repoPath}${path.sep}${REPO_POLICY_FILE}`,
+    repoPolicyProvider: () => policy,
+  });
+  if (!implicit.ok || implicit.projects.length !== 1) {
     throw new Error("repository configuration could not be resolved safely");
   }
-  return implicit;
+  return implicit.projects[0];
 }
 
 function loadEnablementState() {
@@ -707,20 +761,38 @@ async function detectProjectIdentity(pi, cwd) {
   const fetchRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--all", "origin"])).stdout.split(/\r?\n/).filter(Boolean);
   const pushRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--push", "--all", "origin"])).stdout.split(/\r?\n/).filter(Boolean);
   const identities = [...fetchRemotes, ...pushRemotes].map(githubRepoFromRemote);
-  const uniqueIdentities = new Set(identities);
-  if (identities.length === 0 || identities.some((identity) => !identity) || uniqueIdentities.size !== 1) {
-    throw new Error("all origin fetch and push URLs must identify exactly the same GitHub repository");
+  if (identities.length === 0 || identities.some((identity) => !identity)) {
+    throw new Error("all origin fetch and push URLs must identify GitHub repositories");
   }
-  const githubRepo = identities[0];
+  const canonicalIdentities = new Set<string>();
+  for (const remoteIdentity of new Set(identities)) {
+    const view = JSON.parse((await commandExec(pi, "gh", ["repo", "view", remoteIdentity, "--json", "nameWithOwner"])).stdout || "{}");
+    if (!view.nameWithOwner) throw new Error(`GitHub repository identity could not be resolved for ${remoteIdentity}`);
+    canonicalIdentities.add(String(view.nameWithOwner));
+  }
+  if (canonicalIdentities.size !== 1) {
+    throw new Error("all origin fetch and push URLs must resolve to exactly the same GitHub repository");
+  }
+  const githubRepo = [...canonicalIdentities][0];
   const upstream = await pi.exec("git", ["-C", repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], { timeout: 15_000 });
   const baseBranch = upstream.code === 0 ? upstream.stdout.trim() || "origin/main" : "origin/main";
   const id = inferredProjectId(repoPath, githubRepo);
-  return { repoPath, githubRepo, baseBranch, id, worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", id) };
+  return {
+    repoPath,
+    githubRepo,
+    githubAliases: [...new Set(identities)],
+    baseBranch,
+    id,
+    worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", id),
+  };
 }
 
 async function prepareGithub(pi, githubRepo) {
   await commandExec(pi, "gh", ["auth", "status"]);
-  const view = JSON.parse((await commandExec(pi, "gh", ["repo", "view", githubRepo, "--json", "viewerPermission"])).stdout || "{}");
+  const view = JSON.parse((await commandExec(pi, "gh", ["repo", "view", githubRepo, "--json", "viewerPermission,nameWithOwner"])).stdout || "{}");
+  if (view.nameWithOwner !== githubRepo) {
+    throw new Error("GitHub repository identity changed during enablement");
+  }
   if (!["ADMIN", "MAINTAIN", "WRITE"].includes(String(view.viewerPermission || "").toUpperCase())) {
     throw new Error("GitHub write permission is required to enable deadloop");
   }
