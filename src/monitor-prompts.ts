@@ -2,6 +2,9 @@ type MonitorPromptBaseInput = {
   automationDir: string;
   promiseFile: string;
   actorName: string;
+  repoPath?: string;
+  githubRepo?: string;
+  stateDir?: string;
 };
 
 export type IssueMonitorPromptInput = MonitorPromptBaseInput & {
@@ -50,13 +53,18 @@ function shellQuotePrompt(value: string): string {
 }
 
 function renderPromisePollingRules(input: MonitorPromptBaseInput): string {
+  const guardedOperation = `node ${shellQuotePrompt(`${input.automationDir}/guarded-operation.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --`;
   return `Monitor only this promise file. It is the only completion authority:
 - ${input.promiseFile}
 
 Polling rules:
 - Use \`node ${input.automationDir}/extract-worker-promise.ts --file ${input.promiseFile}\`.
 - If the promise status is \`complete\` or \`blocked\`, break polling immediately. Do not use Herdr status as completion authority.
-- If the promise is missing while the agent is idle/done, ask the ${input.actorName} to write the promise file instead of guessing completion.`;
+- If the promise is missing while the agent is idle/done, ask the ${input.actorName} to write the promise file instead of guessing completion.
+
+Enablement guard:
+- Immediately before every monitor-side \`git push\` and every mutating \`gh\` command (including PR creation, comments, labels, handoff, merge, and blocked paths), run the whole command through this prefix: \`${guardedOperation}\`.
+- Never run those mutations directly. Each guarded operation is synchronized with \`/deadloop-disable\`; if it reports that deadloop is disabled, stop without that mutation. Re-evaluate only on a later scheduler cycle after re-enable.`;
 }
 
 function renderIssueMonitorPrompt(input: IssueMonitorPromptInput): string {

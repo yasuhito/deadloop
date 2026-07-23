@@ -245,6 +245,9 @@ function drive(fixturePath: string | undefined): DriverResult {
       automationDir: env.automationDir,
       promiseFile: String(launch.promiseFile || ""),
       actorName: "Worker",
+      repoPath: env.repoPath,
+      githubRepo: env.githubRepo,
+      stateDir: env.stateDir,
       worktreePath: String(launch.worktreePath || ""),
       branch: String(launch.branch || ""),
       checkCommand: renderProjectCheckCommand({

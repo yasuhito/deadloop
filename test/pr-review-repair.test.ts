@@ -62,6 +62,32 @@ function finalizeWith(commands: string[][], actualHead = head) {
   );
 }
 
+function finalizeWhileDisabled() {
+  const commands: string[][] = [];
+  let error = "";
+  try {
+    finalizeReviewRepair(
+      {
+        repo: "/worktree", projectRepo: "/repo", githubRepo: "owner/repo", pr: "243",
+        branch: "agent/issue-243", expectedHead: head, remote: "origin",
+        automationDir: "/automation", stateDir: "/state", checkCommand: "npm test",
+      },
+      {
+        assertEnabled: () => { throw new Error("deadloop is disabled for this repository"); },
+        run: (args: string[]) => {
+          commands.push(args);
+          if (args[0] === "gh") return { status: 0, stdout: JSON.stringify({ state: "OPEN", isCrossRepository: false, headRefName: "agent/issue-243", headRefOid: head }), stderr: "" };
+          if (args.includes("rev-parse")) return { status: 0, stdout: `${"b".repeat(40)}\n`, stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+  } catch (caught) {
+    error = caught instanceof Error ? caught.message : String(caught);
+  }
+  return { error, commands };
+}
+
 function prompt() {
   return repairWorkerPrompt("243", "agent/issue-243", head, findings, "/state/promise.json", "/worktree", {
     projectId: "demo",
@@ -164,54 +190,11 @@ describe("automatic PR review repair", () => {
     expect(commands.some((command) => command.includes("push"))).toBe(false);
   });
 
-  it("does not push when deadloop is disabled before finalization", () => {
-    const commands: string[][] = [];
+  it("reports disabled enablement before repair finalization", () => {
+    expect(finalizeWhileDisabled().error).toBe("deadloop is disabled for this repository");
+  });
 
-    let error = "";
-    try {
-      finalizeReviewRepair(
-        {
-          repo: "/worktree",
-          projectRepo: "/repo",
-          githubRepo: "owner/repo",
-          pr: "243",
-          branch: "agent/issue-243",
-          expectedHead: head,
-          remote: "origin",
-          automationDir: "/automation",
-          stateDir: "/state",
-          checkCommand: "npm test",
-        },
-        {
-          assertEnabled: () => {
-            throw new Error("deadloop is disabled for this repository");
-          },
-          run: (args: string[]) => {
-            commands.push(args);
-            if (args[0] === "gh") {
-              return {
-                status: 0,
-                stdout: JSON.stringify({
-                  state: "OPEN",
-                  isCrossRepository: false,
-                  headRefName: "agent/issue-243",
-                  headRefOid: head,
-                }),
-                stderr: "",
-              };
-            }
-            if (args.includes("rev-parse")) return { status: 0, stdout: `${"b".repeat(40)}\n`, stderr: "" };
-            return { status: 0, stdout: "", stderr: "" };
-          },
-        },
-      );
-    } catch (caught) {
-      error = caught instanceof Error ? caught.message : String(caught);
-    }
-
-    expect({ error, pushed: commands.some((command) => command.includes("push")) }).toEqual({
-      error: "deadloop is disabled for this repository",
-      pushed: false,
-    });
+  it("does not push when deadloop is disabled before repair finalization", () => {
+    expect(finalizeWhileDisabled().commands.some((command) => command.includes("push"))).toBe(false);
   });
 });

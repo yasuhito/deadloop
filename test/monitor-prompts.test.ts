@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { renderIssueMonitorPrompt, renderRepairMonitorPrompt, renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
+const { renderBranchUpdateMonitorPrompt, renderIssueMonitorPrompt, renderRepairMonitorPrompt, renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
 
 describe("monitor prompts", () => {
   it("renders shared promise polling rules for Worker monitoring", () => {
@@ -88,6 +88,46 @@ describe("monitor prompts", () => {
     });
 
     expect(prompt).toContain("outcome=changes_requested");
+  });
+
+  it("routes issue monitor mutations through the enablement guard", () => {
+    const prompt = renderIssueMonitorPrompt({
+      issueNumber: 12, automationDir: "/automation", promiseFile: "/state/promise.json", actorName: "Worker",
+      repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state", worktreePath: "/wt", branch: "agent/issue-12",
+      checkCommand: "npm test", reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("guarded-operation.ts");
+  });
+
+  it("routes approved reviewer handoff and merge through the enablement guard", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
+      promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
+      checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("including PR creation, comments, labels, handoff, merge, and blocked paths");
+  });
+
+  it("routes branch-update blocked handling through the enablement guard", () => {
+    const prompt = renderBranchUpdateMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), expectedBaseOid: "b".repeat(40), branch: "agent/issue-24",
+      automationDir: "/automation", promiseFile: "/state/promise.json", actorName: "branch-update worker",
+      repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("Never run those mutations directly");
+  });
+
+  it("routes repair blocked handling through the enablement guard", () => {
+    const prompt = renderRepairMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
+      promiseFile: "/state/promise.json", actorName: "review-repair worker", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("if it reports that deadloop is disabled, stop without that mutation");
   });
 
   it("keeps review labels through successful repair monitoring", () => {

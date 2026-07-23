@@ -4,7 +4,7 @@
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
-const { assertDriverEnabled } = require("../../../src/driver-enablement.cjs");
+const { withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
@@ -81,8 +81,15 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   const guard = decideRepairPushGuard(pr, args.branch, args.expectedHead);
   if (guard.action !== "push") return guard;
 
-  (ops.assertEnabled || assertDriverEnabled)({ repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir });
-  checked(ops, ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`]);
+  const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir };
+  if (ops.assertEnabled) {
+    ops.assertEnabled(project);
+    checked(ops, ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`]);
+  } else {
+    withEnabledProjectLock(project, () =>
+      checked(ops, ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`]),
+    );
+  }
   return { action: "pushed", reason: "repair_pushed", headOid: checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"]) };
 }
 

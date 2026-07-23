@@ -113,23 +113,27 @@ afterEach(() => {
 });
 
 describe("review repair dispatch integration", () => {
-  it("launches a dedicated repair worker and returns its bounded monitor", () => {
-    const { output } = runDispatch(true);
+  it("requests LLM monitoring after launching a repair", () => {
+    expect(runDispatch(true).output.action).toBe("needs_llm");
+  });
 
-    expect({ action: output.action, driverAction: output.driverAction, monitored: output.prompt.includes("review-repair worker") }).toEqual({
-      action: "needs_llm",
-      driverAction: "review_repair_monitor_request",
-      monitored: true,
-    });
+  it("identifies the bounded repair monitor action", () => {
+    expect(runDispatch(true).output.driverAction).toBe("review_repair_monitor_request");
+  });
+
+  it("returns the dedicated repair monitor prompt", () => {
+    expect(runDispatch(true).output.prompt).toContain("review-repair worker");
+  });
+
+  it("returns an error after disable", () => {
+    expect(runDispatch(false).output.action).toBe("error");
+  });
+
+  it("reports disable as the dispatch failure", () => {
+    expect(runDispatch(false).output.summary).toBe("deadloop is disabled for this repository");
   });
 
   it("does not mutate GitHub or launch a repair after disable", () => {
-    const { output, events } = runDispatch(false);
-
-    expect({ action: output.action, summary: output.summary, events }).toEqual({
-      action: "error",
-      summary: "deadloop is disabled for this repository",
-      events: [],
-    });
+    expect(runDispatch(false).events).toEqual([]);
   });
 });

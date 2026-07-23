@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-type CommandHandler = (_args: string, ctx: { cwd: string; mode: string; ui: { notify: () => void; setStatus: () => void } }) => Promise<void>;
+type CommandContext = { cwd: string; mode: string; ui: { notify: () => void; setStatus: () => void }; isIdle?: () => boolean; hasPendingMessages?: () => boolean };
+type CommandHandler = (_args: string, ctx: CommandContext) => Promise<void>;
 
 const originalHome = process.env.HOME;
 const originalStateDir = process.env.PI_CODING_AGENT_DIR;
@@ -40,7 +41,7 @@ function fixtureRepository() {
 
 async function loadExtension(
   root: string,
-  options: { failLabel?: boolean; labels?: unknown[] } = {},
+  options: { failLabel?: boolean; labels?: unknown[]; viewerPermission?: string; pushRemote?: string } = {},
 ): Promise<{ commands: Map<string, CommandHandler>; ghCommands: string[][]; messages: string[] }> {
   process.env.HOME = root;
   process.env.PI_CODING_AGENT_DIR = path.join(root, ".pi", "agent");
@@ -54,7 +55,10 @@ async function loadExtension(
   extension({
     exec: async (command: string, args: string[]) => {
       if (command === "git") {
-        if (args.includes("get-url")) return { code: 0, stdout: "https://github.com/owner/demo.git\n", stderr: "" };
+        if (args.includes("get-url")) {
+          const remote = args.includes("--push") ? options.pushRemote || "https://github.com/owner/demo.git" : "https://github.com/owner/demo.git";
+          return { code: 0, stdout: `${remote}\n`, stderr: "" };
+        }
         if (args.includes("--symbolic-full-name")) return { code: 0, stdout: "", stderr: "" };
         if (args.includes("fetch")) return { code: 0, stdout: "", stderr: "" };
         if (args.includes("show")) return { code: 1, stdout: "", stderr: "missing" };
@@ -66,7 +70,7 @@ async function loadExtension(
       }
       if (command === "gh") ghCommands.push(args);
       if (command === "gh" && args[0] === "auth") return { code: 0, stdout: "", stderr: "" };
-      if (command === "gh" && args[0] === "repo") return { code: 0, stdout: '{"viewerPermission":"WRITE"}', stderr: "" };
+      if (command === "gh" && args[0] === "repo") return { code: 0, stdout: JSON.stringify({ viewerPermission: options.viewerPermission || "WRITE" }), stderr: "" };
       if (command === "gh" && args[0] === "label" && args[1] === "list") return { code: 0, stdout: JSON.stringify(options.labels || []), stderr: "" };
       if (command === "gh" && args[0] === "label" && args[1] === "create") {
         return options.failLabel ? { code: 1, stdout: "", stderr: "label denied" } : { code: 0, stdout: "", stderr: "" };
@@ -96,12 +100,13 @@ function writeConfig(root: string, repoPath: string, options: { autoMerge?: bool
   }));
 }
 
-async function invoke(handler: CommandHandler, cwd: string): Promise<void> {
-  await handler("", { cwd, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined } });
+async function invoke(handler: CommandHandler, cwd: string, schedulerState: Pick<CommandContext, "isIdle" | "hasPendingMessages"> = {}): Promise<void> {
+  await handler("", { cwd, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined }, ...schedulerState });
 }
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   vi.resetModules();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
@@ -149,6 +154,45 @@ describe("enablement command integration", () => {
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
     expect(extension.messages.at(-1)).toContain("autoMerge is on");
+  });
+
+  it("rejects a different configured origin push repository", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root, { pushRemote: "https://github.com/other/target.git" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("all origin fetch and push URLs must identify exactly the same GitHub repository");
+  });
+
+  it("disables an existing enablement when repeated preflight loses write permission", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const options = { viewerPermission: "WRITE" };
+    const extension = await loadExtension(root, options);
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    options.viewerPermission = "READ";
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8")).projects[0].enabled).toBe(false);
+  });
+
+  it("disables an existing enablement when a removed standard label cannot be recreated", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const options: { labels: { name: string }[]; failLabel?: boolean } = {
+      labels: ["ready-for-agent", "agent:implement", "agent:in-progress", "agent:review", "agent:reviewing", "agent:blocked", "ready-for-human", "needs-info", "needs-triage"].map((name) => ({ name })),
+    };
+    const extension = await loadExtension(root, options);
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    options.labels = options.labels.filter((label) => label.name !== "needs-triage");
+    options.failLabel = true;
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8")).projects[0].enabled).toBe(false);
   });
 
   it("does not create a standard label that appears after the first 100 labels", async () => {
@@ -227,6 +271,22 @@ describe("enablement command integration", () => {
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
     expect(extension.messages.at(-1)).toContain("another session (pid 4242)");
+  });
+
+  it("releases the scheduler lock after another session disables a busy owner", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+    vi.useFakeTimers();
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath, { isIdle: () => false });
+    const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    state.projects[0].enabled = false;
+    writeFileSync(statePath, JSON.stringify(state));
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", "scheduler.demo.lock"))).toBe(false);
   });
 
   it("stops an enabled primary checkout when disabled", async () => {

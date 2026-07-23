@@ -245,7 +245,7 @@ function saveEnablementState(state) {
 async function updateEnablementState(update) {
   const lockPath = `${ENABLEMENT_PATH}.lock`;
   fs.mkdirSync(STATE_DIR, { recursive: true });
-  for (let attempt = 0; attempt < 20; attempt++) {
+  for (let attempt = 0; attempt < 1200; attempt++) {
     try {
       const fd = fs.openSync(lockPath, "wx");
       try {
@@ -684,9 +684,14 @@ async function detectProjectIdentity(pi, cwd) {
   if (isLinkedGitWorktree(repoPath, commonDir)) {
     throw new Error(`linked worktrees cannot be enabled; run /deadloop-enable from the primary checkout: ${path.dirname(path.resolve(repoPath, commonDir))}`);
   }
-  const remote = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "origin"])).stdout.trim();
-  const githubRepo = githubRepoFromRemote(remote);
-  if (!githubRepo) throw new Error("origin must identify exactly one GitHub repository");
+  const fetchRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--all", "origin"])).stdout.split(/\r?\n/).filter(Boolean);
+  const pushRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--push", "--all", "origin"])).stdout.split(/\r?\n/).filter(Boolean);
+  const identities = [...fetchRemotes, ...pushRemotes].map(githubRepoFromRemote);
+  const uniqueIdentities = new Set(identities);
+  if (identities.length === 0 || identities.some((identity) => !identity) || uniqueIdentities.size !== 1) {
+    throw new Error("all origin fetch and push URLs must identify exactly the same GitHub repository");
+  }
+  const githubRepo = identities[0];
   const baseBranch = (await commandExec(pi, "git", ["-C", repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])).stdout.trim() || "origin/main";
   return { repoPath, githubRepo, baseBranch, id: sanitizeId(path.basename(repoPath)), worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", sanitizeId(path.basename(repoPath))) };
 }
@@ -763,9 +768,6 @@ export default function (pi) {
 
   async function tick(ctx) {
     if (!active) return;
-    if (running) return;
-    if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
-    if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return;
 
     const projectsResult = loadProjectsResult(ctx.cwd);
     if (!projectsResult.ok) {
@@ -782,6 +784,9 @@ export default function (pi) {
       setLooperStatus(ctx, "skipped: active project changed since scheduler lock was acquired");
       return;
     }
+    if (running) return;
+    if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
+    if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return;
 
     const state = loadState();
     updateStatus(ctx, project, state);
@@ -845,10 +850,16 @@ export default function (pi) {
         const firstEnable = {
           firstEnableAutoMerge: Boolean(configuredProject?.autoMerge),
         };
-        let newlyEnabled = false;
-        await updateEnablementState(async (state) => {
-          if (findEnabledProject(state, identity)) return state;
+        const wasEnabled = Boolean(findEnabledProject(loadEnablementState(), identity));
+        try {
           await prepareGithub(pi, identity.githubRepo);
+        } catch (error) {
+          if (wasEnabled) await updateEnablementState((state) => removeEnabledProject(state, identity));
+          throw error;
+        }
+        let newlyEnabled = false;
+        await updateEnablementState((state) => {
+          if (findEnabledProject(state, identity)) return state;
           newlyEnabled = true;
           return upsertEnabledProject(state, identity, Date.now(), firstEnable);
         });
