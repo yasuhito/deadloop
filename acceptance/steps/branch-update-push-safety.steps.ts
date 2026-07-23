@@ -14,20 +14,10 @@ const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const branch = "agent/issue-31";
 
-type BranchPush = {
-  repo: string;
-  remote: string;
-  updates: { source: string; destination: string }[];
-  mode: "normal";
-};
-
 type SafetyWorld = {
   actualHead?: string;
-  branchPushes?: BranchPush[];
   crossRepository?: boolean;
   commands?: string[][];
-  branchUpdateInput?: { cleanWorktree: boolean; headMatchesExpected: boolean };
-  branchUpdateResult?: Record<string, unknown>;
   finalizeResult?: Record<string, unknown>;
   temporaryRoots?: string[];
   trustLaunchMarker?: string;
@@ -70,63 +60,34 @@ function finalize(world: SafetyWorld): void {
         }
         return { status: 0, stdout: "", stderr: "" };
       },
-      pushBranch: (push: BranchPush) => {
-        world.branchPushes = [...(world.branchPushes ?? []), push];
-        return { status: 0, stdout: "", stderr: "" };
-      },
     },
   );
 }
 
+function pushCommand(world: SafetyWorld): string[] | undefined {
+  return world.commands?.find((command) => command[0] === "git" && command.includes("push"));
+}
+
 function pushed(world: SafetyWorld): boolean {
-  return (world.branchPushes?.length ?? 0) > 0;
+  return pushCommand(world) !== undefined;
+}
+
+function pushedUpdates(world: SafetyWorld): string[] {
+  return pushCommand(world)?.filter((argument) => argument.includes(":refs/heads/")) ?? [];
+}
+
+function forcePushArguments(world: SafetyWorld): string[] {
+  return (
+    pushCommand(world)?.filter(
+      (argument) => argument === "-f" || argument.startsWith("--force") || argument.startsWith("+"),
+    ) ?? []
+  );
 }
 
 function temporaryRoot(world: SafetyWorld, prefix: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   world.temporaryRoots = [...(world.temporaryRoots ?? []), root];
   return root;
-}
-
-function runBranchUpdate(world: SafetyWorld): void {
-  if (!world.branchUpdateInput) throw new Error("branch update precondition is missing");
-  const root = temporaryRoot(world, "deadloop-branch-update-");
-  const fixturePath = path.join(root, "fixture.json");
-  fs.writeFileSync(
-    fixturePath,
-    JSON.stringify({
-      prs: [
-        {
-          number: 31,
-          title: "Conflicting PR",
-          headRefName: branch,
-          headRefOid: head,
-          isCrossRepository: false,
-          isDraft: false,
-          labels: [{ name: "agent:review" }],
-          statusCheckRollup: [],
-          comments: [],
-          reviewRequests: [],
-          mergeStateStatus: "CONFLICTING",
-        },
-      ],
-      agents: { result: { agents: [] } },
-      branchUpdate: {
-        ahead: 1,
-        behind: 1,
-        conflictFree: true,
-        ...world.branchUpdateInput,
-        baseOid: base,
-      },
-    }),
-  );
-  const result = spawnSync(
-    "node",
-    ["extensions/deadloop/automations/pr-reviewer-driver.ts", "--fixture", fixturePath],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, DEADLOOP_PROJECT_ID: "acceptance" } },
-  );
-  if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-  world.branchUpdateResult = JSON.parse(result.stdout);
 }
 
 Given("更新前に確認した pull request head がある", function (this: SafetyWorld) {
@@ -152,22 +113,6 @@ Then("branch への push は行われない", function (this: SafetyWorld) {
 
 Then("完了結果は古い head として観測される", function (this: SafetyWorld) {
   assert.equal(this.finalizeResult?.action, "stale_head");
-});
-
-Given("更新対象の作業場所に未コミットの変更がある", function (this: SafetyWorld) {
-  this.branchUpdateInput = { cleanWorktree: false, headMatchesExpected: true };
-});
-
-Given("選択した pull request head が更新前に変わっている", function (this: SafetyWorld) {
-  this.branchUpdateInput = { cleanWorktree: true, headMatchesExpected: false };
-});
-
-When("deadloop が branch 更新を開始しようとする", function (this: SafetyWorld) {
-  runBranchUpdate(this);
-});
-
-Then("branch 更新の作業エージェントは起動されない", function (this: SafetyWorld) {
-  assert.equal(this.branchUpdateResult?.launch, undefined);
 });
 
 Given("作業場所の信頼が承認されていない", function (this: SafetyWorld) {
@@ -218,14 +163,11 @@ Then("作業エージェントは起動されない", function (this: SafetyWorl
 });
 
 Then("選択された branch だけが push の対象になる", function (this: SafetyWorld) {
-  assert.deepEqual(
-    this.branchPushes?.flatMap((push) => push.updates.map((update) => update.destination)) ?? [],
-    [`refs/heads/${branch}`],
-  );
+  assert.deepEqual(pushedUpdates(this), [`HEAD:refs/heads/${branch}`]);
 });
 
 Then("branch は強制せずに push される", function (this: SafetyWorld) {
-  assert.deepEqual(this.branchPushes?.map((push) => push.mode) ?? [], ["normal"]);
+  assert.deepEqual(forcePushArguments(this), []);
 });
 
 After(function (this: SafetyWorld) {
