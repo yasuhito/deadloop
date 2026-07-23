@@ -13,6 +13,8 @@ type CommandHandler = (_args: string, ctx: CommandContext) => Promise<void>;
 const originalHome = process.env.HOME;
 const originalStateDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
+const originalDeadloop = process.env.DEADLOOP;
+const originalDeadloopAutomations = process.env.DEADLOOP_AUTOMATIONS;
 const sandboxes: string[] = [];
 
 function git(repoPath: string, args: string[]): string {
@@ -174,10 +176,63 @@ afterEach(() => {
   else process.env.PI_CODING_AGENT_DIR = originalStateDir;
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
+  if (originalDeadloop === undefined) delete process.env.DEADLOOP;
+  else process.env.DEADLOOP = originalDeadloop;
+  if (originalDeadloopAutomations === undefined) delete process.env.DEADLOOP_AUTOMATIONS;
+  else process.env.DEADLOOP_AUTOMATIONS = originalDeadloopAutomations;
   for (const sandbox of sandboxes.splice(0)) rmSync(sandbox, { recursive: true, force: true });
 });
 
 describe("enablement command integration", () => {
+  it.each([
+    ["DEADLOOP", "DEADLOOP=off"],
+    ["DEADLOOP_AUTOMATIONS", "DEADLOOP_AUTOMATIONS=off"],
+  ] as const)("does not retain enablement when %s suppresses scheduler startup", async (variable, reason) => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    process.env[variable] = "off";
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    expect({ enabled: state.projects[0].enabled, message: extension.messages.at(-1) }).toEqual({
+      enabled: false,
+      message: expect.stringContaining(reason),
+    });
+  });
+
+  it.each(["deadloop-status", "deadloop-doctor"])("does not recommend enablement outside Git for %s", async (command) => {
+    const { root } = fixtureRepository();
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get(command)!, root);
+
+    const report = extension.messages.at(-1) || "";
+    expect(report.includes("unavailable for the current location") && !report.includes("  /deadloop-enable")).toBe(true);
+  });
+
+  it.each(["deadloop-status", "deadloop-doctor"])("preserves invalid configuration diagnostics for %s", async (command) => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    writeFileSync(path.join(root, ".pi", "agent", "deadloop", "projects.json"), "{");
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get(command)!, repoPath);
+
+    const report = extension.messages.at(-1) || "";
+    expect(report.includes("warning: projects.json") && !report.includes("  /deadloop-enable")).toBe(true);
+  });
+
+  it.each(["deadloop-status", "deadloop-doctor"])("recommends enablement for a disabled repository in %s", async (command) => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get(command)!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("/deadloop-enable");
+  });
+
   it("does not schedule a configured project until dedicated enablement exists", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath, { enabled: false });

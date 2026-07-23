@@ -21,7 +21,7 @@ import {
   templateValues,
 } from "../../src/core";
 import { buildDoctorSnapshot, formatDoctorReport } from "../../src/doctor";
-import { buildStatusSnapshot, formatStatusReport } from "../../src/status";
+import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } from "../../src/status";
 import { readClaudeConfig } from "../../src/agent-trust.cjs";
 import { runScheduledAutomation } from "../../src/automation-runner";
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
@@ -604,9 +604,16 @@ async function collectLiveSnapshotData(
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
   const project = activeProject(cwd, projects);
-  const warnings = statusWarnings(projectsResult.ok ? projectsResult.warnings : [projectsResult.reason], project);
+  const repositoryRoot = !project && projectsResult.ok
+    ? (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim()
+    : undefined;
+  const repositoryEnablement: RepositoryEnablement = project ? "enabled" : repositoryRoot ? "disabled" : "unavailable";
+  const diagnosticWarnings = projectsResult.ok
+    ? [...projectsResult.warnings, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])]
+    : [projectsResult.reason];
+  const warnings = statusWarnings(diagnosticWarnings, project);
   if (!project) {
-    return { cwd, projects, state, warnings };
+    return { cwd, projects, state, repositoryEnablement, warnings };
   }
 
   const issueFields = includeIssueComments
@@ -721,6 +728,7 @@ async function collectLiveSnapshotData(
     automationDir: AUTOMATION_DIR,
     statePath: STATE_PATH,
     claudeConfig,
+    repositoryEnablement,
     warnings,
   };
 }
@@ -943,16 +951,21 @@ export default function (pi) {
   }
 
   function startScheduler(ctx, project) {
-    if (process.env.DEADLOOP === "off" || process.env.DEADLOOP_AUTOMATIONS === "off") return;
+    if (process.env.DEADLOOP === "off") {
+      return { started: false, reason: "scheduler startup is suppressed by DEADLOOP=off" };
+    }
+    if (process.env.DEADLOOP_AUTOMATIONS === "off") {
+      return { started: false, reason: "scheduler startup is suppressed by DEADLOOP_AUTOMATIONS=off" };
+    }
     if (!isProjectEnabled(project)) {
       stopScheduler(ctx);
       setLooperStatus(ctx, "deadloop is not enabled for this repository");
-      return;
+      return { started: false, reason: "repository enablement was not retained before scheduler startup" };
     }
     const lockPath = projectLockPath(project);
     if (active?.lockPath === lockPath && ownsLock) {
       active.project = project;
-      return;
+      return { started: true };
     }
     stopScheduler(ctx);
     const lock = acquireSchedulerLock(project);
@@ -962,13 +975,14 @@ export default function (pi) {
       setLooperStatus(ctx, `${project.id} standby: owner pid ${lock.owner ?? "unknown"}`);
       timer = setInterval(() => startScheduler(ctx, project), TICK_MS);
       timer.unref?.();
-      return;
+      return { started: true };
     }
     updateStatus(ctx, project, loadState());
     timer = setInterval(() => tick(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] tick failed:`, error?.message || error)), TICK_MS);
     timer.unref?.();
     startupTick = setTimeout(() => tick(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] startup tick failed:`, error?.message || error)), 3000);
     startupTick.unref?.();
+    return { started: true };
   }
 
   pi.registerCommand("deadloop-enable", {
@@ -1008,7 +1022,8 @@ export default function (pi) {
           const projects = loadProjects(ctx.cwd);
           project = await activeSchedulerProject(ctx.cwd, projects);
           if (!project) throw new Error("enabled repository configuration could not be resolved safely");
-          startScheduler(ctx, project);
+          const schedulerStart = startScheduler(ctx, project);
+          if (!schedulerStart.started) throw new Error(schedulerStart.reason);
           await completeFirstSchedulerStart(project);
         } catch (error) {
           await disableEnablementAttempt(identity, enabledAt, enableAttemptToken);
