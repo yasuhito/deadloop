@@ -19,17 +19,17 @@ npx skills@latest add yasuhito/deadloop
 - v0 is a Pi package / extension.
 - The default runner is [Herdr](https://herdr.dev/).
 
-## Safety first
-
-Install only from source you trust. deadloop can write GitHub Issue / PR comments, change labels, create PRs, and, when `autoMerge: true` is explicitly enabled, squash-merge PRs and delete head branches.
-
-Start with `autoMerge: false` in a test repository or a repository with known branch protection and permissions.
-
 ## Configure
 
-For the zero-local-config path, commit `deadloop.json` at the target repository root on the trusted base branch, then start Pi from that checkout. deadloop infers `repoPath`, the GitHub repository, and a default Herdr worktree root from the current git repository.
+To start with the defaults, create `deadloop.json` at the target repository root and commit it to the base branch:
 
-Use `~/.pi/agent/deadloop/projects.json` only for local overrides such as `autoMerge`, custom `worktreeRoot`, or managing repositories that do not carry `deadloop.json`. Copy the example configuration and edit it when you need those overrides:
+```json
+{}
+```
+
+deadloop infers the local checkout path, GitHub repository, base branch, and default Herdr worktree root from the current Git repository. The first run needs no local configuration.
+
+Copy the example into Pi's local state only when you need overrides such as `autoMerge` or a custom `worktreeRoot`:
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop
@@ -37,26 +37,15 @@ cp ~/.pi/agent/git/github.com/yasuhito/deadloop/extensions/deadloop/projects.exa
 $EDITOR ~/.pi/agent/deadloop/projects.json
 ```
 
-For a local checkout, copy from:
+`projects.json` contains local paths and rollout choices. Do not commit it. See the [setup guide](docs/public-package-setup.md) for every available setting.
 
-```text
-/absolute/path/to/deadloop/extensions/deadloop/projects.example.json
-```
+## Safety controls
 
-`projects.json` is local configuration. Do not commit it.
+`autoMerge` controls whether deadloop merges reviewed PRs automatically.
 
-Local project fields include:
+With `false`, deadloop creates and reviews each PR, then hands the merge to a human. With `true`, deadloop squash-merges PRs that pass its safety checks and deletes their head branches.
 
-- `repoPath` — absolute path to the target repository checkout. Optional when the current git repository has `deadloop.json` on the trusted base branch.
-- `githubRepo` — GitHub repository in `owner/name` form. Inferred from the `origin` remote for implicit `deadloop.json` projects.
-- `baseBranch` — branch or remote ref used as the worktree base, usually `origin/main`. Inferred from the current branch upstream for implicit `deadloop.json` projects.
-- `worktreeRoot` — directory where Herdr may create worktrees. Defaults to `~/.herdr/worktrees/<repo>/` for implicit `deadloop.json` projects.
-- `autoMerge` — keep `false` until the repository has proven safeguards.
-- `externalReview` — disabled by default. Set `{ "enabled": true }` only where the built-in CodeRabbit/Copilot request path is available.
-
-Shared repository policy lives in `deadloop.json` on the trusted base branch. Standard labels, verification (`git diff --check`, then `npm run check` or existing `test` / `lint` / `typecheck` scripts), worker instruction files (`AGENTS.md`, `CONTEXT.md`, `README.md`), issue coordinator / PR reviewer automations, and disabled external review are defaults, so omit those sections unless you are customizing them. Local `projects.json` values win over repo policy.
-
-Runtime prompts and promise reports are stored under `~/.pi/agent/deadloop/runs/`, outside target worktrees. deadloop also isolates untracked `.deadloop` and `.pi-subagents` while running the configured project check, so generated JSON does not contaminate recursive formatting or lint commands. Tracked files are never hidden; validation fails closed if either runtime directory contains one.
+Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
 
 ## Create labels
 

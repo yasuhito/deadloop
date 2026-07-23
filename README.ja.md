@@ -19,17 +19,17 @@ npx skills@latest add yasuhito/deadloop
 - v0 は Pi パッケージ／拡張として動作します。
 - 既定の実行基盤は [Herdr](https://herdr.dev/) です。
 
-## 安全を最優先する
-
-信頼できるソースからのみインストールしてください。deadloop は GitHub Issue や PR へのコメント投稿、ラベル変更、PR 作成を行います。`autoMerge: true` を明示的に有効にすると、PR の squash merge と作業ブランチの削除も行います。
-
-最初はテスト用リポジトリ、またはブランチ保護と権限を把握しているリポジトリで、`autoMerge: false` に設定して始めてください。
-
 ## 設定
 
-ローカル設定なしで使う場合は、対象リポジトリの信頼済み基準ブランチのルートに `deadloop.json` をコミットし、そのチェックアウトから Pi を起動します。deadloop は、現在の Git リポジトリから `repoPath`、GitHub リポジトリ、既定の Herdr ワークツリー保存先を推測します。
+標準設定で始めるには、対象リポジトリのルートに `deadloop.json` を作成し、基準ブランチへコミットします。
 
-`~/.pi/agent/deadloop/projects.json` は、`autoMerge`、独自の `worktreeRoot`、`deadloop.json` を持たないリポジトリの管理など、ローカル環境だけで使う上書き設定に限定してください。上書きが必要な場合は、設定例をコピーして編集します。
+```json
+{}
+```
+
+deadloop は現在の Git リポジトリから、ローカルのチェックアウト先、GitHub リポジトリ、基準ブランチ、Herdr のワークツリー保存先を自動的に取得します。最初の実行にローカル設定は必要ありません。
+
+`autoMerge` やワークツリー保存先などを変更する場合だけ、設定例を Pi のローカル設定へコピーします。
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop
@@ -37,26 +37,15 @@ cp ~/.pi/agent/git/github.com/yasuhito/deadloop/extensions/deadloop/projects.exa
 $EDITOR ~/.pi/agent/deadloop/projects.json
 ```
 
-ローカルのチェックアウトから使う場合は、次のファイルをコピーします。
+`projects.json` にはローカルのパスや運用設定が含まれるため、リポジトリにはコミットしないでください。すべての設定項目は [設定ガイド](docs/public-package-setup.md) を参照してください。
 
-```text
-/absolute/path/to/deadloop/extensions/deadloop/projects.example.json
-```
+## 安全装置
 
-`projects.json` はローカル設定です。コミットしないでください。
+`autoMerge` は、レビュー済みの PR を deadloop が自動的にマージするかを制御します。
 
-ローカルプロジェクトでは、次の項目を設定できます。
+`false` では、PR の作成とレビューまでを自動化し、マージは人間に引き渡します。`true` では、安全条件を満たした PR を squash merge し、作業ブランチを削除します。
 
-- `repoPath` — 対象リポジトリのチェックアウトへの絶対パス。現在の Git リポジトリの信頼済み基準ブランチに `deadloop.json` がある場合は省略できます。
-- `githubRepo` — `owner/name` 形式の GitHub リポジトリ。`deadloop.json` から暗黙に設定するプロジェクトでは、`origin` リモートから推測します。
-- `baseBranch` — ワークツリーの起点にするブランチまたはリモート参照。通常は `origin/main` です。暗黙に設定するプロジェクトでは、現在のブランチの上流から推測します。
-- `worktreeRoot` — Herdr がワークツリーを作成するディレクトリ。暗黙に設定するプロジェクトでは、既定値は `~/.herdr/worktrees/<repo>/` です。
-- `autoMerge` — リポジトリの安全策が十分に実証されるまでは `false` にしてください。
-- `externalReview` — 既定では無効です。組み込みの CodeRabbit／Copilot リクエスト経路を利用できる場合に限り、`{ "enabled": true }` を設定してください。
-
-共有するリポジトリ方針は、信頼済み基準ブランチの `deadloop.json` に置きます。標準ラベル、検証方法（`git diff --check` の後に `npm run check`、または既存の `test`／`lint`／`typecheck` スクリプトを実行）、作業エージェント向け指示ファイル（`AGENTS.md`、`CONTEXT.md`、`README.md`）、Issue 調整と PR レビューの自動処理、外部レビューの無効化には既定値があります。独自設定が必要な項目だけ記述してください。ローカルの `projects.json` はリポジトリ方針より優先されます。
-
-実行時のプロンプトと完了報告は、対象ワークツリーの外にある `~/.pi/agent/deadloop/runs/` へ保存します。deadloop は、設定したプロジェクト検査の実行中、未追跡の `.deadloop` と `.pi-subagents` を一時的に隔離します。そのため、生成された JSON が再帰的な整形や静的検査の対象に混入しません。Git 管理ファイルは隠しません。いずれかの実行時ディレクトリに Git 管理ファイルがある場合、検証は安全のため失敗します。
+最初は `false` に設定し、ブランチ保護、CI、権限、停止条件を確認してから `true` にしてください。
 
 ## ラベルを作成する
 
