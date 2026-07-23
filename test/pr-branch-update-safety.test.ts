@@ -10,7 +10,13 @@ const {
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-function finalizeWith(commands: string[][], actualHead = head, headAfterAuthorization?: string, timeouts: Array<number | undefined> = []) {
+function finalizeWith(
+  commands: string[][],
+  actualHead = head,
+  headAfterAuthorization?: string,
+  timeouts: Array<number | undefined> = [],
+  pushUrl = "https://github.com/owner/repo.git",
+) {
   let observedHead = actualHead;
   return finalizeBranchUpdate(
     {
@@ -32,6 +38,7 @@ function finalizeWith(commands: string[][], actualHead = head, headAfterAuthoriz
       run: (args: string[], timeoutMs?: number) => {
         commands.push(args);
         timeouts.push(timeoutMs);
+        if (args.includes("get-url")) return { status: 0, stdout: `${pushUrl}\n`, stderr: "" };
         if (args[0] === "gh") {
           return {
             status: 0,
@@ -125,7 +132,7 @@ describe("PR branch-update safety", () => {
     finalizeWith(commands, head, undefined, timeouts);
     const firstGuardedCommand = commands.findIndex((command) => command[0] === "gh");
 
-    expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000]);
+    expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000, 25_000]);
   });
 
   it("pushes only the selected existing branch without force", () => {
@@ -138,9 +145,22 @@ describe("PR branch-update safety", () => {
       "/worktree",
       "push",
       "--porcelain",
-      "origin",
+      "https://github.com/owner/repo.git",
       "HEAD:refs/heads/agent/issue-31",
     ]);
+  });
+
+  it("rejects a branch-update push remote for another repository", () => {
+    expect(() => finalizeWith([], head, undefined, [], "https://github.com/other/repo.git")).toThrow(
+      "push remote origin does not resolve exclusively to owner/repo",
+    );
+  });
+
+  it("pins the verified branch-update destination before a mutable remote can redirect the push", () => {
+    const commands: string[][] = [];
+    finalizeWith(commands);
+
+    expect(commands.find((command) => command.includes("push"))?.[5]).toBe("https://github.com/owner/repo.git");
   });
 
   it("does not push when the immediate PR-head check is stale", () => {

@@ -72,6 +72,7 @@ describe("real driver handoff across disable and re-enable", () => {
       const sentWhileDisabled = [...sent];
       enabled = true;
       deliverPendingDriverHandoff(entry, reloaded, "issue coordinator", {
+        currentEnabledAt: () => 2,
         isEnabled: () => enabled,
         now: () => 789,
         saveState: (next) => writeFileSync(statePath, JSON.stringify(next)),
@@ -81,8 +82,9 @@ describe("real driver handoff across disable and re-enable", () => {
       expect({
         sentWhileDisabled,
         consumed: sent[0]?.includes(`${root}/runs/fixture-worker-uuid/promise.json`),
+        currentGeneration: sent[0]?.includes("--enabled-at 2 --"),
         pending: entry.pendingDriverHandoff,
-      }).toEqual({ sentWhileDisabled: [], consumed: true, pending: undefined });
+      }).toEqual({ sentWhileDisabled: [], consumed: true, currentGeneration: true, pending: undefined });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

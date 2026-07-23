@@ -303,6 +303,36 @@ describe("enablement command integration", () => {
     expect(authorized).toBe(true);
   });
 
+  it("records disable promptly while an enable preflight is stalled", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    let releasePreflight!: () => void;
+    let preflightStarted!: () => void;
+    const started = new Promise<void>((resolve) => { preflightStarted = resolve; });
+    const stalled = new Promise<void>((resolve) => { releasePreflight = resolve; });
+    let firstRepoCheck = true;
+    const extension = await loadExtension(root, {
+      beforeGithubRepoCheck: async () => {
+        if (!firstRepoCheck) return;
+        firstRepoCheck = false;
+        preflightStarted();
+        await stalled;
+      },
+    });
+
+    const enabling = invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    await started;
+    await invoke(extension.commands.get("deadloop-disable")!, repoPath);
+    const disabledState = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    releasePreflight();
+    await enabling;
+
+    expect({ disabled: disabledState.projects.length === 0, finalMessage: extension.messages.at(-1) }).toEqual({
+      disabled: true,
+      finalMessage: "deadloop was not enabled: enablement was revoked while preflight was running",
+    });
+  });
+
   it("does not let a failed enable revoke a later successful concurrent enable", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
@@ -815,7 +845,7 @@ fs.writeFileSync(reportPath, JSON.stringify({ reads, errors }));
     releasePreflight();
     await Promise.all([enabling, disabling]);
 
-    expect(JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8")).projects[0].enabled).toBe(false);
+    expect(JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8")).projects.every((project: { enabled: boolean }) => project.enabled === false)).toBe(true);
   });
 
   it("stops an enabled primary checkout when disabled", async () => {

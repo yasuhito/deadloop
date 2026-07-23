@@ -152,9 +152,22 @@ Prohibited in every path: force-push, monitor-side push, label changes on succes
 Report only the terminal action and evidence.`;
 }
 
+type PendingMonitorHandoff = {
+  kind: "issue";
+  input: IssueMonitorPromptInput;
+};
+
+function renderPendingMonitorHandoff(handoff: PendingMonitorHandoff, enabledAt?: number): string {
+  if (handoff.kind !== "issue" || !handoff.input || typeof handoff.input !== "object") {
+    throw new Error("unsupported pending monitor handoff");
+  }
+  return renderIssueMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
+}
+
 module.exports = {
   renderBranchUpdateMonitorPrompt,
   renderIssueMonitorPrompt,
+  renderPendingMonitorHandoff,
   renderPromisePollingRules,
   renderRepairMonitorPrompt,
   renderReviewerMonitorPrompt,

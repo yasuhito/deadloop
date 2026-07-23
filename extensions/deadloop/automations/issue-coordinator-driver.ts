@@ -234,31 +234,33 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   const launch = launchIssueWorker(issue, env, fixture);
+  const monitorInput = {
+    issueNumber: Number(issue.number || 0),
+    automationDir: env.automationDir,
+    promiseFile: String(launch.promiseFile || ""),
+    actorName: "Worker",
+    repoPath: env.repoPath,
+    githubRepo: env.githubRepo,
+    stateDir: env.stateDir,
+    enabledAt: env.enabledAt,
+    worktreePath: String(launch.worktreePath || ""),
+    branch: String(launch.branch || ""),
+    checkCommand: renderProjectCheckCommand({
+      automationDir: env.automationDir,
+      stateDir: env.stateDir,
+      cwd: String(launch.worktreePath || ""),
+      command: env.checkCommand,
+    }),
+    reviewLabel: env.reviewLabel,
+    inProgressLabel: env.inProgressLabel,
+    blockedLabel: env.blockedLabel,
+  };
   return driverResult("needs_llm", `Launched Worker for Issue #${issue.number}`, {
     driverAction: "worker_monitor_request",
     issueNumber: issue.number,
     launch,
-    prompt: renderIssueMonitorPrompt({
-      issueNumber: Number(issue.number || 0),
-      automationDir: env.automationDir,
-      promiseFile: String(launch.promiseFile || ""),
-      actorName: "Worker",
-      repoPath: env.repoPath,
-      githubRepo: env.githubRepo,
-      stateDir: env.stateDir,
-      enabledAt: env.enabledAt,
-      worktreePath: String(launch.worktreePath || ""),
-      branch: String(launch.branch || ""),
-      checkCommand: renderProjectCheckCommand({
-        automationDir: env.automationDir,
-        stateDir: env.stateDir,
-        cwd: String(launch.worktreePath || ""),
-        command: env.checkCommand,
-      }),
-      reviewLabel: env.reviewLabel,
-      inProgressLabel: env.inProgressLabel,
-      blockedLabel: env.blockedLabel,
-    }),
+    monitorHandoff: { kind: "issue", input: monitorInput },
+    prompt: renderIssueMonitorPrompt(monitorInput),
   });
 }
 

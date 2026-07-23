@@ -5,6 +5,7 @@
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
@@ -87,7 +88,14 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     );
     const guard = decideRepairPushGuard(pr, args.branch, args.expectedHead);
     if (guard.action !== "push") return guard;
-    checked(ops, ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`], MAX_GUARDED_OPERATION_MS);
+    const pushDestination = resolveVerifiedPushDestination(
+      ops,
+      args.repo,
+      args.remote,
+      args.githubRepo,
+      MAX_GUARDED_OPERATION_MS,
+    );
+    checked(ops, ["git", "-C", args.repo, "push", "--porcelain", pushDestination, `HEAD:refs/heads/${args.branch}`], MAX_GUARDED_OPERATION_MS);
     return {
       action: "pushed",
       reason: "repair_pushed",

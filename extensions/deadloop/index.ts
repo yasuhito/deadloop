@@ -43,6 +43,7 @@ import {
   removeEnabledProject,
   removeEnabledProjectAtPath,
   removeEnabledProjectAttempt,
+  removeEnabledProjectGeneration,
   upsertEnabledProject,
 } from "../../src/enablement";
 
@@ -762,13 +763,50 @@ async function commandExec(pi, command, args, timeout = 15_000) {
   return result;
 }
 
-async function detectProjectIdentity(pi, cwd) {
+async function detectPrimaryCheckout(pi, cwd) {
   const repoPath = (await commandExec(pi, "git", ["-C", cwd, "rev-parse", "--show-toplevel"])).stdout.trim();
   const gitDir = (await commandExec(pi, "git", ["-C", cwd, "rev-parse", "--git-dir"])).stdout.trim();
   const commonDir = (await commandExec(pi, "git", ["-C", cwd, "rev-parse", "--git-common-dir"])).stdout.trim();
   if (isLinkedGitWorktree(cwd, gitDir, commonDir)) {
-    throw new Error(`linked worktrees cannot be enabled; run /deadloop-enable from the primary checkout: ${path.dirname(path.resolve(cwd, commonDir))}`);
+    throw new Error(`linked worktrees cannot be enabled or disabled; use the primary checkout: ${path.dirname(path.resolve(cwd, commonDir))}`);
   }
+  return repoPath;
+}
+
+function enableAttemptPath(repoPath) {
+  const key = crypto.createHash("sha256").update(path.resolve(repoPath)).digest("hex").slice(0, 24);
+  return path.join(STATE_DIR, `enable-attempt-${key}.json`);
+}
+
+function writeEnableAttempt(repoPath, token, cancelled = false) {
+  writeJsonFile(enableAttemptPath(repoPath), { repoPath: path.resolve(repoPath), token, cancelled });
+}
+
+function ownsEnableAttempt(repoPath, token) {
+  const attempt = readJsonFile(enableAttemptPath(repoPath), null);
+  return attempt?.repoPath === path.resolve(repoPath) && attempt?.token === token && attempt?.cancelled !== true;
+}
+
+function finishEnableAttempt(repoPath, token) {
+  const attemptPath = enableAttemptPath(repoPath);
+  const attempt = readJsonFile(attemptPath, null);
+  if (attempt?.token === token) fs.rmSync(attemptPath, { force: true });
+}
+
+async function revalidateLocalProjectIdentity(pi, identity) {
+  const repoPath = await detectPrimaryCheckout(pi, identity.repoPath);
+  if (path.resolve(repoPath) !== path.resolve(identity.repoPath)) throw new Error("repository checkout identity changed during enablement");
+  const fetchRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--all", "origin"], 5_000)).stdout.split(/\r?\n/).filter(Boolean);
+  const pushRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--push", "--all", "origin"], 5_000)).stdout.split(/\r?\n/).filter(Boolean);
+  const allowed = new Set(identity.githubAliases || []);
+  const identities = [...fetchRemotes, ...pushRemotes].map(githubRepoFromRemote);
+  if (identities.length === 0 || identities.some((candidate) => !candidate || !allowed.has(candidate))) {
+    throw new Error("origin identity changed during enablement");
+  }
+}
+
+async function detectProjectIdentity(pi, cwd) {
+  const repoPath = await detectPrimaryCheckout(pi, cwd);
   const fetchRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--all", "origin"])).stdout.split(/\r?\n/).filter(Boolean);
   const pushRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--push", "--all", "origin"])).stdout.split(/\r?\n/).filter(Boolean);
   const identities = [...fetchRemotes, ...pushRemotes].map(githubRepoFromRemote);
@@ -836,6 +874,7 @@ async function prepareGithub(pi, githubRepo) {
 }
 function automationRunnerDeps(pi, ctx, project) {
   return {
+    currentEnabledAt: () => project.enabledAt,
     isEnabled: () => isProjectEnabled(project),
     isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
     notify: (message, level) => {
@@ -1052,34 +1091,31 @@ export default function (pi) {
   pi.registerCommand("deadloop-enable", {
     description: "Enable deadloop locally for this primary Git checkout",
     handler: async (_args, ctx) => {
+      let primaryRepoPath;
+      let identity;
+      let previousEnabledAt;
+      let enablementSaved = false;
+      const enableAttemptToken = crypto.randomUUID();
       try {
-        let identity;
         let enabledAt;
-        const enableAttemptToken = crypto.randomUUID();
+        primaryRepoPath = await detectPrimaryCheckout(pi, ctx.cwd);
+        writeEnableAttempt(primaryRepoPath, enableAttemptToken);
+        identity = await detectProjectIdentity(pi, primaryRepoPath);
+        previousEnabledAt = await withEnablementStateLock(async () => findEnabledProject(loadEnablementState(), identity)?.enabledAt);
+        const configuredProject = resolveEnableProject(ctx.cwd, identity);
+        const firstEnable = { firstEnableAutoMerge: Boolean(configuredProject.autoMerge) };
+        await prepareGithub(pi, identity.githubRepo);
         await withEnablementStateLock(async () => {
-          identity = await detectProjectIdentity(pi, ctx.cwd);
-          const state = loadEnablementState();
-          const wasEnabled = Boolean(findEnabledProject(state, identity));
-          let configuredProject;
-          try {
-            configuredProject = resolveEnableProject(ctx.cwd, identity);
-          } catch (error) {
-            if (wasEnabled) saveEnablementState(removeEnabledProject(state, identity));
-            throw error;
+          if (!ownsEnableAttempt(primaryRepoPath, enableAttemptToken)) {
+            throw new Error("enablement was revoked while preflight was running");
           }
-          const firstEnable = {
-            firstEnableAutoMerge: Boolean(configuredProject.autoMerge),
-          };
-          try {
-            await prepareGithub(pi, identity.githubRepo);
-          } catch (error) {
-            if (wasEnabled) saveEnablementState(removeEnabledProject(state, identity));
-            throw error;
-          }
-          const next = upsertEnabledProject(state, identity, Date.now(), firstEnable, enableAttemptToken);
+          await revalidateLocalProjectIdentity(pi, identity);
+          const next = upsertEnabledProject(loadEnablementState(), identity, Date.now(), firstEnable, enableAttemptToken);
           enabledAt = findEnabledProject(next, identity)?.enabledAt;
           saveEnablementState(next);
+          enablementSaved = true;
         });
+        finishEnableAttempt(primaryRepoPath, enableAttemptToken);
         let project;
         try {
           await pi.testing?.afterEnablementSaved?.();
@@ -1098,6 +1134,10 @@ export default function (pi) {
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
       } catch (error) {
+        if (primaryRepoPath) finishEnableAttempt(primaryRepoPath, enableAttemptToken);
+        if (!enablementSaved && identity && previousEnabledAt !== undefined) {
+          await updateEnablementState((state) => removeEnabledProjectGeneration(state, identity, previousEnabledAt));
+        }
         const message = `deadloop was not enabled: ${error?.message || error}`;
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
@@ -1110,26 +1150,20 @@ export default function (pi) {
     handler: async (_args, ctx) => {
       try {
         let message;
+        const repoPath = await detectPrimaryCheckout(pi, ctx.cwd);
+        const attemptPath = enableAttemptPath(repoPath);
+        const attempt = readJsonFile(attemptPath, null);
+        if (attempt?.repoPath === path.resolve(repoPath) && attempt?.token) {
+          writeEnableAttempt(repoPath, attempt.token, true);
+        }
         await withEnablementStateLock(async () => {
-          let identity;
-          try {
-            identity = await detectProjectIdentity(pi, ctx.cwd);
-          } catch {
-            const repoPath = (await commandExec(pi, "git", ["-C", ctx.cwd, "rev-parse", "--show-toplevel"])).stdout.trim();
-            const gitDir = (await commandExec(pi, "git", ["-C", ctx.cwd, "rev-parse", "--git-dir"])).stdout.trim();
-            const commonDir = (await commandExec(pi, "git", ["-C", ctx.cwd, "rev-parse", "--git-common-dir"])).stdout.trim();
-            if (isLinkedGitWorktree(ctx.cwd, gitDir, commonDir)) {
-              const primaryCheckout = path.dirname(path.resolve(ctx.cwd, commonDir));
-              throw new Error(`linked worktrees cannot be disabled; run /deadloop-disable from the primary checkout: ${primaryCheckout}`);
-            }
-            saveEnablementState(removeEnabledProjectAtPath(loadEnablementState(), repoPath));
-            if (active?.project?.repoPath && path.resolve(active.project.repoPath) === path.resolve(repoPath)) stopScheduler(ctx);
-            message = "deadloop disabled for this checkout. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.";
-            return;
-          }
-          saveEnablementState(removeEnabledProjectAtPath(removeEnabledProject(loadEnablementState(), identity), identity.repoPath));
-          if (active?.project?.githubRepo === identity.githubRepo && path.resolve(active.project.repoPath) === path.resolve(identity.repoPath)) stopScheduler(ctx);
-          message = `deadloop disabled for ${identity.githubRepo}. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.`;
+          const state = loadEnablementState();
+          const enabled = state.projects.find((project) => project.repoPath === path.resolve(repoPath) && project.enabled !== false);
+          saveEnablementState(removeEnabledProjectAtPath(state, repoPath));
+          if (active?.project?.repoPath && path.resolve(active.project.repoPath) === path.resolve(repoPath)) stopScheduler(ctx);
+          message = enabled
+            ? `deadloop disabled for ${enabled.githubRepo}. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.`
+            : "deadloop disabled for this checkout. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.";
         });
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-disable", content: message, display: true });

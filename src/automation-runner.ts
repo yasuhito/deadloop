@@ -5,6 +5,8 @@ import {
   type NormalizedProject,
 } from "./core";
 
+const { renderPendingMonitorHandoff } = require("./monitor-prompts.ts");
+
 export type AutomationExecResult = {
   code: number;
   stdout?: string;
@@ -16,6 +18,7 @@ export type AutomationState = {
 };
 
 export type AutomationRunnerDeps = {
+  currentEnabledAt?: () => number | undefined;
   isEnabled?: () => boolean;
   isIdle?: () => boolean;
   notify?: (message: string, level: "info" | "warning" | "error") => void;
@@ -57,12 +60,25 @@ export function deliverPendingDriverHandoff(
   deps: Pick<
     AutomationRunnerDeps,
     "isEnabled" | "notify" | "now" | "saveState" | "sendUserMessage" | "sendUserMessageIfEnabled"
-  >,
+  > & Pick<AutomationRunnerDeps, "currentEnabledAt">,
 ): boolean {
   const handoff = entry.pendingDriverHandoff;
   if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) return false;
-  const pendingPrompt = (handoff as DriverPayload).prompt;
-  const prompt = typeof pendingPrompt === "string" ? pendingPrompt : "";
+  const payload = handoff as DriverPayload;
+  const pendingPrompt = payload.prompt;
+  let prompt = typeof pendingPrompt === "string" ? pendingPrompt : "";
+  if (payload.monitorHandoff && typeof payload.monitorHandoff === "object" && !Array.isArray(payload.monitorHandoff)) {
+    try {
+      prompt = renderPendingMonitorHandoff(payload.monitorHandoff, deps.currentEnabledAt?.());
+    } catch (error) {
+      delete entry.pendingDriverHandoff;
+      recordAutomationResult(entry, "driver_invalid_result");
+      entry.lastError = error instanceof Error ? error.message : String(error);
+      entry.updatedAt = deps.now();
+      deps.saveState(state);
+      return true;
+    }
+  }
   if (!prompt) {
     delete entry.pendingDriverHandoff;
     recordAutomationResult(entry, "driver_invalid_result");
