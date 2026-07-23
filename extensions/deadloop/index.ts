@@ -523,22 +523,31 @@ function updateStatus(ctx, project, state) {
   setLooperStatus(ctx, suffix);
 }
 
-function activeProject(cwd, projects) {
-  let resolvedCwd;
+function canonicalPath(value) {
   try {
-    resolvedCwd = path.resolve(cwd);
+    return fs.realpathSync(value);
   } catch {
-    resolvedCwd = cwd;
+    return path.resolve(value);
   }
+}
+
+function activeProject(cwd, projects) {
+  const repositoryRoot = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
+  const gitDir = gitOutput(cwd, ["rev-parse", "--git-dir"]);
+  const gitCommonDir = gitOutput(cwd, ["rev-parse", "--git-common-dir"]);
+  if (!repositoryRoot || !gitDir || !gitCommonDir || isLinkedGitWorktree(cwd, gitDir, gitCommonDir)) {
+    debugLog("active project rejected", cwd, "missing repository identity or linked worktree");
+    return null;
+  }
+  const canonicalRoot = canonicalPath(repositoryRoot);
   const project = projects.find((candidate) => {
     try {
-      const repoPath = path.resolve(candidate.repoPath);
-      const matches = resolvedCwd === repoPath || resolvedCwd.startsWith(`${repoPath}${path.sep}`);
-      debugLog("project candidate", candidate.id, "repoPath", repoPath, "cwd", resolvedCwd, "matches", matches);
+      const matches = canonicalPath(candidate.repoPath) === canonicalRoot;
+      debugLog("project candidate", candidate.id, "repoPath", candidate.repoPath, "repositoryRoot", canonicalRoot, "matches", matches);
       return matches;
     } catch (error) {
       debugLog("project candidate error", candidate.id, error?.message || error);
-      return cwd === candidate.repoPath;
+      return false;
     }
   });
   return project || null;
@@ -624,16 +633,14 @@ async function collectLiveSnapshotData(
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
   const project = activeProject(cwd, projects);
-  const repositoryRoot = !project
-    ? (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim()
-    : undefined;
+  const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
   const repositoryEnablement: RepositoryEnablement = project ? "enabled" : repositoryRoot ? "disabled" : "unavailable";
   const diagnosticWarnings = projectsResult.ok
     ? [...projectsResult.warnings, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])]
     : [projectsResult.reason, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])];
   const warnings = statusWarnings(diagnosticWarnings, project);
   if (!project) {
-    return { cwd, projects, state, repositoryEnablement, warnings };
+    return { cwd, projects, state, repositoryEnablement, warnings, selectedProject: null };
   }
 
   const issueFields = includeIssueComments
@@ -750,6 +757,7 @@ async function collectLiveSnapshotData(
     claudeConfig,
     repositoryEnablement,
     warnings,
+    selectedProject: project,
   };
 }
 

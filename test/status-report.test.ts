@@ -19,8 +19,12 @@ function report(warnings: string[] = []) {
 }
 
 describe("deadloop status report", () => {
-  it("resolves the active project from the configured repository path", () => {
-    expect(resolveActiveProject("/home/yasuhito/Work/deadloop/docs", projects)?.id).toBe("deadloop");
+  it("resolves the active project only from the exact repository top-level", () => {
+    expect(resolveActiveProject("/home/yasuhito/Work/deadloop", projects)?.id).toBe("deadloop");
+  });
+
+  it("does not select a parent project from a nested repository root", () => {
+    expect(resolveActiveProject("/home/yasuhito/Work/deadloop/vendor/nested", projects)).toBeNull();
   });
 
   it("shows when there are no eligible issues", () => {

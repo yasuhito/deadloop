@@ -122,6 +122,17 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("including PR creation, comments, labels, handoff, merge, and blocked paths");
   });
 
+  it("binds auto-merge to the reviewed PR head", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
+      promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
+      enabledAt: 123, checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review",
+      reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("merge-reviewed-pr.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  });
+
   it("routes branch-update blocked handling through the enablement guard", () => {
     const prompt = renderBranchUpdateMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), expectedBaseOid: "b".repeat(40), branch: "agent/issue-24",

@@ -135,6 +135,7 @@ function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): str
 }
 
 function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string {
+  const guardedMerge = `node ${shellQuotePrompt(`${input.automationDir}/merge-reviewed-pr.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)}`;
   return `Deterministic driver launched reviewer for PR #${input.prNumber}. Do not launch another agent and do not reselect another PR.
 
 Review binding:
@@ -152,7 +153,7 @@ Completion handling:
 - For outcome=approved or a legacy complete promise, re-check GitHub PR state, reviews, and checks before changing labels.
 - Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork.
 - If autoMerge=false, never merge; hand off by moving PR toward \`${input.humanLabel}\` with review evidence.
-- If autoMerge=true, merge only after review, CI/fallback, and repository safety gates all pass.
+- If autoMerge=true, merge only after review, CI/fallback, and repository safety gates all pass. Perform the merge only by running exactly \`${guardedMerge}\`; never run \`gh pr merge\` directly. This binds GitHub's mutation to the reviewed head while holding the enablement guard.
 
 Report only the resulting action and evidence.`;
 }

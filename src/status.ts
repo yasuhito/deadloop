@@ -41,6 +41,7 @@ export type StatusReportInput = {
   gitStatuses?: Record<string, string>;
   gitHeads?: Record<string, string>;
   warnings?: string[];
+  selectedProject?: NormalizedProject | null;
   nowMs?: number;
 };
 
@@ -106,14 +107,14 @@ function isPathInside(child: string, parent: string): boolean {
   return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-export function resolveActiveProject(cwd: string, projects: NormalizedProject[]): NormalizedProject | null {
+export function resolveActiveProject(repositoryRoot: string, projects: NormalizedProject[]): NormalizedProject | null {
   return (
     projects.find((project) => {
       if (!project.repoPath) return false;
       try {
-        return isPathInside(cwd, project.repoPath);
+        return path.resolve(repositoryRoot) === path.resolve(project.repoPath);
       } catch {
-        return cwd === project.repoPath;
+        return repositoryRoot === project.repoPath;
       }
     }) || null
   );
@@ -207,7 +208,9 @@ function selectStaleLeftovers(worktrees: HerdrWorktree[], cleanupCandidates: Cle
 }
 
 export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
-  const project = resolveActiveProject(input.cwd, input.projects);
+  const project = input.selectedProject === undefined
+    ? resolveActiveProject(input.cwd, input.projects)
+    : input.selectedProject;
   const repositoryEnablement = project ? "enabled" : input.repositoryEnablement || "unavailable";
   const nowMs = input.nowMs ?? Date.now();
   if (!project) {

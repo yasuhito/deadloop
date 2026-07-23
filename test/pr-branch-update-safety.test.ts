@@ -160,6 +160,7 @@ describe("PR branch-update safety", () => {
       "/worktree",
       "push",
       "--porcelain",
+      `--force-with-lease=refs/heads/agent/issue-31:${head}`,
       "https://github.com/owner/repo.git",
       "HEAD:refs/heads/agent/issue-31",
     ]);
@@ -194,6 +195,12 @@ describe("PR branch-update safety", () => {
   it("reports stale when a concurrent remote update rejects the push", () => {
     const commands: string[][] = [];
     const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, base);
+
+    expect(result.action).toBe("stale_head");
+  });
+
+  it("rejects a concurrent rewind to an ancestor with an exact-head lease", () => {
+    const result = finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, "0".repeat(40));
 
     expect(result.action).toBe("stale_head");
   });

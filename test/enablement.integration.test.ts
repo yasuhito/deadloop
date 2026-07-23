@@ -1119,4 +1119,35 @@ fs.writeFileSync(reportPath, JSON.stringify({ reads, errors }));
 
     expect(JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8")).projects[0].enabled).toBe(false);
   });
+
+  it("does not start the parent scheduler from a nested independent repository", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    const context = { cwd: repoPath, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined } };
+    await extension.events.get("session_shutdown")!({}, context);
+    const nested = path.join(repoPath, "nested-repository");
+    mkdirSync(nested);
+    git(nested, ["init", "--quiet"]);
+
+    await extension.events.get("session_start")!({}, { ...context, cwd: nested });
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ githubRepositoryId: "R_demo" })))).toBe(false);
+  });
+
+  it("does not start the parent scheduler from a nested linked worktree", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    const context = { cwd: repoPath, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined } };
+    await extension.events.get("session_shutdown")!({}, context);
+    const nested = path.join(repoPath, "nested-worktree");
+    git(repoPath, ["worktree", "add", "--quiet", "-b", "nested-worktree-test", nested]);
+
+    await extension.events.get("session_start")!({}, { ...context, cwd: nested });
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ githubRepositoryId: "R_demo" })))).toBe(false);
+  });
 });

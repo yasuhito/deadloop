@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Run the configured check, revalidate the exact PR head, and perform the only
 // push allowed to a branch-update worker. It re-checks the validated PR head,
-// then uses a normal fast-forward-only push.
+// then uses an exact-head conditional push.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
@@ -45,7 +45,7 @@ function checked(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
   return result.stdout.trim();
 }
 
-function pushNormally(
+function pushConditionally(
   ops: FinalizeOps,
   repo: string,
   destination: string,
@@ -53,8 +53,10 @@ function pushNormally(
   expectedHead: string,
 ): boolean {
   const ref = `refs/heads/${branch}`;
+  // The earlier ancestry check guarantees this leased update is a fast-forward
+  // from expectedHead; the lease adds exact old-ref compare-and-swap semantics.
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", destination, `HEAD:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `HEAD:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return true;
@@ -116,7 +118,7 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       enabled.githubRepositoryId,
       MAX_GUARDED_OPERATION_MS,
     );
-    if (!pushNormally(ops, args.repo, pushDestination, args.branch, args.expectedHead)) {
+    if (!pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead)) {
       return { action: "stale_head", reason: "head_sha_changed_during_push" };
     }
     return {

@@ -212,6 +212,7 @@ describe("automatic PR review repair", () => {
       "/worktree",
       "push",
       "--porcelain",
+      `--force-with-lease=refs/heads/agent/issue-243:${head}`,
       "https://github.com/owner/repo.git",
       "HEAD:refs/heads/agent/issue-243",
     ]);
@@ -246,6 +247,12 @@ describe("automatic PR review repair", () => {
   it("reports stale when a concurrent remote update rejects the push", () => {
     const commands: string[][] = [];
     const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, "c".repeat(40));
+
+    expect(result.action).toBe("stale_head");
+  });
+
+  it("rejects a concurrent rewind to an ancestor with an exact-head lease", () => {
+    const result = finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, "0".repeat(40));
 
     expect(result.action).toBe("stale_head");
   });
