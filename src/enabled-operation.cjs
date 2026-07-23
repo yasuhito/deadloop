@@ -51,7 +51,7 @@ function assertCanonicalStateDir(stateDir) {
   if (path.resolve(stateDir) !== canonicalStateDir()) throw new Error("deadloop state directory is not canonical");
 }
 
-function assertEnabled(project) {
+function assertLocallyEnabled(project) {
   assertCanonicalStateDir(project.stateDir);
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(project.stateDir, "enabled-projects.json"), "utf8"));
@@ -61,11 +61,6 @@ function assertEnabled(project) {
       candidate.repoPath === path.resolve(project.repoPath) && candidate.githubRepo === project.githubRepo && candidate.enabled !== false,
     );
     if (enabled) {
-      const identities = originIdentities(project.repoPath);
-      if (
-        identities.length === 0
-        || identities.some((identity) => githubRepositoryId(identity) !== enabled.githubRepositoryId)
-      ) throw new Error("origin identity mismatch");
       if (project.enabledAt !== undefined && enabled.enabledAt !== project.enabledAt) {
         throw new Error("deadloop enablement generation changed; operation stopped");
       }
@@ -73,6 +68,16 @@ function assertEnabled(project) {
     }
   } catch {}
   throw new Error("deadloop is disabled for this repository");
+}
+
+function assertEnabled(project) {
+  const enabled = assertLocallyEnabled(project);
+  const identities = originIdentities(project.repoPath);
+  if (
+    identities.length === 0
+    || identities.some((identity) => githubRepositoryId(identity) !== enabled.githubRepositoryId)
+  ) throw new Error("deadloop is disabled for this repository");
+  return enabled;
 }
 
 function withEnabledProjectLock(project, operation, options = {}) {
@@ -94,6 +99,7 @@ module.exports = {
   MAX_GUARDED_OPERATION_MS,
   MAX_ORIGIN_IDENTITIES,
   assertEnabled,
+  assertLocallyEnabled,
   canonicalStateDir,
   withEnabledProjectLock,
 };

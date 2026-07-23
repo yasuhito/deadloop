@@ -35,7 +35,7 @@ const {
   DISABLE_LOCK_ATTEMPTS,
   DISABLE_LOCK_DELAY_MS,
 } = require("../../src/driver-enablement.cjs");
-const { assertEnabled, withEnabledProjectLock } = require("../../src/enabled-operation.cjs");
+const { assertLocallyEnabled, withEnabledProjectLock } = require("../../src/enabled-operation.cjs");
 const {
   acquireSchedulerLock: acquireSchedulerFileLock,
   releaseSchedulerLock: releaseSchedulerFileLock,
@@ -353,6 +353,19 @@ function saveEnablementState(state) {
   writeJsonFile(ENABLEMENT_PATH, state);
 }
 
+const DISABLE_GENERATION_PATH = path.join(STATE_DIR, "disable-generation.json");
+
+function loadDisableGeneration() {
+  const value = readJsonFile(DISABLE_GENERATION_PATH, { generation: 0 });
+  return Number.isSafeInteger(value?.generation) && value.generation >= 0 ? value.generation : 0;
+}
+
+function advanceDisableGeneration() {
+  const generation = loadDisableGeneration() + 1;
+  writeJsonFile(DISABLE_GENERATION_PATH, { generation });
+  return generation;
+}
+
 async function withEnablementStateLock(operation) {
   const lockPath = `${ENABLEMENT_PATH}.lock`;
   fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -419,7 +432,7 @@ async function rollbackFailedEnablementAttempt(identity, enabledAt, repoPath, en
 function isProjectEnabled(project) {
   if (!project.repoPath || !project.githubRepo) return false;
   try {
-    assertEnabled({ repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt });
+    assertLocallyEnabled({ repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt });
     return true;
   } catch {
     return false;
@@ -1211,8 +1224,14 @@ export default function (pi) {
       const enableAttemptToken = crypto.randomUUID();
       try {
         let enabledAt;
+        const disableGeneration = await withEnablementStateLock(async () => loadDisableGeneration());
         primaryRepoPath = await detectPrimaryCheckout(pi, ctx.cwd);
-        writeEnableAttempt(primaryRepoPath, enableAttemptToken);
+        await withEnablementStateLock(async () => {
+          if (loadDisableGeneration() !== disableGeneration) {
+            throw new Error("enablement was revoked while checkout detection was running");
+          }
+          writeEnableAttempt(primaryRepoPath, enableAttemptToken);
+        });
         identity = await detectProjectIdentity(pi, primaryRepoPath);
         previousEnabledAt = await withEnablementStateLock(async () => findEnabledProject(loadEnablementState(), identity)?.enabledAt);
         resolveEnableProject(ctx.cwd, identity);
@@ -1274,6 +1293,7 @@ export default function (pi) {
           writeEnableAttempt(repoPath, attempt.token, true);
         }
         await withEnablementStateLock(async () => {
+          advanceDisableGeneration();
           const state = loadEnablementState();
           const enabled = state.projects.find((project) => project.repoPath === path.resolve(repoPath) && project.enabled !== false);
           saveEnablementState(removeEnabledProjectAtPath(state, repoPath));

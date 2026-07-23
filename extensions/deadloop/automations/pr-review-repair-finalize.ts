@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Validate and push a review repair. This is the repair worker's only push path.
-// It re-checks the open PR head, then uses an exact-head conditional push.
+// It re-checks the open PR head, then normally pushes the immutable validated
+// candidate as a fast-forward.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
@@ -49,12 +50,14 @@ function pushConditionally(
   destination: string,
   branch: string,
   expectedHead: string,
+  candidateOid: string,
 ): boolean {
   const ref = `refs/heads/${branch}`;
-  // The earlier ancestry check guarantees this leased update is a fast-forward
-  // from expectedHead; the lease adds exact old-ref compare-and-swap semantics.
+  if (checked(ops, ["git", "-C", repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
+    throw new Error("repair HEAD changed immediately before push");
+  }
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `HEAD:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return true;
@@ -75,10 +78,11 @@ function decideRepairPushGuard(pr: JsonObject, expectedBranch: string, expectedH
 
 function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): JsonObject {
   checked(ops, ["git", "check-ref-format", "--branch", args.branch]);
-  if (ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedHead, "HEAD"]).status !== 0) {
+  const candidateOid = checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS);
+  if (ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedHead, candidateOid]).status !== 0) {
     throw new Error("repair branch does not contain the expected PR head");
   }
-  if (checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"]).toLowerCase() === args.expectedHead.toLowerCase()) {
+  if (candidateOid.toLowerCase() === args.expectedHead.toLowerCase()) {
     throw new Error("repair did not create a new commit");
   }
   if (checked(ops, ["git", "-C", args.repo, "status", "--porcelain"])) throw new Error("repair worktree is dirty before checks");
@@ -94,6 +98,9 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     path.join(args.stateDir, "check-quarantine"),
   ]);
   if (checked(ops, ["git", "-C", args.repo, "status", "--porcelain"])) throw new Error("repair worktree is dirty after checks");
+  if (checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
+    throw new Error("repair HEAD changed during checks");
+  }
 
   const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
   const guardAndPush = (enabled: EnabledProject) => {
@@ -119,13 +126,13 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       enabled.githubRepositoryId,
       MAX_GUARDED_OPERATION_MS,
     );
-    if (!pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead)) {
+    if (!pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid)) {
       return { action: "stale_head", reason: "head_sha_changed_during_push" };
     }
     return {
       action: "pushed",
       reason: "repair_pushed",
-      headOid: checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS),
+      headOid: candidateOid,
     };
   };
   if (ops.assertEnabled) {

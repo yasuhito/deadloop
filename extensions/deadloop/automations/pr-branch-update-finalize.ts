@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Run the configured check, revalidate the exact PR head, and perform the only
 // push allowed to a branch-update worker. It re-checks the validated PR head,
-// then uses an exact-head conditional push.
+// then normally pushes the immutable validated candidate as a fast-forward.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
@@ -51,12 +51,14 @@ function pushConditionally(
   destination: string,
   branch: string,
   expectedHead: string,
+  candidateOid: string,
 ): boolean {
   const ref = `refs/heads/${branch}`;
-  // The earlier ancestry check guarantees this leased update is a fast-forward
-  // from expectedHead; the lease adds exact old-ref compare-and-swap semantics.
+  if (checked(ops, ["git", "-C", repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
+    throw new Error("branch-update HEAD changed immediately before push");
+  }
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `HEAD:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return true;
@@ -77,9 +79,10 @@ function decidePushGuard(pr: JsonObject, expectedBranch: string, expectedHead: s
 
 function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): JsonObject {
   checked(ops, ["git", "check-ref-format", "--branch", args.branch]);
-  const originalHeadIsAncestor = ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedHead, "HEAD"]);
+  const candidateOid = checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS);
+  const originalHeadIsAncestor = ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedHead, candidateOid]);
   if (originalHeadIsAncestor.status !== 0) throw new Error("updated branch does not contain the expected PR head");
-  const baseIsAncestor = ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedBase, "HEAD"]);
+  const baseIsAncestor = ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedBase, candidateOid]);
   if (baseIsAncestor.status !== 0) throw new Error("updated branch does not contain the selected base head");
 
   checked(ops, [
@@ -93,6 +96,9 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     path.join(args.stateDir, "check-quarantine"),
   ]);
   if (checked(ops, ["git", "-C", args.repo, "status", "--porcelain"])) throw new Error("branch-update worktree is dirty after checks");
+  if (checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
+    throw new Error("branch-update HEAD changed during checks");
+  }
 
   const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
   const guardAndPush = (enabled: EnabledProject) => {
@@ -118,13 +124,13 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       enabled.githubRepositoryId,
       MAX_GUARDED_OPERATION_MS,
     );
-    if (!pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead)) {
+    if (!pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid)) {
       return { action: "stale_head", reason: "head_sha_changed_during_push" };
     }
     return {
       action: "pushed",
       reason: "branch_updated",
-      headOid: checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS),
+      headOid: candidateOid,
     };
   };
   if (ops.assertEnabled) {

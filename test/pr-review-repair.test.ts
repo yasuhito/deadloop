@@ -33,8 +33,10 @@ function finalizeWith(
   pushUrl = "https://github.com/owner/repo.git",
   repositoryIds: Record<string, string> = {},
   raceRemoteHead?: string | null,
+  localHeadChanges: { afterChecks?: string; beforePush?: string } = {},
 ) {
   let observedHead = actualHead;
+  let localHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   return finalizeReviewRepair(
     {
       repo: "/worktree",
@@ -57,6 +59,7 @@ function finalizeWith(
       run: (args: string[], timeoutMs?: number) => {
         commands.push(args);
         timeouts.push(timeoutMs);
+        if (args[0] === "node" && localHeadChanges.afterChecks) localHead = localHeadChanges.afterChecks;
         if (args.includes("get-url")) return { status: 0, stdout: `${pushUrl}\n`, stderr: "" };
         if (args.includes("push") && raceRemoteHead !== undefined && raceRemoteHead !== head) {
           return { status: 1, stdout: "", stderr: "rejected (non-fast-forward)" };
@@ -66,6 +69,7 @@ function finalizeWith(
           return { status: 0, stdout: remoteLine, stderr: "" };
         }
         if (args[0] === "gh" && args[1] === "repo") {
+          if (localHeadChanges.beforePush) localHead = localHeadChanges.beforePush;
           return { status: 0, stdout: JSON.stringify({ id: repositoryIds[args[3]] || (args[3] === "other/repo" ? "R_other" : "R_repo") }), stderr: "" };
         }
         if (args[0] === "gh") {
@@ -80,7 +84,7 @@ function finalizeWith(
             stderr: "",
           };
         }
-        if (args.includes("rev-parse")) return { status: 0, stdout: `${"b".repeat(40)}\n`, stderr: "" };
+        if (args.includes("rev-parse")) return { status: 0, stdout: `${localHead}\n`, stderr: "" };
         return { status: 0, stdout: "", stderr: "" };
       },
     },
@@ -212,10 +216,21 @@ describe("automatic PR review repair", () => {
       "/worktree",
       "push",
       "--porcelain",
-      `--force-with-lease=refs/heads/agent/issue-243:${head}`,
       "https://github.com/owner/repo.git",
-      "HEAD:refs/heads/agent/issue-243",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/agent/issue-243",
     ]);
+  });
+
+  it("rejects HEAD changing during configured checks", () => {
+    expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { afterChecks: "c".repeat(40) })).toThrow(
+      "repair HEAD changed during checks",
+    );
+  });
+
+  it("rejects HEAD changing immediately before push", () => {
+    expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { beforePush: "c".repeat(40) })).toThrow(
+      "repair HEAD changed immediately before push",
+    );
   });
 
   it("rejects a repair push remote for another repository", () => {
