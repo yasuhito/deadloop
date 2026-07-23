@@ -1,5 +1,7 @@
 ![deadloop banner](docs/assets/deadloop-banner.png)
 
+English | [日本語](README.ja.md)
+
 # deadloop
 
 > Maximum effort. A loop for building loops.
