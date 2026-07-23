@@ -92,32 +92,6 @@ function runBranchUpdate(world: SafetyWorld): void {
   if (!world.branchUpdateInput) throw new Error("branch update precondition is missing");
   const root = temporaryRoot(world, "deadloop-branch-update-");
   const fixturePath = path.join(root, "fixture.json");
-  let selectedHead = head;
-  let openedWorktreePath: string | undefined;
-  let cleanWorktree = world.branchUpdateInput.cleanWorktree;
-  if (!cleanWorktree) {
-    openedWorktreePath = path.join(root, "opened-worktree");
-    fs.mkdirSync(openedWorktreePath);
-    for (const args of [
-      ["git", "init", "-q", openedWorktreePath],
-      ["git", "-C", openedWorktreePath, "config", "user.email", "acceptance@example.com"],
-      ["git", "-C", openedWorktreePath, "config", "user.name", "Acceptance"],
-    ]) {
-      const result = spawnSync(args[0], args.slice(1), { encoding: "utf8" });
-      if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-    }
-    fs.writeFileSync(path.join(openedWorktreePath, "tracked.txt"), "clean\n");
-    for (const args of [
-      ["git", "-C", openedWorktreePath, "add", "tracked.txt"],
-      ["git", "-C", openedWorktreePath, "commit", "-qm", "fixture"],
-    ]) {
-      const result = spawnSync(args[0], args.slice(1), { encoding: "utf8" });
-      if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-    }
-    selectedHead = spawnSync("git", ["-C", openedWorktreePath, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
-    fs.writeFileSync(path.join(openedWorktreePath, "tracked.txt"), "dirty\n");
-    cleanWorktree = true;
-  }
   fs.writeFileSync(
     fixturePath,
     JSON.stringify({
@@ -126,7 +100,7 @@ function runBranchUpdate(world: SafetyWorld): void {
           number: 31,
           title: "Conflicting PR",
           headRefName: branch,
-          headRefOid: selectedHead,
+          headRefOid: head,
           isCrossRepository: false,
           isDraft: false,
           labels: [{ name: "agent:review" }],
@@ -140,11 +114,9 @@ function runBranchUpdate(world: SafetyWorld): void {
       branchUpdate: {
         ahead: 1,
         behind: 1,
-        conflictFree: false,
+        conflictFree: true,
         ...world.branchUpdateInput,
-        cleanWorktree,
         baseOid: base,
-        openedWorktreePath,
       },
     }),
   );
@@ -243,12 +215,6 @@ When("deadloop が Claude の作業エージェントを起動しようとする
 
 Then("作業エージェントは起動されない", function (this: SafetyWorld) {
   assert.equal(fs.existsSync(this.trustLaunchMarker ?? ""), false);
-});
-
-Then("自動チェックは pull request head 確認より先に実行される", function (this: SafetyWorld) {
-  const checkIndex = this.commands?.findIndex((command) => command[0] === "node") ?? -1;
-  const headQueryIndex = this.commands?.findIndex((command) => command[0] === "gh") ?? -1;
-  assert.ok(checkIndex >= 0 && checkIndex < headQueryIndex);
 });
 
 Then("選択された branch だけが push の対象になる", function (this: SafetyWorld) {

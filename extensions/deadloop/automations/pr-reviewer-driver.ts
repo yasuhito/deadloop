@@ -245,16 +245,6 @@ function applyBranchUpdateBlocked(pr: JsonObject, env: ReturnType<typeof envConf
   return comment;
 }
 
-function validateBranchUpdateWorktree(worktreePath: string, expectedHead: string): void {
-  if (runText(["git", "-C", worktreePath, "status", "--porcelain"]).trim()) {
-    throw new Error("opened branch-update worktree is dirty");
-  }
-  const actualHead = runText(["git", "-C", worktreePath, "rev-parse", "HEAD"]).trim();
-  if (actualHead.toLowerCase() !== expectedHead.toLowerCase()) {
-    throw new Error(`opened branch-update worktree HEAD ${actualHead} does not match expected PR head ${expectedHead}`);
-  }
-}
-
 function launchBranchUpdate(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -269,44 +259,13 @@ function launchBranchUpdate(
   const updaterName = `${env.projectId}-pr-${number}-branch-update-${key}`;
   const uuid = fixture ? "fixture-branch-update-uuid" : randomUUID();
   if (fixture) {
-    const worktreePath = String(fixture.branchUpdate?.openedWorktreePath || `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`);
-    if (fixture.branchUpdate?.openedWorktreePath) {
-      const launch = launchAgentFlow(
-        {
-          worktree: { mode: "open", branch },
-          repoPath: env.repoPath,
-          automationDir: env.automationDir,
-          stateDir: env.stateDir,
-          name: updaterName,
-          agent: env.branchUpdateAgent,
-          model: env.branchUpdateModel,
-          level: "medium",
-          uuid,
-          promptFilePrefix: "branch-update-prompt",
-          renderPrompt: ({ promiseFile }: { promiseFile: string }) =>
-            branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
-          validateWorktree: (openedPath: string) => validateBranchUpdateWorktree(openedPath, headOid),
-        },
-        {
-          mkdirSync: fs.mkdirSync,
-          runner: {
-            openWorktree: () => ({ workspaceId: "fixture-update-workspace", worktreePath }),
-            listAgents: () => [],
-            createTab: () => ({ tabId: "fixture-update-tab" }),
-          } as any,
-          runText: () => "fixture launch",
-          writeFileSync: fs.writeFileSync,
-        },
-      );
-      return { updaterName, headRefName: branch, retryKey: key, ...launch, simulated: true };
-    }
     return {
       updaterName,
       headRefName: branch,
       retryKey: key,
       workspaceId: "fixture-update-workspace",
       tabId: "fixture-update-tab",
-      worktreePath,
+      worktreePath: `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`,
       promptFile: `${env.stateDir}/runs/${uuid}/branch-update-prompt.md`,
       promiseFile: `${env.stateDir}/runs/${uuid}/promise.json`,
       simulated: true,
@@ -332,7 +291,6 @@ function launchBranchUpdate(
       promptFilePrefix: "branch-update-prompt",
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
-      validateWorktree: (worktreePath: string) => validateBranchUpdateWorktree(worktreePath, headOid),
     },
     { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
   );

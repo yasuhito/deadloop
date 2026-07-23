@@ -4,7 +4,7 @@
 
 ## ブランチ更新と push の安全制限（Issue #114）
 
-`acceptance/features/branch-update-push-safety.feature.md` は次の分類 ID を移行した。同等性の人間レビューが完了するまでは、対応する Vitest 8 件も残している。
+`acceptance/features/branch-update-push-safety.feature.md` は次の分類 ID を移行した。同等性の人間レビューが完了するまでは、対応する Vitest 9 件も残している。
 
 | 分類 ID | 最終結果 | 移行先シナリオ |
 |---|---|---|
@@ -14,7 +14,7 @@
 | T284 | 移行済み | 選択後に head が変わった pull request は作業エージェントを起動しない |
 | T288 | 移行済み | push 直前に変わった pull request head は古い head として報告する |
 | T289 | 移行済み | 別リポジトリの pull request は branch を更新しない |
-| T290 | 移行済み | 自動チェックは push 直前の head 確認より先に実行される |
+| T290 | Vitest 継続へ再分類 | コマンド実行順の局所的な診断であり、外部観測可能な保証として表現できないため `test/pr-branch-update-safety.test.ts` に残す |
 | T291 | 移行済み | 更新できる pull request は選択された branch だけへ push する／更新できる pull request は強制せずに push する |
 | T292 | 同じ保証へ統合 | push 直前に pull request head が変わった場合は branch を更新しない |
 
@@ -22,14 +22,14 @@ T285〜T287 は retry key と記録済み試行の低レベル状態を診断す
 
 ### 同等性確認
 
-移行前の Vitest 8 件と Cucumber 9 シナリオを併存させ、次のコマンドで両方が成功することを確認した。
+移行前の Vitest 9 件と Cucumber 9 シナリオを併存させ、次のコマンドで両方が成功することを確認した。
 
 ```bash
 npm run test:acceptance
-npx vitest run test/agent-trust.test.ts test/pr-branch-update-decision.test.ts test/pr-branch-update-safety.test.ts test/pr-reviewer-driver.test.ts
+npx vitest run test/agent-trust.test.ts test/launch-agent-integration.test.ts test/pr-branch-update-decision.test.ts test/pr-branch-update-safety.test.ts test/pr-reviewer-driver.test.ts
 ```
 
-Cucumber は 10 シナリオ 54 ステップ、Vitest は対象 4 ファイル 35 テストが成功した。未コミット変更のシナリオは、fixture が指定する実際の Git 作業ツリーを、本番と同じ起動直前の検査境界へ渡し、作業エージェントの起動記録がないことを観測する。古い head のシナリオは finalizer の `action=stale_head` と push 記録がないことを別々に観測する。信頼確認シナリオは `herdr` を記録用の偽物へ置き換え、起動記録がないことを観測する。この信頼確認は、信頼判定の T021 と Herdr を起動しない統合動作の T253 を一つの外部結果で同時に覆う。
+Cucumber は 9 シナリオ 49 ステップ、Vitest は対象 5 ファイル 39 テストが成功した。未コミット変更と古い head のシナリオは、ブランチ更新の決定論的な実行境界をテスト用 fixture に置き換え、作業エージェントの起動記録がないことを観測する。古い head のシナリオは finalizer の `action=stale_head` と push 記録がないことも別々に観測する。信頼確認シナリオは `herdr` を記録用の偽物へ置き換え、起動記録がないことを観測する。この信頼確認は、信頼判定の T021 と Herdr を起動しない統合動作の T253 を一つの外部結果で同時に覆う。T290 は内部コマンド順の診断であるため Cucumber へ移さず、Vitest を継続する。
 
 ### 意図的失敗の確認
 
@@ -37,13 +37,12 @@ Cucumber は 10 シナリオ 54 ステップ、Vitest は対象 4 ファイル 3
 
 | 分類 ID | 一時的に与えた失敗 | 報告された結果 |
 |---|---|---|
-| T021、T253 | 起動記録があることを期待 | 「信頼されていない作業場所では作業エージェントを起動しない」が失敗（9 passed, 1 failed） |
+| T021、T253 | 起動記録があることを期待 | 「信頼されていない作業場所では作業エージェントを起動しない」が失敗（8 passed, 1 failed） |
 | T283 | 作業エージェントの起動結果があることを期待 | 「変更中の作業場所では branch 更新の作業エージェントを起動しない」が失敗 |
 | T284 | 作業エージェントの起動結果があることを期待 | 「選択後に head が変わった pull request は作業エージェントを起動しない」が失敗（両シナリオの実行では 7 passed, 2 failed） |
 | T288 | finalizer の結果が `stale_head` 以外であることを期待 | 「push 直前に変わった pull request head は古い head として報告する」が失敗 |
 | T292 | push があることを期待 | 「push 直前に pull request head が変わった場合は branch を更新しない」が失敗 |
 | T289 | push があることを期待 | 「別リポジトリの pull request は branch を更新しない」が失敗（両シナリオの実行では 7 passed, 2 failed） |
-| T290 | 自動チェックが head 確認より後であることを期待 | 「自動チェックは push 直前の head 確認より先に実行される」が失敗（8 passed, 1 failed） |
 | T291 | 成功した push の送信先に別 branch を追加 | 「更新できる pull request は選択された branch だけへ push する」だけが失敗（8 passed, 1 failed） |
 | T291 | 成功した push のモードを `force` に変更 | 「更新できる pull request は強制せずに push する」だけが失敗（8 passed, 1 failed） |
 
@@ -60,4 +59,4 @@ Cucumber は 10 シナリオ 54 ステップ、Vitest は対象 4 ファイル 3
 -   'normal'
 ```
 
-確認のたびに一時変更を戻した。最後に変更のない期待値で再実行し、10 シナリオ 54 ステップが成功した。
+確認のたびに一時変更を戻した。最後に変更のない期待値で再実行し、9 シナリオ 49 ステップが成功した。
