@@ -18,7 +18,6 @@ npx skills@latest add yasuhito/deadloop
 
 - v0 is a Pi package / extension.
 - The default runner is [Herdr](https://herdr.dev/).
-- The public name, package name, commands, config paths, and environment variables are **deadloop**.
 
 ## Safety first
 

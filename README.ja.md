@@ -18,7 +18,6 @@ npx skills@latest add yasuhito/deadloop
 
 - v0 は Pi パッケージ／拡張として動作します。
 - 既定の実行基盤は [Herdr](https://herdr.dev/) です。
-- 公開名、パッケージ名、コマンド、設定パス、環境変数には **deadloop** を使用します。
 
 ## 安全を最優先する
 
