@@ -21,13 +21,25 @@ describe("package manifest files", () => {
 
   it("defines a local lint command", () => {
     expect(packageJson.scripts.lint).toBe(
-      "biome check package.json biome.json deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src extensions/deadloop/index.ts extensions/deadloop/automations/*.ts test/*.ts --files-ignore-unknown=true",
+      "biome check package.json biome.json cucumber.cjs deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src acceptance/**/*.ts extensions/deadloop/index.ts extensions/deadloop/automations/*.ts test/*.ts --files-ignore-unknown=true",
     );
+  });
+
+  it("provides a Vitest-only command", () => {
+    expect(packageJson.scripts["test:unit"]).toBe("vitest run");
+  });
+
+  it("provides a Cucumber-only command", () => {
+    expect(packageJson.scripts["test:acceptance"]).toBe("tsx src/run-acceptance-tests.ts");
+  });
+
+  it("runs Vitest and Cucumber serially", () => {
+    expect(packageJson.scripts.test).toBe("npm run test:unit && npm run test:acceptance");
   });
 
   it("defines a conventional check command", () => {
     expect(packageJson.scripts.check).toBe(
-      "npm test && npm run lint && npm run typecheck && bash -n extensions/deadloop/automations/*.sh && npm pack --dry-run",
+      "npm run check:acceptance-rules && npm test && npm run lint && npm run typecheck && bash -n extensions/deadloop/automations/*.sh && npm pack --dry-run",
     );
   });
 

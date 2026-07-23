@@ -27,17 +27,5 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npm test
-
-      - name: Run static and formatting checks
-        run: npm run lint
-
-      - name: Run TypeScript type checks
-        run: npm run typecheck
-
-      - name: Check shell automation syntax
-        run: bash -n extensions/deadloop/automations/*.sh
-
-      - name: Check package contents
-        run: npm pack --dry-run
+      - name: Run the complete project check
+        run: npm run check

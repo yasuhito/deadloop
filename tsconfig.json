@@ -17,6 +17,7 @@
     "src/**/*.cjs",
     "extensions/deadloop/index.ts",
     "extensions/deadloop/automations/*.ts",
+    "acceptance/**/*.ts",
     "test/**/*.ts"
   ],
   "exclude": ["node_modules", ".pi-subagents"]
