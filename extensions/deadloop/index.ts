@@ -31,7 +31,6 @@ const {
 } = require("../../src/scheduler-lock.cjs");
 import { inferredProjectId, schedulerLockName } from "../../src/project-identity";
 import {
-  acknowledgeAutoMerge,
   findEnabledProject,
   isEnabledProjectState,
   normalizeEnablementState,
@@ -747,6 +746,18 @@ export default function (pi) {
   async function tick(ctx) {
     if (!active) return;
 
+    let remainsEnabled = false;
+    try {
+      remainsEnabled = isProjectEnabled(active.project);
+    } catch (error) {
+      debugLog("scheduler enablement check failed", error?.message || error);
+    }
+    if (!remainsEnabled) {
+      stopScheduler(ctx);
+      setLooperStatus(ctx, "deadloop is not enabled for this repository");
+      return;
+    }
+
     const projectsResult = loadProjectsResult(ctx.cwd);
     if (!projectsResult.ok) {
       setLooperStatus(ctx, `skipped: ${projectsResult.reason}`);
@@ -842,7 +853,6 @@ export default function (pi) {
           throw error;
         }
         await updateEnablementState((state) => {
-          if (wasEnabled && configuredProject.autoMerge) return acknowledgeAutoMerge(state, identity);
           if (findEnabledProject(state, identity)) return state;
           return upsertEnabledProject(state, identity, Date.now(), firstEnable);
         });

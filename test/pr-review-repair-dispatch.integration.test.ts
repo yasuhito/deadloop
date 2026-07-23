@@ -17,12 +17,13 @@ function runDispatch(enabled: boolean): { output: Record<string, any>; events: s
   tempDirs.push(root);
   const bin = path.join(root, "bin");
   const worktree = path.join(root, "worktree");
-  const state = path.join(root, "state");
+  const configDir = path.join(root, "config");
+  const state = path.join(configDir, "deadloop");
   const promise = path.join(root, "review-promise.json");
   const eventLog = path.join(root, "events.log");
   fs.mkdirSync(bin);
   fs.mkdirSync(worktree);
-  fs.mkdirSync(state);
+  fs.mkdirSync(state, { recursive: true });
   fs.writeFileSync(
     path.join(state, "enabled-projects.json"),
     JSON.stringify({
@@ -93,6 +94,7 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
       env: {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
+        PI_CODING_AGENT_DIR: configDir,
         DEADLOOP_PROJECT_ID: "demo",
         DEADLOOP_REPO_PATH: root,
         DEADLOOP_GITHUB_REPO: "owner/repo",

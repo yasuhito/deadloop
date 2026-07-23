@@ -6,29 +6,38 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const sandboxes: string[] = [];
 
-function mutationRanAfterDisable(monitor: string): boolean {
+function mutationRanAfterDisable(monitor: string, useFabricatedState = false): boolean {
   const root = mkdtempSync(path.join(os.tmpdir(), `deadloop-${monitor}-monitor-`));
   sandboxes.push(root);
-  const stateDir = path.join(root, "state");
+  const configDir = path.join(root, "config");
+  const stateDir = path.join(configDir, "deadloop");
   const repoPath = path.join(root, "repo");
   const marker = path.join(root, "mutation-ran");
-  mkdirSync(stateDir);
+  mkdirSync(stateDir, { recursive: true });
   mkdirSync(repoPath);
   writeFileSync(
     path.join(stateDir, "enabled-projects.json"),
     JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/repo", enabledAt: 1, enabled: false }] }),
   );
+  const suppliedStateDir = useFabricatedState ? path.join(root, "fabricated-state") : stateDir;
+  if (useFabricatedState) {
+    mkdirSync(suppliedStateDir);
+    writeFileSync(
+      path.join(suppliedStateDir, "enabled-projects.json"),
+      JSON.stringify({ projects: [{ repoPath, githubRepo: "owner/repo", enabledAt: 1 }] }),
+    );
+  }
   const result = spawnSync(
     "node",
     [
       "extensions/deadloop/automations/guarded-operation.ts",
       "--project-repo", repoPath,
       "--github-repo", "owner/repo",
-      "--state-dir", stateDir,
+      "--state-dir", suppliedStateDir,
       "--",
       "node", "-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')`,
     ],
-    { cwd: process.cwd(), encoding: "utf8" },
+    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PI_CODING_AGENT_DIR: configDir } },
   );
   if (result.status !== 2) throw new Error(result.stderr || result.stdout);
   return existsSync(marker);
@@ -53,5 +62,9 @@ describe("pending monitor disable integration", () => {
 
   it("stops a pending repair monitor mutation after disable", () => {
     expect(mutationRanAfterDisable("repair")).toBe(false);
+  });
+
+  it("rejects a fabricated enabled state directory when canonical state is disabled", () => {
+    expect(mutationRanAfterDisable("fabricated", true)).toBe(false);
   });
 });

@@ -3,7 +3,9 @@
 // /deadloop-disable. A disabled repository never starts the command.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-const { withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+
+const GUARDED_OPERATION_TIMEOUT_MS = MAX_GUARDED_OPERATION_MS;
 
 type Args = { projectRepo: string; githubRepo: string; stateDir: string; command: string[] };
 
@@ -21,11 +23,15 @@ function parseArgs(argv: string[]): Args {
   return { projectRepo: values.projectRepo, githubRepo: values.githubRepo, stateDir: values.stateDir, command: argv.slice(separator + 1) };
 }
 
-function runGuarded(args: Args): number {
+function runGuarded(args: Args, spawn = spawnSync): number {
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir },
     () => {
-      const result = spawnSync(args.command[0], args.command.slice(1), { stdio: "inherit" });
+      const result = spawn(args.command[0], args.command.slice(1), {
+        stdio: "inherit",
+        timeout: GUARDED_OPERATION_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      });
       if (result.error) throw result.error;
       return result.status ?? 1;
     },
@@ -42,4 +48,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { parseArgs, runGuarded };
+module.exports = { GUARDED_OPERATION_TIMEOUT_MS, parseArgs, runGuarded };

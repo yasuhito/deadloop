@@ -22,12 +22,13 @@ describe("PR reviewer relaunch integration", () => {
     tempDirs.push(root);
     const bin = path.join(root, "bin");
     const worktree = path.join(root, "worktree");
-    const state = path.join(root, "state");
+    const configDir = path.join(root, "config");
+    const state = path.join(configDir, "deadloop");
     const log = path.join(root, "herdr.log");
     const prState = path.join(root, "pr-state.json");
     fs.mkdirSync(bin);
     fs.mkdirSync(worktree);
-    fs.mkdirSync(state);
+    fs.mkdirSync(state, { recursive: true });
     fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
       projects: [{ repoPath: root, githubRepo: "owner/repo", enabledAt: 1 }],
     }));
@@ -87,6 +88,7 @@ if (args[0] === "agent" && args[1] === "list") {
         env: {
           ...process.env,
           PATH: `${bin}:${process.env.PATH}`,
+          PI_CODING_AGENT_DIR: configDir,
           DEADLOOP_PROJECT_ID: "demo",
           DEADLOOP_REPO_PATH: root,
           DEADLOOP_GITHUB_REPO: "owner/repo",

@@ -130,7 +130,7 @@ describe("enablement command integration", () => {
     expect(extension.messages.at(-1)).toContain("deadloop enabled");
   });
 
-  it("accepts a repeated enable as explicit acknowledgement of a preexisting true auto-merge setting", async () => {
+  it("keeps a repeated enable idempotent for a preexisting true auto-merge setting", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath, { autoMerge: true });
     const extension = await loadExtension(root);
@@ -138,7 +138,7 @@ describe("enablement command integration", () => {
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
-    expect(extension.messages.at(-1)).toContain("autoMerge is on");
+    expect(extension.messages.at(-1)).toContain("autoMerge is off");
   });
 
   it("forces a preexisting true auto-merge setting off on first enable", async () => {
@@ -328,6 +328,24 @@ describe("enablement command integration", () => {
     const state = JSON.parse(readFileSync(statePath, "utf8"));
     state.projects[0].enabled = false;
     writeFileSync(statePath, JSON.stringify(state));
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const lockName = schedulerLockName({ id: "demo", repoPath, githubRepo: "owner/demo" });
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", lockName))).toBe(false);
+  });
+
+  it("releases the scheduler lock after disable even when project configuration is invalid", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+    vi.useFakeTimers();
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath, { isIdle: () => false });
+    const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    state.projects[0].enabled = false;
+    writeFileSync(statePath, JSON.stringify(state));
+    writeFileSync(path.join(root, ".pi", "agent", "deadloop", "projects.json"), "{");
 
     await vi.advanceTimersByTimeAsync(30_000);
 

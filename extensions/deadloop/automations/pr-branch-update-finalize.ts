@@ -4,7 +4,7 @@
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
-const { withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
@@ -22,17 +22,21 @@ type FinalizeArgs = {
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
 type FinalizeOps = {
-  run(args: string[]): CommandResult;
+  run(args: string[], timeoutMs?: number): CommandResult;
   assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string }) => void;
 };
 
-function defaultRun(args: string[]): CommandResult {
-  const result = spawnSync(args[0], args.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+function defaultRun(args: string[], timeoutMs?: number): CommandResult {
+  const result = spawnSync(args[0], args.slice(1), {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    ...(timeoutMs === undefined ? {} : { timeout: timeoutMs, killSignal: "SIGKILL" }),
+  });
   return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
 }
 
-function checked(ops: FinalizeOps, args: string[]): string {
-  const result = ops.run(args);
+function checked(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
+  const result = ops.run(args, timeoutMs);
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || `command failed: ${args.join(" ")}`).trim());
   return result.stdout.trim();
 }
@@ -82,10 +86,14 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir };
   if (ops.assertEnabled) {
     ops.assertEnabled(project);
-    checked(ops, ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`]);
+    checked(ops, ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`], MAX_GUARDED_OPERATION_MS);
   } else {
     withEnabledProjectLock(project, () =>
-      checked(ops, ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`]),
+      checked(
+        ops,
+        ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`],
+        MAX_GUARDED_OPERATION_MS,
+      ),
     );
   }
   return { action: "pushed", reason: "branch_updated", headOid: checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"]) };

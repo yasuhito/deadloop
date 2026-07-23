@@ -1,5 +1,6 @@
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { normalizeEnablementStateValue } = require("./enablement-state.cjs");
 const { acquireLockSync, releaseOwned } = require("./enablement-lock.cjs");
@@ -19,7 +20,19 @@ function originIdentities(repoPath) {
   return urls.map(githubRepoFromRemote);
 }
 
+const MAX_GUARDED_OPERATION_MS = 25_000;
+
+function canonicalStateDir() {
+  const configDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+  return path.resolve(configDir, "deadloop");
+}
+
+function assertCanonicalStateDir(stateDir) {
+  if (path.resolve(stateDir) !== canonicalStateDir()) throw new Error("deadloop state directory is not canonical");
+}
+
 function assertEnabled(project) {
+  assertCanonicalStateDir(project.stateDir);
   try {
     const identities = originIdentities(project.repoPath);
     if (identities.length === 0 || identities.some((identity) => identity !== project.githubRepo)) throw new Error("origin identity mismatch");
@@ -35,6 +48,7 @@ function assertEnabled(project) {
 }
 
 function withEnabledProjectLock(project, operation, options = {}) {
+  assertCanonicalStateDir(project.stateDir);
   const lockPath = path.join(project.stateDir, "enabled-projects.json.lock");
   fs.mkdirSync(project.stateDir, { recursive: true });
   const lock = acquireLockSync(lockPath, { ...options, busyMessage: "enablement state is busy; operation stopped" });
@@ -47,4 +61,4 @@ function withEnabledProjectLock(project, operation, options = {}) {
   }
 }
 
-module.exports = { assertEnabled, withEnabledProjectLock };
+module.exports = { MAX_GUARDED_OPERATION_MS, assertEnabled, canonicalStateDir, withEnabledProjectLock };
