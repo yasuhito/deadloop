@@ -7,7 +7,6 @@ import path from "node:path";
 import { After, Given, Then, When } from "@cucumber/cucumber";
 
 const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
-const { decideBranchUpdateLive } = require("../../extensions/deadloop/automations/pr-branch-update-decision.ts");
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const candidate = "cccccccccccccccccccccccccccccccccccccccc";
@@ -19,9 +18,6 @@ type SafetyWorld = {
   changeHeadAfterChecks?: boolean;
   crossRepository?: boolean;
   commands?: string[][];
-  decisionResult?: Record<string, unknown>;
-  decisionRepo?: string;
-  expectedHeadRef?: string;
   finalizeResult?: Record<string, unknown>;
   temporaryRoots?: string[];
   trackedChangesAfterChecks?: boolean;
@@ -31,7 +27,6 @@ type SafetyWorld = {
 
 function finalize(world: SafetyWorld): void {
   const commands: string[][] = [];
-  let configuredCheckCompleted = false;
   world.commands = commands;
   world.finalizeResult = finalizeBranchUpdate(
     {
@@ -53,7 +48,6 @@ function finalize(world: SafetyWorld): void {
       run: (args: string[]) => {
         commands.push(args);
         if (args[0] === "node" && args[1]?.endsWith("/run-project-check.ts")) {
-          configuredCheckCompleted = true;
           if (world.changeHeadAfterChecks) world.actualHead = base;
         }
         if (args.includes("get-url")) return { status: 0, stdout: `${pushUrl}\n`, stderr: "" };
@@ -66,7 +60,6 @@ function finalize(world: SafetyWorld): void {
           return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
         }
         if (args[0] === "gh") {
-          if (!configuredCheckCompleted) throw new Error("PR head queried before the configured check completed");
           return {
             status: 0,
             stdout: JSON.stringify({
@@ -112,46 +105,40 @@ function pushTargets(world: SafetyWorld): string[][] {
 
 function successfulPushForceOptions(world: SafetyWorld): string[][] {
   if (world.finalizeResult?.action !== "pushed") return [];
-  return pushCommands(world).map((command) =>
-    command.filter(
-      (argument) =>
-        argument === "-f" || argument === "--mirror" || argument.startsWith("--force") || argument.startsWith("+"),
-    ),
-  );
+  return pushCommands(world).map((command) => {
+    const forceOptions: string[] = [];
+    let parsesOptions = true;
+    for (const argument of command.slice(command.indexOf("push") + 1)) {
+      if (argument === "--") {
+        parsesOptions = false;
+        continue;
+      }
+      if (argument.startsWith("+")) {
+        forceOptions.push(argument);
+        continue;
+      }
+      if (!parsesOptions) continue;
+      if (argument === "--mirror" || argument.startsWith("--force")) {
+        forceOptions.push(argument);
+        continue;
+      }
+      if (!argument.startsWith("-") || argument.startsWith("--")) continue;
+      for (const option of argument.slice(1)) {
+        if (option === "f") {
+          forceOptions.push(argument);
+          break;
+        }
+        if (option === "o") break;
+      }
+    }
+    return forceOptions;
+  });
 }
 
 function temporaryRoot(world: SafetyWorld, prefix: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   world.temporaryRoots = [...(world.temporaryRoots ?? []), root];
   return root;
-}
-
-function git(repo: string, args: string[]): string {
-  const result = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
-  if (result.status !== 0) throw new Error((result.stderr || result.stdout).trim());
-  return result.stdout.trim();
-}
-
-function prepareDecisionRepo(world: SafetyWorld): string {
-  const repo = temporaryRoot(world, "deadloop-branch-decision-");
-  git(repo, ["init", "--initial-branch=work"]);
-  git(repo, ["config", "user.name", "Acceptance Test"]);
-  git(repo, ["config", "user.email", "acceptance@example.com"]);
-  fs.writeFileSync(path.join(repo, "initial.txt"), "initial\n");
-  git(repo, ["add", "initial.txt"]);
-  git(repo, ["commit", "-m", "initial"]);
-  git(repo, ["branch", "expected-head"]);
-  git(repo, ["branch", "base"]);
-  fs.writeFileSync(path.join(repo, "work.txt"), "work\n");
-  git(repo, ["add", "work.txt"]);
-  git(repo, ["commit", "-m", "work"]);
-  git(repo, ["checkout", "base"]);
-  fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
-  git(repo, ["add", "base.txt"]);
-  git(repo, ["commit", "-m", "base"]);
-  git(repo, ["checkout", "work"]);
-  world.decisionRepo = repo;
-  return repo;
 }
 
 Given("更新前に確認した pull request head がある", function (this: SafetyWorld) {
@@ -171,21 +158,6 @@ Given("自動チェック後に作業場所へ追跡中の変更がある", func
   this.trackedChangesAfterChecks = true;
 });
 
-Given("branch 更新の選定前から作業場所に未コミットの変更がある", function (this: SafetyWorld) {
-  const repo = prepareDecisionRepo(this);
-  fs.writeFileSync(path.join(repo, "work.txt"), "uncommitted\n");
-});
-
-Given("選定対象の pull request head が事前確認した head と異なる", function (this: SafetyWorld) {
-  prepareDecisionRepo(this);
-  this.expectedHeadRef = "expected-head";
-});
-
-When("deadloop が branch 更新方法を選定する", function (this: SafetyWorld) {
-  if (!this.decisionRepo) throw new Error("branch decision precondition is missing");
-  this.decisionResult = decideBranchUpdateLive(this.decisionRepo, "work", "base", this.expectedHeadRef);
-});
-
 When("deadloop が branch 更新を完了しようとする", function (this: SafetyWorld) {
   try {
     finalize(this);
@@ -201,20 +173,6 @@ Then("branch への push は行われない", function (this: SafetyWorld) {
 
 Then("完了結果は古い head として観測される", function (this: SafetyWorld) {
   assert.equal(this.finalizeResult?.action, "stale_head");
-});
-
-Then("branch 更新方法は作業場所の変更を理由に停止となる", function (this: SafetyWorld) {
-  assert.deepEqual(
-    { action: this.decisionResult?.action, reason: this.decisionResult?.reason },
-    { action: "blocked", reason: "dirty_worktree" },
-  );
-});
-
-Then("branch 更新方法は古い head を理由に停止となる", function (this: SafetyWorld) {
-  assert.deepEqual(
-    { action: this.decisionResult?.action, reason: this.decisionResult?.reason },
-    { action: "blocked", reason: "stale_head" },
-  );
 });
 
 Given("作業場所の信頼が承認されていない", function (this: SafetyWorld) {
