@@ -71,10 +71,34 @@
 
 ### 意図的失敗による検出確認
 
-「環境変数で指定した設定ファイルを使う」を対象に、Then の期待値を `paths.environment` から一時的に `/intentionally-wrong/projects.json` へ変更し、次を実行した。
+各シナリオを対象に、`acceptance/steps/public-configuration.steps.ts` の Then が比較する期待値だけを表中の不正値へ一時的に変更し、次の形式で個別実行した。シナリオ名は正規表現の先頭・末尾を指定し、同じ文言を含む別シナリオが同時に選ばれないようにした。
 
 ```bash
-npx cucumber-js --name '環境変数で指定した設定ファイルを使う'
+npx cucumber-js --name '^<シナリオ名>$'
 ```
 
-終了コードは 1 だった。失敗したのは対象の一シナリオだけで、`acceptance/steps/public-configuration.steps.ts` の `assert.equal` が実際値 `/environment/projects.json` と一時的な期待値 `/intentionally-wrong/projects.json` の差を報告した。期待値を `paths.environment` に復元し、同じコマンドを再実行して 1 scenario / 5 steps の成功を確認した。続いて `npm run test:acceptance` で全 22 scenarios / 91 steps の成功を確認した。一時的な不正値はコミットしていない。
+| 分類 ID | 失敗を確認したシナリオ | 一時的な期待値 |
+|---|---|---|
+| T076 | 「環境変数で指定した設定ファイルを使う」 | `/intentionally-wrong/projects.json` |
+| T077 | 「利用者設定を同梱設定より優先する」 | `/intentionally-wrong/projects.json` |
+| T078 | 「利用者設定がない場合は同梱設定を使う」 | `/intentionally-wrong/projects.json` |
+| T080 | 「設定を省略した場合は標準の自動化を使う」 | 自動化 ID の一覧を `["intentionally-wrong"]` に変更 |
+| T081 | 「空の自動化設定は自動化を無効のままにする」 | 自動化の一覧を `[{ id: "intentionally-wrong" }]` に変更 |
+| T095 | 「設定を省略した Worker は pi を使う」 | `intentionally-wrong` |
+| T097 | 「指定した Worker エージェントを使う」 | `intentionally-wrong` |
+| T099 | 「設定を省略した Reviewer は pi を使う」 | `intentionally-wrong` |
+| T100 | 「指定した Reviewer エージェントを使う」 | `intentionally-wrong` |
+| T103 | 「指定した Worker モデルをそのまま使う」 | `intentionally-wrong` |
+| T104 | 「指定した Reviewer モデルをそのまま使う」 | `intentionally-wrong` |
+| T108 | 「設定を省略した場合は自動マージしない」 | `true` |
+| T109 | 「自動マージは明示した場合だけ有効になる」 | `false` |
+| T110 | 「設定を省略した場合は CI 代替を使わない」 | `true` |
+| T111 | 「設定を省略した場合は外部レビューを使わない」 | `true` |
+| T118 | 「ローカルで省略した Worker モデルを共有方針が補う」 | `intentionally-wrong` |
+| T119 | 「共有方針はローカルで省略した指示ファイルを補う」 | `intentionally-wrong` |
+| T120 | 「ローカルの Worker モデルは共有方針より優先する」 | `intentionally-wrong` |
+| T122 | 「共有方針の空の自動化設定は自動化を無効のままにする」 | 自動化の一覧を `[{ id: "intentionally-wrong" }]` に変更 |
+| T123 | 「共有方針はローカルで省略した自動化を補う」 | `intentionally-wrong` |
+| T125 | 「共有方針はローカルで省略した外部レビュー設定を補う」 | `false` |
+
+全 21 件の個別実行はそれぞれ終了コード 1 となり、指定した一シナリオだけが失敗した。いずれも Then の `assert.equal` または `assert.deepEqual` が実際値と一時的な期待値の差を報告し、失敗したシナリオ名、`.feature.md` の失敗ステップ、ステップ定義の位置を出力した。T081 と T122 は同じ Then ステップを使うが、ローカル設定と共有方針という別の保証であるため、別々に選択して失敗を確認した。各確認後に期待値を復元し、`npm run test:acceptance` で全 22 scenarios / 91 steps の成功を確認した。一時的な不正値はコミットしていない。
