@@ -60,7 +60,7 @@ Given("選定可能な Issue が GitHub 上で未完了の依存を持つ", func
   this.fixtureName = "selection-open-relationship-dependency.json";
 });
 
-When("Issue coordinator が作業対象を選ぶ", function (this: IssueSelectionWorld) {
+When("deadloop が作業対象を選ぶ", function (this: IssueSelectionWorld) {
   if (!this.fixtureName) throw new Error("issue precondition is missing");
   this.decision = selectIssue(this.fixtureName);
 });

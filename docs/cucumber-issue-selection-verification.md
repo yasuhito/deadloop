@@ -28,4 +28,6 @@ Issue #117 が求める選定対象外の状態を網羅するため、次のシ
 
 同日に、選定対象外を確認する3つの Then の期待値を一時的に `true` へ変えて、`npm run test:acceptance` を実行した。コマンドは status 1 で終了し、T244 の「作業中」 (`acceptance/features/issue-selection.feature.md:20`、Then `acceptance/steps/issue-selection.steps.ts:76`、assertion `:77`)、T245 の「依存欄」 (`acceptance/features/issue-selection.feature.md:41`、Then `:84`、assertion `:85`)、T248 の「末尾」 (feature `:42`、Then `:84`、assertion `:85`)、T247 の「GitHub 上の未完了の依存」 (feature `:50`、Then `:88`、assertion `:89`) の4シナリオが失敗した。各失敗は `false !== true` と `-false` / `+true` の差分を報告した。期待値を `false` へ戻した後、同じコマンドが9シナリオ、37ステップで成功することを確認した。
 
+同日に、新規追加した2つの選定対象外シナリオについても、各 Then の期待値を一時的に `true` へ変えて `npm run test:acceptance` を実行した。コマンドは status 1 で終了し、「準備不足」 (`acceptance/features/issue-selection.feature.md:14`、Then `acceptance/steps/issue-selection.steps.ts:72`、assertion `:73`) と「停止中」 (`acceptance/features/issue-selection.feature.md:26`、Then `acceptance/steps/issue-selection.steps.ts:80`、assertion `:81`) の2シナリオだけが意図どおり失敗した。どちらも実際値 `false` と一時的な期待値 `true` の不一致を示す `false !== true` および `-false` / `+true` の差分を報告した。確認後に両方の期待値を `false` へ戻した。
+
 既存の `test/issue-coordinator-selection.test.ts` からは、完全に置換した T243〜T248 の6件を削除した。CLI の help と未知の引数に関する T249、T250 は低レベル診断として Vitest に残している。
