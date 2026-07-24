@@ -22,6 +22,7 @@ type SafetyWorld = {
   temporaryRoots?: string[];
   trackedChangesAfterChecks?: boolean;
   trustLaunchMarker?: string;
+  trustLaunchResult?: { status: number | null; stdout: string };
   trustRoot?: string;
 };
 
@@ -146,16 +147,23 @@ Given("更新前に確認した pull request head がある", function (this: Sa
   this.crossRepository = false;
 });
 
-Given("自動チェック後に pull request head が変わる", function (this: SafetyWorld) {
+When("自動チェック後に pull request head が変わる", function (this: SafetyWorld) {
   this.changeHeadAfterChecks = true;
+  finalize(this);
 });
 
 Given("pull request が別リポジトリから作られている", function (this: SafetyWorld) {
   this.crossRepository = true;
 });
 
-Given("自動チェック後に作業場所へ追跡中の変更がある", function (this: SafetyWorld) {
+When("自動チェック後に作業場所へ追跡中の変更が生じる", function (this: SafetyWorld) {
   this.trackedChangesAfterChecks = true;
+  try {
+    finalize(this);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("worktree is dirty")) return;
+    throw error;
+  }
 });
 
 When("deadloop が branch 更新を完了しようとする", function (this: SafetyWorld) {
@@ -191,7 +199,7 @@ Given("作業場所の信頼が承認されていない", function (this: Safety
 
 When("deadloop が Claude の作業エージェントを起動しようとする", function (this: SafetyWorld) {
   if (!this.trustRoot) throw new Error("trust precondition is missing");
-  spawnSync(
+  const result = spawnSync(
     "node",
     [
       "extensions/deadloop/automations/launch-agent.ts",
@@ -216,10 +224,28 @@ When("deadloop が Claude の作業エージェントを起動しようとする
       env: { ...process.env, HOME: this.trustRoot, PATH: `${path.join(this.trustRoot, "bin")}:${process.env.PATH}` },
     },
   );
+  this.trustLaunchResult = { status: result.status, stdout: result.stdout };
 });
 
 Then("作業エージェントは起動されない", function (this: SafetyWorld) {
-  assert.equal(fs.existsSync(this.trustLaunchMarker ?? ""), false);
+  const repoPath = this.trustRoot ?? "";
+  assert.deepEqual(
+    {
+      launch: this.trustLaunchResult,
+      herdrStarted: fs.existsSync(this.trustLaunchMarker ?? ""),
+    },
+    {
+      launch: {
+        status: 1,
+        stdout: `${JSON.stringify({
+          error: "workspace_trust_unaccepted",
+          repoPath,
+          resolution: `cd ${repoPath} && claude`,
+        })}\n`,
+      },
+      herdrStarted: false,
+    },
+  );
 });
 
 Then("選択された branch だけが push の対象になる", function (this: SafetyWorld) {
