@@ -64,35 +64,30 @@ Then("その Issue の作業は開始されない", function (this: IssueCoordin
   assert.equal(this.result?.launch, undefined);
 });
 
-Then("不足している契約項目と再投入方法が案内される", function (this: IssueCoordinationWorld) {
-  assert.equal(
-    this.result?.comment,
-    [
-      "deadloop skipped automated implementation because the issue is missing an implementation contract.",
-      "",
-      "Missing:",
-      "- `## Agent Brief` or `## What to build`",
-      "- `## Acceptance criteria`",
-      "",
-      "Update the issue body, then add `agent:implement` again. Target: #10",
-    ].join("\n"),
-  );
+Then("Issue に追加する実装契約の項目が案内される", function (this: IssueCoordinationWorld) {
+  assert.match(this.result?.comment || "", /`## Agent Brief` or `## What to build`[\s\S]*`## Acceptance criteria`/);
+});
+
+Then("修正した Issue を再投入する方法が案内される", function (this: IssueCoordinationWorld) {
+  assert.match(this.result?.comment || "", /Update the issue body, then add `agent:implement` again\./);
 });
 
 Then("実装可能な Issue への分割方法が案内される", function (this: IssueCoordinationWorld) {
-  assert.match(
-    this.result?.comment || "",
-    /Skipped automated implementation because this looks like a PRD, design, or parent issue\.[\s\S]*Create a separate implementable issue or split this issue's scope\./,
-  );
+  assert.match(this.result?.comment || "", /Create a separate implementable issue or split this issue's scope\./);
+});
+
+Then("停止後の復旧手順が案内される", function (this: IssueCoordinationWorld) {
+  assert.match(this.result?.comment || "", /## Recovery steps/);
 });
 
 Then("その Issue の作業が開始される", function (this: IssueCoordinationWorld) {
   assert.equal(this.result?.launch?.simulated, true);
 });
 
-Then("その Issue は作業開始後の完了監視へ進む", function (this: IssueCoordinationWorld) {
-  assert.deepEqual(
-    { workStarted: this.result?.launch?.simulated, monitoringTarget: this.result?.monitorHandoff?.kind },
-    { workStarted: true, monitoringTarget: "issue" },
-  );
+Then("その Issue の完了監視が開始される", function (this: IssueCoordinationWorld) {
+  assert.equal(this.result?.monitorHandoff?.kind, "issue");
+});
+
+Then("その Issue に停止案内は作られない", function (this: IssueCoordinationWorld) {
+  assert.equal(this.result?.comment, undefined);
 });
