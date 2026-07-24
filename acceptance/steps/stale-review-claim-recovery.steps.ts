@@ -6,8 +6,6 @@ import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
 
-const { defaultDecisionConfig, selectPrForReview, workingReviewerPrNumbers } = require("../../extensions/deadloop/automations/pr-reviewer-decisions.ts");
-
 type DriverStart = { name?: string };
 type DriverResult = {
   testAdapterEffects?: {
@@ -19,7 +17,6 @@ type DriverResult = {
 type ClaimWorld = {
   prs?: Record<string, unknown>[];
   agents?: unknown;
-  decision?: { selected?: boolean; number?: number; reason?: string };
   driverResult?: DriverResult;
 };
 
@@ -102,16 +99,9 @@ When("deadloop が次の選定周期を実行する", function (this: ClaimWorld
   this.driverResult = runDriver({ prs: this.prs, agents: this.agents });
 });
 
-function decide(world: ClaimWorld): void {
-  if (!world.prs) throw new Error("review claim is missing");
-  const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo" });
-  world.decision = selectPrForReview(world.prs, config, workingReviewerPrNumbers(world.agents, config.projectId));
-}
-
 When("deadloop が古いレビュー占有の回収対象を探す", function (this: ClaimWorld) {
   if (!this.prs) throw new Error("review claim is missing");
   this.driverResult = runDriver({ prs: this.prs, agents: this.agents });
-  decide(this);
 });
 
 Then("pull request #{int} のレビューを再開する", function (this: ClaimWorld, number: number) {
@@ -122,7 +112,11 @@ Then("pull request #{int} のレビューを再開する", function (this: Claim
 });
 
 Then("レビュー占有は回収されない", function (this: ClaimWorld) {
-  assert.equal(this.decision?.selected, false);
+  const reviewerStartCount =
+    this.driverResult?.testAdapterEffects?.herdrStarts?.filter(
+      (start) => start.name === "demo-pr-13-reviewer",
+    ).length ?? 0;
+  assert.equal(reviewerStartCount, 0);
 });
 
 Then("次の選定周期ではレビュー担当が追加で起動されない", function (this: ClaimWorld) {
