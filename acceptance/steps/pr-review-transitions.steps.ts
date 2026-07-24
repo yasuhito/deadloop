@@ -4,6 +4,11 @@ import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
 
+const { mergeReviewedPr } = require("../../extensions/deadloop/automations/merge-reviewed-pr.ts");
+
+const currentHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const previousHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
 type GithubEffect = { operation?: string; reviewer?: string };
 type TransitionResult = {
   driverAction?: string;
@@ -14,8 +19,9 @@ type TransitionResult = {
 type TransitionWorld = {
   fixtureName?: string;
   externalReviewEnabled?: boolean;
-  autoMerge?: boolean;
   result?: TransitionResult;
+  staleApproval?: boolean;
+  completionCommands?: string[][];
 };
 
 Given("現在レビューできる pull request がない", function (this: TransitionWorld) {
@@ -34,10 +40,6 @@ Given("以前の pull request head にだけ外部レビューを依頼してい
   this.fixtureName = "previous-head-external-review.json";
 });
 
-Given("現在の pull request head の外部レビュー待機期限が切れている", function (this: TransitionWorld) {
-  this.fixtureName = "fallback-review.json";
-});
-
 Given("外部レビューが無効に設定されている", function (this: TransitionWorld) {
   this.externalReviewEnabled = false;
 });
@@ -46,8 +48,8 @@ Given("外部レビューが有効に設定されている", function (this: Tra
   this.externalReviewEnabled = true;
 });
 
-Given("自動マージが無効に設定されている", function (this: TransitionWorld) {
-  this.autoMerge = false;
+Given("以前の pull request head に対する承認結果がある", function (this: TransitionWorld) {
+  this.staleApproval = true;
 });
 
 When("deadloop が pull request の次の処理を決める", function (this: TransitionWorld) {
@@ -65,7 +67,7 @@ When("deadloop が pull request の次の処理を決める", function (this: Tr
         DEADLOOP_GITHUB_REPO: "owner/repo",
         DEADLOOP_REVIEWER_AGENT: "pi",
         DEADLOOP_REVIEWER_MODEL: "",
-        DEADLOOP_AUTO_MERGE: this.autoMerge ? "1" : "0",
+        DEADLOOP_AUTO_MERGE: "0",
         DEADLOOP_EXTERNAL_REVIEW_ENABLED: this.externalReviewEnabled ? "1" : "0",
         DEADLOOP_NOW: "2026-07-08T00:00:00Z",
       },
@@ -96,6 +98,56 @@ Then("現在の head の外部レビューを依頼する", function (this: Tran
   );
 });
 
-Then("自動マージを無効にしたまま引き渡す", function (this: TransitionWorld) {
-  assert.match(this.result?.prompt ?? "", /If autoMerge=false, never merge/);
+When("deadloop が現在の pull request の承認処理を完了する", function (this: TransitionWorld) {
+  if (!this.staleApproval) throw new Error("approval result is missing");
+  const commands: string[][] = [];
+  try {
+    mergeReviewedPr(
+      {
+        projectRepo: "/repo",
+        githubRepo: "owner/repo",
+        stateDir: "/state",
+        enabledAt: 1,
+        pr: "25",
+        expectedHead: currentHead,
+        reviewPromise: "/state/reviewer-promise.json",
+        reviewLabel: "agent:review",
+        reviewingLabel: "agent:reviewing",
+        blockedLabel: "agent:blocked",
+      },
+      {
+        withLock: (_project: unknown, operation: (enabled: unknown) => number) => operation({
+          firstEnableAutoMerge: false,
+          firstStartPending: false,
+          autoMergeAcknowledged: false,
+        }),
+        isAutoMergeEnabled: () => true,
+        validateReviewPromise: () => ({
+          status: "complete",
+          promise: {
+            status: "complete",
+            outcome: "approved",
+            reviewedHead: previousHead,
+            reason: "",
+            summary: "approved",
+            findings: [],
+          },
+        }),
+        run: (args: string[]) => {
+          commands.push(args);
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+  } catch {
+    // A stale approval must stop completion before the externally visible merge command.
+  }
+  this.completionCommands = commands;
+});
+
+Then("現在の pull request はマージされない", function (this: TransitionWorld) {
+  assert.equal(
+    this.completionCommands?.some((args) => args[0] === "gh" && args[1] === "pr" && args[2] === "merge"),
+    false,
+  );
 });

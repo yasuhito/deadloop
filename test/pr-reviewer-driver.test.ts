@@ -47,6 +47,12 @@ describe("PR reviewer deterministic driver", () => {
     ).toContain("run-project-check.ts");
   });
 
+  it("preserves autoMerge=false safety after deterministic reviewer launch", () => {
+    expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).prompt).toContain(
+      "If autoMerge=false, never merge",
+    );
+  });
+
   it("does not ask the LLM to run launch-agent", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).prompt).not.toContain("launch-agent.ts");
   });

@@ -29,10 +29,8 @@ deadloop の利用者に対し、pull request の現在の head、CI、外部レ
 * もし deadloop が pull request の次の処理を決める
 * ならば 現在の head の外部レビューを依頼する
 
-## シナリオ: 自動マージが無効のまま通常レビューへ遷移する
+## シナリオ: 以前の head の承認結果では現在の pull request をマージしない
 
-* 前提 現在の pull request head の外部レビュー待機期限が切れている
-* かつ 外部レビューが有効に設定されている
-* かつ 自動マージが無効に設定されている
-* もし deadloop が pull request の次の処理を決める
-* ならば 自動マージを無効にしたまま引き渡す
+* 前提 以前の pull request head に対する承認結果がある
+* もし deadloop が現在の pull request の承認処理を完了する
+* ならば 現在の pull request はマージされない
