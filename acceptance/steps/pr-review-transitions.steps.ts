@@ -1,25 +1,18 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
+import { type PrReviewerDriverResult, runPrReviewerDriverFixture } from "../support/pr-reviewer-driver";
 
 const { mergeReviewedPr } = require("../../extensions/deadloop/automations/merge-reviewed-pr.ts");
 
 const currentHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const previousHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-type GithubEffect = { operation?: string; reviewer?: string; body?: string };
-type TransitionResult = {
-  driverAction?: string;
-  githubEffects?: GithubEffect[];
-  prompt?: string;
-  testAdapterEffects?: { herdrStarts?: unknown[] };
-};
 type TransitionWorld = {
   fixtureName?: string;
   externalReviewEnabled?: boolean;
-  result?: TransitionResult;
+  result?: PrReviewerDriverResult;
   staleApproval?: boolean;
   completionCommands?: string[][];
 };
@@ -54,27 +47,10 @@ Given("以前の pull request head に対する承認結果がある", function 
 
 When("deadloop が pull request の次の処理を決める", function (this: TransitionWorld) {
   if (!this.fixtureName) throw new Error("pull request state is missing");
-  const result = spawnSync(
-    "node",
-    ["extensions/deadloop/automations/pr-reviewer-driver.ts", "--fixture", path.join("test/fixtures/pr-reviewer-driver", this.fixtureName)],
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        DEADLOOP_PROJECT_ID: "demo",
-        DEADLOOP_REPO_PATH: "/repo",
-        DEADLOOP_GITHUB_REPO: "owner/repo",
-        DEADLOOP_REVIEWER_AGENT: "pi",
-        DEADLOOP_REVIEWER_MODEL: "",
-        DEADLOOP_AUTO_MERGE: "0",
-        DEADLOOP_EXTERNAL_REVIEW_ENABLED: this.externalReviewEnabled ? "1" : "0",
-        DEADLOOP_NOW: "2026-07-08T00:00:00Z",
-      },
-    },
+  this.result = runPrReviewerDriverFixture(
+    path.join("test/fixtures/pr-reviewer-driver", this.fixtureName),
+    { DEADLOOP_EXTERNAL_REVIEW_ENABLED: this.externalReviewEnabled ? "1" : "0" },
   );
-  if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-  this.result = JSON.parse(result.stdout) as TransitionResult;
 });
 
 Then("レビュー処理は開始されない", function (this: TransitionWorld) {
@@ -86,7 +62,7 @@ Then("CI の完了待ちになる", function (this: TransitionWorld) {
 });
 
 Then("通常レビューを開始する", function (this: TransitionWorld) {
-  assert.equal(this.result?.driverAction, "reviewer_monitor_request");
+  assert.equal(this.result?.testAdapterEffects?.herdrStarts?.length, 1);
 });
 
 Then("現在の head の外部レビューを依頼する", function (this: TransitionWorld) {

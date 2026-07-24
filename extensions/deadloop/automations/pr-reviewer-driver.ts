@@ -718,6 +718,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     prNumber: Number(pr.number || 0),
     expectedHeadOid: String(pr.headRefOid || ""),
     branch: String(pr.headRefName || ""),
+    autoMerge: env.autoMerge,
     automationDir: env.automationDir,
     promiseFile: String(launch.promiseFile || ""),
     actorName: "reviewer",
