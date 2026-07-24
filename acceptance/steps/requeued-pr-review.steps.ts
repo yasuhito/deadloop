@@ -62,7 +62,10 @@ Given("修正後の新しい head を持ち終了済みのレビュー担当が�
     comments: [],
     reviewRequests: [],
   };
-  fs.writeFileSync(prState, JSON.stringify([{ ...pullRequest, labels: [{ name: "agent:review" }] }]));
+  fs.writeFileSync(prState, JSON.stringify([{
+    ...pullRequest,
+    labels: [{ name: "agent:review" }, { name: "agent:blocked" }],
+  }]));
 
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -120,6 +123,11 @@ When("deadloop が再投入された pull request を確認する", function (th
     if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   };
 
+  runDriver();
+  fs.writeFileSync(this.prState, JSON.stringify([{
+    ...this.pullRequest,
+    labels: [{ name: "agent:review" }],
+  }]));
   runDriver();
 });
 
