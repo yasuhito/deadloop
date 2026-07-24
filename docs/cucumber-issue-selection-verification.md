@@ -24,6 +24,6 @@ Issue #117 が求める選定対象外の状態を網羅するため、次のシ
 
 ## 意図的な失敗の確認
 
-2026-07-23 に「準備済みの Issue を作業対象に選ぶ」の Then を一時的に `false` を期待するよう変更して、`npm run test:acceptance` を実行した。コマンドは status 1 で終了し、`acceptance/features/issue-selection.feature.md:8` の対象シナリオ、`acceptance/steps/issue-selection.steps.ts:49` の Then、`true !== false` の assertion 差分を報告した。確認後に assertion は `true` を期待する状態へ戻した。
+2026-07-24 に Issue 番号を確認する Then の期待値へ一時的に 1000 を加えて、`npm run test:acceptance` を実行した。コマンドは status 1 で終了し、「準備済みの Issue を作業対象に選ぶ」 (`acceptance/features/issue-selection.feature.md:8`) と「完了した本文依存を持つ Issue を作業対象に選ぶ」 (`acceptance/features/issue-selection.feature.md:44`) が失敗した。どちらも `acceptance/steps/issue-selection.steps.ts:68` の Then と同ファイル `:69` の assertion を指し、それぞれ `1 !== 1001` (`-1`, `+1001`) と `2 !== 1002` (`-2`, `+1002`) の差分を報告した。確認後に assertion は引数で渡された Issue 番号を期待する状態へ戻した。
 
 既存の `test/issue-coordinator-selection.test.ts` からは、完全に置換した T243〜T248 の6件を削除した。CLI の help と未知の引数に関する T249、T250 は低レベル診断として Vitest に残している。
