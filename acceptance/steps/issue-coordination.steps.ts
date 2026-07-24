@@ -7,7 +7,7 @@ import { Given, Then, When } from "@cucumber/cucumber";
 type IssueCoordinationResult = {
   action?: string;
   comment?: string;
-  launch?: { simulated?: boolean };
+  launch?: { instructions?: string; simulated?: boolean };
   monitorHandoff?: { kind?: string };
 };
 
@@ -60,6 +60,10 @@ When("deadloop が選ばれた Issue の次処理を決める", function (this: 
   this.result = coordinateIssue(this.fixtureName);
 });
 
+Then("その Issue は言語モデルを使わずに停止される", function (this: IssueCoordinationWorld) {
+  assert.equal(this.result?.action, "done");
+});
+
 Then("その Issue の作業は開始されない", function (this: IssueCoordinationWorld) {
   assert.equal(this.result?.launch, undefined);
 });
@@ -80,8 +84,19 @@ Then("停止後の復旧手順が案内される", function (this: IssueCoordina
   assert.match(this.result?.comment || "", /## Recovery steps/);
 });
 
+Then("停止コメントは利用者向けの案内だけで作られる", function (this: IssueCoordinationWorld) {
+  assert.doesNotMatch(
+    this.result?.comment || "",
+    /extract-worker-promise|herdr|\/example\/repository|<(?:promiseFile|workspaceId|worktreePath|branch)>/i,
+  );
+});
+
 Then("その Issue の作業が開始される", function (this: IssueCoordinationWorld) {
   assert.equal(this.result?.launch?.simulated, true);
+});
+
+Then("作業指示は実装担当者に必要な情報だけで作られる", function (this: IssueCoordinationWorld) {
+  assert.doesNotMatch(this.result?.launch?.instructions || "", /issue coordinator|driver|renderer/i);
 });
 
 Then("その Issue の完了監視が開始される", function (this: IssueCoordinationWorld) {

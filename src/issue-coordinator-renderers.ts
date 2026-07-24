@@ -75,6 +75,17 @@ function markdownCode(value: string): string {
   return oneLineForRenderer(value).replace(/`/g, "\\`");
 }
 
+function renderIssuePlanningComment(issueNumber: number): string {
+  return [
+    "deadloop skipped automated implementation because this issue describes planning work rather than one implementable change.",
+    "",
+    "## Recovery steps",
+    "1. Create a separate implementable issue or split this issue's scope.",
+    "2. Give each implementation issue an `## Agent Brief` or `## What to build` section and an `## Acceptance criteria` section.",
+    `3. When an implementation issue is ready, add \`agent:implement\` to that issue. Planning issue: #${issueNumber}`,
+  ].join("\n");
+}
+
 function renderIssueBlockedComment(input: IssueBlockedCommentInput): string {
   const issue = Number(input.issueNumber);
   const promiseFile = optionalValue(input.promiseFile, "<promiseFile>");
@@ -157,4 +168,4 @@ Promise report:
 - Always write the promise file, even on failure. Do not exit silently.`;
 }
 
-module.exports = { renderIssueBlockedComment, renderIssueWorkerPrompt };
+module.exports = { renderIssueBlockedComment, renderIssuePlanningComment, renderIssueWorkerPrompt };

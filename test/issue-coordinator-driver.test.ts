@@ -180,7 +180,7 @@ exit 2
     expect(readFileSync("src/core.ts", "utf8")).toContain("DEADLOOP_WORKER_MODEL");
   });
 
-  it("uses the TypeScript renderer for blocked comments", () => {
-    expect(readFileSync(driverScript, "utf8")).toContain("renderIssueBlockedComment");
+  it("uses the TypeScript renderer for planning comments", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain("renderIssuePlanningComment");
   });
 });

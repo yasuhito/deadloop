@@ -8,7 +8,7 @@ const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
-const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
+const { renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
@@ -103,19 +103,8 @@ function applyContractMissing(issue: JsonObject, env: ReturnType<typeof envConfi
   });
 }
 
-function blockedComment(issue: JsonObject, env: ReturnType<typeof envConfig>, reason: string): string {
-  const number = Number(issue.number || 0);
-  return renderIssueBlockedComment({
-    issueNumber: number,
-    githubRepo: env.githubRepo,
-    repoPath: env.repoPath,
-    automationDir: env.automationDir,
-    blockedLabel: env.blockedLabel,
-    implementLabel: env.implementLabel,
-    summary: reason,
-    confirmed: [`Issue #${number} is not a single implementable Worker task.`],
-    nextDecision: "Create a separate implementable issue or split this issue's scope.",
-  });
+function blockedComment(issue: JsonObject): string {
+  return renderIssuePlanningComment(Number(issue.number || 0));
 }
 
 function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comment: string, fixture: JsonObject | null): boolean {
@@ -139,6 +128,31 @@ function shouldSimulateLaunch(fixture: JsonObject | null): boolean {
   return Boolean(fixture);
 }
 
+function workerPrompt(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  promiseFile: string,
+  worktreePath: string,
+): string {
+  const number = Number(issue.number || 0);
+  return renderIssueWorkerPrompt({
+    launchReason: "The issue is ready for implementation.",
+    issueNumber: number,
+    issueTitle: String(issue.title || "task"),
+    issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
+    githubRepo: env.githubRepo,
+    workerInstructions: env.workerInstructions,
+    checkCommand: env.checkCommand,
+    validationCommand: renderProjectCheckCommand({
+      automationDir: env.automationDir,
+      stateDir: env.stateDir,
+      cwd: worktreePath,
+      command: env.checkCommand,
+    }),
+    promiseFile,
+  });
+}
+
 function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
   const number = Number(issue.number || 0);
   const uuid = shouldSimulateLaunch(fixture) ? "fixture-worker-uuid" : randomUUID();
@@ -147,6 +161,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
 
   if (shouldSimulateLaunch(fixture)) {
+    const promiseFile = `${env.stateDir}/runs/${uuid}/promise.json`;
     return {
       workerName,
       branch,
@@ -154,7 +169,8 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       tabId: "fixture-tab",
       worktreePath: simulatedWorktreePath,
       promptFile: `${env.stateDir}/runs/${uuid}/worker-prompt.md`,
-      promiseFile: `${env.stateDir}/runs/${uuid}/promise.json`,
+      promiseFile,
+      instructions: workerPrompt(issue, env, promiseFile, simulatedWorktreePath),
       simulated: true,
     };
   }
@@ -175,22 +191,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         uuid,
         promptFilePrefix: "worker-prompt",
         renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-          renderIssueWorkerPrompt({
-            launchReason: "deterministic issue coordinator launch",
-            issueNumber: number,
-            issueTitle: String(issue.title || "task"),
-            issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
-            githubRepo: env.githubRepo,
-            workerInstructions: env.workerInstructions,
-            checkCommand: env.checkCommand,
-            validationCommand: renderProjectCheckCommand({
-              automationDir: env.automationDir,
-              stateDir: env.stateDir,
-              cwd: worktreePath,
-              command: env.checkCommand,
-            }),
-            promiseFile,
-          }),
+          workerPrompt(issue, env, promiseFile, worktreePath),
       },
       { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
     ),
@@ -272,7 +273,7 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   if (issuePlan.kind === "planning_blocked") {
-    const comment = blockedComment(issue, env, "Skipped automated implementation because this looks like a PRD, design, or parent issue.");
+    const comment = blockedComment(issue);
     if (!applyBlocked(issue, env, comment, fixture)) {
       return driverResult("skip", `Issue #${issue.number} changed before the planning gate; no workflow state was mutated`, {
         driverAction: "planning_blocked_stale", issueNumber: issue.number,
