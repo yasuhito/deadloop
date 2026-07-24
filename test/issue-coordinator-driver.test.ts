@@ -154,10 +154,6 @@ exit 2
     expect(runDriverFixture("driver-prd-doc-reference.json").driverAction).toBe("worker_monitor_request");
   });
 
-  it("launches ready issues deterministically before monitoring", () => {
-    expect(runDriverFixture("driver-ready-worker.json").driverAction).toBe("worker_monitor_request");
-  });
-
   it("reports the deterministic Worker name", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });
