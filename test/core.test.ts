@@ -17,6 +17,7 @@ import {
   parseEveryMinutes,
   REPO_POLICY_FILE,
   renderTemplate,
+  resolveConfigPath,
   resolveProjectForTick,
   sanitizeId,
   templateValues,
@@ -29,6 +30,39 @@ describe("deterministic extension core", () => {
 
   it("does not identify a primary checkout as a linked worktree", () => {
     expect(isLinkedGitWorktree("/repos/repo", ".git")).toBe(false);
+  });
+
+  it("uses DEADLOOP_CONFIG before default config paths", () => {
+    expect(
+      resolveConfigPath({
+        env: { DEADLOOP_CONFIG: "/deadloop/projects.json" },
+        stateDir: "/state",
+        extensionDir: "/extension",
+        exists: () => true,
+      }),
+    ).toBe("/deadloop/projects.json");
+  });
+
+  it("uses the deadloop user state config before package-local config", () => {
+    expect(
+      resolveConfigPath({
+        env: {},
+        stateDir: "/state",
+        extensionDir: "/extension",
+        exists: (value) => value === "/state/projects.json",
+      }),
+    ).toBe("/state/projects.json");
+  });
+
+  it("falls back to package-local config when user state config is missing", () => {
+    expect(
+      resolveConfigPath({
+        env: {},
+        stateDir: "/state",
+        extensionDir: "/extension",
+        exists: () => false,
+      }),
+    ).toBe("/extension/projects.json");
   });
 
   it("normalizes project configuration defaults from public config fields", () => {
@@ -101,6 +135,18 @@ describe("deterministic extension core", () => {
         repoPolicyAppliedKeys: [],
       },
     });
+  });
+
+  it("uses standard automations when project configuration omits them", () => {
+    const project = normalizeProject({ id: "demo" });
+
+    expect(project.automations.map((automation) => automation.id)).toEqual(["demo:issue-coordinator", "demo:pr-reviewer"]);
+  });
+
+  it("keeps explicit empty automations disabled", () => {
+    const project = normalizeProject({ id: "demo", automations: [] });
+
+    expect(project.automations).toEqual([]);
   });
 
   it("parses the supported every-N-minutes cron form", () => {
@@ -213,12 +259,28 @@ describe("deterministic extension core", () => {
     expect(project.workerInstructions).toBe("Follow these repository-specific instructions.");
   });
 
+  it("defaults the worker agent to pi", () => {
+    expect(normalizeProject({}).workerAgent).toBe("pi");
+  });
+
   it("preserves the pi worker agent selection", () => {
     expect(normalizeProject({ workerAgent: "pi" }).workerAgent).toBe("pi");
   });
 
+  it("preserves the claude worker agent selection", () => {
+    expect(normalizeProject({ workerAgent: "claude" }).workerAgent).toBe("claude");
+  });
+
   it("rejects invalid worker agent values", () => {
     expect(() => normalizeProject({ workerAgent: "codex" })).toThrow(/invalid workerAgent/);
+  });
+
+  it("defaults the reviewer agent to pi", () => {
+    expect(normalizeProject({}).reviewerAgent).toBe("pi");
+  });
+
+  it("preserves the claude reviewer agent selection", () => {
+    expect(normalizeProject({ reviewerAgent: "claude" }).reviewerAgent).toBe("claude");
   });
 
   it("rejects invalid reviewer agent values", () => {
@@ -227,6 +289,18 @@ describe("deterministic extension core", () => {
 
   it("keeps the default worker launch policy independent of pi thinking flags", () => {
     expect(DEFAULT_WORKER_LAUNCH_POLICY).not.toContain("--thinking");
+  });
+
+  it("preserves the operator-designated worker model verbatim", () => {
+    const project = normalizeProject({ workerModel: "anthropic/claude-opus-4-8" });
+
+    expect(project.workerModel).toBe("anthropic/claude-opus-4-8");
+  });
+
+  it("preserves the operator-designated reviewer model verbatim", () => {
+    const project = normalizeProject({ reviewerModel: "openai-codex/gpt-5.2-codex" });
+
+    expect(project.reviewerModel).toBe("openai-codex/gpt-5.2-codex");
   });
 
   it("exposes worker and reviewer models to prompt templates", () => {
@@ -250,6 +324,14 @@ describe("deterministic extension core", () => {
     );
   });
 
+  it("defaults auto merge to disabled", () => {
+    expect(normalizeProject({}).autoMerge).toBe(false);
+  });
+
+  it("preserves explicitly enabled auto merge", () => {
+    expect(normalizeProject({ autoMerge: true }).autoMerge).toBe(true);
+  });
+
   it("defaults CI fallback to disabled billing-only mode", () => {
     expect(normalizeProject({}).ciFallback).toEqual({
       enabled: false,
@@ -257,6 +339,10 @@ describe("deterministic extension core", () => {
       allowAutoMerge: false,
       localCommands: "",
     });
+  });
+
+  it("defaults external review to disabled", () => {
+    expect(normalizeProject({}).externalReview).toEqual({ enabled: false, waitSeconds: 1800 });
   });
 
   it("normalizes CI fallback local commands for prompt templates", () => {
@@ -315,12 +401,64 @@ describe("deterministic extension core", () => {
     expect(result.ok && result.projects[0].workerModel).toBe("");
   });
 
+  it("uses the trusted repo policy worker model when local config omits it", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ workerModel: "repo-model" }) }),
+    });
+
+    expect(result.ok && result.projects[0].workerModel).toBe("repo-model");
+  });
+
+  it("allows trusted repo policy to provide worker instruction files", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({
+        status: "loaded",
+        text: JSON.stringify({ workerInstructionFiles: ["docs/agents.md"] }),
+      }),
+    });
+
+    expect(result.ok && result.projects[0].workerInstructions).toBe(
+      "Start by reading docs/agents.md, and docs relevant to the change. Follow repository-local instructions first.",
+    );
+  });
+
+  it("keeps the local worker model above the trusted repo policy", () => {
+    const result = parseProjectsConfig(
+      JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", workerModel: "local-model" }] }),
+      "",
+      {
+        repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ workerModel: "repo-model" }) }),
+      },
+    );
+
+    expect(result.ok && result.projects[0].workerModel).toBe("local-model");
+  });
+
   it("accepts this repository's shared policy file", () => {
     const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "deadloop", repoPath: "/repo" }] }), "", {
       repoPolicyProvider: () => ({ status: "loaded", text: readFileSync("deadloop.json", "utf8") }),
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("keeps trusted repo policy explicit empty automations disabled", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ automations: [] }) }),
+    });
+
+    expect(result.ok && result.projects[0].automations).toEqual([]);
+  });
+
+  it("allows trusted repo policy to provide locally omitted automations", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({
+        status: "loaded",
+        text: JSON.stringify({ automations: [{ id: "demo:auto", promptFile: "issue-coordinator.prompt.md" }] }),
+      }),
+    });
+
+    expect(result.ok && result.projects[0].automations[0].id).toBe("demo:auto");
   });
 
   it("allows trusted repo policy to provide automation driver files", () => {
@@ -336,6 +474,14 @@ describe("deterministic extension core", () => {
     );
 
     expect(result.ok && result.projects[0].automations[0].driverFile).toBe("issue-coordinator-driver.ts");
+  });
+
+  it("uses trusted repo policy external review settings", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+      repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ externalReview: { enabled: true } }) }),
+    });
+
+    expect(result.ok && result.projects[0].externalReview.enabled).toBe(true);
   });
 
   it("rejects forbidden trusted repo policy keys", () => {
