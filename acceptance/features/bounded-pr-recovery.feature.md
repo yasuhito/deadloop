@@ -38,9 +38,21 @@
 * もし deadloop がレビュー結果を処理する
 * ならば deadloop は専用の修正作業を開始する
 
-## シナリオ: 同じレビュー指摘が残った場合は人間対応にする
+## シナリオ: 修正中もレビュー状態を維持する
 
-* 前提 同じレビュー指摘の修正を一度試した pull request がある
+* 前提 レビュー指摘の修正中である pull request がある
+* もし deadloop がレビュー指摘の修正を開始する
+* ならば deadloop はレビュー状態を維持する
+
+## シナリオ: 修正の push で head が変わった pull request は通常レビューへ戻る
+
+* 前提 修正の push で head が変わった pull request がある
+* もし deadloop が pull request を確認する
+* ならば deadloop は通常レビューを開始する
+
+## シナリオ: 修正後の新しい head でも同じレビュー指摘が残った場合は人間対応にする
+
+* 前提 修正後の新しい head でも同じレビュー指摘が残った pull request がある
 * もし deadloop がレビュー結果を処理する
 * ならば deadloop は修正を停止して人間対応にする
 

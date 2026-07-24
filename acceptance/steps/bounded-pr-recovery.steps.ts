@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
@@ -17,6 +19,7 @@ const { repairWorkerPrompt } = require("../../extensions/deadloop/automations/pr
 
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const repairedHead = "cccccccccccccccccccccccccccccccccccccccc";
 const branch = "agent/issue-31";
 const findings = [{ title: "Lint contract failure", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
 
@@ -47,6 +50,76 @@ function reviewerDriver(fixture: string): Record<string, unknown> {
   );
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   return JSON.parse(result.stdout);
+}
+
+function repairDispatch(): Record<string, unknown> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-acceptance-review-repair-"));
+  try {
+    const bin = path.join(root, "bin");
+    const worktree = path.join(root, "worktree");
+    const promise = path.join(root, "review-promise.json");
+    fs.mkdirSync(bin);
+    fs.mkdirSync(worktree);
+    fs.writeFileSync(
+      promise,
+      JSON.stringify({ status: "complete", outcome: "changes_requested", reason: "", summary: "Repair required.", findings }),
+    );
+    const executable = (file: string, content: string) => {
+      fs.writeFileSync(file, content);
+      fs.chmodSync(file, 0o755);
+    };
+    executable(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env node
+if (process.argv[2] === "pr" && process.argv[3] === "view") process.stdout.write(JSON.stringify({
+  number: 31, state: "OPEN", headRefName: "${branch}", headRefOid: "${head}", isCrossRepository: false,
+  labels: [{name: "agent:review"}, {name: "agent:reviewing"}], comments: []
+}));
+`,
+    );
+    executable(path.join(bin, "git"), "#!/usr/bin/env node\nprocess.exit(0);\n");
+    executable(
+      path.join(bin, "herdr"),
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "worktree" && args[1] === "open") process.stdout.write(JSON.stringify({workspace_id: "workspace-1", path: process.env.TEST_WORKTREE}));
+else if (args[0] === "agent" && args[1] === "list") process.stdout.write(JSON.stringify({result: {agents: []}}));
+else if (args[0] === "tab" && args[1] === "create") process.stdout.write(JSON.stringify({tab_id: "tab-1"}));
+else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.stringify({ok: true}));
+`,
+    );
+    const result = spawnSync(
+      "node",
+      [
+        "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+        "--promise",
+        promise,
+        "--pr",
+        "31",
+        "--expected-head",
+        head,
+        "--branch",
+        branch,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          DEADLOOP_PROJECT_ID: "demo",
+          DEADLOOP_REPO_PATH: root,
+          DEADLOOP_GITHUB_REPO: "owner/repo",
+          DEADLOOP_STATE_DIR: path.join(root, "state"),
+          TEST_WORKTREE: worktree,
+        },
+      },
+    );
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    return JSON.parse(result.stdout);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
 function finalizerOps(commands: string[][], actualHead = head) {
@@ -117,8 +190,16 @@ Given("初めての対応可能なレビュー指摘がある pull request が�
   this.case = "first-repair";
 });
 
-Given("同じレビュー指摘の修正を一度試した pull request がある", function (this: RecoveryWorld) {
+Given("修正後の新しい head でも同じレビュー指摘が残った pull request がある", function (this: RecoveryWorld) {
   this.case = "repeated-repair";
+});
+
+Given("レビュー指摘の修正中である pull request がある", function (this: RecoveryWorld) {
+  this.case = "repair-dispatch";
+});
+
+Given("修正の push で head が変わった pull request がある", function (this: RecoveryWorld) {
+  this.case = "repaired-head";
 });
 
 Given("初めて技術的に失敗したレビューがある pull request がある", function (this: RecoveryWorld) {
@@ -141,13 +222,20 @@ When("deadloop が pull request を確認する", function (this: RecoveryWorld)
   if (this.case === "conflict") this.result = reviewerDriver("merge-conflict.json");
   if (this.case === "repeated-conflict") this.result = reviewerDriver("merge-conflict-double-attempt.json");
   if (this.case === "resolved-conflict") this.result = reviewerDriver("merge-conflict-updated.json");
+  if (this.case === "repaired-head") this.result = reviewerDriver("review-repair-pushed.json");
 });
 
 When("deadloop がレビュー結果を処理する", function (this: RecoveryWorld) {
   if (this.case === "first-repair") this.result = selectRepairAttempt([], head, findings);
-  if (this.case === "repeated-repair") this.result = selectRepairAttempt([{ body: renderRepairMarker(head, reviewResultFingerprint(findings)) }], head, findings);
+  if (this.case === "repeated-repair") {
+    this.result = selectRepairAttempt([{ body: renderRepairMarker(head, reviewResultFingerprint(findings)) }], repairedHead, findings);
+  }
   if (this.case === "first-technical-failure") this.result = decideTechnicalReviewFailure([], head);
   if (this.case === "repeated-technical-failure") this.result = decideTechnicalReviewFailure([{ body: renderTechnicalFailureMarker(head) }], head);
+});
+
+When("deadloop がレビュー指摘の修正を開始する", function (this: RecoveryWorld) {
+  this.result = repairDispatch();
 });
 
 When("deadloop が修正作業者へ指示する", function (this: RecoveryWorld) {
@@ -236,7 +324,9 @@ Then("deadloop は確認した branch へ非強制で push する", function (th
 });
 
 Then("deadloop は push 前に設定済みチェックを実行する", function (this: RecoveryWorld) {
-  assert.ok((this.commands?.findIndex((command) => command[0] === "node") ?? -1) < (this.commands?.findIndex((command) => command[0] === "gh") ?? -1));
+  const checkIndex = this.commands?.findIndex((command) => command[0] === "node") ?? -1;
+  const headCheckIndex = this.commands?.findIndex((command) => command[0] === "gh") ?? -1;
+  assert.ok(checkIndex >= 0 && checkIndex < headCheckIndex);
 });
 
 Then("deadloop は競合回復 branch へ非強制で push する", function (this: RecoveryWorld) {
@@ -244,7 +334,9 @@ Then("deadloop は競合回復 branch へ非強制で push する", function (th
 });
 
 Then("deadloop は競合回復の push 前に設定済みチェックを実行する", function (this: RecoveryWorld) {
-  assert.ok((this.commands?.findIndex((command) => command[0] === "node") ?? -1) < (this.commands?.findIndex((command) => command[0] === "gh") ?? -1));
+  const checkIndex = this.commands?.findIndex((command) => command[0] === "node") ?? -1;
+  const headCheckIndex = this.commands?.findIndex((command) => command[0] === "gh") ?? -1;
+  assert.ok(checkIndex >= 0 && checkIndex < headCheckIndex);
 });
 
 Then("deadloop は競合回復 branch へ push しない", function (this: RecoveryWorld) {

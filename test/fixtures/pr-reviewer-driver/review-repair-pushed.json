@@ -1,0 +1,35 @@
+{
+  "prs": [
+    {
+      "number": 31,
+      "title": "Repaired PR",
+      "url": "https://github.com/owner/repo/pull/31",
+      "updatedAt": "2026-07-08T00:00:00Z",
+      "headRefName": "agent/issue-31",
+      "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+      "isCrossRepository": false,
+      "isDraft": false,
+      "labels": [
+        {
+          "name": "agent:review"
+        },
+        {
+          "name": "agent:reviewing"
+        }
+      ],
+      "statusCheckRollup": [],
+      "comments": [
+        {
+          "body": "<!-- deadloop:review-repair-attempt key=c4ddc9641edec4e267b2 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=0621b60e5337fe8290d8 -->"
+        }
+      ],
+      "reviewRequests": [],
+      "mergeStateStatus": "CLEAN"
+    }
+  ],
+  "agents": {
+    "result": {
+      "agents": []
+    }
+  }
+}
