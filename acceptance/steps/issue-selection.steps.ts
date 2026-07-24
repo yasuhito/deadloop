@@ -101,7 +101,7 @@ Given("停止中の Issue が `agent:blocked` ラベルを持つ", function (thi
   this.fixtureName = "selection-blocked.json";
 });
 
-Given("選定可能な Issue が本文の{string}で未完了の依存を示す", function (this: IssueSelectionWorld, location: string) {
+Given("必要な公開ラベルがそろった Issue が本文の{string}で未完了の依存を示す", function (this: IssueSelectionWorld, location: string) {
   const fixtures: Record<string, string> = {
     "依存欄": "selection-open-body-dependency.json",
     "末尾": "selection-open-final-section-dependency.json",
@@ -115,7 +115,7 @@ Given("選定可能な Issue が本文で完了した依存を示す", function 
   this.fixtureName = "selection-closed-body-dependency.json";
 });
 
-Given("選定可能な Issue が GitHub 上で未完了の依存を持つ", function (this: IssueSelectionWorld) {
+Given("必要な公開ラベルがそろった Issue が GitHub 上で未完了の依存を持つ", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-open-relationship-dependency.json";
 });
 
