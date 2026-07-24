@@ -39,16 +39,19 @@ Issue #119 では、Issue 専用の作業場所で担当を重複なく起動し
 
 2026-07-24 に、削除前の Vitest と新しい Cucumber を併存させて `npm run test:unit` と `npm run test:acceptance` を実行し、両方が成功することを確認した。置換後は Vitest 56ファイル 744テスト、Cucumber 92シナリオ 480ステップが成功した。
 
-同日、各移行先の Then の期待結果を一時的に変更して `npm run test:acceptance` を実行した。すべて終了状態1となり、次のとおり対象シナリオ、ステップ定義の位置、実際値と一時的な期待値の差を報告した。非操作の3つの Then については、`launchCount` と `removedAgentIds.length` の期待値を同時に `0` から `1` へ変更した実行で、5シナリオが失敗した。
+同日、各移行先の Then の期待結果を一時的に変更して `npm run test:acceptance` を実行した。さらにレビュー修正時に、現行の三つの起動拒否 Then と、T003〜T005 が共有する非起動 Then を一つずつ意図的に壊して再実行した。すべて終了状態1となり、次のとおり実際の Then 名、実際値と一時的な期待値の差、失敗シナリオ数を確認した。
 
 | 分類 ID | 一時的に壊した Then | 報告された差 | 失敗シナリオ数 |
 |---|---|---|---:|
 | T002 | 完了済みの担当を片付けてから交代を起動する | `remove:finished>create-tab>launch` / `intentional-failure` | 1 |
 | T002（起動回数） | 一人の交代担当を起動する（`launchCount`） | `1` / `2` | 1 |
-| T003 | 稼働中の担当は残る | `true` / `false` | 1 |
-| T004 | 候補を特定できない同名担当は片付けない（`removedAgentIds.length`） | `0` / `1` | 1 |
-| T005 | 別の作業場所の同名担当は片付けない（`removedAgentIds.length`） | `0` / `1` | 1 |
-| T003〜T005 | 新しい担当は起動しない（共有 Then の `launchCount`） | `0` / `1` | 3 |
+| T003（拒否理由） | 稼働中の同名担当がいるため起動を拒否する | `agent name demo-pr-44-reviewer is working; refusing duplicate launch` / `intentional-failure` | 1 |
+| T003（既存担当） | 稼働中の担当は残る | `true` / `false` | 1 |
+| T004（拒否理由） | 複数の同名担当がいるため起動を拒否する | `agent name demo-pr-44-reviewer has 2 live candidates; refusing cleanup` / `intentional-failure` | 1 |
+| T004（片付け） | 候補を特定できない同名担当は片付けない（`removedAgentIds.length`） | `0` / `1` | 1 |
+| T005（拒否理由） | 別の作業場所に同名担当がいるため起動を拒否する | `agent name demo-pr-44-reviewer belongs to a different worktree; refusing cleanup` / `intentional-failure` | 1 |
+| T005（片付け） | 別の作業場所の同名担当は片付けない（`removedAgentIds.length`） | `0` / `1` | 1 |
+| T003〜T005（非起動） | 新しい担当は起動しない（共有 Then の `launchCount`） | `0` / `1` | 3 |
 | T006 | 担当には基準ブランチから Issue 専用の作業場所を作る | `origin/main` / `origin/intentional-failure` | 1 |
 | T006（起動回数） | 新しい担当を一人だけ起動する（`launchCount`） | `1` / `2` | 1 |
 | T215 | その Issue は完了ファイルの監視対象になる | `worker_monitor_request` / `intentional_failure` | 1 |
@@ -58,4 +61,4 @@ Issue #119 では、Issue 専用の作業場所で担当を重複なく起動し
 | T395 | 終了前に不足した観測を集める | `collect_observations` / `intentional_failure` | 1 |
 | T396 | 完了ファイルに従って監視を終える | `promise_settled` / `intentional_failure` | 2 |
 
-T396 はシナリオアウトラインの2例が同じ Then を共有するため、一度の変更で2シナリオが失敗した。2026-07-25 には、別々の保証として追加した二つの起動回数について、各 `launchCount` の期待値を `1` から `2` へ一つずつ変更し、表のとおり対応する1シナリオだけが終了状態1で失敗して `1 !== 2` を報告することを確認した。各期待値を元に戻した後、`npm run test:acceptance` で 92シナリオ 480ステップが再び成功することを確認した。壊した状態はコミットしていない。
+T396 はシナリオアウトラインの2例が同じ Then を共有するため、一度の変更で2シナリオが失敗した。2026-07-25 には、別々の保証として追加した二つの起動回数について、各 `launchCount` の期待値を `1` から `2` へ一つずつ変更し、表のとおり対応する1シナリオだけが終了状態1で失敗して `1 !== 2` を報告することを確認した。レビュー修正時には、共有する「新しい担当は起動しない」の期待値を `0` から `1` へ変更した一度の実行で、T003〜T005 の3シナリオだけが失敗することも確認した。各期待値を元に戻した後、`npm run test:acceptance` で 95シナリオ 495ステップが再び成功することを確認した。壊した状態はコミットしていない。

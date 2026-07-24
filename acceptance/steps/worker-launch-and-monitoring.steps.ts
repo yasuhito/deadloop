@@ -173,6 +173,10 @@ Then("別の作業場所に同名担当がいるため起動を拒否する", fu
   );
 });
 
+Then("新しい担当は起動しない", function (this: WorkerWorld) {
+  assert.equal(this.launchCount, 0);
+});
+
 Then("稼働中の担当は残る", function (this: WorkerWorld) {
   assert.equal(this.agents?.some((agent) => agent.agentId === "working"), true);
 });
@@ -196,7 +200,10 @@ When("deadloop が選ばれた Issue の作業を開始する", function (this: 
     {
       cwd: process.cwd(),
       encoding: "utf8",
-      env: { ...process.env, DEADLOOP_PROJECT_ID: "demo" },
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("DEADLOOP_"))),
+        DEADLOOP_PROJECT_ID: "demo",
+      },
     },
   );
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
