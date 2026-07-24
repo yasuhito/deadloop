@@ -53,13 +53,40 @@ function runDriverFixture(target: StoppedTarget): string {
   return JSON.parse(result.stdout).comment;
 }
 
-Given("deadloop の状態表示用データがある", function (this: OperatorStatusWorld) {
+Given("実装待ちの Issue がない", function (this: OperatorStatusWorld) {
   this.warnings = [];
 });
 
-Given("コード更新の警告がある deadloop の状態表示用データがある", function (this: OperatorStatusWorld) {
+Given("Issue #13 が実装中である", function (this: OperatorStatusWorld) {
+  this.warnings = [];
+});
+
+Given("pull request #21 がレビュー待ちである", function (this: OperatorStatusWorld) {
+  this.warnings = [];
+});
+
+Given("マージ済み pull request #20 の作業場所が残っている", function (this: OperatorStatusWorld) {
+  this.warnings = [];
+});
+
+Given("実装中の Issue #13 の作業場所が稼働している", function (this: OperatorStatusWorld) {
+  this.warnings = [];
+});
+
+Given("deadloop 拡張のコード更新が状態表示に反映されていない", function (this: OperatorStatusWorld) {
   this.warnings = [EXTENSION_CODE_CHANGED_WARNING];
 });
+
+Given("自動化が直近の実行で Issue #12 を選んでいる", function (this: OperatorStatusWorld) {
+  this.warnings = [];
+});
+
+Given(
+  "ローカル設定の場所が不明で、リポジトリ設定を origin\\/main の deadloop.json から読む設定である",
+  function (this: OperatorStatusWorld) {
+    this.warnings = [];
+  },
+);
 
 When("オペレーターが deadloop の状態を表示する", function (this: OperatorStatusWorld) {
   this.report = statusReport(this.warnings);
@@ -97,9 +124,12 @@ Then("設定元が表示される", function (this: OperatorStatusWorld) {
   assert.match(this.report || "", /config: local=unknown local projects\.json; repoPolicy=origin\/main:deadloop\.json \(not-read\)/);
 });
 
-Given("停止した Issue がある", function (this: OperatorStatusWorld) {
-  this.stoppedTarget = "issue";
-});
+Given(
+  "PRD、設計、または親課題に相当する Issue #11 が実装待ちである",
+  function (this: OperatorStatusWorld) {
+    this.stoppedTarget = "issue";
+  },
+);
 
 When("deadloop が停止コメントを作成する", function (this: OperatorStatusWorld) {
   if (!this.stoppedTarget) throw new Error("stopped target is required");
@@ -118,7 +148,7 @@ Then("停止コメントに安全な再投入方法が表示される", function
   assert.match(this.blockedComment || "", /gh issue edit 11 -R owner\/repo --remove-label agent:blocked --add-label agent:implement/);
 });
 
-Given("停止した pull request がある", function (this: OperatorStatusWorld) {
+Given("pull request #23 が下書きでレビュー待ちである", function (this: OperatorStatusWorld) {
   this.stoppedTarget = "pull-request";
 });
 

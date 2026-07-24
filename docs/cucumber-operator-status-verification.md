@@ -4,12 +4,12 @@ This record tracks the Cucumber migration for Issue #127. The existing Vitest te
 
 ## Classification mapping
 
-| Classification IDs | Acceptance scenario(s) |
+| Classification IDs | Migration destination |
 |---|---|
-| T050 | `Issue の停止コメントに復旧手順を表示する` |
-| T051 | `Issue の停止コメントに安全な再投入方法を表示する` |
-| T052 | `pull request の停止コメントに復旧手順を表示する` |
-| T053 | `pull request の停止コメントに安全な再投入方法を表示する` |
+| T050 | Acceptance scenario `Issue の停止コメントに復旧手順を表示する` |
+| T051 | Acceptance scenario `Issue の停止コメントに安全な再投入方法を表示する` |
+| T052 | Reclassified to focused Vitest coverage in `test/blocked-report-format.test.ts`; this is a static prompt-file contract |
+| T053 | Reclassified to focused Vitest coverage in `test/blocked-report-format.test.ts`; this is a static prompt-file contract |
 | T054 | `現行の状態表示コマンドを登録する` |
 | T380 | `実装待ちの Issue がない場合はそのことを表示する` |
 | Issue #127 target display | `対象の Issue を表示する` |
@@ -23,7 +23,9 @@ This record tracks the Cucumber migration for Issue #127. The existing Vitest te
 
 ## Acceptance boundary
 
-The status scenarios establish input data in Given and render the report in When. The stopped-Issue scenarios run the issue coordinator driver with `driver-blocked-prd.json`, while the stopped-pull-request scenarios run the PR reviewer driver with `draft-pr.json`; their When step observes the comments returned by those deterministic acceptance adapters rather than reading a prompt or pre-rendering a comment in Given.
+Each status scenario names the Issue, pull request, workspace, warning, automation decision, or configuration state that its result depends on, then renders the report in When. The stopped-Issue scenarios state that Issue #11 looks like a PRD, design, or parent issue and run the issue coordinator driver with `driver-blocked-prd.json`. The stopped-pull-request scenarios state that pull request #23 is a draft awaiting review and run the PR reviewer driver with `draft-pr.json`.
+
+The deterministic draft gate does not read `pr-reviewer.prompt.md`. Its acceptance scenarios therefore cover the draft-PR comment output, not T052 or T053. Those two classifications retain focused Vitest coverage that reads the prompt file directly and guards its recovery heading and safe requeue command.
 
 ## Intentional failures
 
@@ -37,9 +39,9 @@ On 2026-07-23, each expected external result was temporarily changed to an impos
 - T384: the expected code-update warning was changed to `missing warning`.
 - T385: the selected Issue in the driver summary was changed from `#12` to `#999`.
 - T386: the expected repository-policy source was changed from `origin/main` to `origin/missing`.
-- T050 and T052: the shared expected recovery heading was changed to `## Missing recovery steps`; both the Issue and pull-request scenarios failed, demonstrating the same heading guarantee at each output boundary.
+- T050: the Issue recovery heading was changed to `## Missing recovery steps`.
 - T051: the Issue requeue command target was changed from `#11` to `#999`.
-- T053: the pull-request recovery command repository was changed from `owner/repo` to `other/repo`.
+- Draft-PR output: the recovery heading was changed to `## Missing recovery steps`, and the recovery command repository was changed from `owner/repo` to `other/repo` in separate runs. T052 and T053 are not assigned to these scenarios because the draft gate does not read the prompt.
 - T054: the expected registered command was changed from `deadloop-status` to `missing-status`.
 - Issue #127 stop reasons: the known planning-Issue reason and known draft-pull-request reason were each changed to a missing reason; each corresponding scenario failed independently.
 
