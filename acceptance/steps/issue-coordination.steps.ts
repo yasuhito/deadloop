@@ -88,6 +88,10 @@ Then("その Issue の完了監視が開始される", function (this: IssueCoor
   assert.equal(this.result?.monitorHandoff?.kind, "issue");
 });
 
+Then("その Issue の完了監視は開始されない", function (this: IssueCoordinationWorld) {
+  assert.equal(this.result?.monitorHandoff, undefined);
+});
+
 Then("その Issue に停止案内は作られない", function (this: IssueCoordinationWorld) {
   assert.equal(this.result?.comment, undefined);
 });
