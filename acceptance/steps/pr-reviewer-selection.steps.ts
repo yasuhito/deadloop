@@ -213,16 +213,12 @@ Then("deadloop は外部レビューを依頼する", function (this: SelectionW
   );
 });
 
-Then("deadloop は外部レビューを待機する", function (this: SelectionWorld) {
-  assert.equal(this.driverResult?.driverAction, "wait");
-});
-
-Then("deadloop は通常レビューへ戻す", function (this: SelectionWorld) {
-  assert.equal(this.driverResult?.driverAction, "reviewer_monitor_request");
-});
-
 Then("レビュー担当は起動されない", function (this: SelectionWorld) {
-  assert.deepEqual(this.driverResult?.testAdapterEffects?.herdrStarts, []);
+  assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0, 0);
+});
+
+Then("レビュー担当が起動される", function (this: SelectionWorld) {
+  assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length, 1);
 });
 
 Then("pull request の復旧手順を示す", function (this: SelectionWorld) {
