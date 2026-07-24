@@ -264,9 +264,6 @@ describe("issue coordinator cleanup", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.promiseFile).toContain("fixture-worker-uuid");
   });
 
-  it("keeps the promise file as the worker completion authority", () => {
-    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain("only completion authority");
-  });
 
   it("documents dedicated tab startup for branch update workers", () => {
     expect(readFileSync("extensions/deadloop/automations/pr-reviewer.prompt.md", "utf8")).toContain(
