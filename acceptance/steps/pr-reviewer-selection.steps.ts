@@ -218,6 +218,10 @@ Then("レビュー担当は起動されない", function (this: SelectionWorld) 
   assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0, 0);
 });
 
+Then("外部レビューの完了待ちになる", function (this: SelectionWorld) {
+  assert.equal(this.driverResult?.driverAction, "wait");
+});
+
 Then("レビュー担当が起動される", function (this: SelectionWorld) {
   assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length, 1);
 });

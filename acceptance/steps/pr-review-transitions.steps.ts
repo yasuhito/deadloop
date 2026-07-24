@@ -9,7 +9,7 @@ const { mergeReviewedPr } = require("../../extensions/deadloop/automations/merge
 const currentHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const previousHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-type GithubEffect = { operation?: string; reviewer?: string };
+type GithubEffect = { operation?: string; reviewer?: string; body?: string };
 type TransitionResult = {
   driverAction?: string;
   githubEffects?: GithubEffect[];
@@ -86,13 +86,14 @@ Then("CI の完了待ちになる", function (this: TransitionWorld) {
 });
 
 Then("通常レビューを開始する", function (this: TransitionWorld) {
-  assert.equal(this.result?.testAdapterEffects?.herdrStarts?.length, 1);
+  assert.equal(this.result?.driverAction, "reviewer_monitor_request");
 });
 
 Then("現在の head の外部レビューを依頼する", function (this: TransitionWorld) {
   assert.equal(
     this.result?.githubEffects?.some(
-      (effect) => effect.operation === "add_pr_reviewer" && effect.reviewer === "@copilot",
+      (effect) => effect.operation === "comment_pr"
+        && effect.body?.includes("deadloop:external-review-request head=new2525"),
     ),
     true,
   );
@@ -135,12 +136,29 @@ When("deadloop が現在の pull request の承認処理を完了する", functi
         }),
         run: (args: string[]) => {
           commands.push(args);
+          if (args[0] === "gh" && args[1] === "pr" && args[2] === "view") {
+            return {
+              status: 0,
+              stdout: JSON.stringify({
+                state: "OPEN",
+                isDraft: false,
+                headRefOid: currentHead,
+                mergeable: "MERGEABLE",
+                mergeStateStatus: "CLEAN",
+                statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+                labels: [{ name: "agent:review" }, { name: "agent:reviewing" }],
+              }),
+              stderr: "",
+            };
+          }
           return { status: 0, stdout: "", stderr: "" };
         },
       },
     );
-  } catch {
-    // A stale approval must stop completion before the externally visible merge command.
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "reviewed head does not match the guarded merge head; automatic merge stopped") {
+      throw error;
+    }
   }
   this.completionCommands = commands;
 });
