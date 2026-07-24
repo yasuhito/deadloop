@@ -63,10 +63,10 @@
 | --- | --- | --- |
 | T331、T333、T335、T336、T346 | 選択番号の期待値を `number + 1` に変更 | 対応する5シナリオと複数候補シナリオの計6件が失敗し、たとえば `7 !== 8` を表示 |
 | T332、T334、T337、T338、T347、T348 | 非選択の期待値を `false` から `true` に変更 | 対応する6シナリオと同じ Then を使う追加2シナリオの計8件が失敗し、`false !== true` を表示 |
-| T340 | 外部レビュー依頼の期待値を `wait` に変更 | 「外部レビューをまだ依頼していない pull request には外部レビューを依頼する」だけが失敗し、`external_review_requested` と `wait` の差分を表示 |
+| T340 | `githubEffects` に `add_pr_reviewer`（担当者 `@copilot`）が含まれる期待値を `true` から `false` に変更 | 「外部レビューをまだ依頼していない pull request には外部レビューを依頼する」だけが失敗し、`true !== false`、20シナリオ中19件成功・1件失敗を表示 |
 | T341 | 外部レビュー待機の期待値を `external_review_requested` に変更 | 「外部レビューを待っている pull request は待機する」だけが失敗し、`wait` と `external_review_requested` の差分を表示 |
 | T342 | 通常レビュー復帰の期待値を `wait` に変更 | 「外部レビューの待機期限が切れた pull request は通常レビューへ戻す」だけが失敗し、`reviewer_monitor_request` と `wait` の差分を表示 |
-| T339 | 下書き停止の期待値を `wait` に変更 | 「下書きの pull request はレビューを開始しない」だけが失敗し、`draft_blocked` と `wait` の差分を表示 |
+| T339 | `githubEffects` に `agent:blocked` を追加する `move_pr_labels` が含まれる期待値を `true` から `false` に変更 | 「下書きの pull request はレビューを開始しない」だけが失敗し、`true !== false`、20シナリオ中19件成功・1件失敗を表示 |
 | T312 | 復旧手順の正規表現を存在しない見出しへ変更 | 「下書きの pull request には復旧手順を示す」だけが失敗し、実際のコメントと不一致の正規表現を表示 |
 
 各実行の直後に変更を元へ戻した。最後に通常の `npm run test:acceptance` が成功することと、意図的な変更が作業ツリーに残っていないことを確認した。
