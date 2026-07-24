@@ -23,7 +23,7 @@ Issue #117 が求める選定対象外の状態を網羅するため、次のシ
 
 ラベルと依存関係の各シナリオは既存の決定論的な Issue 選定コマンドを fixture で実行する。選定しないシナリオは選定結果を、選定する T243 と T246 のシナリオはそれぞれ Issue 番号 1 と 2 を Then の一つの assertion で観測する。したがって、以前のテストと同じ事前状態（公開ラベル、本文または GitHub の依存状態）および契機（Issue 選定）に対して、同じ利用者観測可能な選定結果と選定された Issue の同一性を確認する。
 
-クローズ済み Issue のシナリオは、決定コマンドへ直接 fixture を渡さず、coordinator の事前確認を起動する。`gh issue list --state open` には候補なしを返し、状態指定が欠けた呼び出しには公開ラベルがそろったクローズ済み Issue を返すスタブにより、本番と同じ GitHub 一覧取得境界を通す。事前確認の終了状態 1 を一つの assertion で観測し、クローズ済み Issue が作業対象にないことを確認する。2026-07-24 に `npm run test:acceptance` を実行し、10シナリオ、41ステップがすべて成功した。
+クローズ済み Issue のシナリオは、決定コマンドへ直接 fixture を渡さず、coordinator の事前確認を起動する。実際の GitHub CLI と同様に、`gh issue list` の状態指定がない場合と `--state open` の場合は候補なしを返し、`--state all` の場合だけ公開ラベルがそろったクローズ済み Issue を返すスタブにより、本番と同じ GitHub 一覧取得境界を通す。事前確認の終了状態 1 を一つの assertion で観測し、クローズ済み Issue が作業対象にないことを確認する。2026-07-24 に `npm run test:acceptance` を実行し、10シナリオ、41ステップがすべて成功した。
 
 ## Vitest と Cucumber の併存確認
 
@@ -31,12 +31,12 @@ Issue #117 が求める選定対象外の状態を網羅するため、次のシ
 
 ## 意図的な失敗の確認
 
-2026-07-24 に Issue 番号を確認する Then の期待値へ一時的に 1000 を加えて、`npm run test:acceptance` を実行した。コマンドは status 1 で終了し、「準備済みの Issue を作業対象に選ぶ」 (`acceptance/features/issue-selection.feature.md:8`) と「完了した本文依存を持つ Issue を作業対象に選ぶ」 (`acceptance/features/issue-selection.feature.md:44`) が失敗した。どちらも `acceptance/steps/issue-selection.steps.ts:68` の Then と同ファイル `:69` の assertion を指し、それぞれ `1 !== 1001` (`-1`, `+1001`) と `2 !== 1002` (`-2`, `+1002`) の差分を報告した。確認後に assertion は引数で渡された Issue 番号を期待する状態へ戻した。
+2026-07-24 に Issue 番号を確認する Then の期待値へ一時的に 1000 を加えて、`npm run test:acceptance` を実行した。コマンドは status 1 で終了し、「準備済みの Issue を作業対象に選ぶ」 (`acceptance/features/issue-selection.feature.md:8`) と「完了した本文依存を持つ Issue を作業対象に選ぶ」 (`acceptance/features/issue-selection.feature.md:50`) が失敗した。どちらも `acceptance/steps/issue-selection.steps.ts:132` の Then と同ファイル `:133` の assertion を指し、それぞれ `1 !== 1001` (`-1`, `+1001`) と `2 !== 1002` (`-2`, `+1002`) の差分を報告した。確認後に assertion は引数で渡された Issue 番号を期待する状態へ戻した。
 
-同日に、選定対象外を確認する3つの Then の期待値を一時的に `true` へ変えて、`npm run test:acceptance` を実行した。コマンドは status 1 で終了し、T244 の「作業中」 (`acceptance/features/issue-selection.feature.md:20`、Then `acceptance/steps/issue-selection.steps.ts:76`、assertion `:77`)、T245 の「依存欄」 (`acceptance/features/issue-selection.feature.md:41`、Then `:84`、assertion `:85`)、T248 の「末尾」 (feature `:42`、Then `:84`、assertion `:85`)、T247 の「GitHub 上の未完了の依存」 (feature `:50`、Then `:88`、assertion `:89`) の4シナリオが失敗した。各失敗は `false !== true` と `-false` / `+true` の差分を報告した。期待値を `false` へ戻した後、同じコマンドが9シナリオ、37ステップで成功することを確認した。
+同日に、選定対象外を確認する3つの Then の期待値を一時的に `true` へ変えて、`npm run test:acceptance` を実行した。コマンドは status 1 で終了し、T244 の「作業中」 (`acceptance/features/issue-selection.feature.md:26`、Then `acceptance/steps/issue-selection.steps.ts:144`、assertion `:145`)、T245 の「依存欄」 (`acceptance/features/issue-selection.feature.md:47`、Then `:152`、assertion `:153`)、T248 の「末尾」 (feature `:48`、Then `:152`、assertion `:153`)、T247 の「GitHub 上の未完了の依存」 (feature `:56`、Then `:156`、assertion `:157`) の4シナリオが失敗した。各失敗は `false !== true` と `-false` / `+true` の差分を報告した。期待値を `false` へ戻した後、同じコマンドが9シナリオ、37ステップで成功することを確認した。
 
-同日に、新規追加した2つの選定対象外シナリオについても、各 Then の期待値を一時的に `true` へ変えて `npm run test:acceptance` を実行した。コマンドは status 1 で終了し、「準備不足」 (`acceptance/features/issue-selection.feature.md:14`、Then `acceptance/steps/issue-selection.steps.ts:72`、assertion `:73`) と「停止中」 (`acceptance/features/issue-selection.feature.md:26`、Then `acceptance/steps/issue-selection.steps.ts:80`、assertion `:81`) の2シナリオだけが意図どおり失敗した。どちらも実際値 `false` と一時的な期待値 `true` の不一致を示す `false !== true` および `-false` / `+true` の差分を報告した。確認後に両方の期待値を `false` へ戻した。
+同日に、新規追加した2つの選定対象外シナリオについても、各 Then の期待値を一時的に `true` へ変えて `npm run test:acceptance` を実行した。コマンドは status 1 で終了し、「準備不足」 (`acceptance/features/issue-selection.feature.md:20`、Then `acceptance/steps/issue-selection.steps.ts:140`、assertion `:141`) と「停止中」 (`acceptance/features/issue-selection.feature.md:32`、Then `acceptance/steps/issue-selection.steps.ts:148`、assertion `:149`) の2シナリオだけが意図どおり失敗した。どちらも実際値 `false` と一時的な期待値 `true` の不一致を示す `false !== true` および `-false` / `+true` の差分を報告した。確認後に両方の期待値を `false` へ戻した。
 
-同日に、coordinator の事前確認から `--state open` を一時的に外して `npm run test:acceptance` を実行した。コマンドは status 1 で終了し、「クローズ済みの Issue を作業対象に選ばない」 (`acceptance/features/issue-selection.feature.md:14`) だけが失敗した。`acceptance/steps/issue-selection.steps.ts:136` の Then と `:137` の assertion を指し、事前確認の実際の終了状態 0 と期待値 1 の不一致を `0 !== 1` (`-0`, `+1`) と報告した。`--state open` を戻した後、同じコマンドが10シナリオ、41ステップで成功することを確認した。
+同日に、coordinator の事前確認の `--state open` を一時的に `--state all` へ変えて `npm run test:acceptance` を実行した。コマンドは status 1 で終了し、「クローズ済みの Issue を作業対象に選ばない」 (`acceptance/features/issue-selection.feature.md:14`) だけが失敗した。`acceptance/steps/issue-selection.steps.ts:136` の Then と `:137` の assertion を指し、事前確認の実際の終了状態 0 と期待値 1 の不一致を `0 !== 1` (`-0`, `+1`) と報告した。`--state open` を戻した後、同じコマンドが10シナリオ、41ステップで成功することを確認した。
 
 既存の `test/issue-coordinator-selection.test.ts` からは、完全に置換した T243〜T248 の6件を削除した。CLI の help と未知の引数に関する T249、T250 は低レベル診断として Vitest に残している。
