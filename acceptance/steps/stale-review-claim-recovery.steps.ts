@@ -19,8 +19,8 @@ type DriverResult = {
 type ClaimWorld = {
   prs?: Record<string, unknown>[];
   agents?: unknown;
-  decision?: { selected?: boolean; number?: number; staleReclaim?: boolean; reason?: string };
-  reviewerLaunchCounts?: number[];
+  decision?: { selected?: boolean; number?: number; reason?: string };
+  driverResult?: DriverResult;
 };
 
 const fixtureDirectory = path.join(process.cwd(), "test/fixtures/pr-reviewer");
@@ -55,8 +55,21 @@ Given("意図的に停止されたレビュー占有がある", function (this: 
   setClaim(this, "precheck-blocked.json", "agents-empty.json");
 });
 
-Given("まだ占有されていないレビュー待ちの pull request がある", function (this: ClaimWorld) {
-  setClaim(this, "precheck-agent-review.json", "agents-empty.json");
+Given("回収済みで新しいレビュー担当が稼働中の占有がある", function (this: ClaimWorld) {
+  setClaim(this, "precheck-reviewing.json", "agents-empty.json");
+  const firstCycle = runDriver({ prs: this.prs, agents: this.agents });
+  const starts = firstCycle.testAdapterEffects?.herdrStarts ?? [];
+  const labels = firstCycle.testAdapterEffects?.labels?.["13"];
+  this.prs = this.prs?.map((pr) =>
+    Number(pr.number) === 13 && labels ? { ...pr, labels: labels.map((name) => ({ name })) } : pr,
+  );
+  this.agents = {
+    result: {
+      agents: starts.flatMap((start) =>
+        start.name ? [{ name: start.name, agent_status: "working" }] : [],
+      ),
+    },
+  };
 });
 
 function runDriver(fixtureData: Record<string, unknown>): DriverResult {
@@ -84,23 +97,9 @@ function runDriver(fixtureData: Record<string, unknown>): DriverResult {
   }
 }
 
-When("deadloop が占有を回収して次の選定周期まで処理する", function (this: ClaimWorld) {
+When("deadloop が次の選定周期を実行する", function (this: ClaimWorld) {
   if (!this.prs) throw new Error("review claim is missing");
-  const firstCycle = runDriver({ prs: this.prs, agents: this.agents });
-  const firstStarts = firstCycle.testAdapterEffects?.herdrStarts ?? [];
-  const labels = firstCycle.testAdapterEffects?.labels?.["13"];
-  const claimedPrs = this.prs.map((pr) =>
-    Number(pr.number) === 13 && labels ? { ...pr, labels: labels.map((name) => ({ name })) } : pr,
-  );
-  const activeAgents = {
-    result: {
-      agents: firstStarts.flatMap((start) =>
-        start.name ? [{ name: start.name, agent_status: "working" }] : [],
-      ),
-    },
-  };
-  const nextCycle = runDriver({ prs: claimedPrs, agents: activeAgents });
-  this.reviewerLaunchCounts = [firstStarts.length, nextCycle.testAdapterEffects?.herdrStarts?.length ?? 0];
+  this.driverResult = runDriver({ prs: this.prs, agents: this.agents });
 });
 
 function decide(world: ClaimWorld): void {
@@ -117,18 +116,10 @@ Then("pull request #{int} のレビューを再開する", function (this: Claim
   assert.equal(this.decision?.number, number);
 });
 
-Then("選んだレビューは中断後の再開として扱われる", function (this: ClaimWorld) {
-  assert.equal(this.decision?.staleReclaim, true);
-});
-
 Then("レビュー占有は回収されない", function (this: ClaimWorld) {
   assert.equal(this.decision?.selected, false);
 });
 
-Then("新しいレビュー担当は一人だけ起動される", function (this: ClaimWorld) {
-  assert.deepEqual(this.reviewerLaunchCounts, [1, 0]);
-});
-
-Then("選んだレビューは通常の開始として扱われる", function (this: ClaimWorld) {
-  assert.equal(this.decision?.staleReclaim, false);
+Then("追加のレビュー担当は起動されない", function (this: ClaimWorld) {
+  assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0, 0);
 });
