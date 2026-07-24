@@ -551,8 +551,7 @@ function drive(fixturePath: string | undefined): DriverResult {
       driverAction: "draft_blocked",
       prNumber: plan.decision.number,
       comment,
-      githubEffects,
-      ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
+      ...(fixture ? { githubEffects, testAdapterEffects: fixtureEffects(fixture) } : {}),
     });
   }
 
@@ -690,7 +689,7 @@ function drive(fixturePath: string | undefined): DriverResult {
       driverAction: "external_review_requested",
       prNumber: plan.decision.number,
       gate: plan.gate,
-      githubEffects,
+      ...(fixture ? { githubEffects, testAdapterEffects: fixtureEffects(fixture) } : {}),
     });
   }
   if (plan.kind === "external_review_wait") {
