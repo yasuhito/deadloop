@@ -21,6 +21,37 @@ function executable(file: string, content: string): void {
   fs.chmodSync(file, 0o755);
 }
 
+function runReviewDriver(world: RequeuedReviewWorld): void {
+  if (
+    !world.root ||
+    !world.bin ||
+    !world.worktree ||
+    !world.configDir ||
+    !world.log ||
+    !world.prState
+  ) {
+    throw new Error("requeued pull request state is missing");
+  }
+  const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${world.bin}:${process.env.PATH}`,
+      PI_CODING_AGENT_DIR: world.configDir,
+      DEADLOOP_PROJECT_ID: "demo",
+      DEADLOOP_REPO_PATH: world.root,
+      DEADLOOP_GITHUB_REPO: "owner/repo",
+      DEADLOOP_ENABLED_AT: "1",
+      DEADLOOP_STATE_DIR: path.join(world.configDir, "deadloop"),
+      GH_TEST_PR_STATE: world.prState,
+      HERDR_TEST_LOG: world.log,
+      HERDR_TEST_WORKTREE: world.worktree,
+    },
+  });
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+}
+
 After("@requeued-pr-review", function (this: RequeuedReviewWorld) {
   if (this.root) fs.rmSync(this.root, { recursive: true, force: true });
 });
@@ -94,48 +125,17 @@ if (args[0] === "agent" && args[1] === "list") {
 `);
 
   Object.assign(this, { root, bin, worktree, configDir, log, prState, updatedHead });
+  runReviewDriver(this);
 });
 
-When("deadloop が停止中と再投入後の二周期で pull request を確認する", function (this: RequeuedReviewWorld) {
-  if (
-    !this.root ||
-    !this.bin ||
-    !this.worktree ||
-    !this.configDir ||
-    !this.log ||
-    !this.prState ||
-    !this.updatedHead
-  ) {
-    throw new Error("requeued pull request state is missing");
-  }
-  const runDriver = () => {
-    const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${this.bin}:${process.env.PATH}`,
-        PI_CODING_AGENT_DIR: this.configDir,
-        DEADLOOP_PROJECT_ID: "demo",
-        DEADLOOP_REPO_PATH: this.root,
-        DEADLOOP_GITHUB_REPO: "owner/repo",
-        DEADLOOP_ENABLED_AT: "1",
-        DEADLOOP_STATE_DIR: path.join(this.configDir, "deadloop"),
-        GH_TEST_PR_STATE: this.prState,
-        HERDR_TEST_LOG: this.log,
-        HERDR_TEST_WORKTREE: this.worktree,
-      },
-    });
-    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-  };
-
-  runDriver();
+When("agent:blocked が外された pull request を deadloop が再確認する", function (this: RequeuedReviewWorld) {
+  if (!this.prState) throw new Error("requeued pull request state is missing");
   const pullRequests = JSON.parse(fs.readFileSync(this.prState, "utf8")) as Array<{
     labels: Array<{ name: string }>;
   }>;
   pullRequests[0].labels = pullRequests[0].labels.filter(({ name }) => name !== "agent:blocked");
   fs.writeFileSync(this.prState, JSON.stringify(pullRequests));
-  runDriver();
+  runReviewDriver(this);
 });
 
 Then("新しい head のレビュー担当を一人だけ起動する", function (this: RequeuedReviewWorld) {
