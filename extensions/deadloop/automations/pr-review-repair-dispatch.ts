@@ -415,29 +415,10 @@ function dispatch(args: JsonObject): DriverResult {
   }
 
   github.commentPr(env.githubRepo, prNumber, renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }));
+  let launch: JsonObject;
   try {
     github.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
-    const launch = launchRepair(prNumber, branch, expectedHead, findings, selection.key, env);
-    recordLaunchEvidence(prNumber, branch, expectedHead, selection.key, env);
-    return driverResult("needs_llm", `Launched review-repair worker for PR #${prNumber}`, {
-      driverAction: "review_repair_monitor_request",
-      selection,
-      labelsPreserved: [env.reviewLabel, env.reviewingLabel],
-      launch,
-      prompt: renderRepairMonitorPrompt({
-        prNumber: Number(prNumber),
-        expectedHeadOid: expectedHead,
-        branch,
-        automationDir: env.automationDir,
-        promiseFile: launch.promiseFile,
-        actorName: "review-repair worker",
-        reviewLabel: env.reviewLabel,
-        reviewingLabel: env.reviewingLabel,
-        blockedLabel: env.blockedLabel,
-        attemptKey: selection.key,
-        githubRepo: env.githubRepo,
-      }),
-    });
+    launch = launchRepair(prNumber, branch, expectedHead, findings, selection.key, env);
   } catch (error) {
     const comment = applyHumanBlock(
       prNumber,
@@ -451,6 +432,33 @@ function dispatch(args: JsonObject): DriverResult {
       comment,
     });
   }
+
+  let launchEvidenceError = "";
+  try {
+    recordLaunchEvidence(prNumber, branch, expectedHead, selection.key, env);
+  } catch (error) {
+    launchEvidenceError = error instanceof Error ? error.message : String(error);
+  }
+  return driverResult("needs_llm", `Launched review-repair worker for PR #${prNumber}`, {
+    driverAction: "review_repair_monitor_request",
+    selection,
+    labelsPreserved: [env.reviewLabel, env.reviewingLabel],
+    launch,
+    ...(launchEvidenceError ? { launchEvidenceError } : {}),
+    prompt: renderRepairMonitorPrompt({
+      prNumber: Number(prNumber),
+      expectedHeadOid: expectedHead,
+      branch,
+      automationDir: env.automationDir,
+      promiseFile: launch.promiseFile,
+      actorName: "review-repair worker",
+      reviewLabel: env.reviewLabel,
+      reviewingLabel: env.reviewingLabel,
+      blockedLabel: env.blockedLabel,
+      attemptKey: selection.key,
+      githubRepo: env.githubRepo,
+    }),
+  });
 }
 
 function main(): void {

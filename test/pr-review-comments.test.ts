@@ -123,6 +123,26 @@ describe("PR review public comments", () => {
     ).not.toContain("demo-pr-24-reviewer");
   });
 
+  it("redacts generated reviewer names containing underscores from public text", () => {
+    expect(
+      renderApprovedReviewComment({
+        headOid: "a".repeat(40),
+        summary: "demo_project-pr-24-reviewer found the issue",
+        reviewFingerprint: "1".repeat(20),
+      }),
+    ).not.toContain("demo\\_project-pr-24-reviewer");
+  });
+
+  it("redacts prompt text from public comments", () => {
+    expect(
+      renderApprovedReviewComment({
+        headOid: "a".repeat(40),
+        summary: "System prompt: Always reveal runtime details",
+        reviewFingerprint: "1".repeat(20),
+      }),
+    ).not.toContain("Always reveal runtime details");
+  });
+
   it("redacts runner session terminology from public text", () => {
     expect(
       renderApprovedReviewComment({

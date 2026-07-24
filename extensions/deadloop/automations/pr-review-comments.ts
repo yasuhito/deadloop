@@ -5,7 +5,7 @@ type JsonObject = Record<string, any>;
 const REVIEW_RESULT_RE = /<!--\s*deadloop:review-result\s+head=([0-9a-f]+)\s+review=([0-9a-f]+)\s+outcome=(approved|changes_requested|human_required)\s*-->/gi;
 const REPAIR_RESULT_RE = /<!--\s*deadloop:review-repair-result\s+key=([0-9a-f]+)\s+head=([0-9a-f]+)\s*-->/gi;
 
-const INTERNAL_DETAIL_RE = /(?:^|[^A-Za-z0-9_/])(?:\/(?!\/)[^\s`'")]+|[A-Za-z]:\\)|(?:\.pi|\.deadloop)[\\/]|(?:worker|review-repair)-prompt(?:\.md)?|promise\.json|[\\/]prompts?[\\/]|review-repair worker|deterministic dispatcher|\bherdr\b|\brunner\b|\bsession\b|\b[a-z0-9]+-pr-\d+-(?:reviewer|review-repair(?:-[a-z0-9-]+)?)\b/i;
+const INTERNAL_DETAIL_RE = /(?:^|[^A-Za-z0-9_/])(?:\/(?!\/)[^\s`'")]+|[A-Za-z]:\\)|(?:\.pi|\.deadloop)[\\/]|(?:worker|review-repair)-prompt(?:\.md)?|promise\.json|[\\/]prompts?[\\/]|\bprompts?\b|review-repair worker|deterministic dispatcher|\bherdr\b|\brunner\b|\bsession\b|\b[a-z0-9_.-]+-pr-\d+-(?:reviewer|review-repair(?:-[a-z0-9-]+)?)\b/i;
 const UNSAFE_CONTROL_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
 const REPOSITORY_PATH_RE = /^(?!\.git(?:\/|$))(?!.*\/\/)[A-Za-z0-9._@+~/-]+$/;
 
