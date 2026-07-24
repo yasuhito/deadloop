@@ -85,6 +85,7 @@ function repairDispatch(testCase: string): Record<string, unknown> {
       : testCase === "repeated-technical-failure"
         ? [{ body: renderTechnicalFailureMarker(head) }]
         : [];
+    const currentHead = testCase === "repeated-repair" ? repairedHead : head;
     const executable = (file: string, content: string) => {
       fs.writeFileSync(file, content);
       fs.chmodSync(file, 0o755);
@@ -95,7 +96,7 @@ function repairDispatch(testCase: string): Record<string, unknown> {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
-  number: 31, state: "OPEN", headRefName: "${branch}", headRefOid: "${head}", isCrossRepository: false,
+  number: 31, state: "OPEN", headRefName: "${branch}", headRefOid: "${currentHead}", isCrossRepository: false,
   labels: [{name: "agent:review"}, {name: "agent:reviewing"}], comments: JSON.parse(process.env.TEST_COMMENTS)
 }));
 else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id: "R_repo"}));
@@ -123,7 +124,7 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
     );
     const result = spawnSync(
       "node",
-      ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--pr", "31", "--expected-head", head, "--branch", branch],
+      ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--pr", "31", "--expected-head", currentHead, "--branch", branch],
       {
         cwd: process.cwd(),
         encoding: "utf8",
