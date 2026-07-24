@@ -14,6 +14,7 @@ type RequeuedReviewWorld = {
   log?: string;
   prState?: string;
   pullRequest?: Record<string, unknown>;
+  updatedHead?: string;
 };
 
 function executable(file: string, content: string): void {
@@ -25,7 +26,7 @@ After("@requeued-pr-review", function (this: RequeuedReviewWorld) {
   if (this.root) fs.rmSync(this.root, { recursive: true, force: true });
 });
 
-Given("修正後の新しい head を持ち終了済みのレビュー担当が残る pull request がある", function (this: RequeuedReviewWorld) {
+Given("修正で head が変わり終了済みのレビュー担当が残る pull request がある", function (this: RequeuedReviewWorld) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-requeued-review-"));
   const bin = path.join(root, "bin");
   const worktree = path.join(root, "worktree");
@@ -55,7 +56,7 @@ Given("修正後の新しい head を持ち終了済みのレビュー担当が�
     title: "Updated review",
     url: "https://github.com/owner/repo/pull/44",
     headRefName: "agent/issue-44-fix",
-    headRefOid: "feed44",
+    headRefOid: "dead43",
     updatedAt: "2026-07-13T00:00:00Z",
     isDraft: false,
     statusCheckRollup: [],
@@ -95,11 +96,20 @@ if (args[0] === "agent" && args[1] === "list") {
 }
 `);
 
-  Object.assign(this, { root, bin, worktree, configDir, log, prState, pullRequest });
+  Object.assign(this, { root, bin, worktree, configDir, log, prState, pullRequest, updatedHead: "feed44" });
 });
 
 When("deadloop が再投入された pull request を確認する", function (this: RequeuedReviewWorld) {
-  if (!this.root || !this.bin || !this.worktree || !this.configDir || !this.log || !this.prState || !this.pullRequest) {
+  if (
+    !this.root ||
+    !this.bin ||
+    !this.worktree ||
+    !this.configDir ||
+    !this.log ||
+    !this.prState ||
+    !this.pullRequest ||
+    !this.updatedHead
+  ) {
     throw new Error("requeued pull request state is missing");
   }
   const runDriver = (): void => {
@@ -126,6 +136,7 @@ When("deadloop が再投入された pull request を確認する", function (th
   runDriver();
   fs.writeFileSync(this.prState, JSON.stringify([{
     ...this.pullRequest,
+    headRefOid: this.updatedHead,
     labels: [{ name: "agent:review" }],
   }]));
   runDriver();
@@ -141,4 +152,21 @@ Then("新しい head のレビュー担当を一人だけ起動する", function
     .map((args) => args.slice(0, args[0] === "pane" || (args[0] === "agent" && args[1] === "start") ? 3 : 2).join(" "));
 
   assert.equal(actions.filter((action) => action === "agent start demo-pr-44-reviewer").length, 1);
+});
+
+Then("レビュー担当への引き継ぎに修正後の head を使う", function (this: RequeuedReviewWorld) {
+  if (!this.log || !this.updatedHead) throw new Error("review handoff state is missing");
+  const start = fs
+    .readFileSync(this.log, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as string[])
+    .find((args) => args[0] === "agent" && args[1] === "start" && args[2] === "demo-pr-44-reviewer");
+  const promptArgument = start?.at(-1) ?? "";
+  const prompt = promptArgument.startsWith("@")
+    ? fs.readFileSync(promptArgument.slice(1), "utf8")
+    : promptArgument;
+  const handedOffHead = prompt.match(/^- Expected PR head: (.+)$/m)?.[1] ?? "";
+
+  assert.equal(handedOffHead, this.updatedHead);
 });
