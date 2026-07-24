@@ -124,5 +124,5 @@ Then("レビュー占有は回収されない", function (this: ClaimWorld) {
 
 Then("二周期を通じてレビュー担当は一件だけ起動される", function (this: ClaimWorld) {
   const nextCycleStartCount = this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0;
-  assert.equal((this.firstCycleStartCount ?? 0) + nextCycleStartCount, 1);
+  assert.deepEqual([this.firstCycleStartCount ?? 0, nextCycleStartCount], [1, 0]);
 });
