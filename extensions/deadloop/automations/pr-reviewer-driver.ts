@@ -23,6 +23,8 @@ const {
   shellQuote,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -34,8 +36,8 @@ function herdrRunner() {
   return createHerdrRunnerFromCommandRunner(commandRunner);
 }
 
-function githubOperations() {
-  return createGithubOperations(commandRunner);
+function githubOperations(beforeMutation?: () => void) {
+  return createGithubOperations(commandRunner, beforeMutation);
 }
 
 function envConfig() {
@@ -43,6 +45,7 @@ function envConfig() {
     projectId: process.env.DEADLOOP_PROJECT_ID || "project",
     repoPath: process.env.DEADLOOP_REPO_PATH || ".",
     githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
+    enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
     baseBranch: process.env.DEADLOOP_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
     stateDir:
@@ -98,6 +101,7 @@ Target:
 - PR: #${number} ${title}
 - PR URL: ${pr.url || `https://github.com/${env.githubRepo}/pull/${number}`}
 - Reason: ${reason}
+- Expected PR head: ${String(pr.headRefOid || "")}
 - autoMerge: ${env.autoMerge ? "true" : "false"}
 
 Contract:
@@ -115,7 +119,7 @@ Contract:
 Promise report:
 - Before stopping, write JSON to the promise file: \`${promiseFile.replace(/`/g, "\\`")}\`.
 - Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
-- If no actionable defect remains, write {"status":"complete","outcome":"approved","reason":"","summary":"three sentences: what was reviewed, result, remaining risk","findings":[]}.
+- If no actionable defect remains, write {"status":"complete","outcome":"approved","reviewedHead":"${String(pr.headRefOid || "")}","reason":"","summary":"three sentences: what was reviewed, result, remaining risk","findings":[]}.
 - If actionable defects exist, write {"status":"complete","outcome":"changes_requested","reason":"","summary":"three-sentence summary","findings":[{"title":"concise defect","body":"bounded required correction and evidence","path":"optional/repo/path","line":1,"severity":"blocker|major|minor"}]}.
 - Use outcome=human_required only when a product/spec/safety decision cannot be repaired within the PR. Explain it in reason and optional findings.
 - Findings are the repair worker's entire contract. Include only verified, actionable defects; #243-style lint or repository-contract failures are changes_requested, not blocked.
@@ -137,6 +141,8 @@ function branchUpdateWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-branch-update-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-repo",
+    shellQuote(env.repoPath),
     "--github-repo",
     shellQuote(env.githubRepo),
     "--pr",
@@ -153,6 +159,8 @@ function branchUpdateWorkerPrompt(
     shellQuote(env.automationDir),
     "--state-dir",
     shellQuote(env.stateDir),
+    "--enabled-at",
+    String(env.enabledAt),
     "--check-command",
     shellQuote(env.checkCommand),
   ].join(" ");
@@ -171,7 +179,7 @@ Safety contract:
 - Merge ${baseOid} into the existing PR branch. Use git merge, never rebase, and never rewrite existing commits.
 - Resolve only conflicts caused by this merge. Do not widen the PR's scope.
 - Commit the merge resolution before finalization.
-- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, verifies the PR head SHA immediately before the only permitted non-force push, and pushes only the driver-selected branch:
+- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted normal non-force push to the driver-selected branch:
   ${finalizeCommand}
 - Never force-push. Never push another ref. Never edit labels, create or edit a PR, merge a PR, close an issue, or delete a branch.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state so the next cycle can re-evaluate.
@@ -222,14 +230,46 @@ gh pr view ${Number(pr.number || 0)} -R ${shellQuote(env.githubRepo)} --comments
 3. After changing either the PR head or configured base head, remove ${env.blockedLabel}; the new exact head/base pair may be attempted once.`;
 }
 
-function applyBranchUpdateBlocked(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): string {
-  const comment = branchUpdateBlockedComment(pr, env, reason);
-  if (!fixture) {
-    const github = githubOperations();
-    github.commentPr(env.githubRepo, Number(pr.number || 0), comment);
-    github.movePrLabels(env.githubRepo, Number(pr.number || 0), { remove: env.reviewingLabel, add: env.blockedLabel });
+function applyPrTransition(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  stillApplicable: (livePlan: ReturnType<typeof planPrReviewerAction>, live: JsonObject) => boolean,
+  mutate: (github: ReturnType<typeof githubOperations>, live: JsonObject) => void,
+): boolean {
+  if (fixture) return true;
+  try {
+    return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+      const github = githubOperations(recheck);
+      const live = github.getPr(env.githubRepo, pr.number);
+      if (String(live.state || "").toUpperCase() !== "OPEN") throw new StaleLaunchError(`PR #${pr.number} is no longer open`);
+      assertSameLaunchTarget(pr, live, "pr");
+      const livePlan = planPrReviewerAction([live], liveAgents(), env);
+      if (!("pr" in livePlan) || Number(livePlan.pr.number) !== Number(pr.number) || !stillApplicable(livePlan, live)) {
+        throw new StaleLaunchError(`PR #${pr.number} transition changed`);
+      }
+      mutate(github, live);
+      return true;
+    });
+  } catch (error) {
+    if (isStaleLaunchError(error)) return false;
+    throw error;
   }
-  return comment;
+}
+
+function applyBranchUpdateBlocked(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  reason: string,
+  stillApplicable: (livePlan: ReturnType<typeof planPrReviewerAction>, live: JsonObject) => boolean,
+): { comment: string; applied: boolean } {
+  const comment = branchUpdateBlockedComment(pr, env, reason);
+  const applied = applyPrTransition(pr, env, fixture, stillApplicable, (github, live) => {
+    github.commentPr(env.githubRepo, Number(live.number || 0), comment);
+    github.movePrLabels(env.githubRepo, Number(live.number || 0), { remove: env.reviewingLabel, add: env.blockedLabel });
+  });
+  return { comment, applied };
 }
 
 function launchBranchUpdate(
@@ -261,25 +301,44 @@ function launchBranchUpdate(
 
   runText(["git", "check-ref-format", "--branch", branch]);
   const marker = renderBranchUpdateMarker(headOid, baseOid);
-  const github = githubOperations();
-  github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
-  github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
-  const launch = launchAgentFlow(
-    {
-      worktree: { mode: "open", branch },
-      repoPath: env.repoPath,
-      automationDir: env.automationDir,
-      stateDir: env.stateDir,
-      name: updaterName,
-      agent: env.branchUpdateAgent,
-      model: env.branchUpdateModel,
-      level: "medium",
-      uuid,
-      promptFilePrefix: "branch-update-prompt",
-      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-        branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
+  const launch = withEnabledDriverLaunch(
+    env,
+    (recheck: () => void) => {
+      const github = githubOperations(recheck);
+      github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
+      github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
     },
-    { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+    (recheck: () => void) => launchAgentFlow(
+      {
+        worktree: { mode: "open", branch },
+        repoPath: env.repoPath,
+        automationDir: env.automationDir,
+        stateDir: env.stateDir,
+        name: updaterName,
+        agent: env.branchUpdateAgent,
+        model: env.branchUpdateModel,
+        level: "medium",
+        uuid,
+        promptFilePrefix: "branch-update-prompt",
+        renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+          branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
+      },
+      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
+    ),
+    {
+      revalidate: () => {
+        const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
+        if (!("pr" in livePlan)) throw new StaleLaunchError(`PR #${number} is no longer eligible`);
+        assertSameLaunchTarget(pr, livePlan.pr, "pr");
+        const liveDecision = branchUpdateDecision(livePlan.pr, env, null);
+        if (
+          liveDecision.action !== "delegate_worker"
+          || String(liveDecision.headOid || "") !== headOid
+          || String(liveDecision.baseOid || "") !== baseOid
+          || branchUpdateAttemptExists(livePlan.pr.comments || [], headOid, baseOid)
+        ) throw new StaleLaunchError(`PR #${number} branch-update target changed before launch`);
+      },
+    },
   );
   return { updaterName, headRefName: branch, retryKey: key, ...launch };
 }
@@ -304,23 +363,36 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
     };
   }
 
-  githubOperations().movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
-  const launch = launchAgentFlow(
+  const launch = withEnabledDriverLaunch(
+    env,
+    (recheck: () => void) => githubOperations(recheck).movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }),
+    (recheck: () => void) => launchAgentFlow(
+      {
+        worktree: { mode: "open", branch: headRefName },
+        repoPath: env.repoPath,
+        automationDir: env.automationDir,
+        stateDir: env.stateDir,
+        name: reviewerName,
+        agent: env.reviewerAgent,
+        model: env.reviewerModel,
+        level: "medium",
+        uuid,
+        promptFilePrefix: "reviewer-prompt",
+        renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+          reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
+      },
+      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
+    ),
     {
-      worktree: { mode: "open", branch: headRefName },
-      repoPath: env.repoPath,
-      automationDir: env.automationDir,
-      stateDir: env.stateDir,
-      name: reviewerName,
-      agent: env.reviewerAgent,
-      model: env.reviewerModel,
-      level: "medium",
-      uuid,
-      promptFilePrefix: "reviewer-prompt",
-      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-        reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
+      revalidate: () => {
+        const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
+        if (livePlan.kind !== "review_required") throw new StaleLaunchError(`PR #${number} is no longer eligible for reviewer launch`);
+        assertSameLaunchTarget(pr, livePlan.pr, "pr");
+        if (branchUpdateDecision(livePlan.pr, env, null).action !== "no_update") {
+          throw new StaleLaunchError(`PR #${number} branch-update state changed before reviewer launch`);
+        }
+      },
     },
-    { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
   );
   return { reviewerName, headRefName, ...launch };
 }
@@ -359,24 +431,22 @@ gh issue edit <issueNumber> -R ${shellQuote(env.githubRepo)} --remove-label ${sh
 \`\`\``;
 }
 
-function applyDraftGate(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, comment: string): void {
-  if (fixture) return;
-  const number = String(pr.number);
-  const github = githubOperations();
-  github.commentPr(env.githubRepo, number, comment);
-  github.movePrLabels(env.githubRepo, number, { remove: env.reviewingLabel }, { check: false });
-  github.movePrLabels(env.githubRepo, number, { remove: env.reviewLabel }, { check: false });
-  github.movePrLabels(env.githubRepo, number, { add: env.blockedLabel });
+function applyDraftGate(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, comment: string): boolean {
+  return applyPrTransition(pr, env, fixture, (livePlan) => livePlan.kind === "draft_gate", (github, live) => {
+    const number = String(live.number);
+    github.commentPr(env.githubRepo, number, comment);
+    github.movePrLabels(env.githubRepo, number, { remove: [env.reviewingLabel, env.reviewLabel], add: env.blockedLabel });
+  });
 }
 
-function applyExternalReviewRequest(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): void {
-  if (fixture) return;
-  const number = String(pr.number);
-  const head = String(pr.headRefOid || "");
-  const github = githubOperations();
-  github.addPrReviewer(env.githubRepo, number, "@copilot", { check: false });
-  github.commentPr(env.githubRepo, number, `@coderabbitai review\n\n<!-- deadloop:external-review-request head=${head} -->`);
-  github.movePrLabels(env.githubRepo, number, { remove: env.reviewingLabel }, { check: false });
+function applyExternalReviewRequest(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): boolean {
+  return applyPrTransition(pr, env, fixture, (livePlan) => livePlan.kind === "external_review_request", (github, live) => {
+    const number = String(live.number);
+    const head = String(live.headRefOid || "");
+    github.addPrReviewer(env.githubRepo, number, "@copilot", { check: false });
+    github.commentPr(env.githubRepo, number, `@coderabbitai review\n\n<!-- deadloop:external-review-request head=${head} -->`);
+    github.movePrLabels(env.githubRepo, number, { remove: env.reviewingLabel }, { check: false });
+  });
 }
 
 function drive(fixturePath: string | undefined): DriverResult {
@@ -394,7 +464,11 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   if (plan.kind === "draft_gate") {
     const comment = draftBlockedComment(plan.pr, env);
-    applyDraftGate(plan.pr, env, fixture, comment);
+    if (!applyDraftGate(plan.pr, env, fixture, comment)) {
+      return driverResult("skip", `PR #${plan.decision.number} changed before the draft gate; no workflow state was mutated`, {
+        driverAction: "draft_gate_stale", prNumber: plan.decision.number,
+      });
+    }
     return driverResult("done", `PR #${plan.decision.number} is draft; marked blocked`, {
       driverAction: "draft_blocked",
       prNumber: plan.decision.number,
@@ -411,7 +485,15 @@ function drive(fixturePath: string | undefined): DriverResult {
         branchUpdate: updateDecision,
       });
     }
-    const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, String(updateDecision.reason || "unsafe branch-update state"));
+    const transition = applyBranchUpdateBlocked(
+      plan.pr, env, fixture, String(updateDecision.reason || "unsafe branch-update state"),
+      (_livePlan, live) => {
+        const liveDecision = branchUpdateDecision(live, env, null);
+        return liveDecision.action === "blocked" && liveDecision.reason === updateDecision.reason;
+      },
+    );
+    if (!transition.applied) return driverResult("skip", `PR #${plan.decision.number} changed before branch blocking`, { driverAction: "branch_update_block_stale" });
+    const { comment } = transition;
     return driverResult("done", `PR #${plan.decision.number} branch update is unsafe; marked blocked`, {
       driverAction: "branch_update_blocked",
       prNumber: plan.decision.number,
@@ -424,7 +506,12 @@ function drive(fixturePath: string | undefined): DriverResult {
     const headOid = String(updateDecision.headOid || plan.pr.headRefOid || "");
     const baseOid = String(updateDecision.baseOid || "");
     if (Boolean(plan.pr.isCrossRepository)) {
-      const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, "the PR comes from another repository");
+      const transition = applyBranchUpdateBlocked(
+        plan.pr, env, fixture, "the PR comes from another repository",
+        (_livePlan, live) => Boolean(live.isCrossRepository) && branchUpdateDecision(live, env, null).action === "delegate_worker",
+      );
+      if (!transition.applied) return driverResult("skip", `PR #${plan.decision.number} changed before branch blocking`, { driverAction: "branch_update_block_stale" });
+      const { comment } = transition;
       return driverResult("done", `PR #${plan.decision.number} is cross-repository; marked blocked`, {
         driverAction: "branch_update_blocked",
         prNumber: plan.decision.number,
@@ -434,7 +521,16 @@ function drive(fixturePath: string | undefined): DriverResult {
     }
     const marker = renderBranchUpdateMarker(headOid, baseOid);
     if (branchUpdateAttemptExists(plan.pr.comments || [], headOid, baseOid)) {
-      const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, "this exact PR head/base head pair already used its one attempt");
+      const transition = applyBranchUpdateBlocked(
+        plan.pr, env, fixture, "this exact PR head/base head pair already used its one attempt",
+        (_livePlan, live) => {
+          const liveDecision = branchUpdateDecision(live, env, null);
+          return liveDecision.action === "delegate_worker"
+            && branchUpdateAttemptExists(live.comments || [], String(liveDecision.headOid || ""), String(liveDecision.baseOid || ""));
+        },
+      );
+      if (!transition.applied) return driverResult("skip", `PR #${plan.decision.number} changed before branch blocking`, { driverAction: "branch_update_block_stale" });
+      const { comment } = transition;
       return driverResult("done", `PR #${plan.decision.number} exact branch-update pair was already attempted; marked blocked`, {
         driverAction: "branch_update_attempt_exhausted",
         prNumber: plan.decision.number,
@@ -445,6 +541,23 @@ function drive(fixturePath: string | undefined): DriverResult {
     }
     try {
       const launch = launchBranchUpdate(plan.pr, env, fixture, updateDecision);
+      const monitorInput = {
+        prNumber: Number(plan.pr.number || 0),
+        expectedHeadOid: headOid,
+        expectedBaseOid: baseOid,
+        branch: String(plan.pr.headRefName || ""),
+        automationDir: env.automationDir,
+        promiseFile: String(launch.promiseFile || ""),
+        actorName: "branch-update worker",
+        projectId: env.projectId,
+        repoPath: env.repoPath,
+        githubRepo: env.githubRepo,
+        stateDir: env.stateDir,
+        enabledAt: env.enabledAt,
+        reviewingLabel: env.reviewingLabel,
+        reviewLabel: env.reviewLabel,
+        blockedLabel: env.blockedLabel,
+      };
       return driverResult("needs_llm", `Launched branch-update worker for PR #${plan.decision.number}`, {
         driverAction: "branch_update_monitor_request",
         prNumber: plan.decision.number,
@@ -452,22 +565,28 @@ function drive(fixturePath: string | undefined): DriverResult {
         marker,
         labelsPreserved: [env.reviewLabel, env.reviewingLabel],
         launch,
-        prompt: renderBranchUpdateMonitorPrompt({
-          prNumber: Number(plan.pr.number || 0),
-          expectedHeadOid: headOid,
-          expectedBaseOid: baseOid,
-          branch: String(plan.pr.headRefName || ""),
-          automationDir: env.automationDir,
-          promiseFile: String(launch.promiseFile || ""),
-          actorName: "branch-update worker",
-          reviewingLabel: env.reviewingLabel,
-          reviewLabel: env.reviewLabel,
-          blockedLabel: env.blockedLabel,
-        }),
+        monitorHandoff: { kind: "branch-update", input: monitorInput },
+        prompt: renderBranchUpdateMonitorPrompt(monitorInput),
       });
     } catch (error) {
+      if (isStaleLaunchError(error)) {
+        return driverResult("skip", `PR #${plan.decision.number} changed before branch-update launch; no workflow state was mutated`, {
+          driverAction: "branch_update_launch_stale",
+          prNumber: plan.decision.number,
+        });
+      }
       const reason = `branch-update launch failed: ${error instanceof Error ? error.message : String(error)}`;
-      const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, reason);
+      const transition = applyBranchUpdateBlocked(
+        plan.pr, env, fixture, reason,
+        (_livePlan, live) => {
+          const liveDecision = branchUpdateDecision(live, env, null);
+          return liveDecision.action === "delegate_worker"
+            && String(liveDecision.headOid || "") === headOid
+            && String(liveDecision.baseOid || "") === baseOid;
+        },
+      );
+      if (!transition.applied) return driverResult("skip", `PR #${plan.decision.number} changed after branch-update launch failed`, { driverAction: "branch_update_block_stale" });
+      const { comment } = transition;
       return driverResult("done", `PR #${plan.decision.number} branch-update launch failed; marked blocked`, {
         driverAction: "branch_update_launch_failed",
         prNumber: plan.decision.number,
@@ -478,7 +597,11 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   if (plan.kind === "external_review_request") {
-    applyExternalReviewRequest(plan.pr, env, fixture);
+    if (!applyExternalReviewRequest(plan.pr, env, fixture)) {
+      return driverResult("skip", `PR #${plan.decision.number} changed before external review request`, {
+        driverAction: "external_review_request_stale", prNumber: plan.decision.number,
+      });
+    }
     return driverResult("done", `Requested external review for PR #${plan.decision.number}`, {
       driverAction: "external_review_requested",
       prNumber: plan.decision.number,
@@ -495,30 +618,52 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   const { pr, gate, reason } = plan;
   const decision = plan.decision;
-  const launch = launchPrReviewer(pr, env, fixture, reason);
+  let launch: JsonObject;
+  try {
+    launch = launchPrReviewer(pr, env, fixture, reason);
+  } catch (error) {
+    if (isStaleLaunchError(error)) {
+      return driverResult("skip", `PR #${decision.number} changed before reviewer launch; no workflow state was mutated`, {
+        driverAction: "reviewer_launch_stale",
+        prNumber: decision.number,
+      });
+    }
+    throw error;
+  }
+  const monitorInput = {
+    prNumber: Number(pr.number || 0),
+    expectedHeadOid: String(pr.headRefOid || ""),
+    branch: String(pr.headRefName || ""),
+    automationDir: env.automationDir,
+    promiseFile: String(launch.promiseFile || ""),
+    actorName: "reviewer",
+    projectId: env.projectId,
+    repoPath: env.repoPath,
+    githubRepo: env.githubRepo,
+    stateDir: env.stateDir,
+    enabledAt: env.enabledAt,
+    checkCommand: renderProjectCheckCommand({
+      automationDir: env.automationDir,
+      stateDir: env.stateDir,
+      cwd: String(launch.worktreePath || ""),
+      command: env.checkCommand,
+    }),
+    projectCheckCommand: env.checkCommand,
+    workerAgent: env.branchUpdateAgent,
+    workerModel: env.branchUpdateModel,
+    repairRemote: env.branchUpdateRemote,
+    humanLabel: env.humanLabel,
+    reviewLabel: env.reviewLabel,
+    reviewingLabel: env.reviewingLabel,
+    blockedLabel: env.blockedLabel,
+  };
   return driverResult("needs_llm", `Launched reviewer agent for PR #${decision.number}`, {
     driverAction: "reviewer_monitor_request",
     prNumber: decision.number,
     gate,
     launch,
-    prompt: renderReviewerMonitorPrompt({
-      prNumber: Number(pr.number || 0),
-      expectedHeadOid: String(pr.headRefOid || ""),
-      branch: String(pr.headRefName || ""),
-      automationDir: env.automationDir,
-      promiseFile: String(launch.promiseFile || ""),
-      actorName: "reviewer",
-      checkCommand: renderProjectCheckCommand({
-        automationDir: env.automationDir,
-        stateDir: env.stateDir,
-        cwd: String(launch.worktreePath || ""),
-        command: env.checkCommand,
-      }),
-      humanLabel: env.humanLabel,
-      reviewLabel: env.reviewLabel,
-      reviewingLabel: env.reviewingLabel,
-      blockedLabel: env.blockedLabel,
-    }),
+    monitorHandoff: { kind: "reviewer", input: monitorInput },
+    prompt: renderReviewerMonitorPrompt(monitorInput),
   });
 }
 

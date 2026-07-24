@@ -10,6 +10,14 @@ English | [日本語](README.ja.md)
 
 ## Install
 
+Install and activate the Pi package:
+
+```bash
+pi install git:github.com/yasuhito/deadloop
+```
+
+Optionally install the setup skill for guided configuration:
+
 ```bash
 npx skills@latest add yasuhito/deadloop
 ```
@@ -21,13 +29,15 @@ npx skills@latest add yasuhito/deadloop
 
 ## Configure
 
-To start with the defaults, create `deadloop.json` at the target repository root and commit it to the base branch:
+From a normal Git checkout, explicitly enable the local scheduler:
 
-```json
-{}
+```text
+/deadloop-enable
 ```
 
-deadloop infers the local checkout path, GitHub repository, base branch, and default Herdr worktree root from the current Git repository. The first run needs no local configuration.
+deadloop infers the checkout path, GitHub repository, base branch, and default Herdr worktree root. Enablement is local state under `~/.pi/agent/deadloop/`; neither `deadloop.json` nor `projects.json` starts automation by itself. `/deadloop-enable` verifies GitHub write access and creates only missing standard labels. It always starts a newly enabled repository with `autoMerge: false`. If enablement found a pre-existing `autoMerge: true`, deadloop keeps automatic merge off until it observes an explicit post-enable change from `false` to `true`. That acknowledgement is preserved across disable/re-enable. Keep it `false` until you intend to enable automatic merge.
+
+Use `/deadloop-disable` to stop scheduling without stopping active agents or removing GitHub state, worktrees, or run artifacts. Re-enable each repository after upgrading from older releases.
 
 Copy the example into Pi's local state only when you need overrides such as `autoMerge` or a custom `worktreeRoot`:
 
@@ -67,13 +77,13 @@ An issue is eligible only when it has both `ready-for-agent` and `agent:implemen
 
 ## Merge-conflict recovery
 
-When a selected same-repository PR conflicts with the configured base, deadloop can start one guarded branch-update worker. It merges the selected base commit into the existing PR branch (never rebases), runs the configured checks, re-checks the PR head immediately before a non-force push, and then returns the PR to normal review. Review labels remain in place during the update; no extra label is required.
+When a selected same-repository PR conflicts with the configured base, deadloop can start one guarded branch-update worker. It merges the selected base commit into the existing PR branch (never rebases), runs the configured checks, and atomically updates the branch only if the PR head still equals the validated commit before returning it to normal review. Review labels remain in place during the update; no extra label is required.
 
 Each exact PR-head/base-head pair is attempted at most once. A stale PR head stops without pushing and is re-evaluated on the next cycle. Failed or unsafe updates are marked `agent:blocked` with recovery evidence. See [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) for the safety contract.
 
 ## Automatic review repair
 
-When the built-in reviewer reports structured actionable findings, deadloop can start one bounded repair worker on the existing PR branch. Review labels stay in place; no repair label is added. The worker receives only the findings, runs configured checks, re-checks the PR head immediately before a normal push to that exact branch, and never force-pushes or changes GitHub workflow state.
+When the built-in reviewer reports structured actionable findings, deadloop can start one bounded repair worker on the existing PR branch. Review labels stay in place; no repair label is added. The worker receives only the findings, runs configured checks, and atomically updates that exact branch only if its head still equals the validated commit; it never replaces another head or changes GitHub workflow state.
 
 A changed head starts a fresh review cycle. A stale head stops without pushing or changing labels. Repeated findings after the bounded attempt, a required human decision, or an exhausted technical/safety retry adds `agent:blocked` with recovery guidance. See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md).
 
@@ -95,6 +105,8 @@ pi
 Useful commands:
 
 ```text
+/deadloop-enable
+/deadloop-disable
 /deadloop-status
 /deadloop-doctor
 ```
