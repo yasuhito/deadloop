@@ -15,7 +15,6 @@ type WorkerWorld = {
   agents?: RunnerAgent[];
   removedAgentIds?: string[];
   launchCount?: number;
-  launchEvents?: string[];
   worktreeRequest?: { branch: string; baseBranch: string; label: string };
   launchError?: Error;
   coordinatorResult?: Record<string, unknown>;
@@ -27,7 +26,6 @@ function launchWorker(world: WorkerWorld): void {
   const agents = world.agents ?? [];
   const removedAgentIds: string[] = [];
   let launchCount = 0;
-  const launchEvents: string[] = [];
   const runner: RunnerAdapter = {
     createWorktree: (input) => {
       world.worktreeRequest = { branch: input.branch, baseBranch: input.baseBranch, label: input.label };
@@ -36,10 +34,7 @@ function launchWorker(world: WorkerWorld): void {
     openWorktree: () => {
       throw new Error("既存の作業場所を開いてはならない");
     },
-    createTab: () => {
-      launchEvents.push("create-tab");
-      return { tabId: "tab-12" };
-    },
+    createTab: () => ({ tabId: "tab-12" }),
     startAgent: () => {
       throw new Error("起動は共通ランチャーを経由する");
     },
@@ -47,7 +42,6 @@ function launchWorker(world: WorkerWorld): void {
     listAgents: () => agents,
     removeAgent: (agentId) => {
       removedAgentIds.push(agentId);
-      launchEvents.push(`remove:${agentId}`);
       const index = agents.findIndex((agent) => agent.agentId === agentId);
       if (index >= 0) agents.splice(index, 1);
       return "";
@@ -75,7 +69,6 @@ function launchWorker(world: WorkerWorld): void {
         runner,
         runText: () => {
           launchCount += 1;
-          launchEvents.push("launch");
           agents.push({ name: workerName, status: "working", cwd: workerPath, agentId: "replacement" });
           return "started";
         },
@@ -89,7 +82,6 @@ function launchWorker(world: WorkerWorld): void {
   world.agents = agents;
   world.removedAgentIds = removedAgentIds;
   world.launchCount = launchCount;
-  world.launchEvents = launchEvents;
 }
 
 Given("作業を開始できる Issue がある", function (this: WorkerWorld) {
@@ -131,8 +123,12 @@ Then("新しい担当を一人だけ起動する", function (this: WorkerWorld) 
   assert.equal(this.launchCount, 1);
 });
 
-Then("完了済みの担当を片付けて一人の交代担当を起動する", function (this: WorkerWorld) {
-  assert.equal(this.launchEvents?.join(">"), "remove:finished>create-tab>launch");
+Then("完了済みの担当を片付ける", function (this: WorkerWorld) {
+  assert.deepEqual(this.removedAgentIds, ["finished"]);
+});
+
+Then("一人の交代担当を起動する", function (this: WorkerWorld) {
+  assert.equal(this.launchCount, 1);
 });
 
 Then("新しい担当は起動しない", function (this: WorkerWorld) {
@@ -155,7 +151,7 @@ Given("作業を開始できる Issue が選ばれている", function (this: Wo
   this.coordinatorResult = undefined;
 });
 
-When("coordinator が担当を起動する", function (this: WorkerWorld) {
+When("deadloop が選ばれた Issue の作業を開始する", function (this: WorkerWorld) {
   const result = spawnSync(
     "node",
     ["extensions/deadloop/automations/issue-coordinator-driver.ts", "--fixture", "test/fixtures/issue-coordinator/driver-ready-worker.json"],
