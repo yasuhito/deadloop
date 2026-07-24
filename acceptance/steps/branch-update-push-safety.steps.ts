@@ -9,6 +9,9 @@ import { After, Given, Then, When } from "@cucumber/cucumber";
 const {
   finalizeBranchUpdate,
 } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
+const {
+  decideBranchUpdate,
+} = require("../../extensions/deadloop/automations/pr-branch-update-decision.ts");
 
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -16,6 +19,7 @@ const branch = "agent/issue-31";
 
 type SafetyWorld = {
   actualHead?: string;
+  changeHeadAfterChecks?: boolean;
   crossRepository?: boolean;
   commands?: string[][];
   dirtyWorktree?: boolean;
@@ -23,6 +27,7 @@ type SafetyWorld = {
   temporaryRoots?: string[];
   trustLaunchMarker?: string;
   trustRoot?: string;
+  workerLaunches?: string[];
 };
 
 function finalize(world: SafetyWorld): void {
@@ -45,6 +50,9 @@ function finalize(world: SafetyWorld): void {
       {
         run: (args: string[]) => {
           commands.push(args);
+          if (args[0] === "node" && args[1]?.endsWith("/run-project-check.ts") && world.changeHeadAfterChecks) {
+            world.actualHead = base;
+          }
           if (args[0] === "gh") {
             return {
               status: 0,
@@ -72,12 +80,8 @@ function finalize(world: SafetyWorld): void {
   }
 }
 
-function pushCommand(world: SafetyWorld): string[] | undefined {
-  return world.commands?.find((command) => command[0] === "git" && command.includes("push"));
-}
-
-function pushed(world: SafetyWorld): boolean {
-  return pushCommand(world) !== undefined;
+function pushCommands(world: SafetyWorld): string[][] {
+  return (world.commands ?? []).filter((command) => command[0] === "git" && command.includes("push"));
 }
 
 function expectedPushCommand(): string[] {
@@ -96,7 +100,7 @@ Given("更新前に確認した pull request head がある", function (this: Sa
 });
 
 Given("自動チェック後に pull request head が変わる", function (this: SafetyWorld) {
-  this.actualHead = base;
+  this.changeHeadAfterChecks = true;
 });
 
 Given("更新対象の作業場所に未コミットの変更がある", function (this: SafetyWorld) {
@@ -110,11 +114,23 @@ Given("pull request が別リポジトリから作られている", function (th
 });
 
 When("deadloop が branch 更新を完了しようとする", function (this: SafetyWorld) {
+  if (this.dirtyWorktree) {
+    const decision = decideBranchUpdate(1, 1, false, false);
+    this.workerLaunches = decision.action === "delegate_worker" ? [branch] : [];
+    if (decision.action !== "mechanical_update") return;
+  }
   finalize(this);
 });
 
 Then("branch への push は行われない", function (this: SafetyWorld) {
-  assert.equal(pushed(this), false);
+  assert.deepEqual(pushCommands(this), []);
+});
+
+Then("branch 更新処理は開始されない", function (this: SafetyWorld) {
+  assert.deepEqual(
+    { workerLaunches: this.workerLaunches ?? [], pushCommands: pushCommands(this) },
+    { workerLaunches: [], pushCommands: [] },
+  );
 });
 
 Then("完了結果は古い head として観測される", function (this: SafetyWorld) {
@@ -169,11 +185,11 @@ Then("作業エージェントは起動されない", function (this: SafetyWorl
 });
 
 Then("選択された branch だけが push の対象になる", function (this: SafetyWorld) {
-  assert.deepEqual(pushCommand(this), expectedPushCommand());
+  assert.deepEqual(pushCommands(this), [expectedPushCommand()]);
 });
 
 Then("branch は強制せずに push される", function (this: SafetyWorld) {
-  assert.deepEqual(pushCommand(this), expectedPushCommand());
+  assert.deepEqual(pushCommands(this), [expectedPushCommand()]);
 });
 
 After(function (this: SafetyWorld) {
