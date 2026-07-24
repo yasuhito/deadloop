@@ -95,36 +95,38 @@ function runDriver(fixtureData: Record<string, unknown>): DriverResult {
 }
 
 When("deadloop が次の選定周期を実行する", function (this: ClaimWorld) {
-  if (!this.prs) throw new Error("review claim is missing");
-  this.driverResult = runDriver({ prs: this.prs, agents: this.agents });
+  runCycle(this);
 });
 
 When("deadloop が古いレビュー占有の回収対象を探す", function (this: ClaimWorld) {
-  if (!this.prs) throw new Error("review claim is missing");
-  this.driverResult = runDriver({ prs: this.prs, agents: this.agents });
+  runCycle(this);
 });
 
 Then("pull request #{int} のレビューを再開する", function (this: ClaimWorld, number: number) {
-  const reviewerStarts = this.driverResult?.testAdapterEffects?.herdrStarts?.filter(
-    (start) => start.name === `demo-pr-${number}-reviewer`,
-  );
-  assert.equal(reviewerStarts?.length, 1);
+  assert.equal(countReviewerStarts(this, [number]), 1);
 });
 
 Then("レビュー占有は回収されない", function (this: ClaimWorld) {
-  const reviewerNames = new Set(this.prs?.map((pr) => `demo-pr-${Number(pr.number)}-reviewer`));
-  const reviewerStartCount =
-    this.driverResult?.testAdapterEffects?.herdrStarts?.filter((start) =>
-      reviewerNames.has(start.name ?? ""),
-    ).length ?? 0;
-  assert.equal(reviewerStartCount, 0);
+  assert.equal(countReviewerStarts(this), 0);
 });
 
 Then("次の選定周期ではレビュー担当が追加で起動されない", function (this: ClaimWorld) {
-  const reviewerNames = new Set(this.prs?.map((pr) => `demo-pr-${Number(pr.number)}-reviewer`));
-  const nextCycleReviewerStartCount =
-    this.driverResult?.testAdapterEffects?.herdrStarts?.filter((start) =>
-      reviewerNames.has(start.name ?? ""),
-    ).length ?? 0;
-  assert.equal(nextCycleReviewerStartCount, 0);
+  assert.equal(countReviewerStarts(this), 0);
 });
+
+function runCycle(world: ClaimWorld): void {
+  if (!world.prs) throw new Error("review claim is missing");
+  world.driverResult = runDriver({ prs: world.prs, agents: world.agents });
+}
+
+function countReviewerStarts(
+  world: ClaimWorld,
+  pullRequestNumbers = world.prs?.map((pr) => Number(pr.number)) ?? [],
+): number {
+  const reviewerNames = new Set(pullRequestNumbers.map((number) => `demo-pr-${number}-reviewer`));
+  return (
+    world.driverResult?.testAdapterEffects?.herdrStarts?.filter((start) =>
+      reviewerNames.has(start.name ?? ""),
+    ).length ?? 0
+  );
+}
