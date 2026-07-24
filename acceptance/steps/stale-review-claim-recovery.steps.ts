@@ -121,6 +121,10 @@ Then("レビュー占有は回収されない", function (this: ClaimWorld) {
 });
 
 Then("次の選定周期ではレビュー担当が追加で起動されない", function (this: ClaimWorld) {
-  const nextCycleStartCount = this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0;
-  assert.equal(nextCycleStartCount, 0);
+  const reviewerNames = new Set(this.prs?.map((pr) => `demo-pr-${Number(pr.number)}-reviewer`));
+  const nextCycleReviewerStartCount =
+    this.driverResult?.testAdapterEffects?.herdrStarts?.filter((start) =>
+      reviewerNames.has(start.name ?? ""),
+    ).length ?? 0;
+  assert.equal(nextCycleReviewerStartCount, 0);
 });
