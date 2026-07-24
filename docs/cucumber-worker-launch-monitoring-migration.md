@@ -39,4 +39,21 @@ Issue #119 では、Issue 専用の作業場所で担当を重複なく起動し
 
 2026-07-24 に、削除前の Vitest と新しい Cucumber を併存させて `npm run test:unit` と `npm run test:acceptance` を実行し、両方が成功することを確認した。置換後は Vitest 56ファイル 744テスト、Cucumber 92シナリオ 480ステップが成功した。
 
-同日、「準備済み Issue の担当には基準ブランチから専用の作業場所を作る」の Then で、期待する基準ブランチを一時的に `origin/intentional-failure` へ変更した。`npm run test:acceptance` は終了状態1となり、対象シナリオだけが失敗して実際値 `origin/main` と一時的な期待値の差を報告した。期待値を `origin/main` へ戻した後、受け入れテストが再び成功することを確認した。
+同日、各移行先の Then の期待結果を一時的に変更して `npm run test:acceptance` を実行した。すべて終了状態1となり、次のとおり対象シナリオ、ステップ定義の位置、実際値と一時的な期待値の差を報告した。
+
+| 分類 ID | 一時的に壊した Then | 報告された差 | 失敗シナリオ数 |
+|---|---|---|---:|
+| T002 | 完了済みの担当を片付けてから交代を起動する | `remove:finished>create-tab>launch` / `intentional-failure` | 1 |
+| T003 | 稼働中の担当は残る | `true` / `false` | 1 |
+| T004 | 候補を特定できない同名担当は片付けない | `0` / `1` | 1 |
+| T005 | 別の作業場所の同名担当は片付けない | `0` / `1` | 1 |
+| T003〜T005 | 新しい担当は起動しない（共有 Then） | `0` / `1` | 3 |
+| T006 | 担当には基準ブランチから Issue 専用の作業場所を作る | `origin/main` / `origin/intentional-failure` | 1 |
+| T215 | その Issue は完了ファイルの監視対象になる | `worker_monitor_request` / `intentional_failure` | 1 |
+| T391、T392 | 担当の監視を続ける（共有 Then） | `continue_waiting` / `intentional_failure` | 2 |
+| T393 | 担当に完了ファイルを書くよう求める | `nudge_worker` / `intentional_failure` | 1 |
+| T394 | 担当画面の終了を許す | `may_close_pane` / `intentional_failure` | 1 |
+| T395 | 終了前に不足した観測を集める | `collect_observations` / `intentional_failure` | 1 |
+| T396 | 完了ファイルに従って監視を終える | `promise_settled` / `intentional_failure` | 2 |
+
+T396 はシナリオアウトラインの2例が同じ Then を共有するため、一度の変更で2シナリオが失敗した。各期待値を元に戻した後、`npm run test:acceptance` で 92シナリオ 480ステップが再び成功することを確認した。壊した状態はコミットしていない。
