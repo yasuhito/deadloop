@@ -42,7 +42,12 @@ function reviewerDriver(fixture: string): Record<string, unknown> {
     },
   );
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-  return JSON.parse(result.stdout);
+  const output = JSON.parse(result.stdout);
+  const input = JSON.parse(fs.readFileSync(path.join("test/fixtures/pr-reviewer-driver", fixture), "utf8"));
+  return {
+    ...output,
+    observedLabels: input.prs[0].labels.map((label: { name: string }) => label.name),
+  };
 }
 
 function repairDispatch(testCase: string): Record<string, unknown> {
@@ -55,9 +60,11 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     const promise = path.join(root, "review-promise.json");
     const githubLog = path.join(root, "github.log");
     const herdrLog = path.join(root, "herdr.log");
+    const labelsFile = path.join(root, "labels.json");
     fs.mkdirSync(bin);
     fs.mkdirSync(worktree);
     fs.mkdirSync(state, { recursive: true });
+    fs.writeFileSync(labelsFile, JSON.stringify(["agent:review", "agent:reviewing"]));
     fs.writeFileSync(
       path.join(state, "enabled-projects.json"),
       JSON.stringify({ projects: [{
@@ -96,10 +103,21 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number: 31, state: "OPEN", headRefName: "${branch}", headRefOid: "${currentHead}", isCrossRepository: false,
-  labels: [{name: "agent:review"}, {name: "agent:reviewing"}], comments: JSON.parse(process.env.TEST_COMMENTS)
+  labels: JSON.parse(fs.readFileSync(process.env.TEST_LABELS_FILE, "utf8")).map(name => ({name})),
+  comments: JSON.parse(process.env.TEST_COMMENTS)
 }));
 else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id: "R_repo"}));
-else fs.appendFileSync(process.env.TEST_GITHUB_LOG, args.join(" ") + "\\n");
+else {
+  if (args[0] === "pr" && args[1] === "edit") {
+    const labels = new Set(JSON.parse(fs.readFileSync(process.env.TEST_LABELS_FILE, "utf8")));
+    for (let index = 0; index < args.length; index += 1) {
+      if (args[index] === "--add-label") labels.add(args[index + 1]);
+      if (args[index] === "--remove-label") labels.delete(args[index + 1]);
+    }
+    fs.writeFileSync(process.env.TEST_LABELS_FILE, JSON.stringify([...labels]));
+  }
+  fs.appendFileSync(process.env.TEST_GITHUB_LOG, args.join(" ") + "\\n");
+}
 `,
     );
     executable(
@@ -139,6 +157,7 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
           TEST_COMMENTS: JSON.stringify(comments),
           TEST_GITHUB_LOG: githubLog,
           TEST_HERDR_LOG: herdrLog,
+          TEST_LABELS_FILE: labelsFile,
           TEST_WORKTREE: worktree,
         },
       },
@@ -148,6 +167,7 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
       ...JSON.parse(result.stdout),
       githubLog: fs.existsSync(githubLog) ? fs.readFileSync(githubLog, "utf8") : "",
       herdrLog: fs.existsSync(herdrLog) ? fs.readFileSync(herdrLog, "utf8") : "",
+      observedLabels: JSON.parse(fs.readFileSync(labelsFile, "utf8")),
     };
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -277,7 +297,8 @@ When("deadloop がレビュー結果を処理する", function (this: RecoveryWo
 });
 
 When("deadloop がレビュー指摘の修正を開始する", function (this: RecoveryWorld) {
-  this.result = repairDispatch("first-repair");
+  if (!this.case) throw new Error("review repair case is missing");
+  this.result = repairDispatch(this.case);
 });
 
 When("push の直前に pull request head が変わる", function (this: RecoveryWorld) {
@@ -309,7 +330,7 @@ Then("deadloop は通常レビューを開始する", function (this: RecoveryWo
 });
 
 Then("deadloop はレビュー状態を維持する", function (this: RecoveryWorld) {
-  assert.deepEqual(this.result?.labelsPreserved, ["agent:review", "agent:reviewing"]);
+  assert.deepEqual(this.result?.observedLabels, ["agent:review", "agent:reviewing"]);
 });
 
 Then("deadloop は専用の修正作業を開始する", function (this: RecoveryWorld) {
