@@ -22,10 +22,15 @@ type RecoveryWorld = {
   commands?: string[][];
 };
 
+function adapterEffects(result: Record<string, unknown> | undefined): any {
+  return result?.testAdapterEffects;
+}
+
 function reviewerDriver(fixture: string): Record<string, unknown> {
+  const fixturePath = path.isAbsolute(fixture) ? fixture : path.join("test/fixtures/pr-reviewer-driver", fixture);
   const result = spawnSync(
     "node",
-    ["extensions/deadloop/automations/pr-reviewer-driver.ts", "--fixture", path.join("test/fixtures/pr-reviewer-driver", fixture)],
+    ["extensions/deadloop/automations/pr-reviewer-driver.ts", "--fixture", fixturePath],
     {
       cwd: process.cwd(),
       encoding: "utf8",
@@ -42,12 +47,7 @@ function reviewerDriver(fixture: string): Record<string, unknown> {
     },
   );
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-  const output = JSON.parse(result.stdout);
-  const input = JSON.parse(fs.readFileSync(path.join("test/fixtures/pr-reviewer-driver", fixture), "utf8"));
-  return {
-    ...output,
-    observedLabels: input.prs[0].labels.map((label: { name: string }) => label.name),
-  };
+  return JSON.parse(result.stdout);
 }
 
 function repairDispatch(testCase: string): Record<string, unknown> {
@@ -61,6 +61,7 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     const githubLog = path.join(root, "github.log");
     const herdrLog = path.join(root, "herdr.log");
     const labelsFile = path.join(root, "labels.json");
+    const commentsFile = path.join(root, "comments.json");
     fs.mkdirSync(bin);
     fs.mkdirSync(worktree);
     fs.mkdirSync(state, { recursive: true });
@@ -92,6 +93,7 @@ function repairDispatch(testCase: string): Record<string, unknown> {
         ? [{ body: renderTechnicalFailureMarker(head) }]
         : [];
     const currentHead = testCase === "repeated-repair" ? repairedHead : head;
+    fs.writeFileSync(commentsFile, JSON.stringify(comments));
     const executable = (file: string, content: string) => {
       fs.writeFileSync(file, content);
       fs.chmodSync(file, 0o755);
@@ -104,7 +106,7 @@ const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number: 31, state: "OPEN", headRefName: "${branch}", headRefOid: "${currentHead}", isCrossRepository: false,
   labels: JSON.parse(fs.readFileSync(process.env.TEST_LABELS_FILE, "utf8")).map(name => ({name})),
-  comments: JSON.parse(process.env.TEST_COMMENTS)
+  comments: JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"))
 }));
 else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id: "R_repo"}));
 else {
@@ -115,6 +117,11 @@ else {
       if (args[index] === "--remove-label") labels.delete(args[index + 1]);
     }
     fs.writeFileSync(process.env.TEST_LABELS_FILE, JSON.stringify([...labels]));
+  }
+  if (args[0] === "pr" && args[1] === "comment") {
+    const comments = JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"));
+    comments.push({body: args[args.indexOf("--body") + 1]});
+    fs.writeFileSync(process.env.TEST_COMMENTS_FILE, JSON.stringify(comments));
   }
   fs.appendFileSync(process.env.TEST_GITHUB_LOG, args.join(" ") + "\\n");
 }
@@ -154,7 +161,7 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
           DEADLOOP_GITHUB_REPO: "owner/repo",
           DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
-          TEST_COMMENTS: JSON.stringify(comments),
+          TEST_COMMENTS_FILE: commentsFile,
           TEST_GITHUB_LOG: githubLog,
           TEST_HERDR_LOG: herdrLog,
           TEST_LABELS_FILE: labelsFile,
@@ -163,11 +170,26 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
       },
     );
     if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    let retryCycleEffects: unknown;
+    if (testCase === "first-technical-failure") {
+      const retryFixture = path.join(root, "retry-cycle.json");
+      fs.writeFileSync(retryFixture, JSON.stringify({
+        prs: [{
+          number: 31, title: "PR", url: "https://github.com/owner/repo/pull/31", updatedAt: "2026-07-08T00:00:00Z",
+          headRefName: branch, headRefOid: head, isCrossRepository: false, isDraft: false,
+          labels: JSON.parse(fs.readFileSync(labelsFile, "utf8")).map((name: string) => ({ name })),
+          statusCheckRollup: [], comments: JSON.parse(fs.readFileSync(commentsFile, "utf8")), reviewRequests: [], mergeStateStatus: "CLEAN",
+        }],
+        agents: { result: { agents: [] } },
+      }));
+      retryCycleEffects = reviewerDriver(retryFixture).testAdapterEffects;
+    }
     return {
       ...JSON.parse(result.stdout),
       githubLog: fs.existsSync(githubLog) ? fs.readFileSync(githubLog, "utf8") : "",
       herdrLog: fs.existsSync(herdrLog) ? fs.readFileSync(herdrLog, "utf8") : "",
       observedLabels: JSON.parse(fs.readFileSync(labelsFile, "utf8")),
+      retryCycleEffects,
     };
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -318,19 +340,20 @@ When("deadloop が競合回復を完了する", function (this: RecoveryWorld) {
 });
 
 Then("deadloop は専用の競合回復作業を開始する", function (this: RecoveryWorld) {
-  assert.equal(this.result?.driverAction, "branch_update_monitor_request");
+  assert.equal(adapterEffects(this.result)?.herdrStarts?.[0]?.name.includes("branch-update"), true);
 });
 
 Then("deadloop は競合回復を停止して人間対応にする", function (this: RecoveryWorld) {
-  assert.equal(this.result?.driverAction, "branch_update_attempt_exhausted");
+  assert.equal(adapterEffects(this.result)?.labels?.["31"]?.includes("agent:blocked"), true);
 });
 
 Then("deadloop は通常レビューを開始する", function (this: RecoveryWorld) {
-  assert.equal(this.result?.driverAction, "reviewer_monitor_request");
+  assert.equal(adapterEffects(this.result)?.herdrStarts?.[0]?.name.endsWith("-reviewer"), true);
 });
 
 Then("deadloop はレビュー状態を維持する", function (this: RecoveryWorld) {
-  assert.deepEqual(this.result?.observedLabels, ["agent:review", "agent:reviewing"]);
+  const labels = adapterEffects(this.result)?.labels?.["31"] ?? this.result?.observedLabels;
+  assert.deepEqual(labels, ["agent:review", "agent:reviewing"]);
 });
 
 Then("deadloop は専用の修正作業を開始する", function (this: RecoveryWorld) {
@@ -342,7 +365,7 @@ Then("deadloop は修正を停止して人間対応にする", function (this: R
 });
 
 Then("deadloop はレビューを一度だけ再試行する", function (this: RecoveryWorld) {
-  assert.ok(String(this.result?.githubLog).includes("Reviewer technical failure will be retried once"));
+  assert.equal((this.result?.retryCycleEffects as any)?.herdrStarts?.length, 1);
 });
 
 Then("deadloop はレビューを停止して人間対応にする", function (this: RecoveryWorld) {

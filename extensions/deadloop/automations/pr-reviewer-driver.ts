@@ -85,6 +85,32 @@ function shouldSimulateLaunch(fixture: JsonObject | null): boolean {
   return Boolean(fixture);
 }
 
+function fixtureEffects(fixture: JsonObject): JsonObject {
+  fixture.testAdapterEffects ||= { herdrStarts: [], githubComments: [], labels: {} };
+  return fixture.testAdapterEffects;
+}
+
+function fixtureGithubOperations(fixture: JsonObject) {
+  const effects = fixtureEffects(fixture);
+  return {
+    commentPr: (_repo: string, number: string | number, body: string) => {
+      effects.githubComments.push({ number: Number(number), body });
+    },
+    movePrLabels: (_repo: string, number: string | number, move: { remove?: string | string[]; add?: string | string[] }) => {
+      const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
+      const labels = new Set((pr?.labels || []).map((label: JsonObject) => String(label.name)));
+      for (const label of [move.remove || []].flat()) labels.delete(label);
+      for (const label of [move.add || []].flat()) labels.add(label);
+      if (pr) pr.labels = [...labels].map((name) => ({ name }));
+      effects.labels[String(number)] = [...labels];
+    },
+    addPrReviewer: (_repo: string, number: string | number, reviewer: string) => {
+      effects.githubReviewers ||= [];
+      effects.githubReviewers.push({ number: Number(number), reviewer });
+    },
+  };
+}
+
 function reviewAgentPrompt(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -237,7 +263,10 @@ function applyPrTransition(
   stillApplicable: (livePlan: ReturnType<typeof planPrReviewerAction>, live: JsonObject) => boolean,
   mutate: (github: ReturnType<typeof githubOperations>, live: JsonObject) => void,
 ): boolean {
-  if (fixture) return true;
+  if (fixture) {
+    mutate(fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations>, pr);
+    return true;
+  }
   try {
     return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
       const github = githubOperations(recheck);
@@ -285,7 +314,12 @@ function launchBranchUpdate(
   const key = branchUpdateRetryKey(headOid, baseOid);
   const updaterName = `${env.projectId}-pr-${number}-branch-update-${key}`;
   const uuid = fixture ? "fixture-branch-update-uuid" : randomUUID();
+  const marker = renderBranchUpdateMarker(headOid, baseOid);
   if (fixture) {
+    const github = fixtureGithubOperations(fixture);
+    github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
+    github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
+    fixtureEffects(fixture).herdrStarts.push({ name: updaterName, agent: env.branchUpdateAgent, branch });
     return {
       updaterName,
       headRefName: branch,
@@ -300,7 +334,6 @@ function launchBranchUpdate(
   }
 
   runText(["git", "check-ref-format", "--branch", branch]);
-  const marker = renderBranchUpdateMarker(headOid, baseOid);
   const launch = withEnabledDriverLaunch(
     env,
     (recheck: () => void) => {
@@ -350,7 +383,9 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
   const headRefName = String(pr.headRefName || `pr-${number}`);
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${headRefName.replace(/\//g, "-")}`;
 
-  if (shouldSimulateLaunch(fixture)) {
+  if (fixture) {
+    fixtureGithubOperations(fixture).movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
+    fixtureEffects(fixture).herdrStarts.push({ name: reviewerName, agent: env.reviewerAgent, branch: headRefName });
     return {
       reviewerName,
       headRefName,
@@ -537,6 +572,7 @@ function drive(fixturePath: string | undefined): DriverResult {
         retryKey: branchUpdateRetryKey(headOid, baseOid),
         marker,
         comment,
+        ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
       });
     }
     try {
@@ -567,6 +603,7 @@ function drive(fixturePath: string | undefined): DriverResult {
         launch,
         monitorHandoff: { kind: "branch-update", input: monitorInput },
         prompt: renderBranchUpdateMonitorPrompt(monitorInput),
+        ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
       });
     } catch (error) {
       if (isStaleLaunchError(error)) {
@@ -592,6 +629,7 @@ function drive(fixturePath: string | undefined): DriverResult {
         prNumber: plan.decision.number,
         marker,
         comment,
+        ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
       });
     }
   }
@@ -664,6 +702,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     launch,
     monitorHandoff: { kind: "reviewer", input: monitorInput },
     prompt: renderReviewerMonitorPrompt(monitorInput),
+    ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
   });
 }
 

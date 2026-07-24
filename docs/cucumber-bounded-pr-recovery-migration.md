@@ -9,6 +9,8 @@ Issue [#116](https://github.com/yasuhito/deadloop/issues/116) では、PR の自
 | T266 | 該当なし | Vitest 継続へ再分類（レビュー監視者のプロンプト境界を診断） |
 | T267 | 該当なし | Vitest 継続へ再分類（修正監視者のプロンプト境界を診断） |
 | T282 | 競合した pull request は一度だけ専用の回復作業を開始する | 移行済み（Vitest の診断テストを併存） |
+| T283 | 該当なし | Vitest 継続へ再分類（分離作業領域を起動する前の純粋な判定関数で `dirty_worktree` の原因を特定する診断） |
+| T284 | 古い pull request head の競合回復は push しない | Vitest 継続へ再分類（受け入れシナリオは push 抑止を保証し、Vitest は事前判定の `stale_head` 原因を特定） |
 | T288, T292 | 古い pull request head の競合回復は push しない | Vitest 継続へ再分類（受け入れシナリオ併存） |
 | T289 | 別のリポジトリからの pull request の競合回復は push しない | 移行済み（Vitest の診断テストを併存） |
 | T290 | 競合回復のチェックは push 直前の head 確認より先に実行する | Vitest 継続へ再分類（受け入れシナリオ併存） |
@@ -34,6 +36,8 @@ Issue [#116](https://github.com/yasuhito/deadloop/issues/116) では、PR の自
 - T266 は、レビュー監視者が `changes_requested` を修正 dispatcher へ渡すプロンプト境界の欠落を特定するため Vitest に残す。受け入れシナリオは dispatcher 以降の修正作業起動を保証するが、監視者からの引き渡しは通らない。
 - T267 は、修正監視者が成功時にラベルを変更しないよう指示するプロンプト境界の欠落を特定するため Vitest に残す。受け入れシナリオは修正開始時の GitHub ラベル状態を保証するが、修正完了後の監視者指示は通らない。
 - T282 は、競合判定関数が一つの作業へ委譲する判断を局所的に診断するため Vitest に残す。受け入れシナリオは driver 境界から同じ委譲結果を保証する。
+- T283 は、分離した競合回復作業領域を作る前に使う純粋な判定関数へ汚れた作業領域を与えたとき、停止原因が `dirty_worktree` であることを局所的に特定するため Vitest に残す。実運用の driver は共有リポジトリの汚れを理由に分離作業領域の起動を止めないため、この入力を公開状態遷移として Cucumber に重複させない。
+- T284 は、確認済み head と現在の head の不一致を事前判定が `stale_head` と分類する箇所を特定するため Vitest に残す。利用者に対する安全保証は「古い pull request head の競合回復は push しない」シナリオで finalizer の再確認と push 抑止まで観測する。
 - T285–T287 は、再試行キーと GitHub コメント内の正確な head/base 記録を局所的に診断するため Vitest に残す。
 - T293 は、Herdr・GitHub・git の偽コマンドを接続した修正作業の起動経路を診断するため Vitest に残す。受け入れシナリオは利用者に見える一回限りの引き渡しを保証し、この統合テストは失敗した実行基盤アダプターを絞り込む。
 - T295、T299、T300 は、修正指摘の fingerprint、head ごとの技術失敗集計、作業者への構造化した指摘の受け渡しを局所的に診断するため Vitest に残す。
@@ -46,4 +50,4 @@ Issue [#116](https://github.com/yasuhito/deadloop/issues/116) では、PR の自
 
 ## 同等性確認
 
-通常の成功に加え、`acceptance/steps/bounded-pr-recovery.steps.ts` の結果 assertion を一時的に逆転させ、対象 Cucumber シナリオが assertion 差分と TypeScript のソース位置を示して失敗することを確認してから元へ戻す。最終確認は `npm run check` で Vitest と Cucumber を直列に実行する。
+通常の成功に加え、`acceptance/steps/bounded-pr-recovery.steps.ts` のテスト用アダプターが記録する Herdr 起動、GitHub のコメント・結果ラベル、次のレビュー周期の起動回数を各シナリオで観測する。各製品効果の記録を一時的に止めると対応する Cucumber シナリオが assertion 差分と TypeScript のソース位置を示して失敗することを確認してから元へ戻す。最終確認は `npm run check` で Vitest と Cucumber を直列に実行する。
