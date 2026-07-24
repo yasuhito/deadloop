@@ -32,19 +32,6 @@ const {
     ops: Record<string, unknown>,
   ) => unknown;
 };
-const { decideCiFallback } = require("../../extensions/deadloop/automations/ci-fallback-decision.ts") as {
-  decideCiFallback: (
-    data: unknown,
-    jobs: unknown,
-    logs: string,
-    enabled: boolean,
-    mode: string,
-    maxImmediateSeconds: number,
-  ) => { fallbackAllowed: boolean };
-};
-
-export type CiInfrastructureFailure = { checks: unknown; logs: string };
-
 function selectedAutomation(project: NormalizedProject, driver: string) {
   const automation = project.automations.find((candidate) => candidate.driverFile.endsWith(driver));
   if (!automation) throw new Error(`missing ${driver} automation`);
@@ -162,21 +149,4 @@ export function observeWorkerLaunch(project: NormalizedProject): string[] {
 
 export function observeReviewerLaunch(project: NormalizedProject): string[] {
   return observeAgentLaunch(project, "reviewer");
-}
-
-export function observeCiFallbackLaunches(
-  project: NormalizedProject,
-  failure: CiInfrastructureFailure,
-  launchCommand: (command: string) => void,
-): void {
-  const decision = decideCiFallback(
-    failure.checks,
-    null,
-    failure.logs,
-    project.ciFallback.enabled,
-    project.ciFallback.mode,
-    5,
-  );
-  if (!decision.fallbackAllowed) return;
-  for (const command of project.ciFallback.localCommands.split("\n").filter(Boolean)) launchCommand(command);
 }

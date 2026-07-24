@@ -13,6 +13,12 @@ describe("automation driver kit", () => {
     expect(runner.runText(["node", "-e", "process.stdout.write('ok')"])).toBe("ok");
   });
 
+  it("times out a hung launch command", () => {
+    const runner = createCommandRunner({ timeoutMs: 50 });
+
+    expect(() => runner.runText(["node", "-e", "setInterval(() => {}, 1000)"])).toThrow("timed out");
+  });
+
   it("normalizes multiline text", () => {
     expect(oneLine("a\n b\t c")).toBe("a b c");
   });

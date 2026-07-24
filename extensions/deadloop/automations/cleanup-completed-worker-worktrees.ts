@@ -7,6 +7,7 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { createHerdrRunner, normalizeHerdrWorktreeRecord } = require("../../../src/herdr-runner.ts");
+const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 
 type CleanupRecord = Record<string, any>;
 
@@ -16,6 +17,8 @@ type CleanupConfig = {
   worktreeRoot: string;
   reviewLabel: string;
   humanLabel: string;
+  stateDir?: string;
+  enabledAt?: number;
 };
 
 const DEFAULT_REVIEW_LABEL = "agent:review";
@@ -239,6 +242,8 @@ function cleanupConfigFromEnv(): CleanupConfig {
     worktreeRoot: process.env.DEADLOOP_WORKTREE_ROOT || "",
     reviewLabel: process.env.DEADLOOP_REVIEW_LABEL || DEFAULT_REVIEW_LABEL,
     humanLabel: process.env.DEADLOOP_HUMAN_LABEL || DEFAULT_HUMAN_LABEL,
+    stateDir: process.env.DEADLOOP_STATE_DIR,
+    enabledAt: process.env.DEADLOOP_ENABLED_AT === undefined ? undefined : Number(process.env.DEADLOOP_ENABLED_AT),
   };
 }
 
@@ -297,7 +302,23 @@ function loadFixtureCleanupPlan(file: string): { candidates: CleanupRecord[]; sk
   });
 }
 
-function removeGeneratedAgentArtifacts(worktreePath: string): void {
+function withCleanupMutation<T>(config: CleanupConfig, mutation: () => T): T {
+  if (config.enabledAt === undefined) return mutation();
+  if (!Number.isFinite(config.enabledAt) || !config.stateDir) {
+    throw new Error("cleanup enablement generation is invalid");
+  }
+  return withEnabledDriverLock({
+    repoPath: config.repoPath,
+    githubRepo: config.repo,
+    stateDir: config.stateDir,
+    enabledAt: config.enabledAt,
+  }, (_enabled: unknown, recheck: () => void) => {
+    recheck();
+    return mutation();
+  });
+}
+
+function removeGeneratedAgentArtifacts(worktreePath: string, config: CleanupConfig): void {
   const tracked = runCleanupText(["git", "-C", worktreePath, "ls-files", "-z", "--", ".deadloop", ".pi-subagents"])
     .split("\0")
     .filter(Boolean);
@@ -307,7 +328,7 @@ function removeGeneratedAgentArtifacts(worktreePath: string): void {
   if (!isCleanStatusForCleanup(currentStatus)) throw new Error("worktree became dirty after cleanup planning; refusing removal");
 
   for (const directory of [".deadloop", ".pi-subagents"]) {
-    fs.rmSync(path.join(worktreePath, directory), { recursive: true, force: true });
+    withCleanupMutation(config, () => fs.rmSync(path.join(worktreePath, directory), { recursive: true, force: true }));
   }
 }
 
@@ -322,10 +343,10 @@ function applyCleanupPlan(plan: { candidates: CleanupRecord[]; skipped: CleanupR
       if (!workspaceId) throw new Error("missing Herdr workspace id; refusing direct git worktree removal");
       const worktreePath = String(item.path || "");
       if (!worktreePath) throw new Error("missing worktree path; refusing cleanup");
-      removeGeneratedAgentArtifacts(worktreePath);
+      removeGeneratedAgentArtifacts(worktreePath, config);
       const remainingStatus = runCleanupText(["git", "-C", worktreePath, "status", "--short"]);
       if (remainingStatus.trim()) throw new Error("worktree became dirty after cleanup planning; refusing removal");
-      cleanupHerdrRunner().removeWorktree(String(workspaceId));
+      withCleanupMutation(config, () => cleanupHerdrRunner().removeWorktree(String(workspaceId)));
       removed.push(item);
     } catch (error) {
       failed.push({ ...item, error: error instanceof Error ? error.message : String(error) });

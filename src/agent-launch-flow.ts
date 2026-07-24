@@ -26,6 +26,7 @@ type AgentLaunchFlowOps = {
   runner?: RunnerAdapter;
   runText: (args: string[]) => string;
   writeFileSync: (file: string, text: string, encoding: "utf8") => void;
+  beforeAgentStart?: () => void;
 };
 
 type AgentLaunchFlowResult = {
@@ -76,6 +77,7 @@ function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): 
   const promiseFile = path.join(runDir, "promise.json");
   ops.writeFileSync(promptFile, input.renderPrompt({ promiseFile, worktreePath }), "utf8");
 
+  ops.beforeAgentStart?.();
   const launchOutput = ops.runText([
     "node",
     path.join(input.automationDir, "launch-agent.ts"),

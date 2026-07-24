@@ -2,7 +2,13 @@ import path from "node:path";
 
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
-import { type GithubItem, type HerdrWorktree, labelsOf, resolveActiveProject } from "./status";
+import {
+  type GithubItem,
+  type HerdrWorktree,
+  type RepositoryEnablement,
+  labelsOf,
+  resolveActiveProject,
+} from "./status";
 
 const STALE_IN_PROGRESS_MS = 24 * 60 * 60 * 1000;
 const MAX_COMMENT_SUMMARY_LENGTH = 180;
@@ -49,6 +55,7 @@ export type HerdrAgent = {
 export type DoctorInput = {
   cwd: string;
   projects: NormalizedProject[];
+  repositoryEnablement?: RepositoryEnablement;
   warnings?: string[];
   issues?: DoctorGithubItem[];
   openPrs?: DoctorGithubItem[];
@@ -83,6 +90,7 @@ export type DoctorFinding = {
 
 export type DoctorSnapshot = {
   project: NormalizedProject | null;
+  repositoryEnablement: RepositoryEnablement;
   cwd: string;
   warnings: string[];
   findings: DoctorFinding[];
@@ -509,8 +517,9 @@ function buildWorkspaceTrustFindings(
 
 export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   const project = resolveActiveProject(input.cwd, input.projects);
+  const repositoryEnablement = project ? "enabled" : input.repositoryEnablement || "unavailable";
   const warnings = input.warnings || [];
-  if (!project) return { project: null, cwd: input.cwd, warnings, findings: [] };
+  if (!project) return { project: null, repositoryEnablement, cwd: input.cwd, warnings, findings: [] };
 
   const issues = input.issues || [];
   const openPrs = input.openPrs || [];
@@ -524,6 +533,7 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
 
   return {
     project,
+    repositoryEnablement,
     cwd: input.cwd,
     warnings,
     findings: [
@@ -550,8 +560,11 @@ function formatConfigSource(project: NormalizedProject): string {
 
 export function formatDoctorReport(snapshot: DoctorSnapshot): string {
   if (!snapshot.project) {
+    const lines = snapshot.repositoryEnablement === "disabled"
+      ? ["deadloop is not enabled for this repository.", "", "Enable it:", "  /deadloop-enable", ""]
+      : ["deadloop doctor is unavailable for the current location.", ""];
     return [
-      `deadloop doctor: no active project`,
+      ...lines,
       `cwd: ${snapshot.cwd}`,
       ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     ].join("\n");

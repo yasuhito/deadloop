@@ -2,56 +2,20 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { EXTENSION_CODE_CHANGED_WARNING, normalizeProject } from "../src/core";
-import { buildStatusSnapshot, formatStatusReport, resolveActiveProject } from "../src/status";
+import { normalizeProject } from "../src/core";
+import { resolveActiveProject } from "../src/status";
 
 const fixture = JSON.parse(readFileSync("test/fixtures/status/report-case.json", "utf8"));
 const projects = fixture.projects.map(normalizeProject);
 
-function report(warnings: string[] = []) {
-  return formatStatusReport(
-    buildStatusSnapshot({
-      ...fixture,
-      projects,
-      warnings,
-    }),
-  );
-}
 
 describe("deadloop status report", () => {
-  it("resolves the active project from the configured repository path", () => {
-    expect(resolveActiveProject("/home/yasuhito/Work/deadloop/docs", projects)?.id).toBe("deadloop");
+  it("resolves the active project only from the exact repository top-level", () => {
+    expect(resolveActiveProject("/home/yasuhito/Work/deadloop", projects)?.id).toBe("deadloop");
   });
 
-  it("shows when there are no eligible issues", () => {
-    expect(report()).toContain("- eligible: none");
+  it("does not select a parent project from a nested repository root", () => {
+    expect(resolveActiveProject("/home/yasuhito/Work/deadloop/vendor/nested", projects)).toBeNull();
   });
 
-  it("shows the review target PR", () => {
-    expect(report()).toContain("- review target: #21 Add status report");
-  });
-
-  it("shows the cleanup candidate worktree", () => {
-    expect(report()).toContain(
-      "- cleanup candidates: #20 agent/issue-12-old -> /home/yasuhito/Work/herdr-worktrees/deadloop/agent-issue-12-old (workspace-20; merged_pr)",
-    );
-  });
-
-  it("shows active Herdr worker worktrees with workspace ids", () => {
-    expect(report()).toContain(
-      "agent/issue-13-add-deadloop-status-report -> /home/yasuhito/Work/herdr-worktrees/deadloop/agent-issue-13-add-deadloop-status-report (workspace-13)",
-    );
-  });
-
-  it("shows extension code freshness warnings", () => {
-    expect(report([EXTENSION_CODE_CHANGED_WARNING])).toContain(EXTENSION_CODE_CHANGED_WARNING);
-  });
-
-  it("shows the automation driver summary", () => {
-    expect(report()).toContain("summary=driver selected Issue #12");
-  });
-
-  it("shows the layered config source", () => {
-    expect(report()).toContain("config: local=unknown local projects.json; repoPolicy=origin/main:deadloop.json (not-read)");
-  });
 });

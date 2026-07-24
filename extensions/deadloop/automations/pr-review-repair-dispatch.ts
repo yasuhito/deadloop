@@ -22,11 +22,12 @@ const {
   shellQuote,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
 const commandRunner = createCommandRunner();
-const github = createGithubOperations(commandRunner);
 
 function envConfig() {
   const automationDir = __dirname;
@@ -34,6 +35,7 @@ function envConfig() {
     projectId: process.env.DEADLOOP_PROJECT_ID || "project",
     repoPath: process.env.DEADLOOP_REPO_PATH || ".",
     githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
+    enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
     stateDir:
       process.env.DEADLOOP_STATE_DIR ||
       path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
@@ -75,6 +77,37 @@ function readLivePr(repo: string, prNumber: string): JsonObject {
   ]);
 }
 
+type RepairWorktreeInspection =
+  | { kind: "absent" }
+  | { kind: "ambiguous" }
+  | { kind: "present"; head: string; clean: boolean };
+
+function branchWorktrees(repoPath: string, branch: string): string[] {
+  const output = commandRunner.runText(["git", "-C", repoPath, "worktree", "list", "--porcelain", "-z"]);
+  const expectedBranch = `refs/heads/${branch}`;
+  const matches: string[] = [];
+  for (const block of output.split("\0\0")) {
+    const fields = block.split("\0");
+    const worktreeField = fields.find((field) => field.startsWith("worktree "));
+    const branchField = fields.find((field) => field.startsWith("branch "));
+    if (worktreeField && branchField?.slice("branch ".length) === expectedBranch) {
+      matches.push(worktreeField.slice("worktree ".length));
+    }
+  }
+  return matches;
+}
+
+function inspectRepairWorktree(repoPath: string, branch: string): RepairWorktreeInspection {
+  const worktrees = branchWorktrees(repoPath, branch);
+  if (worktrees.length === 0) return { kind: "absent" };
+  if (worktrees.length !== 1) return { kind: "ambiguous" };
+  const worktreePath = worktrees[0];
+  const head = commandRunner.runText(["git", "-C", worktreePath, "rev-parse", "HEAD"]).trim().toLowerCase();
+  const clean =
+    commandRunner.runText(["git", "-C", worktreePath, "status", "--porcelain", "--untracked-files=all"]).trim() === "";
+  return { kind: "present", head, clean };
+}
+
 function recoveryComment(prNumber: string, env: ReturnType<typeof envConfig>, reason: string, summary: string): string {
   return `## What happened
 - Automatic review repair for PR #${prNumber} requires human intervention: ${reason}.
@@ -89,10 +122,31 @@ gh pr view ${prNumber} -R ${shellQuote(env.githubRepo)} --comments --json number
 3. Push a new commit, then remove ${env.blockedLabel}; the changed head can start a new review cycle.`;
 }
 
-function applyHumanBlock(prNumber: string, env: ReturnType<typeof envConfig>, reason: string, summary: string): string {
+function withRevalidatedPrMutation(
+  prNumber: string,
+  env: ReturnType<typeof envConfig>,
+  expectedPr: JsonObject,
+  mutation: (guardedGithub: ReturnType<typeof createGithubOperations>) => void,
+): void {
+  withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+    const livePr = readLivePr(env.githubRepo, prNumber);
+    assertSameLaunchTarget(expectedPr, livePr, "pr");
+    mutation(createGithubOperations(commandRunner, recheck));
+  });
+}
+
+function applyHumanBlock(
+  prNumber: string,
+  env: ReturnType<typeof envConfig>,
+  expectedPr: JsonObject,
+  reason: string,
+  summary: string,
+): string {
   const comment = recoveryComment(prNumber, env, reason, summary);
-  github.commentPr(env.githubRepo, prNumber, comment);
-  github.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+  withRevalidatedPrMutation(prNumber, env, expectedPr, (guardedGithub) => {
+    guardedGithub.commentPr(env.githubRepo, prNumber, comment);
+    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+  });
   return comment;
 }
 
@@ -110,6 +164,8 @@ function repairWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-review-repair-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-repo",
+    shellQuote(env.repoPath),
     "--github-repo",
     shellQuote(env.githubRepo),
     "--pr",
@@ -124,6 +180,8 @@ function repairWorkerPrompt(
     shellQuote(env.automationDir),
     "--state-dir",
     shellQuote(env.stateDir),
+    "--enabled-at",
+    String(env.enabledAt),
     "--check-command",
     shellQuote(env.checkCommand),
   ].join(" ");
@@ -144,7 +202,7 @@ Safety contract:
 - First require a clean worktree and HEAD exactly equal to ${expectedHead}.
 - Change only what is needed to resolve every listed finding. Do not add features, reinterpret the issue, or widen scope.
 - Run focused tests while editing, then commit the repair normally. Never amend, rebase, reset published history, or force-push.
-- Do not run git push directly. After committing, run exactly this finalizer; it runs configured checks, immediately re-checks the PR head, and performs the only permitted non-force push to the exact branch:
+- Do not run git push directly. After committing, run exactly this finalizer; it runs configured checks, rechecks the validated PR head, and performs the only permitted normal non-force push to the exact branch:
   ${finalizer}
 - Never edit labels or PR metadata, create a PR, merge, close an issue, delete a branch, or invoke another agent.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state.
@@ -164,6 +222,7 @@ function launchRepair(
   findings: JsonObject[],
   key: string,
   env: ReturnType<typeof envConfig>,
+  beforeAgentStart?: () => void,
 ): JsonObject {
   commandRunner.runText(["git", "check-ref-format", "--branch", branch]);
   const uuid = randomUUID();
@@ -188,6 +247,7 @@ function launchRepair(
       runner: createHerdrRunnerFromCommandRunner(commandRunner),
       runText: commandRunner.runText,
       writeFileSync: fs.writeFileSync,
+      beforeAgentStart,
     },
   );
   return { repairName, ...launch };
@@ -207,26 +267,27 @@ function dispatch(args: JsonObject): DriverResult {
   const pr = readLivePr(env.githubRepo, prNumber);
 
   if (String(pr.state || "").toUpperCase() !== "OPEN" || Boolean(pr.isCrossRepository) || String(pr.headRefName || "") !== branch) {
-    const comment = applyHumanBlock(prNumber, env, "the selected PR is no longer a safe same-repository branch target", promise.summary);
+    const comment = applyHumanBlock(prNumber, env, pr, "the selected PR is no longer a safe same-repository branch target", promise.summary);
     return driverResult("done", `PR #${prNumber} requires human intervention`, { driverAction: "review_human_blocked", comment });
   }
-  if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
-    return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
-  }
-
   if (validation.status === "blocked") {
+    if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
+      return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, {
+        driverAction: "review_stale_head",
+      });
+    }
     const technicalDecision = decideTechnicalReviewFailure(pr.comments || [], expectedHead);
     if (technicalDecision.action === "retry") {
-      github.commentPr(
+      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub) => guardedGithub.commentPr(
         env.githubRepo,
         prNumber,
         `Reviewer technical failure will be retried once for this head: ${promise.reason || "unknown failure"}.\n\n${renderTechnicalFailureMarker(expectedHead)}`,
-      );
+      ));
       return driverResult("done", `PR #${prNumber} reviewer technical failure retained review labels for one retry`, {
         driverAction: "review_technical_retry",
       });
     }
-    const comment = applyHumanBlock(prNumber, env, "the reviewer failed technically twice on the same PR head", promise.summary);
+    const comment = applyHumanBlock(prNumber, env, pr, "the reviewer failed technically twice on the same PR head", promise.summary);
     return driverResult("done", `PR #${prNumber} exhausted its technical review retry`, {
       driverAction: "review_technical_retry_exhausted",
       comment,
@@ -235,17 +296,105 @@ function dispatch(args: JsonObject): DriverResult {
 
   const outcome = promise.outcome || "approved";
   if (outcome === "approved") {
-    return driverResult("done", `PR #${prNumber} review completed without actionable findings`, { driverAction: "review_approved" });
+    return String(pr.headRefOid || "").toLowerCase() === expectedHead
+      ? driverResult("done", `PR #${prNumber} review completed without actionable findings`, { driverAction: "review_approved" })
+      : driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, {
+          driverAction: "review_stale_head",
+        });
   }
   if (outcome === "human_required") {
-    const comment = applyHumanBlock(prNumber, env, promise.reason || "the reviewer requested a human decision", promise.summary);
+    if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
+      return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, {
+        driverAction: "review_stale_head",
+      });
+    }
+    const comment = applyHumanBlock(prNumber, env, pr, promise.reason || "the reviewer requested a human decision", promise.summary);
     return driverResult("done", `PR #${prNumber} review requires a human`, { driverAction: "review_human_blocked", comment });
   }
 
   const findings = promise.findings as JsonObject[];
-  const selection = selectRepairAttempt(pr.comments || [], expectedHead, findings);
+  const worktree = inspectRepairWorktree(env.repoPath, branch);
+  const refreshedPr = readLivePr(env.githubRepo, prNumber);
+  if (
+    String(refreshedPr.state || "").toUpperCase() !== "OPEN" ||
+    Boolean(refreshedPr.isCrossRepository) ||
+    String(refreshedPr.headRefName || "") !== branch
+  ) {
+    const comment = applyHumanBlock(
+      prNumber,
+      env,
+      refreshedPr,
+      "the selected PR stopped being a safe same-repository branch target before repair dispatch",
+      promise.summary,
+    );
+    return driverResult("done", `PR #${prNumber} requires human intervention`, {
+      driverAction: "review_human_blocked",
+      comment,
+    });
+  }
+  if (worktree.kind === "ambiguous") {
+    const comment = applyHumanBlock(
+      prNumber,
+      env,
+      refreshedPr,
+      "more than one worktree claims the repair branch",
+      "Worktree ownership must be made unambiguous before another repair starts.",
+    );
+    return driverResult("done", `PR #${prNumber} repair worktree ownership is ambiguous; marked blocked`, {
+      driverAction: "review_repair_ambiguous_worktree",
+      comment,
+    });
+  }
+  if (worktree.kind === "present" && !worktree.clean) {
+    const comment = applyHumanBlock(
+      prNumber,
+      env,
+      refreshedPr,
+      "the existing repair worktree is dirty",
+      "The existing repair worktree must be inspected before another repair starts.",
+    );
+    return driverResult("done", `PR #${prNumber} repair worktree is dirty; marked blocked`, {
+      driverAction: "review_repair_dirty_worktree",
+      comment,
+    });
+  }
+
+  const refreshedHead = String(refreshedPr.headRefOid || "").toLowerCase();
+  if (refreshedHead !== expectedHead) {
+    if (worktree.kind === "present" && worktree.head === refreshedHead) {
+      return driverResult("done", `PR #${prNumber} head changed before repair dispatch; left labels untouched for re-evaluation`, {
+        driverAction: "review_stale_head",
+      });
+    }
+    const comment = applyHumanBlock(
+      prNumber,
+      env,
+      refreshedPr,
+      "the refreshed PR head does not have one matching clean repair worktree",
+      "The PR branch and worktree ownership must be reconciled before another repair starts.",
+    );
+    return driverResult("done", `PR #${prNumber} refreshed head lacks a matching repair worktree; marked blocked`, {
+      driverAction: "review_repair_worktree_mismatch",
+      comment,
+    });
+  }
+  if (worktree.kind === "present" && worktree.head !== expectedHead) {
+    const comment = applyHumanBlock(
+      prNumber,
+      env,
+      refreshedPr,
+      "the clean repair worktree and current PR head do not match",
+      "The existing worktree must be reconciled without rewriting history before another repair starts.",
+    );
+    return driverResult("done", `PR #${prNumber} repair worktree does not match its current head; marked blocked`, {
+      driverAction: "review_repair_worktree_mismatch",
+      comment,
+    });
+  }
+
+  const selection = selectRepairAttempt(refreshedPr.comments || [], expectedHead, findings);
   if (selection.action !== "launch_repair") {
-    const comment = applyHumanBlock(prNumber, env, "the same review findings remained after their bounded repair attempt", promise.summary);
+    const comment = applyHumanBlock(prNumber, env, refreshedPr, "the same review findings remained after their bounded repair attempt", promise.summary);
     return driverResult("done", `PR #${prNumber} repeated the same findings; marked blocked`, {
       driverAction: "review_repair_repeated",
       selection,
@@ -254,31 +403,64 @@ function dispatch(args: JsonObject): DriverResult {
   }
 
   const marker = renderRepairMarker(expectedHead, selection.reviewFingerprint);
-  github.commentPr(env.githubRepo, prNumber, `Starting one bounded repair for this exact PR head and review result.\n\n${marker}`);
-  github.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
   try {
-    const launch = launchRepair(prNumber, branch, expectedHead, findings, selection.key, env);
+    const launch = withEnabledDriverLaunch(
+      env,
+      (recheck: () => void) => {
+        const guardedGithub = createGithubOperations(commandRunner, recheck);
+        guardedGithub.commentPr(env.githubRepo, prNumber, `Starting one bounded repair for this exact PR head and review result.\n\n${marker}`);
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
+      },
+      (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck),
+      {
+        revalidate: () => {
+          const livePr = readLivePr(env.githubRepo, prNumber);
+          assertSameLaunchTarget(pr, livePr, "pr");
+          const labels = labelNames(livePr.labels);
+          if (!labels.includes(env.reviewLabel) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)) {
+            throw new StaleLaunchError(`PR #${prNumber} is no longer eligible for repair`);
+          }
+          const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings);
+          if (liveSelection.action !== "launch_repair" || liveSelection.key !== selection.key) {
+            throw new StaleLaunchError(`PR #${prNumber} repair attempt state changed before launch`);
+          }
+        },
+      },
+    );
+    const monitorInput = {
+      prNumber: Number(prNumber),
+      expectedHeadOid: expectedHead,
+      branch,
+      automationDir: env.automationDir,
+      promiseFile: launch.promiseFile,
+      actorName: "review-repair worker",
+      projectId: env.projectId,
+      repoPath: env.repoPath,
+      githubRepo: env.githubRepo,
+      stateDir: env.stateDir,
+      enabledAt: env.enabledAt,
+      reviewLabel: env.reviewLabel,
+      reviewingLabel: env.reviewingLabel,
+      blockedLabel: env.blockedLabel,
+    };
     return driverResult("needs_llm", `Launched review-repair worker for PR #${prNumber}`, {
       driverAction: "review_repair_monitor_request",
       selection,
       labelsPreserved: [env.reviewLabel, env.reviewingLabel],
       launch,
-      prompt: renderRepairMonitorPrompt({
-        prNumber: Number(prNumber),
-        expectedHeadOid: expectedHead,
-        branch,
-        automationDir: env.automationDir,
-        promiseFile: launch.promiseFile,
-        actorName: "review-repair worker",
-        reviewLabel: env.reviewLabel,
-        reviewingLabel: env.reviewingLabel,
-        blockedLabel: env.blockedLabel,
-      }),
+      monitorHandoff: { kind: "repair", input: monitorInput },
+      prompt: renderRepairMonitorPrompt(monitorInput),
     });
   } catch (error) {
+    if (isStaleLaunchError(error)) {
+      return driverResult("done", `PR #${prNumber} changed before repair launch; left workflow state untouched`, {
+        driverAction: "review_repair_launch_stale",
+      });
+    }
     const comment = applyHumanBlock(
       prNumber,
       env,
+      refreshedPr,
       `the bounded repair launch failed after its attempt marker was recorded: ${error instanceof Error ? error.message : String(error)}`,
       promise.summary,
     );

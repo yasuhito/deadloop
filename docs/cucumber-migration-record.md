@@ -1,10 +1,122 @@
 # Cucumber 移行記録
 
-この記録は [分類表](cucumber-test-classification.md) の ID と受け入れ仕様の対応を追跡する。受け入れシナリオで完全に置換した Vitest だけを削除し、局所的な診断価値がある Vitest は残す。
+この記録は、`docs/cucumber-test-classification.md` の Cucumber 候補を受け入れ仕様へ移した対応を追跡する。分類表の当初の件数と判断根拠を保つため、元表は変更しない。
+
+## ブランチ更新と push の安全制限（Issue #114）
+
+`acceptance/features/branch-update-push-safety.feature.md` には 7 シナリオを追加した。次の表は、各分類 ID の移行結果を示す。同等性の人間レビューが完了するまでは、対応する Vitest 9 件も残している。
+
+| 分類 ID | 最終結果 | 移行先または再分類理由 |
+|---|---|---|
+| T021 | 移行済み | 信頼されていない作業場所では作業エージェントを起動しない |
+| T253 | T021 と同じシナリオへ統合 | 信頼されていない作業場所では作業エージェントを起動しない |
+| T283 | Vitest 継続 | `--fixture` 経由で `decideBranchUpdateFixture` が返す純粋な `decideBranchUpdate` の内部判断結果を確認する単体テストであり、更新実行境界の外部結果ではないため受け入れ仕様へ移行しない |
+| T284 | Vitest 継続 | `--fixture` 経由で `decideBranchUpdateFixture` が返す純粋な `decideBranchUpdate` の内部判断結果を確認する単体テストであり、更新実行境界の外部結果ではないため受け入れ仕様へ移行しない |
+| T288 | 移行済み | 自動チェックの完了時に変わった pull request head は、その後の再照会で古い head として報告する |
+| T289 | 移行済み | 別リポジトリの pull request は branch を更新しない |
+| T290 | T288 と同じシナリオへ統合 | 自動チェック完了後に head を変更するアダプターにより、再照会がチェックより後であることを外部結果として確認する |
+| T291 | 移行済み | 更新できる pull request は選択された branch だけへ push する／更新できる pull request は強制せずに push する |
+| T292 | 同じ保証へ統合 | push 直前に pull request head が変わった場合は branch を更新しない |
+
+T285〜T287 は retry key と記録済み試行の低レベル状態を診断するため、Vitest 継続とする。
+
+### 同等性確認
+
+元の分類に対応する Vitest 9 件を残したまま、追加した Cucumber 7 シナリオを次のコマンドで確認した。`npm run test:acceptance` は、追加した 7 シナリオを既存の受け入れスイートとともに実行する。
+
+```bash
+npm run test:acceptance
+npx vitest run test/agent-trust.test.ts test/launch-agent-integration.test.ts test/pr-branch-update-decision.test.ts test/pr-branch-update-safety.test.ts test/pr-reviewer-driver.test.ts
+```
+
+Cucumber は追加分 7 シナリオ、スイート全体 23 シナリオ 128 ステップが成功し、Vitest は対象 5 ファイル 56 テストが成功した。T283 と T284 は内部判断を観測する単体テストとして Vitest に残し、受け入れ仕様への移行対象から外した。自動チェック後の dirty 状態は finalizer 境界の追加保証として別シナリオに残す。push 直前に変わった head のシナリオでは、テスト用アダプターが自動チェック完了時に head を変更する。その後の再照会による `action=stale_head` と push 記録がないことを別々に観測するため、head 再照会をチェックより前へ移す回帰も検出する。信頼確認シナリオは `herdr` を記録用の偽物へ置き換え、起動記録がないことを観測する。この信頼確認は、信頼判定の T021 と Herdr を起動しない統合動作の T253 を一つの外部結果で同時に覆う。finalizer の fixture は有効化検証済みの project 情報、検証済み push URL、検証開始時に固定した candidate OID を使う。Vitest のコマンド順検査も局所的な診断として残す。
+
+### 意図的失敗の確認
+
+各移行先について期待する外部結果を一時的に壊し、毎回 `npm run test:acceptance` が終了状態 1 となることを確認した。結果は次のとおり。いずれも失敗したシナリオ名、feature と step の位置、期待値との差分を報告した。
+
+| 分類 ID | 一時的に与えた失敗 | 報告された結果 |
+|---|---|---|
+| T021、T253 | 起動記録があることを期待 | 「信頼されていない作業場所では作業エージェントを起動しない」が失敗 |
+| T288、T290 | head の再照会を自動チェックより前へ移す | 「push 直前に変わった pull request head は古い head として報告する」が失敗 |
+| T292 | head の再照会を自動チェックより前へ移す | 「push 直前に pull request head が変わった場合は branch を更新しない」が push 記録を報告して失敗 |
+| T289 | push があることを期待 | 「別リポジトリの pull request は branch を更新しない」が失敗 |
+| T291 | 本番の git push 引数に別 branch または tag の refspec、あるいは `--follow-tags` を追加 | 「更新できる pull request は選択された branch だけへ push する」が送信先の差分を報告して失敗 |
+| T291 | 本番の git push 引数へ `--force`、`-fq`、`-qf` を一つずつ追加 | 「更新できる pull request は強制せずに push する」だけが force 系オプションを報告して失敗 |
+
+送信先のシナリオは成功した `git push` の remote と refspec、および追加の送信先を生む引数だけを観測し、force 指定の有無は観測しない。非強制 push のシナリオは成功した push が一つあり、そのコマンドに force 系オプションがないことを独立して確認する。本番コマンドへ `HEAD:refs/heads/other`、`HEAD:refs/tags/review-test`、`--follow-tags`、`--force`、`-fq`、`-qf`、`--mirror` を一つずつ追加した確認では、対応するシナリオが終了状態 1 となり、追加引数を期待値との差分として報告した。`--mirror` は送信先を増やすと同時に強制 push も指定するため、二つの T291 シナリオが失敗した。短いオプションの解析は `--` で終了し、以後の `-f` はオプションとして扱わない。確認のたびに一時変更を戻した。最後に変更のない期待値で再実行し、23 シナリオ 128 ステップが成功した。
+
+## Issue #121: レビュー可能な pull request だけを選ぶ
+
+正本は [`acceptance/features/pr-reviewer-selection.feature.md`](../acceptance/features/pr-reviewer-selection.feature.md) である。
+各シナリオは決定論的な PR 選定またはレビュー処理の境界に、分類元と同じ事前状態を与え、一つの外部結果だけを検査する。
+
+| 分類 ID | 受け入れシナリオ |
+| --- | --- |
+| T331 | レビュー待ちの pull request を選ぶ |
+| T332 | 自動マージが無効なら人間確認待ちの pull request を選ばない |
+| T333 | 自動マージが有効なら人間確認待ちの pull request を選ぶ |
+| T334 | CI 実行中の pull request を選ばない |
+| T335 | 外部レビューの待機期限が切れた pull request を選ぶ |
+| T336 | 外部レビューが無効なら外部レビュー待ちの pull request を選ぶ |
+| T337 | 外部レビュー担当が処理中の pull request を選ばない |
+| T338 | 別の外部レビュー担当が処理中の pull request を選ばない |
+| T339 | 下書きの pull request はレビューを開始しない |
+| T312 | 下書きの pull request には復旧手順を示す |
+| T340 | 外部レビューをまだ依頼していない pull request には外部レビューを依頼する |
+| T341 | 外部レビュー待ちでは通常レビューを開始しない |
+| T342 | 外部レビューの待機期限が切れたら通常レビューを開始する |
+| T346 | 古いレビュー占有を回収して pull request を選ぶ |
+| T347 | 別担当がレビュー中の pull request を選ばない |
+| T348 | 停止中の pull request を選ばない |
+
+### 元の Vitest の最終状態
+
+| 分類 ID | 最終状態 | Vitest を継続する局所的な診断価値 |
+| --- | --- | --- |
+| T312 | 削除 | 復旧手順の表示は受け入れシナリオが同じ driver 結果を完全に置換したため、重複テストを削除した。 |
+| T331 | Vitest 継続へ再分類 | `pr-reviewer.precheck.sh` と偽 `gh` の接続および終了コードを局所的に診断する。 |
+| T332 | Vitest 継続へ再分類 | 自動マージ無効値を shell 環境から選定処理へ渡す接続を局所的に診断する。 |
+| T333 | Vitest 継続へ再分類 | 自動マージ有効値を shell 環境から選定処理へ渡す接続を局所的に診断する。 |
+| T334 | Vitest 継続へ再分類 | CI 状態を読み込んだ precheck の終了コードを局所的に診断する。 |
+| T335 | Vitest 継続へ再分類 | 現在時刻と外部レビュー待機時間を shell 環境から渡す接続を局所的に診断する。 |
+| T336 | Vitest 継続へ再分類 | 外部レビュー無効値を shell 環境から渡す接続を局所的に診断する。 |
+| T337 | Vitest 継続へ再分類 | 外部レビュー有効値と Copilot の状態を precheck へ渡す接続を局所的に診断する。 |
+| T338 | Vitest 継続へ再分類 | CodeRabbit の状態を precheck へ渡したときの終了コードを局所的に診断する。 |
+| T339 | Vitest 継続へ再分類 | shell precheck が下書きを自動化対象として終了コード 0 を返す境界を局所的に診断する。受け入れシナリオは同じ下書きの選定から draft gate までを検査する。 |
+| T340 | Vitest 継続へ再分類 | decision CLI の入力読込みと `request_external_review` の直列化を局所的に診断する。 |
+| T341 | Vitest 継続へ再分類 | decision CLI の時刻入力と `wait_external_review` の直列化を局所的に診断する。 |
+| T342 | Vitest 継続へ再分類 | decision CLI の時刻入力と `fallback_review` の直列化を局所的に診断する。 |
+| T343 | Vitest 継続 | 不正な decision mode を拒否する CLI 入力検証を局所的に診断する。 |
+| T344 | Vitest 継続 | 不正な待機秒数を拒否する CLI 入力検証を局所的に診断する。 |
+| T345 | Vitest 継続 | 不正な日時を拒否する CLI 入力検証を局所的に診断する。 |
+| T346 | Vitest 継続へ再分類 | 偽 `herdr agent list` の出力と shell precheck の接続を局所的に診断する。 |
+| T347 | Vitest 継続へ再分類 | 稼働中担当者を示す偽 `herdr` 出力と shell precheck の接続を局所的に診断する。 |
+| T348 | Vitest 継続へ再分類 | 停止ラベルの環境設定と shell precheck の終了コードを局所的に診断する。 |
+
+複数候補と選択後の状態変化は追加シナリオで確認し、低い番号の対象外ラベル・停止中・CI 実行中・別担当が処理中の候補を飛ばすこと、および同じ PR を重複して選ばないことを確認する。
+
+## 同等性と否定確認
+
+`npm run test:unit` と `npm run test:acceptance` を同じ作業ツリーで実行し、既存の `test/pr-reviewer-precheck.test.ts` と上記受け入れシナリオの双方が成功することを確認した。
+
+2026-07-24 に、各 Then assertion の期待値を次のとおり一時的に変更し、変更ごとに `npm run test:acceptance` を実行した。すべて終了コード 1 で意図したシナリオだけが失敗し、出力には `.feature.md` のシナリオ行、`.steps.ts` のステップと callback 行、および実値と期待値の差分が表示された。
+
+| 対象 ID | 一時的な変更 | 観測した失敗 |
+| --- | --- | --- |
+| T331、T333、T335、T336、T346 | 選択番号の期待値を `number + 1` に変更 | 対応する5シナリオと複数候補シナリオの計6件が失敗し、たとえば `7 !== 8` を表示 |
+| T332、T334、T337、T338、T347、T348 | 非選択の期待値を `false` から `true` に変更 | 対応する6シナリオと同じ Then を使う追加2シナリオの計8件が失敗し、`false !== true` を表示 |
+| T340 | `githubEffects` に `add_pr_reviewer`（担当者 `@copilot`）が含まれる期待値を `true` から `false` に変更 | 「外部レビューをまだ依頼していない pull request には外部レビューを依頼する」だけが失敗し、`true !== false`、20シナリオ中19件成功・1件失敗を表示 |
+| T341 | `testAdapterEffects.herdrStarts` の件数の期待値を `0` から `1` に変更 | 同じ結果ステップを使う「外部レビュー待ちでは通常レビューを開始しない」と「下書きの pull request はレビューを開始しない」の2件が失敗し、実値 `0` と期待値 `1` の差分を表示 |
+| T342 | `testAdapterEffects.herdrStarts` の件数の期待値を `1` から `0` に変更 | 「外部レビューの待機期限が切れたら通常レビューを開始する」だけが失敗し、実値 `1` と期待値 `0` の差分を表示 |
+| T339 | `testAdapterEffects.herdrStarts` の件数の期待値を `0` から `1` に変更 | 同じ結果ステップを使う「下書きの pull request はレビューを開始しない」と「外部レビュー待ちでは通常レビューを開始しない」の2件が失敗し、実値 `0` と期待値 `1` の差分を表示 |
+| T312 | 復旧手順の正規表現を存在しない見出しへ変更 | 「下書きの pull request には復旧手順を示す」だけが失敗し、実際のコメントと不一致の正規表現を表示 |
+
+各実行の直後に変更を元へ戻した。最後に通常の `npm run test:acceptance` が成功することと、意図的な変更が作業ツリーに残っていないことを確認した。
 
 ## Issue #128: 公開設定と安全な既定値
 
-受け入れ仕様の正本は [`acceptance/features/public-configuration.feature.md`](../acceptance/features/public-configuration.feature.md) である。ステップ定義は、設定の解析値を直接 assertion せず、決定論的なテスト用アダプターを通して実際の状態表示、エージェント起動引数、CI 代替判断を観測する。
+受け入れ仕様の正本は [`acceptance/features/public-configuration.feature.md`](../acceptance/features/public-configuration.feature.md) である。ステップ定義は、設定の解析値を直接 assertion せず、決定論的なテスト用アダプターを通して実際の状態表示とエージェント起動引数を観測する。CI 代替判断は既存の正本 `acceptance/features/ci-fallback-safety.feature.md` で観測する。
 
 ### 元から Vitest 継続の ID
 
@@ -41,7 +153,7 @@
 
 | 分類 ID | 処理 | 移行先または ID ごとの再分類理由 |
 |---|---|---|
-| T058 | 移行済み | 「CI 代替は設定を省略するとインフラ障害でも実行しない」で、明示的に有効化しない限り代替コマンドを起動しないことを観測する。 |
+| T058 | 既存保証へ統合 | `acceptance/features/ci-fallback-safety.feature.md` の「明示設定がない場合は CI 代替検証を許可しない」。対応と意図的失敗の証拠は `docs/cucumber-migration-records.md` に記録済みである。 |
 | T076 | 移行済み | 「環境変数で指定した設定ファイルを状態表示に使う」 |
 | T077 | 移行済み | 「利用者設定を同梱設定より優先して状態表示に使う」 |
 | T078 | 移行済み | 「利用者設定がない場合は同梱設定を状態表示に使う」 |
@@ -61,7 +173,7 @@
 | T104 | 同じ保証へ統合 | 「指定した Reviewer モデルで起動する」でモデル引数を観測する。 |
 | T108 | 移行済み | 「自動マージは設定を省略すると無効と表示する」 |
 | T109 | 移行済み | 「自動マージはローカルで明示した場合だけ有効と表示する」 |
-| T110 | 移行済み | 「CI 代替は設定を省略するとインフラ障害でも実行しない」で実際の代替判断を観測する。mode などの低レベル既定値は Vitest に残す。 |
+| T110 | T058 の既存保証へ統合 | `acceptance/features/ci-fallback-safety.feature.md` の「明示設定がない場合は CI 代替検証を許可しない」で既定無効を観測する。mode などの低レベル既定値は Vitest に残す。 |
 | T111 | 移行済み | 「外部レビューは設定を省略すると無効と表示する」 |
 | T115 | Vitest 継続へ再分類 | `driverFile` が正規化で失われないことを診断する設定変換契約であり、ドライバー実行とは分離する。 |
 | T116 | Vitest 継続へ再分類 | tick ごとの再読込順序を検査する低レベル統合であり、単一回の利用者操作として表現すると契機が曖昧になる。 |
@@ -81,12 +193,8 @@
 
 ### 意図的失敗と成功確認
 
-2026-07-16 に「設定を省略した Worker は pi で起動する」の期待値だけを一時的に `intentionally-wrong` へ変更し、次を実行した。
+2026-07-24 に、公開設定 Feature の25シナリオすべてについて、各 Then の期待結果だけを一時的に反対へ変更し、シナリオ名を `--name` で限定して Cucumber を実行した。状態表示の正規表現は `assert.doesNotMatch`、起動引数などの等値は `assert.notEqual`、自動化一覧は `assert.notDeepEqual` へ一時変更した。各実行は終了コード1となり、対象シナリオだけが失敗した。出力には `acceptance/features/public-configuration.feature.md` のシナリオと失敗ステップ、`acceptance/steps/public-configuration.steps.ts` の assertion 位置、および実値と反転した期待値の差が表示された。共有する「状態表示に有効な自動化はない」ステップも、それを使う2シナリオをそれぞれ個別に実行した。各確認直後に変更を復元し、意図的な変更は残していない。
 
-```bash
-npx cucumber-js --name '^設定を省略した Worker は pi で起動する$'
-```
+T058 と T110 を統合した既存の CI 代替保証は、`docs/cucumber-migration-records.md` に記録された T058 の意図的失敗確認を証拠とする。公開設定側に重複シナリオやコマンド起動を模造するアダプターは置かない。
 
-終了コードは 1 で、実際の起動コマンド先頭 `pi` と不正な期待値の差、シナリオ位置 `acceptance/features/public-configuration.feature.md:37`、ステップ定義位置が表示された。期待値を復元後、`npm run test:acceptance` は 19 scenarios / 79 steps で成功した。一時変更は残していない。
-
-最終確認では `npm run check` を実行し、Cucumber、Vitest、lint、型検査、シェル構文検査、配布物検査が成功した。
+復元後、公開設定の25シナリオは25 scenarios / 127 steps で成功した。`npm run test:acceptance` のスイート全体は160 scenarios / 832 steps で成功した。最終確認では `npm run check` を実行し、Cucumber、Vitest、lint、型検査、シェル構文検査、配布物検査が成功した。

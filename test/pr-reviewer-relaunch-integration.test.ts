@@ -22,11 +22,16 @@ describe("PR reviewer relaunch integration", () => {
     tempDirs.push(root);
     const bin = path.join(root, "bin");
     const worktree = path.join(root, "worktree");
-    const state = path.join(root, "state");
+    const configDir = path.join(root, "config");
+    const state = path.join(configDir, "deadloop");
     const log = path.join(root, "herdr.log");
     const prState = path.join(root, "pr-state.json");
     fs.mkdirSync(bin);
     fs.mkdirSync(worktree);
+    fs.mkdirSync(state, { recursive: true });
+    fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
+      projects: [{ repoPath: root, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1, firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }],
+    }));
     const pr = {
       number: 44,
       title: "Requeued review",
@@ -48,7 +53,16 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "list") {
   process.stdout.write(fs.readFileSync(process.env.GH_TEST_PR_STATE, "utf8"));
+} else if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({id:"R_repo"}));
 }
+`,
+    );
+    executable(
+      path.join(bin, "git"),
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
 `,
     );
     executable(
@@ -76,9 +90,11 @@ if (args[0] === "agent" && args[1] === "list") {
         env: {
           ...process.env,
           PATH: `${bin}:${process.env.PATH}`,
+          PI_CODING_AGENT_DIR: configDir,
           DEADLOOP_PROJECT_ID: "demo",
           DEADLOOP_REPO_PATH: root,
           DEADLOOP_GITHUB_REPO: "owner/repo",
+          DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
           GH_TEST_PR_STATE: prState,
           HERDR_TEST_LOG: log,
@@ -100,6 +116,7 @@ if (args[0] === "agent" && args[1] === "list") {
       .map((args) => args.slice(0, args[0] === "pane" || (args[0] === "agent" && args[1] === "start") ? 3 : 2).join(" "));
 
     expect(actions).toEqual([
+      "agent list",
       "agent list",
       "agent list",
       "worktree open",

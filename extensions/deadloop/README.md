@@ -14,7 +14,7 @@ Configuration lookup order:
 
 Do not commit `projects.json`; it contains local paths and rollout choices.
 
-When the current git repository has `deadloop.json` on the trusted base branch, deadloop can infer the project without a `projects.json` entry. Each project overlays inferred or explicit local config, trusted base-branch repo policy, and package defaults. Standard labels, verification command inference, worker instruction files, and the issue coordinator / PR reviewer automations come from package defaults unless explicitly overridden. The repo policy file is `deadloop.json`. Repo policy is read only from the trusted `baseBranch` after `git fetch`, never from the PR branch being reviewed.
+`deadloop.json` is an optional shared policy and `projects.json` is an optional local override; neither enables scheduling. `/deadloop-enable` records the execution permission in `~/.pi/agent/deadloop/enabled-projects.json` only after repository identity, primary checkout status, GitHub authentication, write permission, and missing-label creation succeed. Each project overlays inferred or explicit local config, trusted base-branch repo policy, and package defaults. `/deadloop-disable` removes only that permission and lets running agents finish their promise reports. The repo policy file is `deadloop.json`. Repo policy is read only from the trusted `baseBranch` after `git fetch`, never from the PR branch being reviewed.
 
 ## State
 
@@ -25,6 +25,8 @@ Worker, reviewer, and monitor prompts run the configured project check through `
 ## Commands
 
 ```text
+/deadloop-enable
+/deadloop-disable
 /deadloop-status
 /deadloop-doctor
 ```
@@ -36,7 +38,8 @@ Each automation may define a `driverFile`. Drivers run after precheck and before
 - `issue-coordinator-driver.ts` handles cleanup, candidate selection gates, worker launch, and bounded monitor handoff.
 - `pr-reviewer-driver.ts` handles no-op, pending CI, external review gates, draft gates, one-attempt merge-conflict recovery, reviewer launch, and bounded monitor handoff.
 - `pr-review-repair-dispatch.ts` consumes completed reviewer outcomes. Actionable findings launch one dedicated repair worker; technical reviewer failures retry once for the exact head, while repeated findings and human-required outcomes add `agent:blocked` with recovery guidance.
-- `pr-review-repair-finalize.ts` is the repair worker's only push path. It runs configured checks, immediately re-checks the PR head, and permits only a normal push to the selected existing branch. Successful or stale results preserve `agent:review` and `agent:reviewing` for re-review.
+- `pr-review-repair-finalize.ts` is the repair worker's only push path. It runs configured checks and atomically updates the selected existing branch only while its head equals the validated commit. Successful or stale results preserve `agent:review` and `agent:reviewing` for re-review.
+- `merge-reviewed-pr.ts` accepts only a validated reviewer approval bound to the expected head, then immediately re-fetches the PR and requires successful reported CI checks plus confirmed clean mergeability before its head-guarded mutation. Missing, pending, failed, or ambiguous gates stop automatic merge.
 - Merge-conflict recovery keeps `agent:review` and `agent:reviewing`, records the exact PR-head/base-head attempt in a PR comment, and uses `pr-branch-update-finalize.ts` as the only permitted push path. Stale heads stop without a push; only failed or unsafe updates add `agent:blocked`.
 - `ci-fallback-decision.ts`, `worker-watch-decision.ts`, and related helpers keep deterministic checks out of prompts.
 

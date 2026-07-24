@@ -7,6 +7,7 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
+const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
 const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
@@ -19,6 +20,8 @@ const {
   parseFixtureArg,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -31,8 +34,8 @@ function herdrRunner() {
   return createHerdrRunnerFromCommandRunner(commandRunner);
 }
 
-function githubOperations() {
-  return createGithubOperations(commandRunner);
+function githubOperations(beforeMutation?: () => void) {
+  return createGithubOperations(commandRunner, beforeMutation);
 }
 
 function cleanupPlan(fixture: JsonObject | null): JsonObject {
@@ -62,12 +65,42 @@ function gateMissingContractComment(issue: JsonObject): string {
   ].join("\n");
 }
 
-function applyContractMissing(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): void {
-  if (fixture) return;
-  const number = String(issue.number);
-  const github = githubOperations();
-  github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.needsTriageLabel });
-  github.commentIssue(env.githubRepo, number, gateMissingContractComment(issue));
+function applyIssueTransition(
+  issue: JsonObject,
+  expectedKind: "contract_missing" | "planning_blocked",
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  mutate: (github: ReturnType<typeof githubOperations>, live: JsonObject) => void,
+): boolean {
+  if (fixture) return true;
+  try {
+    return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+      const github = githubOperations(recheck);
+      const live = github.getIssue(env.githubRepo, issue.number);
+      if (String(live.state || "").toUpperCase() !== "OPEN") throw new StaleLaunchError(`Issue #${issue.number} is no longer open`);
+      assertSameLaunchTarget(issue, live, "issue");
+      const livePlan = planIssueCoordinatorAction(
+        [live],
+        decisionForIssues(undefined, [live], env.githubRepo, env),
+      );
+      if (livePlan.kind !== expectedKind || Number(livePlan.issue.number) !== Number(issue.number)) {
+        throw new StaleLaunchError(`Issue #${issue.number} transition changed`);
+      }
+      mutate(github, live);
+      return true;
+    });
+  } catch (error) {
+    if (isStaleLaunchError(error)) return false;
+    throw error;
+  }
+}
+
+function applyContractMissing(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): boolean {
+  return applyIssueTransition(issue, "contract_missing", env, fixture, (github, live) => {
+    const number = String(live.number);
+    github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.needsTriageLabel });
+    github.commentIssue(env.githubRepo, number, gateMissingContractComment(live));
+  });
 }
 
 function blockedComment(issue: JsonObject, env: ReturnType<typeof envConfig>, reason: string): string {
@@ -85,12 +118,12 @@ function blockedComment(issue: JsonObject, env: ReturnType<typeof envConfig>, re
   });
 }
 
-function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comment: string, fixture: JsonObject | null): void {
-  if (fixture) return;
-  const number = String(issue.number);
-  const github = githubOperations();
-  github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.blockedLabel });
-  github.commentIssue(env.githubRepo, number, comment);
+function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comment: string, fixture: JsonObject | null): boolean {
+  return applyIssueTransition(issue, "planning_blocked", env, fixture, (github, live) => {
+    const number = String(live.number);
+    github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.blockedLabel });
+    github.commentIssue(env.githubRepo, number, comment);
+  });
 }
 
 function slugForBranch(value: unknown): string {
@@ -152,7 +185,7 @@ function launchIssueWorkerFlow(
 
 function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
   const number = Number(issue.number || 0);
-  const uuid = "fixture-worker-uuid";
+  const uuid = shouldSimulateLaunch(fixture) ? "fixture-worker-uuid" : randomUUID();
   const workerName = `${env.projectId}-issue-${number}-worker`;
   const branch = `agent/issue-${number}-${slugForBranch(issue.title)}`;
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
@@ -170,13 +203,55 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     };
   }
 
-  githubOperations().moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel });
-  return launchIssueWorkerFlow(issue, env, {
-    mkdirSync: fs.mkdirSync,
-    runner: herdrRunner(),
-    runText,
-    writeFileSync: fs.writeFileSync,
-  });
+  const launch = withEnabledDriverLaunch(
+    env,
+    (recheck: () => void) => githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel }),
+    (recheck: () => void) => launchAgentFlow(
+      {
+        worktree: { mode: "create", branch, baseBranch: env.baseBranch },
+        repoPath: env.repoPath,
+        automationDir: env.automationDir,
+        stateDir: env.stateDir,
+        name: workerName,
+        agent: env.workerAgent,
+        model: env.workerModel,
+        level: "medium",
+        uuid,
+        promptFilePrefix: "worker-prompt",
+        renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+          renderIssueWorkerPrompt({
+            launchReason: "deterministic issue coordinator launch",
+            issueNumber: number,
+            issueTitle: String(issue.title || "task"),
+            issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
+            githubRepo: env.githubRepo,
+            workerInstructions: env.workerInstructions,
+            checkCommand: env.checkCommand,
+            validationCommand: renderProjectCheckCommand({
+              automationDir: env.automationDir,
+              stateDir: env.stateDir,
+              cwd: worktreePath,
+              command: env.checkCommand,
+            }),
+            promiseFile,
+          }),
+      },
+      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
+    ),
+    {
+      revalidate: () => {
+        const deadline = issueDecisionDeadline();
+        const liveIssue = githubOperations().getIssue(env.githubRepo, number);
+        const livePlan = planIssueCoordinatorAction(
+          [liveIssue],
+          decisionForIssues(undefined, [liveIssue], env.githubRepo, env, deadline),
+        );
+        if (livePlan.kind !== "worker_required") throw new StaleLaunchError("selected issue is no longer eligible");
+        assertSameLaunchTarget(issue, livePlan.issue, "issue");
+      },
+    },
+  );
+  return { workerName, branch, ...launch };
 }
 
 function envConfig(source: NodeJS.ProcessEnv = process.env) {
@@ -184,6 +259,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     projectId: source.DEADLOOP_PROJECT_ID || "project",
     repoPath: source.DEADLOOP_REPO_PATH || ".",
     githubRepo: source.DEADLOOP_GITHUB_REPO || "",
+    enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
     stateDir:
@@ -213,9 +289,10 @@ function drive(fixturePath: string | undefined): DriverResult {
   const cleanup = cleanupPlan(fixture);
   const candidates = cleanup.candidates || [];
   if (candidates.length) {
+    const appliedCleanup = applyCleanup(cleanup, fixture);
     return driverResult("done", `completed worker cleanup: ${candidates.length} candidate(s)`, {
       driverAction: "cleanup_applied",
-      cleanup: applyCleanup(cleanup, fixture),
+      cleanup: appliedCleanup,
     });
   }
 
@@ -226,7 +303,11 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   const issue = issuePlan.issue;
   if (issuePlan.kind === "contract_missing") {
-    applyContractMissing(issue, env, fixture);
+    if (!applyContractMissing(issue, env, fixture)) {
+      return driverResult("skip", `Issue #${issue.number} changed before the contract gate; no workflow state was mutated`, {
+        driverAction: "contract_missing_stale", issueNumber: issue.number,
+      });
+    }
     return driverResult("done", `Issue #${issue.number} is missing its contract; moved it to needs-triage`, {
       driverAction: "contract_missing",
       issueNumber: issue.number,
@@ -236,7 +317,11 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   if (issuePlan.kind === "planning_blocked") {
     const comment = blockedComment(issue, env, "Skipped automated implementation because this looks like a PRD, design, or parent issue.");
-    applyBlocked(issue, env, comment, fixture);
+    if (!applyBlocked(issue, env, comment, fixture)) {
+      return driverResult("skip", `Issue #${issue.number} changed before the planning gate; no workflow state was mutated`, {
+        driverAction: "planning_blocked_stale", issueNumber: issue.number,
+      });
+    }
     return driverResult("done", `Issue #${issue.number} is not an implementable unit; marked it blocked`, {
       driverAction: "blocked_comment",
       issueNumber: issue.number,
@@ -244,28 +329,52 @@ function drive(fixturePath: string | undefined): DriverResult {
     });
   }
 
-  const launch = launchIssueWorker(issue, env, fixture);
+  let launch: JsonObject;
+  try {
+    launch = launchIssueWorker(issue, env, fixture);
+  } catch (error) {
+    if (isStaleLaunchError(error)) {
+      return driverResult("skip", `Issue #${issue.number} changed before launch; no workflow state was mutated`, {
+        driverAction: "worker_launch_stale",
+        issueNumber: issue.number,
+      });
+    }
+    throw error;
+  }
+  const monitorInput = {
+    issueNumber: Number(issue.number || 0),
+    issueTitle: String(issue.title || ""),
+    issueBody: String(issue.body || ""),
+    automationDir: env.automationDir,
+    promiseFile: String(launch.promiseFile || ""),
+    actorName: "Worker",
+    repoPath: env.repoPath,
+    githubRepo: env.githubRepo,
+    stateDir: env.stateDir,
+    enabledAt: env.enabledAt,
+    worktreePath: String(launch.worktreePath || ""),
+    branch: String(launch.branch || ""),
+    checkCommand: renderProjectCheckCommand({
+      automationDir: env.automationDir,
+      stateDir: env.stateDir,
+      cwd: String(launch.worktreePath || ""),
+      command: env.checkCommand,
+    }),
+    readyLabel: env.readyLabel,
+    implementLabel: env.implementLabel,
+    reviewLabel: env.reviewLabel,
+    inProgressLabel: env.inProgressLabel,
+    blockedLabel: env.blockedLabel,
+    humanLabel: env.humanLabel,
+    needsInfoLabel: env.needsInfoLabel,
+    wontfixLabel: env.wontfixLabel,
+  };
   return driverResult("needs_llm", `Launched Worker for Issue #${issue.number}`, {
     driverAction: "worker_monitor_request",
     issueNumber: issue.number,
     launch,
-    prompt: renderIssueMonitorPrompt({
-      issueNumber: Number(issue.number || 0),
-      automationDir: env.automationDir,
-      promiseFile: String(launch.promiseFile || ""),
-      actorName: "Worker",
-      worktreePath: String(launch.worktreePath || ""),
-      branch: String(launch.branch || ""),
-      checkCommand: renderProjectCheckCommand({
-        automationDir: env.automationDir,
-        stateDir: env.stateDir,
-        cwd: String(launch.worktreePath || ""),
-        command: env.checkCommand,
-      }),
-      reviewLabel: env.reviewLabel,
-      inProgressLabel: env.inProgressLabel,
-      blockedLabel: env.blockedLabel,
-    }),
+    monitorHandoff: { kind: "issue", input: monitorInput },
+    prompt: renderIssueMonitorPrompt(monitorInput),
   });
 }
 

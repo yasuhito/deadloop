@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 // Run the configured check, revalidate the exact PR head, and perform the only
-// push allowed to a branch-update worker. The push is always non-force.
+// push allowed to a branch-update worker. It re-checks the validated PR head,
+// then performs a normal fast-forward push of the immutable candidate.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const path = require("node:path") as typeof import("node:path");
+const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
+const { assertAuthorizedSource } = require("./guarded-push.ts");
 
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
   repo: string;
+  projectRepo: string;
   githubRepo: string;
   pr: string;
   branch: string;
@@ -16,20 +21,57 @@ type FinalizeArgs = {
   remote: string;
   automationDir: string;
   stateDir: string;
+  enabledAt: number;
   checkCommand: string;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
-type FinalizeOps = { run(args: string[]): CommandResult };
+type EnabledProject = { githubRepo: string; githubRepositoryId: string };
+type FinalizeOps = {
+  run(args: string[], timeoutMs?: number): CommandResult;
+  assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => EnabledProject;
+};
 
-function defaultRun(args: string[]): CommandResult {
-  const result = spawnSync(args[0], args.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+function defaultRun(args: string[], timeoutMs?: number): CommandResult {
+  const result = spawnSync(args[0], args.slice(1), {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    ...(timeoutMs === undefined ? {} : { timeout: timeoutMs, killSignal: "SIGKILL" }),
+  });
   return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
 }
 
-function checked(ops: FinalizeOps, args: string[]): string {
-  const result = ops.run(args);
+function checked(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
+  const result = ops.run(args, timeoutMs);
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || `command failed: ${args.join(" ")}`).trim());
   return result.stdout.trim();
+}
+
+function pushConditionally(
+  ops: FinalizeOps,
+  repo: string,
+  destination: string,
+  branch: string,
+  expectedHead: string,
+  candidateOid: string,
+  recheck: () => void,
+): boolean {
+  const ref = `refs/heads/${branch}`;
+  if (checked(ops, ["git", "-C", repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
+    throw new Error("branch-update HEAD changed immediately before push");
+  }
+  const remoteBeforePush = checked(ops, ["git", "ls-remote", destination, ref], MAX_GUARDED_OPERATION_MS).split(/\s+/)[0] || "";
+  if (remoteBeforePush.toLowerCase() !== expectedHead.toLowerCase()) return false;
+  recheck();
+  const push = ops.run(
+    ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
+    MAX_GUARDED_OPERATION_MS,
+  );
+  if (push.status === 0) return true;
+
+  const remoteLine = checked(ops, ["git", "ls-remote", destination, ref], MAX_GUARDED_OPERATION_MS);
+  const remoteHead = remoteLine.split(/\s+/)[0] || "";
+  if (remoteHead.toLowerCase() !== expectedHead.toLowerCase()) return false;
+  throw new Error((push.stderr || push.stdout || "conditional push failed").trim());
 }
 
 function decidePushGuard(pr: JsonObject, expectedBranch: string, expectedHead: string): JsonObject {
@@ -42,9 +84,10 @@ function decidePushGuard(pr: JsonObject, expectedBranch: string, expectedHead: s
 
 function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): JsonObject {
   checked(ops, ["git", "check-ref-format", "--branch", args.branch]);
-  const originalHeadIsAncestor = ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedHead, "HEAD"]);
+  const candidateOid = checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS);
+  const originalHeadIsAncestor = ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedHead, candidateOid]);
   if (originalHeadIsAncestor.status !== 0) throw new Error("updated branch does not contain the expected PR head");
-  const baseIsAncestor = ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedBase, "HEAD"]);
+  const baseIsAncestor = ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedBase, candidateOid]);
   if (baseIsAncestor.status !== 0) throw new Error("updated branch does not contain the selected base head");
 
   checked(ops, [
@@ -58,24 +101,52 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     path.join(args.stateDir, "check-quarantine"),
   ]);
   if (checked(ops, ["git", "-C", args.repo, "status", "--porcelain"])) throw new Error("branch-update worktree is dirty after checks");
+  if (checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
+    throw new Error("branch-update HEAD changed during checks");
+  }
 
-  const pr = JSON.parse(
-    checked(ops, [
-      "gh",
-      "pr",
-      "view",
-      args.pr,
-      "-R",
-      args.githubRepo,
-      "--json",
-      "state,headRefName,headRefOid,isCrossRepository",
-    ]),
-  );
-  const guard = decidePushGuard(pr, args.branch, args.expectedHead);
-  if (guard.action !== "push") return guard;
-
-  checked(ops, ["git", "-C", args.repo, "push", "--porcelain", args.remote, `HEAD:refs/heads/${args.branch}`]);
-  return { action: "pushed", reason: "branch_updated", headOid: checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"]) };
+  const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
+  const guardAndPush = (enabled: EnabledProject, recheck: () => void = () => {}) => {
+    assertAuthorizedSource(
+      { projectRepo: args.projectRepo, worktree: args.repo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt, remote: args.remote, branch: args.branch },
+      enabled,
+      ops,
+    );
+    const pr = JSON.parse(
+      checked(ops, [
+        "gh",
+        "pr",
+        "view",
+        args.pr,
+        "-R",
+        args.githubRepo,
+        "--json",
+        "state,headRefName,headRefOid,isCrossRepository",
+      ], MAX_GUARDED_OPERATION_MS),
+    );
+    const guard = decidePushGuard(pr, args.branch, args.expectedHead);
+    if (guard.action !== "push") return guard;
+    const pushDestination = resolveVerifiedPushDestination(
+      ops,
+      args.repo,
+      args.remote,
+      enabled.githubRepo,
+      enabled.githubRepositoryId,
+      MAX_GUARDED_OPERATION_MS,
+    );
+    if (!pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid, recheck)) {
+      return { action: "stale_head", reason: "head_sha_changed_during_push" };
+    }
+    return {
+      action: "pushed",
+      reason: "branch_updated",
+      headOid: candidateOid,
+    };
+  };
+  if (ops.assertEnabled) {
+    return guardAndPush(ops.assertEnabled(project));
+  }
+  return withEnabledProjectLock(project, guardAndPush);
 }
 
 function required(values: Record<string, string>, name: string): string {
@@ -93,6 +164,7 @@ function parseArgs(argv: string[]): FinalizeArgs {
   }
   return {
     repo: required(values, "repo"),
+    projectRepo: required(values, "projectRepo"),
     githubRepo: required(values, "githubRepo"),
     pr: required(values, "pr"),
     branch: required(values, "branch"),
@@ -101,6 +173,7 @@ function parseArgs(argv: string[]): FinalizeArgs {
     remote: required(values, "remote"),
     automationDir: required(values, "automationDir"),
     stateDir: required(values, "stateDir"),
+    enabledAt: Number(required(values, "enabledAt")),
     checkCommand: required(values, "checkCommand"),
   };
 }

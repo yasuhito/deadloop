@@ -1,0 +1,52 @@
+[
+  {
+    "number": 5,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefOid": "5555555555555555555555555555555555555555",
+    "isDraft": false,
+    "labels": [{ "name": "needs-info" }],
+    "statusCheckRollup": [],
+    "comments": [],
+    "reviewRequests": []
+  },
+  {
+    "number": 6,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefOid": "6666666666666666666666666666666666666666",
+    "isDraft": false,
+    "labels": [{ "name": "agent:review" }, { "name": "agent:blocked" }],
+    "statusCheckRollup": [],
+    "comments": [],
+    "reviewRequests": []
+  },
+  {
+    "number": 8,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefOid": "8888888888888888888888888888888888888888",
+    "isDraft": false,
+    "labels": [{ "name": "agent:review" }],
+    "statusCheckRollup": [{ "status": "IN_PROGRESS" }],
+    "comments": [],
+    "reviewRequests": []
+  },
+  {
+    "number": 13,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefOid": "1313131313131313131313131313131313131313",
+    "isDraft": false,
+    "labels": [{ "name": "agent:review" }, { "name": "agent:reviewing" }],
+    "statusCheckRollup": [],
+    "comments": [],
+    "reviewRequests": []
+  },
+  {
+    "number": 15,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefOid": "1515151515151515151515151515151515151515",
+    "isDraft": false,
+    "labels": [{ "name": "agent:review" }],
+    "statusCheckRollup": [],
+    "comments": [],
+    "reviewRequests": []
+  }
+]

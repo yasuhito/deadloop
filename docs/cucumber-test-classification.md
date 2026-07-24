@@ -373,6 +373,23 @@
 | T207 | `test/issue-coordinator-cleanup.test.ts` | `keeps the promise file as the worker completion authority` | **Cucumber候補** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 | T208 | `test/issue-coordinator-cleanup.test.ts` | `documents dedicated tab startup for branch update workers` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
 
+#### Issue #112 の移行追跡
+
+| ID | 移行先または Vitest 継続理由 |
+|---:|---|
+| T187 | `worktree-cleanup-safety.feature.md` の「マージ済みで変更のない作業場所は片付け候補になる」。同じ候補選定の観測結果を Cucumber へ移し、Vitest を削除。 |
+| T188 | `worktree-cleanup-safety.feature.md` の「変更中の作業場所は片付け候補にならない」。同じ候補選定の観測結果を Cucumber へ移し、Vitest を削除。 |
+| T189 | Vitest 継続。生成された一時ファイルだけを除外する低レベルの Git status 解釈は、失敗位置を絞れる既存テストの診断価値を保つ。 |
+| T190 | `worktree-cleanup-safety.feature.md` の「Git 管理ファイルは片付け後も残る」。 |
+| T191 | Vitest 継続。`.pi-subagents` 固有の削除防止は実際のファイル操作を検証する診断価値を保つ。 |
+| T192 | Vitest 継続。停止理由の文言は実際の削除処理に近い診断を必要とする。 |
+| T193 | Vitest 継続。停止時に Herdr workspace を削除しない副作用を直接診断する。 |
+| T194 | Vitest 継続。一時ファイルだけを消して workspace を削除する実際の副作用を直接診断する。 |
+| T195 | Vitest 継続。workspace ID の正規化と欠落時の停止は実行基盤アダプターに近い診断を必要とする。 |
+| T196 | Vitest 継続。main workspace の停止理由を直接診断する。 |
+| T197 | `worktree-cleanup-safety.feature.md` の「別のリポジトリの作業場所は片付け候補にならない」。 |
+| T198 | Vitest 継続。cleanup 後に issue coordinator を起動する低レベルの precheck 結合を診断する。 |
+
 ### `test/issue-coordinator-driver.test.ts`（16件）
 
 | ID | 現在のファイル名 | 現在のテスト名 | 分類 | 守る契約 | 根拠 |
@@ -606,19 +623,39 @@
 | T355 | `test/pr-reviewer-stale-reclaim.test.ts` | `keeps skipping blocked PRs regardless of reviewer agents` | **Cucumber候補** | 実働担当がいない古いレビュー占有だけを回収し、稼働中または停止中のPRを奪わないこと | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 | T356 | `test/pr-reviewer-stale-reclaim.test.ts` | `does not flag an ordinary review PR as a stale reclaim` | **Cucumber候補** | 実働担当がいない古いレビュー占有だけを回収し、稼働中または停止中のPRを奪わないこと | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 
-### `test/project-check.test.ts`（9件）
+### `test/project-check.test.ts`（9件、移行済み）
 
-| ID | 現在のファイル名 | 現在のテスト名 | 分類 | 守る契約 | 根拠 |
-|---:|---|---|---|---|---|
-| T357 | `test/project-check.test.ts` | `does not expose deadloop runtime artifacts to recursive JSON validation` | **Cucumber候補** | 検証中だけ未追跡実行時成果物を隔離し、追跡対象と証跡を隠さず必ず復元すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T358 | `test/project-check.test.ts` | `still fails recursive JSON validation for a tracked product file` | **Cucumber候補** | 検証中だけ未追跡実行時成果物を隔離し、追跡対象と証跡を隠さず必ず復元すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T359 | `test/project-check.test.ts` | `fails closed instead of hiding a tracked file in a runtime directory` | **Cucumber候補** | 検証中だけ未追跡実行時成果物を隔離し、追跡対象と証跡を隠さず必ず復元すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T360 | `test/project-check.test.ts` | `restores promise evidence after a failed check` | **Cucumber候補** | 検証中だけ未追跡実行時成果物を隔離し、追跡対象と証跡を隠さず必ず復元すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T361 | `test/project-check.test.ts` | `restores subagent diagnostics after a timed-out check` | **Cucumber候補** | 検証中だけ未追跡実行時成果物を隔離し、追跡対象と証跡を隠さず必ず復元すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T362 | `test/project-check.test.ts` | `bounds a timed-out check that ignores SIGTERM` | **Cucumber候補** | 検証中だけ未追跡実行時成果物を隔離し、追跡対象と証跡を隠さず必ず復元すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T363 | `test/project-check.test.ts` | `restores artifacts after forcing a timed-out check to stop` | **Cucumber候補** | 検証中だけ未追跡実行時成果物を隔離し、追跡対象と証跡を隠さず必ず復元すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T364 | `test/project-check.test.ts` | `restores runtime artifacts when the CLI is interrupted` | **Cucumber候補** | 検証中だけ未追跡実行時成果物を隔離し、追跡対象と証跡を隠さず必ず復元すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T365 | `test/project-check.test.ts` | `reports an interrupted check without losing restoration control` | **Cucumber候補** | 検証中だけ未追跡実行時成果物を隔離し、追跡対象と証跡を隠さず必ず復元すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
+| ID | 現在のテスト名 | 移行先シナリオ |
+|---:|---|---|
+| T357 | `does not expose deadloop runtime artifacts to recursive JSON validation` | `未追跡の実行時成果物を隔離して再帰的な検証を成功させる` |
+| T358 | `still fails recursive JSON validation for a tracked product file` | `Git 管理された製品ファイルは再帰的な検証で失敗する` |
+| T359 | `fails closed instead of hiding a tracked file in a runtime directory` | 「`.deadloop` に Git 管理ファイルがある場合は安全停止する」 |
+| T360 | `restores promise evidence after a failed check` | `失敗した自動チェック後に完了報告を復元する` |
+| T361 | `restores subagent diagnostics after a timed-out check` | `時間切れの自動チェック後に診断情報を復元する` |
+| T362 | `bounds a timed-out check that ignores SIGTERM` | `終了要求を無視した時間切れの自動チェックを停止する` |
+| T363 | `restores artifacts after forcing a timed-out check to stop` | `強制停止した時間切れの自動チェック後に診断情報を復元する` |
+| T364 | `restores runtime artifacts when the CLI is interrupted` | `CLI を中断した後に診断情報を復元する` |
+| T365 | `reports an interrupted check without losing restoration control` | `中断した自動チェックは中断として報告する` |
+
+#### T357-T365 の移行確認記録
+
+2026-07-23 に、削除前の `test/project-check.test.ts` を残した状態で `npm test` を実行し、Vitest の対象9件を含む496件と Cucumber の11シナリオ（55ステップ）がすべて成功した（Vitest 2.05秒、Cucumber 0.473秒）。
+
+続いて T357-T365 の各期待結果を一件ずつ一時的に壊し、`npx cucumber-js --name '^<移行先シナリオ名>$'` で対応するシナリオだけを実行した。各実行は終了コード1となり、機能ファイルとステップ定義の位置に加えて、次の差または失敗した式を表示した。
+
+| ID | 一時的に壊した期待結果 | Cucumber が表示した証拠 |
+|---:|---|---|
+| T357 | 終了コード `0` を `99` に変更 | 実際値 `0` と期待値 `99` の差 |
+| T358 | 終了コード `1` を `99` に変更 | 実際値 `1` と期待値 `99` の差 |
+| T359 | 終了コード `1` を `99` に変更 | 実際値 `1` と期待値 `99` の差 |
+| T360 | 完了報告を `intentionally broken` に変更 | 実際値 `pending` と誤った期待値の差 |
+| T361 | 診断情報を `intentionally broken` に変更 | 実際値 `diagnostic output` と誤った期待値の差 |
+| T362 | 経過時間の上限を `0` ミリ秒に変更 | `(this.elapsedMs ?? Infinity) < 0` が偽になった式と位置 |
+| T363 | 診断情報を `intentionally broken` に変更 | 実際値 `diagnostic output` と誤った期待値の差 |
+| T364 | 診断情報を `intentionally broken` に変更 | 実際値 `diagnostic output` と誤った期待値の差 |
+| T365 | 中断時の終了コード `130` を `99` に変更 | 実際値 `130` と期待値 `99` の差 |
+
+T358 は、未追跡の `.deadloop/promise.json` と `.pi-subagents/metadata.json` がある事前状態で Git 管理された `package.json` を壊して確認した。すべての期待値を元へ戻した後、`npx cucumber-js acceptance/features/project-check-safety.feature.md` を再実行し、11シナリオ、56ステップが成功した（0.471秒）。この確認後に、置換済みのVitest 9件を削除した。
 
 ### `test/promise-file-contract.test.ts`（6件）
 
