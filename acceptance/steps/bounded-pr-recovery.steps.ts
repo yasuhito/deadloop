@@ -30,6 +30,20 @@ function loggedAgentStartCount(result: Record<string, unknown> | undefined): num
   return String(result?.herdrLog || "").split("\n").filter((line) => line.startsWith("agent start ")).length;
 }
 
+function loggedRepairAgentStartCount(result: Record<string, unknown> | undefined): number {
+  return String(result?.herdrLog || "").split("\n").filter((line) =>
+    line.startsWith("agent start ") && line.includes("-review-repair-"),
+  ).length;
+}
+
+function observedLabels(result: Record<string, unknown> | undefined): string[] {
+  return adapterEffects(result)?.labels?.["31"] ?? result?.observedLabels ?? [];
+}
+
+function observedComments(result: Record<string, unknown> | undefined): Array<{ body: string }> {
+  return adapterEffects(result)?.githubComments ?? result?.observedComments ?? [];
+}
+
 function reviewerDriver(fixture: string): Record<string, unknown> {
   const fixturePath = path.isAbsolute(fixture) ? fixture : path.join("test/fixtures/pr-reviewer-driver", fixture);
   const result = spawnSync(
@@ -193,6 +207,7 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
       githubLog: fs.existsSync(githubLog) ? fs.readFileSync(githubLog, "utf8") : "",
       herdrLog: fs.existsSync(herdrLog) ? fs.readFileSync(herdrLog, "utf8") : "",
       observedLabels: JSON.parse(fs.readFileSync(labelsFile, "utf8")),
+      observedComments: JSON.parse(fs.readFileSync(commentsFile, "utf8")),
       retryCycleEffects,
     };
   } finally {
@@ -364,11 +379,23 @@ Then("deadloop はレビュー状態を維持する", function (this: RecoveryWo
 });
 
 Then("deadloop は専用の修正作業を開始する", function (this: RecoveryWorld) {
-  assert.equal(loggedAgentStartCount(this.result), 1);
+  assert.equal(loggedRepairAgentStartCount(this.result), 1);
+});
+
+Then("deadloop は修正作業を有界な監視へ引き渡す", function (this: RecoveryWorld) {
+  assert.equal((this.result?.monitorHandoff as any)?.kind, "repair");
 });
 
 Then("deadloop は専用の修正作業を開始しない", function (this: RecoveryWorld) {
   assert.equal(loggedAgentStartCount(this.result), 0);
+});
+
+Then("deadloop はレビューを維持して人間対応へ移す", function (this: RecoveryWorld) {
+  assert.deepEqual(observedLabels(this.result), ["agent:review", "agent:blocked"]);
+});
+
+Then("deadloop は回復案内を残す", function (this: RecoveryWorld) {
+  assert.equal(observedComments(this.result).some((comment) => comment.body.includes("## Recovery steps")), true);
 });
 
 Then("deadloop はレビューを一度だけ再試行する", function (this: RecoveryWorld) {
