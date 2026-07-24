@@ -24,7 +24,7 @@ function publicRepoPath(value: unknown): string {
   const raw = String(value || "");
   const candidate = raw.trim();
   if (!candidate || CONTROL_OR_LINE_BREAK_RE.test(raw) || !REPOSITORY_PATH_RE.test(candidate)) return "Not specified";
-  if (candidate.startsWith("/") || candidate.split("/").includes("..") || INTERNAL_DETAIL_RE.test(candidate)) return "Not specified";
+  if (candidate.startsWith("/") || candidate.startsWith("~") || candidate.split("/").includes("..") || INTERNAL_DETAIL_RE.test(candidate)) return "Not specified";
   return candidate;
 }
 

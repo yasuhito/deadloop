@@ -138,6 +138,23 @@ describe("review repair deterministic completion", () => {
     expect(result.output.driverAction).toBe("repair_human_blocked");
   });
 
+  it("requires recovery when a pushed receipt and live head are unchanged", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: {
+        status: "complete",
+        reason: "repair_pushed",
+        summary: "fixed",
+        repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }],
+        checks,
+      },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: oldHead, checks },
+      liveHead: oldHead,
+    });
+
+    expect(result.output.driverAction).toBe("repair_human_blocked");
+  });
+
   it("does not duplicate an existing repair result comment", () => {
     const checks = [{ command: "npm test", result: "passed" }];
     const result = runCompletion({

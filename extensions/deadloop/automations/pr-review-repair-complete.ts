@@ -90,6 +90,7 @@ function completion(args: JsonObject): DriverResult {
     return driverResult("done", `PR #${args.pr} repair became stale; no public success was posted`, { driverAction: "repair_stale_head" });
   }
 
+  const receiptHead = String(receipt?.headOid || "").toLowerCase();
   const successful =
     validation.status === "complete" &&
     validation.promise?.reason === "repair_pushed" &&
@@ -98,8 +99,10 @@ function completion(args: JsonObject): DriverResult {
     String(contract?.expectedHead || "").toLowerCase() === String(args.expectedHead).toLowerCase() &&
     sameFindingTitles(validation.promise.repairs, contract?.findingTitles) &&
     String(pr.state || "").toUpperCase() === "OPEN" &&
-    String(receipt.originalHeadOid || "").toLowerCase() === String(args.expectedHead).toLowerCase() &&
-    String(receipt.headOid || "").toLowerCase() === String(pr.headRefOid || "").toLowerCase() &&
+    String(receipt.originalHeadOid || "").toLowerCase() === expectedHead &&
+    /^[0-9a-f]{40}$/.test(receiptHead) &&
+    receiptHead !== expectedHead &&
+    receiptHead === String(pr.headRefOid || "").toLowerCase() &&
     JSON.stringify(validation.promise.checks) === JSON.stringify(receipt.checks);
 
   if (successful) {

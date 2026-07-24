@@ -122,6 +122,15 @@ describe("PR review public comments", () => {
     ).toContain("- File: `Not specified`");
   });
 
+  it("rejects tilde-prefixed local finding paths", () => {
+    expect(
+      renderChangesRequestedComment({
+        ...fixture("changes-requested.json"),
+        findings: [{ title: "Private path", body: "Use repository evidence.", path: "~/private/secrets.txt", severity: "major" }],
+      }),
+    ).toContain("- File: `Not specified`");
+  });
+
   it("rejects multiline finding paths instead of rendering injected Markdown", () => {
     expect(
       renderChangesRequestedComment({
