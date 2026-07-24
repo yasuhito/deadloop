@@ -10,9 +10,13 @@ const { decideWorkerWatch } = require("../../extensions/deadloop/automations/wor
 
 const workerName = "demo-issue-12-worker";
 const workerPath = "/worktrees/demo/agent-issue-12-task";
+const reviewerName = "demo-pr-44-reviewer";
+const reviewerPath = "/worktrees/demo/feature-review";
 
 type WorkerWorld = {
   agents?: RunnerAgent[];
+  launchTarget?: "worker" | "reviewer";
+  expectedLaunchError?: string;
   removedAgentIds?: string[];
   launchCount?: number;
   launchEvents?: string[];
@@ -27,14 +31,19 @@ function launchWorker(world: WorkerWorld): void {
   const agents = world.agents ?? [];
   const removedAgentIds: string[] = [];
   const launchEvents: string[] = [];
+  const isReviewer = world.launchTarget === "reviewer";
+  const name = isReviewer ? reviewerName : workerName;
+  const worktreePath = isReviewer ? reviewerPath : workerPath;
   let launchCount = 0;
   const runner: RunnerAdapter = {
     createWorktree: (input) => {
+      if (isReviewer) throw new Error("reviewer の作業場所を作ってはならない");
       world.worktreeRequest = { branch: input.branch, baseBranch: input.baseBranch, label: input.label };
-      return { workspaceId: "workspace-12", worktreePath: workerPath };
+      return { workspaceId: "workspace-12", worktreePath };
     },
     openWorktree: () => {
-      throw new Error("既存の作業場所を開いてはならない");
+      if (!isReviewer) throw new Error("worker の既存作業場所を開いてはならない");
+      return { workspaceId: "workspace-44", worktreePath };
     },
     createTab: () => {
       launchEvents.push("create-tab");
@@ -58,16 +67,18 @@ function launchWorker(world: WorkerWorld): void {
   try {
     launchAgentFlow(
       {
-        worktree: { mode: "create", branch: "agent/issue-12-task", baseBranch: "origin/main" },
+        worktree: isReviewer
+          ? { mode: "open", branch: "feature/review" }
+          : { mode: "create", branch: "agent/issue-12-task", baseBranch: "origin/main" },
         repoPath: "/repo",
         automationDir: "/automation",
         stateDir: "/state/deadloop",
-        name: workerName,
+        name,
         agent: "pi",
         model: "",
         level: "medium",
-        uuid: "worker-12",
-        promptFilePrefix: "worker-prompt",
+        uuid: isReviewer ? "reviewer-44" : "worker-12",
+        promptFilePrefix: isReviewer ? "reviewer-prompt" : "worker-prompt",
         renderPrompt: ({ promiseFile }: { promiseFile: string }) => `promise: ${promiseFile}`,
       },
       {
@@ -76,14 +87,16 @@ function launchWorker(world: WorkerWorld): void {
         runText: () => {
           launchCount += 1;
           launchEvents.push("launch");
-          agents.push({ name: workerName, status: "working", cwd: workerPath, agentId: "replacement" });
+          agents.push({ name, status: "working", cwd: worktreePath, agentId: "replacement" });
           return "started";
         },
         writeFileSync: () => {},
       },
     );
   } catch (error) {
-    world.launchError = error instanceof Error ? error : new Error(String(error));
+    const launchError = error instanceof Error ? error : new Error(String(error));
+    if (launchError.message !== world.expectedLaunchError) throw launchError;
+    world.launchError = launchError;
   }
 
   world.agents = agents;
@@ -93,29 +106,41 @@ function launchWorker(world: WorkerWorld): void {
 }
 
 Given("作業を開始できる Issue がある", function (this: WorkerWorld) {
+  this.launchTarget = "worker";
   this.agents = [];
 });
 
-Given("同じ作業場所に完了済みの同名担当がいる", function (this: WorkerWorld) {
-  this.agents = [{ name: workerName, status: "done", cwd: workerPath, agentId: "finished" }];
+Given("同じ作業場所に完了済みの同名 reviewer がいる", function (this: WorkerWorld) {
+  this.launchTarget = "reviewer";
+  this.agents = [{ name: reviewerName, status: "done", cwd: reviewerPath, agentId: "finished" }];
 });
 
-Given("同じ作業場所に稼働中の同名担当がいる", function (this: WorkerWorld) {
-  this.agents = [{ name: workerName, status: "working", cwd: workerPath, agentId: "working" }];
+Given("同じ作業場所に稼働中の同名 reviewer がいる", function (this: WorkerWorld) {
+  this.launchTarget = "reviewer";
+  this.expectedLaunchError = `agent name ${reviewerName} is working; refusing duplicate launch`;
+  this.agents = [{ name: reviewerName, status: "working", cwd: reviewerPath, agentId: "working" }];
 });
 
-Given("同じ作業場所に複数の完了済み同名担当がいる", function (this: WorkerWorld) {
+Given("同じ作業場所に複数の完了済み同名 reviewer がいる", function (this: WorkerWorld) {
+  this.launchTarget = "reviewer";
+  this.expectedLaunchError = `agent name ${reviewerName} has 2 live candidates; refusing cleanup`;
   this.agents = [
-    { name: workerName, status: "done", cwd: workerPath, agentId: "finished-1" },
-    { name: workerName, status: "done", cwd: workerPath, agentId: "finished-2" },
+    { name: reviewerName, status: "done", cwd: reviewerPath, agentId: "finished-1" },
+    { name: reviewerName, status: "done", cwd: reviewerPath, agentId: "finished-2" },
   ];
 });
 
-Given("別の作業場所に完了済みの同名担当がいる", function (this: WorkerWorld) {
-  this.agents = [{ name: workerName, status: "done", cwd: "/worktrees/demo/other-task", agentId: "foreign" }];
+Given("別の作業場所に完了済みの同名 reviewer がいる", function (this: WorkerWorld) {
+  this.launchTarget = "reviewer";
+  this.expectedLaunchError = `agent name ${reviewerName} belongs to a different worktree; refusing cleanup`;
+  this.agents = [{ name: reviewerName, status: "done", cwd: "/worktrees/demo/other-task", agentId: "foreign" }];
 });
 
 When("deadloop がその Issue の担当を起動する", function (this: WorkerWorld) {
+  launchWorker(this);
+});
+
+When("deadloop が pull request の reviewer を起動する", function (this: WorkerWorld) {
   launchWorker(this);
 });
 
@@ -140,7 +165,7 @@ Then("一人の交代担当を起動する", function (this: WorkerWorld) {
 });
 
 Then("新しい担当は起動しない", function (this: WorkerWorld) {
-  assert.equal(this.launchCount, 0);
+  assert.equal(this.launchError?.message, this.expectedLaunchError);
 });
 
 Then("稼働中の担当は残る", function (this: WorkerWorld) {
@@ -148,11 +173,11 @@ Then("稼働中の担当は残る", function (this: WorkerWorld) {
 });
 
 Then("候補を特定できない同名担当は片付けない", function (this: WorkerWorld) {
-  assert.equal(this.removedAgentIds?.length, 0);
+  assert.equal(this.launchError?.message, this.expectedLaunchError);
 });
 
 Then("別の作業場所の同名担当は片付けない", function (this: WorkerWorld) {
-  assert.equal(this.removedAgentIds?.length, 0);
+  assert.equal(this.launchError?.message, this.expectedLaunchError);
 });
 
 Given("作業を開始できる Issue が選ばれている", function (this: WorkerWorld) {
@@ -177,10 +202,12 @@ Then("その Issue は完了ファイルの監視対象になる", function (thi
   assert.equal(this.coordinatorResult?.driverAction, "worker_monitor_request");
 });
 
-Given("完了ファイルがなく担当に最近の活動がある", function (this: WorkerWorld) {
+Given("完了ファイルを求めた後に担当の最近の活動がある", function (this: WorkerWorld) {
   this.watchInput = {
     now: "2026-07-07T11:17:37Z",
     promiseStatus: "none",
+    worktreeHasChanges: false,
+    nudgeSentAt: "2026-07-07T11:15:33Z",
     agentStatus: "idle",
     activity: [{ kind: "tool", at: "2026-07-07T11:16:20Z" }],
   };
