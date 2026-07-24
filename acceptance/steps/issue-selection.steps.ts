@@ -4,29 +4,42 @@ import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
 
+type IssueSelectionDecision = {
+  selected: boolean;
+  number?: number;
+};
+
 type IssueSelectionWorld = {
   fixtureName?: string;
-  selected?: boolean;
+  decision?: IssueSelectionDecision;
 };
 
 const decisionScript = "extensions/deadloop/automations/issue-coordinator-decisions.ts";
 
-function selectIssue(fixtureName: string): boolean {
+function selectIssue(fixtureName: string): IssueSelectionDecision {
   const result = spawnSync(
     "node",
     [decisionScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName), "--json"],
     { cwd: process.cwd(), encoding: "utf8" },
   );
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-  return JSON.parse(result.stdout).selected === true;
+  return JSON.parse(result.stdout);
 }
 
 Given("選定可能な Issue が `ready-for-agent` と `agent:implement` のラベルを持つ", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-ready-implement.json";
 });
 
+Given("準備不足の Issue に必要な公開ラベルがそろっていない", function (this: IssueSelectionWorld) {
+  this.fixtureName = "selection-missing-required-label.json";
+});
+
 Given("作業中の Issue が `agent:in-progress` ラベルを持つ", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-in-progress.json";
+});
+
+Given("停止中の Issue が `agent:blocked` ラベルを持つ", function (this: IssueSelectionWorld) {
+  this.fixtureName = "selection-blocked.json";
 });
 
 Given("選定可能な Issue が本文の{string}で未完了の依存を示す", function (this: IssueSelectionWorld, location: string) {
@@ -49,25 +62,29 @@ Given("選定可能な Issue が GitHub 上で未完了の依存を持つ", func
 
 When("Issue coordinator が作業対象を選ぶ", function (this: IssueSelectionWorld) {
   if (!this.fixtureName) throw new Error("issue precondition is missing");
-  this.selected = selectIssue(this.fixtureName);
+  this.decision = selectIssue(this.fixtureName);
 });
 
-Then("その Issue は作業対象に選ばれる", function (this: IssueSelectionWorld) {
-  assert.equal(this.selected, true);
+Then("Issue #{int} が作業対象に選ばれる", function (this: IssueSelectionWorld, issueNumber: number) {
+  assert.equal(this.decision?.number, issueNumber);
+});
+
+Then("準備不足の Issue は作業対象に選ばれない", function (this: IssueSelectionWorld) {
+  assert.equal(this.decision?.selected, false);
 });
 
 Then("作業中の Issue は作業対象に選ばれない", function (this: IssueSelectionWorld) {
-  assert.equal(this.selected, false);
+  assert.equal(this.decision?.selected, false);
+});
+
+Then("停止中の Issue は作業対象に選ばれない", function (this: IssueSelectionWorld) {
+  assert.equal(this.decision?.selected, false);
 });
 
 Then("未完了の依存を持つ Issue は作業対象に選ばれない", function (this: IssueSelectionWorld) {
-  assert.equal(this.selected, false);
-});
-
-Then("完了した依存を持つ Issue は作業対象に選ばれる", function (this: IssueSelectionWorld) {
-  assert.equal(this.selected, true);
+  assert.equal(this.decision?.selected, false);
 });
 
 Then("GitHub 上の未完了の依存を持つ Issue は作業対象に選ばれない", function (this: IssueSelectionWorld) {
-  assert.equal(this.selected, false);
+  assert.equal(this.decision?.selected, false);
 });

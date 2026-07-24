@@ -1,0 +1,16 @@
+{
+  "issues": [
+    {
+      "number": 4,
+      "title": "Stopped issue",
+      "body": "## Agent Brief\nBuild the thing.\n\n## Acceptance criteria\n- It works.",
+      "labels": [
+        { "name": "ready-for-agent" },
+        { "name": "agent:implement" },
+        { "name": "agent:blocked" }
+      ]
+    }
+  ],
+  "dependencyStates": {},
+  "relationshipDependencies": {}
+}
