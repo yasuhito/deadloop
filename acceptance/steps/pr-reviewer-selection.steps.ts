@@ -120,7 +120,8 @@ When("deadloop がレビュー対象を探す", function (this: SelectionWorld) 
 
 When("deadloop が外部レビューの扱いを決める", function (this: SelectionWorld) {
   if (!this.driverFixtureName) throw new Error("review state is missing");
-  this.driverResult = runDriver(this.driverFixtureName, { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" });
+  if (this.externalReviewEnabled === undefined) throw new Error("external review state is missing");
+  this.driverResult = runDriver(this.driverFixtureName, { DEADLOOP_EXTERNAL_REVIEW_ENABLED: this.externalReviewEnabled ? "1" : "0" });
 });
 
 function runDriver(fixtureName: string, extraEnv: Record<string, string> = {}): { driverAction?: string; comment?: string } {
