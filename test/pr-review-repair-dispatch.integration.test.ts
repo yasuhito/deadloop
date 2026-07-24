@@ -101,6 +101,83 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
     });
   });
 
+  it("recovers a crash-window retry from the active Herdr worker when local launch evidence is missing", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-repair-active-recovery-"));
+    tempDirs.push(root);
+    const bin = path.join(root, "bin");
+    const state = path.join(root, "state");
+    const worktree = path.join(root, "worktree");
+    const promise = path.join(root, "review-promise.json");
+    const launchAttempted = path.join(root, "launch-attempted");
+    const head = "a".repeat(40);
+    const finding = { title: "Lint contract", body: "Format src/a.ts", path: "src/a.ts", severity: "major" };
+    const { renderRepairMarker, reviewResultFingerprint } = require("../extensions/deadloop/automations/pr-review-repair-state.ts");
+    const fingerprint = reviewResultFingerprint([finding]);
+    const marker = renderRepairMarker(head, fingerprint);
+    const attemptKey = marker.match(/key=([0-9a-f]+)/)?.[1];
+    fs.mkdirSync(bin);
+    fs.mkdirSync(worktree);
+    fs.writeFileSync(
+      promise,
+      JSON.stringify({ status: "complete", outcome: "changes_requested", reason: "", summary: "Repair it.", findings: [finding] }),
+    );
+    executable(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
+  number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${head}",isCrossRepository:false,labels:[{name:"agent:reviewing"}],comments:[{body:${JSON.stringify(marker)}}]
+}));
+`,
+    );
+    executable(
+      path.join(bin, "herdr"),
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result:{worktrees:[{branch:"agent/issue-243",path:process.env.TEST_WORKTREE}]}}));
+else if (args[0] === "agent" && args[1] === "list") process.stdout.write(JSON.stringify({result:{agents:[{name:"demo-pr-243-review-repair-${attemptKey}",agent_status:"working",cwd:process.env.TEST_WORKTREE,pane_id:"pane-1"}]}}));
+else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.env.LAUNCH_ATTEMPTED, "yes");
+`,
+    );
+
+    const result = spawnSync(
+      "node",
+      [
+        "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+        "--promise",
+        promise,
+        "--pr",
+        "243",
+        "--expected-head",
+        head,
+        "--branch",
+        "agent/issue-243",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          DEADLOOP_PROJECT_ID: "demo",
+          DEADLOOP_REPO_PATH: root,
+          DEADLOOP_GITHUB_REPO: "owner/repo",
+          DEADLOOP_STATE_DIR: state,
+          TEST_WORKTREE: worktree,
+          LAUNCH_ATTEMPTED: launchAttempted,
+        },
+      },
+    );
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    const output = JSON.parse(result.stdout);
+
+    expect({ driverAction: output.driverAction, launchAttempted: fs.existsSync(launchAttempted) }).toEqual({
+      driverAction: "review_repair_duplicate",
+      launchAttempted: false,
+    });
+  });
+
   it("recovers a marker-only retry when no launch evidence exists", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-repair-marker-only-"));
     tempDirs.push(root);
@@ -127,7 +204,11 @@ if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify(
 `,
     );
     executable(path.join(bin, "herdr"), `#!/usr/bin/env node
-require("node:fs").writeFileSync(process.env.HERDR_CALLED, "yes");
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result:{worktrees:[]}}));
+else if (args[0] === "agent" && args[1] === "list") process.stdout.write(JSON.stringify({result:{agents:[]}}));
+else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.env.HERDR_CALLED, "yes");
 `);
 
     const result = spawnSync(

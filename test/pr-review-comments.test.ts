@@ -83,14 +83,34 @@ describe("PR review public comments", () => {
     ).not.toContain("/home/user");
   });
 
-  it("redacts local paths outside common home directories", () => {
+  it("redacts colon-prefixed absolute local paths", () => {
     expect(
       renderApprovedReviewComment({
         headOid: "a".repeat(40),
-        summary: "Inspect /workspace/project/runtime.log",
+        summary: "path:/workspace/private/runtime.log",
         reviewFingerprint: "1".repeat(20),
       }),
     ).not.toContain("/workspace");
+  });
+
+  it("redacts absolute local paths after punctuation", () => {
+    expect(
+      renderApprovedReviewComment({
+        headOid: "a".repeat(40),
+        summary: "Inspect [/workspace/project/runtime.log]",
+        reviewFingerprint: "1".repeat(20),
+      }),
+    ).not.toContain("/workspace");
+  });
+
+  it("does not treat URL paths as absolute local paths", () => {
+    expect(
+      renderApprovedReviewComment({
+        headOid: "a".repeat(40),
+        summary: "See https://example.com/project/runtime.log",
+        reviewFingerprint: "1".repeat(20),
+      }),
+    ).toContain("https://example.com/project/runtime.log");
   });
 
   it("redacts generated reviewer names from public text", () => {
@@ -138,6 +158,15 @@ describe("PR review public comments", () => {
         findings: [{ title: "Unsafe path", body: "Use one path.", path: "src/a.ts\n## Injected", severity: "major" }],
       }),
     ).not.toContain("## Injected");
+  });
+
+  it("preserves both lines of multiline finding evidence", () => {
+    expect(
+      renderChangesRequestedComment({
+        ...fixture("changes-requested.json"),
+        findings: [{ title: "Mismatch", body: "Expected X\nObserved Y", path: "src/a.ts", severity: "major" }],
+      }),
+    ).toContain("- Reason: Expected X Observed Y");
   });
 
   it("escapes Markdown in public finding text", () => {

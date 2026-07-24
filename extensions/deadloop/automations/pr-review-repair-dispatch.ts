@@ -168,6 +168,10 @@ Promise report:
 - Do not claim success unless the finalizer returned pushed or stale_head.`;
 }
 
+function repairAgentName(prNumber: string, key: string, env: ReturnType<typeof envConfig>): string {
+  return `${env.projectId}-pr-${prNumber}-review-repair-${key}`;
+}
+
 function launchEvidenceFile(prNumber: string, key: string, env: ReturnType<typeof envConfig>): string {
   return path.join(env.stateDir, "review-repair-launches", `${env.projectId}-pr-${prNumber}-${key}.json`);
 }
@@ -190,6 +194,28 @@ function hasLaunchEvidence(
   } catch {
     return false;
   }
+}
+
+function recoverLaunchFromHerdr(
+  prNumber: string,
+  branch: string,
+  key: string,
+  env: ReturnType<typeof envConfig>,
+): boolean {
+  const runner = createHerdrRunnerFromCommandRunner(commandRunner);
+  const worktrees = runner.listWorktrees(env.repoPath).filter((worktree) => String(worktree.branch || "") === branch);
+  const agents = runner.listAgents().filter((agent) => agent.name === repairAgentName(prNumber, key, env));
+  if (!agents.length) return false;
+  if (agents.length !== 1 || worktrees.length !== 1) {
+    throw new Error(`repair launch recovery found ${agents.length} named agent(s) and ${worktrees.length} branch worktree(s)`);
+  }
+
+  const worktreePath = String(worktrees[0].path || worktrees[0].worktreePath || "");
+  const agentPath = String(agents[0].cwd || "");
+  if (!worktreePath || !agentPath || path.resolve(worktreePath) !== path.resolve(agentPath)) {
+    throw new Error("repair launch recovery found a named agent outside the selected branch worktree");
+  }
+  return true;
 }
 
 function recordLaunchEvidence(
@@ -224,7 +250,7 @@ function launchRepair(
     `${JSON.stringify({ attemptKey: key, expectedHead, findingTitles: findings.map((finding) => String(finding.title)) })}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
-  const repairName = `${env.projectId}-pr-${prNumber}-review-repair-${key}`;
+  const repairName = repairAgentName(prNumber, key, env);
   const launch = launchAgentFlow(
     {
       worktree: { mode: "open", branch },
@@ -323,7 +349,10 @@ function dispatch(args: JsonObject): DriverResult {
 
   const selection = selectRepairAttempt(pr.comments || [], expectedHead, findings);
   if (selection.action === "already_attempted") {
-    if (hasLaunchEvidence(prNumber, branch, expectedHead, selection.key, env)) {
+    if (
+      hasLaunchEvidence(prNumber, branch, expectedHead, selection.key, env) ||
+      recoverLaunchFromHerdr(prNumber, branch, selection.key, env)
+    ) {
       if (!reviewCommentExists(pr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
         github.commentPr(
           env.githubRepo,
