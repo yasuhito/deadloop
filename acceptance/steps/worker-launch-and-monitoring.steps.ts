@@ -165,7 +165,7 @@ Then("一人の交代担当を起動する", function (this: WorkerWorld) {
 });
 
 Then("新しい担当は起動しない", function (this: WorkerWorld) {
-  assert.equal(this.launchError?.message, this.expectedLaunchError);
+  assert.equal(this.launchCount, 0);
 });
 
 Then("稼働中の担当は残る", function (this: WorkerWorld) {
@@ -173,11 +173,11 @@ Then("稼働中の担当は残る", function (this: WorkerWorld) {
 });
 
 Then("候補を特定できない同名担当は片付けない", function (this: WorkerWorld) {
-  assert.equal(this.launchError?.message, this.expectedLaunchError);
+  assert.equal(this.removedAgentIds?.length, 0);
 });
 
 Then("別の作業場所の同名担当は片付けない", function (this: WorkerWorld) {
-  assert.equal(this.launchError?.message, this.expectedLaunchError);
+  assert.equal(this.removedAgentIds?.length, 0);
 });
 
 Given("作業を開始できる Issue が選ばれている", function (this: WorkerWorld) {
