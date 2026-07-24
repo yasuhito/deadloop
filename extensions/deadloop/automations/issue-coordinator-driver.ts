@@ -139,11 +139,60 @@ function shouldSimulateLaunch(fixture: JsonObject | null): boolean {
   return Boolean(fixture);
 }
 
+function issueWorkerLaunchPlan(issue: JsonObject, env: ReturnType<typeof envConfig>, uuid: string) {
+  const number = Number(issue.number || 0);
+  const workerName = `${env.projectId}-issue-${number}-worker`;
+  const branch = `agent/issue-${number}-${slugForBranch(issue.title)}`;
+  return {
+    workerName,
+    branch,
+    input: {
+      worktree: { mode: "create" as const, branch, baseBranch: env.baseBranch },
+      repoPath: env.repoPath,
+      automationDir: env.automationDir,
+      stateDir: env.stateDir,
+      name: workerName,
+      agent: env.workerAgent,
+      model: env.workerModel,
+      level: "medium",
+      uuid,
+      promptFilePrefix: "worker-prompt",
+      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+        renderIssueWorkerPrompt({
+          launchReason: "deterministic issue coordinator launch",
+          issueNumber: number,
+          issueTitle: String(issue.title || "task"),
+          issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
+          githubRepo: env.githubRepo,
+          workerInstructions: env.workerInstructions,
+          checkCommand: env.checkCommand,
+          validationCommand: renderProjectCheckCommand({
+            automationDir: env.automationDir,
+            stateDir: env.stateDir,
+            cwd: worktreePath,
+            command: env.checkCommand,
+          }),
+          promiseFile,
+        }),
+    },
+  };
+}
+
+function launchIssueWorkerFlow(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  ops: Parameters<typeof launchAgentFlow>[1],
+): JsonObject {
+  const plan = issueWorkerLaunchPlan(issue, env, randomUUID());
+  const launch = launchAgentFlow(plan.input, ops);
+  return { workerName: plan.workerName, branch: plan.branch, ...launch };
+}
+
 function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
   const number = Number(issue.number || 0);
   const uuid = shouldSimulateLaunch(fixture) ? "fixture-worker-uuid" : randomUUID();
-  const workerName = `${env.projectId}-issue-${number}-worker`;
-  const branch = `agent/issue-${number}-${slugForBranch(issue.title)}`;
+  const plan = issueWorkerLaunchPlan(issue, env, uuid);
+  const { workerName, branch } = plan;
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
 
   if (shouldSimulateLaunch(fixture)) {
@@ -163,35 +212,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     env,
     (recheck: () => void) => githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel }),
     (recheck: () => void) => launchAgentFlow(
-      {
-        worktree: { mode: "create", branch, baseBranch: env.baseBranch },
-        repoPath: env.repoPath,
-        automationDir: env.automationDir,
-        stateDir: env.stateDir,
-        name: workerName,
-        agent: env.workerAgent,
-        model: env.workerModel,
-        level: "medium",
-        uuid,
-        promptFilePrefix: "worker-prompt",
-        renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-          renderIssueWorkerPrompt({
-            launchReason: "deterministic issue coordinator launch",
-            issueNumber: number,
-            issueTitle: String(issue.title || "task"),
-            issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
-            githubRepo: env.githubRepo,
-            workerInstructions: env.workerInstructions,
-            checkCommand: env.checkCommand,
-            validationCommand: renderProjectCheckCommand({
-              automationDir: env.automationDir,
-              stateDir: env.stateDir,
-              cwd: worktreePath,
-              command: env.checkCommand,
-            }),
-            promiseFile,
-          }),
-      },
+      plan.input,
       { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
     ),
     {
@@ -210,30 +231,30 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   return { workerName, branch, ...launch };
 }
 
-function envConfig() {
+function envConfig(source: NodeJS.ProcessEnv = process.env) {
   return {
-    projectId: process.env.DEADLOOP_PROJECT_ID || "project",
-    repoPath: process.env.DEADLOOP_REPO_PATH || ".",
-    githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
-    enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
-    baseBranch: process.env.DEADLOOP_BASE_BRANCH || "origin/main",
+    projectId: source.DEADLOOP_PROJECT_ID || "project",
+    repoPath: source.DEADLOOP_REPO_PATH || ".",
+    githubRepo: source.DEADLOOP_GITHUB_REPO || "",
+    enabledAt: Number(source.DEADLOOP_ENABLED_AT),
+    baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
     stateDir:
-      process.env.DEADLOOP_STATE_DIR ||
-      path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
-    checkCommand: process.env.DEADLOOP_CHECK_COMMAND || "git diff --check",
-    workerInstructions: process.env.DEADLOOP_WORKER_INSTRUCTIONS || "Read AGENTS.md and follow the issue contract.",
-    workerAgent: process.env.DEADLOOP_WORKER_AGENT || "pi",
-    workerModel: process.env.DEADLOOP_WORKER_MODEL || "",
-    readyLabel: process.env.DEADLOOP_READY_LABEL || "ready-for-agent",
-    implementLabel: process.env.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
-    inProgressLabel: process.env.DEADLOOP_IN_PROGRESS_LABEL || "agent:in-progress",
-    blockedLabel: process.env.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
-    reviewLabel: process.env.DEADLOOP_REVIEW_LABEL || "agent:review",
-    humanLabel: process.env.DEADLOOP_HUMAN_LABEL || "ready-for-human",
-    needsInfoLabel: process.env.DEADLOOP_NEEDS_INFO_LABEL || "needs-info",
-    wontfixLabel: process.env.DEADLOOP_WONTFIX_LABEL || "wontfix",
-    needsTriageLabel: process.env.DEADLOOP_NEEDS_TRIAGE_LABEL || "needs-triage",
+      source.DEADLOOP_STATE_DIR ||
+      path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
+    checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
+    workerInstructions: source.DEADLOOP_WORKER_INSTRUCTIONS || "Read AGENTS.md and follow the issue contract.",
+    workerAgent: source.DEADLOOP_WORKER_AGENT || "pi",
+    workerModel: source.DEADLOOP_WORKER_MODEL || "",
+    readyLabel: source.DEADLOOP_READY_LABEL || "ready-for-agent",
+    implementLabel: source.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
+    inProgressLabel: source.DEADLOOP_IN_PROGRESS_LABEL || "agent:in-progress",
+    blockedLabel: source.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
+    reviewLabel: source.DEADLOOP_REVIEW_LABEL || "agent:review",
+    humanLabel: source.DEADLOOP_HUMAN_LABEL || "ready-for-human",
+    needsInfoLabel: source.DEADLOOP_NEEDS_INFO_LABEL || "needs-info",
+    wontfixLabel: source.DEADLOOP_WONTFIX_LABEL || "wontfix",
+    needsTriageLabel: source.DEADLOOP_NEEDS_TRIAGE_LABEL || "needs-triage",
   };
 }
 
@@ -345,4 +366,6 @@ function main(): void {
   }
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { envConfig, launchIssueWorkerFlow };

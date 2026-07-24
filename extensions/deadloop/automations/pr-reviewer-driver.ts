@@ -45,32 +45,32 @@ function githubOperations(beforeMutation?: () => void) {
   return createGithubOperations(commandRunner, beforeMutation);
 }
 
-function envConfig() {
+function envConfig(source: NodeJS.ProcessEnv = process.env) {
   return {
-    projectId: process.env.DEADLOOP_PROJECT_ID || "project",
-    repoPath: process.env.DEADLOOP_REPO_PATH || ".",
-    githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
-    enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
-    baseBranch: process.env.DEADLOOP_BASE_BRANCH || "origin/main",
+    projectId: source.DEADLOOP_PROJECT_ID || "project",
+    repoPath: source.DEADLOOP_REPO_PATH || ".",
+    githubRepo: source.DEADLOOP_GITHUB_REPO || "",
+    enabledAt: Number(source.DEADLOOP_ENABLED_AT),
+    baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
     stateDir:
-      process.env.DEADLOOP_STATE_DIR ||
-      path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
-    checkCommand: process.env.DEADLOOP_CHECK_COMMAND || "git diff --check",
-    reviewerAgent: process.env.DEADLOOP_REVIEWER_AGENT || "pi",
-    reviewerModel: process.env.DEADLOOP_REVIEWER_MODEL || "",
-    branchUpdateAgent: process.env.DEADLOOP_WORKER_AGENT || "pi",
-    branchUpdateModel: process.env.DEADLOOP_WORKER_MODEL || "",
-    branchUpdateRemote: process.env.DEADLOOP_BRANCH_UPDATE_REMOTE || "origin",
-    reviewLabel: process.env.DEADLOOP_REVIEW_LABEL || "agent:review",
-    reviewingLabel: process.env.DEADLOOP_REVIEWING_LABEL || "agent:reviewing",
-    humanLabel: process.env.DEADLOOP_HUMAN_LABEL || "ready-for-human",
-    blockedLabel: process.env.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
-    implementLabel: process.env.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
-    autoMerge: parseBool(process.env.DEADLOOP_AUTO_MERGE),
-    externalReviewEnabled: parseBool(process.env.DEADLOOP_EXTERNAL_REVIEW_ENABLED),
-    externalReviewWaitSeconds: process.env.DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS || "1800",
-    now: process.env.DEADLOOP_NOW || "",
+      source.DEADLOOP_STATE_DIR ||
+      path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
+    checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
+    reviewerAgent: source.DEADLOOP_REVIEWER_AGENT || "pi",
+    reviewerModel: source.DEADLOOP_REVIEWER_MODEL || "",
+    branchUpdateAgent: source.DEADLOOP_WORKER_AGENT || "pi",
+    branchUpdateModel: source.DEADLOOP_WORKER_MODEL || "",
+    branchUpdateRemote: source.DEADLOOP_BRANCH_UPDATE_REMOTE || "origin",
+    reviewLabel: source.DEADLOOP_REVIEW_LABEL || "agent:review",
+    reviewingLabel: source.DEADLOOP_REVIEWING_LABEL || "agent:reviewing",
+    humanLabel: source.DEADLOOP_HUMAN_LABEL || "ready-for-human",
+    blockedLabel: source.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
+    implementLabel: source.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
+    autoMerge: parseBool(source.DEADLOOP_AUTO_MERGE),
+    externalReviewEnabled: parseBool(source.DEADLOOP_EXTERNAL_REVIEW_ENABLED),
+    externalReviewWaitSeconds: source.DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS || "1800",
+    now: source.DEADLOOP_NOW || "",
   };
 }
 
@@ -425,15 +425,19 @@ function launchBranchUpdate(
   return { updaterName, headRefName: branch, retryKey: key, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
-function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
+function prReviewerLaunchPlan(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  reason: string,
+  uuid: string,
+): { reviewerName: string; headRefName: string; input: DriverLaunchInput } {
   const number = Number(pr.number || 0);
-  const uuid = fixture ? "fixture-reviewer-uuid" : randomUUID();
   const reviewerName = `${env.projectId}-pr-${number}-reviewer`;
   const headRefName = String(pr.headRefName || `pr-${number}`);
-  const launch = launchWithAdapters(
-    env,
-    fixture,
-    {
+  return {
+    reviewerName,
+    headRefName,
+    input: {
       worktree: { mode: "open", branch: headRefName },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
@@ -447,6 +451,29 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
     },
+  };
+}
+
+function launchPrReviewerFlow(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  reason: string,
+  ops: Parameters<typeof launchAgentFlow>[1],
+): JsonObject {
+  const plan = prReviewerLaunchPlan(pr, env, reason, randomUUID());
+  const launch = launchAgentFlow(plan.input, ops);
+  return { reviewerName: plan.reviewerName, headRefName: plan.headRefName, ...launch };
+}
+
+function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
+  const number = Number(pr.number || 0);
+  const uuid = fixture ? "fixture-reviewer-uuid" : randomUUID();
+  const plan = prReviewerLaunchPlan(pr, env, reason, uuid);
+  const { reviewerName, headRefName } = plan;
+  const launch = launchWithAdapters(
+    env,
+    fixture,
+    plan.input,
     (github) => github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }),
     () => {
       if (fixture) return;
@@ -763,4 +790,6 @@ function main(): void {
   }
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { envConfig, launchPrReviewerFlow };
