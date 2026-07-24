@@ -161,7 +161,11 @@ Then("状態表示は同梱設定ファイルを示す", function (this: Configu
 });
 
 Then("状態表示に標準の自動化が二つある", function (this: ConfigurationWorld) {
-  assert.match(this.status ?? "", /demo issue coordinator:[\s\S]*demo PR reviewer:/);
+  const automationLines = (this.status ?? "").split("\n").slice(8);
+  const automationNames = automationLines
+    .slice(0, automationLines.indexOf(""))
+    .map((line) => line.match(/^- ([^:]+):/)?.[1]);
+  assert.deepEqual(automationNames, ["demo issue coordinator", "demo PR reviewer"]);
 });
 
 Then("状態表示に有効な自動化はない", function (this: ConfigurationWorld) {
@@ -176,20 +180,40 @@ Then("Reviewer の起動コマンドは pi である", function (this: Configura
   assert.equal(this.reviewerLaunch?.[0], "pi");
 });
 
-Then("Worker は指定したエージェントとモデルで起動する", function (this: ConfigurationWorld) {
-  assert.match((this.workerLaunch ?? []).join(" "), /^claude .* --model worker-local-model /);
+Then("Worker は指定したエージェントで起動する", function (this: ConfigurationWorld) {
+  assert.equal(this.workerLaunch?.[0], "claude");
 });
 
-Then("Reviewer は指定したエージェントとモデルで起動する", function (this: ConfigurationWorld) {
-  assert.match((this.reviewerLaunch ?? []).join(" "), /^claude .* --model reviewer-local-model /);
+Then("Worker は指定したモデルで起動する", function (this: ConfigurationWorld) {
+  const modelIndex = this.workerLaunch?.indexOf("--model") ?? -1;
+  assert.equal(this.workerLaunch?.[modelIndex + 1], "worker-local-model");
 });
 
-Then("Worker は共有方針の種別とモデルで起動する", function (this: ConfigurationWorld) {
-  assert.match((this.workerLaunch ?? []).join(" "), /^claude .* --model shared-model /);
+Then("Reviewer は指定したエージェントで起動する", function (this: ConfigurationWorld) {
+  assert.equal(this.reviewerLaunch?.[0], "claude");
 });
 
-Then("Worker はローカルの種別とモデルで起動する", function (this: ConfigurationWorld) {
-  assert.match((this.workerLaunch ?? []).join(" "), /^pi .* --model local-model /);
+Then("Reviewer は指定したモデルで起動する", function (this: ConfigurationWorld) {
+  const modelIndex = this.reviewerLaunch?.indexOf("--model") ?? -1;
+  assert.equal(this.reviewerLaunch?.[modelIndex + 1], "reviewer-local-model");
+});
+
+Then("Worker は共有方針の種別で起動する", function (this: ConfigurationWorld) {
+  assert.equal(this.workerLaunch?.[0], "claude");
+});
+
+Then("Worker は共有方針のモデルで起動する", function (this: ConfigurationWorld) {
+  const modelIndex = this.workerLaunch?.indexOf("--model") ?? -1;
+  assert.equal(this.workerLaunch?.[modelIndex + 1], "shared-model");
+});
+
+Then("Worker はローカルの種別で起動する", function (this: ConfigurationWorld) {
+  assert.equal(this.workerLaunch?.[0], "pi");
+});
+
+Then("Worker はローカルのモデルで起動する", function (this: ConfigurationWorld) {
+  const modelIndex = this.workerLaunch?.indexOf("--model") ?? -1;
+  assert.equal(this.workerLaunch?.[modelIndex + 1], "local-model");
 });
 
 Then("状態表示に共有方針の自動化がある", function (this: ConfigurationWorld) {
@@ -204,12 +228,22 @@ Then("状態表示で外部レビューは無効である", function (this: Conf
   assert.match(this.status ?? "", /externalReview: off/);
 });
 
-Then("Reviewer は共有方針の種別とモデルで起動する", function (this: ConfigurationWorld) {
-  assert.match((this.reviewerLaunch ?? []).join(" "), /^claude .* --model shared-reviewer-model /);
+Then("Reviewer は共有方針の種別で起動する", function (this: ConfigurationWorld) {
+  assert.equal(this.reviewerLaunch?.[0], "claude");
 });
 
-Then("Reviewer はローカルの種別とモデルで起動する", function (this: ConfigurationWorld) {
-  assert.match((this.reviewerLaunch ?? []).join(" "), /^pi .* --model local-reviewer-model /);
+Then("Reviewer は共有方針のモデルで起動する", function (this: ConfigurationWorld) {
+  const modelIndex = this.reviewerLaunch?.indexOf("--model") ?? -1;
+  assert.equal(this.reviewerLaunch?.[modelIndex + 1], "shared-reviewer-model");
+});
+
+Then("Reviewer はローカルの種別で起動する", function (this: ConfigurationWorld) {
+  assert.equal(this.reviewerLaunch?.[0], "pi");
+});
+
+Then("Reviewer はローカルのモデルで起動する", function (this: ConfigurationWorld) {
+  const modelIndex = this.reviewerLaunch?.indexOf("--model") ?? -1;
+  assert.equal(this.reviewerLaunch?.[modelIndex + 1], "local-reviewer-model");
 });
 
 Then("CI 代替コマンドは起動されない", function (this: ConfigurationWorld) {
