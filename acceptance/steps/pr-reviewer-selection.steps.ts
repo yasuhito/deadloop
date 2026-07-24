@@ -12,6 +12,7 @@ type PullRequest = Record<string, unknown>;
 type GithubEffect = {
   operation?: string;
   reviewer?: string;
+  body?: string;
   move?: { add?: string | string[]; remove?: string | string[] };
 };
 type DriverResult = {
@@ -222,5 +223,6 @@ Then("レビュー担当が起動される", function (this: SelectionWorld) {
 });
 
 Then("pull request の復旧手順を示す", function (this: SelectionWorld) {
-  assert.match(this.driverResult?.comment ?? "", /## Recovery steps/);
+  const commentEffect = this.driverResult?.githubEffects?.find((effect) => effect.operation === "comment_pr");
+  assert.match(commentEffect?.body ?? "", /## Recovery steps/);
 });
