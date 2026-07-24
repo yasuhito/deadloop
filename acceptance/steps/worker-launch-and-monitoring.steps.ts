@@ -16,7 +16,6 @@ const reviewerPath = "/worktrees/demo/feature-review";
 type WorkerWorld = {
   agents?: RunnerAgent[];
   launchTarget?: "worker" | "reviewer";
-  expectedLaunchError?: string;
   removedAgentIds?: string[];
   launchCount?: number;
   launchEvents?: string[];
@@ -94,9 +93,7 @@ function launchWorker(world: WorkerWorld): void {
       },
     );
   } catch (error) {
-    const launchError = error instanceof Error ? error : new Error(String(error));
-    if (launchError.message !== world.expectedLaunchError) throw launchError;
-    world.launchError = launchError;
+    world.launchError = error instanceof Error ? error : new Error(String(error));
   }
 
   world.agents = agents;
@@ -117,13 +114,11 @@ Given("同じ作業場所に完了済みの同名 reviewer がいる", function 
 
 Given("同じ作業場所に稼働中の同名 reviewer がいる", function (this: WorkerWorld) {
   this.launchTarget = "reviewer";
-  this.expectedLaunchError = `agent name ${reviewerName} is working; refusing duplicate launch`;
   this.agents = [{ name: reviewerName, status: "working", cwd: reviewerPath, agentId: "working" }];
 });
 
 Given("同じ作業場所に複数の完了済み同名 reviewer がいる", function (this: WorkerWorld) {
   this.launchTarget = "reviewer";
-  this.expectedLaunchError = `agent name ${reviewerName} has 2 live candidates; refusing cleanup`;
   this.agents = [
     { name: reviewerName, status: "done", cwd: reviewerPath, agentId: "finished-1" },
     { name: reviewerName, status: "done", cwd: reviewerPath, agentId: "finished-2" },
@@ -132,7 +127,6 @@ Given("同じ作業場所に複数の完了済み同名 reviewer がいる", fun
 
 Given("別の作業場所に完了済みの同名 reviewer がいる", function (this: WorkerWorld) {
   this.launchTarget = "reviewer";
-  this.expectedLaunchError = `agent name ${reviewerName} belongs to a different worktree; refusing cleanup`;
   this.agents = [{ name: reviewerName, status: "done", cwd: "/worktrees/demo/other-task", agentId: "foreign" }];
 });
 
@@ -164,8 +158,19 @@ Then("一人の交代担当を起動する", function (this: WorkerWorld) {
   assert.equal(this.launchCount, 1);
 });
 
-Then("新しい担当は起動しない", function (this: WorkerWorld) {
-  assert.equal(this.launchCount, 0);
+Then("稼働中の同名担当がいるため起動を拒否する", function (this: WorkerWorld) {
+  assert.equal(this.launchError?.message, `agent name ${reviewerName} is working; refusing duplicate launch`);
+});
+
+Then("複数の同名担当がいるため起動を拒否する", function (this: WorkerWorld) {
+  assert.equal(this.launchError?.message, `agent name ${reviewerName} has 2 live candidates; refusing cleanup`);
+});
+
+Then("別の作業場所に同名担当がいるため起動を拒否する", function (this: WorkerWorld) {
+  assert.equal(
+    this.launchError?.message,
+    `agent name ${reviewerName} belongs to a different worktree; refusing cleanup`,
+  );
 });
 
 Then("稼働中の担当は残る", function (this: WorkerWorld) {

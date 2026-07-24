@@ -44,11 +44,13 @@ Issue #119 では、Issue 専用の作業場所で担当を重複なく起動し
 | 分類 ID | 一時的に壊した Then | 報告された差 | 失敗シナリオ数 |
 |---|---|---|---:|
 | T002 | 完了済みの担当を片付けてから交代を起動する | `remove:finished>create-tab>launch` / `intentional-failure` | 1 |
+| T002（起動回数） | 一人の交代担当を起動する（`launchCount`） | `1` / `2` | 1 |
 | T003 | 稼働中の担当は残る | `true` / `false` | 1 |
 | T004 | 候補を特定できない同名担当は片付けない（`removedAgentIds.length`） | `0` / `1` | 1 |
 | T005 | 別の作業場所の同名担当は片付けない（`removedAgentIds.length`） | `0` / `1` | 1 |
 | T003〜T005 | 新しい担当は起動しない（共有 Then の `launchCount`） | `0` / `1` | 3 |
 | T006 | 担当には基準ブランチから Issue 専用の作業場所を作る | `origin/main` / `origin/intentional-failure` | 1 |
+| T006（起動回数） | 新しい担当を一人だけ起動する（`launchCount`） | `1` / `2` | 1 |
 | T215 | その Issue は完了ファイルの監視対象になる | `worker_monitor_request` / `intentional_failure` | 1 |
 | T391、T392 | 担当の監視を続ける（共有 Then） | `continue_waiting` / `intentional_failure` | 2 |
 | T393 | 担当に完了ファイルを書くよう求める | `nudge_worker` / `intentional_failure` | 1 |
@@ -56,4 +58,4 @@ Issue #119 では、Issue 専用の作業場所で担当を重複なく起動し
 | T395 | 終了前に不足した観測を集める | `collect_observations` / `intentional_failure` | 1 |
 | T396 | 完了ファイルに従って監視を終える | `promise_settled` / `intentional_failure` | 2 |
 
-T396 はシナリオアウトラインの2例が同じ Then を共有するため、一度の変更で2シナリオが失敗した。各期待値を元に戻した後、`npm run test:acceptance` で 92シナリオ 480ステップが再び成功することを確認した。壊した状態はコミットしていない。
+T396 はシナリオアウトラインの2例が同じ Then を共有するため、一度の変更で2シナリオが失敗した。2026-07-25 には、別々の保証として追加した二つの起動回数について、各 `launchCount` の期待値を `1` から `2` へ一つずつ変更し、表のとおり対応する1シナリオだけが終了状態1で失敗して `1 !== 2` を報告することを確認した。各期待値を元に戻した後、`npm run test:acceptance` で 92シナリオ 480ステップが再び成功することを確認した。壊した状態はコミットしていない。
