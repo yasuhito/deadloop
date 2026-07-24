@@ -31,6 +31,7 @@ type SafetyWorld = {
 
 function finalize(world: SafetyWorld): void {
   const commands: string[][] = [];
+  let configuredCheckCompleted = false;
   world.commands = commands;
   world.finalizeResult = finalizeBranchUpdate(
     {
@@ -51,8 +52,9 @@ function finalize(world: SafetyWorld): void {
       assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
       run: (args: string[]) => {
         commands.push(args);
-        if (args[0] === "node" && args[1]?.endsWith("/run-project-check.ts") && world.changeHeadAfterChecks) {
-          world.actualHead = base;
+        if (args[0] === "node" && args[1]?.endsWith("/run-project-check.ts")) {
+          configuredCheckCompleted = true;
+          if (world.changeHeadAfterChecks) world.actualHead = base;
         }
         if (args.includes("get-url")) return { status: 0, stdout: `${pushUrl}\n`, stderr: "" };
         if (args.includes("ls-remote")) {
@@ -64,6 +66,7 @@ function finalize(world: SafetyWorld): void {
           return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
         }
         if (args[0] === "gh") {
+          if (!configuredCheckCompleted) throw new Error("PR head queried before the configured check completed");
           return {
             status: 0,
             stdout: JSON.stringify({
