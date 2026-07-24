@@ -112,9 +112,10 @@ Then("pull request #{int} のレビューを再開する", function (this: Claim
 });
 
 Then("レビュー占有は回収されない", function (this: ClaimWorld) {
+  const reviewerNames = new Set(this.prs?.map((pr) => `demo-pr-${Number(pr.number)}-reviewer`));
   const reviewerStartCount =
-    this.driverResult?.testAdapterEffects?.herdrStarts?.filter(
-      (start) => start.name === "demo-pr-13-reviewer",
+    this.driverResult?.testAdapterEffects?.herdrStarts?.filter((start) =>
+      reviewerNames.has(start.name ?? ""),
     ).length ?? 0;
   assert.equal(reviewerStartCount, 0);
 });
