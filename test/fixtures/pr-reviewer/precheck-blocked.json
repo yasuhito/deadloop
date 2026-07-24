@@ -4,7 +4,11 @@
     "updatedAt": "2026-07-04T00:00:00Z",
     "headRefOid": "2222222222222222222222222222222222222222",
     "isDraft": false,
-    "labels": [{ "name": "agent:review" }, { "name": "agent:blocked" }],
+    "labels": [
+      { "name": "agent:review" },
+      { "name": "agent:reviewing" },
+      { "name": "agent:blocked" }
+    ],
     "statusCheckRollup": [],
     "comments": [],
     "reviewRequests": []

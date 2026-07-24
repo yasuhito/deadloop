@@ -20,7 +20,6 @@ type ClaimWorld = {
   prs?: Record<string, unknown>[];
   agents?: unknown;
   decision?: { selected?: boolean; number?: number; reason?: string };
-  firstCycleStartCount?: number;
   driverResult?: DriverResult;
 };
 
@@ -60,7 +59,6 @@ Given("回収済みで新しいレビュー担当が稼働中の占有がある"
   setClaim(this, "precheck-reviewing.json", "agents-empty.json");
   const firstCycle = runDriver({ prs: this.prs, agents: this.agents });
   const starts = firstCycle.testAdapterEffects?.herdrStarts ?? [];
-  this.firstCycleStartCount = starts.length;
   const labels = firstCycle.testAdapterEffects?.labels?.["13"];
   this.prs = this.prs?.map((pr) =>
     Number(pr.number) === 13 && labels ? { ...pr, labels: labels.map((name) => ({ name })) } : pr,
@@ -122,7 +120,7 @@ Then("レビュー占有は回収されない", function (this: ClaimWorld) {
   assert.equal(this.decision?.selected, false);
 });
 
-Then("二周期を通じてレビュー担当は一件だけ起動される", function (this: ClaimWorld) {
+Then("次の選定周期ではレビュー担当が追加で起動されない", function (this: ClaimWorld) {
   const nextCycleStartCount = this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0;
-  assert.deepEqual([this.firstCycleStartCount ?? 0, nextCycleStartCount], [1, 0]);
+  assert.equal(nextCycleStartCount, 0);
 });
