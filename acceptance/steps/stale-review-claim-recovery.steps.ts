@@ -109,11 +109,16 @@ function decide(world: ClaimWorld): void {
 }
 
 When("deadloop が古いレビュー占有の回収対象を探す", function (this: ClaimWorld) {
+  if (!this.prs) throw new Error("review claim is missing");
+  this.driverResult = runDriver({ prs: this.prs, agents: this.agents });
   decide(this);
 });
 
 Then("pull request #{int} のレビューを再開する", function (this: ClaimWorld, number: number) {
-  assert.equal(this.decision?.number, number);
+  const reviewerStarts = this.driverResult?.testAdapterEffects?.herdrStarts?.filter(
+    (start) => start.name === `demo-pr-${number}-reviewer`,
+  );
+  assert.equal(reviewerStarts?.length, 1);
 });
 
 Then("レビュー占有は回収されない", function (this: ClaimWorld) {
