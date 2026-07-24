@@ -28,11 +28,17 @@ pi -e /absolute/path/to/deadloop
 
 Pi packages and extensions run with your local user permissions. Install only from source you trust.
 
-## 2. Create repository policy and optional local configuration
+## 2. Enable the local scheduler and add optional policy
 
-For the zero-local-config path, commit `deadloop.json` at the target repository root on the trusted base branch. Start Pi from that checkout and deadloop infers the local checkout path, GitHub repository, base branch, and default Herdr worktree root from the current git repository.
+Start Pi from a normal (non-linked) Git checkout and run:
 
-Use Pi's user state config only for local overrides such as `autoMerge`, a custom `worktreeRoot`, or repositories that do not carry `deadloop.json`. If you need those overrides, copy the example config to Pi's user state directory and edit it for your repository. If you installed from GitHub, Pi clones the package under `~/.pi/agent/git/github.com/yasuhito/deadloop`:
+```text
+/deadloop-enable
+```
+
+The command infers the local checkout, GitHub repository, base branch, and default Herdr worktree root. It checks `gh` authentication and write permission, then creates only missing standard labels. Only after those steps succeed does it save local execution permission under `~/.pi/agent/deadloop/`. `deadloop.json` and `projects.json` are optional policy/override files and never start automation merely by existing. A newly enabled repository always starts with `autoMerge: false`; configure auto-merge only after the safety checks in this guide. After the initial safe start, deadloop must observe `autoMerge: false` and then an explicit change to `autoMerge: true` before it acknowledges automatic merge. That acknowledgement survives disable and re-enable. Keep `autoMerge: false` until you intend to enable automatic merge.
+
+Use Pi's user state config only for local overrides such as `autoMerge` or a custom `worktreeRoot`. If you need those overrides, copy the example config to Pi's user state directory and edit it for your repository. If you installed from GitHub, Pi clones the package under `~/.pi/agent/git/github.com/yasuhito/deadloop`:
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop
@@ -50,10 +56,10 @@ If a project uses `workerAgent: "claude"` or `reviewerAgent: "claude"`, run `cla
 
 Key fields:
 
-- `repoPath` — absolute path to the target repository checkout. Optional when the current git repository has `deadloop.json` on the trusted base branch.
-- `githubRepo` — GitHub repository in `owner/name` form. Inferred from the `origin` remote for implicit `deadloop.json` projects.
-- `baseBranch` — branch or remote ref used as the worktree base, usually `origin/main`. Inferred from the current branch upstream for implicit `deadloop.json` projects.
-- `worktreeRoot` — directory where the Herdr runner may create worker worktrees. Defaults to `~/.herdr/worktrees/<repo>/` for implicit `deadloop.json` projects.
+- `repoPath` — absolute path to the target repository checkout. `/deadloop-enable` infers it from the current primary checkout; set it in `projects.json` only as a local override.
+- `githubRepo` — GitHub repository in `owner/name` form. `/deadloop-enable` infers it from the canonical `origin` fetch and push URLs; set it in `projects.json` only as a local override.
+- `baseBranch` — branch or remote ref used as the worktree base, usually the current branch upstream or the verified GitHub default branch when no upstream exists. `/deadloop-enable` infers it; set it in `projects.json` only as a local override.
+- `worktreeRoot` — directory where the Herdr runner may create worker worktrees. `/deadloop-enable` defaults it to `~/.herdr/worktrees/<sanitized-checkout-name>-<12-character-identity-hash>/`; the hash is derived from the canonical checkout path and GitHub repository identity. Set it in `projects.json` only to use another local path.
 - `checkCommand` — optional verification command workers and reviewers must pass before handoff. Omit this for the standard convention: run `git diff --check`, then `npm run check` when it exists, otherwise the existing `test`, `lint`, and `typecheck` package scripts.
 - `autoMerge` — keep `false` until the repository has proven safeguards. Only `true` allows the PR reviewer automation to squash merge and delete the head branch after its gates pass.
 - `externalReview` — optional external review service gate. It is disabled by default; set `{ "enabled": true }` only for repositories where the built-in CodeRabbit/Copilot request path is available.
@@ -66,15 +72,15 @@ Key fields:
 - `labels` — GitHub labels used to coordinate issue and PR state. Omit this when using the standard labels.
 - `automations` — scheduled automation entries and their prompt/precheck files. Omit this to use the standard issue coordinator and PR reviewer. Set an explicit array only when customizing or disabling the standard automation set. Optional `driverFile` entries run bundled deterministic automation scripts after precheck and before sending any prompt; the driver can return `skip`, `done`, `needs_llm`, or `error` JSON to avoid unnecessary LLM context.
 
-Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `externalReview`, `workerInstructionFiles`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` / `driverFile` for automations. Keep `enabled`, `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local or inferred. Invalid JSON or disallowed keys stop that project safely and appear in `/deadloop-status` and `/deadloop-doctor`.
+Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `externalReview`, `workerInstructionFiles`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` / `driverFile` for automations. The legacy project-level `enabled` field is ignored; only `/deadloop-enable` and `/deadloop-disable` control scheduling. Keep `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local or inferred. Invalid JSON or disallowed keys stop that project safely and appear in `/deadloop-status` and `/deadloop-doctor`.
 
 Per-launch prompts and promise reports live under `~/.pi/agent/deadloop/runs/`, not in the target worktree. The configured project check runs through deadloop's isolation wrapper: untracked `.deadloop` and `.pi-subagents` directories are temporarily hidden and restored on every exit path. Tracked files are never hidden; validation fails closed if either runtime directory contains one.
 
 By default deadloop reads `~/.pi/agent/deadloop/projects.json`. Use `DEADLOOP_CONFIG=/path/to/projects.json` only when you intentionally want a different config file.
 
-## 3. Create required labels
+## 3. Standard labels
 
-Create the standard labels once per repository:
+`/deadloop-enable` creates only missing standard labels and never changes an existing label. To prepare them manually instead, use:
 
 ```bash
 gh label create ready-for-agent --repo owner/repo --color 0e8a16 || true
@@ -109,7 +115,7 @@ Use the standard `pr-reviewer` only after Phase 1 is reliable. Keep:
 
 With auto-merge disabled, the reviewer automation starts a review agent session, requests fixes when needed, and hands the PR to `ready-for-human` instead of merging. External review requests are disabled by default; enable `externalReview` only in repositories where the external service is installed and allowed.
 
-Before review, a same-repository PR that conflicts with the configured base is given one guarded merge-update attempt for each exact PR-head/base-head pair. The dedicated worker merges (never rebases), runs `checkCommand`, verifies that the PR head is still unchanged, and non-force pushes only the existing PR branch. Operators do not need another label: `agent:review` and `agent:reviewing` remain during the update. A stale head waits for the next cycle without a push; a failed or unsafe attempt adds `agent:blocked`. To retry after intervention, change the PR head or base head, inspect the recorded `deadloop:branch-update-attempt` PR comment, then remove `agent:blocked`.
+Before review, a same-repository PR that conflicts with the configured base is given one guarded merge-update attempt for each exact PR-head/base-head pair. The dedicated worker merges (never rebases), runs `checkCommand`, and atomically updates only the existing PR branch if its head still equals the validated commit. Operators do not need another label: `agent:review` and `agent:reviewing` remain during the update. A stale head waits for the next cycle without a push; a failed or unsafe attempt adds `agent:blocked`. To retry after intervention, change the PR head or base head, inspect the recorded `deadloop:branch-update-attempt` PR comment, then remove `agent:blocked`.
 
 ### Phase 3: Consider auto-merge
 
@@ -133,9 +139,13 @@ pi
 Useful commands:
 
 ```text
+/deadloop-enable
+/deadloop-disable
 /deadloop-status
 /deadloop-doctor
 ```
+
+`/deadloop-disable` removes local execution permission, stops the scheduler and releases its lock without killing active agents or deleting GitHub state, worktrees, or run artifacts. Another session owning the lock notices the removal on its next polling tick. To migrate from releases that activated from configuration files, run `/deadloop-enable` once in each repository.
 
 ## Verification commands
 

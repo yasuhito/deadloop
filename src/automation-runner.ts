@@ -4,6 +4,8 @@ import {
   type NormalizedAutomation,
   type NormalizedProject,
 } from "./core";
+const { passesIssueLabelGate } = require("./issue-eligibility.cjs");
+const { renderPendingMonitorHandoff } = require("./monitor-prompts.ts");
 
 export type AutomationExecResult = {
   code: number;
@@ -16,10 +18,13 @@ export type AutomationState = {
 };
 
 export type AutomationRunnerDeps = {
+  enabledAt?: () => number;
+  isEnabled?: () => boolean;
   isIdle?: () => boolean;
   notify?: (message: string, level: "info" | "warning" | "error") => void;
   now: () => number;
   readPrompt: (project: NormalizedProject, automation: NormalizedAutomation, promptFile: string) => string;
+  revalidatePendingDriverHandoff?: (handoff: Record<string, unknown>) => boolean;
   resolveAutomationFileInDir: (
     kind: "precheck" | "prompt" | "driver",
     automation: NormalizedAutomation,
@@ -37,15 +42,140 @@ export type AutomationRunnerDeps = {
   ) => Promise<AutomationExecResult>;
   saveState: (state: AutomationState) => void;
   sendUserMessage: (prompt: string) => void;
+  sendUserMessageIfEnabled?: (prompt: string) => boolean;
   setStatus?: (text: string) => void;
 };
+
+export function isPendingIssueHandoffEligible(
+  handoff: Record<string, unknown>,
+  issue: Record<string, unknown>,
+): boolean {
+  if (handoff.kind !== "issue" || !handoff.input || typeof handoff.input !== "object" || Array.isArray(handoff.input)) {
+    return false;
+  }
+  const input = handoff.input as Record<string, unknown>;
+  const labelKeys = ["readyLabel", "inProgressLabel", "blockedLabel", "humanLabel", "needsInfoLabel", "wontfixLabel"];
+  if (!labelKeys.every((key) => typeof input[key] === "string" && input[key])) return false;
+  return (
+    Number.isInteger(input.issueNumber) &&
+    issue.number === input.issueNumber &&
+    typeof input.issueTitle === "string" &&
+    issue.title === input.issueTitle &&
+    typeof input.issueBody === "string" &&
+    issue.body === input.issueBody &&
+    issue.state === "OPEN" &&
+    passesIssueLabelGate(issue, {
+      required: [input.readyLabel as string, input.inProgressLabel as string],
+      blocked: [input.blockedLabel as string, input.humanLabel as string, input.needsInfoLabel as string, input.wontfixLabel as string],
+    })
+  );
+}
 
 type DriverPayload = {
   action?: unknown;
   summary?: unknown;
   prompt?: unknown;
   error?: unknown;
+  [key: string]: unknown;
 };
+
+export function deliverPendingDriverHandoff(
+  entry: Record<string, unknown>,
+  state: AutomationState,
+  automationName: string,
+  deps: Pick<
+    AutomationRunnerDeps,
+    | "enabledAt"
+    | "isEnabled"
+    | "notify"
+    | "now"
+    | "revalidatePendingDriverHandoff"
+    | "saveState"
+    | "sendUserMessage"
+    | "sendUserMessageIfEnabled"
+  >,
+): boolean {
+  const handoff = entry.pendingDriverHandoff;
+  if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) return false;
+  const payload = handoff as DriverPayload;
+  const pendingPrompt = payload.prompt;
+  let prompt = typeof pendingPrompt === "string" ? pendingPrompt : "";
+  if (payload.monitorHandoff && typeof payload.monitorHandoff === "object" && !Array.isArray(payload.monitorHandoff)) {
+    try {
+      const monitorHandoff = payload.monitorHandoff as Record<string, unknown>;
+      const input = monitorHandoff.input;
+      const persistedEnabledAt = input && typeof input === "object" && !Array.isArray(input)
+        ? (input as Record<string, unknown>).enabledAt
+        : undefined;
+      const currentEnabledAt = deps.enabledAt?.();
+      const generationsAreValid =
+        typeof persistedEnabledAt === "number" &&
+        Number.isFinite(persistedEnabledAt) &&
+        typeof currentEnabledAt === "number" &&
+        Number.isFinite(currentEnabledAt);
+      const generationChanged = generationsAreValid && persistedEnabledAt !== currentEnabledAt;
+      const canRebind =
+        generationsAreValid &&
+        (!generationChanged ||
+          (monitorHandoff.kind === "issue" && deps.revalidatePendingDriverHandoff?.(monitorHandoff) === true));
+      if (!canRebind) {
+        delete entry.pendingDriverHandoff;
+        recordAutomationResult(entry, "driver_handoff_revalidation_required");
+        entry.lastSummary = `pre-disable ${String(monitorHandoff.kind || "monitor")} handoff was discarded for current-state re-evaluation`;
+        entry.updatedAt = deps.now();
+        deps.saveState(state);
+        deps.notify?.(`deadloop discarded stale monitor handoff: ${automationName}`, "warning");
+        return true;
+      }
+      prompt = renderPendingMonitorHandoff(monitorHandoff, currentEnabledAt);
+    } catch (error) {
+      delete entry.pendingDriverHandoff;
+      recordAutomationResult(entry, "driver_invalid_result");
+      entry.lastError = error instanceof Error ? error.message : String(error);
+      entry.updatedAt = deps.now();
+      deps.saveState(state);
+      return true;
+    }
+  }
+  if (!prompt) {
+    delete entry.pendingDriverHandoff;
+    recordAutomationResult(entry, "driver_invalid_result");
+    entry.lastError = "pending needs_llm driver result did not include prompt";
+    entry.updatedAt = deps.now();
+    deps.saveState(state);
+    return true;
+  }
+  if (deps.isEnabled && !deps.isEnabled()) {
+    recordAutomationResult(entry, "disabled_before_driver_prompt");
+    entry.updatedAt = deps.now();
+    deps.saveState(state);
+    return true;
+  }
+  try {
+    const queued = deps.sendUserMessageIfEnabled
+      ? deps.sendUserMessageIfEnabled(prompt)
+      : (deps.sendUserMessage(prompt), true);
+    if (!queued) {
+      recordAutomationResult(entry, "disabled_before_driver_prompt");
+      entry.updatedAt = deps.now();
+      deps.saveState(state);
+      return true;
+    }
+    delete entry.pendingDriverHandoff;
+    recordAutomationResult(entry, "driver_needs_llm_queued");
+    entry.lastQueuedAt = deps.now();
+    entry.updatedAt = deps.now();
+    deps.saveState(state);
+    deps.notify?.(`deadloop queued driver prompt: ${automationName}`, "info");
+  } catch (error) {
+    recordAutomationResult(entry, "send_error");
+    entry.lastError = error instanceof Error ? error.message : String(error);
+    entry.updatedAt = deps.now();
+    deps.saveState(state);
+    deps.notify?.(`deadloop send failed: ${automationName}`, "error");
+  }
+  return true;
+}
 
 function isAutomationFailureResult(result: string): boolean {
   return (
@@ -120,6 +250,13 @@ async function runConfiguredDriver(
     return true;
   }
 
+  if (deps.isEnabled && !deps.isEnabled()) {
+    recordAutomationResult(entry, "disabled_before_driver");
+    entry.updatedAt = deps.now();
+    deps.saveState(state);
+    return true;
+  }
+
   let result: AutomationExecResult;
   try {
     result = await deps.runDriver(project, automation, driver.resolved);
@@ -181,20 +318,11 @@ async function runConfiguredDriver(
       deps.notify?.(`deadloop driver returned invalid result: ${automation.name}`, "warning");
       return true;
     }
-    try {
-      deps.sendUserMessage(prompt);
-      recordAutomationResult(entry, "driver_needs_llm_queued");
-      entry.lastQueuedAt = deps.now();
-      entry.updatedAt = deps.now();
-      deps.saveState(state);
-      deps.notify?.(`deadloop queued driver prompt: ${automation.name}`, "info");
-    } catch (error) {
-      recordAutomationResult(entry, "send_error");
-      entry.lastError = error instanceof Error ? error.message : String(error);
-      entry.updatedAt = deps.now();
-      deps.saveState(state);
-      deps.notify?.(`deadloop send failed: ${automation.name}`, "error");
-    }
+    entry.pendingDriverHandoff = payload;
+    recordAutomationResult(entry, "driver_handoff_pending");
+    entry.updatedAt = deps.now();
+    deps.saveState(state);
+    deliverPendingDriverHandoff(entry, state, automation.name, deps);
     return true;
   }
 
@@ -279,6 +407,13 @@ export async function runScheduledAutomation(
     return;
   }
 
+  if (deps.isEnabled && !deps.isEnabled()) {
+    recordAutomationResult(entry, "disabled_after_precheck");
+    entry.updatedAt = deps.now();
+    deps.saveState(state);
+    return;
+  }
+
   if (await runConfiguredDriver(project, automation, entry, state, deps)) return;
 
   const promptResolution = deps.resolveAutomationFileInDir("prompt", automation, automation.promptFile);
@@ -291,9 +426,24 @@ export async function runScheduledAutomation(
     return;
   }
 
+  if (deps.isEnabled && !deps.isEnabled()) {
+    recordAutomationResult(entry, "disabled_before_prompt");
+    entry.updatedAt = deps.now();
+    deps.saveState(state);
+    return;
+  }
+
   try {
     const prompt = deps.readPrompt(project, automation, promptResolution.resolved);
-    deps.sendUserMessage(prompt);
+    const queued = deps.sendUserMessageIfEnabled
+      ? deps.sendUserMessageIfEnabled(prompt)
+      : (deps.sendUserMessage(prompt), true);
+    if (!queued) {
+      recordAutomationResult(entry, "disabled_before_prompt");
+      entry.updatedAt = deps.now();
+      deps.saveState(state);
+      return;
+    }
     recordAutomationResult(entry, "queued");
     entry.lastQueuedAt = deps.now();
     entry.updatedAt = deps.now();

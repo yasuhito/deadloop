@@ -6,8 +6,8 @@ export const DEFAULT_TIMEZONE = "Asia/Tokyo";
 
 export const REPO_POLICY_FILE = "deadloop.json";
 
-export function isLinkedGitWorktree(repoPath: string, gitCommonDir: string): boolean {
-  return path.dirname(path.resolve(repoPath, gitCommonDir)) !== path.resolve(repoPath);
+export function isLinkedGitWorktree(cwd: string, gitDir: string, gitCommonDir: string): boolean {
+  return path.resolve(cwd, gitDir) !== path.resolve(cwd, gitCommonDir);
 }
 
 export const DEFAULT_CHECK_COMMAND =
@@ -135,6 +135,7 @@ export type NormalizedProject = {
   enabled: boolean;
   repoPath?: string;
   githubRepo?: string;
+  githubRepositoryId?: string;
   baseBranch: string;
   worktreeRoot: string;
   checkCommand: string;
@@ -545,7 +546,7 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
   const id = sanitizeId(raw.id || raw.githubRepo || raw.repoPath);
   const project: NormalizedProject = {
     id,
-    enabled: raw.enabled !== false,
+    enabled: true,
     repoPath: raw.repoPath,
     githubRepo: raw.githubRepo,
     baseBranch: raw.baseBranch || "origin/main",
@@ -588,8 +589,7 @@ export function projectsFromConfig(
     .map((raw) => {
       const layered = applyRepoPolicy(raw, options);
       return normalizeProject(layered.raw, layered.source);
-    })
-    .filter((project) => project.enabled);
+    });
 }
 
 export function parseProjectsConfig(

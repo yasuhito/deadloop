@@ -15,6 +15,7 @@ import {
   normalizeProject,
   parseProjectsConfig,
   parseEveryMinutes,
+  projectsFromConfig,
   REPO_POLICY_FILE,
   renderTemplate,
   resolveConfigPath,
@@ -25,11 +26,11 @@ import {
 
 describe("deterministic extension core", () => {
   it("identifies a linked worktree whose common git directory belongs to another checkout", () => {
-    expect(isLinkedGitWorktree("/worktrees/repo/feature", "/repos/repo/.git")).toBe(true);
+    expect(isLinkedGitWorktree("/worktrees/repo/feature", "/repos/repo/.git/worktrees/feature", "/repos/repo/.git")).toBe(true);
   });
 
   it("does not identify a primary checkout as a linked worktree", () => {
-    expect(isLinkedGitWorktree("/repos/repo", ".git")).toBe(false);
+    expect(isLinkedGitWorktree("/repos/repo", ".git", ".git")).toBe(false);
   });
 
   it("uses DEADLOOP_CONFIG before default config paths", () => {
@@ -322,6 +323,32 @@ describe("deterministic extension core", () => {
     expect(renderTemplate("{{reviewerAgent}}", templateValues(project, project.automations[0], "/auto"))).toBe(
       "claude",
     );
+  });
+
+  it("retains overrides from a project whose obsolete enabled field is false", () => {
+    const [project] = projectsFromConfig({
+      projects: [{
+        id: "configured",
+        enabled: false,
+        repoPath: "/repo",
+        githubRepo: "owner/repo",
+        baseBranch: "origin/release",
+        checkCommand: "npm run verify",
+        worktreeRoot: "/worktrees/configured",
+        autoMerge: true,
+        automations: [],
+      }],
+    });
+
+    expect(project).toMatchObject({
+      id: "configured",
+      enabled: true,
+      baseBranch: "origin/release",
+      checkCommand: "npm run verify",
+      worktreeRoot: "/worktrees/configured",
+      autoMerge: true,
+      automations: [],
+    });
   });
 
   it("defaults auto merge to disabled", () => {

@@ -23,9 +23,16 @@ const {
   shellQuote,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
+type LabelMove = { remove?: string | string[]; add?: string | string[] };
+type GithubEffect =
+  | { operation: "add_pr_reviewer"; repo: string; prNumber: string; reviewer: string }
+  | { operation: "comment_pr"; repo: string; prNumber: string; body: string }
+  | { operation: "move_pr_labels"; repo: string; prNumber: string; move: LabelMove };
 const SCRIPT_DIR = __dirname;
 const commandRunner = createCommandRunner();
 const { runText } = commandRunner;
@@ -34,35 +41,36 @@ function herdrRunner() {
   return createHerdrRunnerFromCommandRunner(commandRunner);
 }
 
-function githubOperations() {
-  return createGithubOperations(commandRunner);
+function githubOperations(beforeMutation?: () => void) {
+  return createGithubOperations(commandRunner, beforeMutation);
 }
 
-function envConfig() {
+function envConfig(source: NodeJS.ProcessEnv = process.env) {
   return {
-    projectId: process.env.DEADLOOP_PROJECT_ID || "project",
-    repoPath: process.env.DEADLOOP_REPO_PATH || ".",
-    githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
-    baseBranch: process.env.DEADLOOP_BASE_BRANCH || "origin/main",
+    projectId: source.DEADLOOP_PROJECT_ID || "project",
+    repoPath: source.DEADLOOP_REPO_PATH || ".",
+    githubRepo: source.DEADLOOP_GITHUB_REPO || "",
+    enabledAt: Number(source.DEADLOOP_ENABLED_AT),
+    baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
     stateDir:
-      process.env.DEADLOOP_STATE_DIR ||
-      path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
-    checkCommand: process.env.DEADLOOP_CHECK_COMMAND || "git diff --check",
-    reviewerAgent: process.env.DEADLOOP_REVIEWER_AGENT || "pi",
-    reviewerModel: process.env.DEADLOOP_REVIEWER_MODEL || "",
-    branchUpdateAgent: process.env.DEADLOOP_WORKER_AGENT || "pi",
-    branchUpdateModel: process.env.DEADLOOP_WORKER_MODEL || "",
-    branchUpdateRemote: process.env.DEADLOOP_BRANCH_UPDATE_REMOTE || "origin",
-    reviewLabel: process.env.DEADLOOP_REVIEW_LABEL || "agent:review",
-    reviewingLabel: process.env.DEADLOOP_REVIEWING_LABEL || "agent:reviewing",
-    humanLabel: process.env.DEADLOOP_HUMAN_LABEL || "ready-for-human",
-    blockedLabel: process.env.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
-    implementLabel: process.env.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
-    autoMerge: parseBool(process.env.DEADLOOP_AUTO_MERGE),
-    externalReviewEnabled: parseBool(process.env.DEADLOOP_EXTERNAL_REVIEW_ENABLED),
-    externalReviewWaitSeconds: process.env.DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS || "1800",
-    now: process.env.DEADLOOP_NOW || "",
+      source.DEADLOOP_STATE_DIR ||
+      path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
+    checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
+    reviewerAgent: source.DEADLOOP_REVIEWER_AGENT || "pi",
+    reviewerModel: source.DEADLOOP_REVIEWER_MODEL || "",
+    branchUpdateAgent: source.DEADLOOP_WORKER_AGENT || "pi",
+    branchUpdateModel: source.DEADLOOP_WORKER_MODEL || "",
+    branchUpdateRemote: source.DEADLOOP_BRANCH_UPDATE_REMOTE || "origin",
+    reviewLabel: source.DEADLOOP_REVIEW_LABEL || "agent:review",
+    reviewingLabel: source.DEADLOOP_REVIEWING_LABEL || "agent:reviewing",
+    humanLabel: source.DEADLOOP_HUMAN_LABEL || "ready-for-human",
+    blockedLabel: source.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
+    implementLabel: source.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
+    autoMerge: parseBool(source.DEADLOOP_AUTO_MERGE),
+    externalReviewEnabled: parseBool(source.DEADLOOP_EXTERNAL_REVIEW_ENABLED),
+    externalReviewWaitSeconds: source.DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS || "1800",
+    now: source.DEADLOOP_NOW || "",
   };
 }
 
@@ -78,8 +86,99 @@ function liveAgents(): any {
   }
 }
 
-function shouldSimulateLaunch(fixture: JsonObject | null): boolean {
-  return Boolean(fixture);
+function fixtureEffects(fixture: JsonObject): JsonObject {
+  fixture.testAdapterEffects ||= { herdrStarts: [], githubComments: [], labels: {} };
+  return fixture.testAdapterEffects;
+}
+
+function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffect[]) {
+  const effects = fixtureEffects(fixture);
+  return {
+    commentPr: (repo: string, number: string | number, body: string) => {
+      effects.githubComments.push({ number: Number(number), body });
+      githubEffects?.push({ operation: "comment_pr", repo, prNumber: String(number), body });
+    },
+    movePrLabels: (repo: string, number: string | number, move: LabelMove) => {
+      const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
+      const labels = new Set((pr?.labels || []).map((label: JsonObject) => String(label.name)));
+      for (const label of [move.remove || []].flat()) labels.delete(label);
+      for (const label of [move.add || []].flat()) labels.add(label);
+      if (pr) pr.labels = [...labels].map((name) => ({ name }));
+      effects.labels[String(number)] = [...labels];
+      githubEffects?.push({ operation: "move_pr_labels", repo, prNumber: String(number), move });
+    },
+    addPrReviewer: (repo: string, number: string | number, reviewer: string) => {
+      effects.githubReviewers ||= [];
+      effects.githubReviewers.push({ number: Number(number), reviewer });
+      githubEffects?.push({ operation: "add_pr_reviewer", repo, prNumber: String(number), reviewer });
+    },
+  };
+}
+
+function fixtureHerdrRunner(branch: string) {
+  return {
+    createWorktree: () => ({ workspaceId: "fixture-workspace", worktreePath: `/worktrees/fixture/${branch.replace(/\//g, "-")}` }),
+    openWorktree: () => ({ workspaceId: "fixture-workspace", worktreePath: `/worktrees/fixture/${branch.replace(/\//g, "-")}` }),
+    createTab: () => ({ tabId: "fixture-tab" }),
+    startAgent: () => "",
+    listWorktrees: () => [],
+    listAgents: () => [],
+    removeAgent: () => "",
+    removeWorktree: () => "",
+  };
+}
+
+type DriverLaunchInput = {
+  worktree: { mode: "open"; branch: string };
+  repoPath: string;
+  automationDir: string;
+  stateDir: string;
+  name: string;
+  agent: string;
+  model: string;
+  level: string;
+  uuid: string;
+  promptFilePrefix: string;
+  renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
+};
+
+function launchWithAdapters(
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  input: DriverLaunchInput,
+  mutateWorkflowState: (github: ReturnType<typeof githubOperations>) => void,
+  revalidate: () => void,
+): JsonObject {
+  const mutate = (recheck: () => void) => mutateWorkflowState(
+    fixture ? fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations> : githubOperations(recheck),
+  );
+  const launch = (recheck: () => void) => launchAgentFlow(
+    input,
+    fixture
+      ? {
+          mkdirSync: () => {},
+          runner: fixtureHerdrRunner(input.worktree.branch),
+          runText: (args: string[]) => {
+            const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
+            fixtureEffects(fixture).herdrStarts.push({
+              name: valueAfter("--name"),
+              agent: valueAfter("--agent"),
+              branch: input.worktree.branch,
+            });
+            return JSON.stringify({ ok: true });
+          },
+          writeFileSync: () => {},
+          beforeAgentStart: recheck,
+        }
+      : { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
+  );
+
+  if (fixture) {
+    revalidate();
+    mutate(() => {});
+    return launch(() => {});
+  }
+  return withEnabledDriverLaunch(env, mutate, launch, { revalidate });
 }
 
 function reviewAgentPrompt(
@@ -98,6 +197,7 @@ Target:
 - PR: #${number} ${title}
 - PR URL: ${pr.url || `https://github.com/${env.githubRepo}/pull/${number}`}
 - Reason: ${reason}
+- Expected PR head: ${String(pr.headRefOid || "")}
 - autoMerge: ${env.autoMerge ? "true" : "false"}
 
 Contract:
@@ -115,7 +215,7 @@ Contract:
 Promise report:
 - Before stopping, write JSON to the promise file: \`${promiseFile.replace(/`/g, "\\`")}\`.
 - Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
-- If no actionable defect remains, write {"status":"complete","outcome":"approved","reason":"","summary":"three sentences: what was reviewed, result, remaining risk","findings":[]}.
+- If no actionable defect remains, write {"status":"complete","outcome":"approved","reviewedHead":"${String(pr.headRefOid || "")}","reason":"","summary":"three sentences: what was reviewed, result, remaining risk","findings":[]}.
 - If actionable defects exist, write {"status":"complete","outcome":"changes_requested","reason":"","summary":"three-sentence summary","findings":[{"title":"concise defect","body":"bounded required correction and evidence","path":"optional/repo/path","line":1,"severity":"blocker|major|minor"}]}.
 - Use outcome=human_required only when a product/spec/safety decision cannot be repaired within the PR. Explain it in reason and optional findings.
 - Findings are the repair worker's entire contract. Include only verified, actionable defects; #243-style lint or repository-contract failures are changes_requested, not blocked.
@@ -138,6 +238,8 @@ function branchUpdateWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-branch-update-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-repo",
+    shellQuote(env.repoPath),
     "--github-repo",
     shellQuote(env.githubRepo),
     "--pr",
@@ -154,6 +256,8 @@ function branchUpdateWorkerPrompt(
     shellQuote(env.automationDir),
     "--state-dir",
     shellQuote(env.stateDir),
+    "--enabled-at",
+    String(env.enabledAt),
     "--check-command",
     shellQuote(env.checkCommand),
   ].join(" ");
@@ -172,7 +276,7 @@ Safety contract:
 - Merge ${baseOid} into the existing PR branch. Use git merge, never rebase, and never rewrite existing commits.
 - Resolve only conflicts caused by this merge. Do not widen the PR's scope.
 - Commit the merge resolution before finalization.
-- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, verifies the PR head SHA immediately before the only permitted non-force push, and pushes only the driver-selected branch:
+- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted normal non-force push to the driver-selected branch:
   ${finalizeCommand}
 - Never force-push. Never push another ref. Never edit labels, create or edit a PR, merge a PR, close an issue, or delete a branch.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state so the next cycle can re-evaluate.
@@ -223,14 +327,50 @@ gh pr view ${Number(pr.number || 0)} -R ${shellQuote(env.githubRepo)} --comments
 3. After changing either the PR head or configured base head, remove ${env.blockedLabel}; the new exact head/base pair may be attempted once.`;
 }
 
-function applyBranchUpdateBlocked(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): string {
-  const comment = branchUpdateBlockedComment(pr, env, reason);
-  if (!fixture) {
-    const github = githubOperations();
-    github.commentPr(env.githubRepo, Number(pr.number || 0), comment);
-    github.movePrLabels(env.githubRepo, Number(pr.number || 0), { remove: env.reviewingLabel, add: env.blockedLabel });
+function applyPrTransition(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  stillApplicable: (livePlan: ReturnType<typeof planPrReviewerAction>, live: JsonObject) => boolean,
+  mutate: (github: ReturnType<typeof githubOperations>, live: JsonObject) => void,
+  githubEffects?: GithubEffect[],
+): boolean {
+  if (fixture) {
+    mutate(fixtureGithubOperations(fixture, githubEffects) as ReturnType<typeof githubOperations>, pr);
+    return true;
   }
-  return comment;
+  try {
+    return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+      const github = githubOperations(recheck);
+      const live = github.getPr(env.githubRepo, pr.number);
+      if (String(live.state || "").toUpperCase() !== "OPEN") throw new StaleLaunchError(`PR #${pr.number} is no longer open`);
+      assertSameLaunchTarget(pr, live, "pr");
+      const livePlan = planPrReviewerAction([live], liveAgents(), env);
+      if (!("pr" in livePlan) || Number(livePlan.pr.number) !== Number(pr.number) || !stillApplicable(livePlan, live)) {
+        throw new StaleLaunchError(`PR #${pr.number} transition changed`);
+      }
+      mutate(github, live);
+      return true;
+    });
+  } catch (error) {
+    if (isStaleLaunchError(error)) return false;
+    throw error;
+  }
+}
+
+function applyBranchUpdateBlocked(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  reason: string,
+  stillApplicable: (livePlan: ReturnType<typeof planPrReviewerAction>, live: JsonObject) => boolean,
+): { comment: string; applied: boolean } {
+  const comment = branchUpdateBlockedComment(pr, env, reason);
+  const applied = applyPrTransition(pr, env, fixture, stillApplicable, (github, live) => {
+    github.commentPr(env.githubRepo, Number(live.number || 0), comment);
+    github.movePrLabels(env.githubRepo, Number(live.number || 0), { remove: env.reviewingLabel, add: env.blockedLabel });
+  });
+  return { comment, applied };
 }
 
 function launchBranchUpdate(
@@ -246,26 +386,11 @@ function launchBranchUpdate(
   const key = branchUpdateRetryKey(headOid, baseOid);
   const updaterName = `${env.projectId}-pr-${number}-branch-update-${key}`;
   const uuid = fixture ? "fixture-branch-update-uuid" : randomUUID();
-  if (fixture) {
-    return {
-      updaterName,
-      headRefName: branch,
-      retryKey: key,
-      workspaceId: "fixture-update-workspace",
-      tabId: "fixture-update-tab",
-      worktreePath: `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`,
-      promptFile: `${env.stateDir}/runs/${uuid}/branch-update-prompt.md`,
-      promiseFile: `${env.stateDir}/runs/${uuid}/promise.json`,
-      simulated: true,
-    };
-  }
-
-  runText(["git", "check-ref-format", "--branch", branch]);
   const marker = renderBranchUpdateMarker(headOid, baseOid);
-  const github = githubOperations();
-  github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
-  github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
-  const launch = launchAgentFlow(
+  if (!fixture) runText(["git", "check-ref-format", "--branch", branch]);
+  const launch = launchWithAdapters(
+    env,
+    fixture,
     {
       worktree: { mode: "open", branch },
       repoPath: env.repoPath,
@@ -280,34 +405,40 @@ function launchBranchUpdate(
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
     },
-    { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+    (github) => {
+      github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
+      github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
+    },
+    () => {
+      if (fixture) return;
+      const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
+      if (!("pr" in livePlan)) throw new StaleLaunchError(`PR #${number} is no longer eligible`);
+      assertSameLaunchTarget(pr, livePlan.pr, "pr");
+      const liveDecision = branchUpdateDecision(livePlan.pr, env, null);
+      if (
+        liveDecision.action !== "delegate_worker"
+        || String(liveDecision.headOid || "") !== headOid
+        || String(liveDecision.baseOid || "") !== baseOid
+        || branchUpdateAttemptExists(livePlan.pr.comments || [], headOid, baseOid)
+      ) throw new StaleLaunchError(`PR #${number} branch-update target changed before launch`);
+    },
   );
-  return { updaterName, headRefName: branch, retryKey: key, ...launch };
+  return { updaterName, headRefName: branch, retryKey: key, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
-function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
+function prReviewerLaunchPlan(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  reason: string,
+  uuid: string,
+): { reviewerName: string; headRefName: string; input: DriverLaunchInput } {
   const number = Number(pr.number || 0);
-  const uuid = shouldSimulateLaunch(fixture) ? "fixture-reviewer-uuid" : randomUUID();
   const reviewerName = `${env.projectId}-pr-${number}-reviewer`;
   const headRefName = String(pr.headRefName || `pr-${number}`);
-  const simulatedWorktreePath = `/worktrees/${env.projectId}/${headRefName.replace(/\//g, "-")}`;
-
-  if (shouldSimulateLaunch(fixture)) {
-    return {
-      reviewerName,
-      headRefName,
-      workspaceId: "fixture-workspace",
-      tabId: "fixture-tab",
-      worktreePath: simulatedWorktreePath,
-      promptFile: `${env.stateDir}/runs/${uuid}/reviewer-prompt.md`,
-      promiseFile: `${env.stateDir}/runs/${uuid}/promise.json`,
-      simulated: true,
-    };
-  }
-
-  githubOperations().movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
-  const launch = launchAgentFlow(
-    {
+  return {
+    reviewerName,
+    headRefName,
+    input: {
       worktree: { mode: "open", branch: headRefName },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
@@ -321,9 +452,41 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
     },
-    { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+  };
+}
+
+function launchPrReviewerFlow(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  reason: string,
+  ops: Parameters<typeof launchAgentFlow>[1],
+): JsonObject {
+  const plan = prReviewerLaunchPlan(pr, env, reason, randomUUID());
+  const launch = launchAgentFlow(plan.input, ops);
+  return { reviewerName: plan.reviewerName, headRefName: plan.headRefName, ...launch };
+}
+
+function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
+  const number = Number(pr.number || 0);
+  const uuid = fixture ? "fixture-reviewer-uuid" : randomUUID();
+  const plan = prReviewerLaunchPlan(pr, env, reason, uuid);
+  const { reviewerName, headRefName } = plan;
+  const launch = launchWithAdapters(
+    env,
+    fixture,
+    plan.input,
+    (github) => github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }),
+    () => {
+      if (fixture) return;
+      const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
+      if (livePlan.kind !== "review_required") throw new StaleLaunchError(`PR #${number} is no longer eligible for reviewer launch`);
+      assertSameLaunchTarget(pr, livePlan.pr, "pr");
+      if (branchUpdateDecision(livePlan.pr, env, null).action !== "no_update") {
+        throw new StaleLaunchError(`PR #${number} branch-update state changed before reviewer launch`);
+      }
+    },
   );
-  return { reviewerName, headRefName, ...launch };
+  return { reviewerName, headRefName, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
 function draftBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>): string {
@@ -360,24 +523,35 @@ gh issue edit <issueNumber> -R ${shellQuote(env.githubRepo)} --remove-label ${sh
 \`\`\``;
 }
 
-function applyDraftGate(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, comment: string): void {
-  if (fixture) return;
-  const number = String(pr.number);
-  const github = githubOperations();
-  github.commentPr(env.githubRepo, number, comment);
-  github.movePrLabels(env.githubRepo, number, { remove: env.reviewingLabel }, { check: false });
-  github.movePrLabels(env.githubRepo, number, { remove: env.reviewLabel }, { check: false });
-  github.movePrLabels(env.githubRepo, number, { add: env.blockedLabel });
+function applyDraftGate(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  comment: string,
+): { applied: boolean; githubEffects: GithubEffect[] } {
+  const githubEffects: GithubEffect[] = [];
+  const applied = applyPrTransition(pr, env, fixture, (livePlan) => livePlan.kind === "draft_gate", (github, live) => {
+    const number = String(live.number);
+    github.commentPr(env.githubRepo, number, comment);
+    github.movePrLabels(env.githubRepo, number, { remove: [env.reviewingLabel, env.reviewLabel], add: env.blockedLabel });
+  }, githubEffects);
+  return { applied, githubEffects };
 }
 
-function applyExternalReviewRequest(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): void {
-  if (fixture) return;
-  const number = String(pr.number);
-  const head = String(pr.headRefOid || "");
-  const github = githubOperations();
-  github.addPrReviewer(env.githubRepo, number, "@copilot", { check: false });
-  github.commentPr(env.githubRepo, number, `@coderabbitai review\n\n<!-- deadloop:external-review-request head=${head} -->`);
-  github.movePrLabels(env.githubRepo, number, { remove: env.reviewingLabel }, { check: false });
+function applyExternalReviewRequest(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+): { applied: boolean; githubEffects: GithubEffect[] } {
+  const githubEffects: GithubEffect[] = [];
+  const applied = applyPrTransition(pr, env, fixture, (livePlan) => livePlan.kind === "external_review_request", (github, live) => {
+    const number = String(live.number);
+    const head = String(live.headRefOid || "");
+    github.addPrReviewer(env.githubRepo, number, "@copilot", { check: false });
+    github.commentPr(env.githubRepo, number, `@coderabbitai review\n\n<!-- deadloop:external-review-request head=${head} -->`);
+    github.movePrLabels(env.githubRepo, number, { remove: env.reviewingLabel }, { check: false });
+  }, githubEffects);
+  return { applied, githubEffects };
 }
 
 function drive(fixturePath: string | undefined): DriverResult {
@@ -395,11 +569,17 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   if (plan.kind === "draft_gate") {
     const comment = draftBlockedComment(plan.pr, env);
-    applyDraftGate(plan.pr, env, fixture, comment);
+    const { applied, githubEffects } = applyDraftGate(plan.pr, env, fixture, comment);
+    if (!applied) {
+      return driverResult("skip", `PR #${plan.decision.number} changed before the draft gate; no workflow state was mutated`, {
+        driverAction: "draft_gate_stale", prNumber: plan.decision.number,
+      });
+    }
     return driverResult("done", `PR #${plan.decision.number} is draft; marked blocked`, {
       driverAction: "draft_blocked",
       prNumber: plan.decision.number,
       comment,
+      ...(fixture ? { githubEffects, testAdapterEffects: fixtureEffects(fixture) } : {}),
     });
   }
 
@@ -412,7 +592,15 @@ function drive(fixturePath: string | undefined): DriverResult {
         branchUpdate: updateDecision,
       });
     }
-    const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, String(updateDecision.reason || "unsafe branch-update state"));
+    const transition = applyBranchUpdateBlocked(
+      plan.pr, env, fixture, String(updateDecision.reason || "unsafe branch-update state"),
+      (_livePlan, live) => {
+        const liveDecision = branchUpdateDecision(live, env, null);
+        return liveDecision.action === "blocked" && liveDecision.reason === updateDecision.reason;
+      },
+    );
+    if (!transition.applied) return driverResult("skip", `PR #${plan.decision.number} changed before branch blocking`, { driverAction: "branch_update_block_stale" });
+    const { comment } = transition;
     return driverResult("done", `PR #${plan.decision.number} branch update is unsafe; marked blocked`, {
       driverAction: "branch_update_blocked",
       prNumber: plan.decision.number,
@@ -425,7 +613,12 @@ function drive(fixturePath: string | undefined): DriverResult {
     const headOid = String(updateDecision.headOid || plan.pr.headRefOid || "");
     const baseOid = String(updateDecision.baseOid || "");
     if (Boolean(plan.pr.isCrossRepository)) {
-      const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, "the PR comes from another repository");
+      const transition = applyBranchUpdateBlocked(
+        plan.pr, env, fixture, "the PR comes from another repository",
+        (_livePlan, live) => Boolean(live.isCrossRepository) && branchUpdateDecision(live, env, null).action === "delegate_worker",
+      );
+      if (!transition.applied) return driverResult("skip", `PR #${plan.decision.number} changed before branch blocking`, { driverAction: "branch_update_block_stale" });
+      const { comment } = transition;
       return driverResult("done", `PR #${plan.decision.number} is cross-repository; marked blocked`, {
         driverAction: "branch_update_blocked",
         prNumber: plan.decision.number,
@@ -435,17 +628,44 @@ function drive(fixturePath: string | undefined): DriverResult {
     }
     const marker = renderBranchUpdateMarker(headOid, baseOid);
     if (branchUpdateAttemptExists(plan.pr.comments || [], headOid, baseOid)) {
-      const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, "this exact PR head/base head pair already used its one attempt");
+      const transition = applyBranchUpdateBlocked(
+        plan.pr, env, fixture, "this exact PR head/base head pair already used its one attempt",
+        (_livePlan, live) => {
+          const liveDecision = branchUpdateDecision(live, env, null);
+          return liveDecision.action === "delegate_worker"
+            && branchUpdateAttemptExists(live.comments || [], String(liveDecision.headOid || ""), String(liveDecision.baseOid || ""));
+        },
+      );
+      if (!transition.applied) return driverResult("skip", `PR #${plan.decision.number} changed before branch blocking`, { driverAction: "branch_update_block_stale" });
+      const { comment } = transition;
       return driverResult("done", `PR #${plan.decision.number} exact branch-update pair was already attempted; marked blocked`, {
         driverAction: "branch_update_attempt_exhausted",
         prNumber: plan.decision.number,
         retryKey: branchUpdateRetryKey(headOid, baseOid),
         marker,
         comment,
+        ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
       });
     }
     try {
       const launch = launchBranchUpdate(plan.pr, env, fixture, updateDecision);
+      const monitorInput = {
+        prNumber: Number(plan.pr.number || 0),
+        expectedHeadOid: headOid,
+        expectedBaseOid: baseOid,
+        branch: String(plan.pr.headRefName || ""),
+        automationDir: env.automationDir,
+        promiseFile: String(launch.promiseFile || ""),
+        actorName: "branch-update worker",
+        projectId: env.projectId,
+        repoPath: env.repoPath,
+        githubRepo: env.githubRepo,
+        stateDir: env.stateDir,
+        enabledAt: env.enabledAt,
+        reviewingLabel: env.reviewingLabel,
+        reviewLabel: env.reviewLabel,
+        blockedLabel: env.blockedLabel,
+      };
       return driverResult("needs_llm", `Launched branch-update worker for PR #${plan.decision.number}`, {
         driverAction: "branch_update_monitor_request",
         prNumber: plan.decision.number,
@@ -453,37 +673,51 @@ function drive(fixturePath: string | undefined): DriverResult {
         marker,
         labelsPreserved: [env.reviewLabel, env.reviewingLabel],
         launch,
-        prompt: renderBranchUpdateMonitorPrompt({
-          prNumber: Number(plan.pr.number || 0),
-          expectedHeadOid: headOid,
-          expectedBaseOid: baseOid,
-          branch: String(plan.pr.headRefName || ""),
-          automationDir: env.automationDir,
-          promiseFile: String(launch.promiseFile || ""),
-          actorName: "branch-update worker",
-          reviewingLabel: env.reviewingLabel,
-          reviewLabel: env.reviewLabel,
-          blockedLabel: env.blockedLabel,
-        }),
+        monitorHandoff: { kind: "branch-update", input: monitorInput },
+        prompt: renderBranchUpdateMonitorPrompt(monitorInput),
+        ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
       });
     } catch (error) {
+      if (isStaleLaunchError(error)) {
+        return driverResult("skip", `PR #${plan.decision.number} changed before branch-update launch; no workflow state was mutated`, {
+          driverAction: "branch_update_launch_stale",
+          prNumber: plan.decision.number,
+        });
+      }
       const reason = `branch-update launch failed: ${error instanceof Error ? error.message : String(error)}`;
-      const comment = applyBranchUpdateBlocked(plan.pr, env, fixture, reason);
+      const transition = applyBranchUpdateBlocked(
+        plan.pr, env, fixture, reason,
+        (_livePlan, live) => {
+          const liveDecision = branchUpdateDecision(live, env, null);
+          return liveDecision.action === "delegate_worker"
+            && String(liveDecision.headOid || "") === headOid
+            && String(liveDecision.baseOid || "") === baseOid;
+        },
+      );
+      if (!transition.applied) return driverResult("skip", `PR #${plan.decision.number} changed after branch-update launch failed`, { driverAction: "branch_update_block_stale" });
+      const { comment } = transition;
       return driverResult("done", `PR #${plan.decision.number} branch-update launch failed; marked blocked`, {
         driverAction: "branch_update_launch_failed",
         prNumber: plan.decision.number,
         marker,
         comment,
+        ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
       });
     }
   }
 
   if (plan.kind === "external_review_request") {
-    applyExternalReviewRequest(plan.pr, env, fixture);
+    const { applied, githubEffects } = applyExternalReviewRequest(plan.pr, env, fixture);
+    if (!applied) {
+      return driverResult("skip", `PR #${plan.decision.number} changed before external review request`, {
+        driverAction: "external_review_request_stale", prNumber: plan.decision.number,
+      });
+    }
     return driverResult("done", `Requested external review for PR #${plan.decision.number}`, {
       driverAction: "external_review_requested",
       prNumber: plan.decision.number,
       gate: plan.gate,
+      ...(fixture ? { githubEffects, testAdapterEffects: fixtureEffects(fixture) } : {}),
     });
   }
   if (plan.kind === "external_review_wait") {
@@ -496,30 +730,53 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   const { pr, gate, reason } = plan;
   const decision = plan.decision;
-  const launch = launchPrReviewer(pr, env, fixture, reason);
+  let launch: JsonObject;
+  try {
+    launch = launchPrReviewer(pr, env, fixture, reason);
+  } catch (error) {
+    if (isStaleLaunchError(error)) {
+      return driverResult("skip", `PR #${decision.number} changed before reviewer launch; no workflow state was mutated`, {
+        driverAction: "reviewer_launch_stale",
+        prNumber: decision.number,
+      });
+    }
+    throw error;
+  }
+  const monitorInput = {
+    prNumber: Number(pr.number || 0),
+    expectedHeadOid: String(pr.headRefOid || ""),
+    branch: String(pr.headRefName || ""),
+    automationDir: env.automationDir,
+    promiseFile: String(launch.promiseFile || ""),
+    actorName: "reviewer",
+    projectId: env.projectId,
+    repoPath: env.repoPath,
+    githubRepo: env.githubRepo,
+    stateDir: env.stateDir,
+    enabledAt: env.enabledAt,
+    checkCommand: renderProjectCheckCommand({
+      automationDir: env.automationDir,
+      stateDir: env.stateDir,
+      cwd: String(launch.worktreePath || ""),
+      command: env.checkCommand,
+    }),
+    projectCheckCommand: env.checkCommand,
+    workerAgent: env.branchUpdateAgent,
+    workerModel: env.branchUpdateModel,
+    repairRemote: env.branchUpdateRemote,
+    humanLabel: env.humanLabel,
+    reviewLabel: env.reviewLabel,
+    reviewingLabel: env.reviewingLabel,
+    blockedLabel: env.blockedLabel,
+  };
   return driverResult("needs_llm", `Launched reviewer agent for PR #${decision.number}`, {
     driverAction: "reviewer_monitor_request",
     prNumber: decision.number,
     gate,
     launch,
-    prompt: renderReviewerMonitorPrompt({
-      prNumber: Number(pr.number || 0),
-      expectedHeadOid: String(pr.headRefOid || ""),
-      branch: String(pr.headRefName || ""),
-      automationDir: env.automationDir,
-      promiseFile: String(launch.promiseFile || ""),
-      actorName: "reviewer",
-      checkCommand: renderProjectCheckCommand({
-        automationDir: env.automationDir,
-        stateDir: env.stateDir,
-        cwd: String(launch.worktreePath || ""),
-        command: env.checkCommand,
-      }),
-      humanLabel: env.humanLabel,
-      reviewLabel: env.reviewLabel,
-      reviewingLabel: env.reviewingLabel,
-      blockedLabel: env.blockedLabel,
-    }),
+    monitorHandoff: { kind: "reviewer", input: monitorInput },
+    prompt: renderReviewerMonitorPrompt(monitorInput),
+    ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
   });
 }
 
@@ -534,4 +791,6 @@ function main(): void {
   }
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { envConfig, launchPrReviewerFlow };

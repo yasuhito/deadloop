@@ -5,7 +5,10 @@ type JsonObject = Record<string, any>;
 const REVIEW_RESULT_RE = /<!--\s*deadloop:review-result\s+head=([0-9a-f]+)\s+review=([0-9a-f]+)\s+outcome=(approved|changes_requested|human_required)\s*-->/gi;
 const REPAIR_RESULT_RE = /<!--\s*deadloop:review-repair-result\s+key=([0-9a-f]+)\s+head=([0-9a-f]+)\s*-->/gi;
 
-const INTERNAL_DETAIL_RE = /(?:\bfile:\/\/+|(?<!:)\/\/|\\\\)[^\s`'")]+|(?:^|[^A-Za-z0-9_/])(?:\/(?!\/)[^\s`'")]+|[A-Za-z]:\\)|(?:\.pi|\.deadloop)[\\/]|(?:worker|review-repair)-prompt(?:\.md)?|promise\.json|[\\/]prompts?[\\/]|\bprompts?\b|review-repair worker|deterministic dispatcher|\bherdr\b|\brunner\b|\bsession\b|\b[a-z0-9_.-]+-pr-\d+-(?:reviewer|review-repair(?:-[a-z0-9-]+)?)\b/i;
+const LOCAL_DETAIL_RE = /(?:\bfile:\/\/+|(?<!:)\/\/|\\\\)[^\s`'")]+|(?:^|[^A-Za-z0-9_/])(?:\/(?!\/)[^\s`'")]+|[A-Za-z]:\\)[^\s`'")]*/gi;
+const INTERNAL_TERM_RE = /(?:worker|review-repair)-prompt(?:\.md)?|promise(?:\.json)?|(?:\.pi|\.deadloop)[\\/][^\s`'")]*|[\\/]prompts?[\\/][^\s`'")]*|review-repair worker|deterministic dispatcher|\bherdr\b|\brunner\b|\bsession\b|\b[a-z0-9_.-]+-pr-\d+-(?:reviewer|review-repair(?:-[a-z0-9-]+)?)\b/gi;
+const PROMPT_DETAIL_RE = /\bprompts?\b/i;
+const INTERNAL_DETAIL_RE = new RegExp(`${LOCAL_DETAIL_RE.source}|(?:worker|review-repair)-prompt(?:\\.md)?|promise\\.json|(?:\\.pi|\\.deadloop)[\\\\/]|[\\\\/]prompts?[\\\\/]|${PROMPT_DETAIL_RE.source}`, "i");
 const UNSAFE_CONTROL_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
 const REPOSITORY_PATH_RE = /^(?!\.git(?:\/|$))(?!.*\/\/)[A-Za-z0-9._@+~/-]+$/;
 
@@ -16,8 +19,13 @@ function escapeMarkdown(text: string): string {
 function publicText(value: unknown, fallback: string): string {
   const raw = String(value || "");
   const text = raw.replace(/\s+/g, " ").trim();
-  if (!text || UNSAFE_CONTROL_RE.test(raw) || INTERNAL_DETAIL_RE.test(text) || text.includes("<!-- deadloop:")) return fallback;
-  return escapeMarkdown(text);
+  if (!text || UNSAFE_CONTROL_RE.test(raw) || PROMPT_DETAIL_RE.test(text) || text.includes("<!-- deadloop:")) return fallback;
+  const sanitized = text
+    .replace(LOCAL_DETAIL_RE, (fragment) => `${fragment.startsWith(" ") ? " " : ""}[internal path omitted]`)
+    .replace(INTERNAL_TERM_RE, "internal review data")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized ? escapeMarkdown(sanitized) : fallback;
 }
 
 function publicRepoPath(value: unknown): string {
@@ -48,6 +56,7 @@ function renderChangesRequestedComment(input: JsonObject): string {
     : input.repairAlreadyStarted
       ? "This review result already used its one bounded automatic repair attempt. The repair will not be launched again."
       : "Exactly one bounded automatic repair will now start and will change only the findings listed above. The updated head will be reviewed again after a successful push.";
+  const nextHeading = input.repairUnavailable ? "Recovery steps" : "Next step";
   return `## Review result: changes required
 
 - Reviewed commit: ${code(input.headOid)}
@@ -55,7 +64,7 @@ function renderChangesRequestedComment(input: JsonObject): string {
 
 ${findings.join("\n\n")}
 
-## Next step
+## ${nextHeading}
 ${nextStep}
 
 ${reviewMarker({ ...input, outcome: "changes_requested" })}${input.repairUnavailable ? "" : `\n${marker}`}`;

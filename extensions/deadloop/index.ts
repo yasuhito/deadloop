@@ -1,13 +1,10 @@
-const childProcess = require("node:child_process");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
+import childProcess from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-const EXTENSION_NAME = "deadloop";
-const STATUS_KEY = EXTENSION_NAME;
-const TICK_MS = 30_000;
-const MODULE_LOAD_TIME_MS = Date.now();
-const {
+import {
   DEFAULT_TIMEZONE,
   REPO_POLICY_FILE,
   automationEnvironment,
@@ -22,19 +19,59 @@ const {
   resolveConfigPath,
   sanitizeId,
   templateValues,
-} = require("../../src/core.ts");
-const {
-  buildDoctorSnapshot,
-  formatDoctorReport,
-} = require("../../src/doctor.ts");
-const { buildStatusSnapshot, formatStatusReport } = require("../../src/status.ts");
-const { readClaudeConfig } = require("../../src/agent-trust.cjs");
-const { runScheduledAutomation } = require("../../src/automation-runner.ts");
+} from "../../src/core";
+import { buildDoctorSnapshot, formatDoctorReport } from "../../src/doctor";
+import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } from "../../src/status";
+import { readClaudeConfig } from "../../src/agent-trust.cjs";
+import {
+  deliverPendingDriverHandoff,
+  isPendingIssueHandoffEligible,
+  runScheduledAutomation,
+} from "../../src/automation-runner";
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
+const {
+  defaultIssueDecisionConfig,
+  issueBlockedByNumbers,
+  liveDependencyState,
+  selectIssueForImplementation,
+} = require("./automations/issue-coordinator-decisions.ts");
+const { loadAutomationState, saveAutomationState } = require("../../src/automation-state.cjs");
+const { acquireLock, releaseOwned } = require("../../src/enablement-lock.cjs");
+const {
+  DISABLE_LOCK_ATTEMPTS,
+  DISABLE_LOCK_DELAY_MS,
+} = require("../../src/driver-enablement.cjs");
+const { assertEnabled, withEnabledProjectLock } = require("../../src/enabled-operation.cjs");
+const {
+  advanceDisableGeneration,
+  disableGenerationForRepo,
+  loadDisableGenerations,
+} = require("../../src/disable-generation.cjs");
+const {
+  acquireSchedulerLock: acquireSchedulerFileLock,
+  releaseSchedulerLock: releaseSchedulerFileLock,
+} = require("../../src/scheduler-lock.cjs");
+import { inferredProjectId, schedulerLockName } from "../../src/project-identity";
+import {
+  findEnabledProject,
+  normalizeEnablementState,
+  observeAutoMerge,
+  removeEnabledProject,
+  removeEnabledProjectAtPath,
+  removeEnabledProjectAttempt,
+  removeEnabledProjectGeneration,
+  upsertEnabledProject,
+} from "../../src/enablement";
+
+const EXTENSION_NAME = "deadloop";
+const STATUS_KEY = EXTENSION_NAME;
+const TICK_MS = 30_000;
+const MODULE_LOAD_TIME_MS = Date.now();
 
 const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 const STATE_DIR = path.join(CONFIG_DIR, EXTENSION_NAME);
 const STATE_PATH = path.join(STATE_DIR, "state.json");
+const ENABLEMENT_PATH = path.join(STATE_DIR, "enabled-projects.json");
 
 function resolveExtensionDir() {
   const candidates = [
@@ -57,14 +94,17 @@ const CODE_FRESHNESS_SOURCE_PATHS = [
   path.resolve(__dirname, "../../src/core.ts"),
   path.resolve(__dirname, "../../src/automation-runner.ts"),
 ];
-const CONFIG_PATH = resolveConfigPath({
-  env: process.env,
-  stateDir: STATE_DIR,
-  extensionDir: EXTENSION_DIR,
-  exists: fs.existsSync,
-  joinPath: path.join,
-});
 const AUTOMATION_DIR = path.join(EXTENSION_DIR, "automations");
+
+function currentConfigPath() {
+  return resolveConfigPath({
+    env: process.env,
+    stateDir: STATE_DIR,
+    extensionDir: EXTENSION_DIR,
+    exists: fs.existsSync,
+    joinPath: path.join,
+  });
+}
 
 function readJsonFile(file, fallback) {
   try {
@@ -76,7 +116,7 @@ function readJsonFile(file, fallback) {
 
 function writeJsonFile(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   fs.renameSync(tmp, file);
 }
@@ -88,10 +128,11 @@ function debugLog(...args) {
 }
 
 function readConfigText() {
+  const configPath = currentConfigPath();
   try {
-    return fs.readFileSync(CONFIG_PATH, "utf8");
+    return { text: fs.readFileSync(configPath, "utf8"), configPath };
   } catch (error) {
-    if (error?.code === "ENOENT") return "{}";
+    if (error?.code === "ENOENT") return { text: "{}", configPath };
     throw error;
   }
 }
@@ -104,21 +145,23 @@ function gitSync(repoPath, args, timeout = 30_000) {
   });
 }
 
-function trustedRepoPolicyProvider(project) {
+function trustedRepoPolicyProvider(project, options: { fetch?: boolean } = {}) {
   const repoPath = project.repoPath;
-  if (!repoPath) return { status: "missing" };
+  if (!repoPath) return { status: "missing" as const };
   const baseBranch = project.baseBranch || "origin/main";
 
-  const fetch = gitSync(repoPath, ["fetch", "--quiet"], 30_000);
-  if (fetch.status !== 0) {
-    const reason = (fetch.stderr || fetch.stdout || fetch.error?.message || "git fetch failed").trim();
-    return { status: "error", reason: `trusted repo policy fetch failed for ${baseBranch}: ${reason}` };
+  if (options.fetch !== false) {
+    const fetch = gitSync(repoPath, ["fetch", "--quiet"], 30_000);
+    if (fetch.status !== 0) {
+      const reason = (fetch.stderr || fetch.stdout || fetch.error?.message || "git fetch failed").trim();
+      return { status: "error" as const, reason: `trusted repo policy fetch failed for ${baseBranch}: ${reason}` };
+    }
   }
 
   const show = gitSync(repoPath, ["show", `${baseBranch}:${REPO_POLICY_FILE}`], 10_000);
-  if (show.status === 0) return { status: "loaded", text: show.stdout || "{}" };
+  if (show.status === 0) return { status: "loaded" as const, text: show.stdout || "{}" };
   debugLog("trusted repo policy missing", repoPath, baseBranch, String(show.stderr || show.stdout || "").trim());
-  return { status: "missing" };
+  return { status: "missing" as const };
 }
 
 function projectFilter() {
@@ -135,29 +178,38 @@ function inferBaseBranch(repoPath) {
   return gitOutput(repoPath, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]) || "origin/main";
 }
 
-function inferGithubRepo(repoPath) {
-  const remote = gitOutput(repoPath, ["remote", "get-url", "origin"]);
-  const match = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(remote);
+function githubRepoFromRemote(remote) {
+  const match = /^(?:git@github\.com:|https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(String(remote || ""));
   return match ? match[1] : "";
 }
 
-function implicitProjectFromCwd(cwd) {
+function inferGithubRepo(repoPath) {
+  return githubRepoFromRemote(gitOutput(repoPath, ["remote", "get-url", "origin"]));
+}
+
+function implicitProjectFromCwd(cwd, options: { fetchPolicy?: boolean } = {}) {
   const repoPath = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
   if (!repoPath) return null;
+  const gitDir = gitOutput(cwd, ["rev-parse", "--git-dir"]);
   const gitCommonDir = gitOutput(cwd, ["rev-parse", "--git-common-dir"]);
-  if (!gitCommonDir || isLinkedGitWorktree(repoPath, gitCommonDir)) return null;
-  const id = sanitizeId(path.basename(repoPath));
+  if (!gitDir || !gitCommonDir || isLinkedGitWorktree(cwd, gitDir, gitCommonDir)) return null;
+  const enabledIdentity = loadEnablementState().projects.find((project) =>
+    project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repoPath)
+  );
+  const githubRepo = enabledIdentity?.githubRepo || inferGithubRepo(repoPath);
+  if (!githubRepo) return null;
+  const id = inferredProjectId(repoPath, githubRepo);
   const raw = {
     id,
     enabled: true,
     repoPath,
-    githubRepo: inferGithubRepo(repoPath),
-    baseBranch: inferBaseBranch(repoPath),
+    githubRepo,
+    baseBranch: enabledIdentity?.baseBranch || inferBaseBranch(repoPath),
     worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", id),
     autoMerge: false,
   };
-  const policy = trustedRepoPolicyProvider(raw);
-  if (policy.status !== "loaded") return null;
+  const policy = trustedRepoPolicyProvider(raw, { fetch: options.fetchPolicy });
+  if (policy.status === "error") return null;
   const result = parseProjectsConfig(JSON.stringify({ projects: [raw] }), projectFilter(), {
     configPath: `${repoPath}${path.sep}${REPO_POLICY_FILE}`,
     repoPolicyProvider: () => policy,
@@ -166,10 +218,10 @@ function implicitProjectFromCwd(cwd) {
   return result.projects[0] || null;
 }
 
-function addImplicitProject(cwd, result) {
+function addImplicitProject(cwd, result, options: { fetchPolicy?: boolean } = {}) {
   if (!result.ok || !cwd) return result;
-  const implicit = implicitProjectFromCwd(cwd);
-  if (!implicit) return result;
+  const implicit = implicitProjectFromCwd(cwd, options);
+  if (!implicit || !isProjectEnabled(implicit)) return result;
   const implicitPath = path.resolve(implicit.repoPath || "");
   const duplicate = result.projects.some((project) => {
     if (!project.repoPath) return false;
@@ -183,29 +235,83 @@ function addImplicitProject(cwd, result) {
   return { ...result, projects: [...result.projects, implicit] };
 }
 
-function loadProjectsResult(cwd) {
+function overlayEnableIdentityDefaults(text, identity) {
+  const config = JSON.parse(text || "{}");
+  if (!Array.isArray(config?.projects)) return text;
+  const repoPath = path.resolve(identity.repoPath);
+  return JSON.stringify({
+    ...config,
+    projects: config.projects.map((project) => {
+      try {
+        if (path.resolve(project?.repoPath) !== repoPath || project?.githubRepo !== identity.githubRepo) return project;
+      } catch {
+        return project;
+      }
+      return {
+        ...project,
+        ...(Object.hasOwn(project, "baseBranch") ? {} : { baseBranch: identity.baseBranch }),
+        ...(Object.hasOwn(project, "worktreeRoot") ? {} : { worktreeRoot: identity.worktreeRoot }),
+      };
+    }),
+  });
+}
+
+function loadProjectsResult(
+  cwd,
+  options: {
+    includeDisabled?: boolean;
+    fetchPolicy?: boolean;
+    enableIdentity?: { repoPath: string; githubRepo: string; baseBranch: string; worktreeRoot: string };
+  } = {},
+) {
   let text;
+  let configPath;
   try {
-    text = readConfigText();
+    ({ text, configPath } = readConfigText());
+    let enableIdentity = options.enableIdentity;
+    if (!enableIdentity && cwd) {
+      const repoPath = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
+      const enabled = loadEnablementState().projects.find((project) =>
+        project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repoPath)
+      );
+      if (enabled) {
+        const id = inferredProjectId(repoPath, enabled.githubRepo);
+        enableIdentity = {
+          repoPath,
+          githubRepo: enabled.githubRepo,
+          baseBranch: enabled.baseBranch || inferBaseBranch(repoPath),
+          worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", id),
+        };
+      }
+    }
+    if (enableIdentity) text = overlayEnableIdentityDefaults(text, enableIdentity);
   } catch (error) {
     return { ok: false, reason: `projects.json read error: ${error?.message || error}` };
   }
-  const result = addImplicitProject(
-    cwd,
-    parseProjectsConfig(text, projectFilter(), {
-      configPath: CONFIG_PATH,
-      repoPolicyProvider: trustedRepoPolicyProvider,
-    }),
-  );
+  const parsed = parseProjectsConfig(text, projectFilter(), {
+    configPath,
+    repoPolicyProvider: (project) => trustedRepoPolicyProvider(project, { fetch: options.fetchPolicy }),
+  });
+  const result = addImplicitProject(cwd, parsed, options);
   if (result.ok) {
+    const enablement = loadEnablementState();
+    result.projects = result.projects.map((project) => {
+      const enabled = enablement.projects.find((candidate) =>
+        candidate.repoPath === path.resolve(project.repoPath || "")
+        && candidate.githubRepo === project.githubRepo
+        && candidate.enabled !== false
+      );
+      return enabled ? { ...project, githubRepositoryId: enabled.githubRepositoryId } : project;
+    });
+    if (!options.includeDisabled) result.projects = result.projects.filter((project) => isProjectEnabled(project));
     debugLog(
       "config",
-      CONFIG_PATH,
+      configPath,
       "projects",
       result.projects.map((project) => project.id || project.repoPath),
     );
   } else {
-    debugLog("config", CONFIG_PATH, result.reason);
+    debugLog("config", configPath, result.reason);
   }
   return result;
 }
@@ -214,6 +320,135 @@ function loadProjects(cwd) {
   const result = loadProjectsResult(cwd);
   if (!result.ok) throw new Error(result.reason);
   return result.projects;
+}
+
+function resolveEnableProject(cwd, identity) {
+  const result = loadProjectsResult(cwd, { includeDisabled: true, enableIdentity: identity });
+  if (!result.ok) throw new Error(result.reason);
+  const repoPath = path.resolve(identity.repoPath);
+  const configuredAtPath = result.projects.filter((project) => {
+    try {
+      return path.resolve(project.repoPath) === repoPath;
+    } catch {
+      return false;
+    }
+  });
+  if (configuredAtPath.length > 0) {
+    const exact = configuredAtPath.filter((project) => project.githubRepo === identity.githubRepo);
+    if (exact.length !== 1 || configuredAtPath.length !== 1) {
+      throw new Error("configured repository identity does not match the canonical checkout identity");
+    }
+    return exact[0];
+  }
+  const raw = { ...identity, enabled: true, autoMerge: false };
+  const policy = trustedRepoPolicyProvider(raw);
+  if (policy.status === "error") throw new Error(policy.reason);
+  const implicit = parseProjectsConfig(JSON.stringify({ projects: [raw] }), projectFilter(), {
+    configPath: `${repoPath}${path.sep}${REPO_POLICY_FILE}`,
+    repoPolicyProvider: () => policy,
+  });
+  if (!implicit.ok || implicit.projects.length !== 1) {
+    throw new Error("repository configuration could not be resolved safely");
+  }
+  return implicit.projects[0];
+}
+
+function loadEnablementState() {
+  try {
+    const text = fs.readFileSync(ENABLEMENT_PATH, "utf8");
+    const state = normalizeEnablementState(JSON.parse(text));
+    if (!state) throw new Error("schema is invalid");
+    return state;
+  } catch (error) {
+    if (error?.code === "ENOENT") return { projects: [] };
+    throw new Error(`enablement state is invalid at ${ENABLEMENT_PATH}: ${error?.message || error}. Inspect and move the file aside, then run /deadloop-enable again to recover.`);
+  }
+}
+
+function saveEnablementState(state) {
+  writeJsonFile(ENABLEMENT_PATH, state);
+}
+
+
+async function withEnablementStateLock(operation) {
+  const lockPath = `${ENABLEMENT_PATH}.lock`;
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  const lock = await acquireLock(lockPath, {
+    attempts: DISABLE_LOCK_ATTEMPTS,
+    delayMs: DISABLE_LOCK_DELAY_MS,
+    busyMessage: "enablement state is busy; retry the command",
+  });
+  try {
+    return await operation();
+  } finally {
+    releaseOwned(lockPath, lock.token);
+  }
+}
+
+async function updateEnablementState(update) {
+  return await withEnablementStateLock(async () => {
+    const next = await update(loadEnablementState());
+    saveEnablementState(next);
+    return next;
+  });
+}
+
+function firstEnableAutoMergeGate(state, project) {
+  const enabled = findEnabledProject(state, project);
+  if (!enabled) return { state, project: null };
+
+  let observed = state;
+  let forceAutoMergeOff = enabled.firstStartPending;
+  if (enabled.firstEnableAutoMerge === true && !enabled.autoMergeAcknowledged) {
+    observed = observeAutoMerge(state, project, project.autoMerge);
+    if (!findEnabledProject(observed, project)?.autoMergeAcknowledged) forceAutoMergeOff = true;
+  }
+  return {
+    state: observed,
+    project: { ...project, enabledAt: enabled.enabledAt, ...(forceAutoMergeOff ? { autoMerge: false } : {}) },
+  };
+}
+
+async function applyFirstEnableAutoMergeGate(project) {
+  let effectiveProject = null;
+  await updateEnablementState((state) => {
+    const gated = firstEnableAutoMergeGate(state, project);
+    effectiveProject = gated.project;
+    return gated.state;
+  });
+  return effectiveProject;
+}
+
+async function completeFirstSchedulerStart(project) {
+  await updateEnablementState((state) => ({
+    projects: state.projects.map((candidate) =>
+      candidate.repoPath === path.resolve(project.repoPath)
+      && candidate.githubRepo === project.githubRepo
+      && candidate.enabledAt === project.enabledAt
+        ? { ...candidate, firstStartPending: false }
+        : candidate,
+    ),
+  }));
+}
+
+async function disableEnablementAttempt(identity, enabledAt, enableAttemptToken) {
+  await updateEnablementState((state) => removeEnabledProjectAttempt(state, identity, enabledAt, enableAttemptToken));
+}
+
+async function rollbackFailedEnablementAttempt(identity, enabledAt, repoPath, enableAttemptToken) {
+  await updateEnablementState((state) => ownsEnableAttempt(repoPath, enableAttemptToken)
+    ? removeEnabledProjectGeneration(state, identity, enabledAt)
+    : state);
+}
+
+function isProjectEnabled(project) {
+  if (!project.repoPath || !project.githubRepo) return false;
+  try {
+    assertEnabled({ repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function extensionCodeWarning() {
@@ -228,9 +463,9 @@ function extensionCodeWarning() {
   return codeFreshnessWarning(MODULE_LOAD_TIME_MS, sources);
 }
 
-function ownsSchedulerLock(project) {
+function ownsSchedulerLock(project, token = null) {
   const lock = readLock(projectLockPath(project));
-  return Number(lock?.pid) === process.pid;
+  return Number(lock?.pid) === process.pid && (!token || lock?.token === token);
 }
 
 function statusWarnings(extraWarnings = [], project = null) {
@@ -249,27 +484,15 @@ function setLooperStatus(ctx, text) {
 }
 
 function loadState() {
-  const state = readJsonFile(STATE_PATH, { automations: {} });
-  if (!state || typeof state !== "object") return { automations: {} };
-  if (!state.automations || typeof state.automations !== "object") state.automations = {};
-  return state;
+  return loadAutomationState(STATE_PATH);
 }
 
-function saveState(state) {
+function saveState(state, ownedAutomationKeys) {
   try {
-    writeJsonFile(STATE_PATH, state);
+    return saveAutomationState(STATE_PATH, state, ownedAutomationKeys);
   } catch (error) {
     console.warn(`[${EXTENSION_NAME}] failed to save state:`, error?.message || error);
-  }
-}
-
-function isPidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code === "EPERM";
+    return state;
   }
 }
 
@@ -278,54 +501,24 @@ function readLock(lockPath) {
 }
 
 function projectLockPath(project) {
-  return path.join(STATE_DIR, `scheduler.${sanitizeId(project.id)}.lock`);
+  return path.join(STATE_DIR, schedulerLockName(project));
 }
 
 function acquireSchedulerLock(project) {
   fs.mkdirSync(STATE_DIR, { recursive: true });
-
   const lockPath = projectLockPath(project);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const fd = fs.openSync(lockPath, "wx");
-      try {
-        fs.writeFileSync(
-          fd,
-          JSON.stringify({ pid: process.pid, cwd: process.cwd(), projectId: project.id, startedAt: Date.now() }),
-        );
-      } finally {
-        fs.closeSync(fd);
-      }
-      return { acquired: true, owner: process.pid, lockPath };
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      const lock = readLock(lockPath);
-      const owner = Number(lock?.pid);
-      if (owner === process.pid) return { acquired: true, owner, lockPath };
-      if (isPidAlive(owner)) return { acquired: false, owner, lockPath };
-      try {
-        fs.unlinkSync(lockPath);
-      } catch (unlinkError) {
-        if (unlinkError?.code !== "ENOENT") return { acquired: false, owner, lockPath };
-      }
-    }
-  }
-  const lock = readLock(lockPath);
-  return { acquired: false, owner: Number(lock?.pid) || null, lockPath };
+  return acquireSchedulerFileLock(lockPath, {
+    cwd: process.cwd(),
+    projectId: project.id,
+    startedAt: Date.now(),
+  });
 }
 
-function releaseSchedulerLock(project) {
-  const lockPaths = [projectLockPath(project)];
-  for (const lockPath of lockPaths) {
-    const lock = readLock(lockPath);
-    if (Number(lock?.pid) !== process.pid) continue;
-    try {
-      fs.unlinkSync(lockPath);
-    } catch (error) {
-      if (error?.code !== "ENOENT") {
-        console.warn(`[${EXTENSION_NAME}] failed to release lock:`, error?.message || error);
-      }
-    }
+function releaseSchedulerLock(lockPath, token) {
+  try {
+    releaseSchedulerFileLock(lockPath, token);
+  } catch (error) {
+    console.warn(`[${EXTENSION_NAME}] failed to release lock:`, error?.message || error);
   }
 }
 
@@ -355,26 +548,39 @@ function updateStatus(ctx, project, state) {
   setLooperStatus(ctx, suffix);
 }
 
-function activeProject(cwd, projects) {
-  let resolvedCwd;
+function canonicalPath(value) {
   try {
-    resolvedCwd = path.resolve(cwd);
+    return fs.realpathSync(value);
   } catch {
-    resolvedCwd = cwd;
+    return path.resolve(value);
   }
-  return (
-    projects.find((project) => {
-      try {
-        const repoPath = path.resolve(project.repoPath);
-        const matches = resolvedCwd === repoPath || resolvedCwd.startsWith(`${repoPath}${path.sep}`);
-        debugLog("project candidate", project.id, "repoPath", repoPath, "cwd", resolvedCwd, "matches", matches);
-        return matches;
-      } catch (error) {
-        debugLog("project candidate error", project.id, error?.message || error);
-        return cwd === project.repoPath;
-      }
-    }) || null
-  );
+}
+
+function activeProject(cwd, projects) {
+  const repositoryRoot = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
+  const gitDir = gitOutput(cwd, ["rev-parse", "--git-dir"]);
+  const gitCommonDir = gitOutput(cwd, ["rev-parse", "--git-common-dir"]);
+  if (!repositoryRoot || !gitDir || !gitCommonDir || isLinkedGitWorktree(cwd, gitDir, gitCommonDir)) {
+    debugLog("active project rejected", cwd, "missing repository identity or linked worktree");
+    return null;
+  }
+  const canonicalRoot = canonicalPath(repositoryRoot);
+  const project = projects.find((candidate) => {
+    try {
+      const matches = canonicalPath(candidate.repoPath) === canonicalRoot;
+      debugLog("project candidate", candidate.id, "repoPath", candidate.repoPath, "repositoryRoot", canonicalRoot, "matches", matches);
+      return matches;
+    } catch (error) {
+      debugLog("project candidate error", candidate.id, error?.message || error);
+      return false;
+    }
+  });
+  return project || null;
+}
+
+async function activeSchedulerProject(cwd, projects) {
+  const project = activeProject(cwd, projects);
+  return project ? await applyFirstEnableAutoMergeGate(project) : null;
 }
 
 function shellQuote(value) {
@@ -387,7 +593,11 @@ function resolveAutomationFileInDir(_kind, _automation, requested) {
 
 async function runAutomationScript(pi, project, automation, automationFile) {
   const scriptPath = path.join(AUTOMATION_DIR, automationFile);
-  const env = { ...automationEnvironment(project, automation), DEADLOOP_STATE_DIR: STATE_DIR };
+  const env = {
+    ...automationEnvironment(project, automation),
+    DEADLOOP_STATE_DIR: STATE_DIR,
+    DEADLOOP_ENABLED_AT: String(project.enabledAt),
+  };
   const exports = Object.entries(env)
     .filter(([key]) => key.startsWith("DEADLOOP_"))
     .map(([key, value]) => `${key}=${shellQuote(value)}`)
@@ -435,6 +645,25 @@ async function gitText(pi, args) {
   }
 }
 
+function repositoryEnablementForRoot(repositoryRoot: string | undefined): RepositoryEnablement {
+  if (!repositoryRoot) return "unavailable";
+  const enabled = loadEnablementState().projects.find((project) =>
+    project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repositoryRoot)
+  );
+  if (!enabled) return "disabled";
+  try {
+    assertEnabled({
+      repoPath: enabled.repoPath,
+      githubRepo: enabled.githubRepo,
+      stateDir: STATE_DIR,
+      enabledAt: enabled.enabledAt,
+    });
+    return "enabled";
+  } catch {
+    return "disabled";
+  }
+}
+
 async function collectLiveSnapshotData(
   pi,
   cwd,
@@ -444,13 +673,21 @@ async function collectLiveSnapshotData(
   const includeIssueComments = options.includeIssueComments === true;
   const includeAgents = options.includeAgents === true;
 
-  const projectsResult = loadProjectsResult(cwd);
+  const projectsResult = loadProjectsResult(cwd, { fetchPolicy: false });
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
-  const project = activeProject(cwd, projects);
-  const warnings = statusWarnings(projectsResult.ok ? projectsResult.warnings : [projectsResult.reason], project);
+  const configuredProject = activeProject(cwd, projects);
+  const project = configuredProject
+    ? firstEnableAutoMergeGate(loadEnablementState(), configuredProject).project
+    : null;
+  const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
+  const repositoryEnablement = repositoryEnablementForRoot(repositoryRoot);
+  const diagnosticWarnings = projectsResult.ok
+    ? [...projectsResult.warnings, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])]
+    : [projectsResult.reason, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])];
+  const warnings = statusWarnings(diagnosticWarnings, project);
   if (!project) {
-    return { cwd, projects, state, warnings };
+    return { cwd, projects, state, repositoryEnablement, warnings, selectedProject: null };
   }
 
   const issueFields = includeIssueComments
@@ -565,7 +802,9 @@ async function collectLiveSnapshotData(
     automationDir: AUTOMATION_DIR,
     statePath: STATE_PATH,
     claudeConfig,
+    repositoryEnablement,
     warnings,
+    selectedProject: project,
   };
 }
 
@@ -578,25 +817,278 @@ async function buildLiveDoctorReport(pi, cwd) {
   const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true, includeAgents: true });
   return formatDoctorReport(buildDoctorSnapshot(data));
 }
-async function runAutomation(pi, ctx, project, automation, dueSlot, state) {
-  await runScheduledAutomation(project, automation, dueSlot, state, {
+
+const STANDARD_LABELS = [
+  ["ready-for-agent", "0e8a16"],
+  ["agent:implement", "1d76db"],
+  ["agent:in-progress", "fbca04"],
+  ["agent:review", "5319e7"],
+  ["agent:reviewing", "c2e0c6"],
+  ["agent:blocked", "b60205"],
+  ["ready-for-human", "d93f0b"],
+  ["needs-info", "fef2c0"],
+  ["needs-triage", "f9d0c4"],
+];
+
+async function commandExec(pi, command, args, timeout = 15_000) {
+  const result = await pi.exec(command, args, { timeout });
+  if (result.code !== 0) throw new Error((result.stderr || result.stdout || `${command} failed`).trim());
+  return result;
+}
+
+function findCheckoutPointingToGitDir(commonDir) {
+  const absoluteCommonDir = path.resolve(commonDir);
+  try {
+    for (const entry of fs.readdirSync(path.dirname(absoluteCommonDir), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const checkout = path.join(path.dirname(absoluteCommonDir), entry.name);
+      const gitFile = path.join(checkout, ".git");
+      if (!fs.existsSync(gitFile) || !fs.statSync(gitFile).isFile()) continue;
+      const match = /^gitdir: (.+)$/m.exec(fs.readFileSync(gitFile, "utf8"));
+      if (match && path.resolve(checkout, match[1]) === absoluteCommonDir) return checkout;
+    }
+  } catch {}
+  return "";
+}
+
+async function detectPrimaryCheckout(pi, cwd, allowLinkedWorktree = false) {
+  const repoPath = (await commandExec(pi, "git", ["-C", cwd, "rev-parse", "--show-toplevel"])).stdout.trim();
+  const gitDir = (await commandExec(pi, "git", ["-C", cwd, "rev-parse", "--git-dir"])).stdout.trim();
+  const commonDir = (await commandExec(pi, "git", ["-C", cwd, "rev-parse", "--git-common-dir"])).stdout.trim();
+  if (isLinkedGitWorktree(cwd, gitDir, commonDir)) {
+    const configuredWorktree = await pi.exec("git", ["-C", cwd, "config", "--path", "--get", "core.worktree"], { timeout: 15_000 });
+    const worktreeList = (await commandExec(pi, "git", ["-C", cwd, "worktree", "list", "--porcelain"])).stdout;
+    const primaryCheckout = configuredWorktree.code === 0
+      ? configuredWorktree.stdout.trim()
+      : findCheckoutPointingToGitDir(path.resolve(cwd, commonDir)) || worktreeList.match(/^worktree (.+)$/m)?.[1];
+    if (!primaryCheckout) throw new Error("linked worktree primary checkout could not be resolved");
+    if (allowLinkedWorktree) return path.resolve(cwd, primaryCheckout);
+    throw new Error(`linked worktrees cannot be enabled; use the primary checkout: ${primaryCheckout}`);
+  }
+  return repoPath;
+}
+
+function enableAttemptPath(repoPath) {
+  const key = crypto.createHash("sha256").update(path.resolve(repoPath)).digest("hex").slice(0, 24);
+  return path.join(STATE_DIR, `enable-attempt-${key}.json`);
+}
+
+function writeEnableAttempt(repoPath, token, cancelled = false) {
+  writeJsonFile(enableAttemptPath(repoPath), { repoPath: path.resolve(repoPath), token, cancelled });
+}
+
+function ownsEnableAttempt(repoPath, token) {
+  const attempt = readJsonFile(enableAttemptPath(repoPath), null);
+  return attempt?.repoPath === path.resolve(repoPath) && attempt?.token === token && attempt?.cancelled !== true;
+}
+
+function finishEnableAttempt(repoPath, token) {
+  const attemptPath = enableAttemptPath(repoPath);
+  const attempt = readJsonFile(attemptPath, null);
+  if (attempt?.token === token) fs.rmSync(attemptPath, { force: true });
+}
+
+async function revalidateLocalProjectIdentity(pi, identity) {
+  const repoPath = await detectPrimaryCheckout(pi, identity.repoPath);
+  if (path.resolve(repoPath) !== path.resolve(identity.repoPath)) throw new Error("repository checkout identity changed during enablement");
+  const fetchRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--all", "origin"], 5_000)).stdout.split(/\r?\n/).filter(Boolean);
+  const pushRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--push", "--all", "origin"], 5_000)).stdout.split(/\r?\n/).filter(Boolean);
+  const identities = [...fetchRemotes, ...pushRemotes].map(githubRepoFromRemote);
+  if (identities.length === 0 || identities.some((candidate) => !candidate)) {
+    throw new Error("origin identity changed during enablement");
+  }
+  for (const remoteIdentity of new Set(identities)) {
+    const view = JSON.parse(
+      (await commandExec(pi, "gh", ["repo", "view", remoteIdentity, "--json", "id"])).stdout || "{}",
+    );
+    if (!view.id || String(view.id) !== identity.githubRepositoryId) {
+      throw new Error("origin GitHub repository identity changed during enablement");
+    }
+  }
+}
+
+async function detectProjectIdentity(pi, cwd) {
+  const repoPath = await detectPrimaryCheckout(pi, cwd);
+  const fetchRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--all", "origin"])).stdout.split(/\r?\n/).filter(Boolean);
+  const pushRemotes = (await commandExec(pi, "git", ["-C", repoPath, "remote", "get-url", "--push", "--all", "origin"])).stdout.split(/\r?\n/).filter(Boolean);
+  const identities = [...fetchRemotes, ...pushRemotes].map(githubRepoFromRemote);
+  if (identities.length === 0 || identities.some((identity) => !identity)) {
+    throw new Error("all origin fetch and push URLs must identify GitHub repositories");
+  }
+  const canonicalIdentities = new Set<string>();
+  const repositoryIds = new Set<string>();
+  const defaultBranches = new Set<string>();
+  for (const remoteIdentity of new Set(identities)) {
+    const view = JSON.parse(
+      (await commandExec(pi, "gh", ["repo", "view", remoteIdentity, "--json", "id,nameWithOwner,defaultBranchRef"])).stdout || "{}",
+    );
+    if (!view.id || !view.nameWithOwner) throw new Error(`GitHub repository identity could not be resolved for ${remoteIdentity}`);
+    repositoryIds.add(String(view.id));
+    canonicalIdentities.add(String(view.nameWithOwner));
+    if (view.defaultBranchRef?.name) defaultBranches.add(String(view.defaultBranchRef.name));
+  }
+  if (canonicalIdentities.size !== 1 || repositoryIds.size !== 1) {
+    throw new Error("all origin fetch and push URLs must resolve to exactly the same GitHub repository");
+  }
+  const githubRepo = [...canonicalIdentities][0];
+  const githubRepositoryId = [...repositoryIds][0];
+  const upstream = await pi.exec("git", ["-C", repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], { timeout: 15_000 });
+  let baseBranch = upstream.code === 0 ? upstream.stdout.trim() : "";
+  if (!baseBranch.startsWith("origin/")) {
+    if (defaultBranches.size !== 1) throw new Error("GitHub default branch could not be resolved unambiguously");
+    const defaultBranch = [...defaultBranches][0];
+    await commandExec(pi, "git", [
+      "-C",
+      repoPath,
+      "fetch",
+      "--quiet",
+      "origin",
+      `+refs/heads/${defaultBranch}:refs/remotes/origin/${defaultBranch}`,
+    ], 30_000);
+    baseBranch = `origin/${defaultBranch}`;
+  }
+  await commandExec(pi, "git", ["-C", repoPath, "rev-parse", "--verify", "--quiet", `${baseBranch}^{commit}`]);
+  const id = inferredProjectId(repoPath, githubRepo);
+  return {
+    repoPath,
+    githubRepo,
+    githubRepositoryId,
+    githubAliases: [...new Set(identities)],
+    baseBranch,
+    id,
+    worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", id),
+  };
+}
+
+async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disableGeneration) {
+  await commandExec(pi, "gh", ["auth", "status"]);
+  const view = JSON.parse((await commandExec(pi, "gh", ["repo", "view", identity.githubRepo, "--json", "id,viewerPermission,nameWithOwner"])).stdout || "{}");
+  if (view.nameWithOwner !== identity.githubRepo || String(view.id || "") !== identity.githubRepositoryId) {
+    throw new Error("GitHub repository identity changed during enablement");
+  }
+  if (!["ADMIN", "MAINTAIN", "WRITE"].includes(String(view.viewerPermission || "").toUpperCase())) {
+    throw new Error("GitHub write permission is required to enable deadloop");
+  }
+  for (const [name, color] of STANDARD_LABELS) {
+    if (!ownsEnableAttempt(repoPath, enableAttemptToken)) {
+      throw new Error("enablement was revoked while preflight was running");
+    }
+    const lookup = await pi.exec("gh", ["api", "--silent", `repos/${identity.githubRepo}/labels/${encodeURIComponent(name)}`], { timeout: 15_000 });
+    if (lookup.code === 0) continue;
+    if (!/HTTP 404\b/.test(`${lookup.stderr || ""}\n${lookup.stdout || ""}`)) {
+      throw new Error((lookup.stderr || lookup.stdout || `label lookup failed for ${name}`).trim());
+    }
+    await withEnablementStateLock(async () => {
+      if (
+        !ownsEnableAttempt(repoPath, enableAttemptToken) ||
+        disableGenerationForRepo(loadDisableGenerations(STATE_DIR), repoPath) !== disableGeneration
+      ) {
+        throw new Error("enablement was revoked while preflight was running");
+      }
+      const lockedLookup = await pi.exec("gh", ["api", "--silent", `repos/${identity.githubRepo}/labels/${encodeURIComponent(name)}`], { timeout: 15_000 });
+      if (lockedLookup.code === 0) return;
+      if (!/HTTP 404\b/.test(`${lockedLookup.stderr || ""}\n${lockedLookup.stdout || ""}`)) {
+        throw new Error((lockedLookup.stderr || lockedLookup.stdout || `label lookup failed for ${name}`).trim());
+      }
+      await commandExec(pi, "gh", ["label", "create", name, "-R", identity.githubRepo, "--color", color]);
+    });
+  }
+}
+function revalidatePendingIssueHandoff(handoff) {
+  if (handoff.kind !== "issue" || !handoff.input || typeof handoff.input !== "object") return true;
+  const input = handoff.input;
+  if (
+    !input.githubRepo ||
+    !Number.isInteger(input.issueNumber) ||
+    typeof input.issueTitle !== "string" ||
+    typeof input.issueBody !== "string" ||
+    !input.readyLabel ||
+    !input.implementLabel ||
+    !input.inProgressLabel ||
+    !input.blockedLabel ||
+    !input.humanLabel ||
+    !input.needsInfoLabel ||
+    !input.wontfixLabel
+  ) return false;
+  const result = childProcess.spawnSync(
+    "gh",
+    ["issue", "view", String(input.issueNumber), "-R", input.githubRepo, "--json", "number,title,body,state,labels"],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 25_000, killSignal: "SIGKILL" },
+  );
+  if (result.status !== 0) return false;
+  try {
+    const issue = JSON.parse(result.stdout || "{}");
+    if (!isPendingIssueHandoffEligible(handoff, issue)) return false;
+    const labels = (Array.isArray(issue.labels) ? issue.labels : [])
+      .map((label) => typeof label === "string" ? label : String(label?.name || ""))
+      .filter((label) => label && label !== input.inProgressLabel && label !== input.implementLabel);
+    labels.push(input.implementLabel);
+    const decision = selectIssueForImplementation(
+      [{ ...issue, labels }],
+      defaultIssueDecisionConfig({
+        readyLabel: input.readyLabel,
+        implementLabel: input.implementLabel,
+        inProgressLabel: input.inProgressLabel,
+        blockedLabel: input.blockedLabel,
+        humanLabel: input.humanLabel,
+        needsInfoLabel: input.needsInfoLabel,
+        wontfixLabel: input.wontfixLabel,
+      }),
+      (candidate) => issueBlockedByNumbers(input.githubRepo, Number(candidate.number)),
+      (number) => liveDependencyState(input.githubRepo, number),
+    );
+    return decision.selected === true && decision.number === input.issueNumber;
+  } catch {
+    return false;
+  }
+}
+
+function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => true) {
+  const ownedAutomationKeys = project.automations.map((automation) => automationStateKey(project, automation));
+  return {
+    enabledAt: () => project.enabledAt,
+    isEnabled: () => isCurrentSchedulerRun() && isProjectEnabled(project),
     isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
     notify: (message, level) => {
+      if (!isCurrentSchedulerRun()) return;
       try {
         ctx.ui.notify(message.replace(/^deadloop /, `${EXTENSION_NAME} `), level);
       } catch {}
     },
     now: () => Date.now(),
     readPrompt,
+    revalidatePendingDriverHandoff: revalidatePendingIssueHandoff,
     resolveAutomationFileInDir,
     runDriver: async (driverProject, driverAutomation, driverFile) =>
       await runAutomationScript(pi, driverProject, driverAutomation, driverFile),
     runPrecheck: async (precheckProject, precheckAutomation, precheckFile) =>
       await runAutomationScript(pi, precheckProject, precheckAutomation, precheckFile),
-    saveState,
-    sendUserMessage: (prompt) => pi.sendUserMessage(prompt),
-    setStatus: (text) => setLooperStatus(ctx, text),
-  });
+    saveState: (state) => {
+      if (isCurrentSchedulerRun()) saveState(state, ownedAutomationKeys);
+    },
+    sendUserMessage: (prompt) => {
+      if (isCurrentSchedulerRun()) pi.sendUserMessage(prompt);
+    },
+    sendUserMessageIfEnabled: (prompt) => {
+      if (!isCurrentSchedulerRun()) return false;
+      try {
+        return withEnabledProjectLock(
+          { repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt },
+          (_enabled, recheck) => (recheck(), pi.sendUserMessage(prompt), true),
+        );
+      } catch (error) {
+        if (error instanceof Error && error.message === "deadloop is disabled for this repository") return false;
+        throw error;
+      }
+    },
+    setStatus: (text) => {
+      if (isCurrentSchedulerRun()) setLooperStatus(ctx, text);
+    },
+  };
+}
+
+async function runAutomation(pi, ctx, project, automation, dueSlot, state, deps = automationRunnerDeps(pi, ctx, project)) {
+  await runScheduledAutomation(project, automation, dueSlot, state, deps);
 }
 
 function registerReportCommand(pi, name, description, customType, buildReport) {
@@ -634,110 +1126,317 @@ export default function (pi) {
   let startupTick = null;
   let active = null;
   let ownsLock = false;
+  let stopRequested = false;
+  let pendingStart = null;
+  let activeTickPromise = null;
 
   async function tick(ctx) {
     if (!active) return;
-    if (running) return;
-    if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
-    if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return;
+    const schedulerRun = active;
+
+    let remainsEnabled = false;
+    try {
+      remainsEnabled = isProjectEnabled(active.project);
+    } catch (error) {
+      debugLog("scheduler enablement check failed", error?.message || error);
+    }
+    if (!remainsEnabled) {
+      invalidateSchedulerRun(ctx, schedulerRun);
+      setLooperStatus(ctx, "deadloop is not enabled for this repository");
+      return;
+    }
 
     const projectsResult = loadProjectsResult(ctx.cwd);
     if (!projectsResult.ok) {
       setLooperStatus(ctx, `skipped: ${projectsResult.reason}`);
       return;
     }
-    const project = activeProject(ctx.cwd, projectsResult.projects);
+    const project = await activeSchedulerProject(ctx.cwd, projectsResult.projects);
     if (!project) {
-      setLooperStatus(ctx, "skipped: active project is not present in projects.json or deadloop.json");
+      invalidateSchedulerRun(ctx, schedulerRun);
+      setLooperStatus(ctx, "deadloop is not enabled for this repository");
       return;
     }
-    if (project.id !== active.project.id) {
-      setLooperStatus(ctx, "skipped: active project changed since scheduler lock was acquired");
+    if (projectLockPath(project) !== schedulerRun.lockPath) {
+      invalidateSchedulerRun(ctx, schedulerRun);
+      setLooperStatus(ctx, "skipped: active project identity changed since scheduler lock was acquired");
       return;
     }
+    if (running) return;
+    if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
+    if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return;
 
-    const state = loadState();
-    updateStatus(ctx, project, state);
+    running = true;
+    let completedSafely = false;
+    try {
+      const state = loadState();
+      updateStatus(ctx, project, state);
 
-    const now = Date.now();
-    for (const automation of project.automations) {
-      const key = automationStateKey(project, automation);
-      const entry = state.automations[key] || {};
-      state.automations[key] = entry;
-      const dueSlot = getDueSlot(automation, entry, now);
-      if (!dueSlot) continue;
+      const deps = automationRunnerDeps(pi, ctx, project, () => active === schedulerRun && ownsLock && !stopRequested);
+      for (const automation of project.automations) {
+        const entry = state.automations[automationStateKey(project, automation)] || {};
+        state.automations[automationStateKey(project, automation)] = entry;
+        if (deliverPendingDriverHandoff(entry, state, automation.name, deps)) {
+          if (active === schedulerRun && ownsLock && !stopRequested) deps.saveState(state);
+          completedSafely = true;
+          return;
+        }
+      }
 
-      running = true;
+      const now = Date.now();
+      for (const automation of project.automations) {
+        const key = automationStateKey(project, automation);
+        const entry = state.automations[key] || {};
+        state.automations[key] = entry;
+        const dueSlot = getDueSlot(automation, entry, now);
+        if (!dueSlot) continue;
+
+        await runAutomation(pi, ctx, project, automation, dueSlot, state, deps);
+        if (active === schedulerRun && ownsLock && !stopRequested) updateStatus(ctx, project, state);
+        break;
+      }
+
+      if (active === schedulerRun && ownsLock && !stopRequested) deps.saveState(state);
+      completedSafely = true;
+    } finally {
       try {
-        await runAutomation(pi, ctx, project, automation, dueSlot, state);
-        updateStatus(ctx, project, state);
+        if (completedSafely) await completeFirstSchedulerStart(project);
       } finally {
         running = false;
       }
-      break;
     }
-
-    saveState(state);
   }
 
-  pi.on("session_start", async (_event, ctx) => {
-    if (ctx.mode === "print" || ctx.mode === "json") return;
-    let projects;
-    try {
-      projects = loadProjects(ctx.cwd);
-    } catch (error) {
-      setLooperStatus(ctx, `skipped: ${error?.message || error}`);
-      return;
-    }
-    const project = activeProject(ctx.cwd, projects);
-    debugLog("session_start", "cwd", ctx.cwd, "mode", ctx.mode, "project", project?.id || null);
-    if (!project) return;
-    if (
-      process.env.DEADLOOP === "off" ||
-      process.env.DEADLOOP_AUTOMATIONS === "off"
-    ) {
-      return;
-    }
+  function runTick(ctx) {
+    if (activeTickPromise) return activeTickPromise;
+    const currentTick = tick(ctx);
+    activeTickPromise = currentTick;
+    const finishTick = () => {
+      if (activeTickPromise === currentTick) activeTickPromise = null;
+      if (stopRequested && !running) {
+        const restart = pendingStart;
+        finishStoppingScheduler(ctx);
+        if (restart) startScheduler(restart.ctx, restart.project);
+      }
+    };
+    void currentTick.then(finishTick, finishTick);
+    return currentTick;
+  }
 
-    const lock = acquireSchedulerLock(project);
-    ownsLock = lock.acquired;
-    active = { project, lockPath: lock.lockPath };
-    if (!ownsLock) {
-      setLooperStatus(ctx, `${project.id} standby: owner pid ${lock.owner ?? "unknown"}`);
-      return;
-    }
+  function finishStoppingScheduler(ctx) {
+    if (ownsLock && active?.lockPath && active?.lockToken) releaseSchedulerLock(active.lockPath, active.lockToken);
+    ownsLock = false;
+    active = null;
+    stopRequested = false;
+    pendingStart = null;
+    setLooperStatus(ctx, undefined);
+  }
 
-    const state = loadState();
-    updateStatus(ctx, project, state);
-
-    if (timer) clearInterval(timer);
-    if (startupTick) clearTimeout(startupTick);
-
-    timer = setInterval(() => {
-      tick(ctx).catch((error) => {
-        console.warn(`[${EXTENSION_NAME}] tick failed:`, error?.message || error);
-      });
-    }, TICK_MS);
-    timer.unref?.();
-
-    startupTick = setTimeout(() => {
-      tick(ctx).catch((error) => {
-        console.warn(`[${EXTENSION_NAME}] startup tick failed:`, error?.message || error);
-      });
-    }, 3000);
-    startupTick.unref?.();
-  });
-
-  pi.on("session_shutdown", async (_event, ctx) => {
+  function invalidateSchedulerRun(ctx, schedulerRun = active) {
+    if (!schedulerRun || active !== schedulerRun) return;
     if (timer) clearInterval(timer);
     if (startupTick) clearTimeout(startupTick);
     timer = null;
     startupTick = null;
-    if (ownsLock && active?.project) {
-      releaseSchedulerLock(active.project);
-      ownsLock = false;
+    pendingStart = null;
+    if (ownsLock && schedulerRun.lockPath && schedulerRun.lockToken) {
+      releaseSchedulerLock(schedulerRun.lockPath, schedulerRun.lockToken);
     }
+    ownsLock = false;
     active = null;
+    stopRequested = false;
     setLooperStatus(ctx, undefined);
+  }
+
+  function pollScheduler(ctx) {
+    const schedulerRun = active;
+    if (!schedulerRun) return Promise.resolve();
+    let remainsEnabled = false;
+    try {
+      remainsEnabled = isProjectEnabled(schedulerRun.project);
+    } catch (error) {
+      debugLog("scheduler polling enablement check failed", error?.message || error);
+    }
+    if (!remainsEnabled) {
+      invalidateSchedulerRun(ctx, schedulerRun);
+      setLooperStatus(ctx, "deadloop is not enabled for this repository");
+      return Promise.resolve();
+    }
+    return runTick(ctx);
+  }
+
+  function stopScheduler(ctx) {
+    if (timer) clearInterval(timer);
+    if (startupTick) clearTimeout(startupTick);
+    timer = null;
+    startupTick = null;
+    pendingStart = null;
+    if (activeTickPromise) {
+      stopRequested = true;
+      setLooperStatus(ctx, undefined);
+      return activeTickPromise;
+    }
+    finishStoppingScheduler(ctx);
+    return Promise.resolve();
+  }
+
+  function startScheduler(ctx, project) {
+    if (process.env.DEADLOOP === "off") {
+      return { started: false, reason: "scheduler startup is suppressed by DEADLOOP=off" };
+    }
+    if (process.env.DEADLOOP_AUTOMATIONS === "off") {
+      return { started: false, reason: "scheduler startup is suppressed by DEADLOOP_AUTOMATIONS=off" };
+    }
+    if (!isProjectEnabled(project)) {
+      stopScheduler(ctx);
+      setLooperStatus(ctx, "deadloop is not enabled for this repository");
+      return { started: false, reason: "repository enablement was not retained before scheduler startup" };
+    }
+    const lockPath = projectLockPath(project);
+    if (stopRequested) {
+      pendingStart = { ctx, project };
+      return { started: true };
+    }
+    if (active?.lockPath === lockPath && ownsLock) {
+      active.project = project;
+      return { started: true };
+    }
+    stopScheduler(ctx);
+    if (running) {
+      pendingStart = { ctx, project };
+      return { started: true };
+    }
+    const lock = acquireSchedulerLock(project);
+    ownsLock = lock.acquired;
+    active = { project, lockPath: lock.lockPath, lockToken: lock.token };
+    if (!ownsLock) {
+      setLooperStatus(ctx, `${project.id} standby: owner pid ${lock.owner ?? "unknown"}`);
+      timer = setInterval(() => startScheduler(ctx, project), TICK_MS);
+      timer.unref?.();
+      return { started: true };
+    }
+    updateStatus(ctx, project, loadState());
+    timer = setInterval(() => pollScheduler(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] tick failed:`, error?.message || error)), TICK_MS);
+    timer.unref?.();
+    startupTick = setTimeout(() => pollScheduler(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] startup tick failed:`, error?.message || error)), 3000);
+    startupTick.unref?.();
+    return { started: true };
+  }
+
+  pi.registerCommand("deadloop-enable", {
+    description: "Enable deadloop locally for this primary Git checkout",
+    handler: async (_args, ctx) => {
+      let primaryRepoPath;
+      let identity;
+      let previousEnabledAt;
+      let enablementSaved = false;
+      const enableAttemptToken = crypto.randomUUID();
+      try {
+        let enabledAt;
+        const disableGenerations = await withEnablementStateLock(async () => loadDisableGenerations(STATE_DIR));
+        primaryRepoPath = await detectPrimaryCheckout(pi, ctx.cwd);
+        const disableGeneration = disableGenerationForRepo(disableGenerations, primaryRepoPath);
+        await withEnablementStateLock(async () => {
+          if (disableGenerationForRepo(loadDisableGenerations(STATE_DIR), primaryRepoPath) !== disableGeneration) {
+            throw new Error("enablement was revoked while checkout detection was running");
+          }
+          writeEnableAttempt(primaryRepoPath, enableAttemptToken);
+        });
+        identity = await detectProjectIdentity(pi, primaryRepoPath);
+        previousEnabledAt = await withEnablementStateLock(async () => findEnabledProject(loadEnablementState(), identity)?.enabledAt);
+        resolveEnableProject(ctx.cwd, identity);
+        await prepareGithub(pi, identity, primaryRepoPath, enableAttemptToken, disableGeneration);
+        await withEnablementStateLock(async () => {
+          if (
+            !ownsEnableAttempt(primaryRepoPath, enableAttemptToken) ||
+            disableGenerationForRepo(loadDisableGenerations(STATE_DIR), primaryRepoPath) !== disableGeneration
+          ) {
+            throw new Error("enablement was revoked while preflight was running");
+          }
+          await revalidateLocalProjectIdentity(pi, identity);
+          const configuredProject = resolveEnableProject(ctx.cwd, identity);
+          const firstEnable = { firstEnableAutoMerge: Boolean(configuredProject.autoMerge) };
+          const next = upsertEnabledProject(loadEnablementState(), { ...identity, disableGeneration }, Date.now(), firstEnable, enableAttemptToken);
+          enabledAt = findEnabledProject(next, identity)?.enabledAt;
+          saveEnablementState(next);
+          enablementSaved = true;
+        });
+        finishEnableAttempt(primaryRepoPath, enableAttemptToken);
+        let project;
+        try {
+          await pi.testing?.afterEnablementSaved?.();
+          const projects = loadProjects(ctx.cwd);
+          project = await activeSchedulerProject(ctx.cwd, projects);
+          if (!project) throw new Error("enabled repository configuration could not be resolved safely");
+          const schedulerStart = startScheduler(ctx, project);
+          if (!schedulerStart.started) throw new Error(schedulerStart.reason);
+        } catch (error) {
+          if (previousEnabledAt === undefined) {
+            await disableEnablementAttempt(identity, enabledAt, enableAttemptToken);
+          }
+          throw error;
+        }
+        const owner = ownsLock ? "this session" : `another session (pid ${readLock(projectLockPath(project))?.pid || "unknown"})`;
+        const message = `deadloop enabled for ${identity.githubRepo}; scheduler owner: ${owner}. autoMerge is ${project.autoMerge ? "on (existing local setting preserved)" : "off"}.`;
+        if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
+        else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
+      } catch (error) {
+        if (!enablementSaved && identity && previousEnabledAt !== undefined && primaryRepoPath) {
+          await rollbackFailedEnablementAttempt(identity, previousEnabledAt, primaryRepoPath, enableAttemptToken);
+        }
+        if (primaryRepoPath) finishEnableAttempt(primaryRepoPath, enableAttemptToken);
+        const message = `deadloop was not enabled: ${error?.message || error}`;
+        if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
+        else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
+      }
+    },
+  });
+
+  pi.registerCommand("deadloop-disable", {
+    description: "Disable local deadloop scheduling for this repository without stopping active agents",
+    handler: async (_args, ctx) => {
+      try {
+        let message;
+        const repoPath = await detectPrimaryCheckout(pi, ctx.cwd, true);
+        advanceDisableGeneration(STATE_DIR, repoPath, writeJsonFile);
+        await pi.testing?.beforeDisableLock?.();
+        await withEnablementStateLock(async () => {
+          const attempt = readJsonFile(enableAttemptPath(repoPath), null);
+          if (attempt?.repoPath === path.resolve(repoPath) && attempt?.token) {
+            writeEnableAttempt(repoPath, attempt.token, true);
+          }
+          const state = loadEnablementState();
+          const enabled = state.projects.find((project) => project.repoPath === path.resolve(repoPath) && project.enabled !== false);
+          saveEnablementState(removeEnabledProjectAtPath(state, repoPath));
+          if (active?.project?.repoPath && path.resolve(active.project.repoPath) === path.resolve(repoPath)) {
+            invalidateSchedulerRun(ctx, active);
+          }
+          message = enabled
+            ? `deadloop disabled for ${enabled.githubRepo}. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.`
+            : "deadloop disabled for this checkout. Existing agents, GitHub state, worktrees, and run artifacts were left unchanged.";
+        });
+        if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
+        else pi.sendMessage({ customType: "deadloop-disable", content: message, display: true });
+      } catch (error) {
+        const message = `deadloop was not disabled: ${error?.message || error}`;
+        if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
+        else pi.sendMessage({ customType: "deadloop-disable", content: message, display: true });
+      }
+    },
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
+    if (ctx.mode === "print" || ctx.mode === "json") return;
+    try {
+      const project = await activeSchedulerProject(ctx.cwd, loadProjects(ctx.cwd));
+      debugLog("session_start", "cwd", ctx.cwd, "mode", ctx.mode, "project", project?.id || null);
+      if (project) startScheduler(ctx, project);
+    } catch (error) {
+      setLooperStatus(ctx, `skipped: ${error?.message || error}`);
+    }
+  });
+
+  pi.on("session_shutdown", async (_event, ctx) => {
+    await stopScheduler(ctx);
   });
 }

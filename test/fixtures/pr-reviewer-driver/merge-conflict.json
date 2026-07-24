@@ -12,6 +12,9 @@
       "labels": [
         {
           "name": "agent:review"
+        },
+        {
+          "name": "agent:reviewing"
         }
       ],
       "statusCheckRollup": [],

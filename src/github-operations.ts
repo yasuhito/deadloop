@@ -18,7 +18,7 @@ function labelArgs(move: LabelMove): string[] {
   return args;
 }
 
-function createGithubOperations(commandRunner: CommandRunner) {
+function createGithubOperations(commandRunner: CommandRunner, beforeMutation: () => void = () => {}) {
   return {
     listOpenIssues(repo: string): JsonObject[] {
       return commandRunner.runJson([
@@ -36,11 +36,20 @@ function createGithubOperations(commandRunner: CommandRunner) {
       ]);
     },
 
+    getIssue(repo: string, issueNumber: string | number): JsonObject {
+      return commandRunner.runJson([
+        "gh", "issue", "view", String(issueNumber), "-R", repo,
+        "--json", "number,title,body,labels,updatedAt,url,state",
+      ]);
+    },
+
     moveIssueLabels(repo: string, issueNumber: string | number, move: LabelMove): void {
+      beforeMutation();
       commandRunner.runText(["gh", "issue", "edit", String(issueNumber), "-R", repo, ...labelArgs(move)]);
     },
 
     commentIssue(repo: string, issueNumber: string | number, body: string): void {
+      beforeMutation();
       commandRunner.runText(["gh", "issue", "comment", String(issueNumber), "-R", repo, "--body", body]);
     },
 
@@ -56,19 +65,29 @@ function createGithubOperations(commandRunner: CommandRunner) {
         "--limit",
         "100",
         "--json",
-        "number,title,url,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,mergeStateStatus,labels,statusCheckRollup,comments,reviewRequests",
+        "number,title,url,state,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,mergeStateStatus,labels,statusCheckRollup,comments,reviewRequests",
+      ]);
+    },
+
+    getPr(repo: string, prNumber: string | number): JsonObject {
+      return commandRunner.runJson([
+        "gh", "pr", "view", String(prNumber), "-R", repo,
+        "--json", "number,title,url,state,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,mergeStateStatus,labels,statusCheckRollup,comments,reviewRequests",
       ]);
     },
 
     movePrLabels(repo: string, prNumber: string | number, move: LabelMove, options: { check?: boolean } = {}): void {
+      beforeMutation();
       commandRunner.runText(["gh", "pr", "edit", String(prNumber), "-R", repo, ...labelArgs(move)], { check: options.check });
     },
 
     commentPr(repo: string, prNumber: string | number, body: string): void {
+      beforeMutation();
       commandRunner.runText(["gh", "pr", "comment", String(prNumber), "-R", repo, "--body", body]);
     },
 
     addPrReviewer(repo: string, prNumber: string | number, reviewer: string, options: { check?: boolean } = {}): void {
+      beforeMutation();
       commandRunner.runText(["gh", "pr", "edit", String(prNumber), "-R", repo, "--add-reviewer", reviewer], { check: options.check });
     },
   };

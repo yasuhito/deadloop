@@ -110,6 +110,25 @@ The new head will be reviewed again. Review labels remain in place.
     ).not.toContain("/home/user");
   });
 
+  it("redacts plain promise terminology", () => {
+    expect(
+      renderApprovedReviewComment({
+        headOid: "a".repeat(40),
+        summary: "The worker promise was invalid.",
+        reviewFingerprint: "1".repeat(20),
+      }),
+    ).not.toContain("promise");
+  });
+
+  it("preserves public evidence around a redacted local path", () => {
+    expect(
+      renderChangesRequestedComment({
+        ...fixture("changes-requested.json"),
+        findings: [{ title: "Unsafe fallback", body: "The fallback approves failures; see /home/user/private.log for local reproduction.", path: "src/a.ts", severity: "blocker" }],
+      }),
+    ).toContain("The fallback approves failures");
+  });
+
   it("redacts colon-prefixed absolute local paths", () => {
     expect(
       renderApprovedReviewComment({

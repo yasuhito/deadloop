@@ -27,9 +27,12 @@ export type PiLooperState = {
   automations?: Record<string, AutomationStateEntry & Record<string, unknown>>;
 };
 
+export type RepositoryEnablement = "enabled" | "disabled" | "unavailable";
+
 export type StatusReportInput = {
   cwd: string;
   projects: NormalizedProject[];
+  repositoryEnablement?: RepositoryEnablement;
   state?: PiLooperState;
   issues?: GithubItem[];
   openPrs?: GithubItem[];
@@ -38,6 +41,7 @@ export type StatusReportInput = {
   gitStatuses?: Record<string, string>;
   gitHeads?: Record<string, string>;
   warnings?: string[];
+  selectedProject?: NormalizedProject | null;
   nowMs?: number;
 };
 
@@ -66,6 +70,7 @@ export type CleanupCandidate = {
 
 export type StatusSnapshot = {
   project: NormalizedProject | null;
+  repositoryEnablement: RepositoryEnablement;
   cwd: string;
   warnings: string[];
   automations: AutomationStatus[];
@@ -102,14 +107,14 @@ function isPathInside(child: string, parent: string): boolean {
   return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-export function resolveActiveProject(cwd: string, projects: NormalizedProject[]): NormalizedProject | null {
+export function resolveActiveProject(repositoryRoot: string, projects: NormalizedProject[]): NormalizedProject | null {
   return (
     projects.find((project) => {
       if (!project.repoPath) return false;
       try {
-        return isPathInside(cwd, project.repoPath);
+        return path.resolve(repositoryRoot) === path.resolve(project.repoPath);
       } catch {
-        return cwd === project.repoPath;
+        return repositoryRoot === project.repoPath;
       }
     }) || null
   );
@@ -203,11 +208,15 @@ function selectStaleLeftovers(worktrees: HerdrWorktree[], cleanupCandidates: Cle
 }
 
 export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
-  const project = resolveActiveProject(input.cwd, input.projects);
+  const project = input.selectedProject === undefined
+    ? resolveActiveProject(input.cwd, input.projects)
+    : input.selectedProject;
+  const repositoryEnablement = project ? "enabled" : input.repositoryEnablement || "unavailable";
   const nowMs = input.nowMs ?? Date.now();
   if (!project) {
     return {
       project: null,
+      repositoryEnablement,
       cwd: input.cwd,
       warnings: input.warnings || [],
       automations: [],
@@ -264,6 +273,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
 
   return {
     project,
+    repositoryEnablement,
     cwd: input.cwd,
     warnings: input.warnings || [],
     automations,
@@ -330,8 +340,11 @@ function formatAutomationSummary(summary: string | undefined): string {
 
 export function formatStatusReport(snapshot: StatusSnapshot): string {
   if (!snapshot.project) {
+    const lines = snapshot.repositoryEnablement === "disabled"
+      ? ["deadloop is not enabled for this repository.", "", "Enable it:", "  /deadloop-enable", ""]
+      : ["deadloop status is unavailable for the current location.", ""];
     return [
-      `deadloop status: no active project`,
+      ...lines,
       `cwd: ${snapshot.cwd}`,
       ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     ].join("\n");

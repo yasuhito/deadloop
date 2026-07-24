@@ -40,16 +40,16 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("external-review-request.json").driverAction).toBe("reviewer_monitor_request");
   });
 
+  it("persists reviewer monitor input as a generation-bound handoff", () => {
+    expect(runDriverFixture("external-review-request.json").monitorHandoff.kind).toBe("reviewer");
+  });
+
   it("waits for fresh external review when external review is enabled", () => {
     expect(runDriverFixture("external-review-wait.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).driverAction).toBe("wait");
   });
 
   it("requests external review deterministically when external review is enabled", () => {
     expect(runDriverFixture("external-review-request.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).driverAction).toBe("external_review_requested");
-  });
-
-  it("renders a blocked comment for draft PRs", () => {
-    expect(runDriverFixture("draft-pr.json").comment).toContain("## Recovery steps");
   });
 
   it("launches stale external-review fallback deterministically before monitoring", () => {
@@ -83,6 +83,10 @@ describe("PR reviewer deterministic driver", () => {
 
   it("routes a merge conflict to one dedicated branch-update worker", () => {
     expect(runDriverFixture("merge-conflict.json").driverAction).toBe("branch_update_monitor_request");
+  });
+
+  it("persists branch-update monitor input as a generation-bound handoff", () => {
+    expect(runDriverFixture("merge-conflict.json").monitorHandoff.kind).toBe("branch-update");
   });
 
   it("uses a deterministic retry-key worker name for the exact head/base pair", () => {
