@@ -21,6 +21,21 @@ function executable(file: string, content: string): void {
   fs.chmodSync(file, 0o755);
 }
 
+function readHerdrActions(world: RequeuedReviewWorld): string[][] {
+  if (!world.log) throw new Error("Herdr action log is missing");
+  return fs
+    .readFileSync(world.log, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as string[]);
+}
+
+function actionName(args: string[]): string {
+  return args
+    .slice(0, args[0] === "pane" || (args[0] === "agent" && args[1] === "start") ? 3 : 2)
+    .join(" ");
+}
+
 function runReviewDriver(world: RequeuedReviewWorld): void {
   if (
     !world.root ||
@@ -125,7 +140,6 @@ if (args[0] === "agent" && args[1] === "list") {
 `);
 
   Object.assign(this, { root, bin, worktree, configDir, log, prState, updatedHead });
-  runReviewDriver(this);
 });
 
 When("agent:blocked が外された pull request を deadloop が再確認する", function (this: RequeuedReviewWorld) {
@@ -139,25 +153,13 @@ When("agent:blocked が外された pull request を deadloop が再確認する
 });
 
 Then("新しい head のレビュー担当を一人だけ起動する", function (this: RequeuedReviewWorld) {
-  if (!this.log) throw new Error("Herdr action log is missing");
-  const actions = fs
-    .readFileSync(this.log, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line) as string[])
-    .map((args) => args.slice(0, args[0] === "pane" || (args[0] === "agent" && args[1] === "start") ? 3 : 2).join(" "));
+  const actions = readHerdrActions(this).map(actionName);
 
   assert.equal(actions.filter((action) => action === "agent start demo-pr-44-reviewer").length, 1);
 });
 
 Then("終了済みのレビュー担当を片付けてから新しい担当を起動する", function (this: RequeuedReviewWorld) {
-  if (!this.log) throw new Error("Herdr action log is missing");
-  const actions = fs
-    .readFileSync(this.log, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line) as string[])
-    .map((args) => args.slice(0, args[0] === "pane" || (args[0] === "agent" && args[1] === "start") ? 3 : 2).join(" "));
+  const actions = readHerdrActions(this).map(actionName);
   const cleanupAndStart = actions.filter((action) =>
     action === "pane close pane-old" || action === "agent start demo-pr-44-reviewer"
   );
@@ -166,12 +168,8 @@ Then("終了済みのレビュー担当を片付けてから新しい担当を�
 });
 
 Then("レビュー担当への引き継ぎに修正後の head を使う", function (this: RequeuedReviewWorld) {
-  if (!this.log || !this.updatedHead) throw new Error("review handoff state is missing");
-  const start = fs
-    .readFileSync(this.log, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line) as string[])
+  if (!this.updatedHead) throw new Error("review handoff state is missing");
+  const start = readHerdrActions(this)
     .find((args) => args[0] === "agent" && args[1] === "start" && args[2] === "demo-pr-44-reviewer");
   const promptArgument = start?.at(-1) ?? "";
   const prompt = promptArgument.startsWith("@")
