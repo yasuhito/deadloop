@@ -11,6 +11,9 @@ This record tracks the Cucumber migration for Issue #127. The existing Vitest te
 | T052 | Reclassified to focused Vitest coverage in `test/blocked-report-format.test.ts`; this is a static prompt-file contract |
 | T053 | Reclassified to focused Vitest coverage in `test/blocked-report-format.test.ts`; this is a static prompt-file contract |
 | T054 | `現行の状態表示コマンドを登録する` |
+| T055 | Processed as a deletion candidate; removed the history-only old-command-alias test after confirming T054 covers the current `/deadloop-status` command |
+| T056 | Processed as a deletion candidate; removed the history-only old-environment-variable test after confirming T076 covers current `DEADLOOP_CONFIG` precedence |
+| T057 | Processed as a deletion candidate; removed the history-only wording test while retaining `docs/migration-to-deadloop.md` as the user-facing migration record |
 | T380 | `実装待ちの Issue がない場合はそのことを表示する` |
 | Issue #127 target display | `対象の Issue を表示する` |
 | T381 | `レビュー対象の pull request を表示する` |
@@ -29,7 +32,7 @@ The deterministic draft gate does not read `pr-reviewer.prompt.md`. Its acceptan
 
 ## Intentional failures
 
-On 2026-07-23, each expected external result was temporarily changed to an impossible value and `npm run test:acceptance` was run. Every mutation exited with status 1 and named the affected scenario and Then source location. The mutations and detected guarantees were:
+On 2026-07-24, each expected external result was temporarily changed to an impossible value against the repaired HEAD and `npm run test:acceptance` was run. Every mutation exited with status 1, with 15 scenarios passing and the affected scenario failing at its Then source location. The mutations and detected guarantees were:
 
 - T380: `eligible: none` was changed to `eligible: #999`.
 - Issue #127 target display: Issue `#13` was changed to `#999`.
@@ -49,4 +52,4 @@ Each assertion was restored before the next mutation. The restored acceptance su
 
 ## Full verification
 
-On 2026-07-23, `npm run check` completed successfully after the restored migration: the acceptance rules passed, all 43 Vitest files (484 tests) passed, all 16 Cucumber scenarios (65 steps) passed, lint and type checking passed, shell syntax checks passed, and `npm pack --dry-run` produced `deadloop-0.1.0.tgz`.
+On 2026-07-24, `npm run check` completed successfully after restoring every mutation and processing T055-T057: the acceptance rules passed, all 43 Vitest files (483 tests) passed, all 16 Cucumber scenarios (65 steps) passed, lint and type checking passed, shell syntax checks passed, and `npm pack --dry-run` produced `deadloop-0.1.0.tgz`.
