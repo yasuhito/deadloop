@@ -50,10 +50,17 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-function main(): void {
+function main(
+  argv: string[] = process.argv.slice(2),
+  options: {
+    runner?: { startAgent: (input: { name: string; cwd: string; tabId?: string; agentArgv: string[] }) => string };
+    readClaudeConfig?: () => unknown;
+    writeOutput?: boolean;
+  } = {},
+): string {
   let args: Record<string, string>;
   try {
-    args = parseArgs(process.argv.slice(2));
+    args = parseArgs(argv);
   } catch (error) {
     fail({ error: "bad_arguments", message: error instanceof Error ? error.message : String(error) });
   }
@@ -83,7 +90,7 @@ function main(): void {
   // diagnostic), not the per-launch worktree cwd, falling back to cwd.
   if (profile.preconditions.includes("workspaceTrust")) {
     const trustPath = args["repo-path"] || cwd;
-    const trust = evaluateWorkspaceTrust(readClaudeConfig(), trustPath);
+    const trust = evaluateWorkspaceTrust((options.readClaudeConfig ?? readClaudeConfig)(), trustPath);
     if (trust === "untrusted") {
       fail({
         error: "workspace_trust_unaccepted",
@@ -113,13 +120,16 @@ function main(): void {
     fail({ error: "invalid_launch", message: error instanceof Error ? error.message : String(error) });
   }
 
-  const runner = createHerdrRunner({
-    runText: (command: string, commandArgs: string[]) => execFileSync(command, commandArgs, { encoding: "utf8" }),
-  });
+  const runner =
+    options.runner ??
+    createHerdrRunner({
+      runText: (command: string, commandArgs: string[]) => execFileSync(command, commandArgs, { encoding: "utf8" }),
+    });
 
   try {
     const stdout = runner.startAgent({ name: args.name || "", cwd, tabId: args.tab, agentArgv });
-    process.stdout.write(stdout);
+    if (options.writeOutput !== false) process.stdout.write(stdout);
+    return stdout;
   } catch (error) {
     const err = error as { stdout?: string; stderr?: string; message?: string };
     if (err.stdout) process.stdout.write(err.stdout);
@@ -128,4 +138,6 @@ function main(): void {
   }
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { main };
