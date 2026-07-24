@@ -81,10 +81,6 @@ function liveAgents(): any {
   }
 }
 
-function shouldSimulateLaunch(fixture: JsonObject | null): boolean {
-  return Boolean(fixture);
-}
-
 function fixtureEffects(fixture: JsonObject): JsonObject {
   fixture.testAdapterEffects ||= { herdrStarts: [], githubComments: [], labels: {} };
   return fixture.testAdapterEffects;
@@ -109,6 +105,72 @@ function fixtureGithubOperations(fixture: JsonObject) {
       effects.githubReviewers.push({ number: Number(number), reviewer });
     },
   };
+}
+
+function fixtureHerdrRunner(branch: string) {
+  return {
+    createWorktree: () => ({ workspaceId: "fixture-workspace", worktreePath: `/worktrees/fixture/${branch.replace(/\//g, "-")}` }),
+    openWorktree: () => ({ workspaceId: "fixture-workspace", worktreePath: `/worktrees/fixture/${branch.replace(/\//g, "-")}` }),
+    createTab: () => ({ tabId: "fixture-tab" }),
+    startAgent: () => "",
+    listWorktrees: () => [],
+    listAgents: () => [],
+    removeAgent: () => "",
+    removeWorktree: () => "",
+  };
+}
+
+type DriverLaunchInput = {
+  worktree: { mode: "open"; branch: string };
+  repoPath: string;
+  automationDir: string;
+  stateDir: string;
+  name: string;
+  agent: string;
+  model: string;
+  level: string;
+  uuid: string;
+  promptFilePrefix: string;
+  renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
+};
+
+function launchWithAdapters(
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  input: DriverLaunchInput,
+  mutateWorkflowState: (github: ReturnType<typeof githubOperations>) => void,
+  revalidate: () => void,
+): JsonObject {
+  const mutate = (recheck: () => void) => mutateWorkflowState(
+    fixture ? fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations> : githubOperations(recheck),
+  );
+  const launch = (recheck: () => void) => launchAgentFlow(
+    input,
+    fixture
+      ? {
+          mkdirSync: () => {},
+          runner: fixtureHerdrRunner(input.worktree.branch),
+          runText: (args: string[]) => {
+            const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
+            fixtureEffects(fixture).herdrStarts.push({
+              name: valueAfter("--name"),
+              agent: valueAfter("--agent"),
+              branch: input.worktree.branch,
+            });
+            return JSON.stringify({ ok: true });
+          },
+          writeFileSync: () => {},
+          beforeAgentStart: recheck,
+        }
+      : { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
+  );
+
+  if (fixture) {
+    revalidate();
+    mutate(() => {});
+    return launch(() => {});
+  }
+  return withEnabledDriverLaunch(env, mutate, launch, { revalidate });
 }
 
 function reviewAgentPrompt(
@@ -315,121 +377,79 @@ function launchBranchUpdate(
   const updaterName = `${env.projectId}-pr-${number}-branch-update-${key}`;
   const uuid = fixture ? "fixture-branch-update-uuid" : randomUUID();
   const marker = renderBranchUpdateMarker(headOid, baseOid);
-  if (fixture) {
-    const github = fixtureGithubOperations(fixture);
-    github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
-    github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
-    fixtureEffects(fixture).herdrStarts.push({ name: updaterName, agent: env.branchUpdateAgent, branch });
-    return {
-      updaterName,
-      headRefName: branch,
-      retryKey: key,
-      workspaceId: "fixture-update-workspace",
-      tabId: "fixture-update-tab",
-      worktreePath: `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`,
-      promptFile: `${env.stateDir}/runs/${uuid}/branch-update-prompt.md`,
-      promiseFile: `${env.stateDir}/runs/${uuid}/promise.json`,
-      simulated: true,
-    };
-  }
-
-  runText(["git", "check-ref-format", "--branch", branch]);
-  const launch = withEnabledDriverLaunch(
+  if (!fixture) runText(["git", "check-ref-format", "--branch", branch]);
+  const launch = launchWithAdapters(
     env,
-    (recheck: () => void) => {
-      const github = githubOperations(recheck);
+    fixture,
+    {
+      worktree: { mode: "open", branch },
+      repoPath: env.repoPath,
+      automationDir: env.automationDir,
+      stateDir: env.stateDir,
+      name: updaterName,
+      agent: env.branchUpdateAgent,
+      model: env.branchUpdateModel,
+      level: "medium",
+      uuid,
+      promptFilePrefix: "branch-update-prompt",
+      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+        branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
+    },
+    (github) => {
       github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
       github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
     },
-    (recheck: () => void) => launchAgentFlow(
-      {
-        worktree: { mode: "open", branch },
-        repoPath: env.repoPath,
-        automationDir: env.automationDir,
-        stateDir: env.stateDir,
-        name: updaterName,
-        agent: env.branchUpdateAgent,
-        model: env.branchUpdateModel,
-        level: "medium",
-        uuid,
-        promptFilePrefix: "branch-update-prompt",
-        renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-          branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
-      },
-      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
-    ),
-    {
-      revalidate: () => {
-        const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
-        if (!("pr" in livePlan)) throw new StaleLaunchError(`PR #${number} is no longer eligible`);
-        assertSameLaunchTarget(pr, livePlan.pr, "pr");
-        const liveDecision = branchUpdateDecision(livePlan.pr, env, null);
-        if (
-          liveDecision.action !== "delegate_worker"
-          || String(liveDecision.headOid || "") !== headOid
-          || String(liveDecision.baseOid || "") !== baseOid
-          || branchUpdateAttemptExists(livePlan.pr.comments || [], headOid, baseOid)
-        ) throw new StaleLaunchError(`PR #${number} branch-update target changed before launch`);
-      },
+    () => {
+      if (fixture) return;
+      const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
+      if (!("pr" in livePlan)) throw new StaleLaunchError(`PR #${number} is no longer eligible`);
+      assertSameLaunchTarget(pr, livePlan.pr, "pr");
+      const liveDecision = branchUpdateDecision(livePlan.pr, env, null);
+      if (
+        liveDecision.action !== "delegate_worker"
+        || String(liveDecision.headOid || "") !== headOid
+        || String(liveDecision.baseOid || "") !== baseOid
+        || branchUpdateAttemptExists(livePlan.pr.comments || [], headOid, baseOid)
+      ) throw new StaleLaunchError(`PR #${number} branch-update target changed before launch`);
     },
   );
-  return { updaterName, headRefName: branch, retryKey: key, ...launch };
+  return { updaterName, headRefName: branch, retryKey: key, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
 function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
   const number = Number(pr.number || 0);
-  const uuid = shouldSimulateLaunch(fixture) ? "fixture-reviewer-uuid" : randomUUID();
+  const uuid = fixture ? "fixture-reviewer-uuid" : randomUUID();
   const reviewerName = `${env.projectId}-pr-${number}-reviewer`;
   const headRefName = String(pr.headRefName || `pr-${number}`);
-  const simulatedWorktreePath = `/worktrees/${env.projectId}/${headRefName.replace(/\//g, "-")}`;
-
-  if (fixture) {
-    fixtureGithubOperations(fixture).movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
-    fixtureEffects(fixture).herdrStarts.push({ name: reviewerName, agent: env.reviewerAgent, branch: headRefName });
-    return {
-      reviewerName,
-      headRefName,
-      workspaceId: "fixture-workspace",
-      tabId: "fixture-tab",
-      worktreePath: simulatedWorktreePath,
-      promptFile: `${env.stateDir}/runs/${uuid}/reviewer-prompt.md`,
-      promiseFile: `${env.stateDir}/runs/${uuid}/promise.json`,
-      simulated: true,
-    };
-  }
-
-  const launch = withEnabledDriverLaunch(
+  const launch = launchWithAdapters(
     env,
-    (recheck: () => void) => githubOperations(recheck).movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }),
-    (recheck: () => void) => launchAgentFlow(
-      {
-        worktree: { mode: "open", branch: headRefName },
-        repoPath: env.repoPath,
-        automationDir: env.automationDir,
-        stateDir: env.stateDir,
-        name: reviewerName,
-        agent: env.reviewerAgent,
-        model: env.reviewerModel,
-        level: "medium",
-        uuid,
-        promptFilePrefix: "reviewer-prompt",
-        renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-          reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
-      },
-      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
-    ),
+    fixture,
     {
-      revalidate: () => {
-        const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
-        if (livePlan.kind !== "review_required") throw new StaleLaunchError(`PR #${number} is no longer eligible for reviewer launch`);
-        assertSameLaunchTarget(pr, livePlan.pr, "pr");
-        if (branchUpdateDecision(livePlan.pr, env, null).action !== "no_update") {
-          throw new StaleLaunchError(`PR #${number} branch-update state changed before reviewer launch`);
-        }
-      },
+      worktree: { mode: "open", branch: headRefName },
+      repoPath: env.repoPath,
+      automationDir: env.automationDir,
+      stateDir: env.stateDir,
+      name: reviewerName,
+      agent: env.reviewerAgent,
+      model: env.reviewerModel,
+      level: "medium",
+      uuid,
+      promptFilePrefix: "reviewer-prompt",
+      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+        reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
+    },
+    (github) => github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }),
+    () => {
+      if (fixture) return;
+      const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
+      if (livePlan.kind !== "review_required") throw new StaleLaunchError(`PR #${number} is no longer eligible for reviewer launch`);
+      assertSameLaunchTarget(pr, livePlan.pr, "pr");
+      if (branchUpdateDecision(livePlan.pr, env, null).action !== "no_update") {
+        throw new StaleLaunchError(`PR #${number} branch-update state changed before reviewer launch`);
+      }
     },
   );
-  return { reviewerName, headRefName, ...launch };
+  return { reviewerName, headRefName, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
 function draftBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>): string {

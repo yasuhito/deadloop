@@ -26,6 +26,10 @@ function adapterEffects(result: Record<string, unknown> | undefined): any {
   return result?.testAdapterEffects;
 }
 
+function loggedAgentStartCount(result: Record<string, unknown> | undefined): number {
+  return String(result?.herdrLog || "").split("\n").filter((line) => line.startsWith("agent start ")).length;
+}
+
 function reviewerDriver(fixture: string): Record<string, unknown> {
   const fixturePath = path.isAbsolute(fixture) ? fixture : path.join("test/fixtures/pr-reviewer-driver", fixture);
   const result = spawnSync(
@@ -340,15 +344,18 @@ When("deadloop が競合回復を完了する", function (this: RecoveryWorld) {
 });
 
 Then("deadloop は専用の競合回復作業を開始する", function (this: RecoveryWorld) {
-  assert.equal(adapterEffects(this.result)?.herdrStarts?.[0]?.name.includes("branch-update"), true);
+  const starts = adapterEffects(this.result)?.herdrStarts?.filter((start: any) => start.name.includes("branch-update")) ?? [];
+  assert.equal(starts.length, 1);
 });
 
-Then("deadloop は競合回復を停止して人間対応にする", function (this: RecoveryWorld) {
-  assert.equal(adapterEffects(this.result)?.labels?.["31"]?.includes("agent:blocked"), true);
+Then("deadloop は専用の競合回復作業を開始しない", function (this: RecoveryWorld) {
+  const starts = adapterEffects(this.result)?.herdrStarts?.filter((start: any) => start.name.includes("branch-update")) ?? [];
+  assert.equal(starts.length, 0);
 });
 
 Then("deadloop は通常レビューを開始する", function (this: RecoveryWorld) {
-  assert.equal(adapterEffects(this.result)?.herdrStarts?.[0]?.name.endsWith("-reviewer"), true);
+  const starts = adapterEffects(this.result)?.herdrStarts?.filter((start: any) => start.name.endsWith("-reviewer")) ?? [];
+  assert.equal(starts.length, 1);
 });
 
 Then("deadloop はレビュー状態を維持する", function (this: RecoveryWorld) {
@@ -357,19 +364,24 @@ Then("deadloop はレビュー状態を維持する", function (this: RecoveryWo
 });
 
 Then("deadloop は専用の修正作業を開始する", function (this: RecoveryWorld) {
-  assert.ok(String(this.result?.herdrLog).includes("agent start"), JSON.stringify(this.result));
+  assert.equal(loggedAgentStartCount(this.result), 1);
 });
 
-Then("deadloop は修正を停止して人間対応にする", function (this: RecoveryWorld) {
-  assert.ok(String(this.result?.githubLog).includes("agent:blocked"));
+Then("deadloop は専用の修正作業を開始しない", function (this: RecoveryWorld) {
+  assert.equal(loggedAgentStartCount(this.result), 0);
 });
 
 Then("deadloop はレビューを一度だけ再試行する", function (this: RecoveryWorld) {
-  assert.equal((this.result?.retryCycleEffects as any)?.herdrStarts?.length, 1);
+  const starts = (this.result?.retryCycleEffects as any)?.herdrStarts?.filter((start: any) => start.name.endsWith("-reviewer")) ?? [];
+  assert.equal(starts.length, 1);
 });
 
-Then("deadloop はレビューを停止して人間対応にする", function (this: RecoveryWorld) {
-  assert.ok(String(this.result?.githubLog).includes("agent:blocked"));
+Then("deadloop は人間対応にしない", function (this: RecoveryWorld) {
+  assert.equal((this.result?.observedLabels as string[]).includes("agent:blocked"), false);
+});
+
+Then("deadloop は通常レビューを開始しない", function (this: RecoveryWorld) {
+  assert.equal(loggedAgentStartCount(this.result), 0);
 });
 
 Then("deadloop は branch へ push しない", function (this: RecoveryWorld) {
@@ -380,7 +392,7 @@ Then("deadloop は確認した branch へ非強制で push する", function (th
   assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
 });
 
-Then("deadloop は push 前に設定済みチェックを実行する", function (this: RecoveryWorld) {
+Then("deadloop は最後の pull request head 確認より先に設定済みチェックを実行する", function (this: RecoveryWorld) {
   const checkIndex = this.commands?.findIndex((command) => command[0] === "node") ?? -1;
   const headCheckIndex = this.commands?.findIndex((command) => command[0] === "gh") ?? -1;
   assert.ok(checkIndex >= 0 && checkIndex < headCheckIndex);
@@ -390,7 +402,7 @@ Then("deadloop は競合回復 branch へ非強制で push する", function (th
   assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
 });
 
-Then("deadloop は競合回復の push 前に設定済みチェックを実行する", function (this: RecoveryWorld) {
+Then("deadloop は競合回復の最後の pull request head 確認より先に設定済みチェックを実行する", function (this: RecoveryWorld) {
   const checkIndex = this.commands?.findIndex((command) => command[0] === "node") ?? -1;
   const headCheckIndex = this.commands?.findIndex((command) => command[0] === "gh") ?? -1;
   assert.ok(checkIndex >= 0 && checkIndex < headCheckIndex);

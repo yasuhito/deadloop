@@ -12,7 +12,7 @@
 
 * 前提 同じ pull request head と base の競合回復を一度試した pull request がある
 * もし deadloop が pull request を確認する
-* ならば deadloop は競合回復を停止して人間対応にする
+* ならば deadloop は専用の競合回復作業を開始しない
 
 ## シナリオ: base が変わった競合 pull request は通常レビューへ戻る
 
@@ -44,11 +44,11 @@
 * もし deadloop が pull request を確認する
 * ならば deadloop は通常レビューを開始する
 
-## シナリオ: 修正後の新しい head でも同じレビュー指摘が残った場合は人間対応にする
+## シナリオ: 修正後の新しい head では同じレビュー指摘の修正を二度開始しない
 
 * 前提 修正後の新しい head でも同じレビュー指摘が残った pull request がある
 * もし deadloop がレビュー結果を処理する
-* ならば deadloop は修正を停止して人間対応にする
+* ならば deadloop は専用の修正作業を開始しない
 
 ## シナリオ: 最初の技術的なレビュー失敗は一度だけ再試行する
 
@@ -56,11 +56,17 @@
 * もし deadloop がレビュー結果を処理する
 * ならば deadloop はレビューを一度だけ再試行する
 
-## シナリオ: 二度目の技術的なレビュー失敗は人間対応にする
+## シナリオ: 最初の技術的なレビュー失敗では人間対応にしない
+
+* 前提 初めて技術的に失敗したレビューがある pull request がある
+* もし deadloop がレビュー結果を処理する
+* ならば deadloop は人間対応にしない
+
+## シナリオ: 二度目の技術的なレビュー失敗は再試行しない
 
 * 前提 技術的に一度失敗したレビューがある pull request がある
 * もし deadloop がレビュー結果を処理する
-* ならば deadloop はレビューを停止して人間対応にする
+* ならば deadloop は通常レビューを開始しない
 
 ## シナリオ: 古い pull request head の修正は push しない
 
@@ -78,7 +84,7 @@
 
 * 前提 修正対象の pull request head が確認済みである
 * もし deadloop が修正を完了する
-* ならば deadloop は push 前に設定済みチェックを実行する
+* ならば deadloop は最後の pull request head 確認より先に設定済みチェックを実行する
 
 ## シナリオ: 別のリポジトリからの pull request の競合回復は push しない
 
@@ -96,7 +102,7 @@
 
 * 前提 競合回復対象の pull request head が確認済みである
 * もし deadloop が競合回復を完了する
-* ならば deadloop は競合回復の push 前に設定済みチェックを実行する
+* ならば deadloop は競合回復の最後の pull request head 確認より先に設定済みチェックを実行する
 
 ## シナリオ: 古い pull request head の競合回復は push しない
 
