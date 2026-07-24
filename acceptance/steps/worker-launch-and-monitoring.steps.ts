@@ -15,6 +15,7 @@ type WorkerWorld = {
   agents?: RunnerAgent[];
   removedAgentIds?: string[];
   launchCount?: number;
+  launchEvents?: string[];
   worktreeRequest?: { branch: string; baseBranch: string; label: string };
   launchError?: Error;
   coordinatorResult?: Record<string, unknown>;
@@ -25,6 +26,7 @@ type WorkerWorld = {
 function launchWorker(world: WorkerWorld): void {
   const agents = world.agents ?? [];
   const removedAgentIds: string[] = [];
+  const launchEvents: string[] = [];
   let launchCount = 0;
   const runner: RunnerAdapter = {
     createWorktree: (input) => {
@@ -34,13 +36,17 @@ function launchWorker(world: WorkerWorld): void {
     openWorktree: () => {
       throw new Error("既存の作業場所を開いてはならない");
     },
-    createTab: () => ({ tabId: "tab-12" }),
+    createTab: () => {
+      launchEvents.push("create-tab");
+      return { tabId: "tab-12" };
+    },
     startAgent: () => {
       throw new Error("起動は共通ランチャーを経由する");
     },
     listWorktrees: () => [],
     listAgents: () => agents,
     removeAgent: (agentId) => {
+      launchEvents.push(`remove:${agentId}`);
       removedAgentIds.push(agentId);
       const index = agents.findIndex((agent) => agent.agentId === agentId);
       if (index >= 0) agents.splice(index, 1);
@@ -69,6 +75,7 @@ function launchWorker(world: WorkerWorld): void {
         runner,
         runText: () => {
           launchCount += 1;
+          launchEvents.push("launch");
           agents.push({ name: workerName, status: "working", cwd: workerPath, agentId: "replacement" });
           return "started";
         },
@@ -82,6 +89,7 @@ function launchWorker(world: WorkerWorld): void {
   world.agents = agents;
   world.removedAgentIds = removedAgentIds;
   world.launchCount = launchCount;
+  world.launchEvents = launchEvents;
 }
 
 Given("作業を開始できる Issue がある", function (this: WorkerWorld) {
@@ -123,8 +131,8 @@ Then("新しい担当を一人だけ起動する", function (this: WorkerWorld) 
   assert.equal(this.launchCount, 1);
 });
 
-Then("完了済みの担当を片付ける", function (this: WorkerWorld) {
-  assert.deepEqual(this.removedAgentIds, ["finished"]);
+Then("完了済みの担当を片付けてから交代を起動する", function (this: WorkerWorld) {
+  assert.equal(this.launchEvents?.join(">"), "remove:finished>create-tab>launch");
 });
 
 Then("一人の交代担当を起動する", function (this: WorkerWorld) {

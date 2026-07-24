@@ -37,6 +37,6 @@ Issue #119 では、Issue 専用の作業場所で担当を重複なく起動し
 
 ## 同等性と意図的な失敗の確認
 
-2026-07-24 に、削除前の Vitest と新しい Cucumber を併存させて `npm run test:unit` と `npm run test:acceptance` を実行し、両方が成功することを確認した。置換後は Vitest 56ファイル 744テスト、Cucumber 91シナリオ 475ステップが成功した。
+2026-07-24 に、削除前の Vitest と新しい Cucumber を併存させて `npm run test:unit` と `npm run test:acceptance` を実行し、両方が成功することを確認した。置換後は Vitest 56ファイル 744テスト、Cucumber 92シナリオ 480ステップが成功した。
 
 同日、「準備済み Issue の担当には基準ブランチから専用の作業場所を作る」の Then で、期待する基準ブランチを一時的に `origin/intentional-failure` へ変更した。`npm run test:acceptance` は終了状態1となり、対象シナリオだけが失敗して実際値 `origin/main` と一時的な期待値の差を報告した。期待値を `origin/main` へ戻した後、受け入れテストが再び成功することを確認した。
