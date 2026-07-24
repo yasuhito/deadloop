@@ -219,7 +219,7 @@ Given("完了ファイルを求めた後に担当の最近の活動がある", f
     now: "2026-07-07T11:17:37Z",
     promiseStatus: "none",
     worktreeHasChanges: false,
-    nudgeSentAt: "2026-07-07T11:15:33Z",
+    nudgeSentAt: "2026-07-07T11:10:33Z",
     agentStatus: "idle",
     activity: [{ kind: "tool", at: "2026-07-07T11:16:20Z" }],
   };
