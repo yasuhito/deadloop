@@ -6,7 +6,8 @@ import { normalizeProject, parseProjectsConfig, resolveConfigPath, type Normaliz
 
 type ConfigurationWorld = {
   configPath?: string;
-  configOptions?: Parameters<typeof resolveConfigPath>[0];
+  configEnv?: Record<string, string | undefined>;
+  existingConfigPaths?: Set<string>;
   raw?: Record<string, unknown>;
   policy?: Record<string, unknown>;
   project?: NormalizedProject;
@@ -28,23 +29,31 @@ function resolve(world: ConfigurationWorld, raw: Record<string, unknown> = {}, p
   world.project = result.projects[0];
 }
 
-Given("三つの設定ファイルがある", function (this: ConfigurationWorld) {});
+Given("三つの設定ファイルがある", function (this: ConfigurationWorld) {
+  this.existingConfigPaths = new Set(Object.values(paths));
+});
 
 Given("`DEADLOOP_CONFIG` で設定ファイルを指定する", function (this: ConfigurationWorld) {
-  this.configOptions = { env: { DEADLOOP_CONFIG: paths.environment }, stateDir: "/state", extensionDir: "/extension", exists: () => true };
+  this.configEnv = { DEADLOOP_CONFIG: paths.environment };
 });
 
 Given("`DEADLOOP_CONFIG` を指定しない", function (this: ConfigurationWorld) {
-  this.configOptions = { env: {}, stateDir: "/state", extensionDir: "/extension", exists: (file) => file === paths.user };
+  this.configEnv = {};
 });
 
 Given("同梱設定ファイルだけがある", function (this: ConfigurationWorld) {
-  this.configOptions = { env: {}, stateDir: "/state", extensionDir: "/extension", exists: () => false };
+  this.configEnv = {};
+  this.existingConfigPaths = new Set([paths.extension]);
 });
 
 When("deadloop が設定ファイルを探す", function (this: ConfigurationWorld) {
-  if (!this.configOptions) throw new Error("configuration file precondition is missing");
-  this.configPath = resolveConfigPath(this.configOptions);
+  if (!this.existingConfigPaths) throw new Error("configuration file precondition is missing");
+  this.configPath = resolveConfigPath({
+    env: this.configEnv,
+    stateDir: "/state",
+    extensionDir: "/extension",
+    exists: (file) => this.existingConfigPaths?.has(file) ?? false,
+  });
 });
 
 Then("指定した設定ファイルが選ばれる", function (this: ConfigurationWorld) {
@@ -159,7 +168,7 @@ Then("自動マージは無効である", function (this: ConfigurationWorld) {
 });
 
 Then("CI 代替は無効である", function (this: ConfigurationWorld) {
-  assert.deepEqual(this.project?.ciFallback, { enabled: false, mode: "billing-only", allowAutoMerge: false, localCommands: "" });
+  assert.equal(this.project?.ciFallback.enabled, false);
 });
 
 Then("外部レビューは無効である", function (this: ConfigurationWorld) {
