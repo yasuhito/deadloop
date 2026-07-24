@@ -1,0 +1,24 @@
+{
+  "prs": [
+    {
+      "number": 25,
+      "title": "Changed after external review request",
+      "url": "https://github.com/owner/repo/pull/25",
+      "headRefName": "agent/issue-25-review",
+      "headRefOid": "new2525",
+      "updatedAt": "2026-07-07T23:55:00Z",
+      "isDraft": false,
+      "labels": [{"name": "agent:review"}],
+      "statusCheckRollup": [],
+      "comments": [
+        {
+          "createdAt": "2026-07-07T23:55:00Z",
+          "author": {"login": "deadloop"},
+          "body": "@coderabbitai review\n\n<!-- deadloop:external-review-request head=old2525 -->"
+        }
+      ],
+      "reviewRequests": []
+    }
+  ],
+  "agents": {"result": {"agents": []}}
+}
