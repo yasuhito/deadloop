@@ -23,4 +23,6 @@ T349 のシナリオは、pull request の head を修正前の `dead43` から�
 
 2026-07-25 に、結果ステップが期待するレビュー担当の起動数を `1` から `2` へ一時的に変更し、対象シナリオだけを実行した。終了コード 1 となり、`requeued-pr-review.feature.md` のシナリオ位置、`requeued-pr-review.steps.ts` の結果ステップと assertion の位置、実際値 `1` と誤った期待値 `2` の差が表示された。
 
-期待値を直ちに元へ戻し、対象シナリオが成功することと意図的な変更が作業ツリーに残っていないことを確認した。
+同日、修正後の head の assertion が期待する値を `feed44` から修正前の `dead43` へ一時的に変更し、「更新された pull request の head をレビュー担当へ引き継ぐ」シナリオだけを実行した。終了コード 1 となり、シナリオ位置 `acceptance/features/requeued-pr-review.feature.md:14`、結果ステップ位置 `acceptance/steps/requeued-pr-review.steps.ts:157`、assertion 位置 `acceptance/steps/requeued-pr-review.steps.ts:171` と、実際の head `feed44` に対して誤った期待値が `dead43` である差が表示された。
+
+期待値を直ちに元へ戻し、各対象シナリオが成功することと意図的な変更が作業ツリーに残っていないことを確認した。
