@@ -12,21 +12,20 @@ type CiFallbackWorld = {
 
 const fixtureDirectory = path.join(process.cwd(), "test/fixtures/ci-fallback");
 
-function configureCiFallback(world: CiFallbackWorld, fixtureName: string, enabled = true): void {
+function configureCiFallback(world: CiFallbackWorld, fixtureName: string): void {
   world.fixtureName = fixtureName;
-  world.enabled = enabled;
 }
 
 function decideCiFallback(world: CiFallbackWorld): void {
-  if (!world.fixtureName || world.enabled === undefined) throw new Error("CI fallback precondition is missing");
+  if (!world.fixtureName) throw new Error("CI fallback precondition is missing");
+  const enabledArgs = world.enabled === undefined ? [] : ["--enabled", String(world.enabled)];
   const result = spawnSync(
     "node",
     [
       "extensions/deadloop/automations/ci-fallback-decision.ts",
       "--input",
       path.join(fixtureDirectory, world.fixtureName),
-      "--enabled",
-      String(world.enabled),
+      ...enabledArgs,
       "--mode",
       "billing-only",
     ],
@@ -41,8 +40,12 @@ function decisionFrom(world: CiFallbackWorld): Record<string, unknown> {
   return world.decision;
 }
 
-Given("CI 代替検証が有効になっていない", function (this: CiFallbackWorld) {
-  configureCiFallback(this, "qorraq-all-jobs-immediate-failure.json", false);
+Given("CI 代替検証を明示設定していない", function (this: CiFallbackWorld) {
+  configureCiFallback(this, "qorraq-all-jobs-immediate-failure.json");
+});
+
+Given("CI 代替検証を明示的に有効にしている", function (this: CiFallbackWorld) {
+  this.enabled = true;
 });
 
 Given("すべての CI ジョブが実行前にすぐ失敗している", function (this: CiFallbackWorld) {

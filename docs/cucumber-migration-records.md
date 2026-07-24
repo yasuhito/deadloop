@@ -4,7 +4,7 @@
 
 ## Issue #115: CI 代替検証
 
-T058〜T065 は、Cucumber の各シナリオが元の Vitest と同じ決定論的 CLI、同じ入力 fixture、同じ一つの観測結果を検査する。正常系の同等性確認では、`npm run test:unit -- --run test/ci-fallback-decision.test.ts` が8件成功（Vitest 表示 546 ms、コマンド全体 0.921秒）、`npm run test:acceptance` が9シナリオ成功（Cucumber 表示 0.409秒、コマンド全体 0.852秒）だった。局所的な診断価値も Cucumber の失敗位置と差分で維持されるため、完全に置換された `test/ci-fallback-decision.test.ts` の8件は削除した。
+T058〜T065 は、Cucumber の各シナリオが元の Vitest と同じ決定論的 CLI、同じ入力 fixture、同じ一つの観測結果を検査する。T058 は `--enabled` を省略して既定無効を検査し、T059〜T065 は Feature の Given で代替検証の明示的な有効化を示してから `--enabled true` を渡す。修正後の同等性確認では、`npm run test:acceptance` が9シナリオ・44ステップ成功（Cucumber 表示 0.323秒、コマンド全体 0.684秒）だった。局所的な診断価値も Cucumber の失敗位置と差分で維持されるため、完全に置換された `test/ci-fallback-decision.test.ts` の8件は削除した。
 
 | 分類 ID | Vitest の保証 | 移行先シナリオ | Cucumber の観測結果 |
 |---|---|---|---|
@@ -23,11 +23,11 @@ T058〜T065 は、Cucumber の各シナリオが元の Vitest と同じ決定論
 
 | 分類 ID | 一時的に設定した期待結果 | 表示された差 | 失敗位置 | 実行時間 |
 |---|---|---|---|---|
-| T058 | 許可される | 実値 `false`、期待値 `true` | Feature 5行、step 77行 | 0.857秒 |
-| T059 | 許可されない | 実値 `true`、期待値 `false` | Feature 11行、step 73行 | 0.852秒 |
-| T060 | 通常の CI 失敗 | 実値 `ci_infrastructure_failure`、期待値 `ordinary_ci_failure` | Feature 17行、step 85行 | 0.697秒 |
-| T061 | 許可される | 実値 `false`、期待値 `true` | Feature 23行、step 77行 | 0.863秒 |
-| T062 | CI 障害 | 実値 `ordinary_ci_failure`、期待値 `ci_infrastructure_failure` | Feature 29行、step 81行 | 0.865秒 |
-| T063 | 許可されない | 実値 `true`、期待値 `false` | Feature 35行、step 73行 | 0.833秒 |
-| T064 | 許可される | 実値 `false`、期待値 `true` | Feature 41行、step 77行 | 0.747秒 |
-| T065 | 許可される | 実値 `false`、期待値 `true` | Feature 47行、step 77行 | 0.750秒 |
+| T058 | 許可される | 実値 `false`、期待値 `true` | Feature 5行、step 80行 | 0.645秒 |
+| T059 | 許可されない | 実値 `true`、期待値 `false` | Feature 11行、step 76行 | 0.647秒 |
+| T060 | 通常の CI 失敗 | 実値 `ci_infrastructure_failure`、期待値 `ordinary_ci_failure` | Feature 18行、step 88行 | 0.652秒 |
+| T061 | 許可される | 実値 `false`、期待値 `true` | Feature 25行、step 80行 | 0.646秒 |
+| T062 | CI 障害 | 実値 `ordinary_ci_failure`、期待値 `ci_infrastructure_failure` | Feature 32行、step 84行 | 0.648秒 |
+| T063 | 許可されない | 実値 `true`、期待値 `false` | Feature 39行、step 76行 | 0.663秒 |
+| T064 | 許可される | 実値 `false`、期待値 `true` | Feature 46行、step 80行 | 0.656秒 |
+| T065 | 許可される | 実値 `false`、期待値 `true` | Feature 53行、step 80行 | 0.660秒 |
