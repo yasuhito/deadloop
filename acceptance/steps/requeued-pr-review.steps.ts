@@ -25,7 +25,7 @@ After("@requeued-pr-review", function (this: RequeuedReviewWorld) {
   if (this.root) fs.rmSync(this.root, { recursive: true, force: true });
 });
 
-Given("修正で head が変わり終了済みのレビュー担当が残る pull request がある", function (this: RequeuedReviewWorld) {
+Given("修正で head が変わり停止中で終了済みのレビュー担当が残る pull request がある", function (this: RequeuedReviewWorld) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-requeued-review-"));
   const bin = path.join(root, "bin");
   const worktree = path.join(root, "worktree");
@@ -62,7 +62,7 @@ Given("修正で head が変わり終了済みのレビュー担当が残る pul
     statusCheckRollup: [],
     comments: [],
     reviewRequests: [],
-    labels: [{ name: "agent:review" }],
+    labels: [{ name: "agent:review" }, { name: "agent:blocked" }],
   }]));
 
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
@@ -96,7 +96,7 @@ if (args[0] === "agent" && args[1] === "list") {
   Object.assign(this, { root, bin, worktree, configDir, log, prState, updatedHead });
 });
 
-When("deadloop が再投入された pull request を確認する", function (this: RequeuedReviewWorld) {
+When("deadloop が停止中と再投入後の二周期で pull request を確認する", function (this: RequeuedReviewWorld) {
   if (
     !this.root ||
     !this.bin ||
@@ -108,24 +108,34 @@ When("deadloop が再投入された pull request を確認する", function (th
   ) {
     throw new Error("requeued pull request state is missing");
   }
-  const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts"], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${this.bin}:${process.env.PATH}`,
-      PI_CODING_AGENT_DIR: this.configDir,
-      DEADLOOP_PROJECT_ID: "demo",
-      DEADLOOP_REPO_PATH: this.root,
-      DEADLOOP_GITHUB_REPO: "owner/repo",
-      DEADLOOP_ENABLED_AT: "1",
-      DEADLOOP_STATE_DIR: path.join(this.configDir, "deadloop"),
-      GH_TEST_PR_STATE: this.prState,
-      HERDR_TEST_LOG: this.log,
-      HERDR_TEST_WORKTREE: this.worktree,
-    },
-  });
-  if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+  const runDriver = () => {
+    const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${this.bin}:${process.env.PATH}`,
+        PI_CODING_AGENT_DIR: this.configDir,
+        DEADLOOP_PROJECT_ID: "demo",
+        DEADLOOP_REPO_PATH: this.root,
+        DEADLOOP_GITHUB_REPO: "owner/repo",
+        DEADLOOP_ENABLED_AT: "1",
+        DEADLOOP_STATE_DIR: path.join(this.configDir, "deadloop"),
+        GH_TEST_PR_STATE: this.prState,
+        HERDR_TEST_LOG: this.log,
+        HERDR_TEST_WORKTREE: this.worktree,
+      },
+    });
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+  };
+
+  runDriver();
+  const pullRequests = JSON.parse(fs.readFileSync(this.prState, "utf8")) as Array<{
+    labels: Array<{ name: string }>;
+  }>;
+  pullRequests[0].labels = pullRequests[0].labels.filter(({ name }) => name !== "agent:blocked");
+  fs.writeFileSync(this.prState, JSON.stringify(pullRequests));
+  runDriver();
 });
 
 Then("新しい head のレビュー担当を一人だけ起動する", function (this: RequeuedReviewWorld) {
