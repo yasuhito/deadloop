@@ -113,10 +113,6 @@ When("deadloop が古いレビュー占有の回収対象を探す", function (t
   decide(this);
 });
 
-When("次の周期で古いレビュー占有の回収対象を探す", function (this: ClaimWorld) {
-  decide(this);
-});
-
 Then("pull request #{int} のレビューを再開する", function (this: ClaimWorld, number: number) {
   assert.equal(this.decision?.number, number);
 });
