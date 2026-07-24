@@ -18,6 +18,7 @@ type SafetyWorld = {
   commands?: string[][];
   finalizeResult?: Record<string, unknown>;
   temporaryRoots?: string[];
+  trackedChangesAfterChecks?: boolean;
   trustLaunchMarker?: string;
   trustRoot?: string;
 };
@@ -57,7 +58,7 @@ function finalize(world: SafetyWorld): void {
           };
         }
         if (args.includes("status") && args.includes("--porcelain")) {
-          return { status: 0, stdout: "", stderr: "" };
+          return { status: 0, stdout: world.trackedChangesAfterChecks ? " M tracked-file.ts\n" : "", stderr: "" };
         }
         if (args.at(-1) === "HEAD" && args.includes("rev-parse")) {
           return { status: 0, stdout: "cccccccccccccccccccccccccccccccccccccccc\n", stderr: "" };
@@ -72,8 +73,25 @@ function pushCommands(world: SafetyWorld): string[][] {
   return (world.commands ?? []).filter((command) => command[0] === "git" && command.includes("push"));
 }
 
-function forcePushOptions(world: SafetyWorld): string[] {
-  return pushCommands(world).flatMap((command) =>
+function pushTargets(world: SafetyWorld): string[][] {
+  return pushCommands(world).map((command) =>
+    command
+      .slice(command.indexOf("push") + 1)
+      .filter(
+        (argument) =>
+          !argument.startsWith("-") ||
+          argument === "--all" ||
+          argument === "--follow-tags" ||
+          argument === "--mirror" ||
+          argument === "--tags",
+      )
+      .map((argument) => argument.replace(/^\+/, "")),
+  );
+}
+
+function successfulPushForceOptions(world: SafetyWorld): string[][] {
+  if (world.finalizeResult?.action !== "pushed") return [];
+  return pushCommands(world).map((command) =>
     command.filter(
       (argument) =>
         argument === "-f" || argument === "--mirror" || argument.startsWith("--force") || argument.startsWith("+"),
@@ -100,8 +118,17 @@ Given("pull request が別リポジトリから作られている", function (th
   this.crossRepository = true;
 });
 
+Given("自動チェック後に作業場所へ追跡中の変更がある", function (this: SafetyWorld) {
+  this.trackedChangesAfterChecks = true;
+});
+
 When("deadloop が branch 更新を完了しようとする", function (this: SafetyWorld) {
-  finalize(this);
+  try {
+    finalize(this);
+  } catch (error) {
+    if (this.trackedChangesAfterChecks && error instanceof Error && error.message.includes("worktree is dirty")) return;
+    throw error;
+  }
 });
 
 Then("branch への push は行われない", function (this: SafetyWorld) {
@@ -160,13 +187,11 @@ Then("作業エージェントは起動されない", function (this: SafetyWorl
 });
 
 Then("選択された branch だけが push の対象になる", function (this: SafetyWorld) {
-  assert.deepEqual(pushCommands(this), [
-    ["git", "-C", "/worktree", "push", "--porcelain", "origin", `HEAD:refs/heads/${branch}`],
-  ]);
+  assert.deepEqual(pushTargets(this), [["origin", `HEAD:refs/heads/${branch}`]]);
 });
 
 Then("branch は強制せずに push される", function (this: SafetyWorld) {
-  assert.deepEqual(forcePushOptions(this), []);
+  assert.deepEqual(successfulPushForceOptions(this), [[]]);
 });
 
 After(function (this: SafetyWorld) {
