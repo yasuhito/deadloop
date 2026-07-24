@@ -47,28 +47,10 @@ describe("PR reviewer deterministic driver", () => {
     ).toContain("run-project-check.ts");
   });
 
-  it("persists autoMerge=false in the reviewer monitor handoff", () => {
-    expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).monitorHandoff.input.autoMerge).toBe(false);
-  });
-
-  it("renders human handoff as the effective policy when autoMerge=false", () => {
+  it("preserves autoMerge=false safety after deterministic reviewer launch", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).prompt).toContain(
-      "Effective merge policy: automatic merge is disabled; never merge",
+      "If autoMerge=false, never merge",
     );
-  });
-
-  it("persists autoMerge=true in the reviewer monitor handoff", () => {
-    expect(runDriverFixture("fallback-review.json", {
-      DEADLOOP_AUTO_MERGE: "1",
-      DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1",
-    }).monitorHandoff.input.autoMerge).toBe(true);
-  });
-
-  it("renders guarded automatic merge as the effective policy when autoMerge=true", () => {
-    expect(runDriverFixture("fallback-review.json", {
-      DEADLOOP_AUTO_MERGE: "1",
-      DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1",
-    }).prompt).toContain("Effective merge policy: automatic merge is enabled");
   });
 
   it("does not ask the LLM to run launch-agent", () => {

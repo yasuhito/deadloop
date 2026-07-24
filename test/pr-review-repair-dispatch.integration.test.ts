@@ -378,7 +378,7 @@ process.stdout.write(JSON.stringify(args[0] === "repo"
       prNumber: 143, expectedHeadOid: "a".repeat(40), branch: "agent/issue-142",
       automationDir: path.resolve("extensions/deadloop/automations"), promiseFile: promise, actorName: "reviewer",
       projectId: "demo", repoPath: root, githubRepo: "owner/repo", stateDir: state, enabledAt: 7,
-      autoMerge: false, projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
+      projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
       checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review",
       reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
     });

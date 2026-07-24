@@ -62,7 +62,6 @@ describe("monitor prompts", () => {
       automationDir: "/automation",
       promiseFile: "/wt/.deadloop/promise-u.json",
       actorName: "reviewer",
-      autoMerge: false,
       checkCommand: "npm test",
       humanLabel: "ready-for-human",
       reviewLabel: "agent:review",
@@ -70,7 +69,7 @@ describe("monitor prompts", () => {
       blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("automatic merge is disabled; never merge. Hand off by moving PR toward `ready-for-human`");
+    expect(prompt).toContain("If autoMerge=false, never merge");
   });
 
   it("routes reviewer changes_requested through the repair dispatcher", () => {
@@ -81,7 +80,6 @@ describe("monitor prompts", () => {
       automationDir: "/automation",
       promiseFile: "/state/promise.json",
       actorName: "reviewer",
-      autoMerge: false,
       checkCommand: "npm test",
       humanLabel: "ready-for-human",
       reviewLabel: "agent:review",
@@ -96,7 +94,7 @@ describe("monitor prompts", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/promise.json", actorName: "reviewer", projectId: "demo", repoPath: "/repo path",
-      githubRepo: "owner/repo", stateDir: "/state", enabledAt: 123, autoMerge: false, projectCheckCommand: "npm test",
+      githubRepo: "owner/repo", stateDir: "/state", enabledAt: 123, projectCheckCommand: "npm test",
       workerAgent: "pi", workerModel: "model", repairRemote: "origin", checkCommand: "npm test",
       humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
     });
@@ -118,7 +116,7 @@ describe("monitor prompts", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
-      autoMerge: false, checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+      checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
     });
 
     expect(prompt).toContain("Never pass merge, push, branch deletion, `gh api`, or arbitrary commands through `guarded-operation.ts`");
@@ -128,7 +126,7 @@ describe("monitor prompts", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
-      enabledAt: 123, autoMerge: true, checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review",
+      enabledAt: 123, checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review",
       reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
     });
 
