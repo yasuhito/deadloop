@@ -46,7 +46,7 @@ Given("停止理由が記録された `agent:blocked` の Issue がある", func
       labels: ["agent:blocked"],
       comments: [
         { body: "BLOCKED: old reason", createdAt: "2026-07-03T00:00:00Z" },
-        { body: "BLOCKED: missing API token.", createdAt: "2026-07-04T00:00:00Z" },
+        { body: "BLOCKED: missing API token.\n\nTry again later.", createdAt: "2026-07-04T00:00:00Z" },
       ],
     }],
   });
@@ -166,7 +166,7 @@ Given("問題のない deadloop プロジェクトがある", function (this: Do
   setInput(this, {});
 });
 
-When("operator が doctor を実行する", function (this: DoctorWorld) {
+When("オペレーターが doctor を実行する", function (this: DoctorWorld) {
   if (!this.input) throw new Error("doctor input is missing");
   this.report = formatDoctorReport(buildDoctorSnapshot(this.input));
 });

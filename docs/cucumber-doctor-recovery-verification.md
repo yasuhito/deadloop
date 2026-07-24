@@ -40,4 +40,4 @@ The former Vitest tests were deleted only after the Cucumber scenarios passed, b
 
 ## Intentional failure check
 
-Before committing, temporarily change the expected text in the `停止した自動化が表示される` Then step from `coordinator_stalled` to `automation_spinning`. Running `npm run test:acceptance` must exit non-zero and identify that scenario and the TypeScript assertion location. Restore the expected text immediately, then rerun the command successfully.
+Before committing, the expected text in the `停止した自動化が表示される` Then step was temporarily changed from `coordinator_stalled` to `automation_spinning`, and `npm run test:acceptance` was run. The command exited with status 1 and identified `自動化の試行停止を表示する` at `acceptance/features/doctor-recovery.feature.md:89` and the failed assertion at `acceptance/steps/doctor-recovery.steps.ts:219`. The expected text was restored to `coordinator_stalled`, and a subsequent `npm run test:acceptance` run passed all 28 scenarios and 113 steps.
