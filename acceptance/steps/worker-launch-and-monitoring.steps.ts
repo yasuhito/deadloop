@@ -36,7 +36,7 @@ function launchWorker(world: WorkerWorld): void {
   let launchCount = 0;
   const runner: RunnerAdapter = {
     createWorktree: (input) => {
-      if (isReviewer) throw new Error("reviewer の作業場所を作ってはならない");
+      if (isReviewer) throw new Error("レビュー担当の作業場所を作ってはならない");
       world.worktreeRequest = { branch: input.branch, baseBranch: input.baseBranch, label: input.label };
       return { workspaceId: "workspace-12", worktreePath };
     },
@@ -107,17 +107,17 @@ Given("作業を開始できる Issue がある", function (this: WorkerWorld) {
   this.agents = [];
 });
 
-Given("同じ作業場所に完了済みの同名 reviewer がいる", function (this: WorkerWorld) {
+Given("同じ作業場所に完了済みの同名レビュー担当がいる", function (this: WorkerWorld) {
   this.launchTarget = "reviewer";
   this.agents = [{ name: reviewerName, status: "done", cwd: reviewerPath, agentId: "finished" }];
 });
 
-Given("同じ作業場所に稼働中の同名 reviewer がいる", function (this: WorkerWorld) {
+Given("同じ作業場所に稼働中の同名レビュー担当がいる", function (this: WorkerWorld) {
   this.launchTarget = "reviewer";
   this.agents = [{ name: reviewerName, status: "working", cwd: reviewerPath, agentId: "working" }];
 });
 
-Given("同じ作業場所に複数の完了済み同名 reviewer がいる", function (this: WorkerWorld) {
+Given("同じ作業場所に複数の完了済み同名レビュー担当がいる", function (this: WorkerWorld) {
   this.launchTarget = "reviewer";
   this.agents = [
     { name: reviewerName, status: "done", cwd: reviewerPath, agentId: "finished-1" },
@@ -125,7 +125,7 @@ Given("同じ作業場所に複数の完了済み同名 reviewer がいる", fun
   ];
 });
 
-Given("別の作業場所に完了済みの同名 reviewer がいる", function (this: WorkerWorld) {
+Given("別の作業場所に完了済みの同名レビュー担当がいる", function (this: WorkerWorld) {
   this.launchTarget = "reviewer";
   this.agents = [{ name: reviewerName, status: "done", cwd: "/worktrees/demo/other-task", agentId: "foreign" }];
 });
@@ -134,7 +134,7 @@ When("deadloop がその Issue の担当を起動する", function (this: Worker
   launchWorker(this);
 });
 
-When("deadloop が pull request の reviewer を起動する", function (this: WorkerWorld) {
+When("deadloop が pull request のレビュー担当を起動する", function (this: WorkerWorld) {
   launchWorker(this);
 });
 
