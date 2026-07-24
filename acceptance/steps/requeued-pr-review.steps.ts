@@ -13,7 +13,6 @@ type RequeuedReviewWorld = {
   configDir?: string;
   log?: string;
   prState?: string;
-  pullRequest?: Record<string, unknown>;
   updatedHead?: string;
 };
 
@@ -51,21 +50,19 @@ Given("修正で head が変わり終了済みのレビュー担当が残る pul
     }],
   }));
 
-  const pullRequest = {
+  const updatedHead = "feed44";
+  fs.writeFileSync(prState, JSON.stringify([{
     number: 44,
     title: "Updated review",
     url: "https://github.com/owner/repo/pull/44",
     headRefName: "agent/issue-44-fix",
-    headRefOid: "dead43",
+    headRefOid: updatedHead,
     updatedAt: "2026-07-13T00:00:00Z",
     isDraft: false,
     statusCheckRollup: [],
     comments: [],
     reviewRequests: [],
-  };
-  fs.writeFileSync(prState, JSON.stringify([{
-    ...pullRequest,
-    labels: [{ name: "agent:review" }, { name: "agent:blocked" }],
+    labels: [{ name: "agent:review" }],
   }]));
 
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
@@ -96,7 +93,7 @@ if (args[0] === "agent" && args[1] === "list") {
 }
 `);
 
-  Object.assign(this, { root, bin, worktree, configDir, log, prState, pullRequest, updatedHead: "feed44" });
+  Object.assign(this, { root, bin, worktree, configDir, log, prState, updatedHead });
 });
 
 When("deadloop が再投入された pull request を確認する", function (this: RequeuedReviewWorld) {
@@ -107,39 +104,28 @@ When("deadloop が再投入された pull request を確認する", function (th
     !this.configDir ||
     !this.log ||
     !this.prState ||
-    !this.pullRequest ||
     !this.updatedHead
   ) {
     throw new Error("requeued pull request state is missing");
   }
-  const runDriver = (): void => {
-    const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${this.bin}:${process.env.PATH}`,
-        PI_CODING_AGENT_DIR: this.configDir,
-        DEADLOOP_PROJECT_ID: "demo",
-        DEADLOOP_REPO_PATH: this.root,
-        DEADLOOP_GITHUB_REPO: "owner/repo",
-        DEADLOOP_ENABLED_AT: "1",
-        DEADLOOP_STATE_DIR: path.join(this.configDir, "deadloop"),
-        GH_TEST_PR_STATE: this.prState,
-        HERDR_TEST_LOG: this.log,
-        HERDR_TEST_WORKTREE: this.worktree,
-      },
-    });
-    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-  };
-
-  runDriver();
-  fs.writeFileSync(this.prState, JSON.stringify([{
-    ...this.pullRequest,
-    headRefOid: this.updatedHead,
-    labels: [{ name: "agent:review" }],
-  }]));
-  runDriver();
+  const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${this.bin}:${process.env.PATH}`,
+      PI_CODING_AGENT_DIR: this.configDir,
+      DEADLOOP_PROJECT_ID: "demo",
+      DEADLOOP_REPO_PATH: this.root,
+      DEADLOOP_GITHUB_REPO: "owner/repo",
+      DEADLOOP_ENABLED_AT: "1",
+      DEADLOOP_STATE_DIR: path.join(this.configDir, "deadloop"),
+      GH_TEST_PR_STATE: this.prState,
+      HERDR_TEST_LOG: this.log,
+      HERDR_TEST_WORKTREE: this.worktree,
+    },
+  });
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout);
 });
 
 Then("新しい head のレビュー担当を一人だけ起動する", function (this: RequeuedReviewWorld) {
@@ -152,6 +138,21 @@ Then("新しい head のレビュー担当を一人だけ起動する", function
     .map((args) => args.slice(0, args[0] === "pane" || (args[0] === "agent" && args[1] === "start") ? 3 : 2).join(" "));
 
   assert.equal(actions.filter((action) => action === "agent start demo-pr-44-reviewer").length, 1);
+});
+
+Then("終了済みのレビュー担当を片付けてから新しい担当を起動する", function (this: RequeuedReviewWorld) {
+  if (!this.log) throw new Error("Herdr action log is missing");
+  const actions = fs
+    .readFileSync(this.log, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as string[])
+    .map((args) => args.slice(0, args[0] === "pane" || (args[0] === "agent" && args[1] === "start") ? 3 : 2).join(" "));
+  const cleanupAndStart = actions.filter((action) =>
+    action === "pane close pane-old" || action === "agent start demo-pr-44-reviewer"
+  );
+
+  assert.equal(cleanupAndStart.join(">"), "pane close pane-old>agent start demo-pr-44-reviewer");
 });
 
 Then("レビュー担当への引き継ぎに修正後の head を使う", function (this: RequeuedReviewWorld) {

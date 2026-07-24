@@ -11,6 +11,13 @@ deadloop の利用者に対し、修正や競合回復で head が変わった p
 * ならば 新しい head のレビュー担当を一人だけ起動する
 
 `@requeued-pr-review`
+## シナリオ: 終了済みのレビュー担当を片付けてから再開する
+
+* 前提 修正で head が変わり終了済みのレビュー担当が残る pull request がある
+* もし deadloop が再投入された pull request を確認する
+* ならば 終了済みのレビュー担当を片付けてから新しい担当を起動する
+
+`@requeued-pr-review`
 ## シナリオ: 更新された pull request の head をレビュー担当へ引き継ぐ
 
 * 前提 修正で head が変わり終了済みのレビュー担当が残る pull request がある
