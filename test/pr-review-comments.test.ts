@@ -93,6 +93,45 @@ describe("PR review public comments", () => {
     ).not.toContain("/workspace");
   });
 
+  it("redacts double-slash paths from approved comments", () => {
+    expect(
+      renderApprovedReviewComment({
+        headOid: "a".repeat(40),
+        summary: "See //home/alice/private/runtime.log",
+        reviewFingerprint: "1".repeat(20),
+      }),
+    ).not.toContain("//home/alice");
+  });
+
+  it("redacts file URLs from changes-requested comments", () => {
+    expect(
+      renderChangesRequestedComment({
+        ...fixture("changes-requested.json"),
+        findings: [{ title: "Private path", body: "See file:///home/alice/private/runtime.log", path: "src/a.ts", severity: "major" }],
+      }),
+    ).not.toContain("file:///home/alice");
+  });
+
+  it("redacts UNC paths from human-required comments", () => {
+    expect(
+      renderHumanRequiredComment({
+        headOid: "a".repeat(40),
+        reason: "See \\\\server\\private\\runtime.log",
+        summary: "A human decision is required.",
+        reviewFingerprint: "2".repeat(20),
+      }),
+    ).not.toContain("server");
+  });
+
+  it("redacts double-slash paths from repair-success comments", () => {
+    expect(
+      renderRepairSuccessComment({
+        ...fixture("repair-succeeded.json"),
+        repairs: [{ title: "Private path", summary: "See //home/alice/private/runtime.log", paths: ["src/a.ts"] }],
+      }),
+    ).not.toContain("//home/alice");
+  });
+
   it("redacts absolute local paths after punctuation", () => {
     expect(
       renderApprovedReviewComment({
