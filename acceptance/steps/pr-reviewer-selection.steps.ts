@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
@@ -16,6 +17,8 @@ type SelectionWorld = {
   driverFixtureName?: string;
   decision?: { selected?: boolean; number?: number };
   driverResult?: { driverAction?: string; comment?: string };
+  prs?: PullRequest[];
+  agents?: Record<string, unknown>;
 };
 
 const fixtureDirectory = path.join(process.cwd(), "test/fixtures/pr-reviewer");
@@ -125,7 +128,11 @@ When("deadloop が外部レビューの扱いを決める", function (this: Sele
 });
 
 function runDriver(fixtureName: string, extraEnv: Record<string, string> = {}): { driverAction?: string; comment?: string } {
-  const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts", "--fixture", `test/fixtures/pr-reviewer-driver/${fixtureName}`], {
+  return runDriverPath(`test/fixtures/pr-reviewer-driver/${fixtureName}`, extraEnv);
+}
+
+function runDriverPath(fixturePath: string, extraEnv: Record<string, string> = {}): { driverAction?: string; comment?: string } {
+  const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts", "--fixture", fixturePath], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
@@ -149,16 +156,33 @@ When("deadloop がレビューを開始しようとする", function (this: Sele
   this.driverResult = runDriver(this.driverFixtureName);
 });
 
-When("別担当が選択後にレビューを開始して次の選定周期になる", function (this: SelectionWorld) {
+When("deadloop がレビュー対象を選んで処理する", function (this: SelectionWorld) {
+  if (!this.fixtureName) throw new Error("review state is missing");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-acceptance-"));
+  const fixturePath = path.join(tempRoot, "selection-cycle.json");
+  try {
+    fs.writeFileSync(fixturePath, JSON.stringify({ prs: readFixture(this.fixtureName), agents: { result: { agents: [] } } }));
+    this.driverResult = runDriverPath(fixturePath);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+Given("別担当が選択後にレビューを開始している", function (this: SelectionWorld) {
   if (!this.fixtureName) throw new Error("review state is missing");
   const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo" });
-  const prs = readFixture(this.fixtureName);
-  const firstDecision = selectPrForReview(prs, config);
-  const selected = prs.find((pr) => pr.number === firstDecision.number);
+  this.prs = readFixture(this.fixtureName);
+  const firstDecision = selectPrForReview(this.prs, config);
+  const selected = this.prs.find((pr) => pr.number === firstDecision.number);
   if (!selected) throw new Error("selected pull request is missing");
   selected.labels = [...(selected.labels as unknown[]), { name: "agent:reviewing" }];
-  const agents = { result: { agents: [{ name: `demo-pr-${firstDecision.number}-reviewer`, agent_status: "working" }] } };
-  this.decision = selectPrForReview(prs, config, workingReviewerPrNumbers(agents, config.projectId));
+  this.agents = { result: { agents: [{ name: `demo-pr-${firstDecision.number}-reviewer`, agent_status: "working" }] } };
+});
+
+When("次の選定周期になる", function (this: SelectionWorld) {
+  if (!this.prs || !this.agents) throw new Error("review state is missing");
+  const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo" });
+  this.decision = selectPrForReview(this.prs, config, workingReviewerPrNumbers(this.agents, config.projectId));
 });
 
 Then("pull request #{int} をレビュー対象に選ぶ", function (this: SelectionWorld, number: number) {

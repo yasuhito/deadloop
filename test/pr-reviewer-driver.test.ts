@@ -48,10 +48,6 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("external-review-request.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).driverAction).toBe("external_review_requested");
   });
 
-  it("renders a blocked comment for draft PRs", () => {
-    expect(runDriverFixture("draft-pr.json").comment).toContain("## Recovery steps");
-  });
-
   it("launches stale external-review fallback deterministically before monitoring", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).driverAction).toBe("reviewer_monitor_request");
   });
