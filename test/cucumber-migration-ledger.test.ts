@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const ledger = readFileSync("docs/cucumber-migration-ledger.md", "utf8");
+const classification = readFileSync("docs/cucumber-test-classification.md", "utf8");
 const rows = [...ledger.matchAll(/^\| (T\d{3}) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|/gm)].map((match) => ({
   id: match[1],
   initial: match[2].trim(),
@@ -11,6 +12,14 @@ const rows = [...ledger.matchAll(/^\| (T\d{3}) \| ([^|]+) \| ([^|]+) \| ([^|]+) 
 }));
 
 const expectedIds = Array.from({ length: 399 }, (_, index) => `T${String(index + 1).padStart(3, "0")}`);
+const migratedProjectCheckIds = Array.from({ length: 9 }, (_, index) => `T${357 + index}`);
+const originalClassifications = [
+  ...classification.matchAll(/^\| (T\d{3}) \| .*?\| \*\*(Cucumber候補|Vitest継続|削除候補)\*\* \|/gm),
+].map((match) => ({ id: match[1], initial: match[2] }));
+const expectedOriginalClassifications = [
+  ...originalClassifications,
+  ...migratedProjectCheckIds.map((id) => ({ id, initial: "Cucumber候補" })),
+].sort(({ id: left }, { id: right }) => left.localeCompare(right));
 const deletionCandidates = ["T043", "T049", "T055", "T056", "T057", "T072", "T366", "T367", "T368"];
 const cucumberResults = new Set(["移行済み", "Vitest 継続へ再分類", "同じ保証へ統合"]);
 const focusedVitestIds = [
@@ -33,6 +42,21 @@ const focusedVitestIds = [
 describe("Cucumber migration ledger", () => {
   it("tracks every original classification ID exactly once", () => {
     expect(rows.map(({ id }) => id)).toEqual(expectedIds);
+  });
+
+  it("preserves every original classification in the migration ledger", () => {
+    expect(rows.map(({ id, initial }) => ({ id, initial }))).toEqual(expectedOriginalClassifications);
+  });
+
+  it("keeps the approved original classification counts", () => {
+    expect(
+      Object.fromEntries(
+        ["Cucumber候補", "Vitest継続", "削除候補"].map((initial) => [
+          initial,
+          expectedOriginalClassifications.filter((row) => row.initial === initial).length,
+        ]),
+      ),
+    ).toEqual({ Cucumber候補: 217, Vitest継続: 173, 削除候補: 9 });
   });
 
   it("gives every Cucumber candidate a final migration result", () => {
