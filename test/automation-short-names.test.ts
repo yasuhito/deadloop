@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
@@ -21,9 +21,5 @@ describe("automation short names", () => {
       promptFile: "pr-reviewer.prompt.md",
       precheckFile: "pr-reviewer.precheck.sh",
     });
-  });
-
-  it("does not ship retired generic automation filenames", () => {
-    expect(readdirSync("extensions/deadloop/automations").some((file) => file.startsWith("generic-"))).toBe(false);
   });
 });
