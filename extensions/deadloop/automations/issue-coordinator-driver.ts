@@ -103,8 +103,12 @@ function applyContractMissing(issue: JsonObject, env: ReturnType<typeof envConfi
   });
 }
 
-function blockedComment(issue: JsonObject, env: ReturnType<typeof envConfig>): string {
-  return renderIssuePlanningComment(Number(issue.number || 0), env.githubRepo);
+function blockedComment(_issue: JsonObject, env: ReturnType<typeof envConfig>): string {
+  return renderIssuePlanningComment({
+    githubRepo: env.githubRepo,
+    blockedLabel: env.blockedLabel,
+    implementLabel: env.implementLabel,
+  });
 }
 
 function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comment: string, fixture: JsonObject | null): boolean {

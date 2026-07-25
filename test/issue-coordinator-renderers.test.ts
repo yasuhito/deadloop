@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../src/issue-coordinator-renderers.ts");
+const {
+  renderIssueBlockedComment,
+  renderIssuePlanningComment,
+  renderIssueWorkerPrompt,
+} = require("../src/issue-coordinator-renderers.ts");
 
 const blockedInput = {
   issueNumber: 72,
@@ -56,6 +60,37 @@ describe("issue coordinator renderers", () => {
     expect(renderIssueBlockedComment(blockedInput)).toContain(
       "gh issue edit 72 -R 'owner/repo with space' --remove-label 'agent:blocked label' --add-label 'agent:implement label'",
     );
+  });
+
+  it("targets the implementable issue in planning recovery", () => {
+    const comment = renderIssuePlanningComment({
+      githubRepo: "owner/repo",
+      blockedLabel: "custom-blocked",
+      implementLabel: "custom-implement",
+    });
+
+    expect(comment).toContain('gh issue edit "$implementable_issue_number"');
+  });
+
+  it("does not target the selected planning issue in planning recovery", () => {
+    const comment = renderIssuePlanningComment({
+      issueNumber: 72,
+      githubRepo: "owner/repo",
+      blockedLabel: "custom-blocked",
+      implementLabel: "custom-implement",
+    });
+
+    expect(comment).not.toContain("gh issue edit 72");
+  });
+
+  it("renders configured labels in planning recovery", () => {
+    const comment = renderIssuePlanningComment({
+      githubRepo: "owner/repo",
+      blockedLabel: "custom-blocked",
+      implementLabel: "custom-implement",
+    });
+
+    expect(comment).toContain("--remove-label custom-blocked --add-label custom-implement");
   });
 
   it("renders the worker issue target", () => {

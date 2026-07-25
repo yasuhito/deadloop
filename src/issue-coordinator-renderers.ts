@@ -1,3 +1,9 @@
+type IssuePlanningCommentInput = {
+  githubRepo: string;
+  blockedLabel: string;
+  implementLabel: string;
+};
+
 type IssueBlockedCommentInput = {
   issueNumber: number;
   githubRepo: string;
@@ -75,16 +81,17 @@ function markdownCode(value: string): string {
   return oneLineForRenderer(value).replace(/`/g, "\\`");
 }
 
-function renderIssuePlanningComment(issueNumber: number, githubRepo: string): string {
+function renderIssuePlanningComment(input: IssuePlanningCommentInput): string {
   return [
     "Skipped automated implementation because this looks like a PRD, design, or parent issue.",
     "",
     "## Recovery steps",
     "1. Create a separate implementable issue or split this issue's scope.",
     "2. Give each implementation issue an `## Agent Brief` or `## What to build` section and an `## Acceptance criteria` section.",
-    "3. When an implementation issue is ready, re-queue it safely:",
+    "3. Note the number of the implementation issue you created or split out, then re-queue that issue safely (replace `123` below):",
     "```bash",
-    `gh issue edit ${issueNumber} -R ${shellQuoteForRenderer(githubRepo)} --remove-label agent:blocked --add-label agent:implement`,
+    "implementable_issue_number=123",
+    `gh issue edit "$implementable_issue_number" -R ${shellQuoteForRenderer(input.githubRepo)} --remove-label ${shellQuoteForRenderer(input.blockedLabel)} --add-label ${shellQuoteForRenderer(input.implementLabel)}`,
     "```",
   ].join("\n");
 }
