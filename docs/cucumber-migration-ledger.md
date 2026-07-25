@@ -18,7 +18,7 @@
 
 | 分類 ID | 当初分類 | 最終結果 | 移行記録・継続理由・代替確認 |
 |---|---|---|---|
-| T001 | Cucumber候補 | 同じ保証へ統合 | [cucumber-worker-launch-monitoring-migration.md](cucumber-worker-launch-monitoring-migration.md) |
+| T001 | Cucumber候補 | Vitest 継続へ再分類 | 既存 pull request の作業場所を開くレビュー担当固有の起動引数、プロンプト書込み、戻り値を一度に診断する低レベル統合として `test/agent-launch-flow.test.ts` に残す（[移行記録](cucumber-worker-launch-monitoring-migration.md)） |
 | T002 | Cucumber候補 | 移行済み | [cucumber-worker-launch-monitoring-migration.md](cucumber-worker-launch-monitoring-migration.md) |
 | T003 | Cucumber候補 | 移行済み | [cucumber-worker-launch-monitoring-migration.md](cucumber-worker-launch-monitoring-migration.md) |
 | T004 | Cucumber候補 | 移行済み | [cucumber-worker-launch-monitoring-migration.md](cucumber-worker-launch-monitoring-migration.md) |
@@ -69,8 +69,8 @@
 | T049 | 削除候補 | 削除済み | T047〜T048 が配布例の現行ファイル名を確認する |
 | T050 | Cucumber候補 | 移行済み | [cucumber-operator-status-verification.md](cucumber-operator-status-verification.md) |
 | T051 | Cucumber候補 | 移行済み | [cucumber-operator-status-verification.md](cucumber-operator-status-verification.md) |
-| T052 | Cucumber候補 | 移行済み | [cucumber-operator-status-verification.md](cucumber-operator-status-verification.md) |
-| T053 | Cucumber候補 | 移行済み | [cucumber-operator-status-verification.md](cucumber-operator-status-verification.md) |
+| T052 | Cucumber候補 | Vitest 継続へ再分類 | 復旧見出しをプロンプトファイルから直接読む静的契約として `test/blocked-report-format.test.ts` に残す（[移行記録](cucumber-operator-status-verification.md)） |
+| T053 | Cucumber候補 | Vitest 継続へ再分類 | 安全な再投入コマンドをプロンプトファイルから直接読む静的契約として `test/blocked-report-format.test.ts` に残す（[移行記録](cucumber-operator-status-verification.md)） |
 | T054 | Cucumber候補 | 移行済み | [cucumber-operator-status-verification.md](cucumber-operator-status-verification.md) |
 | T055 | 削除候補 | 削除済み | T054 が現行コマンドの登録を確認する |
 | T056 | 削除候補 | 削除済み | T076〜T078 が現行の DEADLOOP 設定経路を確認する |
@@ -111,7 +111,7 @@
 | T091 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T092 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T093 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T094 | Cucumber候補 | 同じ保証へ統合 | [cucumber-migration-record.md](cucumber-migration-record.md) |
+| T094 | Cucumber候補 | Vitest 継続へ再分類 | 明示指示文と指示ファイルの優先順位は文字列組み立て内部の契約であり、起動結果へ統合すると原因が不明瞭になるため Vitest に残す（[移行記録](cucumber-migration-record.md)） |
 | T095 | Cucumber候補 | 移行済み | [cucumber-migration-record.md](cucumber-migration-record.md) |
 | T096 | Cucumber候補 | 同じ保証へ統合 | [cucumber-migration-record.md](cucumber-migration-record.md) |
 | T097 | Cucumber候補 | 同じ保証へ統合 | [cucumber-migration-record.md](cucumber-migration-record.md) |
@@ -133,7 +133,7 @@
 | T113 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T114 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T115 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T116 | Cucumber候補 | 同じ保証へ統合 | [cucumber-migration-record.md](cucumber-migration-record.md) |
+| T116 | Cucumber候補 | Vitest 継続へ再分類 | tick ごとの再読込順序を検査する低レベル統合であり、単一回の利用者操作として表現すると契機が曖昧になるため Vitest に残す（[移行記録](cucumber-migration-record.md)） |
 | T117 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
 | T118 | Cucumber候補 | 同じ保証へ統合 | [cucumber-migration-record.md](cucumber-migration-record.md) |
 | T119 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
@@ -146,7 +146,7 @@
 | T126 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
 | T127 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
 | T128 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T129 | Cucumber候補 | 同じ保証へ統合 | [cucumber-migration-record.md](cucumber-migration-record.md) |
+| T129 | Cucumber候補 | Vitest 継続へ再分類 | スケジューラーロック所有者と再読込後 ID の内部不変条件を診断する低レベル統合として Vitest に残す（[移行記録](cucumber-migration-record.md)） |
 | T130 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T131 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T132 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
@@ -206,16 +206,16 @@
 | T186 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T187 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
 | T188 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
-| T189 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
+| T189 | Cucumber候補 | Vitest 継続へ再分類 | 生成された一時ファイルだけを除外する低レベルの Git status 解釈の失敗位置を絞るため Vitest に残す（[Issue #112 移行記録](cucumber-test-classification.md)） |
 | T190 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
-| T191 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
-| T192 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
-| T193 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
-| T194 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
-| T195 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
-| T196 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
+| T191 | Cucumber候補 | Vitest 継続へ再分類 | `.pi-subagents` 固有の削除防止を実際のファイル操作で診断するため Vitest に残す（[Issue #112 移行記録](cucumber-test-classification.md)） |
+| T192 | Cucumber候補 | Vitest 継続へ再分類 | 追跡済み実行時ファイルによる停止理由の文言を実際の削除処理に近い位置で診断するため Vitest に残す（[Issue #112 移行記録](cucumber-test-classification.md)） |
+| T193 | Cucumber候補 | Vitest 継続へ再分類 | 停止時に Herdr workspace を削除しない副作用を直接診断するため Vitest に残す（[Issue #112 移行記録](cucumber-test-classification.md)） |
+| T194 | Cucumber候補 | Vitest 継続へ再分類 | 一時ファイルだけを消して workspace を削除する実際の副作用を直接診断するため Vitest に残す（[Issue #112 移行記録](cucumber-test-classification.md)） |
+| T195 | Cucumber候補 | Vitest 継続へ再分類 | workspace ID の正規化と欠落時の停止を実行基盤アダプターに近い位置で診断するため Vitest に残す（[Issue #112 移行記録](cucumber-test-classification.md)） |
+| T196 | Cucumber候補 | Vitest 継続へ再分類 | main workspace の停止理由を直接診断するため Vitest に残す（[Issue #112 移行記録](cucumber-test-classification.md)） |
 | T197 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
-| T198 | Cucumber候補 | 移行済み | [分類表内の Issue #112 移行記録](cucumber-test-classification.md) |
+| T198 | Cucumber候補 | Vitest 継続へ再分類 | cleanup 後に issue coordinator を起動する低レベルの事前確認結合を診断するため Vitest に残す（[Issue #112 移行記録](cucumber-test-classification.md)） |
 | T199 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T200 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T201 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
