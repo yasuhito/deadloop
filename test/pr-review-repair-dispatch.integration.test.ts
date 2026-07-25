@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -358,11 +358,64 @@ if (args.includes("get-url")) process.stdout.write("https://github.com/owner/rep
   };
 }
 
+async function runConcurrentApprovedRetries(): Promise<number> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-result-concurrent-"));
+  tempDirs.push(root);
+  const bin = path.join(root, "bin");
+  const configDir = path.join(root, "config");
+  const state = path.join(configDir, "deadloop");
+  const promise = path.join(root, "review-promise.json");
+  const commentsFile = path.join(root, "comments.json");
+  fs.mkdirSync(bin);
+  enableProject(state, root);
+  fs.writeFileSync(promise, JSON.stringify({
+    status: "complete", outcome: "approved", reason: "", summary: "No actionable findings.", findings: [],
+  }));
+  fs.writeFileSync(commentsFile, "[]");
+  executable(path.join(bin, "gh"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
+else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
+  number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,
+  labels:[{name:"agent:review"},{name:"agent:reviewing"}],comments:JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"))
+}));
+else if (args[0] === "pr" && args[1] === "comment") {
+  const comments = JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"));
+  comments.push({body:args[args.indexOf("--body")+1]});
+  fs.writeFileSync(process.env.COMMENTS_FILE, JSON.stringify(comments));
+}
+`);
+  executable(path.join(bin, "git"), `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+`);
+  const args = [
+    "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+    "--promise", promise, "--pr", "243", "--expected-head", "a".repeat(40), "--branch", "agent/issue-243",
+  ];
+  const env = {
+    ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir,
+    DEADLOOP_REPO_PATH: root, DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1",
+    DEADLOOP_STATE_DIR: state, COMMENTS_FILE: commentsFile,
+  };
+  await Promise.all([0, 1].map(() => new Promise<void>((resolve, reject) => {
+    const child = spawn("node", args, { cwd: process.cwd(), env, stdio: "ignore" });
+    child.on("error", reject);
+    child.on("exit", (status) => status === 0 ? resolve() : reject(new Error(`dispatch exited ${status}`)));
+  })));
+  return JSON.parse(fs.readFileSync(commentsFile, "utf8")).length;
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe("review repair dispatch integration", () => {
+  it("serializes concurrent approved retries to one review-result comment", async () => {
+    expect(await runConcurrentApprovedRetries()).toBe(1);
+  });
+
   it("executes the exact rendered monitor dispatcher command in a clean environment", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-rendered-dispatch-"));
     tempDirs.push(root);

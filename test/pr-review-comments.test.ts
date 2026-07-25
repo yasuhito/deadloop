@@ -96,8 +96,9 @@ The new head will be reviewed again. Review labels remain in place.
 <!-- deadloop:review-repair-result key=abcdef1234567890abcd head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->`);
   });
 
-  it("detects an existing review result marker", () => {
-    expect(reviewCommentExists([{ body: "<!-- deadloop:review-result head=abc review=def outcome=approved -->" }], "abc", "def", "approved")).toBe(true);
+  it("detects an existing review result marker from the fixture", () => {
+    const input = fixture("existing-approved-marker.json");
+    expect(reviewCommentExists(input.comments, input.headOid, input.reviewFingerprint, input.outcome)).toBe(true);
   });
 
   it("redacts internal promise paths from public review text", () => {
@@ -236,6 +237,14 @@ The new head will be reviewed again. Review labels remain in place.
         reviewFingerprint: "1".repeat(20),
       }),
     ).not.toContain("herdr session");
+  });
+
+  it("rejects .pi-subagents finding paths from the fixture", () => {
+    expect(renderChangesRequestedComment(fixture("internal-runtime-paths.json").changesRequested)).toContain("- File: `Not specified`");
+  });
+
+  it("rejects .deadloop repair paths from the fixture", () => {
+    expect(renderRepairSuccessComment(fixture("internal-runtime-paths.json").repairSucceeded)).toContain("- Files: `Not specified`");
   });
 
   it("rejects absolute finding paths", () => {

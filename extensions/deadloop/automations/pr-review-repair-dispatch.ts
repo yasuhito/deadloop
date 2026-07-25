@@ -133,12 +133,12 @@ function withRevalidatedPrMutation(
   prNumber: string,
   env: ReturnType<typeof envConfig>,
   expectedPr: JsonObject,
-  mutation: (guardedGithub: ReturnType<typeof createGithubOperations>) => void,
+  mutation: (guardedGithub: ReturnType<typeof createGithubOperations>, livePr: JsonObject) => void,
 ): void {
   withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
     const livePr = readLivePr(env.githubRepo, prNumber);
     assertSameLaunchTarget(expectedPr, livePr, "pr");
-    mutation(createGithubOperations(commandRunner, recheck));
+    mutation(createGithubOperations(commandRunner, recheck), livePr);
   });
 }
 
@@ -424,11 +424,11 @@ function dispatch(args: JsonObject): DriverResult {
     if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
-    if (!reviewCommentExists(pr.comments || [], expectedHead, reviewFingerprint, outcome)) {
-      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub) =>
-        guardedGithub.commentPr(env.githubRepo, prNumber, renderApprovedReviewComment(commentInput)),
-      );
-    }
+    withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
+      if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, outcome)) {
+        guardedGithub.commentPr(env.githubRepo, prNumber, renderApprovedReviewComment(commentInput));
+      }
+    });
     return driverResult("done", `PR #${prNumber} review completed without actionable findings`, { driverAction: "review_approved" });
   }
   if (outcome === "human_required") {
@@ -436,12 +436,12 @@ function dispatch(args: JsonObject): DriverResult {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
     let comment = "Review result comment already exists.";
-    withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub) => {
-      if (!reviewCommentExists(pr.comments || [], expectedHead, reviewFingerprint, outcome)) {
+    withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
+      if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, outcome)) {
         comment = renderHumanRequiredComment(commentInput);
         guardedGithub.commentPr(env.githubRepo, prNumber, comment);
       }
-      const labels = labelNames(pr.labels);
+      const labels = labelNames(livePr.labels);
       if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
         guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
       }
@@ -485,13 +485,15 @@ function dispatch(args: JsonObject): DriverResult {
       if (workerConfirmed) recoveredLaunch = findRunMetadata(expectedHead, selection.key, env);
     }
     if (workerConfirmed && recoveredLaunch) {
-      if (!reviewCommentExists(refreshedPr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
-        withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.commentPr(
-          env.githubRepo,
-          prNumber,
-          renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint, repairAlreadyStarted: true }),
-        ));
-      }
+      withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
+        if (!reviewCommentExists(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
+          guardedGithub.commentPr(
+            env.githubRepo,
+            prNumber,
+            renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint, repairAlreadyStarted: true }),
+          );
+        }
+      });
       const monitorInput = {
         prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
         promiseFile: recoveredLaunch.promiseFile, actorName: "review-repair worker", projectId: env.projectId,
@@ -520,12 +522,12 @@ function dispatch(args: JsonObject): DriverResult {
   }
   if (selection.action !== "launch_repair") {
     let comment = "Review result comment already exists.";
-    withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => {
-      if (!reviewCommentExists(refreshedPr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
+    withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
+      if (!reviewCommentExists(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
         comment = renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint, repairUnavailable: true });
         guardedGithub.commentPr(env.githubRepo, prNumber, comment);
       }
-      const labels = labelNames(refreshedPr.labels);
+      const labels = labelNames(livePr.labels);
       if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
         guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
       }

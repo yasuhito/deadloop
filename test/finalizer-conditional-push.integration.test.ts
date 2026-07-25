@@ -117,7 +117,7 @@ describe("finalizer exact-head pushes against real remotes", () => {
     expect({ status: result.status, receipt: JSON.parse(readFileSync(resultFile, "utf8")).action }).toEqual({ status: 2, receipt: "blocked" });
   });
 
-  it("runs the rendered repair finalizer command and writes its pushed receipt", () => {
+  function runRenderedRepairFinalizer() {
     const { repo, remote, expectedHead } = fixture();
     const root = path.dirname(repo);
     const bin = path.join(root, "bin");
@@ -160,9 +160,17 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
     });
     const resultFile = path.join(runDir, "finalizer-result.json");
-
     const receipt = existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : { action: "missing" };
+    return { result, receipt };
+  }
+
+  it("runs the rendered repair finalizer command without an error", () => {
+    const { result, receipt } = runRenderedRepairFinalizer();
     expect(result.stderr || receipt.summary || "").toBe("");
+  });
+
+  it("writes the pushed receipt for the rendered repair finalizer command", () => {
+    const { result, receipt } = runRenderedRepairFinalizer();
     expect({ status: result.status, receipt: receipt.action }).toEqual({ status: 0, receipt: "pushed" });
   });
 

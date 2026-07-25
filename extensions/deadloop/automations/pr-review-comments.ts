@@ -6,9 +6,9 @@ const REVIEW_RESULT_RE = /<!--\s*deadloop:review-result\s+head=([0-9a-f]+)\s+rev
 const REPAIR_RESULT_RE = /<!--\s*deadloop:review-repair-result\s+key=([0-9a-f]+)\s+head=([0-9a-f]+)\s*-->/gi;
 
 const LOCAL_DETAIL_RE = /(?:\bfile:\/\/+|(?<!:)\/\/|\\\\)[^\s`'")]+|(?:^|[^A-Za-z0-9_/])(?:\/(?!\/)[^\s`'")]+|[A-Za-z]:\\)[^\s`'")]*/gi;
-const INTERNAL_TERM_RE = /(?:worker|review-repair)-prompt(?:\.md)?|promise(?:\.json)?|(?:\.pi|\.deadloop)[\\/][^\s`'")]*|[\\/]prompts?[\\/][^\s`'")]*|review-repair worker|deterministic dispatcher|\bherdr\b|\brunner\b|\bsession\b|\b[a-z0-9_.-]+-pr-\d+-(?:reviewer|review-repair(?:-[a-z0-9-]+)?)\b/gi;
+const INTERNAL_TERM_RE = /(?:worker|review-repair)-prompt(?:\.md)?|promise(?:\.json)?|(?:\.pi(?:-subagents)?|\.deadloop)[\\/][^\s`'")]*|[\\/]prompts?[\\/][^\s`'")]*|review-repair worker|deterministic dispatcher|\bherdr\b|\brunner\b|\bsession\b|\b[a-z0-9_.-]+-pr-\d+-(?:reviewer|review-repair(?:-[a-z0-9-]+)?)\b/gi;
 const PROMPT_DETAIL_RE = /\bprompts?\b/i;
-const INTERNAL_DETAIL_RE = new RegExp(`${LOCAL_DETAIL_RE.source}|(?:worker|review-repair)-prompt(?:\\.md)?|promise\\.json|(?:\\.pi|\\.deadloop)[\\\\/]|[\\\\/]prompts?[\\\\/]|${PROMPT_DETAIL_RE.source}`, "i");
+const INTERNAL_DETAIL_RE = new RegExp(`${LOCAL_DETAIL_RE.source}|(?:worker|review-repair)-prompt(?:\\.md)?|promise\\.json|(?:\\.pi(?:-subagents)?|\\.deadloop)[\\\\/]|[\\\\/]prompts?[\\\\/]|${PROMPT_DETAIL_RE.source}`, "i");
 const UNSAFE_CONTROL_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
 const REPOSITORY_PATH_RE = /^(?!\.git(?:\/|$))(?!.*\/\/)[A-Za-z0-9._@+~/-]+$/;
 
@@ -32,7 +32,14 @@ function publicRepoPath(value: unknown): string {
   const raw = String(value || "");
   const candidate = raw.trim();
   if (!candidate || /[\u0000-\u001f\u007f-\u009f]/.test(raw) || !REPOSITORY_PATH_RE.test(candidate)) return "Not specified";
-  if (candidate.startsWith("/") || candidate.startsWith("~") || candidate.split("/").includes("..") || INTERNAL_DETAIL_RE.test(candidate)) return "Not specified";
+  const segments = candidate.split("/");
+  if (
+    candidate.startsWith("/")
+    || candidate.startsWith("~")
+    || segments.includes("..")
+    || segments.some((segment) => [".pi", ".pi-subagents", ".deadloop"].includes(segment))
+    || INTERNAL_DETAIL_RE.test(candidate)
+  ) return "Not specified";
   return candidate;
 }
 
