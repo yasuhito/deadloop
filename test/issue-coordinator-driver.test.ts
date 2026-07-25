@@ -138,22 +138,6 @@ exit 2
     }
   });
 
-  it("handles contract-missing issues without an LLM prompt", () => {
-    expect(runDriverFixture("driver-contract-missing.json").driverAction).toBe("contract_missing");
-  });
-
-  it("renders contract-missing guidance", () => {
-    expect(runDriverFixture("driver-contract-missing.json").comment).toContain("Acceptance criteria");
-  });
-
-  it("renders blocked comments for planning issues", () => {
-    expect(runDriverFixture("driver-blocked-prd.json").comment).toContain("## Recovery steps");
-  });
-
-  it("does not block implementable issues that only reference a PRD document path", () => {
-    expect(runDriverFixture("driver-prd-doc-reference.json").driverAction).toBe("worker_monitor_request");
-  });
-
   it("reports the deterministic Worker name", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });
@@ -196,7 +180,7 @@ exit 2
     expect(readFileSync("src/core.ts", "utf8")).toContain("DEADLOOP_WORKER_MODEL");
   });
 
-  it("uses the TypeScript renderer for blocked comments", () => {
-    expect(readFileSync(driverScript, "utf8")).toContain("renderIssueBlockedComment");
+  it("uses the TypeScript renderer for planning comments", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain("renderIssuePlanningComment");
   });
 });

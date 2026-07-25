@@ -1,3 +1,10 @@
+type IssuePlanningCommentInput = {
+  githubRepo: string;
+  blockedLabel: string;
+  readyLabel: string;
+  implementLabel: string;
+};
+
 type IssueBlockedCommentInput = {
   issueNumber: number;
   githubRepo: string;
@@ -73,6 +80,21 @@ function markdownFence(value: string): string {
 
 function markdownCode(value: string): string {
   return oneLineForRenderer(value).replace(/`/g, "\\`");
+}
+
+function renderIssuePlanningComment(input: IssuePlanningCommentInput): string {
+  return [
+    "Skipped automated implementation because this looks like a PRD, design, or parent issue.",
+    "",
+    "## Recovery steps",
+    "1. Create a separate implementable issue or split this issue's scope.",
+    "2. Give each implementation issue an `## Agent Brief` or `## What to build` section and an `## Acceptance criteria` section.",
+    "3. Note the number of the implementation issue you created or split out, then re-queue that issue safely (replace `123` below):",
+    "```bash",
+    "implementable_issue_number=123",
+    `gh issue edit "$implementable_issue_number" -R ${shellQuoteForRenderer(input.githubRepo)} --remove-label ${shellQuoteForRenderer(input.blockedLabel)} --add-label ${shellQuoteForRenderer(input.readyLabel)} --add-label ${shellQuoteForRenderer(input.implementLabel)}`,
+    "```",
+  ].join("\n");
 }
 
 function renderIssueBlockedComment(input: IssueBlockedCommentInput): string {
@@ -157,4 +179,4 @@ Promise report:
 - Always write the promise file, even on failure. Do not exit silently.`;
 }
 
-module.exports = { renderIssueBlockedComment, renderIssueWorkerPrompt };
+module.exports = { renderIssueBlockedComment, renderIssuePlanningComment, renderIssueWorkerPrompt };

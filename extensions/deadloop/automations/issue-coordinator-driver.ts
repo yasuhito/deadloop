@@ -8,7 +8,7 @@ const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
-const { renderIssueBlockedComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
+const { renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
@@ -103,18 +103,12 @@ function applyContractMissing(issue: JsonObject, env: ReturnType<typeof envConfi
   });
 }
 
-function blockedComment(issue: JsonObject, env: ReturnType<typeof envConfig>, reason: string): string {
-  const number = Number(issue.number || 0);
-  return renderIssueBlockedComment({
-    issueNumber: number,
+function blockedComment(_issue: JsonObject, env: ReturnType<typeof envConfig>): string {
+  return renderIssuePlanningComment({
     githubRepo: env.githubRepo,
-    repoPath: env.repoPath,
-    automationDir: env.automationDir,
     blockedLabel: env.blockedLabel,
+    readyLabel: env.readyLabel,
     implementLabel: env.implementLabel,
-    summary: reason,
-    confirmed: [`Issue #${number} is not a single implementable Worker task.`],
-    nextDecision: "Create a separate implementable issue or split this issue's scope.",
   });
 }
 
@@ -159,7 +153,7 @@ function issueWorkerLaunchPlan(issue: JsonObject, env: ReturnType<typeof envConf
       promptFilePrefix: "worker-prompt",
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         renderIssueWorkerPrompt({
-          launchReason: "deterministic issue coordinator launch",
+          launchReason: "The issue is ready for implementation.",
           issueNumber: number,
           issueTitle: String(issue.title || "task"),
           issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
@@ -196,6 +190,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
 
   if (shouldSimulateLaunch(fixture)) {
+    const promiseFile = `${env.stateDir}/runs/${uuid}/promise.json`;
     return {
       workerName,
       branch,
@@ -203,7 +198,8 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       tabId: "fixture-tab",
       worktreePath: simulatedWorktreePath,
       promptFile: `${env.stateDir}/runs/${uuid}/worker-prompt.md`,
-      promiseFile: `${env.stateDir}/runs/${uuid}/promise.json`,
+      promiseFile,
+      instructions: plan.input.renderPrompt({ promiseFile, worktreePath: simulatedWorktreePath }),
       simulated: true,
     };
   }
@@ -293,7 +289,7 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   if (issuePlan.kind === "planning_blocked") {
-    const comment = blockedComment(issue, env, "Skipped automated implementation because this looks like a PRD, design, or parent issue.");
+    const comment = blockedComment(issue, env);
     if (!applyBlocked(issue, env, comment, fixture)) {
       return driverResult("skip", `Issue #${issue.number} changed before the planning gate; no workflow state was mutated`, {
         driverAction: "planning_blocked_stale", issueNumber: issue.number,
