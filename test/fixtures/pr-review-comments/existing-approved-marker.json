@@ -1,0 +1,10 @@
+{
+  "comments": [
+    {
+      "body": "<!-- deadloop:review-result head=abc review=def outcome=approved -->"
+    }
+  ],
+  "headOid": "abc",
+  "reviewFingerprint": "def",
+  "outcome": "approved"
+}

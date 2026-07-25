@@ -1,0 +1,21 @@
+{
+  "attemptKey": "abcdef1234567890abcd",
+  "originalHeadOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "newHeadOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "repairs": [
+    {
+      "title": "Unsafe fallback",
+      "summary": "Removed the approval fallback and returned a blocked result.",
+      "paths": ["src/review.ts"]
+    },
+    {
+      "title": "Missing validation",
+      "summary": "Validated every structured repair field before rendering.",
+      "paths": ["src/promise.ts", "src/comments.ts"]
+    }
+  ],
+  "checks": [
+    { "command": "npm test", "result": "passed" },
+    { "command": "npm run typecheck", "result": "passed" }
+  ]
+}
