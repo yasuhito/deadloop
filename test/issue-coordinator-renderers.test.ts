@@ -66,6 +66,7 @@ describe("issue coordinator renderers", () => {
     const comment = renderIssuePlanningComment({
       githubRepo: "owner/repo",
       blockedLabel: "custom-blocked",
+      readyLabel: "custom-ready",
       implementLabel: "custom-implement",
     });
 
@@ -77,6 +78,7 @@ describe("issue coordinator renderers", () => {
       issueNumber: 72,
       githubRepo: "owner/repo",
       blockedLabel: "custom-blocked",
+      readyLabel: "custom-ready",
       implementLabel: "custom-implement",
     });
 
@@ -87,10 +89,11 @@ describe("issue coordinator renderers", () => {
     const comment = renderIssuePlanningComment({
       githubRepo: "owner/repo",
       blockedLabel: "custom-blocked",
+      readyLabel: "custom-ready",
       implementLabel: "custom-implement",
     });
 
-    expect(comment).toContain("--remove-label custom-blocked --add-label custom-implement");
+    expect(comment).toContain("--remove-label custom-blocked --add-label custom-ready --add-label custom-implement");
   });
 
   it("renders the worker issue target", () => {

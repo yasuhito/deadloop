@@ -107,6 +107,7 @@ function blockedComment(_issue: JsonObject, env: ReturnType<typeof envConfig>): 
   return renderIssuePlanningComment({
     githubRepo: env.githubRepo,
     blockedLabel: env.blockedLabel,
+    readyLabel: env.readyLabel,
     implementLabel: env.implementLabel,
   });
 }

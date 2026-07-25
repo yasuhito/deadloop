@@ -84,6 +84,13 @@ Then("停止後の復旧手順が案内される", function (this: IssueCoordina
   assert.match(this.result?.comment || "", /## Recovery steps/);
 });
 
+Then("分割した Issue に選定に必要なラベルを付ける方法が案内される", function (this: IssueCoordinationWorld) {
+  assert.match(
+    this.result?.comment || "",
+    /gh issue edit "\$implementable_issue_number"[^\n]*--add-label ready-for-agent[^\n]*--add-label agent:implement/,
+  );
+});
+
 Then("停止コメントは利用者向けの案内だけで作られる", function (this: IssueCoordinationWorld) {
   assert.doesNotMatch(
     this.result?.comment || "",

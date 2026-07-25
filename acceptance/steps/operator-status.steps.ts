@@ -164,7 +164,7 @@ Then("停止コメントに復旧手順が表示される", function (this: Oper
 Then("停止コメントに安全な再投入方法が表示される", function (this: OperatorStatusWorld) {
   assert.match(
     this.blockedComment || "",
-    /implementable_issue_number=123\ngh issue edit "\$implementable_issue_number" -R owner\/repo --remove-label agent:blocked --add-label agent:implement/,
+    /implementable_issue_number=123\ngh issue edit "\$implementable_issue_number" -R owner\/repo --remove-label agent:blocked --add-label ready-for-agent --add-label agent:implement/,
   );
 });
 
