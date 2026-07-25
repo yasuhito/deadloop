@@ -128,11 +128,14 @@ function reviewCommentExists(comments: JsonObject[], headOid: string, reviewFing
   });
 }
 
-function repairResultCommentExists(comments: JsonObject[], attemptKey: string): boolean {
+function repairResultCommentExists(comments: JsonObject[], attemptKey: string, headOid: string, authorLogin: string): boolean {
   return (comments || []).some((comment) => {
+    if (String(comment?.author?.login || "").toLowerCase() !== authorLogin.toLowerCase()) return false;
     REPAIR_RESULT_RE.lastIndex = 0;
     return Array.from(String(comment?.body || "").matchAll(REPAIR_RESULT_RE)).some(
-      (match) => match[1].toLowerCase() === attemptKey.toLowerCase(),
+      (match) =>
+        match[1].toLowerCase() === attemptKey.toLowerCase()
+        && match[2].toLowerCase() === headOid.toLowerCase(),
     );
   });
 }

@@ -50,6 +50,7 @@ function finalizeWith(
       stateDir: "/state",
       enabledAt: 1,
       checkCommand: "npm test",
+      resultFile: "/state/result.json",
     },
     {
       assertEnabled: () => {
@@ -104,6 +105,7 @@ function finalizeWhileDisabled() {
         repo: "/worktree", projectRepo: "/repo", githubRepo: "owner/repo", pr: "243",
         branch: "agent/issue-243", expectedHead: head, remote: "origin",
         automationDir: "/automation", stateDir: "/state", enabledAt: 1, checkCommand: "npm test",
+        resultFile: "/state/result.json",
       },
       {
         assertEnabled: () => { throw new Error("deadloop is disabled for this repository"); },

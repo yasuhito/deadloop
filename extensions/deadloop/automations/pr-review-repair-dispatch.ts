@@ -235,23 +235,46 @@ function launchEvidenceFile(prNumber: string, key: string, env: ReturnType<typeo
   return path.join(env.stateDir, "review-repair-launches", `${env.projectId}-pr-${prNumber}-${key}.json`);
 }
 
-function hasLaunchEvidence(
+type RepairLaunchMetadata = { repairName: string; promiseFile: string };
+
+function findRunMetadata(expectedHead: string, key: string, env: ReturnType<typeof envConfig>): RepairLaunchMetadata | null {
+  const runsDir = path.join(env.stateDir, "runs");
+  let entries: string[];
+  try { entries = fs.readdirSync(runsDir); } catch { return null; }
+  const matches: RepairLaunchMetadata[] = [];
+  for (const entry of entries) {
+    const runDir = path.join(runsDir, entry);
+    try {
+      const contract = JSON.parse(fs.readFileSync(path.join(runDir, "review-contract.json"), "utf8"));
+      if (contract?.attemptKey === key && String(contract?.expectedHead || "").toLowerCase() === expectedHead.toLowerCase()) {
+        matches.push({ repairName: "", promiseFile: path.join(runDir, "promise.json") });
+      }
+    } catch {}
+  }
+  if (matches.length > 1) throw new Error("repair launch recovery found ambiguous run metadata");
+  return matches[0] || null;
+}
+
+function readLaunchEvidence(
   prNumber: string,
   branch: string,
   expectedHead: string,
   key: string,
   env: ReturnType<typeof envConfig>,
-): boolean {
+): RepairLaunchMetadata | null {
   try {
     const evidence = JSON.parse(fs.readFileSync(launchEvidenceFile(prNumber, key, env), "utf8"));
-    return (
-      evidence?.key === key &&
-      evidence?.githubRepo === env.githubRepo &&
-      evidence?.branch === branch &&
-      String(evidence?.expectedHead || "").toLowerCase() === expectedHead.toLowerCase()
-    );
+    if (
+      evidence?.key !== key
+      || evidence?.githubRepo !== env.githubRepo
+      || evidence?.branch !== branch
+      || String(evidence?.expectedHead || "").toLowerCase() !== expectedHead.toLowerCase()
+    ) return null;
+    const fallback = findRunMetadata(expectedHead, key, env);
+    const promiseFile = String(evidence?.promiseFile || fallback?.promiseFile || "");
+    return promiseFile ? { repairName: String(evidence?.repairName || repairAgentName(prNumber, key, env)), promiseFile } : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -282,14 +305,16 @@ function recordLaunchEvidence(
   branch: string,
   expectedHead: string,
   key: string,
+  launch: RepairLaunchMetadata,
   env: ReturnType<typeof envConfig>,
 ): void {
   const file = launchEvidenceFile(prNumber, key, env);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(file, `${JSON.stringify({ key, githubRepo: env.githubRepo, branch, expectedHead })}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify({ key, githubRepo: env.githubRepo, branch, expectedHead, ...launch })}\n`, {
+    encoding: "utf8", mode: 0o600,
   });
+  fs.renameSync(temporary, file);
 }
 
 function launchRepair(
@@ -453,7 +478,13 @@ function dispatch(args: JsonObject): DriverResult {
 
   const selection = selectRepairAttempt(refreshedPr.comments || [], expectedHead, findings);
   if (selection.action === "already_attempted") {
-    if (hasLaunchEvidence(prNumber, branch, expectedHead, selection.key, env) || recoverLaunchFromHerdr(prNumber, branch, selection.key, env)) {
+    let recoveredLaunch = readLaunchEvidence(prNumber, branch, expectedHead, selection.key, env);
+    let workerConfirmed = Boolean(recoveredLaunch);
+    if (!workerConfirmed) {
+      workerConfirmed = recoverLaunchFromHerdr(prNumber, branch, selection.key, env);
+      if (workerConfirmed) recoveredLaunch = findRunMetadata(expectedHead, selection.key, env);
+    }
+    if (workerConfirmed && recoveredLaunch) {
       if (!reviewCommentExists(refreshedPr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
         withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.commentPr(
           env.githubRepo,
@@ -461,7 +492,18 @@ function dispatch(args: JsonObject): DriverResult {
           renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint, repairAlreadyStarted: true }),
         ));
       }
-      return driverResult("done", `PR #${prNumber} review result was already dispatched; repair was not relaunched`, { driverAction: "review_repair_duplicate", selection });
+      const monitorInput = {
+        prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
+        promiseFile: recoveredLaunch.promiseFile, actorName: "review-repair worker", projectId: env.projectId,
+        repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
+        reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, blockedLabel: env.blockedLabel,
+        attemptKey: selection.key,
+      };
+      return driverResult("needs_llm", `Recovered review-repair monitor for PR #${prNumber}`, {
+        driverAction: "review_repair_monitor_recovered", selection,
+        monitorHandoff: { kind: "repair", input: monitorInput },
+        prompt: renderRepairMonitorPrompt(monitorInput),
+      });
     }
     const interruptionMarker = `<!-- deadloop:review-repair-dispatch-stop key=${selection.key} -->`;
     const alreadyRecovered = (refreshedPr.comments || []).some((comment: JsonObject) => String(comment?.body || "").includes(interruptionMarker));
@@ -543,7 +585,12 @@ function dispatch(args: JsonObject): DriverResult {
   }
 
   let launchEvidenceError = "";
-  try { recordLaunchEvidence(prNumber, branch, expectedHead, selection.key, env); } catch (error) {
+  try {
+    recordLaunchEvidence(prNumber, branch, expectedHead, selection.key, {
+      repairName: String(launch.repairName || repairAgentName(prNumber, selection.key, env)),
+      promiseFile: String(launch.promiseFile),
+    }, env);
+  } catch (error) {
     launchEvidenceError = error instanceof Error ? error.message : String(error);
   }
   const monitorInput = {

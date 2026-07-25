@@ -775,6 +775,9 @@ else if (args[0] === "agent" && args[1] === "start") {
     const attemptKey = marker.match(/key=([0-9a-f]+)/)?.[1];
     fs.mkdirSync(bin);
     fs.mkdirSync(worktree);
+    const repairRunDir = path.join(state, "runs", "interrupted-launch");
+    fs.mkdirSync(repairRunDir, { recursive: true });
+    fs.writeFileSync(path.join(repairRunDir, "review-contract.json"), JSON.stringify({ attemptKey, expectedHead: head, findingTitles: [finding.title] }));
     fs.writeFileSync(
       promise,
       JSON.stringify({ status: "complete", outcome: "changes_requested", reason: "", summary: "Repair it.", findings: [finding] }),
@@ -833,8 +836,15 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
     if (result.status !== 0) throw new Error(result.stderr || result.stdout);
     const output = JSON.parse(result.stdout);
 
-    expect({ driverAction: output.driverAction, launchAttempted: fs.existsSync(launchAttempted) }).toEqual({
-      driverAction: "review_repair_duplicate",
+    expect({
+      action: output.action,
+      driverAction: output.driverAction,
+      promiseFile: output.monitorHandoff?.input?.promiseFile,
+      launchAttempted: fs.existsSync(launchAttempted),
+    }).toEqual({
+      action: "needs_llm",
+      driverAction: "review_repair_monitor_recovered",
+      promiseFile: path.join(repairRunDir, "promise.json"),
       launchAttempted: false,
     });
   });

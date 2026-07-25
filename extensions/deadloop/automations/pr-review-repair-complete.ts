@@ -7,6 +7,7 @@ const { validatePromise } = require("./extract-worker-promise.ts");
 const { publicText, renderRepairSuccessComment, repairResultCommentExists } = require("./pr-review-comments.ts");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -18,7 +19,7 @@ function parseArgs(argv: string[]): JsonObject {
     if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs");
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
-  for (const name of ["promise", "result", "contract", "githubRepo", "pr", "expectedHead", "attemptKey", "reviewingLabel", "blockedLabel"]) {
+  for (const name of ["promise", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "reviewingLabel", "blockedLabel"]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
   return values;
@@ -55,91 +56,102 @@ function sameFindingTitles(repairs: JsonObject[], findingTitles: unknown): boole
 
 function completion(args: JsonObject): DriverResult {
   const runner = createCommandRunner();
-  const github = createGithubOperations(runner);
   const validation = validatePromise(String(args.promise));
   const receipt = readJson(String(args.result));
   const contract = readJson(String(args.contract));
-  const pr = runner.runJson([
-    "gh",
-    "pr",
-    "view",
-    String(args.pr),
-    "-R",
-    String(args.githubRepo),
-    "--json",
-    "state,headRefOid,labels,comments",
-  ]);
-  const comments = (pr.comments || []) as JsonObject[];
-  const labelNames = (pr.labels || []).map((label: JsonObject) => String(label.name || label));
-  const needsHumanLabels = labelNames.includes(String(args.reviewingLabel)) || !labelNames.includes(String(args.blockedLabel));
-  const stopMarker = `<!-- deadloop:review-repair-stop key=${String(args.attemptKey).toLowerCase()} -->`;
-
   const expectedHead = String(args.expectedHead).toLowerCase();
-  const staleConfirmed =
-    validation.status === "complete" &&
-    validation.promise?.reason === "stale_head" &&
-    receipt?.action === "stale_head" &&
-    contract?.attemptKey === args.attemptKey &&
-    String(contract?.expectedHead || "").toLowerCase() === expectedHead &&
-    String(receipt.originalHeadOid || "").toLowerCase() === expectedHead &&
-    String(pr.state || "").toUpperCase() === "OPEN" &&
-    Boolean(pr.headRefOid) &&
-    String(pr.headRefOid).toLowerCase() !== expectedHead;
-
-  if (staleConfirmed) {
-    return driverResult("done", `PR #${args.pr} repair became stale; no public success was posted`, { driverAction: "repair_stale_head" });
-  }
-
   const receiptHead = String(receipt?.headOid || "").toLowerCase();
-  const successful =
-    validation.status === "complete" &&
-    validation.promise?.reason === "repair_pushed" &&
-    receipt?.action === "pushed" &&
-    contract?.attemptKey === args.attemptKey &&
-    String(contract?.expectedHead || "").toLowerCase() === String(args.expectedHead).toLowerCase() &&
-    sameFindingTitles(validation.promise.repairs, contract?.findingTitles) &&
-    String(pr.state || "").toUpperCase() === "OPEN" &&
-    String(receipt.originalHeadOid || "").toLowerCase() === expectedHead &&
-    /^[0-9a-f]{40}$/.test(receiptHead) &&
-    receiptHead !== expectedHead &&
-    receiptHead === String(pr.headRefOid || "").toLowerCase() &&
-    JSON.stringify(validation.promise.checks) === JSON.stringify(receipt.checks);
+  const successfulReceipt =
+    validation.status === "complete"
+    && validation.promise?.reason === "repair_pushed"
+    && receipt?.action === "pushed"
+    && contract?.attemptKey === args.attemptKey
+    && String(contract?.expectedHead || "").toLowerCase() === expectedHead
+    && sameFindingTitles(validation.promise.repairs, contract?.findingTitles)
+    && String(receipt.originalHeadOid || "").toLowerCase() === expectedHead
+    && /^[0-9a-f]{40}$/.test(receiptHead)
+    && receiptHead !== expectedHead
+    && JSON.stringify(validation.promise.checks) === JSON.stringify(receipt.checks);
+  const project = {
+    repoPath: String(args.projectRepo),
+    githubRepo: String(args.githubRepo),
+    stateDir: String(args.stateDir),
+    enabledAt: Number(args.enabledAt),
+  };
 
-  if (successful) {
-    if (repairResultCommentExists(comments, String(args.attemptKey))) {
-      return driverResult("done", `PR #${args.pr} repair result was already posted`, { driverAction: "repair_result_duplicate" });
+  return withEnabledDriverLock(project, (_enabled: unknown, recheck: () => void) => {
+    const automationLogin = successfulReceipt ? runner.runText(["gh", "api", "user", "--jq", ".login"]).trim() : "";
+    if (successfulReceipt && !automationLogin) throw new Error("authenticated GitHub identity is unavailable");
+    const pr = runner.runJson([
+      "gh", "pr", "view", String(args.pr), "-R", String(args.githubRepo),
+      "--json", "state,headRefName,headRefOid,isCrossRepository,labels,comments",
+    ]);
+    const liveHead = String(pr.headRefOid || "").toLowerCase();
+    const labels = (pr.labels || []).map((label: JsonObject) => String(label.name || label));
+    const targetOpen =
+      String(pr.state || "").toUpperCase() === "OPEN"
+      && !Boolean(pr.isCrossRepository)
+      && String(pr.headRefName || "") === String(args.branch);
+    if (!targetOpen) {
+      return driverResult("done", `PR #${args.pr} changed before repair completion; left untouched`, { driverAction: "repair_target_changed" });
     }
-    const comment = renderRepairSuccessComment({
-      attemptKey: args.attemptKey,
-      originalHeadOid: args.expectedHead,
-      newHeadOid: receipt.headOid,
-      repairs: validation.promise.repairs,
-      checks: receipt.checks,
-    });
-    github.commentPr(String(args.githubRepo), String(args.pr), comment);
-    return driverResult("done", `PR #${args.pr} repair result posted`, { driverAction: "repair_result_posted", comment });
-  }
 
-  if (comments.some((comment) => String(comment?.body || "").includes(stopMarker))) {
-    if (needsHumanLabels) {
-      github.movePrLabels(String(args.githubRepo), String(args.pr), {
-        remove: String(args.reviewingLabel),
-        add: String(args.blockedLabel),
+    const staleConfirmed =
+      validation.status === "complete"
+      && validation.promise?.reason === "stale_head"
+      && receipt?.action === "stale_head"
+      && contract?.attemptKey === args.attemptKey
+      && String(contract?.expectedHead || "").toLowerCase() === expectedHead
+      && String(receipt.originalHeadOid || "").toLowerCase() === expectedHead
+      && Boolean(liveHead)
+      && liveHead !== expectedHead;
+    if (staleConfirmed) {
+      return driverResult("done", `PR #${args.pr} repair became stale; no public success was posted`, { driverAction: "repair_stale_head" });
+    }
+
+    const expectedLiveHead = receipt?.action === "pushed" ? receiptHead : expectedHead;
+    const workflowActive =
+      labels.includes(String(args.reviewLabel))
+      && labels.includes(String(args.reviewingLabel))
+      && !labels.includes(String(args.blockedLabel));
+    if (!workflowActive || !expectedLiveHead || liveHead !== expectedLiveHead) {
+      return driverResult("done", `PR #${args.pr} repair completion was superseded; left untouched`, { driverAction: "repair_target_changed" });
+    }
+
+    const comments = (pr.comments || []) as JsonObject[];
+    const github = createGithubOperations(runner, recheck);
+
+    if (successfulReceipt) {
+      if (repairResultCommentExists(comments, String(args.attemptKey), receiptHead, automationLogin)) {
+        return driverResult("done", `PR #${args.pr} repair result was already posted`, { driverAction: "repair_result_duplicate" });
+      }
+      const comment = renderRepairSuccessComment({
+        attemptKey: args.attemptKey,
+        originalHeadOid: args.expectedHead,
+        newHeadOid: receipt.headOid,
+        repairs: validation.promise.repairs,
+        checks: receipt.checks,
       });
+      github.commentPr(String(args.githubRepo), String(args.pr), comment);
+      return driverResult("done", `PR #${args.pr} repair result posted`, { driverAction: "repair_result_posted", comment });
     }
-    return driverResult("done", `PR #${args.pr} repair stop was already posted`, { driverAction: "repair_stop_duplicate" });
-  }
-  const reason = validation.promise?.reason || validation.error || receipt?.reason || "inconclusive_repair_completion";
-  const summary = validation.promise?.summary || "The finalizer receipt and structured repair report did not confirm the same successful push.";
-  const comment = recoveryComment(args, reason, summary);
-  github.commentPr(String(args.githubRepo), String(args.pr), comment);
-  if (needsHumanLabels) {
+
+    const stopMarker = `<!-- deadloop:review-repair-stop key=${String(args.attemptKey).toLowerCase()} -->`;
+    if (comments.some((comment) => String(comment?.body || "").includes(stopMarker))) {
+      github.movePrLabels(String(args.githubRepo), String(args.pr), {
+        remove: String(args.reviewingLabel), add: String(args.blockedLabel),
+      });
+      return driverResult("done", `PR #${args.pr} repair stop was already posted`, { driverAction: "repair_stop_duplicate" });
+    }
+    const reason = validation.promise?.reason || validation.error || receipt?.reason || "inconclusive_repair_completion";
+    const summary = validation.promise?.summary || "The finalizer receipt and structured repair report did not confirm the same successful push.";
+    const comment = recoveryComment(args, reason, summary);
+    github.commentPr(String(args.githubRepo), String(args.pr), comment);
     github.movePrLabels(String(args.githubRepo), String(args.pr), {
-      remove: String(args.reviewingLabel),
-      add: String(args.blockedLabel),
+      remove: String(args.reviewingLabel), add: String(args.blockedLabel),
     });
-  }
-  return driverResult("done", `PR #${args.pr} repair requires human recovery`, { driverAction: "repair_human_blocked", comment });
+    return driverResult("done", `PR #${args.pr} repair requires human recovery`, { driverAction: "repair_human_blocked", comment });
+  });
 }
 
 function main(): void {

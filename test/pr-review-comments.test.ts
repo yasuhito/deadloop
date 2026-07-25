@@ -293,7 +293,17 @@ The new head will be reviewed again. Review labels remain in place.
     expect(sameFindingTitles([{ title: "First" }], ["First", "Second"])).toBe(false);
   });
 
-  it("detects an existing repair result marker", () => {
-    expect(repairResultCommentExists([{ body: "<!-- deadloop:review-repair-result key=abc head=def -->" }], "abc")).toBe(true);
+  it("detects an authenticated repair result marker bound to the receipt head", () => {
+    expect(repairResultCommentExists(
+      [{ body: "<!-- deadloop:review-repair-result key=abc head=def -->", author: { login: "deadloop-bot" } }],
+      "abc", "def", "deadloop-bot",
+    )).toBe(true);
+  });
+
+  it("rejects a copied repair result marker from another commenter", () => {
+    expect(repairResultCommentExists(
+      [{ body: "<!-- deadloop:review-repair-result key=abc head=def -->", author: { login: "attacker" } }],
+      "abc", "def", "deadloop-bot",
+    )).toBe(false);
   });
 });
