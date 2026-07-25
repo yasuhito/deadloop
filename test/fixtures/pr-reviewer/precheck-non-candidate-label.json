@@ -1,0 +1,12 @@
+[
+  {
+    "number": 16,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefOid": "1616161616161616161616161616161616161616",
+    "isDraft": false,
+    "labels": [{ "name": "needs-info" }],
+    "statusCheckRollup": [],
+    "comments": [],
+    "reviewRequests": []
+  }
+]

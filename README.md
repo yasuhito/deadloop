@@ -4,7 +4,7 @@ English | [日本語](README.ja.md)
 
 # deadloop
 
-> A loop for building loops, maximum effort.
+> Build your loop. deadloop runs it. Maximum effort.
 
 **GitHub Issues in, reviewed PRs out.** deadloop watches Issues and automates implementation, pull requests, review, and merge—with safety controls built in.
 

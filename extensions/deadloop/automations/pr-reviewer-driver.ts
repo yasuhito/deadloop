@@ -28,6 +28,11 @@ const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
+type LabelMove = { remove?: string | string[]; add?: string | string[] };
+type GithubEffect =
+  | { operation: "add_pr_reviewer"; repo: string; prNumber: string; reviewer: string }
+  | { operation: "comment_pr"; repo: string; prNumber: string; body: string }
+  | { operation: "move_pr_labels"; repo: string; prNumber: string; move: LabelMove };
 const SCRIPT_DIR = __dirname;
 const commandRunner = createCommandRunner();
 const { runText } = commandRunner;
@@ -40,32 +45,32 @@ function githubOperations(beforeMutation?: () => void) {
   return createGithubOperations(commandRunner, beforeMutation);
 }
 
-function envConfig() {
+function envConfig(source: NodeJS.ProcessEnv = process.env) {
   return {
-    projectId: process.env.DEADLOOP_PROJECT_ID || "project",
-    repoPath: process.env.DEADLOOP_REPO_PATH || ".",
-    githubRepo: process.env.DEADLOOP_GITHUB_REPO || "",
-    enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
-    baseBranch: process.env.DEADLOOP_BASE_BRANCH || "origin/main",
+    projectId: source.DEADLOOP_PROJECT_ID || "project",
+    repoPath: source.DEADLOOP_REPO_PATH || ".",
+    githubRepo: source.DEADLOOP_GITHUB_REPO || "",
+    enabledAt: Number(source.DEADLOOP_ENABLED_AT),
+    baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     automationDir: SCRIPT_DIR,
     stateDir:
-      process.env.DEADLOOP_STATE_DIR ||
-      path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
-    checkCommand: process.env.DEADLOOP_CHECK_COMMAND || "git diff --check",
-    reviewerAgent: process.env.DEADLOOP_REVIEWER_AGENT || "pi",
-    reviewerModel: process.env.DEADLOOP_REVIEWER_MODEL || "",
-    branchUpdateAgent: process.env.DEADLOOP_WORKER_AGENT || "pi",
-    branchUpdateModel: process.env.DEADLOOP_WORKER_MODEL || "",
-    branchUpdateRemote: process.env.DEADLOOP_BRANCH_UPDATE_REMOTE || "origin",
-    reviewLabel: process.env.DEADLOOP_REVIEW_LABEL || "agent:review",
-    reviewingLabel: process.env.DEADLOOP_REVIEWING_LABEL || "agent:reviewing",
-    humanLabel: process.env.DEADLOOP_HUMAN_LABEL || "ready-for-human",
-    blockedLabel: process.env.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
-    implementLabel: process.env.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
-    autoMerge: parseBool(process.env.DEADLOOP_AUTO_MERGE),
-    externalReviewEnabled: parseBool(process.env.DEADLOOP_EXTERNAL_REVIEW_ENABLED),
-    externalReviewWaitSeconds: process.env.DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS || "1800",
-    now: process.env.DEADLOOP_NOW || "",
+      source.DEADLOOP_STATE_DIR ||
+      path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
+    checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
+    reviewerAgent: source.DEADLOOP_REVIEWER_AGENT || "pi",
+    reviewerModel: source.DEADLOOP_REVIEWER_MODEL || "",
+    branchUpdateAgent: source.DEADLOOP_WORKER_AGENT || "pi",
+    branchUpdateModel: source.DEADLOOP_WORKER_MODEL || "",
+    branchUpdateRemote: source.DEADLOOP_BRANCH_UPDATE_REMOTE || "origin",
+    reviewLabel: source.DEADLOOP_REVIEW_LABEL || "agent:review",
+    reviewingLabel: source.DEADLOOP_REVIEWING_LABEL || "agent:reviewing",
+    humanLabel: source.DEADLOOP_HUMAN_LABEL || "ready-for-human",
+    blockedLabel: source.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
+    implementLabel: source.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
+    autoMerge: parseBool(source.DEADLOOP_AUTO_MERGE),
+    externalReviewEnabled: parseBool(source.DEADLOOP_EXTERNAL_REVIEW_ENABLED),
+    externalReviewWaitSeconds: source.DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS || "1800",
+    now: source.DEADLOOP_NOW || "",
   };
 }
 
@@ -86,23 +91,26 @@ function fixtureEffects(fixture: JsonObject): JsonObject {
   return fixture.testAdapterEffects;
 }
 
-function fixtureGithubOperations(fixture: JsonObject) {
+function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffect[]) {
   const effects = fixtureEffects(fixture);
   return {
-    commentPr: (_repo: string, number: string | number, body: string) => {
+    commentPr: (repo: string, number: string | number, body: string) => {
       effects.githubComments.push({ number: Number(number), body });
+      githubEffects?.push({ operation: "comment_pr", repo, prNumber: String(number), body });
     },
-    movePrLabels: (_repo: string, number: string | number, move: { remove?: string | string[]; add?: string | string[] }) => {
+    movePrLabels: (repo: string, number: string | number, move: LabelMove) => {
       const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
       const labels = new Set((pr?.labels || []).map((label: JsonObject) => String(label.name)));
       for (const label of [move.remove || []].flat()) labels.delete(label);
       for (const label of [move.add || []].flat()) labels.add(label);
       if (pr) pr.labels = [...labels].map((name) => ({ name }));
       effects.labels[String(number)] = [...labels];
+      githubEffects?.push({ operation: "move_pr_labels", repo, prNumber: String(number), move });
     },
-    addPrReviewer: (_repo: string, number: string | number, reviewer: string) => {
+    addPrReviewer: (repo: string, number: string | number, reviewer: string) => {
       effects.githubReviewers ||= [];
       effects.githubReviewers.push({ number: Number(number), reviewer });
+      githubEffects?.push({ operation: "add_pr_reviewer", repo, prNumber: String(number), reviewer });
     },
   };
 }
@@ -324,9 +332,10 @@ function applyPrTransition(
   fixture: JsonObject | null,
   stillApplicable: (livePlan: ReturnType<typeof planPrReviewerAction>, live: JsonObject) => boolean,
   mutate: (github: ReturnType<typeof githubOperations>, live: JsonObject) => void,
+  githubEffects?: GithubEffect[],
 ): boolean {
   if (fixture) {
-    mutate(fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations>, pr);
+    mutate(fixtureGithubOperations(fixture, githubEffects) as ReturnType<typeof githubOperations>, pr);
     return true;
   }
   try {
@@ -416,15 +425,19 @@ function launchBranchUpdate(
   return { updaterName, headRefName: branch, retryKey: key, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
-function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
+function prReviewerLaunchPlan(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  reason: string,
+  uuid: string,
+): { reviewerName: string; headRefName: string; input: DriverLaunchInput } {
   const number = Number(pr.number || 0);
-  const uuid = fixture ? "fixture-reviewer-uuid" : randomUUID();
   const reviewerName = `${env.projectId}-pr-${number}-reviewer`;
   const headRefName = String(pr.headRefName || `pr-${number}`);
-  const launch = launchWithAdapters(
-    env,
-    fixture,
-    {
+  return {
+    reviewerName,
+    headRefName,
+    input: {
       worktree: { mode: "open", branch: headRefName },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
@@ -438,6 +451,29 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
     },
+  };
+}
+
+function launchPrReviewerFlow(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  reason: string,
+  ops: Parameters<typeof launchAgentFlow>[1],
+): JsonObject {
+  const plan = prReviewerLaunchPlan(pr, env, reason, randomUUID());
+  const launch = launchAgentFlow(plan.input, ops);
+  return { reviewerName: plan.reviewerName, headRefName: plan.headRefName, ...launch };
+}
+
+function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
+  const number = Number(pr.number || 0);
+  const uuid = fixture ? "fixture-reviewer-uuid" : randomUUID();
+  const plan = prReviewerLaunchPlan(pr, env, reason, uuid);
+  const { reviewerName, headRefName } = plan;
+  const launch = launchWithAdapters(
+    env,
+    fixture,
+    plan.input,
     (github) => github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }),
     () => {
       if (fixture) return;
@@ -486,22 +522,35 @@ gh issue edit <issueNumber> -R ${shellQuote(env.githubRepo)} --remove-label ${sh
 \`\`\``;
 }
 
-function applyDraftGate(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, comment: string): boolean {
-  return applyPrTransition(pr, env, fixture, (livePlan) => livePlan.kind === "draft_gate", (github, live) => {
+function applyDraftGate(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  comment: string,
+): { applied: boolean; githubEffects: GithubEffect[] } {
+  const githubEffects: GithubEffect[] = [];
+  const applied = applyPrTransition(pr, env, fixture, (livePlan) => livePlan.kind === "draft_gate", (github, live) => {
     const number = String(live.number);
     github.commentPr(env.githubRepo, number, comment);
     github.movePrLabels(env.githubRepo, number, { remove: [env.reviewingLabel, env.reviewLabel], add: env.blockedLabel });
-  });
+  }, githubEffects);
+  return { applied, githubEffects };
 }
 
-function applyExternalReviewRequest(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): boolean {
-  return applyPrTransition(pr, env, fixture, (livePlan) => livePlan.kind === "external_review_request", (github, live) => {
+function applyExternalReviewRequest(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+): { applied: boolean; githubEffects: GithubEffect[] } {
+  const githubEffects: GithubEffect[] = [];
+  const applied = applyPrTransition(pr, env, fixture, (livePlan) => livePlan.kind === "external_review_request", (github, live) => {
     const number = String(live.number);
     const head = String(live.headRefOid || "");
     github.addPrReviewer(env.githubRepo, number, "@copilot", { check: false });
     github.commentPr(env.githubRepo, number, `@coderabbitai review\n\n<!-- deadloop:external-review-request head=${head} -->`);
     github.movePrLabels(env.githubRepo, number, { remove: env.reviewingLabel }, { check: false });
-  });
+  }, githubEffects);
+  return { applied, githubEffects };
 }
 
 function drive(fixturePath: string | undefined): DriverResult {
@@ -519,7 +568,8 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   if (plan.kind === "draft_gate") {
     const comment = draftBlockedComment(plan.pr, env);
-    if (!applyDraftGate(plan.pr, env, fixture, comment)) {
+    const { applied, githubEffects } = applyDraftGate(plan.pr, env, fixture, comment);
+    if (!applied) {
       return driverResult("skip", `PR #${plan.decision.number} changed before the draft gate; no workflow state was mutated`, {
         driverAction: "draft_gate_stale", prNumber: plan.decision.number,
       });
@@ -528,6 +578,7 @@ function drive(fixturePath: string | undefined): DriverResult {
       driverAction: "draft_blocked",
       prNumber: plan.decision.number,
       comment,
+      ...(fixture ? { githubEffects, testAdapterEffects: fixtureEffects(fixture) } : {}),
     });
   }
 
@@ -655,7 +706,8 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   if (plan.kind === "external_review_request") {
-    if (!applyExternalReviewRequest(plan.pr, env, fixture)) {
+    const { applied, githubEffects } = applyExternalReviewRequest(plan.pr, env, fixture);
+    if (!applied) {
       return driverResult("skip", `PR #${plan.decision.number} changed before external review request`, {
         driverAction: "external_review_request_stale", prNumber: plan.decision.number,
       });
@@ -664,6 +716,7 @@ function drive(fixturePath: string | undefined): DriverResult {
       driverAction: "external_review_requested",
       prNumber: plan.decision.number,
       gate: plan.gate,
+      ...(fixture ? { githubEffects, testAdapterEffects: fixtureEffects(fixture) } : {}),
     });
   }
   if (plan.kind === "external_review_wait") {
@@ -737,4 +790,6 @@ function main(): void {
   }
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { envConfig, launchPrReviewerFlow };

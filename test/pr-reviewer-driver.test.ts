@@ -28,36 +28,8 @@ function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> 
 }
 
 describe("PR reviewer deterministic driver", () => {
-  it("skips candidate-free runs", () => {
-    expect(runDriverFixture("no-candidate.json").action).toBe("skip");
-  });
-
-  it("skips pending CI without sending a review prompt", () => {
-    expect(runDriverFixture("pending-ci.json").driverAction).toBe("wait");
-  });
-
-  it("launches reviewer by default without external review", () => {
-    expect(runDriverFixture("external-review-request.json").driverAction).toBe("reviewer_monitor_request");
-  });
-
   it("persists reviewer monitor input as a generation-bound handoff", () => {
     expect(runDriverFixture("external-review-request.json").monitorHandoff.kind).toBe("reviewer");
-  });
-
-  it("waits for fresh external review when external review is enabled", () => {
-    expect(runDriverFixture("external-review-wait.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).driverAction).toBe("wait");
-  });
-
-  it("requests external review deterministically when external review is enabled", () => {
-    expect(runDriverFixture("external-review-request.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).driverAction).toBe("external_review_requested");
-  });
-
-  it("renders a blocked comment for draft PRs", () => {
-    expect(runDriverFixture("draft-pr.json").comment).toContain("## Recovery steps");
-  });
-
-  it("launches stale external-review fallback deterministically before monitoring", () => {
-    expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).driverAction).toBe("reviewer_monitor_request");
   });
 
   it("reports the deterministic reviewer promise path outside the worktree", () => {

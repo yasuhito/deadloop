@@ -1,6 +1,6 @@
 # Issue coordination acceptance verification
 
-Issue #118 moves the user-visible outcomes for a selected Issue into the Japanese executable acceptance specification. The coordinator transitions are unchanged; planning guidance and the worker launch reason omit unnecessary internal implementation details.
+Issue #118 moves the user-visible outcomes for a selected Issue into the Japanese executable acceptance specification. The coordinator transitions are unchanged. Its explicit acceptance criterion that stop comments and work instructions contain only user-needed information is treated as a narrow exception to the general migration-only rule: planning guidance and the worker launch reason omit unnecessary internal implementation details, without changing selection, labels, launch behavior, or monitoring.
 
 ## Classification correspondence and equivalence
 
