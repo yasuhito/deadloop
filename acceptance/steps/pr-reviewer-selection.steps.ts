@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
+import { runPrReviewerDriverFixture } from "../support/pr-reviewer-driver";
 
 const { defaultDecisionConfig, selectPrForReview, workingReviewerPrNumbers } = require("../../extensions/deadloop/automations/pr-reviewer-decisions.ts");
 
@@ -144,23 +144,7 @@ function runDriver(fixtureName: string, extraEnv: Record<string, string> = {}): 
 }
 
 function runDriverPath(fixturePath: string, extraEnv: Record<string, string> = {}): DriverResult {
-  const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts", "--fixture", fixturePath], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      DEADLOOP_PROJECT_ID: "demo",
-      DEADLOOP_REPO_PATH: "/repo",
-      DEADLOOP_GITHUB_REPO: "owner/repo",
-      DEADLOOP_REVIEWER_AGENT: "pi",
-      DEADLOOP_REVIEWER_MODEL: "",
-      DEADLOOP_AUTO_MERGE: "0",
-      DEADLOOP_NOW: "2026-07-08T00:00:00Z",
-      ...extraEnv,
-    },
-  });
-  if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-  return JSON.parse(result.stdout) as DriverResult;
+  return runPrReviewerDriverFixture(fixturePath, extraEnv);
 }
 
 When("deadloop がレビューを開始しようとする", function (this: SelectionWorld) {
@@ -216,6 +200,10 @@ Then("deadloop は外部レビューを依頼する", function (this: SelectionW
 
 Then("レビュー担当は起動されない", function (this: SelectionWorld) {
   assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0, 0);
+});
+
+Then("外部レビューの完了待ちになる", function (this: SelectionWorld) {
+  assert.equal(this.driverResult?.driverAction, "wait");
 });
 
 Then("レビュー担当が起動される", function (this: SelectionWorld) {
