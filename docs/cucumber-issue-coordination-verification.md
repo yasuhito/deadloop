@@ -30,6 +30,7 @@ On 2026-07-25, every shared Then used by the T211–T214 replacement observation
 | Requeue guidance | `issue-coordination.steps.ts:76` | requeue pattern → `intentional-failure` | missing-contract requeue scenario |
 | Planning split guidance | `issue-coordination.steps.ts:80` | split pattern → `intentional-failure` | planning split scenario |
 | Recovery guidance | `issue-coordination.steps.ts:84` | recovery heading → `intentional-failure` | planning recovery scenario |
+| Selection-label guidance | `issue-coordination.steps.ts:88` | expected label command pattern → `intentional-failure` | planning split-and-requeue scenario |
 | Stop-comment hygiene | `issue-coordination.steps.ts:95` | `doesNotMatch` → `match` for forbidden internal details | planning comment hygiene scenario |
 | Work launch | `issue-coordination.steps.ts:102` | expected simulated launch `true` → `false` | implementable work-launch scenario |
 | Work-instruction hygiene | `issue-coordination.steps.ts:106` | `doesNotMatch` → `match` for internal names | worker-instruction hygiene scenario |
@@ -37,7 +38,7 @@ On 2026-07-25, every shared Then used by the T211–T214 replacement observation
 | No completion monitoring | `issue-coordination.steps.ts:114` | expected handoff `undefined` → `intentional-failure` | contract-missing and planning no-monitor scenarios |
 | No stop comment | `issue-coordination.steps.ts:118` | expected comment `undefined` → `intentional-failure` | implementable no-stop-comment scenario |
 
-After restoring all expectations, `npm run test:acceptance` passed all 89 scenarios and 465 steps.
+After restoring all expectations, `npm run test:acceptance` passed all 212 scenarios and 1097 steps.
 
 ## Vitest retained by scope
 
