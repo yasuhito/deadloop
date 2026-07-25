@@ -75,14 +75,17 @@ function markdownCode(value: string): string {
   return oneLineForRenderer(value).replace(/`/g, "\\`");
 }
 
-function renderIssuePlanningComment(issueNumber: number): string {
+function renderIssuePlanningComment(issueNumber: number, githubRepo: string): string {
   return [
-    "deadloop skipped automated implementation because this issue describes planning work rather than one implementable change.",
+    "Skipped automated implementation because this looks like a PRD, design, or parent issue.",
     "",
     "## Recovery steps",
     "1. Create a separate implementable issue or split this issue's scope.",
     "2. Give each implementation issue an `## Agent Brief` or `## What to build` section and an `## Acceptance criteria` section.",
-    `3. When an implementation issue is ready, add \`agent:implement\` to that issue. Planning issue: #${issueNumber}`,
+    "3. When an implementation issue is ready, re-queue it safely:",
+    "```bash",
+    `gh issue edit ${issueNumber} -R ${shellQuoteForRenderer(githubRepo)} --remove-label agent:blocked --add-label agent:implement`,
+    "```",
   ].join("\n");
 }
 

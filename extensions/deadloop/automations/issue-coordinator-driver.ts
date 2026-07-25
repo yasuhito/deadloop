@@ -103,8 +103,8 @@ function applyContractMissing(issue: JsonObject, env: ReturnType<typeof envConfi
   });
 }
 
-function blockedComment(issue: JsonObject): string {
-  return renderIssuePlanningComment(Number(issue.number || 0));
+function blockedComment(issue: JsonObject, env: ReturnType<typeof envConfig>): string {
+  return renderIssuePlanningComment(Number(issue.number || 0), env.githubRepo);
 }
 
 function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comment: string, fixture: JsonObject | null): boolean {
@@ -284,7 +284,7 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   if (issuePlan.kind === "planning_blocked") {
-    const comment = blockedComment(issue);
+    const comment = blockedComment(issue, env);
     if (!applyBlocked(issue, env, comment, fixture)) {
       return driverResult("skip", `Issue #${issue.number} changed before the planning gate; no workflow state was mutated`, {
         driverAction: "planning_blocked_stale", issueNumber: issue.number,
