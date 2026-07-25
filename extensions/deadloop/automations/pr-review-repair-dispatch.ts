@@ -9,7 +9,6 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { validatePromise } = require("./extract-worker-promise.ts");
 const {
   decideTechnicalReviewFailure,
-  renderRepairMarker,
   renderTechnicalFailureMarker,
   reviewOutcomeFingerprint,
   selectRepairAttempt,
