@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const ledger = readFileSync("docs/cucumber-migration-ledger.md", "utf8");
 const classification = readFileSync("docs/cucumber-test-classification.md", "utf8");
+const boundedRecoveryMigration = readFileSync("docs/cucumber-bounded-pr-recovery-migration.md", "utf8");
 const rows = [...ledger.matchAll(/^\| (T\d{3}) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|/gm)].map((match) => ({
   id: match[1],
   initial: match[2].trim(),
@@ -22,6 +23,14 @@ const expectedOriginalClassifications = [
 ].sort(({ id: left }, { id: right }) => left.localeCompare(right));
 const deletionCandidates = ["T043", "T049", "T055", "T056", "T057", "T072", "T366", "T367", "T368"];
 const cucumberResults = new Set(["移行済み", "Vitest 継続へ再分類", "同じ保証へ統合"]);
+const boundedRecoveryResults = [
+  ...boundedRecoveryMigration.matchAll(/^\| ((?:T\d{3})(?:, T\d{3})*) \| [^|]+ \| ([^|]+) \|/gm),
+].flatMap((match) =>
+  match[1].split(", ").map((id) => ({
+    id,
+    final: match[2].trim().split("（")[0],
+  })),
+);
 const focusedVitestIds = [
   "T001",
   "T052",
@@ -69,6 +78,14 @@ describe("Cucumber migration ledger", () => {
     expect(rows.filter(({ id }) => deletionCandidates.includes(id)).map(({ final }) => final)).toEqual(
       deletionCandidates.map(() => "削除済み"),
     );
+  });
+
+  it("agrees with every final result in the bounded recovery migration record", () => {
+    const ledgerResults = new Map(rows.map(({ id, final }) => [id, final]));
+
+    expect(
+      boundedRecoveryResults.filter(({ id, final }) => ledgerResults.get(id) !== final),
+    ).toEqual([]);
   });
 
   it("records focused Vitest classifications resolved by their migration records", () => {
