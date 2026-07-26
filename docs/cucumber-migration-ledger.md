@@ -226,8 +226,8 @@
 | T206 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T207 | Cucumber候補 | 同じ保証へ統合 | [cucumber-worker-launch-monitoring-migration.md](cucumber-worker-launch-monitoring-migration.md) |
 | T208 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
-| T209 | Cucumber候補 | 同じ保証へ統合 | `automation-driver-results.feature.md` の処理不要時にプロンプトを送らない保証へ統合 |
-| T210 | Cucumber候補 | 同じ保証へ統合 | `worktree-cleanup-safety.feature.md` の片付け結果だけを処理する保証へ統合 |
+| T209 | Cucumber候補 | Vitest 継続へ再分類 | 候補なし入力から Issue 調整役が `skip` を返す決定論的な遷移を局所診断するため `test/issue-coordinator-driver.test.ts` に残す |
+| T210 | Cucumber候補 | Vitest 継続へ再分類 | 片付けだけの入力から Issue 調整役が `cleanup_applied` を返す決定論的な遷移を局所診断するため `test/issue-coordinator-driver.test.ts` に残す |
 | T211 | Cucumber候補 | 移行済み | [cucumber-issue-coordination-verification.md](cucumber-issue-coordination-verification.md) |
 | T212 | Cucumber候補 | 移行済み | [cucumber-issue-coordination-verification.md](cucumber-issue-coordination-verification.md) |
 | T213 | Cucumber候補 | 移行済み | [cucumber-issue-coordination-verification.md](cucumber-issue-coordination-verification.md) |
@@ -237,7 +237,7 @@
 | T217 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T218 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-worker-launch-monitoring-migration.md](cucumber-worker-launch-monitoring-migration.md) |
 | T219 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
-| T220 | Cucumber候補 | 同じ保証へ統合 | `project-check-safety.feature.md` の実行時成果物を隔離・復元する保証へ統合 |
+| T220 | Cucumber候補 | Vitest 継続へ再分類 | Issue 調整役の Worker プロンプトに `run-project-check.ts` を配線する静的境界を局所診断するため `test/issue-coordinator-driver.test.ts` に残す |
 | T221 | Cucumber候補 | Vitest 継続へ再分類 | PR 作成前の検証指示を局所化するプロンプト境界として `test/issue-coordinator-driver.test.ts` に残す |
 | T222 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T223 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
