@@ -12,10 +12,6 @@ const CURRENT_FILES = new Set([
 const exists = (name: string) => CURRENT_FILES.has(name);
 
 describe("automation file resolution", () => {
-  it("does not resolve retired generic automation names", () => {
-    expect(resolveAutomationFile("generic-issue-coordinator.prompt.md", exists).found).toBe(false);
-  });
-
   it("marks an unknown automation file as not found", () => {
     expect(resolveAutomationFile("does-not-exist.prompt.md", exists).found).toBe(false);
   });

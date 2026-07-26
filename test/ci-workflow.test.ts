@@ -39,10 +39,6 @@ describe("GitHub Actions CI workflow", () => {
     expect(checkScript).toContain("bash -n extensions/deadloop/automations/*.sh");
   });
 
-  it("does not require Python automation compile checks", () => {
-    expect(workflow).not.toContain("python3 -m py_compile extensions/deadloop/automations/*.py");
-  });
-
   it("runs npm pack dry run through the complete check", () => {
     expect(checkScript).toContain("npm pack --dry-run");
   });

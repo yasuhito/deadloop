@@ -48,7 +48,9 @@ The following nearby classifications remain in Vitest because they retain lower-
 - T222–T224 diagnose environment wiring and renderer selection.
 - T225–T229 cover the pure internal planning function.
 - T235–T242 cover prompt rendering, escaping, validation commands, and static wiring.
-- T218 and T220–T221 belong to the worker completion and monitoring contract in Issue #119.
+- T218 belongs to the worker completion and monitoring contract in Issue #119.
+- T220 remains in Vitest to diagnose the static `run-project-check.ts` wiring in the Issue coordinator's Worker prompt; the project-check acceptance scenario exercises runtime isolation and restoration instead of this prompt boundary.
+- T221 remains in Vitest to diagnose the prompt boundary before PR creation.
 - T230–T234 belong to the detailed human-facing recovery display migration rather than the selected-Issue transition in Issue #118.
 
-T209 (no selected candidate) and T210 (cleanup-only execution) are outside Issue #118's selected-Issue premise and remain for a separate migration boundary. No classification-table deletion candidate applies to this change.
+T209 (no selected candidate) and T210 (cleanup-only execution) are outside Issue #118's selected-Issue premise. They remain in Vitest to diagnose the Issue coordinator's deterministic `skip` and `cleanup_applied` transitions from their original fixture inputs; the nearby acceptance scenarios do not exercise those transitions. No classification-table deletion candidate applies to this change.
