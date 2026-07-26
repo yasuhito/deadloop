@@ -31,6 +31,10 @@ const boundedRecoveryResults = [
     final: match[2].trim().split("（")[0],
   })),
 );
+const migratedPrSelectionIds = [
+  ...Array.from({ length: 12 }, (_, index) => `T${331 + index}`),
+  ...Array.from({ length: 3 }, (_, index) => `T${346 + index}`),
+];
 const focusedVitestIds = [
   "T001",
   "T052",
@@ -86,6 +90,12 @@ describe("Cucumber migration ledger", () => {
     expect(
       boundedRecoveryResults.filter(({ id, final }) => ledgerResults.get(id) !== final),
     ).toEqual([]);
+  });
+
+  it("records migrated PR-selection guarantees independently of retained Vitest tests", () => {
+    expect(rows.filter(({ id }) => migratedPrSelectionIds.includes(id)).map(({ final }) => final)).toEqual(
+      migratedPrSelectionIds.map(() => "移行済み"),
+    );
   });
 
   it("records focused Vitest classifications resolved by their migration records", () => {

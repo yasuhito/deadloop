@@ -348,24 +348,24 @@
 | T328 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T329 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T330 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
-| T331 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T332 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T333 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T334 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T335 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T336 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T337 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T338 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T339 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T340 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T341 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T342 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
+| T331 | Cucumber候補 | 移行済み | `pr-reviewer.precheck.sh` と偽 `gh` の接続および終了コードの局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T332 | Cucumber候補 | 移行済み | 自動マージ無効値をシェル環境から選定処理へ渡す接続の局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T333 | Cucumber候補 | 移行済み | 自動マージ有効値をシェル環境から選定処理へ渡す接続の局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T334 | Cucumber候補 | 移行済み | CI 状態を読み込んだ事前確認の終了コードの局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T335 | Cucumber候補 | 移行済み | 現在時刻と外部レビュー待機時間をシェル環境から渡す接続の局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T336 | Cucumber候補 | 移行済み | 外部レビュー無効値をシェル環境から渡す接続の局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T337 | Cucumber候補 | 移行済み | 外部レビュー有効値と Copilot の状態を事前確認へ渡す接続の局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T338 | Cucumber候補 | 移行済み | CodeRabbit の状態を事前確認へ渡したときの終了コードの局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T339 | Cucumber候補 | 移行済み | シェル事前確認が下書きに返す終了コードの局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T340 | Cucumber候補 | 移行済み | 判定 CLI の入力読込みと `request_external_review` の直列化の局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T341 | Cucumber候補 | 移行済み | 判定 CLI の時刻入力と `wait_external_review` の直列化の局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T342 | Cucumber候補 | 移行済み | 判定 CLI の時刻入力と `fallback_review` の直列化の局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
 | T343 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T344 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
 | T345 | Vitest継続 | Vitest 継続 | [分類表の診断価値](cucumber-test-classification.md) |
-| T346 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T347 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
-| T348 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
+| T346 | Cucumber候補 | 移行済み | 偽 `herdr agent list` の出力とシェル事前確認の接続の局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T347 | Cucumber候補 | 移行済み | 稼働中担当者を示す偽 `herdr` 出力とシェル事前確認の接続の局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
+| T348 | Cucumber候補 | 移行済み | 停止ラベルの環境設定とシェル事前確認の終了コードの局所診断は Vitest に残す（[移行記録](cucumber-migration-record.md)） |
 | T349 | Cucumber候補 | 移行済み | [cucumber-requeued-pr-review-migration.md](cucumber-requeued-pr-review-migration.md) |
 | T350 | Cucumber候補 | 移行済み | [cucumber-migration-record.md](cucumber-migration-record.md) |
 | T351 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-migration-record.md](cucumber-migration-record.md) |
