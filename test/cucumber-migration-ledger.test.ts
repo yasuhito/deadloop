@@ -94,25 +94,28 @@ describe("Cucumber migration ledger", () => {
     );
   });
 
-  it("retains T209 for the candidate-free coordinator transition", () => {
-    expect(rows.find(({ id }) => id === "T209")).toMatchObject({
-      final: "Vitest 継続へ再分類",
-      evidence: expect.stringContaining("`skip`"),
-    });
+  it("classifies T209 as retained in Vitest", () => {
+    expect(rows.find(({ id }) => id === "T209")?.final).toBe("Vitest 継続へ再分類");
   });
 
-  it("retains T210 for the cleanup-only coordinator transition", () => {
-    expect(rows.find(({ id }) => id === "T210")).toMatchObject({
-      final: "Vitest 継続へ再分類",
-      evidence: expect.stringContaining("`cleanup_applied`"),
-    });
+  it("records T209 evidence for the candidate-free coordinator transition", () => {
+    expect(rows.find(({ id }) => id === "T209")?.evidence).toContain("`skip`");
   });
 
-  it("retains T220 for the project-check prompt boundary", () => {
-    expect(rows.find(({ id }) => id === "T220")).toMatchObject({
-      final: "Vitest 継続へ再分類",
-      evidence: expect.stringContaining("`run-project-check.ts`"),
-    });
+  it("classifies T210 as retained in Vitest", () => {
+    expect(rows.find(({ id }) => id === "T210")?.final).toBe("Vitest 継続へ再分類");
+  });
+
+  it("records T210 evidence for the cleanup-only coordinator transition", () => {
+    expect(rows.find(({ id }) => id === "T210")?.evidence).toContain("`cleanup_applied`");
+  });
+
+  it("classifies T220 as retained in Vitest", () => {
+    expect(rows.find(({ id }) => id === "T220")?.final).toBe("Vitest 継続へ再分類");
+  });
+
+  it("records T220 evidence for the project-check prompt boundary", () => {
+    expect(rows.find(({ id }) => id === "T220")?.evidence).toContain("`run-project-check.ts`");
   });
 
   it("does not treat the original classification as migration evidence", () => {
