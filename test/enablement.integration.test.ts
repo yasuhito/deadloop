@@ -72,7 +72,7 @@ function repositoryTemplate(separateGitDir: boolean): string {
 # keep explicit origin/refspec fetches observable through the real Git command.
 if [ "$3" = "fetch" ] && [ "$#" -eq 4 ]; then
   exit 0
-elif [ "$3" = "show" ] && [ "\${4##*:}" = "deadloop.json" ]; then
+elif [ "$3" = "show" ] && [ "\${4##*:}" = "deadloop.json" ] && [ ! -f "$2/../real-policy-lookup" ]; then
   exit 1
 elif [ "$3 $4" = "remote get-url" ]; then
   repo="$2"
@@ -100,7 +100,7 @@ esac
   return root;
 }
 
-function fixtureRepository(options: { separateGitDir?: boolean } = {}) {
+function fixtureRepository(options: { separateGitDir?: boolean; realPolicyLookup?: boolean } = {}) {
   const separateGitDir = options.separateGitDir === true;
   const templateRoot = repositoryTemplate(separateGitDir);
   const root = path.join(fixtureParent, "fixture");
@@ -119,6 +119,7 @@ function fixtureRepository(options: { separateGitDir?: boolean } = {}) {
 \tinsteadOf = https://github.com/old/demo.git
 \tinsteadOf = https://github.com/new/demo.git
 `);
+  if (options.realPolicyLookup) writeFileSync(path.join(root, "real-policy-lookup"), "");
   return { root, repoPath };
 }
 
@@ -766,7 +767,7 @@ describe("enablement command integration", () => {
   });
 
   it("infers base branch and worktree root when a configured project omits both", async () => {
-    const { root, repoPath } = fixtureRepository();
+    const { root, repoPath } = fixtureRepository({ realPolicyLookup: true });
     writeConfig(root, repoPath);
     git(repoPath, ["checkout", "--quiet", "-b", "invalid-main"]);
     writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({ workerAgent: "invalid" }));
