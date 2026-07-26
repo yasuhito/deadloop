@@ -323,7 +323,7 @@
 | T303 | Cucumber候補 | 移行済み | [cucumber-bounded-pr-recovery-migration.md](cucumber-bounded-pr-recovery-migration.md) |
 | T304 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-bounded-pr-recovery-migration.md](cucumber-bounded-pr-recovery-migration.md) |
 | T305 | Cucumber候補 | Vitest 継続へ再分類 | [cucumber-bounded-pr-recovery-migration.md](cucumber-bounded-pr-recovery-migration.md) |
-| T306 | Cucumber候補 | 移行済み | [cucumber-bounded-pr-recovery-migration.md](cucumber-bounded-pr-recovery-migration.md) |
+| T306 | Cucumber候補 | 同じ保証へ統合 | [cucumber-bounded-pr-recovery-migration.md](cucumber-bounded-pr-recovery-migration.md) |
 | T307 | Cucumber候補 | 移行済み | [cucumber-pr-review-transitions-migration.md](cucumber-pr-review-transitions-migration.md) |
 | T308 | Cucumber候補 | 移行済み | [cucumber-pr-review-transitions-migration.md](cucumber-pr-review-transitions-migration.md) |
 | T309 | Cucumber候補 | 移行済み | [cucumber-pr-review-transitions-migration.md](cucumber-pr-review-transitions-migration.md) |

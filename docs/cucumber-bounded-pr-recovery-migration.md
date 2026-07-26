@@ -23,7 +23,8 @@ Issue [#116](https://github.com/yasuhito/deadloop/issues/116) では、PR の自
 | T298 | 二度目の技術的なレビュー失敗は再試行しない／二度目の技術的なレビュー失敗後もレビュー対象に残す／二度目の技術的なレビュー失敗は人間対応へ移る／二度目の技術的なレビュー失敗は回復案内を残す | Vitest 継続へ再分類（受け入れシナリオ併存） |
 | T301 | 該当なし | Vitest 継続へ再分類（プロンプトの診断） |
 | T302 | 該当なし | Vitest 継続へ再分類（プロンプトの診断） |
-| T303, T306 | 古い pull request head の修正は push しない | 移行済み（Vitest の診断テストを併存） |
+| T303 | 古い pull request head の修正は push しない | 移行済み（Vitest の診断テストを併存） |
+| T306 | 古い pull request head の修正は push しない | 同じ保証へ統合（Vitest の診断テストを併存） |
 | T304 | 修正のチェックは push 直前の head 確認より先に実行する | Vitest 継続へ再分類（受け入れシナリオ併存） |
 | T305 | 修正は確認した既存 branch へ非強制でだけ push する | Vitest 継続へ再分類（受け入れシナリオ併存） |
 | T318 | 競合した pull request は一度だけ専用の回復作業を開始する | 移行済み（Vitest の診断テストを併存） |
