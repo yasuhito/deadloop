@@ -1,8 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { schedulerLockName } from "../src/project-identity";
 const { withEnabledProjectLock } = require("../src/enabled-operation.cjs");
@@ -17,6 +17,12 @@ const originalPath = process.env.PATH;
 const originalDeadloop = process.env.DEADLOOP;
 const originalDeadloopAutomations = process.env.DEADLOOP_AUTOMATIONS;
 const sandboxes: string[] = [];
+const retainedExtensionShutdowns: Array<() => Promise<void>> = [];
+// The extension resolves its state directory when the module loads. Reusing this
+// stable path lets every extension factory get fresh closure state without paying
+// for a transformed module reload; fixtureRepository replaces all files per test.
+const repositoryTemplates = new Map<boolean, string>();
+const fixtureParent = mkdtempSync(path.join(os.tmpdir(), "deadloop-enablement-suite-"));
 const enabledSafetyFields = {
   githubRepositoryId: "R_demo",
   firstEnableAutoMerge: false,
@@ -39,31 +45,36 @@ function gitReportMutationSnapshot(repoPath: string): string {
   });
 }
 
-function fixtureRepository(options: { separateGitDir?: boolean } = {}) {
-  const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-enablement-"));
-  sandboxes.push(root);
+function repositoryTemplate(separateGitDir: boolean): string {
+  const cached = repositoryTemplates.get(separateGitDir);
+  if (cached) return cached;
+
+  const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-enablement-template-"));
   const repoPath = path.join(root, "primary");
   mkdirSync(repoPath);
-  const separateGitDir = path.join(root, "external.git");
-  git(repoPath, ["init", "--quiet", ...(options.separateGitDir ? [`--separate-git-dir=${separateGitDir}`] : [])]);
+  const externalGitDir = path.join(root, "external.git");
+  git(repoPath, ["init", "--quiet", ...(separateGitDir ? [`--separate-git-dir=${externalGitDir}`] : [])]);
   git(repoPath, ["config", "user.email", "test@example.com"]);
   git(repoPath, ["config", "user.name", "Test"]);
   writeFileSync(path.join(repoPath, "README.md"), "fixture\n");
   git(repoPath, ["add", "README.md"]);
   git(repoPath, ["commit", "--quiet", "-m", "initial"]);
-  const barePath = path.join(root, "origin.git");
-  execFileSync("git", ["clone", "--quiet", "--bare", repoPath, barePath]);
+  execFileSync("git", ["clone", "--quiet", "--bare", repoPath, path.join(root, "origin.git")]);
   git(repoPath, ["remote", "add", "origin", "https://github.com/owner/demo.git"]);
-  writeFileSync(path.join(root, ".gitconfig"), `[url "file://${barePath}"]
-\tinsteadOf = https://github.com/owner/demo.git
-\tinsteadOf = https://github.com/old/demo.git
-\tinsteadOf = https://github.com/new/demo.git
-`);
+  git(repoPath, ["update-ref", "refs/remotes/origin/master", "master"]);
+
   const binDir = path.join(root, "bin");
   mkdirSync(binDir);
   const gitPath = path.join(binDir, "git");
   writeFileSync(gitPath, `#!/bin/sh
-if [ "$3 $4" = "remote get-url" ]; then
+# The immutable template already contains the fetched base ref, and these tests
+# do not provide repository policy. Avoid only the repeated policy refresh and
+# keep explicit origin/refspec fetches observable through the real Git command.
+if [ "$3" = "fetch" ] && [ "$#" -eq 4 ]; then
+  exit 0
+elif [ "$3" = "show" ] && [ "\${4##*:}" = "deadloop.json" ] && [ ! -f "$2/../real-policy-lookup" ]; then
+  exit 1
+elif [ "$3 $4" = "remote get-url" ]; then
   repo="$2"
   if printf '%s\\n' "$@" | grep -qx -- '--push'; then
     urls=$(/usr/bin/git -C "$repo" config --get-all remote.origin.pushurl)
@@ -85,6 +96,30 @@ case "$*" in
 esac
 `);
   chmodSync(ghPath, 0o755);
+  repositoryTemplates.set(separateGitDir, root);
+  return root;
+}
+
+function fixtureRepository(options: { separateGitDir?: boolean; realPolicyLookup?: boolean } = {}) {
+  const separateGitDir = options.separateGitDir === true;
+  const templateRoot = repositoryTemplate(separateGitDir);
+  const root = path.join(fixtureParent, "fixture");
+  rmSync(root, { recursive: true, force: true });
+  cpSync(templateRoot, root, { recursive: true });
+  sandboxes.push(root);
+  const repoPath = path.join(root, "primary");
+  const barePath = path.join(root, "origin.git");
+  if (separateGitDir) {
+    writeFileSync(path.join(repoPath, ".git"), `gitdir: ${path.join(root, "external.git")}\n`);
+    const configPath = path.join(root, "external.git", "config");
+    writeFileSync(configPath, readFileSync(configPath, "utf8").replaceAll(templateRoot, root));
+  }
+  writeFileSync(path.join(root, ".gitconfig"), `[url "file://${barePath}"]
+\tinsteadOf = https://github.com/owner/demo.git
+\tinsteadOf = https://github.com/old/demo.git
+\tinsteadOf = https://github.com/new/demo.git
+`);
+  if (options.realPolicyLookup) writeFileSync(path.join(root, "real-policy-lookup"), "");
   return { root, repoPath };
 }
 
@@ -113,7 +148,6 @@ async function loadExtension(
   process.env.HOME = root;
   process.env.PI_CODING_AGENT_DIR = path.join(root, ".pi", "agent");
   process.env.PATH = `${path.join(root, "bin")}:${originalPath || ""}`;
-  vi.resetModules();
   const commands = new Map<string, CommandHandler>();
   const events = new Map<string, EventHandler>();
   const messages: string[] = [];
@@ -124,11 +158,22 @@ async function loadExtension(
     exec: async (command: string, args: string[]) => {
       if (command === "git") {
         if (args.includes("--show-toplevel")) await options.beforePrimaryCheckout?.();
+        const primaryRepoPath = path.join(root, "primary");
+        if (args[1] === primaryRepoPath && args[2] === "rev-parse" && args.length === 4) {
+          if (args[3] === "--show-toplevel") return { code: 0, stdout: `${primaryRepoPath}\n`, stderr: "" };
+          const gitFile = path.join(primaryRepoPath, ".git");
+          const gitDir = existsSync(path.join(root, "external.git"))
+            ? path.join(root, "external.git")
+            : gitFile;
+          if (gitDir && (args[3] === "--git-dir" || args[3] === "--git-common-dir")) {
+            return { code: 0, stdout: `${gitDir}\n`, stderr: "" };
+          }
+        }
         if (args.includes("get-url")) {
           const remote = args.includes("--push") ? options.pushRemote || "https://github.com/owner/demo.git" : options.fetchRemote || "https://github.com/owner/demo.git";
           return { code: 0, stdout: `${remote}\n`, stderr: "" };
         }
-        if (args.includes("--symbolic-full-name")) return options.noUpstream ? { code: 128, stdout: "", stderr: "no upstream" } : { code: 0, stdout: `${options.upstream || ""}\n`, stderr: "" };
+        if (args.includes("--symbolic-full-name")) return options.noUpstream ? { code: 128, stdout: "", stderr: "no upstream" } : { code: 0, stdout: `${options.upstream || "origin/master"}\n`, stderr: "" };
         if (args.includes("show")) return { code: 1, stdout: "", stderr: "missing" };
         try {
           return { code: 0, stdout: execFileSync("git", args, { encoding: "utf8" }), stderr: "" };
@@ -174,6 +219,13 @@ async function loadExtension(
       ? { beforeDisableLock: options.beforeDisableLock, afterEnablementSaved: options.afterEnablementSaved }
       : undefined,
   });
+  retainedExtensionShutdowns.push(async () => {
+    await events.get("session_shutdown")?.({}, {
+      cwd: path.join(root, "primary"),
+      mode: "interactive",
+      ui: { notify: () => undefined, setStatus: () => undefined },
+    });
+  });
   return { commands, events, ghCommands, messages };
 }
 
@@ -205,10 +257,15 @@ async function waitForFile(filePath: string): Promise<void> {
   throw new Error(`timed out waiting for ${filePath}`);
 }
 
-afterEach(() => {
+afterAll(() => {
+  for (const templateRoot of repositoryTemplates.values()) rmSync(templateRoot, { recursive: true, force: true });
+  rmSync(fixtureParent, { recursive: true, force: true });
+});
+
+afterEach(async () => {
+  for (const shutdown of retainedExtensionShutdowns.splice(0)) await shutdown();
   vi.restoreAllMocks();
   vi.useRealTimers();
-  vi.resetModules();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
   if (originalStateDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -407,6 +464,7 @@ describe("enablement command integration", () => {
     git(otherRepoPath, ["add", "README.md"]);
     git(otherRepoPath, ["commit", "--quiet", "-m", "initial"]);
     git(otherRepoPath, ["remote", "add", "origin", "https://github.com/owner/demo.git"]);
+    git(otherRepoPath, ["update-ref", "refs/remotes/origin/master", "master"]);
     let releasePreflight!: () => void;
     let preflightStarted!: () => void;
     const started = new Promise<void>((resolve) => { preflightStarted = resolve; });
@@ -709,7 +767,7 @@ describe("enablement command integration", () => {
   });
 
   it("infers base branch and worktree root when a configured project omits both", async () => {
-    const { root, repoPath } = fixtureRepository();
+    const { root, repoPath } = fixtureRepository({ realPolicyLookup: true });
     writeConfig(root, repoPath);
     git(repoPath, ["checkout", "--quiet", "-b", "invalid-main"]);
     writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({ workerAgent: "invalid" }));
