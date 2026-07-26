@@ -17,6 +17,7 @@ const originalPath = process.env.PATH;
 const originalDeadloop = process.env.DEADLOOP;
 const originalDeadloopAutomations = process.env.DEADLOOP_AUTOMATIONS;
 const sandboxes: string[] = [];
+const retainedExtensionShutdowns: Array<() => Promise<void>> = [];
 // The extension resolves its state directory when the module loads. Reusing this
 // stable path lets every extension factory get fresh closure state without paying
 // for a transformed module reload; fixtureRepository replaces all files per test.
@@ -217,6 +218,13 @@ async function loadExtension(
       ? { beforeDisableLock: options.beforeDisableLock, afterEnablementSaved: options.afterEnablementSaved }
       : undefined,
   });
+  retainedExtensionShutdowns.push(async () => {
+    await events.get("session_shutdown")?.({}, {
+      cwd: path.join(root, "primary"),
+      mode: "interactive",
+      ui: { notify: () => undefined, setStatus: () => undefined },
+    });
+  });
   return { commands, events, ghCommands, messages };
 }
 
@@ -253,7 +261,8 @@ afterAll(() => {
   rmSync(fixtureParent, { recursive: true, force: true });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const shutdown of retainedExtensionShutdowns.splice(0)) await shutdown();
   vi.restoreAllMocks();
   vi.useRealTimers();
   if (originalHome === undefined) delete process.env.HOME;
