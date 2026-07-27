@@ -1,3 +1,10 @@
+type IssuePlanningCommentInput = {
+  githubRepo: string;
+  blockedLabel: string;
+  readyLabel: string;
+  implementLabel: string;
+};
+
 type IssueBlockedCommentInput = {
   issueNumber: number;
   githubRepo: string;
@@ -20,9 +27,10 @@ type IssueWorkerPromptInput = {
   issueTitle: string;
   issueUrl: string;
   githubRepo: string;
-  automationDir: string;
+  automationDir?: string;
   workerInstructions: string;
   checkCommand: string;
+  validationCommand?: string;
   promiseFile: string;
 };
 
@@ -75,6 +83,21 @@ function markdownCode(value: string): string {
   return oneLineForRenderer(value).replace(/`/g, "\\`");
 }
 
+function renderIssuePlanningComment(input: IssuePlanningCommentInput): string {
+  return [
+    "Skipped automated implementation because this looks like a PRD, design, or parent issue.",
+    "",
+    "## Recovery steps",
+    "1. Create a separate implementable issue or split this issue's scope.",
+    "2. Give each implementation issue an `## Agent Brief` or `## What to build` section and an `## Acceptance criteria` section.",
+    "3. Note the number of the implementation issue you created or split out, then re-queue that issue safely (replace `123` below):",
+    "```bash",
+    "implementable_issue_number=123",
+    `gh issue edit "$implementable_issue_number" -R ${shellQuoteForRenderer(input.githubRepo)} --remove-label ${shellQuoteForRenderer(input.blockedLabel)} --add-label ${shellQuoteForRenderer(input.readyLabel)} --add-label ${shellQuoteForRenderer(input.implementLabel)}`,
+    "```",
+  ].join("\n");
+}
+
 function renderIssueBlockedComment(input: IssueBlockedCommentInput): string {
   const issue = Number(input.issueNumber);
   const promiseFile = optionalValue(input.promiseFile, "<promiseFile>");
@@ -119,8 +142,10 @@ gh issue edit ${issue} -R ${shellQuoteForRenderer(input.githubRepo)} --remove-la
 
 function renderIssueWorkerPrompt(input: IssueWorkerPromptInput): string {
   const issueTitle = oneLineForRenderer(input.issueTitle);
-  const projectCheck = `node ${shellQuoteForRenderer(pathForProjectCheck(input.automationDir))} --command ${shellQuoteForRenderer(input.checkCommand)}`;
-  const validationFence = markdownFence(projectCheck);
+  const validationCommand = input.validationCommand || (input.automationDir
+    ? `node ${shellQuoteForRenderer(pathForProjectCheck(input.automationDir))} --command ${shellQuoteForRenderer(input.checkCommand)}`
+    : input.checkCommand);
+  const validationFence = markdownFence(validationCommand);
 
   return `Launch reason: ${oneLineForRenderer(input.launchReason)}
 
@@ -136,9 +161,9 @@ Contract:
 - Respect any \`Out of scope\` section.
 - ${oneLineForRenderer(input.workerInstructions)}
 - Prefer a red-green-refactor loop when practical.
-- Run relevant validation and run the configured check only through the isolation helper:
+- Run relevant validation and at minimum pass this check command:
   ${validationFence}bash
-  ${projectCheck}
+  ${validationCommand}
   ${validationFence}
 - Create at least one conventional commit.
 
@@ -161,4 +186,4 @@ function pathForProjectCheck(automationDir: string): string {
   return `${automationDir.replace(/\/$/, "")}/run-project-check.ts`;
 }
 
-module.exports = { renderIssueBlockedComment, renderIssueWorkerPrompt };
+module.exports = { renderIssueBlockedComment, renderIssuePlanningComment, renderIssueWorkerPrompt };

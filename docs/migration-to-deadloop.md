@@ -22,6 +22,8 @@ Local config path:
 Pi commands:
 
 ```text
+/deadloop-enable
+/deadloop-disable
 /deadloop-status
 /deadloop-doctor
 ```
@@ -63,10 +65,11 @@ If your target repository has shared policy, rename it:
 git mv pi-looper.project.json deadloop.json
 ```
 
-Update runbooks and scripts to use `/deadloop-status`, `/deadloop-doctor`, and `DEADLOOP_*` variables.
+Update runbooks and scripts to use `/deadloop-enable`, `/deadloop-disable`, `/deadloop-status`, `/deadloop-doctor`, and `DEADLOOP_*` variables. Re-enable each repository with `/deadloop-enable` after migrating.
 
 ## Not changed
 
 - v0 still runs as a Pi package.
 - v0 still uses Herdr as the default runner.
-- The safety model, auto-merge gates, GitHub labels, and promise-file contract are unchanged.
+- Existing auto-merge gates, GitHub labels, and the promise-file contract are unchanged.
+- Local scheduling now requires explicit `/deadloop-enable` permission, with enablement state and mutation guards kept outside the repository.

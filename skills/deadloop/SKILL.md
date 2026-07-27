@@ -35,22 +35,22 @@ pi install /absolute/path/to/deadloop
 
 ## Configure safely
 
-1. Copy the example project config into Pi's local state directory:
-
-   ```bash
-   mkdir -p ~/.pi/agent/deadloop
-   cp ~/.pi/agent/git/github.com/yasuhito/deadloop/extensions/deadloop/projects.example.json ~/.pi/agent/deadloop/projects.json
-   $EDITOR ~/.pi/agent/deadloop/projects.json
-   ```
-
-2. Keep `autoMerge: false` for first rollout.
-3. Create the GitHub labels documented in `README.md` and `docs/public-package-setup.md`.
-4. Start from the target repository checkout:
+1. Start Pi from the target repository's normal Git checkout:
 
    ```bash
    cd /absolute/path/to/target/repo
    pi
    ```
+
+2. Explicitly enable deadloop in Pi:
+
+   ```text
+   /deadloop-enable
+   ```
+
+   Enablement verifies GitHub write access and creates any missing standard labels. It starts with `autoMerge: false`.
+
+3. Optionally copy `projects.example.json` to `~/.pi/agent/deadloop/projects.json` only when the user needs overrides such as a custom worktree root. Manual label creation is also optional.
 
 ## Rollout guidance
 

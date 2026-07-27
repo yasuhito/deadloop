@@ -1,0 +1,27 @@
+{
+  "changesRequested": {
+    "headOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reviewFingerprint": "1234567890abcdef1234",
+    "findings": [
+      {
+        "title": "Internal artifact",
+        "body": "Use repository evidence.",
+        "path": ".pi-subagents/artifacts/reviewer-output.md",
+        "severity": "major"
+      }
+    ]
+  },
+  "repairSucceeded": {
+    "originalHeadOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "newHeadOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "attemptKey": "abcdef1234567890abcd",
+    "repairs": [
+      {
+        "title": "Internal artifact",
+        "summary": "Removed the unsafe reference.",
+        "paths": [".deadloop/runtime/result.json"]
+      }
+    ],
+    "checks": []
+  }
+}

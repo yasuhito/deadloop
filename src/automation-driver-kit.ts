@@ -17,17 +17,26 @@ export type CommandRunner = {
   runJson(args: string[], options?: { input?: string }): any;
 };
 
+const COMMAND_TIMEOUT_MS = 20_000;
+
 function driverResult(action: DriverResult["action"], summary: string, extra: JsonObject = {}): DriverResult {
   return { action, summary, ...extra };
 }
 
-function createCommandRunner(): CommandRunner {
+function createCommandRunner(config: { timeoutMs?: number } = {}): CommandRunner {
+  const timeoutMs = config.timeoutMs ?? COMMAND_TIMEOUT_MS;
+
   function runText(args: string[], options: { input?: string; check?: boolean } = {}): string {
     const completed = spawnSync(args[0], args.slice(1), {
       input: options.input,
       encoding: "utf8",
       stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      timeout: timeoutMs,
     });
+    if ((completed.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+      throw new Error(`command timed out after ${timeoutMs}ms: ${args.join(" ")}`);
+    }
+    if (completed.error) throw completed.error;
     if (options.check !== false && completed.status !== 0) {
       throw new Error((completed.stderr || completed.stdout || `command failed: ${args.join(" ")}`).trim());
     }
@@ -81,6 +90,7 @@ function parseFixtureArg(argv: string[]): { fixture?: string } {
 }
 
 module.exports = {
+  COMMAND_TIMEOUT_MS,
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
   driverResult,

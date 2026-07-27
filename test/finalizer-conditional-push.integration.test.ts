@@ -1,0 +1,195 @@
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+
+const { finalizeReviewRepair } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
+const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
+const { finalizeBranchUpdate } = require("../extensions/deadloop/automations/pr-branch-update-finalize.ts");
+
+const sandboxes: string[] = [];
+const branch = "agent/issue-1";
+const ref = `refs/heads/${branch}`;
+
+function git(repo: string, args: string[]): string {
+  return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+}
+
+function fixture() {
+  const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-finalizer-push-"));
+  sandboxes.push(root);
+  const repo = path.join(root, "repo");
+  const remote = path.join(root, "origin.git");
+  mkdirSync(repo);
+  git(repo, ["init", "--quiet"]);
+  git(repo, ["checkout", "--quiet", "-b", branch]);
+  git(repo, ["config", "user.email", "test@example.com"]);
+  git(repo, ["config", "user.name", "Test"]);
+  writeFileSync(path.join(repo, "file.txt"), "root\n");
+  git(repo, ["add", "file.txt"]);
+  git(repo, ["commit", "--quiet", "-m", "root"]);
+  const rootOid = git(repo, ["rev-parse", "HEAD"]);
+  writeFileSync(path.join(repo, "file.txt"), "expected\n");
+  git(repo, ["commit", "--quiet", "-am", "expected"]);
+  const expectedHead = git(repo, ["rev-parse", "HEAD"]);
+  execFileSync("git", ["init", "--quiet", "--bare", remote]);
+  git(repo, ["remote", "add", "origin", "https://github.com/owner/repo.git"]);
+  execFileSync("git", ["-C", repo, "push", "--quiet", remote, `${expectedHead}:${ref}`]);
+  writeFileSync(path.join(repo, "file.txt"), "candidate\n");
+  git(repo, ["commit", "--quiet", "-am", "candidate"]);
+  const configPath = path.join(root, ".gitconfig");
+  writeFileSync(configPath, `[url "file://${remote}"]\n\tinsteadOf = https://github.com/owner/repo.git\n`);
+  return { repo, remote, rootOid, expectedHead, configPath };
+}
+
+function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind") {
+  const { repo, remote, rootOid, expectedHead, configPath } = fixture();
+  const hookPath = path.join(repo, ".git", "hooks", "pre-push");
+  const updateRef = race === "delete"
+    ? `git --git-dir='${remote}' update-ref -d '${ref}'`
+    : `git --git-dir='${remote}' update-ref '${ref}' '${rootOid}'`;
+  writeFileSync(hookPath, `#!/bin/sh\n${updateRef}\n`);
+  chmodSync(hookPath, 0o755);
+  const run = (args: string[]) => {
+    if (args[0] === "node") return { status: 0, stdout: "", stderr: "" };
+    if (args[0] === "git" && args.includes("get-url")) {
+      return { status: 0, stdout: "https://github.com/owner/repo.git\n", stderr: "" };
+    }
+    if (args[0] === "gh" && args[1] === "pr") {
+      return {
+        status: 0,
+        stdout: JSON.stringify({ state: "OPEN", isCrossRepository: false, headRefName: branch, headRefOid: expectedHead }),
+        stderr: "",
+      };
+    }
+    if (args[0] === "gh" && args[1] === "repo") {
+      return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
+    }
+    const result = spawnSync(args[0], args.slice(1), {
+      encoding: "utf8",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: configPath, GIT_CONFIG_NOSYSTEM: "1" },
+    });
+    return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
+  };
+  const common = {
+    repo,
+    projectRepo: repo,
+    githubRepo: "owner/repo",
+    pr: "1",
+    branch,
+    expectedHead,
+    remote: "origin",
+    automationDir: "/automation",
+    stateDir: "/state",
+    enabledAt: 1,
+    checkCommand: "true",
+    resultFile: path.join(path.dirname(repo), "result.json"),
+  };
+  const ops = {
+    run,
+    assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
+  };
+  const result = finalizer === "repair"
+    ? finalizeReviewRepair(common, ops)
+    : finalizeBranchUpdate({ ...common, expectedBase: rootOid }, ops);
+  let remoteHead = "";
+  try {
+    remoteHead = execFileSync("git", ["--git-dir", remote, "rev-parse", "--verify", ref], { encoding: "utf8" }).trim();
+  } catch {}
+  return { action: result.action, remoteHead, rootOid };
+}
+
+afterEach(() => {
+  for (const sandbox of sandboxes.splice(0)) rmSync(sandbox, { recursive: true, force: true });
+});
+
+describe("finalizer exact-head pushes against real remotes", () => {
+  it("atomically writes a blocked receipt when finalizer argument validation fails", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-finalizer-receipt-"));
+    sandboxes.push(root);
+    const resultFile = path.join(root, "result.json");
+    const result = spawnSync("node", [
+      "extensions/deadloop/automations/pr-review-repair-finalize.ts",
+      "--expected-head", "a".repeat(40), "--result-file", resultFile,
+    ], { cwd: process.cwd(), encoding: "utf8" });
+
+    expect({ status: result.status, receipt: JSON.parse(readFileSync(resultFile, "utf8")).action }).toEqual({ status: 2, receipt: "blocked" });
+  });
+
+  function runRenderedRepairFinalizer() {
+    const { repo, remote, expectedHead } = fixture();
+    const root = path.dirname(repo);
+    const bin = path.join(root, "bin");
+    const configDir = path.join(root, "config");
+    const stateDir = path.join(configDir, "deadloop");
+    const runDir = path.join(stateDir, "runs", "rendered");
+    mkdirSync(bin);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
+      repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
+      firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
+      autoMergeAcknowledged: false, enabled: true,
+    }] }));
+    const gitCommand = path.join(bin, "git");
+    writeFileSync(gitCommand, `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2).map((arg) => arg === "https://github.com/owner/repo.git" && (process.argv.includes("push") || process.argv.includes("ls-remote")) ? ${JSON.stringify(remote)} : arg);
+const result = spawnSync("/usr/bin/git", args, {stdio:"inherit"});
+process.exit(result.status ?? 1);
+`);
+    chmodSync(gitCommand, 0o755);
+    const gh = path.join(bin, "gh");
+    writeFileSync(gh, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
+else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isCrossRepository:false,headRefName:"${branch}",headRefOid:"${expectedHead}"}));
+`);
+    chmodSync(gh, 0o755);
+    const promiseFile = path.join(runDir, "promise.json");
+    const automationDir = path.resolve("extensions/deadloop/automations");
+    const rendered = repairWorkerPrompt("1", branch, expectedHead, [], "attempt", promiseFile, repo, {
+      projectId: "demo", repoPath: repo, githubRepo: "owner/repo", stateDir, checkCommand: "true",
+      workerAgent: "pi", workerModel: "", remote: "origin", reviewLabel: "agent:review",
+      reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", automationDir, enabledAt: 1,
+    });
+    const command = rendered.match(/permitted non-force push to the exact branch:\n  (.+)\n- Never edit labels/)?.[1];
+    if (!command) throw new Error("rendered finalizer command was not found");
+    const result = spawnSync("bash", ["-c", command], {
+      cwd: process.cwd(), encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    });
+    const resultFile = path.join(runDir, "finalizer-result.json");
+    const receipt = existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : { action: "missing" };
+    return { result, receipt };
+  }
+
+  it("runs the rendered repair finalizer command without an error", () => {
+    const { result, receipt } = runRenderedRepairFinalizer();
+    expect(result.stderr || receipt.summary || "").toBe("");
+  });
+
+  it("writes the pushed receipt for the rendered repair finalizer command", () => {
+    const { result, receipt } = runRenderedRepairFinalizer();
+    expect({ status: result.status, receipt: receipt.action }).toEqual({ status: 0, receipt: "pushed" });
+  });
+
+  it.each([
+    ["review repair", "repair"],
+    ["branch update", "branch-update"],
+  ] as const)("does not recreate a deleted branch during %s finalization", (_name, finalizer) => {
+    const result = runRace(finalizer, "delete");
+    expect({ action: result.action, remoteHead: result.remoteHead }).toEqual({ action: "stale_head", remoteHead: "" });
+  });
+
+  it.each([
+    ["review repair", "repair"],
+    ["branch update", "branch-update"],
+  ] as const)("does not replace a rewound branch during %s finalization", (_name, finalizer) => {
+    const result = runRace(finalizer, "rewind");
+    expect({ action: result.action, rewoundHeadRetained: result.remoteHead === result.rootOid }).toEqual({
+      action: "stale_head",
+      rewoundHeadRetained: true,
+    });
+  });
+});

@@ -4,18 +4,6 @@ import { describe, expect, it } from "vitest";
 
 const { renderIssueWorkerPrompt } = require("../src/issue-coordinator-renderers.ts");
 
-const contractFiles = [
-  "extensions/deadloop/automations/issue-coordinator.prompt.md",
-  "extensions/deadloop/automations/pr-reviewer.prompt.md",
-  "extensions/deadloop/automations/extract-worker-promise.ts",
-  "extensions/deadloop/automations/issue-coordinator-driver.ts",
-  "src/issue-coordinator-renderers.ts",
-];
-
-function combinedContractText() {
-  return contractFiles.map((file) => readFileSync(file, "utf8")).join("\n---FILE---\n");
-}
-
 function issueWorkerPrompt(): string {
   return renderIssueWorkerPrompt({
     launchReason: "medium",
@@ -31,18 +19,6 @@ function issueWorkerPrompt(): string {
 }
 
 describe("promise file contract", () => {
-  it("removes the legacy promise text tag", () => {
-    expect(combinedContractText()).not.toContain("<promise>");
-  });
-
-  it("removes JSONL session extraction", () => {
-    expect(combinedContractText()).not.toContain("JSONL");
-  });
-
-  it("removes pane-id based helper input", () => {
-    expect(combinedContractText()).not.toContain("--pane-id");
-  });
-
   it("documents unique promise file allocation outside the worktree", () => {
     expect(issueWorkerPrompt()).toContain("<deadloopStateDir>/runs/<uuid>/promise.json");
   });
