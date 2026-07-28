@@ -78,7 +78,9 @@ export type DoctorFindingType =
   | "automation_unavailable"
   | "automation_spinning"
   | "coordinator_stalled"
-  | "workspace_trust";
+  | "workspace_trust"
+  | "retained_attempt_workspace"
+  | "herdr_incompatible";
 
 export type DoctorFinding = {
   id: string;
@@ -87,6 +89,28 @@ export type DoctorFinding = {
   summary: string;
   commands: string[];
 };
+
+export type Herdr075DoctorStatus =
+  | "active"
+  | "blocker"
+  | "missing_report"
+  | "persistence_unconfirmed"
+  | "launch_failed"
+  | "cleanup_pending"
+  | "ownership_mismatch"
+  | "incompatible";
+
+/** Dormant 0.7.5 finding data; activation wires this into the doctor probe. */
+export function herdr075DoctorFinding(status: Herdr075DoctorStatus, detail: string): DoctorFinding {
+  const incompatible = status === "incompatible";
+  return {
+    id: `herdr-075-${status}`,
+    type: incompatible ? "herdr_incompatible" : "retained_attempt_workspace",
+    title: incompatible ? "unsupported or protocol-incompatible Herdr" : `retained attempt workspace: ${status}`,
+    summary: detail,
+    commands: incompatible ? ["herdr update --handoff"] : [],
+  };
+}
 
 export type DoctorSnapshot = {
   project: NormalizedProject | null;

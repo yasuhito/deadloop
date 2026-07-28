@@ -78,7 +78,7 @@ function isAgentKind(value) {
  * @param {LaunchContext} ctx
  * @returns {string[]}
  */
-function buildAgentArgv(ctx) {
+function buildNativeArgv(ctx) {
   if (!isAgentKind(ctx.agent)) throw new Error(`unknown agent: ${String(ctx.agent)}`);
   const profile = AGENT_PROFILES[ctx.agent];
 
@@ -88,11 +88,32 @@ function buildAgentArgv(ctx) {
     throw new Error(`agent ${ctx.agent} requires ${missing} for ${profile.identity.flag}`);
   }
 
-  const argv = [profile.command, profile.identity.flag, identityValue, profile.levelFlag, ctx.level];
-  if (ctx.model) argv.push(profile.modelFlag, ctx.model);
-  argv.push(...profile.permissionArgs);
-  argv.push(profile.prompt === "file-contents" ? ctx.promptText : `@${ctx.promptFile}`);
-  return argv;
+  const nativeArgv = [profile.identity.flag, identityValue, profile.levelFlag, ctx.level];
+  if (ctx.model) nativeArgv.push(profile.modelFlag, ctx.model);
+  nativeArgv.push(...profile.permissionArgs);
+  nativeArgv.push(profile.prompt === "file-contents" ? ctx.promptText : `@${ctx.promptFile}`);
+  return nativeArgv;
 }
 
-module.exports = { AGENT_PROFILES, AGENT_KINDS, isAgentKind, buildAgentArgv };
+/**
+ * Build argv after Herdr's `--` separator. Herdr 0.7.5 selects the executable
+ * through `agent start --kind`, so this intentionally excludes profile.command.
+ * The current 0.7.3 launcher continues to use buildAgentArgv below.
+ * @param {LaunchContext} ctx
+ * @returns {string[]}
+ */
+function buildNativeAgentArgv(ctx) {
+  return buildNativeArgv(ctx);
+}
+
+/**
+ * Build argv for the selected 0.7.3 launcher, including its executable.
+ * @param {LaunchContext} ctx
+ * @returns {string[]}
+ */
+function buildAgentArgv(ctx) {
+  if (!isAgentKind(ctx.agent)) throw new Error(`unknown agent: ${String(ctx.agent)}`);
+  return [AGENT_PROFILES[ctx.agent].command, ...buildNativeAgentArgv(ctx)];
+}
+
+module.exports = { AGENT_PROFILES, AGENT_KINDS, isAgentKind, buildAgentArgv, buildNativeAgentArgv };
