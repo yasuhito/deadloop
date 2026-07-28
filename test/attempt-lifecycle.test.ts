@@ -132,10 +132,16 @@ describe("attempt lifecycle contract", () => {
     expect(observed).toBe(true);
   });
 
-  it("only permits the next successful lifecycle phase", () => {
+  it("permits advancing past a phase which does not apply to the attempt", () => {
     const record = preparedAttempt();
 
-    expect(() => transitionAttempt(record, "workspace_opened")).toThrow("github_claimed");
+    expect(transitionAttempt(record, "workspace_opened").phase).toBe("workspace_opened");
+  });
+
+  it("rejects a lifecycle phase which does not advance", () => {
+    const record = transitionAttempt(preparedAttempt(), "github_claimed");
+
+    expect(() => transitionAttempt(record, "prepared")).toThrow("must advance beyond github_claimed");
   });
 
   it("retains the last successful phase when launch fails", () => {
@@ -162,6 +168,15 @@ describe("attempt lifecycle contract", () => {
     writeFileSync(`${attemptRecordPath(runDir)}.tmp`, "{", "utf8");
 
     expect(readAttemptRecord(runDir)).toEqual(record);
+  });
+
+  it("refuses a temporary record whose replacement never committed", () => {
+    const runDir = runDirectory();
+    const record = preparedAttempt(runDir);
+    rmSync(attemptRecordPath(runDir));
+    writeFileSync(`${attemptRecordPath(runDir)}.tmp`, `${JSON.stringify(record)}\n`, "utf8");
+
+    expect(() => readAttemptRecord(runDir)).toThrow("Attempt record is missing");
   });
 
   it("rejects malformed persisted state without overwriting it", () => {

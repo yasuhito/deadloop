@@ -167,16 +167,14 @@ function parseRecordFile(file: string): AttemptRecord {
   return parseAttemptRecord(value);
 }
 
-/** Reads the committed record; an incomplete replacement never supersedes it. */
+/**
+ * Reads the committed record; an incomplete replacement never supersedes it.
+ * A surviving temporary file marks a write which never committed, so it is never promoted.
+ */
 export function readAttemptRecord(runDir: string): AttemptRecord {
   const file = attemptRecordPath(runDir);
-  if (fs.existsSync(file)) return parseRecordFile(file);
-
-  const temporary = `${file}.tmp`;
-  if (!fs.existsSync(temporary)) throw new Error(`Attempt record is missing: ${file}`);
-  const recovered = parseRecordFile(temporary);
-  fs.renameSync(temporary, file);
-  return recovered;
+  if (!fs.existsSync(file)) throw new Error(`Attempt record is missing: ${file}`);
+  return parseRecordFile(file);
 }
 
 /** Atomically replaces a valid record and refuses to overwrite malformed state. */
@@ -229,6 +227,11 @@ export function withPreparedAttempt<T>(
   return { record, result: mutation(record) };
 }
 
+/**
+ * Advances a record through the applicable subset of the successful phases.
+ * Which phases apply is a role-specific decision, so any forward move is legal here and only
+ * standing still or moving backwards is refused.
+ */
 export function transitionAttempt(record: AttemptRecord, nextPhase: AttemptPhase, launchError?: string): AttemptRecord {
   parseAttemptRecord(record);
   if (record.phase === "launch_failed" || record.phase === "workspace_closed") {
@@ -238,9 +241,9 @@ export function transitionAttempt(record: AttemptRecord, nextPhase: AttemptPhase
     if (!launchError) throw new Error("launch_failed requires an error");
     return { ...record, phase: "launch_failed", launchError, lastSuccessfulPhase: record.lastSuccessfulPhase };
   }
-  const expected =
-    SUCCESSFUL_PHASES[SUCCESSFUL_PHASES.indexOf(record.phase as Exclude<AttemptPhase, "launch_failed">) + 1];
-  if (nextPhase !== expected) throw new Error(`Expected next attempt phase ${expected}, received ${nextPhase}`);
+  if (SUCCESSFUL_PHASES.indexOf(nextPhase) <= SUCCESSFUL_PHASES.indexOf(record.phase)) {
+    throw new Error(`Attempt phase must advance beyond ${record.phase}, received ${nextPhase}`);
+  }
   return { ...record, phase: nextPhase, lastSuccessfulPhase: nextPhase };
 }
 
