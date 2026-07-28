@@ -1,0 +1,149 @@
+{
+  "herdrCommands": [
+    [
+      "herdr",
+      "worktree",
+      "create",
+      "--cwd",
+      "/repo",
+      "--branch",
+      "agent/issue-1",
+      "--base",
+      "origin/main",
+      "--label",
+      "dl-worker",
+      "--no-focus",
+      "--json"
+    ],
+    [
+      "herdr",
+      "worktree",
+      "open",
+      "--cwd",
+      "/repo",
+      "--branch",
+      "agent/issue-1",
+      "--label",
+      "dl-reviewer",
+      "--no-focus",
+      "--json"
+    ],
+    [
+      "herdr",
+      "tab",
+      "create",
+      "--workspace",
+      "w1",
+      "--cwd",
+      "/wt",
+      "--label",
+      "dl-reviewer",
+      "--no-focus"
+    ],
+    [
+      "herdr",
+      "agent",
+      "start",
+      "dl-reviewer",
+      "--cwd",
+      "/wt",
+      "--no-focus",
+      "--tab",
+      "tab-1",
+      "--",
+      "pi",
+      "--prompt-file",
+      "/state/deadloop/runs/U-baseline/reviewer-prompt.md"
+    ],
+    [
+      "herdr",
+      "worktree",
+      "list",
+      "--cwd",
+      "/repo",
+      "--json"
+    ],
+    [
+      "herdr",
+      "agent",
+      "list"
+    ],
+    [
+      "herdr",
+      "pane",
+      "close",
+      "agent-1"
+    ],
+    [
+      "herdr",
+      "worktree",
+      "remove",
+      "--workspace",
+      "w1",
+      "--json"
+    ],
+    [
+      "herdr",
+      "tab",
+      "close",
+      "tab-1"
+    ]
+  ],
+  "launchCommandLog": {
+    "worker": {
+      "calls": [
+        "createWorktree",
+        "createTab",
+        "node /automation/launch-agent.ts --agent pi --name dl-worker --cwd /wt --repo-path /repo --level medium --model  --uuid U-baseline --prompt-file /state/deadloop/runs/U-baseline/worker-prompt.md --tab tab-1"
+      ],
+      "writes": {
+        "/state/deadloop/runs/U-baseline/worker-prompt.md": "promise: /state/deadloop/runs/U-baseline/promise.json"
+      },
+      "result": {
+        "workspaceId": "w1",
+        "tabId": "tab-1",
+        "worktreePath": "/wt",
+        "promptFile": "/state/deadloop/runs/U-baseline/worker-prompt.md",
+        "promiseFile": "/state/deadloop/runs/U-baseline/promise.json",
+        "launchOutput": "launch output"
+      }
+    },
+    "reviewer": {
+      "calls": [
+        "openWorktree",
+        "createTab",
+        "node /automation/launch-agent.ts --agent pi --name dl-reviewer --cwd /wt --repo-path /repo --level medium --model  --uuid U-baseline --prompt-file /state/deadloop/runs/U-baseline/reviewer-prompt.md --tab tab-1"
+      ],
+      "writes": {
+        "/state/deadloop/runs/U-baseline/reviewer-prompt.md": "promise: /state/deadloop/runs/U-baseline/promise.json"
+      },
+      "result": {
+        "workspaceId": "w1",
+        "tabId": "tab-1",
+        "worktreePath": "/wt",
+        "promptFile": "/state/deadloop/runs/U-baseline/reviewer-prompt.md",
+        "promiseFile": "/state/deadloop/runs/U-baseline/promise.json",
+        "launchOutput": "launch output"
+      }
+    }
+  },
+  "automationSelection": [
+    {
+      "id": "example-project",
+      "automations": [
+        {
+          "id": "example-project:issue-coordinator",
+          "promptFile": "issue-coordinator.prompt.md",
+          "precheckFile": "issue-coordinator.precheck.sh",
+          "driverFile": "issue-coordinator-driver.ts"
+        },
+        {
+          "id": "example-project:pr-reviewer",
+          "promptFile": "pr-reviewer.prompt.md",
+          "precheckFile": "pr-reviewer.precheck.sh",
+          "driverFile": "pr-reviewer-driver.ts"
+        }
+      ]
+    }
+  ]
+}
