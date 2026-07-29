@@ -32,6 +32,7 @@ type IssueWorkerPromptInput = {
   checkCommand: string;
   validationCommand?: string;
   promiseFile: string;
+  reportIdentity?: { attemptId: string; inputRevision: { head: string; base?: string } };
 };
 
 function oneLineForRenderer(value: string): string {
@@ -146,6 +147,14 @@ function renderIssueWorkerPrompt(input: IssueWorkerPromptInput): string {
     ? `node ${shellQuoteForRenderer(pathForProjectCheck(input.automationDir))} --command ${shellQuoteForRenderer(input.checkCommand)}`
     : input.checkCommand);
   const validationFence = markdownFence(validationCommand);
+  const identity = input.reportIdentity || { attemptId: "<attemptId>", inputRevision: { head: "<baseRevision>" } };
+  const reportBase = JSON.stringify({
+    schemaVersion: 1,
+    attemptId: identity.attemptId,
+    role: "worker",
+    target: { repository: input.githubRepo, kind: "issue", number: input.issueNumber },
+    inputRevision: identity.inputRevision,
+  });
 
   return `Launch reason: ${oneLineForRenderer(input.launchReason)}
 
@@ -177,8 +186,10 @@ Hard limits:
 
 Promise report:
 - Before stopping, write JSON to the orchestrator promise file: \`${markdownCode(input.promiseFile)}\`.
-- On success, write \`{"status":"complete","reason":"","summary":"three sentences: what changed, what was verified, remaining risk"}\`.
-- If blocked by failure, missing spec, risky change, or uncertainty, write \`{"status":"blocked","reason":"clear reason","summary":"three-sentence summary"}\`.
+- Every report must start with this exact V1 identity: \`${markdownCode(reportBase)}\`.
+- On success, add \`"status":"complete"\`, a three-sentence \`summary\`, \`"result":{"outputRevision":"<commit SHA>"}\`, and \`"evidence":{"validations":["<command and result>"]}\`.
+- If blocked by failure, missing spec, risky change, or uncertainty, add \`"status":"blocked"\`, a three-sentence \`summary\`, \`"result":{"reason":"typed_reason_code","explanation":"what is unsafe","recovery":"safe next step"}\`, and \`"evidence":{}\`.
+- Write one complete JSON object; do not nest the identity JSON as a string.
 - Always write the promise file, even on failure. Do not exit silently.`;
 }
 

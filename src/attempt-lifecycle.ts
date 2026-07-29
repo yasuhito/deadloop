@@ -48,6 +48,13 @@ export type CompletionReportV1 = {
   evidence: unknown;
 };
 
+export type CompletionReportStrength = "strong" | "legacy-weak";
+
+export type ValidatedCompletionReport = {
+  strength: "strong";
+  report: CompletionReportV1;
+};
+
 export type AttemptRecord = AttemptIdentity & {
   branch: string;
   baseBranch?: string;
@@ -262,7 +269,7 @@ function sameRevision(left: InputRevision, right: InputRevision): boolean {
   return left.head === right.head && left.base === right.base;
 }
 
-function parseCompletionReportV1(value: unknown): CompletionReportV1 {
+export function parseCompletionReportV1(value: unknown): CompletionReportV1 {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Completion report must be an object");
   }
@@ -295,8 +302,70 @@ function parseCompletionReportV1(value: unknown): CompletionReportV1 {
   };
 }
 
-/** Validates V1's common contract and identity binding; roles validate result and evidence separately. */
-export function validateCompletionReportBinding(record: AttemptRecord, value: unknown): void {
+function object(value: unknown, name: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${name} must be an object`);
+  return value as Record<string, unknown>;
+}
+
+function requiredString(value: Record<string, unknown>, name: string): void {
+  if (typeof value[name] !== "string" || !value[name].trim()) throw new Error(`${name} must be a non-empty string`);
+}
+
+function validateBlockedResult(result: unknown): void {
+  const blocked = object(result, "Blocked completion result");
+  requiredString(blocked, "reason");
+  requiredString(blocked, "explanation");
+  if (
+    (typeof blocked.recovery !== "string" || !blocked.recovery.trim()) &&
+    (typeof blocked.informationRequest !== "string" || !blocked.informationRequest.trim())
+  ) {
+    throw new Error("Blocked completion result requires recovery or informationRequest");
+  }
+}
+
+function validateCompleteResult(report: CompletionReportV1): void {
+  const result = object(report.result, "Completion result");
+  const evidence = object(report.evidence, "Completion evidence");
+  if (report.role === "worker") {
+    requiredString(result, "outputRevision");
+    if (!Array.isArray(evidence.validations) || evidence.validations.length === 0) {
+      throw new Error("Worker completion requires validation evidence");
+    }
+    return;
+  }
+  if (report.role === "reviewer") {
+    if (result.outcome !== "approved" && result.outcome !== "changes_requested" && result.outcome !== "human_required") {
+      throw new Error("Reviewer completion outcome is invalid");
+    }
+    requiredString(result, "reviewedHead");
+    if (result.reviewedHead !== report.inputRevision.head) throw new Error("Reviewer completion reviewedHead does not match input revision");
+    if (result.outcome === "changes_requested" && (!Array.isArray(result.findings) || result.findings.length === 0)) {
+      throw new Error("Reviewer changes_requested requires findings");
+    }
+    if (!Array.isArray(evidence.reviewed) || evidence.reviewed.length === 0) {
+      throw new Error("Reviewer completion requires review evidence");
+    }
+    return;
+  }
+  requiredString(result, "outcome");
+  if (result.outcome === "pushed" || result.outcome === "repair_pushed" || result.outcome === "branch_updated") {
+    requiredString(result, "outputRevision");
+  }
+  if (!evidence.finalizer || typeof evidence.finalizer !== "object") {
+    throw new Error(`${report.role} completion requires finalizer evidence`);
+  }
+}
+
+/** Validates V1's role-specific result and evidence before a journal is available. */
+export function validateCompletionReportV1(value: unknown): CompletionReportV1 {
+  const report = parseCompletionReportV1(value);
+  if (report.status === "blocked") validateBlockedResult(report.result);
+  else validateCompleteResult(report);
+  return report;
+}
+
+/** Validates V1's common contract, identity binding, and role-specific evidence. */
+export function validateCompletionReportBinding(record: AttemptRecord, value: unknown): ValidatedCompletionReport {
   parseAttemptRecord(record);
   const report = parseCompletionReportV1(value);
   if (report.attemptId !== record.attemptId)
@@ -310,4 +379,7 @@ export function validateCompletionReportBinding(record: AttemptRecord, value: un
   if (!sameRevision(report.inputRevision, record.inputRevision)) {
     throw new Error("Completion report inputRevision does not match attempt record");
   }
+  if (report.status === "blocked") validateBlockedResult(report.result);
+  else validateCompleteResult(report);
+  return { strength: "strong", report };
 }

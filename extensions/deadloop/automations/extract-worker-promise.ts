@@ -3,6 +3,7 @@
 // with `node extract-worker-promise.ts`.
 
 const fs = require("node:fs") as typeof import("node:fs");
+const path = require("node:path") as typeof import("node:path");
 
 type PromiseValidation = Record<string, any>;
 
@@ -45,7 +46,59 @@ function invalidPromise(filePath: string, error: string): PromiseValidation {
   return { status: "invalid", file: filePath, error };
 }
 
-function validatePromise(filePath: string): PromiseValidation {
+function validNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && Boolean(value.trim());
+}
+
+function validV1Report(promise: PromiseValidation): string | undefined {
+  if (!VALID_PROMISE_STATUSES.has(promise.status)) return "invalid_status";
+  if (!validNonEmptyString(promise.attemptId)) return "invalid_attempt_id";
+  if (!["worker", "reviewer", "review-repair", "branch-update"].includes(promise.role)) return "invalid_role";
+  if (!promise.target || typeof promise.target !== "object" || !validNonEmptyString(promise.target.repository)) return "invalid_target";
+  if (!["issue", "pull-request"].includes(promise.target.kind) || !Number.isInteger(promise.target.number) || promise.target.number < 1) return "invalid_target";
+  if (!promise.inputRevision || typeof promise.inputRevision !== "object" || !validNonEmptyString(promise.inputRevision.head)) return "invalid_input_revision";
+  if (!validNonEmptyString(promise.summary)) return "invalid_summary";
+  if (!promise.result || typeof promise.result !== "object" || !promise.evidence || typeof promise.evidence !== "object") return "missing_result_or_evidence";
+  if (promise.status === "blocked") {
+    if (!validNonEmptyString(promise.result.reason) || !validNonEmptyString(promise.result.explanation)) return "invalid_blocked_result";
+    if (!validNonEmptyString(promise.result.recovery) && !validNonEmptyString(promise.result.informationRequest)) return "blocked_requires_guidance";
+    return undefined;
+  }
+  if (promise.role === "worker") {
+    return validNonEmptyString(promise.result.outputRevision) && Array.isArray(promise.evidence.validations) && promise.evidence.validations.length
+      ? undefined : "worker_requires_output_and_validation";
+  }
+  if (promise.role === "reviewer") {
+    if (!["approved", "changes_requested", "human_required"].includes(promise.result.outcome)) return "invalid_reviewer_outcome";
+    if (!validNonEmptyString(promise.result.reviewedHead) || promise.result.reviewedHead !== promise.inputRevision.head) return "invalid_reviewed_head";
+    if (promise.result.outcome === "changes_requested" && (!Array.isArray(promise.result.findings) || !promise.result.findings.length)) return "changes_requested_requires_findings";
+    return Array.isArray(promise.evidence.reviewed) && promise.evidence.reviewed.length ? undefined : "reviewer_requires_evidence";
+  }
+  if (!validNonEmptyString(promise.result.outcome) || !promise.evidence.finalizer || typeof promise.evidence.finalizer !== "object") return "finalizer_evidence_required";
+  return !["pushed", "repair_pushed", "branch_updated"].includes(promise.result.outcome) || validNonEmptyString(promise.result.outputRevision)
+    ? undefined : "pushed_requires_output_revision";
+}
+
+function normalizeV1Report(promise: PromiseValidation): PromiseValidation {
+  const result = promise.result as PromiseValidation;
+  const evidence = promise.evidence as PromiseValidation;
+  return {
+    ...promise,
+    ...result,
+    ...(result.outcome ? { reason: result.outcome } : {}),
+    ...(Array.isArray(result.repairs) ? { repairs: result.repairs } : {}),
+    ...(Array.isArray(evidence.validations) ? { checks: evidence.validations } : {}),
+  };
+}
+
+function reportMatchesRecord(promise: PromiseValidation, record: PromiseValidation): boolean {
+  return promise.attemptId === record.attemptId && promise.role === record.role &&
+    promise.target?.repository === record.repository && promise.target?.kind === record.target?.kind &&
+    promise.target?.number === record.target?.number && promise.inputRevision?.head === record.inputRevision?.head &&
+    promise.inputRevision?.base === record.inputRevision?.base;
+}
+
+function validatePromise(filePath: string, attemptRecordFile?: string): PromiseValidation {
   if (!fs.existsSync(filePath)) return { status: "none", file: filePath };
 
   let payload: unknown;
@@ -58,6 +111,21 @@ function validatePromise(filePath: string): PromiseValidation {
 
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return invalidPromise(filePath, "not_object");
   const promise = payload as PromiseValidation;
+  if (promise.schemaVersion !== undefined) {
+    if (promise.schemaVersion !== 1) return invalidPromise(filePath, "unknown_schema_version");
+    const error = validV1Report(promise);
+    if (error) return invalidPromise(filePath, error);
+    const recordFile = attemptRecordFile || path.join(path.dirname(filePath), "attempt.json");
+    const normalized = normalizeV1Report(promise);
+    if (!fs.existsSync(recordFile)) return { status: promise.status, file: filePath, promise: normalized, evidenceStrength: "unbound-v1" };
+    try {
+      const record = JSON.parse(fs.readFileSync(recordFile, "utf8"));
+      if (!reportMatchesRecord(promise, record)) return invalidPromise(filePath, "attempt_binding_mismatch");
+      return { status: promise.status, file: filePath, promise: normalized, evidenceStrength: "strong", attemptRecord: recordFile };
+    } catch (error) {
+      return invalidPromise(filePath, `invalid_attempt_record: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const status = promise.status;
   if (!VALID_PROMISE_STATUSES.has(status)) return invalidPromise(filePath, "invalid_status");
   if (typeof promise.reason !== "string") return invalidPromise(filePath, "invalid_reason");
@@ -91,7 +159,7 @@ function validatePromise(filePath: string): PromiseValidation {
     return invalidPromise(filePath, "repair_pushed_requires_passed_checks");
   }
 
-  return { status, file: filePath, promise };
+  return { status, file: filePath, promise, evidenceStrength: "legacy-weak" };
 }
 
 function requiredPromiseArg(argv: string[], index: number, flag: string): string {
@@ -117,13 +185,22 @@ function parsePromiseArgs(argv: string[]): PromiseValidation {
       parsed.file = token.slice("--file=".length);
       continue;
     }
+    if (token === "--attempt-record") {
+      parsed.attemptRecord = requiredPromiseArg(argv, index, token);
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("--attempt-record=")) {
+      parsed.attemptRecord = token.slice("--attempt-record=".length);
+      continue;
+    }
     throw new Error(`unknown flag: ${token}`);
   }
   return parsed;
 }
 
 function promiseHelp(): string {
-  return "Usage: extract-worker-promise.ts --file FILE";
+  return "Usage: extract-worker-promise.ts --file FILE [--attempt-record FILE]";
 }
 
 function main(argv: string[] = process.argv.slice(2)): number {
@@ -133,7 +210,7 @@ function main(argv: string[] = process.argv.slice(2)): number {
     return 0;
   }
   if (!args.file) throw new Error("--file is required");
-  const result = validatePromise(args.file);
+  const result = validatePromise(args.file, args.attemptRecord);
   process.stdout.write(`${JSON.stringify(result)}\n`);
   return VALID_PROMISE_STATUSES.has(result.status) ? 0 : 1;
 }

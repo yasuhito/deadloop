@@ -49,8 +49,8 @@ function matchingReport() {
     inputRevision: { head: "a".repeat(40), base: "b".repeat(40) },
     status: "complete" as const,
     summary: "Approved.",
-    result: { outcome: "approved" },
-    evidence: { checks: [] },
+    result: { outcome: "approved", reviewedHead: "a".repeat(40), findings: [] },
+    evidence: { reviewed: ["PR diff"] },
   };
 }
 
@@ -200,7 +200,33 @@ describe("attempt lifecycle contract", () => {
     const runDir = runDirectory();
     preparedAttempt(runDir);
 
-    expect(validateCompletionReportBinding(readAttemptRecord(runDir), matchingReport())).toBeUndefined();
+    expect(validateCompletionReportBinding(readAttemptRecord(runDir), matchingReport()).strength).toBe("strong");
+  });
+
+  it("rejects a reviewer report without exact reviewed head", () => {
+    const record = preparedAttempt();
+
+    expect(() => validateCompletionReportBinding(record, { ...matchingReport(), result: { outcome: "approved" } })).toThrow(
+      "reviewedHead",
+    );
+  });
+
+  it("rejects a blocked report without recovery guidance", () => {
+    const record = preparedAttempt();
+
+    expect(() =>
+      validateCompletionReportBinding(record, { ...matchingReport(), status: "blocked", result: { reason: "network", explanation: "offline" } }),
+    ).toThrow("recovery or informationRequest");
+  });
+
+  it("rejects empty blocked recovery guidance", () => {
+    const record = preparedAttempt();
+
+    expect(() =>
+      validateCompletionReportBinding(record, {
+        ...matchingReport(), status: "blocked", result: { reason: "network", explanation: "offline", recovery: "" },
+      }),
+    ).toThrow("recovery or informationRequest");
   });
 
   it("writes valid JSON to the durable attempt path", () => {

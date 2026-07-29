@@ -7,11 +7,15 @@ import { describe, expect, it } from "vitest";
 
 const helperPath = "extensions/deadloop/automations/extract-worker-promise.ts";
 
-function runHelper(filePath: string, style: "separate" | "equals" = "separate") {
+function runPromise(filePath: string, style: "separate" | "equals" = "separate") {
   const args = style === "equals" ? [helperPath, `--file=${filePath}`] : [helperPath, "--file", filePath];
   const result = spawnSync("node", args, { cwd: process.cwd(), encoding: "utf8" });
-  const output = JSON.parse(result.stdout);
-  return { code: result.status, status: output.status };
+  return { code: result.status, ...JSON.parse(result.stdout) };
+}
+
+function runHelper(filePath: string, style: "separate" | "equals" = "separate") {
+  const { code, status } = runPromise(filePath, style);
+  return { code, status };
 }
 
 function withTempFile(content: string, callback: (filePath: string) => void) {
@@ -45,6 +49,57 @@ describe("extract worker promise helper", () => {
     withTempFile('{"status":"complete","reason":"","summary":"legacy reviewer report"}', (filePath) => {
       expect(runHelper(filePath).code).toBe(0);
     });
+  });
+
+  it("keeps a legacy report as weak evidence", () => {
+    withTempFile('{"status":"complete","reason":"","summary":"legacy worker report"}', (filePath) => {
+      expect(runPromise(filePath).evidenceStrength).toBe("legacy-weak");
+    });
+  });
+
+  it("rejects a V1 report with an unknown status", () => {
+    withTempFile('{"schemaVersion":1,"attemptId":"a","role":"worker","target":{"repository":"octo/demo","kind":"issue","number":1},"inputRevision":{"head":"base"},"status":"unknown","summary":"done","result":{"outputRevision":"output"},"evidence":{"validations":["npm test"]}}', (filePath) => {
+      expect(runHelper(filePath).status).toBe("invalid");
+    });
+  });
+
+  it("rejects an unknown completion-report version", () => {
+    withTempFile('{"schemaVersion":2,"status":"complete"}', (filePath) => {
+      expect(runHelper(filePath).status).toBe("invalid");
+    });
+  });
+
+  it("normalizes a V1 reviewer result for the existing review workflow", () => {
+    withTempFile(
+      '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"head"},"status":"complete","summary":"reviewed","result":{"outcome":"approved","reviewedHead":"head","findings":[]},"evidence":{"reviewed":["diff"]}}',
+      (filePath) => {
+        expect(runPromise(filePath).promise.outcome).toBe("approved");
+      },
+    );
+  });
+
+  it("rejects a V1 report that mismatches its journal", () => {
+    withTempFile(
+      '{"schemaVersion":1,"attemptId":"other","role":"worker","target":{"repository":"octo/demo","kind":"issue","number":1},"inputRevision":{"head":"base"},"status":"complete","summary":"done","result":{"outputRevision":"output"},"evidence":{"validations":["npm test"]}}',
+      (filePath) => {
+        writeFileSync(path.join(path.dirname(filePath), "attempt.json"), JSON.stringify({
+          attemptId: "expected", role: "worker", repository: "octo/demo", target: { kind: "issue", number: 1 }, inputRevision: { head: "base" },
+        }));
+        expect(runHelper(filePath).status).toBe("invalid");
+      },
+    );
+  });
+
+  it("accepts a journal-bound V1 worker report as strong evidence", () => {
+    withTempFile(
+      '{"schemaVersion":1,"attemptId":"expected","role":"worker","target":{"repository":"octo/demo","kind":"issue","number":1},"inputRevision":{"head":"base"},"status":"complete","summary":"done","result":{"outputRevision":"output"},"evidence":{"validations":["npm test"]}}',
+      (filePath) => {
+        writeFileSync(path.join(path.dirname(filePath), "attempt.json"), JSON.stringify({
+          attemptId: "expected", role: "worker", repository: "octo/demo", target: { kind: "issue", number: 1 }, inputRevision: { head: "base" },
+        }));
+        expect(runPromise(filePath).evidenceStrength).toBe("strong");
+      },
+    );
   });
 
   it("rejects changes_requested without findings", () => {

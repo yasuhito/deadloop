@@ -227,11 +227,11 @@ Safety contract:
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state.
 
 Promise report:
-- Always write JSON to ${promiseFile} before stopping; status remains complete|blocked.
-- After action=pushed, read the finalizer result file beside the promise and write {"status":"complete","reason":"repair_pushed","summary":"findings fixed, checks passed, repair commit pushed","repairs":[{"title":"exact finding title","summary":"specific change made for this finding","paths":["changed/repo/path"]}],"checks":[{"command":"exact finalizer check command","result":"passed"}]}. Include exactly one repair entry for every finding and only files actually changed for that finding. Copy the finalizer-confirmed check command and result; do not infer them from logs.
+- Always write one V1 JSON object to ${promiseFile}. Its immutable identity is ${JSON.stringify({ schemaVersion: 1, attemptId: attemptKey, role: "review-repair", target: { repository: env.githubRepo, kind: "pull-request", number: Number(prNumber) }, inputRevision: { head: expectedHead } })}.
+- After action=pushed, read the finalizer result file beside the promise and write a summary plus status="complete", result={outcome:"repair_pushed",outputRevision:"<finalizer headOid>",repairs:[{title:"exact finding title",summary:"specific change",paths:["changed/repo/path"]}]}, and evidence={finalizer:<entire receipt>,validations:<receipt checks>}. Include exactly one repair entry for every finding and only files actually changed for that finding.
+- After action=stale_head, write a summary plus status="complete", result={outcome:"stale_head"}, and evidence={finalizer:<entire receipt>}.
+- On technical, validation, invariant, or push failure, write a summary plus status="blocked", result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
 - This attempt key is ${attemptKey}; do not place it or any local path in public text.
-- After action=stale_head, write {"status":"complete","reason":"stale_head","summary":"PR head changed; stopped without push or labels"}.
-- On technical, validation, invariant, or push failure, write {"status":"blocked","reason":"specific failure","summary":"what failed and why a human is now required"}.
 - Do not claim success unless the finalizer returned pushed or stale_head.`;
 }
 

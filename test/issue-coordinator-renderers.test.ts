@@ -125,7 +125,7 @@ describe("issue coordinator renderers", () => {
 
   it("renders the worker promise file contract", () => {
     expect(renderIssueWorkerPrompt(workerInput)).toContain(
-      '{"status":"blocked","reason":"clear reason","summary":"three-sentence summary"}',
+      '"schemaVersion":1,'
     );
   });
 

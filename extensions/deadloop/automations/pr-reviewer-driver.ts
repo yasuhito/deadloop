@@ -188,9 +188,11 @@ function reviewAgentPrompt(
   promiseFile: string,
   reason: string,
   worktreePath: string,
+  attemptId: string,
 ): string {
   const number = Number(pr.number || 0);
   const title = oneLine(pr.title || "PR review");
+  const reportBase = JSON.stringify({ schemaVersion: 1, attemptId, role: "reviewer", target: { repository: env.githubRepo, kind: "pull-request", number }, inputRevision: { head: String(pr.headRefOid || "") } });
   return `Review PR #${number}.
 
 Target:
@@ -215,10 +217,11 @@ Contract:
 
 Promise report:
 - Before stopping, write JSON to the promise file: \`${promiseFile.replace(/`/g, "\\`")}\`.
+- Every report must include this exact V1 identity: ${reportBase}.
 - Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
-- If no actionable defect remains, write {"status":"complete","outcome":"approved","reviewedHead":"${String(pr.headRefOid || "")}","reason":"","summary":"three sentences: what was reviewed, result, remaining risk","findings":[]}.
-- If actionable defects exist, write {"status":"complete","outcome":"changes_requested","reason":"","summary":"three-sentence summary","findings":[{"title":"concise defect","body":"bounded required correction and evidence","path":"optional/repo/path","line":1,"severity":"blocker|major|minor"}]}.
-- Use outcome=human_required only when a product/spec/safety decision cannot be repaired within the PR. Explain it in reason and optional findings.
+- If no actionable defect remains, write a V1 report with a three-sentence summary, status="complete", result={outcome:"approved",reviewedHead:"${String(pr.headRefOid || "")}",findings:[]}, and evidence={reviewed:["diff and configured checks"]}.
+- If actionable defects exist, include a three-sentence summary and use result={outcome:"changes_requested",reviewedHead:"${String(pr.headRefOid || "")}",findings:[{title:"concise defect",body:"bounded required correction and evidence",path:"optional/repo/path",line:1,severity:"blocker|major|minor"}]} with non-empty evidence.reviewed.
+- Use outcome=human_required only when a product/spec/safety decision cannot be repaired within the PR. For blocked reports include a three-sentence summary, result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
 - Findings are the repair worker's entire contract. Include only verified, actionable defects; #243-style lint or repository-contract failures are changes_requested, not blocked.
 - The reason, summary, finding titles/bodies, and finding paths can be published in a PR comment. Keep them human-readable and never include prompts, promise paths, absolute/local paths, internal agent names, or other runtime details.
 - Always write the promise file, even on failure. Do not exit silently.`;
@@ -231,9 +234,11 @@ function branchUpdateWorkerPrompt(
   worktreePath: string,
   headOid: string,
   baseOid: string,
+  attemptId: string,
 ): string {
   const number = Number(pr.number || 0);
   const branch = String(pr.headRefName || "");
+  const reportBase = JSON.stringify({ schemaVersion: 1, attemptId, role: "branch-update", target: { repository: env.githubRepo, kind: "pull-request", number }, inputRevision: { head: headOid, base: baseOid } });
   const finalizeCommand = [
     "node",
     shellQuote(path.join(env.automationDir, "pr-branch-update-finalize.ts")),
@@ -283,10 +288,10 @@ Safety contract:
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state so the next cycle can re-evaluate.
 
 Promise report:
-- Always write JSON to ${promiseFile} before stopping.
-- After finalizer action=pushed, write {"status":"complete","reason":"branch_updated","summary":"what conflicts were resolved and checks passed"}.
-- After finalizer action=stale_head, write {"status":"complete","reason":"stale_head","summary":"PR head changed; stopped without push"}.
-- On merge, validation, invariant, or push failure, write {"status":"blocked","reason":"specific failure","summary":"what failed and why the update is unsafe"}.
+- Always write one V1 JSON object to ${promiseFile}. Its immutable identity is ${reportBase}.
+- After finalizer action=pushed, write a summary plus status="complete", result={outcome:"branch_updated",outputRevision:"<finalizer headOid>"}, and evidence={finalizer:<finalizer result>,validations:<finalizer checks>}.
+- After finalizer action=stale_head, write a summary plus status="complete", result={outcome:"stale_head"}, and evidence={finalizer:<finalizer result>}.
+- On merge, validation, invariant, or push failure, write a summary plus status="blocked", result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
 - Do not claim complete unless the finalizer returned pushed or stale_head.`;
 }
 
@@ -404,7 +409,7 @@ function launchBranchUpdate(
       uuid,
       promptFilePrefix: "branch-update-prompt",
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-        branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid),
+        branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid, uuid),
     },
     (github) => {
       github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
@@ -451,7 +456,7 @@ function prReviewerLaunchPlan(
       uuid,
       promptFilePrefix: "reviewer-prompt",
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-        reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath),
+        reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath, uuid),
     },
   };
 }

@@ -168,6 +168,7 @@ function issueWorkerLaunchPlan(issue: JsonObject, env: ReturnType<typeof envConf
             command: env.checkCommand,
           }),
           promiseFile,
+          reportIdentity: { attemptId: uuid, inputRevision: { head: env.baseBranch } },
         }),
     },
   };
