@@ -9,7 +9,7 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
 const { renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
-const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const {
@@ -21,6 +21,7 @@ const {
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
@@ -133,7 +134,7 @@ function shouldSimulateLaunch(fixture: JsonObject | null): boolean {
   return Boolean(fixture);
 }
 
-function issueWorkerLaunchPlan(issue: JsonObject, env: ReturnType<typeof envConfig>, uuid: string) {
+function issueWorkerLaunchPlan(issue: JsonObject, env: ReturnType<typeof envConfig>, uuid: string, baseHead: string) {
   const number = Number(issue.number || 0);
   const workerName = `${env.projectId}-issue-${number}-worker`;
   const branch = `agent/issue-${number}-${slugForBranch(issue.title)}`;
@@ -145,12 +146,18 @@ function issueWorkerLaunchPlan(issue: JsonObject, env: ReturnType<typeof envConf
       repoPath: env.repoPath,
       automationDir: env.automationDir,
       stateDir: env.stateDir,
-      name: workerName,
+      workspaceLabel: workerName,
       agent: env.workerAgent,
       model: env.workerModel,
       level: "medium",
       uuid,
       promptFilePrefix: "worker-prompt",
+      project: env.projectId,
+      repository: env.githubRepo,
+      role: "worker" as const,
+      target: { kind: "issue" as const, number },
+      inputRevision: { head: baseHead },
+      intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
       resolveWorktreeHead: true,
       renderPrompt: ({ promiseFile, worktreePath, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
         if (!worktreeHead) throw new Error("Worker prompt requires the exact created worktree HEAD");
@@ -180,9 +187,12 @@ function issueWorkerLaunchPlan(issue: JsonObject, env: ReturnType<typeof envConf
 function launchIssueWorkerFlow(
   issue: JsonObject,
   env: ReturnType<typeof envConfig>,
-  ops: Parameters<typeof launchAgentFlow>[1],
+  ops: { runText: (args: string[]) => string; [key: string]: any },
 ): JsonObject {
-  const plan = issueWorkerLaunchPlan(issue, env, randomUUID());
+  const baseHead = ops.runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  const plan = issueWorkerLaunchPlan(issue, env, randomUUID(), baseHead);
+  prepareAgentLaunchFlow(plan.input, ops);
+  recordAgentLaunchGithubClaimed(plan.input);
   const launch = launchAgentFlow(plan.input, ops);
   return { workerName: plan.workerName, branch: plan.branch, ...launch };
 }
@@ -190,7 +200,10 @@ function launchIssueWorkerFlow(
 function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
   const number = Number(issue.number || 0);
   const uuid = shouldSimulateLaunch(fixture) ? "fixture-worker-uuid" : randomUUID();
-  const plan = issueWorkerLaunchPlan(issue, env, uuid);
+  const baseHead = shouldSimulateLaunch(fixture)
+    ? "f".repeat(40)
+    : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead);
   const { workerName, branch } = plan;
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
 
@@ -199,12 +212,14 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     return {
       workerName,
       branch,
-      workspaceId: "fixture-workspace",
-      tabId: "fixture-tab",
+      workspaceId: "fixture-workspace-worker",
+      tabId: "fixture-tab-worker",
+      rootPaneId: "fixture-pane-worker",
       worktreePath: simulatedWorktreePath,
       promptFile: `${env.stateDir}/runs/${uuid}/worker-prompt.md`,
       promiseFile,
-      instructions: plan.input.renderPrompt({ promiseFile, worktreePath: simulatedWorktreePath, worktreeHead: "f".repeat(40) }),
+      attemptRecordFile: `${env.stateDir}/runs/${uuid}/attempt.json`,
+      instructions: plan.input.renderPrompt({ promiseFile, worktreePath: simulatedWorktreePath, worktreeHead: baseHead }),
       simulated: true,
     };
   }
@@ -217,6 +232,11 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
     ),
     {
+      prepareAttempt: () => prepareAgentLaunchFlow(
+        plan.input,
+        { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+      ),
+      recordClaim: () => recordAgentLaunchGithubClaimed(plan.input),
       revalidate: () => {
         const deadline = issueDecisionDeadline();
         const liveIssue = githubOperations().getIssue(env.githubRepo, number);
@@ -239,6 +259,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     githubRepo: source.DEADLOOP_GITHUB_REPO || "",
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
+    worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
     automationDir: SCRIPT_DIR,
     stateDir:
       source.DEADLOOP_STATE_DIR ||
@@ -260,6 +281,9 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
 }
 
 function drive(fixturePath: string | undefined): DriverResult {
+  if (!fixturePath) {
+    runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runText([command, ...commandArgs]) });
+  }
   const fixture = loadFixture(fixturePath);
   const env = envConfig();
   if (!env.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
@@ -325,7 +349,9 @@ function drive(fixturePath: string | undefined): DriverResult {
     issueBody: String(issue.body || ""),
     automationDir: env.automationDir,
     promiseFile: String(launch.promiseFile || ""),
+    attemptRecordFile: String(launch.attemptRecordFile || ""),
     actorName: "Worker",
+    projectId: env.projectId,
     repoPath: env.repoPath,
     githubRepo: env.githubRepo,
     stateDir: env.stateDir,

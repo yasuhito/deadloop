@@ -8,6 +8,7 @@ const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { createHerdrRunner, normalizeHerdrWorktreeRecord } = require("../../../src/herdr-runner.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 
 type CleanupRecord = Record<string, any>;
 
@@ -190,12 +191,12 @@ function selectCleanupPlan({
       skipped.push(skipCleanup("not_linked_worktree", pr, worktree));
       continue;
     }
-    if (!workspaceIdForCleanup(worktree)) {
-      skipped.push(skipCleanup("missing_workspace_id", pr, worktree));
-      continue;
-    }
     if (!isUnderRootForCleanup(worktreePath, config.worktreeRoot)) {
       skipped.push(skipCleanup("outside_worktree_root", pr, worktree));
+      continue;
+    }
+    if (workspaceIdForCleanup(worktree)) {
+      skipped.push(skipCleanup("open_workspace", pr, worktree));
       continue;
     }
 
@@ -338,15 +339,17 @@ function applyCleanupPlan(plan: { candidates: CleanupRecord[]; skipped: CleanupR
   const failed: CleanupRecord[] = [];
 
   for (const item of plan.candidates) {
-    const workspaceId = item.workspaceId;
     try {
-      if (!workspaceId) throw new Error("missing Herdr workspace id; refusing direct git worktree removal");
       const worktreePath = String(item.path || "");
       if (!worktreePath) throw new Error("missing worktree path; refusing cleanup");
       removeGeneratedAgentArtifacts(worktreePath, config);
       const remainingStatus = runCleanupText(["git", "-C", worktreePath, "status", "--short"]);
       if (remainingStatus.trim()) throw new Error("worktree became dirty after cleanup planning; refusing removal");
-      withCleanupMutation(config, () => cleanupHerdrRunner().removeWorktree(String(workspaceId)));
+      withCleanupMutation(config, () => cleanupHerdrRunner().removeWorktree({
+        repoPath: config.repoPath,
+        branch: String(item.branch || ""),
+        worktreePath,
+      }));
       removed.push(item);
     } catch (error) {
       failed.push({ ...item, error: error instanceof Error ? error.message : String(error) });
@@ -406,6 +409,10 @@ function main(argv: string[] = process.argv.slice(2)): number {
     process.stdout.write(`${cleanupHelp()}\n`);
     return 0;
   }
+
+  // Direct apply is mutation-capable, so compatibility must be proven before GitHub reads,
+  // planning, artifact deletion, or Herdr worktree removal.
+  if (args.apply) runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runCleanupText([command, ...commandArgs]) });
 
   let result: CleanupRecord;
   if (args.fixture) {

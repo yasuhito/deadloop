@@ -1,113 +1,232 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-const { launchAgentFlow } = require("../src/agent-launch-flow.ts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../src/agent-launch-flow.ts");
+const { transitionPersistedAttempt } = require("../src/attempt-lifecycle-runtime.cjs");
 
-describe("エージェント起動フロー", () => {
-  it("renders a Worker prompt with the exact created worktree HEAD", () => {
-    let prompt = "";
+function input(root: string, role: "worker" | "reviewer" = "worker") {
+  const number = role === "worker" ? 1 : 44;
+  return {
+    worktree: role === "worker"
+      ? { mode: "create" as const, branch: "agent/issue-1", baseBranch: "origin/main" }
+      : { mode: "open" as const, branch: "feature/review" },
+    repoPath: "/repo",
+    automationDir: "/automation",
+    stateDir: root,
+    workspaceLabel: role === "worker" ? "Worker Issue 1" : "Reviewer PR 44",
+    agent: "pi",
+    model: "",
+    level: "medium",
+    uuid: `launch-${role}`,
+    promptFilePrefix: `${role}-prompt`,
+    project: "demo",
+    repository: "owner/repo",
+    role,
+    target: { kind: role === "worker" ? "issue" as const : "pull-request" as const, number },
+    inputRevision: { head: "a".repeat(40) },
+    intendedWorktreePath: role === "worker" ? "/wt/worker" : "/wt/review",
+    resolveWorktreeHead: role === "worker",
+    renderPrompt: ({ promiseFile, worktreeHead }: { promiseFile: string; worktreeHead?: string }) =>
+      `promise=${promiseFile};head=${worktreeHead || "review"}`,
+  };
+}
 
-    launchAgentFlow(
-      {
-        worktree: { mode: "create", branch: "agent/issue-1", baseBranch: "origin/main" },
-        repoPath: "/repo",
-        automationDir: "/automation",
-        stateDir: "/state/deadloop",
-        name: "demo-issue-1-worker",
-        agent: "pi",
-        model: "",
-        level: "medium",
-        uuid: "U-worker",
-        promptFilePrefix: "worker-prompt",
-        resolveWorktreeHead: true,
-        renderPrompt: ({ worktreeHead }: { worktreeHead?: string }) => `head: ${worktreeHead}`,
-      },
-      {
-        mkdirSync: () => {},
-        runner: {
-          createWorktree: () => ({ workspaceId: "workspace-1", worktreePath: "/wt/worker" }),
-          openWorktree: () => { throw new Error("unexpected openWorktree"); },
-          createTab: () => ({ tabId: "tab-1" }),
-          startAgent: () => { throw new Error("unexpected startAgent"); },
-          listWorktrees: () => [],
-          listAgents: () => [],
-          removeAgent: () => "",
-          removeWorktree: () => "",
-        },
-        runText: (args: string[]) => args.includes("rev-parse") ? `${"a".repeat(40)}\n` : "launch output",
-        writeFileSync: (_file: string, text: string) => { prompt = text; },
-      },
-    );
+function operations(_root: string, role: "worker" | "reviewer", calls: string[]) {
+  const worktreePath = role === "worker" ? "/wt/worker" : "/wt/review";
+  let launchedName = "";
+  return {
+    mkdirSync: () => {},
+    runner: {
+      createWorktree: () => ({ workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1", worktreePath }),
+      openWorktree: () => ({ workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1", worktreePath }),
+      renameWorkspace: () => (calls.push("rename"), ""),
+      startAgent: () => "",
+      closeWorkspace: () => "",
+      listWorkspaces: () => [],
+      listWorktrees: () => role === "reviewer" ? [{ path: worktreePath, branch: "feature/review" }] : [],
+      listAgents: () => launchedName ? [{ name: launchedName, paneId: "pane-1", cwd: worktreePath, status: "working" }] : [],
+      removeWorktree: () => "",
+    },
+    runText: (args: string[]) => {
+      if (args[0] === "git") return `${"a".repeat(40)}\n`;
+      calls.push(args.join(" "));
+      const nameIndex = args.indexOf("--name");
+      if (nameIndex >= 0) launchedName = args[nameIndex + 1];
+      return "started";
+    },
+    writeFileSync: (file: string, text: string) => require("node:fs").writeFileSync(file, text, "utf8"),
+  };
+}
 
-    expect(prompt).toBe(`head: ${"a".repeat(40)}`);
+describe("0.7.5 エージェント起動フロー", () => {
+  it("外部の要求状態を変える前に準備済み試行記録を残す", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const ops = operations(root, "worker", []);
+      const prepared = prepareAgentLaunchFlow(input(root), ops);
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).phase).toBe("prepared");
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("opens a PR worktree through the runner, writes prompt and promise paths, and starts the reviewer through the launcher", () => {
+  it("attempt.json のない移行前の実行ディレクトリを兄弟試行として無視する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      require("node:fs").mkdirSync(path.join(root, "runs", "historical"), { recursive: true });
+      require("node:fs").writeFileSync(path.join(root, "runs", "historical", "promise.json"), "{}\n");
+      const prepared = prepareAgentLaunchFlow(input(root), operations(root, "worker", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).phase).toBe("prepared");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("attempt.json が壊れた兄弟試行では安全側に停止する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      require("node:fs").mkdirSync(path.join(root, "runs", "malformed"), { recursive: true });
+      require("node:fs").writeFileSync(path.join(root, "runs", "malformed", "attempt.json"), "not-json\n");
+      expect(() => prepareAgentLaunchFlow(input(root), operations(root, "worker", []))).toThrow();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("同じ実行記録の起動失敗を準備済み状態で上書きしない", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const launchInput = input(root);
+      const ops = operations(root, "worker", []);
+      prepareAgentLaunchFlow(launchInput, ops);
+      transitionPersistedAttempt(path.join(root, "runs", launchInput.uuid), "launch_failed", "failed");
+      expect(() => prepareAgentLaunchFlow(launchInput, ops)).toThrow(/cannot resume/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("同じ UUID でも不変の起動識別情報が違えば再開しない", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const launchInput = input(root);
+      const ops = operations(root, "worker", []);
+      prepareAgentLaunchFlow(launchInput, ops);
+      expect(() => prepareAgentLaunchFlow({ ...launchInput, repository: "other/repo" }, ops)).toThrow(/identity/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each(["/custom/worktrees/worker", "/home/test/.herdr/worktrees/demo/agent-issue-1"])(
+    "Worker 作業ツリー作成へ設定済みの正確な意図経路 %s を渡す",
+    (expectedPath) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const launchInput = { ...input(root), intendedWorktreePath: expectedPath };
+      const ops: any = operations(root, "worker", []);
+      let intendedPath = "";
+      ops.runner.createWorktree = (request: { intendedPath: string }) => {
+        intendedPath = request.intendedPath;
+        return { workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1", worktreePath: request.intendedPath };
+      };
+      let launchedName = "";
+      ops.runner.listAgents = () => launchedName ? [{ name: launchedName, paneId: "pane-1", cwd: intendedPath, status: "working" }] : [];
+      ops.runText = (args: string[]) => {
+        if (args[0] === "git") return `${"a".repeat(40)}\n`;
+        const index = args.indexOf("--name");
+        if (index >= 0) launchedName = args[index + 1];
+        return "started";
+      };
+      prepareAgentLaunchFlow(launchInput, ops);
+      recordAgentLaunchGithubClaimed(launchInput);
+      launchAgentFlow(launchInput, ops);
+      expect(intendedPath).toBe(expectedPath);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("返された作業ツリーが記録済み経路と違えば起動しない", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const launchInput = input(root, "reviewer");
+      const ops: any = operations(root, "reviewer", []);
+      ops.runner.openWorktree = () => ({ workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1", worktreePath: "/wt/other" });
+      prepareAgentLaunchFlow(launchInput, ops);
+      recordAgentLaunchGithubClaimed(launchInput);
+      expect(() => launchAgentFlow(launchInput, ops)).toThrow(/outside the recorded attempt checkout/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("開始後の担当が返されたルートペインにいなければ agent_started を記録しない", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const launchInput = input(root, "reviewer");
+      const ops: any = operations(root, "reviewer", []);
+      let observations = 0;
+      ops.runner.listAgents = () => ++observations === 1 ? [] : [{ name: require("../src/herdr-agent-name.cjs").deriveHerdr075AgentName({ repository: "owner/repo", role: "reviewer", target: 44, launchUuid: "launch-reviewer" }), paneId: "pane-other", cwd: "/wt/review", status: "working" }];
+      prepareAgentLaunchFlow(launchInput, ops);
+      recordAgentLaunchGithubClaimed(launchInput);
+      expect(() => launchAgentFlow(launchInput, ops)).toThrow(/recorded root pane/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("同じ作業ツリーの過去試行と同じ workspace ID を返したら名前変更前に拒否する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const priorInput = input(root, "reviewer");
+      const priorOps = operations(root, "reviewer", []);
+      prepareAgentLaunchFlow(priorInput, priorOps);
+      recordAgentLaunchGithubClaimed(priorInput);
+      launchAgentFlow(priorInput, priorOps);
+      const nextInput = { ...priorInput, uuid: "launch-reviewer-next" };
+      const calls: string[] = [];
+      const nextOps = operations(root, "reviewer", calls);
+      prepareAgentLaunchFlow(nextInput, nextOps);
+      recordAgentLaunchGithubClaimed(nextInput);
+      expect(() => launchAgentFlow(nextInput, nextOps)).toThrow(/workspace ID used by a prior attempt/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("Worker からレビューと修正へ続く選択済み起動で毎回新しい三つの所有 ID を確認する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const identities = [
+        ["workspace-worker", "tab-worker", "pane-worker"],
+        ["workspace-reviewer", "tab-reviewer", "pane-reviewer"],
+        ["workspace-repair", "tab-repair", "pane-repair"],
+      ];
+      const roles = ["worker", "reviewer", "review-repair"] as const;
+      const observed: string[] = [];
+      for (let index = 0; index < roles.length; index += 1) {
+        const base = input(root, roles[index] === "worker" ? "worker" : "reviewer");
+        const launchInput: any = {
+          ...base, uuid: `chain-${roles[index]}`, role: roles[index], project: "demo", intendedWorktreePath: "/wt/shared",
+          worktree: index === 0 ? { mode: "create", branch: "feature/shared", baseBranch: "origin/main" } : { mode: "open", branch: "feature/shared" },
+          target: index === 0 ? { kind: "issue", number: 1 } : { kind: "pull-request", number: 44 }, resolveWorktreeHead: false,
+        };
+        const ops: any = operations(root, roles[index] === "worker" ? "worker" : "reviewer", []);
+        ops.runner.createWorktree = () => ({ workspaceId: identities[index][0], tabId: identities[index][1], rootPaneId: identities[index][2], worktreePath: "/wt/shared" });
+        ops.runner.openWorktree = ops.runner.createWorktree;
+        ops.runner.listWorktrees = () => index === 0 ? [] : [{ path: "/wt/shared", branch: "feature/shared" }];
+        let launchedName = "";
+        ops.runner.listAgents = () => launchedName ? [{ name: launchedName, paneId: identities[index][2], cwd: "/wt/shared", status: "working" }] : [];
+        ops.runText = (args: string[]) => {
+          const nameIndex = args.indexOf("--name");
+          if (nameIndex >= 0) { launchedName = args[nameIndex + 1]; observed.push(launchedName); }
+          return "started";
+        };
+        prepareAgentLaunchFlow(launchInput, ops); recordAgentLaunchGithubClaimed(launchInput); launchAgentFlow(launchInput, ops);
+      }
+      expect(identities.flat()).toHaveLength(new Set(identities.flat()).size);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("返されたルートペインへ直接起動し追加タブを作らない", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
     const calls: string[] = [];
-    const writes: Record<string, string> = {};
-
-    const result = launchAgentFlow(
-      {
-        worktree: { mode: "open", branch: "feature/review" },
-        repoPath: "/repo",
-        automationDir: "/automation",
-        stateDir: "/state/deadloop",
-        name: "demo-pr-44-reviewer",
-        agent: "pi",
-        model: "",
-        level: "medium",
-        uuid: "U-review",
-        promptFilePrefix: "reviewer-prompt",
-        renderPrompt: ({ promiseFile }) => `review promise: ${promiseFile}`,
-      },
-      {
-        mkdirSync: () => {},
-        runner: {
-          openWorktree: () => {
-            calls.push("openWorktree");
-            return { workspaceId: "workspace-1", worktreePath: "/wt/review" };
-          },
-          createWorktree: () => {
-            throw new Error("unexpected createWorktree");
-          },
-          createTab: () => {
-            calls.push("createTab");
-            return { tabId: "tab-1" };
-          },
-          startAgent: () => {
-            throw new Error("unexpected startAgent");
-          },
-          listWorktrees: () => [],
-          listAgents: () => [],
-          removeAgent: () => "",
-          removeWorktree: () => "",
-        },
-        runText: (args) => {
-          calls.push(args.join(" "));
-          return "launch output";
-        },
-        writeFileSync: (file, text) => {
-          writes[file] = text;
-        },
-      },
-    );
-
-    expect({ result, calls, writes }).toEqual({
-      result: {
-        workspaceId: "workspace-1",
-        tabId: "tab-1",
-        worktreePath: "/wt/review",
-        promptFile: "/state/deadloop/runs/U-review/reviewer-prompt.md",
-        promiseFile: "/state/deadloop/runs/U-review/promise.json",
-        launchOutput: "launch output",
-      },
-      calls: [
-        "openWorktree",
-        "createTab",
-        "node /automation/launch-agent.ts --agent pi --name demo-pr-44-reviewer --cwd /wt/review --repo-path /repo --level medium --model  --uuid U-review --prompt-file /state/deadloop/runs/U-review/reviewer-prompt.md --tab tab-1",
-      ],
-      writes: {
-        "/state/deadloop/runs/U-review/reviewer-prompt.md": "review promise: /state/deadloop/runs/U-review/promise.json",
-      },
-    });
+    try {
+      const launchInput = input(root, "reviewer");
+      const ops = operations(root, "reviewer", calls);
+      prepareAgentLaunchFlow(launchInput, ops);
+      recordAgentLaunchGithubClaimed(launchInput);
+      launchAgentFlow(launchInput, ops);
+      expect(calls).toEqual([
+        "rename",
+        expect.stringContaining("--pane pane-1"),
+      ]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

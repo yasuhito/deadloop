@@ -21,7 +21,7 @@ The GitHub and promise state was mostly correct. The runtime presentation was no
 
 The current launcher creates a worktree workspace, creates another tab, and starts the agent by splitting that tab. Successful agents remain alive after their completion report, so Herdr continues to show them as idle or done.
 
-Herdr 0.7.5 changes the relevant primitive. `agent start` targets an existing available shell pane and never creates, splits, or moves layout. Workspace and worktree creation return the first tab and root pane for that purpose. deadloop currently targets Herdr 0.7.3 semantics and requires an explicit migration.
+Herdr 0.7.5 changes the relevant primitive. `agent start` targets an existing available shell pane and never creates, splits, or moves layout. Workspace and worktree creation return the first tab and root pane for that purpose. Ticket 4 selects these semantics atomically; the human-run installation and Herdr handoff checklist below remains required before operating the merged package.
 
 ## Product outcome
 

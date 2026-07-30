@@ -100,7 +100,7 @@ export function workerFixture() {
       },
     ],
   } satisfies WorkerGithubObservation;
-  return { record, report, github };
+  return { record, report, github, context: { workerReviewLabel: "agent:review" } };
 }
 
 export function reviewerFixture(outcome: "approved" | "changes_requested" | "human_required" = "approved") {

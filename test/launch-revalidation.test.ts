@@ -24,8 +24,8 @@ describe("guarded launch revalidation wiring", () => {
     expect(issueDriver).toMatch(/revalidate:[\s\S]*issueDecisionDeadline\(\)[\s\S]*getIssue\(env\.githubRepo, number\)/);
   });
 
-  it("passes launch revalidation through the shared reviewer launch adapter", () => {
-    expect(launchWithAdapters).toMatch(/withEnabledDriverLaunch\(env, mutate, launch, \{ revalidate \}\)/);
+  it("passes launch revalidation through the non-replaceable guarded reviewer launch boundary", () => {
+    expect(launchWithAdapters).toMatch(/return withEnabledDriverLaunch\(env, mutate, launch, \{[\s\S]*revalidate,[\s\S]*prepareAttempt/);
   });
 
   it("revalidates PR eligibility inside the reviewer launch guard", () => {

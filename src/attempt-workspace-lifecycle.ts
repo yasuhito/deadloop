@@ -112,7 +112,11 @@ export type GithubCompletionObservation =
   | UncertainGithubObservation;
 
 export type CompletionDecisionContext = {
+  workerReadyLabel?: string;
+  workerImplementLabel?: string;
+  workerReviewLabel?: string;
   reviewerExpectedLabels?: readonly string[];
+  reviewerManagedLabels?: readonly string[];
 };
 
 export type CompletionPersistenceDecision = { action: "close" } | { action: "preserve"; reason: RetentionReason };
@@ -221,6 +225,7 @@ export function workerCompletionPersisted(
   record: AttemptRecord,
   report: WorkerReport,
   github: WorkerGithubObservation,
+  reviewLabel: string,
 ): boolean {
   if (!boundToRecord(github, record)) return false;
   const outputRevision = report.result.outputRevision;
@@ -235,7 +240,7 @@ export function workerCompletionPersisted(
     sameSha(pullRequest.headSha, outputRevision) &&
     pullRequest.baseBranch === record.baseBranch &&
     pullRequest.closesIssue === record.target.number &&
-    pullRequest.labels.includes("agent:review") &&
+    pullRequest.labels.includes(reviewLabel) &&
     markerMatches(pullRequest.marker, record, "complete", outputRevision) &&
     !github.issueClaimable &&
     !sameSha(outputRevision, record.inputRevision.head)
@@ -248,10 +253,12 @@ export function reviewerCompletionPersisted(
   report: ReviewerReport,
   github: ReviewerGithubObservation,
   expectedLabels: readonly string[],
+  managedLabels: readonly string[] = expectedLabels,
 ): boolean {
   if (report.result.outcome === "human_required") return false;
   if (!boundToRecord(github, record) || !sameSha(github.headSha, record.inputRevision.head)) return false;
-  if (!sameStringSet(github.labels, expectedLabels)) return false;
+  const managed = new Set(managedLabels);
+  if (!sameStringSet(github.labels.filter((label) => managed.has(label)), expectedLabels)) return false;
   const persistence = github.reviewPersistence;
   if (
     !persistence ||
@@ -329,12 +336,19 @@ function rolePredicate(
 ): boolean {
   if (report.role !== github.role) return false;
   if (report.role === "worker" && github.role === "worker") {
-    return workerCompletionPersisted(record, report, github);
+    return context.workerReviewLabel !== undefined
+      && workerCompletionPersisted(record, report, github, context.workerReviewLabel);
   }
   if (report.role === "reviewer" && github.role === "reviewer") {
     return (
       context.reviewerExpectedLabels !== undefined &&
-      reviewerCompletionPersisted(record, report, github, context.reviewerExpectedLabels)
+      reviewerCompletionPersisted(
+        record,
+        report,
+        github,
+        context.reviewerExpectedLabels,
+        context.reviewerManagedLabels ?? context.reviewerExpectedLabels,
+      )
     );
   }
   if (report.role === "review-repair" && github.role === "review-repair") {

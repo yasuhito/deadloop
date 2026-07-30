@@ -53,16 +53,20 @@ function selectedAutomation(project: NormalizedProject, driver: string) {
 function observeAgentLaunch(project: NormalizedProject, role: "worker" | "reviewer"): string[] {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-configuration-launch-"));
   let agentArgv: string[] | undefined;
+  let launchedAgent: { name: string; paneId: string; cwd: string } | undefined;
+  const checkout = (branch: string) => path.join(sandbox, branch.replace(/\//g, "-"));
 
   const runner: RunnerAdapter = {
-    createWorktree: () => ({ workspaceId: "workspace", worktreePath: sandbox }),
-    openWorktree: () => ({ workspaceId: "workspace", worktreePath: sandbox }),
-    createTab: () => ({ tabId: "tab" }),
-    closeTab: () => "",
+    createWorktree: (input) => ({ workspaceId: "workspace", tabId: "tab", rootPaneId: "pane", worktreePath: checkout(input.branch) }),
+    openWorktree: (input) => ({ workspaceId: "workspace", tabId: "tab", rootPaneId: "pane", worktreePath: checkout(input.branch) }),
+    renameWorkspace: () => "",
     startAgent: () => "",
-    listWorktrees: () => [],
-    listAgents: () => [],
-    removeAgent: () => "",
+    closeWorkspace: () => "",
+    listWorkspaces: () => [],
+    listWorktrees: () => role === "reviewer"
+      ? [{ path: checkout("agent/configuration-observation"), branch: "agent/configuration-observation" }]
+      : [],
+    listAgents: () => launchedAgent ? [{ ...launchedAgent, status: "working" }] : [],
     removeWorktree: () => "",
   };
   const ops = {
@@ -73,8 +77,9 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
       return launchAgent(command.slice(2), {
         readClaudeConfig: () => ({ projects: { "/repo": { hasTrustDialogAccepted: true } } }),
         runner: {
-          startAgent: (input: { agentArgv: string[] }) => {
-            agentArgv = input.agentArgv;
+          startAgent: (input: { name: string; kind: string; rootPaneId: string; nativeAgentArgv: string[] }) => {
+            agentArgv = [input.kind, ...input.nativeAgentArgv];
+            launchedAgent = { name: input.name, paneId: input.rootPaneId, cwd: command[command.indexOf("--cwd") + 1] };
             return "{}\n";
           },
         },
@@ -91,6 +96,8 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
         ...process.env,
         ...automationEnvironment(project, automation),
         DEADLOOP_STATE_DIR: sandbox,
+        DEADLOOP_WORKTREE_ROOT: sandbox,
+        DEADLOOP_GITHUB_REPO: project.githubRepo || "owner/repo",
       });
       launchIssueWorkerFlow({ number: 12, title: "configuration observation" }, env, ops);
     } else {
@@ -99,9 +106,11 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
         ...process.env,
         ...automationEnvironment(project, automation),
         DEADLOOP_STATE_DIR: sandbox,
+        DEADLOOP_WORKTREE_ROOT: sandbox,
+        DEADLOOP_GITHUB_REPO: project.githubRepo || "owner/repo",
       });
       launchPrReviewerFlow(
-        { number: 24, headRefName: "agent/configuration-observation", headRefOid: "head" },
+        { number: 24, headRefName: "agent/configuration-observation", headRefOid: "a".repeat(40) },
         env,
         "configuration observation",
         ops,

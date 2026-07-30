@@ -34,12 +34,12 @@ describe("agent launch template migration", () => {
     expect(issueCoordinatorWorkerResult().driverAction).toBe("worker_monitor_request");
   });
 
-  it("launches the review agent through launch-agent in the pr reviewer", () => {
-    expect(readTemplate("pr-reviewer.prompt.md")).toMatch(/launch-agent\.ts/);
+  it("keeps review launch inside the deterministic driver", () => {
+    expect(readTemplate("pr-reviewer.prompt.md")).toContain("deterministic driver opens one fresh Herdr workspace");
   });
 
-  it("selects the review agent kind from the reviewerAgent template value", () => {
-    expect(readTemplate("pr-reviewer.prompt.md")).toMatch(/--agent\s+"?\{\{reviewerAgent\}\}"?/);
+  it("keeps reviewerAgent as driver configuration", () => {
+    expect(readTemplate("pr-reviewer.prompt.md")).toContain("reviewerAgent: `{{reviewerAgent}}`");
   });
 
   it("keeps no hard-coded pi agent kind in the pr reviewer launch", () => {

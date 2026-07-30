@@ -191,7 +191,12 @@ Given("作業場所の信頼が承認されていない", function (this: Safety
   fs.writeFileSync(path.join(this.trustRoot, "prompt.md"), "Implement the issue.\n");
   fs.writeFileSync(
     path.join(binDir, "herdr"),
-    `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(this.trustLaunchMarker)}, "started");\n`,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");
+else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
+else require("node:fs").writeFileSync(${JSON.stringify(this.trustLaunchMarker)}, "started");
+`,
     { mode: 0o755 },
   );
 });

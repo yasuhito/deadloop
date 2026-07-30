@@ -3,6 +3,8 @@
 // script can run directly with `node pr-reviewer-decisions.ts` in this package.
 
 const fs = require("node:fs") as typeof import("node:fs");
+const path = require("node:path") as typeof import("node:path");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 
 type AnyRecord = Record<string, any>;
 
@@ -141,31 +143,36 @@ function prNumberForPrReviewer(pr: AnyRecord): number {
   return Number.isFinite(number) ? number : 0;
 }
 
-function iterAgentsForPrReviewer(data: unknown): AnyRecord[] {
-  let value = data;
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const record = value as AnyRecord;
-    if (record.result && typeof record.result === "object" && !Array.isArray(record.result)) value = record.result;
+function attemptJournalsForPrReviewer(stateDir: string): AnyRecord[] {
+  const runsRoot = path.join(stateDir, "runs");
+  let entries: string[];
+  try { entries = fs.readdirSync(runsRoot); } catch { return []; }
+  const attempts: AnyRecord[] = [];
+  for (const entry of entries) {
+    const file = path.join(runsRoot, entry, "attempt.json");
+    if (!fs.existsSync(file)) continue;
+    try { attempts.push(readAttemptRecord(path.dirname(file)) as AnyRecord); }
+    catch (error) { throw new Error(`cannot safely classify live PR ownership because ${file} is malformed`, { cause: error }); }
   }
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const agents = (value as AnyRecord).agents;
-    return Array.isArray(agents) ? agents.filter((agent: unknown) => agent && typeof agent === "object") : [];
-  }
-  return Array.isArray(value) ? value.filter((agent: unknown) => agent && typeof agent === "object") : [];
+  return attempts;
 }
 
-function workingReviewerPrNumbers(agents: unknown, projectId: string): Set<number> {
+function workingReviewerPrNumbers(
+  _agents: unknown,
+  projectId: string,
+  attempts: AnyRecord[] = [],
+  githubRepo = "",
+): Set<number> {
   if (!projectId) return new Set();
-  const pattern = new RegExp(
-    `^${projectId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-pr-(\\d+)-(?:reviewer|branch-update-[0-9a-f]+|review-repair-[0-9a-f]+)$`,
-  );
-  const working = new Set<number>();
-  for (const agent of iterAgentsForPrReviewer(agents)) {
-    if (String(agent.agent_status || "").toLowerCase() !== "working") continue;
-    const match = pattern.exec(String(agent.name || ""));
-    if (match) working.add(Number(match[1]));
+  const owned = new Set<number>();
+  for (const attempt of attempts) {
+    if (attempt.project !== projectId || (githubRepo && attempt.repository !== githubRepo)) continue;
+    if (!["reviewer", "review-repair", "branch-update"].includes(String(attempt.role || ""))) continue;
+    if (attempt.target?.kind !== "pull-request" || !Number.isInteger(attempt.target?.number)) continue;
+    if (attempt.phase === "workspace_closed") continue;
+    owned.add(Number(attempt.target.number));
   }
-  return working;
+  return owned;
 }
 
 function skipForPrReviewer(reason: string, pr: AnyRecord): AnyRecord {
@@ -186,14 +193,11 @@ function selectPrForReview(prs: AnyRecord[], config: ReviewDecisionConfig = defa
       skipped.push(skipForPrReviewer("blocked", pr));
       continue;
     }
-    let staleReclaim = false;
-    if (labels.has(config.reviewingLabel)) {
-      if (workingReviewerPrs.has(prNumberForPrReviewer(pr))) {
-        skipped.push(skipForPrReviewer("reviewer_working", pr));
-        continue;
-      }
-      staleReclaim = true;
+    if (workingReviewerPrs.has(prNumberForPrReviewer(pr))) {
+      skipped.push(skipForPrReviewer("reviewer_working", pr));
+      continue;
     }
+    const staleReclaim = labels.has(config.reviewingLabel);
     if (pr.isDraft) {
       return { selected: true, number: pr.number, action: "draft_gate", reason: "draft", staleReclaim, skipped };
     }
@@ -293,7 +297,12 @@ function main(argv: string[] = process.argv.slice(2)): number {
   const config = cliConfig(args);
   const decision = args.mode === "external-review-gate"
     ? externalReviewGate(loadPr(args.input), config)
-    : selectPrForReview(loadPrs(args.input), config, workingReviewerPrNumbers(loadAgents(args.agents), config.projectId));
+    : selectPrForReview(loadPrs(args.input), config, workingReviewerPrNumbers(
+      loadAgents(args.agents),
+      config.projectId,
+      args.stateDir ? attemptJournalsForPrReviewer(args.stateDir) : [],
+      args.githubRepo || "",
+    ));
   process.stdout.write(`${JSON.stringify(decision)}\n`);
   return args.exitCode && !decision.selected ? 1 : 0;
 }
@@ -311,5 +320,6 @@ module.exports = {
   defaultDecisionConfig,
   externalReviewGate,
   selectPrForReview,
+  attemptJournalsForPrReviewer,
   workingReviewerPrNumbers,
 };

@@ -52,8 +52,10 @@ function trackedFileSurvivesCleanup(): boolean {
     writeExecutable(path.join(binPath, "herdr"), [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
+      'if [ "${1:-}" = "--version" ]; then printf \'herdr 0.7.5\\n\'; exit 0; fi',
+      'if [ "${1:-} ${2:-}" = "status server" ]; then printf \'version: 0.7.5\\ncompatible: yes\\n\'; exit 0; fi',
       'if [ "${1:-}" = "worktree" ] && [ "${2:-}" = "list" ]; then',
-      `  printf '%s\\n' '{"result":{"worktrees":[{"branch":"agent/issue-1-cleanup","is_linked_worktree":true,"open_workspace_id":"wW","path":"${worktreePath}"}]}}'`,
+      `  printf '%s\\n' '{"result":{"worktrees":[{"branch":"agent/issue-1-cleanup","is_linked_worktree":true,"path":"${worktreePath}"}]}}'`,
       "  exit 0",
       "fi",
       'if [ "${1:-}" = "worktree" ] && [ "${2:-}" = "remove" ]; then exit 0; fi',

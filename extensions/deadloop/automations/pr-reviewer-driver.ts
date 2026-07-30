@@ -7,7 +7,7 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { planPrReviewerAction } = require("./pr-reviewer-flow.ts");
-const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { decideBranchUpdateLive } = require("./pr-branch-update-decision.ts");
@@ -24,9 +24,11 @@ const {
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
+import type { RunnerAdapter } from "../../../src/runner";
 
 type LabelMove = { remove?: string | string[]; add?: string | string[] };
 type GithubEffect =
@@ -52,6 +54,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     githubRepo: source.DEADLOOP_GITHUB_REPO || "",
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
+    worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
     automationDir: SCRIPT_DIR,
     stateDir:
       source.DEADLOOP_STATE_DIR ||
@@ -116,31 +119,36 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
   };
 }
 
-function fixtureHerdrRunner(branch: string) {
-  return {
-    createWorktree: () => ({ workspaceId: "fixture-workspace", worktreePath: `/worktrees/fixture/${branch.replace(/\//g, "-")}` }),
-    openWorktree: () => ({ workspaceId: "fixture-workspace", worktreePath: `/worktrees/fixture/${branch.replace(/\//g, "-")}` }),
-    createTab: () => ({ tabId: "fixture-tab" }),
-    startAgent: () => "",
-    listWorktrees: () => [],
-    listAgents: () => [],
-    removeAgent: () => "",
-    removeWorktree: () => "",
-  };
-}
-
 type DriverLaunchInput = {
   worktree: { mode: "open"; branch: string };
   repoPath: string;
   automationDir: string;
   stateDir: string;
-  name: string;
+  workspaceLabel: string;
   agent: string;
   model: string;
   level: string;
   uuid: string;
   promptFilePrefix: string;
+  project: string;
+  repository: string;
+  role: "reviewer" | "branch-update";
+  target: { kind: "pull-request"; number: number };
+  inputRevision: { head: string; base?: string };
+  intendedWorktreePath: string;
+  autoMergePolicy?: boolean;
   renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
+};
+
+type SelectedAgentLaunchOperations = {
+  mkdirSync: (dir: string, options: { recursive: true; mode?: number }) => void;
+  runner?: RunnerAdapter;
+  runText: (args: string[]) => string;
+  writeFileSync: (file: string, text: string, encoding: "utf8") => void;
+};
+
+type SelectedLaunchOperations = {
+  agentLaunchOps?: SelectedAgentLaunchOperations;
 };
 
 function launchWithAdapters(
@@ -149,37 +157,40 @@ function launchWithAdapters(
   input: DriverLaunchInput,
   mutateWorkflowState: (github: ReturnType<typeof githubOperations>) => void,
   revalidate: () => void,
+  operations?: SelectedLaunchOperations,
 ): JsonObject {
   const mutate = (recheck: () => void) => mutateWorkflowState(
     fixture ? fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations> : githubOperations(recheck),
   );
-  const launch = (recheck: () => void) => launchAgentFlow(
-    input,
-    fixture
-      ? {
-          mkdirSync: () => {},
-          runner: fixtureHerdrRunner(input.worktree.branch),
-          runText: (args: string[]) => {
-            const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
-            fixtureEffects(fixture).herdrStarts.push({
-              name: valueAfter("--name"),
-              agent: valueAfter("--agent"),
-              branch: input.worktree.branch,
-            });
-            return JSON.stringify({ ok: true });
-          },
-          writeFileSync: () => {},
-          beforeAgentStart: recheck,
-        }
-      : { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
-  );
-
-  if (fixture) {
+  if (fixture && !operations?.agentLaunchOps) {
     revalidate();
     mutate(() => {});
-    return launch(() => {});
+    fixtureEffects(fixture).herdrStarts.push({
+      name: input.workspaceLabel,
+      agent: input.agent,
+      branch: input.worktree.branch,
+    });
+    const runDir = path.join(input.stateDir, "runs", input.uuid);
+    const worktreePath = `/worktrees/fixture/${input.worktree.branch.replace(/\//g, "-")}`;
+    return {
+      workspaceId: `fixture-workspace-${input.role}`,
+      tabId: `fixture-tab-${input.role}`,
+      rootPaneId: `fixture-pane-${input.role}`,
+      worktreePath,
+      promptFile: path.join(runDir, `${input.promptFilePrefix}.md`),
+      promiseFile: path.join(runDir, "promise.json"),
+      attemptRecordFile: path.join(runDir, "attempt.json"),
+      simulated: true,
+    };
   }
-  return withEnabledDriverLaunch(env, mutate, launch, { revalidate });
+  const ops = operations?.agentLaunchOps
+    || { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync };
+  const launch = (recheck: () => void) => launchAgentFlow(input, { ...ops, beforeAgentStart: recheck });
+  return withEnabledDriverLaunch(env, mutate, launch, {
+    revalidate,
+    prepareAttempt: () => prepareAgentLaunchFlow(input, ops),
+    recordClaim: () => recordAgentLaunchGithubClaimed(input),
+  });
 }
 
 function reviewAgentPrompt(
@@ -380,38 +391,64 @@ function applyBranchUpdateBlocked(
   return { comment, applied };
 }
 
-function launchBranchUpdate(
+function branchUpdateLaunchPlan(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
-  fixture: JsonObject | null,
   decision: JsonObject,
-): JsonObject {
+  uuid: string,
+): { updaterName: string; headRefName: string; retryKey: string; marker: string; input: DriverLaunchInput } {
   const number = Number(pr.number || 0);
   const branch = String(pr.headRefName || "");
   const headOid = String(decision.headOid || pr.headRefOid || "");
   const baseOid = String(decision.baseOid || "");
   const key = branchUpdateRetryKey(headOid, baseOid);
   const updaterName = `${env.projectId}-pr-${number}-branch-update-${key}`;
-  const uuid = fixture ? "fixture-branch-update-uuid" : randomUUID();
-  const marker = renderBranchUpdateMarker(headOid, baseOid);
-  if (!fixture) runText(["git", "check-ref-format", "--branch", branch]);
-  const launch = launchWithAdapters(
-    env,
-    fixture,
-    {
+  return {
+    updaterName,
+    headRefName: branch,
+    retryKey: key,
+    marker: renderBranchUpdateMarker(headOid, baseOid),
+    input: {
       worktree: { mode: "open", branch },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
       stateDir: env.stateDir,
-      name: updaterName,
+      workspaceLabel: updaterName,
       agent: env.branchUpdateAgent,
       model: env.branchUpdateModel,
       level: "medium",
       uuid,
       promptFilePrefix: "branch-update-prompt",
+      project: env.projectId,
+      repository: env.githubRepo,
+      role: "branch-update",
+      target: { kind: "pull-request", number },
+      inputRevision: { head: headOid, base: baseOid },
+      intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid, uuid),
     },
+  };
+}
+
+function launchBranchUpdate(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  decision: JsonObject,
+  operations?: SelectedLaunchOperations,
+): JsonObject {
+  const number = Number(pr.number || 0);
+  const uuid = fixture ? "fixture-branch-update-uuid" : randomUUID();
+  const plan = branchUpdateLaunchPlan(pr, env, decision, uuid);
+  const { headRefName: branch, retryKey: key, marker } = plan;
+  const headOid = plan.input.inputRevision.head;
+  const baseOid = String(plan.input.inputRevision.base || "");
+  if (!fixture) runText(["git", "check-ref-format", "--branch", branch]);
+  const launch = launchWithAdapters(
+    env,
+    fixture,
+    plan.input,
     (github) => {
       github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
       github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
@@ -429,8 +466,9 @@ function launchBranchUpdate(
         || branchUpdateAttemptExists(livePlan.pr.comments || [], headOid, baseOid)
       ) throw new StaleLaunchError(`PR #${number} branch-update target changed before launch`);
     },
+    operations,
   );
-  return { updaterName, headRefName: branch, retryKey: key, ...launch, ...(fixture ? { simulated: true } : {}) };
+  return { updaterName: plan.updaterName, headRefName: branch, retryKey: key, ...launch, ...(fixture && !operations?.agentLaunchOps ? { simulated: true } : {}) };
 }
 
 function prReviewerLaunchPlan(
@@ -450,12 +488,19 @@ function prReviewerLaunchPlan(
       repoPath: env.repoPath,
       automationDir: env.automationDir,
       stateDir: env.stateDir,
-      name: reviewerName,
+      workspaceLabel: reviewerName,
       agent: env.reviewerAgent,
       model: env.reviewerModel,
       level: "medium",
       uuid,
       promptFilePrefix: "reviewer-prompt",
+      project: env.projectId,
+      repository: env.githubRepo,
+      role: "reviewer",
+      autoMergePolicy: env.autoMerge,
+      target: { kind: "pull-request", number },
+      inputRevision: { head: String(pr.headRefOid || "") },
+      intendedWorktreePath: path.join(env.worktreeRoot, headRefName.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath, uuid),
     },
@@ -469,6 +514,8 @@ function launchPrReviewerFlow(
   ops: Parameters<typeof launchAgentFlow>[1],
 ): JsonObject {
   const plan = prReviewerLaunchPlan(pr, env, reason, randomUUID());
+  prepareAgentLaunchFlow(plan.input, ops);
+  recordAgentLaunchGithubClaimed(plan.input);
   const launch = launchAgentFlow(plan.input, ops);
   return { reviewerName: plan.reviewerName, headRefName: plan.headRefName, ...launch };
 }
@@ -514,15 +561,13 @@ node ${shellQuote(env.automationDir)}/extract-worker-promise.ts --file '<promise
 herdr agent list
 herdr pane list
 \`\`\`
-2. Inspect leftover worktrees or branches before cleanup.
-   Not applicable: the draft gate did not create a worktree or branch.
+2. Inspect retained workspaces or branches.
+   Not applicable: the draft gate did not create a worktree, workspace, or branch. Do not remove another attempt's evidence.
    \`\`\`bash
+herdr workspace list
 herdr worktree list --cwd ${shellQuote(env.repoPath)} --json
 git -C ${shellQuote(env.repoPath)} worktree list
 git -C ${shellQuote(env.repoPath)} branch --list ${shellQuote(headRefName)}
-herdr worktree remove --workspace '<workspaceId>'
-git -C ${shellQuote(env.repoPath)} worktree remove '<worktreePath>'
-git -C ${shellQuote(env.repoPath)} branch -d ${shellQuote(headRefName)}
 \`\`\`
 3. Re-queue the target issue after fixing the cause.
    \`\`\`bash
@@ -562,6 +607,9 @@ function applyExternalReviewRequest(
 }
 
 function drive(fixturePath: string | undefined): DriverResult {
+  if (!fixturePath) {
+    runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
+  }
   const fixture = loadFixture(fixturePath);
   const env = envConfig();
   if (!env.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
@@ -663,6 +711,7 @@ function drive(fixturePath: string | undefined): DriverResult {
         branch: String(plan.pr.headRefName || ""),
         automationDir: env.automationDir,
         promiseFile: String(launch.promiseFile || ""),
+        attemptRecordFile: String(launch.attemptRecordFile || ""),
         actorName: "branch-update worker",
         projectId: env.projectId,
         repoPath: env.repoPath,
@@ -755,9 +804,11 @@ function drive(fixturePath: string | undefined): DriverResult {
     branch: String(pr.headRefName || ""),
     automationDir: env.automationDir,
     promiseFile: String(launch.promiseFile || ""),
+    attemptRecordFile: String(launch.attemptRecordFile || ""),
     actorName: "reviewer",
     projectId: env.projectId,
     repoPath: env.repoPath,
+    worktreeRoot: env.worktreeRoot,
     githubRepo: env.githubRepo,
     stateDir: env.stateDir,
     enabledAt: env.enabledAt,
@@ -771,6 +822,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     workerAgent: env.branchUpdateAgent,
     workerModel: env.branchUpdateModel,
     repairRemote: env.reviewRepairRemote,
+    autoMerge: env.autoMerge,
     humanLabel: env.humanLabel,
     reviewLabel: env.reviewLabel,
     reviewingLabel: env.reviewingLabel,
@@ -800,4 +852,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { envConfig, launchPrReviewerFlow };
+module.exports = { envConfig, launchBranchUpdate, launchPrReviewerFlow };

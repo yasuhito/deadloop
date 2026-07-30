@@ -133,16 +133,16 @@ describe("attempt lifecycle contract", () => {
     expect(observed).toBe(true);
   });
 
-  it("permits advancing past a phase which does not apply to the attempt", () => {
+  it("rejects skipping the guarded GitHub claim phase", () => {
     const record = preparedAttempt();
 
-    expect(transitionAttempt(record, "workspace_opened").phase).toBe("workspace_opened");
+    expect(() => transitionAttempt(record, "workspace_opened")).toThrow("cannot transition");
   });
 
   it("rejects a lifecycle phase which does not advance", () => {
     const record = transitionAttempt(preparedAttempt(), "github_claimed");
 
-    expect(() => transitionAttempt(record, "prepared")).toThrow("must advance beyond github_claimed");
+    expect(() => transitionAttempt(record, "prepared")).toThrow("cannot transition");
   });
 
   it("retains the last successful phase when launch fails", () => {

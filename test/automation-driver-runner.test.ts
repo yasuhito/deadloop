@@ -309,7 +309,7 @@ describe("deterministic automation driver runner", () => {
     const entry: Record<string, unknown> = {
       pendingDriverHandoff: {
         action: "needs_llm",
-        monitorHandoff: { kind: "issue", input: { enabledAt: 1 } },
+        monitorHandoff: { kind: "issue", input: { enabledAt: 1, promiseFile: "/runs/one/promise.json", reviewLabel: "custom:review" } },
         prompt: "stale prompt",
       },
     };

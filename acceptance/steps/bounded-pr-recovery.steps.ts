@@ -32,7 +32,7 @@ function loggedAgentStartCount(result: Record<string, unknown> | undefined): num
 
 function loggedRepairAgentStartCount(result: Record<string, unknown> | undefined): number {
   return String(result?.herdrLog || "").split("\n").filter((line) =>
-    line.startsWith("agent start ") && line.includes("-review-repair-"),
+    /^agent start dl-x-31-[0-9a-f]{12} /.test(line),
   ).length;
 }
 
@@ -72,7 +72,8 @@ function repairDispatch(testCase: string): Record<string, unknown> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-acceptance-review-repair-"));
   try {
     const bin = path.join(root, "bin");
-    const worktree = path.join(root, "worktree");
+    const worktreeRoot = path.join(root, "worktrees");
+    const worktree = path.join(worktreeRoot, "agent-issue-31");
     const configDir = path.join(root, "config");
     const state = path.join(configDir, "deadloop");
     const promise = path.join(root, "review-promise.json");
@@ -81,7 +82,7 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     const labelsFile = path.join(root, "labels.json");
     const commentsFile = path.join(root, "comments.json");
     fs.mkdirSync(bin);
-    fs.mkdirSync(worktree);
+    fs.mkdirSync(worktree, { recursive: true });
     fs.mkdirSync(state, { recursive: true });
     fs.writeFileSync(labelsFile, JSON.stringify(["agent:review", "agent:reviewing"]));
     fs.writeFileSync(
@@ -158,10 +159,14 @@ if (args.includes("get-url")) process.stdout.write("https://github.com/owner/rep
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TEST_HERDR_LOG, args.join(" ") + "\\n");
-if (args[0] === "worktree" && args[1] === "open") process.stdout.write(JSON.stringify({workspace_id: "workspace-1", path: process.env.TEST_WORKTREE}));
-else if (args[0] === "agent" && args[1] === "list") process.stdout.write(JSON.stringify({result: {agents: []}}));
-else if (args[0] === "tab" && args[1] === "create") process.stdout.write(JSON.stringify({tab_id: "tab-1"}));
-else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.stringify({ok: true}));
+if (args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");
+else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
+else if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result: {worktrees: [{path: process.env.TEST_WORKTREE, branch: "agent/issue-31"}]}}));
+else if (args[0] === "worktree" && args[1] === "open") process.stdout.write(JSON.stringify({result: {type: "worktree_opened", already_open: false, workspace: {workspace_id: "workspace-1"}, tab: {tab_id: "tab-1", workspace_id: "workspace-1"}, root_pane: {pane_id: "pane-1", tab_id: "tab-1", workspace_id: "workspace-1", cwd: process.env.TEST_WORKTREE}, worktree: {path: process.env.TEST_WORKTREE}}}));
+else if (args[0] === "workspace" && args[1] === "list") process.stdout.write(JSON.stringify({result: {workspaces: []}}));
+else if (args[0] === "workspace" && args[1] === "rename") process.stdout.write("renamed");
+else if (args[0] === "agent" && args[1] === "list") process.stdout.write(JSON.stringify({result: {agents: fs.existsSync(process.env.TEST_HERDR_LOG + ".agent") ? [JSON.parse(fs.readFileSync(process.env.TEST_HERDR_LOG + ".agent", "utf8"))] : []}}));
+else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.env.TEST_HERDR_LOG + ".agent", JSON.stringify({terminal_id:"terminal-1",name:args[2],agent_status:"working",cwd:process.env.TEST_WORKTREE,pane_id:args[args.indexOf("--pane")+1]})); process.stdout.write(JSON.stringify({ok: true})); }
 `,
     );
     const result = spawnSync(
@@ -176,6 +181,7 @@ else if (args[0] === "agent" && args[1] === "start") process.stdout.write(JSON.s
           PI_CODING_AGENT_DIR: configDir,
           DEADLOOP_PROJECT_ID: "demo",
           DEADLOOP_REPO_PATH: root,
+          DEADLOOP_WORKTREE_ROOT: worktreeRoot,
           DEADLOOP_GITHUB_REPO: "owner/repo",
           DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,

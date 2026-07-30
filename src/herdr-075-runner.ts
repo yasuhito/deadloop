@@ -143,7 +143,7 @@ function createHerdr075Runner(ops: { runText: RunText; runJson: RunJson }): Herd
     },
     closeWorkspace(input) {
       const output = ops.runText("herdr", ["workspace", "close", input.workspaceId]);
-      if (workspaceIds(ops.runJson("herdr", ["workspace", "list", "--json"])).includes(input.workspaceId)) {
+      if (workspaceIds(ops.runJson("herdr", ["workspace", "list"])).includes(input.workspaceId)) {
         throw new Herdr075RunnerError(`workspace ${input.workspaceId} remains after close`);
       }
       if (

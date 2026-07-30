@@ -3,11 +3,16 @@
 // public result. This handler never pushes or launches work.
 
 const fs = require("node:fs") as typeof import("node:fs");
+const path = require("node:path") as typeof import("node:path");
 const { validatePromise } = require("./extract-worker-promise.ts");
 const { publicText, renderRepairSuccessComment, repairResultCommentExists } = require("./pr-review-comments.ts");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
+const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -19,7 +24,7 @@ function parseArgs(argv: string[]): JsonObject {
     if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs");
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
-  for (const name of ["promise", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "reviewingLabel", "blockedLabel"]) {
+  for (const name of ["promise", "attemptRecord", "projectId", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "reviewingLabel", "blockedLabel"]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
   return values;
@@ -56,7 +61,28 @@ function sameFindingTitles(repairs: JsonObject[], findingTitles: unknown): boole
 
 function completion(args: JsonObject): DriverResult {
   const runner = createCommandRunner();
-  const validation = validatePromise(String(args.promise));
+  runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
+  const location = canonicalAttemptLocation(args);
+  const record = readAttemptRecord(location.runDir);
+  assertAttemptProjectBinding(record, args);
+  for (const [field, value, basename] of [
+    ["promise", args.promise, "promise.json"],
+    ["result", args.result, "finalizer-result.json"],
+    ["contract", args.contract, "review-contract.json"],
+  ] as const) {
+    const expected = path.join(location.runDir, basename);
+    const supplied = path.resolve(String(value));
+    if (supplied !== expected || (fs.existsSync(supplied) && fs.realpathSync(supplied) !== expected)) {
+      throw new Error(`${field} must be the canonical ${basename} in the attempt run directory`);
+    }
+  }
+  if (record.role !== "review-repair" || record.target.kind !== "pull-request"
+    || record.target.number !== Number(args.pr) || record.branch !== String(args.branch)
+    || String(record.inputRevision.head).toLowerCase() !== String(args.expectedHead).toLowerCase()
+    || record.attemptId !== String(args.attemptKey)) {
+    throw new Error("attempt journal does not exactly bind the requested repair completion");
+  }
+  const validation = validatePromise(String(args.promise), location.attemptRecord);
   const receipt = readJson(String(args.result));
   const contract = readJson(String(args.contract));
   const expectedHead = String(args.expectedHead).toLowerCase();
@@ -125,13 +151,18 @@ function completion(args: JsonObject): DriverResult {
       if (repairResultCommentExists(comments, String(args.attemptKey), receiptHead, automationLogin)) {
         return driverResult("done", `PR #${args.pr} repair result was already posted`, { driverAction: "repair_result_duplicate" });
       }
-      const comment = renderRepairSuccessComment({
+      const marker = renderAttemptPersistenceMarker(
+        record,
+        JSON.parse(fs.readFileSync(String(args.promise), "utf8")),
+        { pushRecorded: true, successClaimRecorded: true, validationPassed: true },
+      );
+      const comment = `${renderRepairSuccessComment({
         attemptKey: args.attemptKey,
         originalHeadOid: args.expectedHead,
         newHeadOid: receipt.headOid,
         repairs: validation.promise.repairs,
         checks: receipt.checks,
-      });
+      })}${marker ? `\n${marker}` : ""}`;
       github.commentPr(String(args.githubRepo), String(args.pr), comment);
       return driverResult("done", `PR #${args.pr} repair result posted`, { driverAction: "repair_result_posted", comment });
     }

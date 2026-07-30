@@ -20,7 +20,7 @@ const {
   renderHumanRequiredComment,
   reviewCommentExists,
 } = require("./pr-review-comments.ts");
-const { launchAgentFlow } = require("../../../src/agent-launch-flow.ts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const {
   createCommandRunner,
@@ -30,9 +30,13 @@ const {
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
+import type { RunnerAdapter } from "../../../src/runner";
 
 const commandRunner = createCommandRunner();
 
@@ -46,6 +50,7 @@ function envConfig(args: JsonObject = {}) {
   return {
     projectId: configValue(args, "projectId", process.env.DEADLOOP_PROJECT_ID, "project"),
     repoPath: configValue(args, "repoPath", process.env.DEADLOOP_REPO_PATH, "."),
+    worktreeRoot: configValue(args, "worktreeRoot", process.env.DEADLOOP_WORKTREE_ROOT, path.join(os.homedir(), ".herdr", "worktrees", configValue(args, "projectId", process.env.DEADLOOP_PROJECT_ID, "project"))),
     githubRepo: configValue(args, "githubRepo", process.env.DEADLOOP_GITHUB_REPO, ""),
     enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
     stateDir: configValue(
@@ -61,6 +66,7 @@ function envConfig(args: JsonObject = {}) {
     reviewLabel: configValue(args, "reviewLabel", process.env.DEADLOOP_REVIEW_LABEL, "agent:review"),
     reviewingLabel: configValue(args, "reviewingLabel", process.env.DEADLOOP_REVIEWING_LABEL, "agent:reviewing"),
     blockedLabel: configValue(args, "blockedLabel", process.env.DEADLOOP_BLOCKED_LABEL, "agent:blocked"),
+    humanLabel: configValue(args, "humanLabel", process.env.DEADLOOP_HUMAN_LABEL, "ready-for-human"),
     automationDir,
   };
 }
@@ -235,7 +241,7 @@ Promise report:
 - Do not claim success unless the finalizer returned pushed or stale_head.`;
 }
 
-function repairAgentName(prNumber: string, key: string, env: ReturnType<typeof envConfig>): string {
+function repairWorkspaceLabel(prNumber: string, key: string, env: ReturnType<typeof envConfig>): string {
   return `${env.projectId}-pr-${prNumber}-review-repair-${key}`;
 }
 
@@ -243,7 +249,7 @@ function launchEvidenceFile(prNumber: string, key: string, env: ReturnType<typeo
   return path.join(env.stateDir, "review-repair-launches", `${env.projectId}-pr-${prNumber}-${key}.json`);
 }
 
-type RepairLaunchMetadata = { repairName: string; promiseFile: string };
+type RepairLaunchMetadata = { repairName: string; promiseFile: string; launchUuid?: string; phase?: string };
 
 function findRunMetadata(expectedHead: string, key: string, env: ReturnType<typeof envConfig>): RepairLaunchMetadata | null {
   const runsDir = path.join(env.stateDir, "runs");
@@ -254,8 +260,14 @@ function findRunMetadata(expectedHead: string, key: string, env: ReturnType<type
     const runDir = path.join(runsDir, entry);
     try {
       const contract = JSON.parse(fs.readFileSync(path.join(runDir, "review-contract.json"), "utf8"));
-      if (contract?.attemptKey === key && String(contract?.expectedHead || "").toLowerCase() === expectedHead.toLowerCase()) {
-        matches.push({ repairName: "", promiseFile: path.join(runDir, "promise.json") });
+      const attempt = JSON.parse(fs.readFileSync(path.join(runDir, "attempt.json"), "utf8"));
+      if (contract?.attemptKey === key && (!expectedHead || String(contract?.expectedHead || "").toLowerCase() === expectedHead.toLowerCase())) {
+        matches.push({
+          repairName: String(attempt.agentName || ""),
+          promiseFile: path.join(runDir, "promise.json"),
+          launchUuid: String(attempt.launchUuid || ""),
+          phase: String(attempt.phase || ""),
+        });
       }
     } catch {}
   }
@@ -280,21 +292,24 @@ function readLaunchEvidence(
     ) return null;
     const fallback = findRunMetadata(expectedHead, key, env);
     const promiseFile = String(evidence?.promiseFile || fallback?.promiseFile || "");
-    return promiseFile ? { repairName: String(evidence?.repairName || repairAgentName(prNumber, key, env)), promiseFile } : null;
+    const repairName = String(evidence?.repairName || fallback?.repairName || "");
+    return promiseFile && repairName ? { repairName, promiseFile } : null;
   } catch {
     return null;
   }
 }
 
 function recoverLaunchFromHerdr(
-  prNumber: string,
+  _prNumber: string,
   branch: string,
   key: string,
   env: ReturnType<typeof envConfig>,
 ): boolean {
+  const metadata = findRunMetadata("", key, env);
+  if (!metadata?.repairName) return false;
   const runner = createHerdrRunnerFromCommandRunner(commandRunner);
   const worktrees = runner.listWorktrees(env.repoPath).filter((worktree) => String(worktree.branch || "") === branch);
-  const agents = runner.listAgents().filter((agent) => agent.name === repairAgentName(prNumber, key, env));
+  const agents = runner.listAgents().filter((agent) => agent.name === metadata.repairName);
   if (!agents.length) return false;
   if (agents.length !== 1 || worktrees.length !== 1) {
     throw new Error(`repair launch recovery found ${agents.length} named agent(s) and ${worktrees.length} branch worktree(s)`);
@@ -325,6 +340,71 @@ function recordLaunchEvidence(
   fs.renameSync(temporary, file);
 }
 
+function repairLaunchInput(
+  prNumber: string,
+  branch: string,
+  expectedHead: string,
+  findings: JsonObject[],
+  key: string,
+  env: ReturnType<typeof envConfig>,
+  uuid: string,
+) {
+  return {
+    worktree: { mode: "open" as const, branch },
+    repoPath: env.repoPath,
+    automationDir: env.automationDir,
+    stateDir: env.stateDir,
+    workspaceLabel: repairWorkspaceLabel(prNumber, key, env),
+    agent: env.workerAgent,
+    model: env.workerModel,
+    level: "medium",
+    uuid,
+    attemptId: key,
+    promptFilePrefix: "review-repair-prompt",
+    project: env.projectId,
+    repository: env.githubRepo,
+    role: "review-repair" as const,
+    target: { kind: "pull-request" as const, number: Number(prNumber) },
+    inputRevision: { head: expectedHead },
+    intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
+    renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
+      repairWorkerPrompt(prNumber, branch, expectedHead, findings, key, promiseFile, worktreePath, env),
+  };
+}
+
+function writeRepairContract(
+  runDir: string,
+  expectedHead: string,
+  findings: JsonObject[],
+  key: string,
+): void {
+  fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(
+    path.join(runDir, "review-contract.json"),
+    `${JSON.stringify({ attemptKey: key, expectedHead, findingTitles: findings.map((finding) => String(finding.title)) })}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+}
+
+type RepairLaunchOperations = {
+  mkdirSync: (dir: string, options: { recursive: true; mode?: number }) => void;
+  runner?: RunnerAdapter;
+  runText: (args: string[]) => string;
+  writeFileSync: (file: string, text: string, encoding: "utf8") => void;
+};
+
+function recordRepairLaunchGithubClaim(
+  prNumber: string,
+  branch: string,
+  expectedHead: string,
+  findings: JsonObject[],
+  key: string,
+  env: ReturnType<typeof envConfig>,
+  uuid: string,
+) {
+  return recordAgentLaunchGithubClaimed(repairLaunchInput(prNumber, branch, expectedHead, findings, key, env, uuid));
+}
+
 function launchRepair(
   prNumber: string,
   branch: string,
@@ -333,43 +413,28 @@ function launchRepair(
   key: string,
   env: ReturnType<typeof envConfig>,
   beforeAgentStart?: () => void,
+  uuid: string = randomUUID(),
+  prepareOnly = false,
+  operations?: RepairLaunchOperations,
 ): JsonObject {
-  commandRunner.runText(["git", "check-ref-format", "--branch", branch]);
-  const uuid = randomUUID();
+  const selectedOperations = operations || {
+    mkdirSync: fs.mkdirSync,
+    runner: createHerdrRunnerFromCommandRunner(commandRunner),
+    runText: commandRunner.runText,
+    writeFileSync: fs.writeFileSync,
+  };
+  selectedOperations.runText(["git", "check-ref-format", "--branch", branch]);
   const runDir = path.join(env.stateDir, "runs", uuid);
-  fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(
-    path.join(runDir, "review-contract.json"),
-    `${JSON.stringify({ attemptKey: key, expectedHead, findingTitles: findings.map((finding) => String(finding.title)) })}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
-  const repairName = repairAgentName(prNumber, key, env);
+  writeRepairContract(runDir, expectedHead, findings, key);
+  const input = repairLaunchInput(prNumber, branch, expectedHead, findings, key, env, uuid);
+  const repairName = input.workspaceLabel;
   const promiseFile = path.join(runDir, "promise.json");
   try {
-    const launch = launchAgentFlow(
-      {
-        worktree: { mode: "open", branch },
-        repoPath: env.repoPath,
-        automationDir: env.automationDir,
-        stateDir: env.stateDir,
-        name: repairName,
-        agent: env.workerAgent,
-        model: env.workerModel,
-        level: "medium",
-        uuid,
-        promptFilePrefix: "review-repair-prompt",
-        renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-          repairWorkerPrompt(prNumber, branch, expectedHead, findings, key, promiseFile, worktreePath, env),
-      },
-      {
-        mkdirSync: fs.mkdirSync,
-        runner: createHerdrRunnerFromCommandRunner(commandRunner),
-        runText: commandRunner.runText,
-        writeFileSync: fs.writeFileSync,
-        beforeAgentStart,
-      },
-    );
-    return { repairName, ...launch };
+    const ops = { ...selectedOperations, beforeAgentStart };
+    const prepared = prepareAgentLaunchFlow(input, ops);
+    if (prepareOnly) return { repairName: prepared.agentName, promiseFile: prepared.promiseFile };
+    const launch = launchAgentFlow(input, ops);
+    return { ...launch, repairName: launch.agentName };
   } catch (error) {
     throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
       launch: { repairName, promiseFile },
@@ -377,14 +442,39 @@ function launchRepair(
   }
 }
 
+function persistedReviewBody(
+  comments: JsonObject[],
+  head: string,
+  fingerprint: string,
+  outcome: string,
+  rendered: string,
+  marker: string,
+  attemptId?: string,
+): string {
+  const reviewExists = reviewCommentExists(comments, head, fingerprint, outcome);
+  const markerExists = attemptId && parseAttemptPersistenceMarkers(comments).some((item: JsonObject) => item.attemptId === attemptId);
+  if (!reviewExists) return `${rendered}${marker ? `\n${marker}` : ""}`;
+  return marker && !markerExists ? marker : "";
+}
+
 function dispatch(args: JsonObject): DriverResult {
+  runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   const env = envConfig(args);
   if (!env.githubRepo) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
-  const validation = validatePromise(String(args.promise));
+  const hasAttemptRecord = Boolean(args.attemptRecord && fs.existsSync(String(args.attemptRecord)));
+  const validation = validatePromise(String(args.promise), hasAttemptRecord ? String(args.attemptRecord) : undefined);
   if (validation.status === "none" || validation.status === "invalid") {
     return driverResult("error", `reviewer promise is ${validation.status}`, { driverAction: "invalid_promise", validation });
   }
   const promise = validation.promise as JsonObject;
+  const rawReport = hasAttemptRecord ? JSON.parse(fs.readFileSync(String(args.promise), "utf8")) : null;
+  const attemptRecord = hasAttemptRecord ? readAttemptRecord(path.dirname(String(args.attemptRecord))) : null;
+  const persistenceMarker = attemptRecord && rawReport?.schemaVersion === 1
+    ? renderAttemptPersistenceMarker(attemptRecord, rawReport, {
+        findings: rawReport.role === "reviewer" ? rawReport.result?.findings || [] : [],
+        boundedRepairAttemptMarked: rawReport.role === "reviewer" && rawReport.result?.outcome === "changes_requested",
+      })
+    : "";
   const prNumber = String(args.pr);
   const expectedHead = String(args.expectedHead).toLowerCase();
   const branch = String(args.branch);
@@ -433,9 +523,9 @@ function dispatch(args: JsonObject): DriverResult {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
     withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
-      if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, outcome)) {
-        guardedGithub.commentPr(env.githubRepo, prNumber, renderApprovedReviewComment(commentInput));
-      }
+      const body = persistedReviewBody(livePr.comments || [], expectedHead, reviewFingerprint, outcome,
+        renderApprovedReviewComment(commentInput), persistenceMarker, attemptRecord?.attemptId);
+      if (body) guardedGithub.commentPr(env.githubRepo, prNumber, body);
     });
     return driverResult("done", `PR #${prNumber} review completed without actionable findings`, { driverAction: "review_approved" });
   }
@@ -487,6 +577,33 @@ function dispatch(args: JsonObject): DriverResult {
   const selection = selectRepairAttempt(refreshedPr.comments || [], expectedHead, findings);
   if (selection.action === "already_attempted") {
     let recoveredLaunch = readLaunchEvidence(prNumber, branch, expectedHead, selection.key, env);
+    const retained = findRunMetadata(expectedHead, selection.key, env);
+    if (!recoveredLaunch && retained?.launchUuid && ["prepared", "github_claimed"].includes(String(retained.phase || ""))) {
+      const resumeUuid = retained.launchUuid;
+      const resumed = withEnabledDriverLaunch(
+        env,
+        (recheck: () => void) => recheck(),
+        (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck, resumeUuid),
+        {
+          prepareAttempt: () => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, undefined, resumeUuid, true),
+          recordClaim: () => recordRepairLaunchGithubClaim(
+            prNumber, branch, expectedHead, findings, selection.key, env, resumeUuid,
+          ),
+          revalidate: () => {
+            const livePr = readLivePr(env.githubRepo, prNumber);
+            assertSameLaunchTarget(refreshedPr, livePr, "pr");
+            const labels = labelNames(livePr.labels);
+            const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings);
+            if (!labels.includes(env.reviewLabel) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)
+              || liveSelection.action !== "already_attempted" || liveSelection.key !== selection.key) {
+              throw new StaleLaunchError(`PR #${prNumber} interrupted repair is no longer resumable`);
+            }
+          },
+        },
+      );
+      recoveredLaunch = { repairName: resumed.agentName, promiseFile: resumed.promiseFile, launchUuid: resumeUuid, phase: "agent_started" };
+      recordLaunchEvidence(prNumber, branch, expectedHead, selection.key, recoveredLaunch, env);
+    }
     let workerConfirmed = Boolean(recoveredLaunch);
     if (!workerConfirmed) {
       workerConfirmed = recoverLaunchFromHerdr(prNumber, branch, selection.key, env);
@@ -504,7 +621,7 @@ function dispatch(args: JsonObject): DriverResult {
       });
       const monitorInput = {
         prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
-        promiseFile: recoveredLaunch.promiseFile, actorName: "review-repair worker", projectId: env.projectId,
+        promiseFile: recoveredLaunch.promiseFile, attemptRecordFile: path.join(path.dirname(recoveredLaunch.promiseFile), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
         repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
         reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, blockedLabel: env.blockedLabel,
         attemptKey: selection.key,
@@ -543,17 +660,58 @@ function dispatch(args: JsonObject): DriverResult {
     return driverResult("done", `PR #${prNumber} repeated the same findings; marked blocked`, { driverAction: "review_repair_repeated", selection, comment });
   }
 
+  const repairLaunchUuid = randomUUID();
+  const preparedRepair = launchRepair(
+    prNumber, branch, expectedHead, findings, selection.key, env, undefined, repairLaunchUuid, true,
+  );
+
+  if (hasAttemptRecord) {
+    withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
+      const body = persistedReviewBody(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome,
+        renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }),
+        persistenceMarker, attemptRecord?.attemptId);
+      if (body) guardedGithub.commentPr(env.githubRepo, prNumber, body);
+      guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
+    });
+    const closed = commandRunner.runJson([
+      "node", path.join(env.automationDir, "complete-attempt-workspace.ts"),
+      "--attempt-record", String(args.attemptRecord),
+      "--project-id", env.projectId,
+      "--project-repo", env.repoPath,
+      "--github-repo", env.githubRepo,
+      "--state-dir", env.stateDir,
+      "--enabled-at", String(env.enabledAt),
+      "--expected-label", env.reviewLabel,
+      "--expected-label", env.reviewingLabel,
+      "--managed-label", env.reviewLabel,
+      "--managed-label", env.reviewingLabel,
+      "--managed-label", env.blockedLabel,
+      "--managed-label", env.humanLabel,
+    ]);
+    if (closed?.driverAction !== "workspace_closed") throw new Error("reviewer workspace was not closed before repair launch");
+  }
+
   let launch: JsonObject;
   try {
     launch = withEnabledDriverLaunch(
       env,
       (recheck: () => void) => {
+        if (hasAttemptRecord) {
+          recheck();
+          return;
+        }
         const guardedGithub = createGithubOperations(commandRunner, recheck);
         guardedGithub.commentPr(env.githubRepo, prNumber, renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }));
         guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
       },
-      (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck),
+      (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck, repairLaunchUuid),
       {
+        prepareAttempt: () => launchRepair(
+          prNumber, branch, expectedHead, findings, selection.key, env, undefined, repairLaunchUuid, true,
+        ),
+        recordClaim: () => recordRepairLaunchGithubClaim(
+          prNumber, branch, expectedHead, findings, selection.key, env, repairLaunchUuid,
+        ),
         revalidate: () => {
           const livePr = readLivePr(env.githubRepo, prNumber);
           assertSameLaunchTarget(refreshedPr, livePr, "pr");
@@ -562,7 +720,16 @@ function dispatch(args: JsonObject): DriverResult {
             throw new StaleLaunchError(`PR #${prNumber} is no longer eligible for repair`);
           }
           const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings);
-          if (liveSelection.action !== "launch_repair" || liveSelection.key !== selection.key) {
+          const markerOwnedByPreparedRepair = liveSelection.action === "already_attempted"
+            && liveSelection.key === selection.key
+            && preparedRepair.promiseFile === path.join(env.stateDir, "runs", repairLaunchUuid, "promise.json")
+            && (() => {
+              const preparedRecord = readAttemptRecord(path.join(env.stateDir, "runs", repairLaunchUuid));
+              return preparedRecord.launchUuid === repairLaunchUuid
+                && preparedRecord.attemptId === selection.key
+                && ["prepared", "github_claimed"].includes(preparedRecord.phase);
+            })();
+          if ((liveSelection.action !== "launch_repair" || liveSelection.key !== selection.key) && !markerOwnedByPreparedRepair) {
             throw new StaleLaunchError(`PR #${prNumber} repair attempt state changed before launch`);
           }
         },
@@ -597,7 +764,7 @@ function dispatch(args: JsonObject): DriverResult {
   let launchEvidenceError = "";
   try {
     recordLaunchEvidence(prNumber, branch, expectedHead, selection.key, {
-      repairName: String(launch.repairName || repairAgentName(prNumber, selection.key, env)),
+      repairName: String(launch.repairName),
       promiseFile: String(launch.promiseFile),
     }, env);
   } catch (error) {
@@ -605,7 +772,7 @@ function dispatch(args: JsonObject): DriverResult {
   }
   const monitorInput = {
     prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
-    promiseFile: launch.promiseFile, actorName: "review-repair worker", projectId: env.projectId,
+    promiseFile: launch.promiseFile, attemptRecordFile: launch.attemptRecordFile || path.join(path.dirname(String(launch.promiseFile)), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
     repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
     reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, blockedLabel: env.blockedLabel,
     attemptKey: selection.key,
@@ -629,4 +796,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { dispatch, parseArgs, repairWorkerPrompt };
+module.exports = { dispatch, envConfig, launchRepair, parseArgs, recordRepairLaunchGithubClaim, repairWorkerPrompt };

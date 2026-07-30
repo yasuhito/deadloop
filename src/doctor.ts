@@ -96,15 +96,19 @@ export type DoctorFinding = {
 
 export type Herdr075DoctorStatus =
   | "active"
-  | "blocker"
+  | "blocked"
+  | "human_required"
   | "missing_report"
+  | "malformed_report"
+  | "legacy_report"
+  | "malformed_journal"
   | "persistence_unconfirmed"
   | "launch_failed"
   | "cleanup_pending"
   | "ownership_mismatch"
   | "incompatible";
 
-/** Dormant 0.7.5 finding data; activation wires this into the doctor probe. */
+/** Read-only Herdr attempt lifecycle diagnostic data. */
 export function herdr075DoctorFinding(
   status: Exclude<Herdr075DoctorStatus, "incompatible">,
   detail: string,

@@ -119,6 +119,7 @@ export type AttemptRecord = AttemptIdentity & {
   tabId?: string;
   rootPaneId?: string;
   outputRevision?: string;
+  autoMergePolicy?: boolean;
 };
 
 export type PreparedAttemptInput = AttemptIdentity & {
@@ -129,6 +130,7 @@ export type PreparedAttemptInput = AttemptIdentity & {
   workspaceLabel: string;
   promptFile: string;
   promiseFile: string;
+  autoMergePolicy?: boolean;
 };
 
 const SUCCESSFUL_PHASES: Exclude<AttemptPhase, "launch_failed">[] = [
@@ -212,6 +214,9 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(record.outputRevision === undefined
       ? {}
       : { outputRevision: commitSha(record.outputRevision, "outputRevision") }),
+    ...(record.autoMergePolicy === undefined
+      ? {}
+      : typeof record.autoMergePolicy === "boolean" ? { autoMergePolicy: record.autoMergePolicy } : fail("autoMergePolicy must be boolean")),
   };
 }
 
@@ -255,7 +260,16 @@ function sameAttemptIdentity(left: AttemptRecord, right: AttemptRecord): boolean
 
 function assertRecordAdvance(current: AttemptRecord, next: AttemptRecord): void {
   if (!sameAttemptIdentity(current, next)) throw new Error("Attempt record identity cannot change");
-  if (current.phase === next.phase) return;
+  for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy"] as const) {
+    if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
+  }
+  for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"] as const) {
+    if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
+  }
+  if (current.phase === next.phase) {
+    if (JSON.stringify(current) !== JSON.stringify(next)) throw new Error("Attempt record cannot be enriched without a phase transition");
+    return;
+  }
   transitionAttempt(current, next.phase, next.launchError);
 }
 
@@ -289,11 +303,16 @@ export function withPreparedAttempt<T>(
   return { record, result: mutation(record) };
 }
 
-/**
- * Advances a record through the applicable subset of the successful phases.
- * Which phases apply is a role-specific decision, so any forward move is legal here and only
- * standing still or moving backwards is refused.
- */
+const NEXT_SUCCESS_PHASE: Partial<Record<AttemptPhase, AttemptPhase>> = {
+  prepared: "github_claimed",
+  github_claimed: "workspace_opened",
+  workspace_opened: "agent_started",
+  agent_started: "report_received",
+  report_received: "github_persisted",
+  github_persisted: "workspace_closed",
+};
+
+/** Advances a record by exactly one modeled successful phase, or records a launch failure. */
 export function transitionAttempt(record: AttemptRecord, nextPhase: AttemptPhase, launchError?: string): AttemptRecord {
   parseAttemptRecord(record);
   if (record.phase === "launch_failed" || record.phase === "workspace_closed") {
@@ -303,10 +322,28 @@ export function transitionAttempt(record: AttemptRecord, nextPhase: AttemptPhase
     if (!launchError) throw new Error("launch_failed requires an error");
     return { ...record, phase: "launch_failed", launchError, lastSuccessfulPhase: record.lastSuccessfulPhase };
   }
-  if (SUCCESSFUL_PHASES.indexOf(nextPhase) <= SUCCESSFUL_PHASES.indexOf(record.phase)) {
-    throw new Error(`Attempt phase must advance beyond ${record.phase}, received ${nextPhase}`);
+  if (NEXT_SUCCESS_PHASE[record.phase] !== nextPhase) {
+    throw new Error(`Attempt phase ${record.phase} cannot transition to ${nextPhase}`);
   }
   return { ...record, phase: nextPhase, lastSuccessfulPhase: nextPhase };
+}
+
+/** Records a strong terminal report and its role-specific output before GitHub persistence checks. */
+export function recordPersistedCompletionReport(runDir: string, report: CompletionReportV1): AttemptRecord {
+  const current = readAttemptRecord(runDir);
+  validateCompletionReportBinding(current, report);
+  if (current.phase !== "agent_started") throw new Error(`Attempt phase ${current.phase} cannot receive a report`);
+  const outputRevision = report.status === "complete" && report.role !== "reviewer"
+    ? report.result.outputRevision
+    : undefined;
+  const next: AttemptRecord = {
+    ...current,
+    ...(outputRevision ? { outputRevision } : {}),
+    phase: "report_received",
+    lastSuccessfulPhase: "report_received",
+  };
+  writeAttemptRecordAtomically(attemptRecordPath(runDir), next);
+  return next;
 }
 
 /** Advances a persisted record through one legal transition. */
@@ -315,7 +352,9 @@ export function transitionPersistedAttempt(
   nextPhase: AttemptPhase,
   launchError?: string,
 ): AttemptRecord {
-  const record = transitionAttempt(readAttemptRecord(runDir), nextPhase, launchError);
+  const current = readAttemptRecord(runDir);
+  if ((nextPhase === "github_persisted" || nextPhase === "workspace_closed") && current.phase === nextPhase) return current;
+  const record = transitionAttempt(current, nextPhase, launchError);
   writeAttemptRecordAtomically(attemptRecordPath(runDir), record);
   return record;
 }

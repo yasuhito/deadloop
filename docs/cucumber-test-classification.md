@@ -85,10 +85,10 @@
 | ID | 現在のファイル名 | 現在のテスト名 | 分類 | 守る契約 | 根拠 |
 |---:|---|---|---|---|---|
 | T001 | `test/agent-launch-flow.test.ts` | `opens a PR worktree through the runner, writes prompt and promise paths, and starts the reviewer through the launcher` | **Cucumber候補** | 作業対象に対応するエージェントを重複や誤消去なく、安全な作業ツリーで起動できること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T002 | `test/agent-launch-flow.test.ts` | `retires a finished same-name reviewer before starting its replacement` | **Cucumber候補** | 作業対象に対応するエージェントを重複や誤消去なく、安全な作業ツリーで起動できること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T003 | `test/agent-launch-flow.test.ts` | `refuses to duplicate a working same-name reviewer` | **Cucumber候補** | 作業対象に対応するエージェントを重複や誤消去なく、安全な作業ツリーで起動できること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T004 | `test/agent-launch-flow.test.ts` | `refuses to clean up ambiguous same-name reviewers` | **Cucumber候補** | 作業対象に対応するエージェントを重複や誤消去なく、安全な作業ツリーで起動できること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T005 | `test/agent-launch-flow.test.ts` | `refuses to clean up a same-name reviewer from another worktree` | **Cucumber候補** | 作業対象に対応するエージェントを重複や誤消去なく、安全な作業ツリーで起動できること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
+| T002 | `test/agent-launch-flow.test.ts` | `requires fresh workspace, tab, and root pane IDs before replacement launch` | **Cucumber候補** | 完了済み試行の端末を再利用せず、新しい作業領域で次の試行を起動すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
+| T003 | `test/agent-launch-flow.test.ts` | `refuses to reuse a live attempt workspace` | **Cucumber候補** | 作業対象に対応するエージェントを重複や誤消去なく、安全な作業ツリーで起動できること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
+| T004 | `test/agent-launch-flow.test.ts` | `refuses launch when workspace ownership is ambiguous` | **Cucumber候補** | 所有権が曖昧な作業領域を閉じたり再利用したりしないこと | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
+| T005 | `test/agent-launch-flow.test.ts` | `refuses a workspace owned by another project checkout` | **Cucumber候補** | 同じGitHubリポジトリを指す別プロジェクトの作業領域を操作しないこと | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 | T006 | `test/agent-launch-flow.test.ts` | `creates a Worker worktree from the base branch before starting the Worker through the launcher` | **Cucumber候補** | 作業対象に対応するエージェントを重複や誤消去なく、安全な作業ツリーで起動できること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 
 ### `test/agent-profiles.test.ts`（13件）
@@ -363,15 +363,15 @@
 | T197 | `test/issue-coordinator-cleanup.test.ts` | `does not select a worktree outside the configured root` | **Cucumber候補** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 | T198 | `test/issue-coordinator-cleanup.test.ts` | `wakes the coordinator for cleanup when no issue is required` | **Cucumber候補** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 | T199 | `test/issue-coordinator-cleanup.test.ts` | `passes a unique worker agent name to deterministic launch` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
-| T200 | `test/issue-coordinator-cleanup.test.ts` | `creates a dedicated tab before monitoring a worker` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
+| T200 | `test/issue-coordinator-cleanup.test.ts` | `uses the created worktree root pane without adding a tab` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
 | T201 | `test/issue-coordinator-cleanup.test.ts` | `keeps worker launch out of the monitoring prompt` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
 | T202 | `test/issue-coordinator-cleanup.test.ts` | `does not document workspace split startup for workers` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
-| T203 | `test/issue-coordinator-cleanup.test.ts` | `creates a dedicated tab before starting a review worker` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
-| T204 | `test/issue-coordinator-cleanup.test.ts` | `forwards the dedicated tab to the launcher for review agents` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
+| T203 | `test/issue-coordinator-cleanup.test.ts` | `documents direct root-pane startup for review workers` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
+| T204 | `test/issue-coordinator-cleanup.test.ts` | `does not forward a tab to the launcher for review agents` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
 | T205 | `test/issue-coordinator-cleanup.test.ts` | `does not document workspace split startup for review workers` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
 | T206 | `test/issue-coordinator-cleanup.test.ts` | `hands the shared session uuid to the promise path` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
 | T207 | `test/issue-coordinator-cleanup.test.ts` | `keeps the promise file as the worker completion authority` | **Cucumber候補** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T208 | `test/issue-coordinator-cleanup.test.ts` | `documents dedicated tab startup for branch update workers` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
+| T208 | `test/issue-coordinator-cleanup.test.ts` | `documents fresh workspace startup for branch update workers` | **Vitest継続** | 完了済み作業領域だけを選び、追跡対象や汚れた作業を消さずに安全に片付けること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
 
 #### Issue #112 の移行追跡
 
@@ -609,7 +609,7 @@
 
 | ID | 現在のファイル名 | 現在のテスト名 | 分類 | 守る契約 | 根拠 |
 |---:|---|---|---|---|---|
-| T349 | `test/pr-reviewer-relaunch-integration.test.ts` | `retires the finished reviewer before relaunching the same PR after it is requeued` | **Cucumber候補** | 再投入されたPRで完了済みレビュー担当を片付けてから一度だけ再起動すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
+| T349 | `test/pr-reviewer-relaunch-integration.test.ts` | `opens a fresh attempt workspace when the same PR is requeued` | **Cucumber候補** | 再投入されたPRで過去の端末を再利用せず、新しい作業領域へ一度だけ起動すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 
 ### `test/pr-reviewer-stale-reclaim.test.ts`（7件）
 

@@ -143,6 +143,7 @@ async function loadExtension(
     beforeDisableLock?: () => Promise<void>;
     afterEnablementSaved?: () => Promise<void>;
     runAutomationScript?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
+    herdrCompatibilityPreflight?: () => void;
   } = {},
 ): Promise<{ commands: Map<string, CommandHandler>; events: Map<string, EventHandler>; ghCommands: string[][]; messages: string[] }> {
   process.env.HOME = root;
@@ -209,15 +210,26 @@ async function loadExtension(
         await options.beforeLabelCreate?.(args[2]);
         return options.failLabel ? { code: 1, stdout: "", stderr: "label denied" } : { code: 0, stdout: "", stderr: "" };
       }
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
+        return { code: 0, stdout: '{"id":"cli:worktree:list","result":{"type":"worktree_list","worktrees":[]}}', stderr: "" };
+      }
+      if (command === "herdr" && args[0] === "agent" && args[1] === "list" && args.length === 2) {
+        return { code: 0, stdout: '{"id":"cli:agent:list","result":{"type":"agent_list","agents":[]}}', stderr: "" };
+      }
+      if (command === "herdr" && args[0] === "workspace" && args[1] === "list" && args.length === 2) {
+        return { code: 0, stdout: '{"id":"cli:workspace:list","result":{"type":"workspace_list","workspaces":[]}}', stderr: "" };
+      }
       throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
     },
     registerCommand: (name: string, command: { handler: CommandHandler }) => commands.set(name, command.handler),
     on: (name: string, handler: EventHandler) => events.set(name, handler),
     sendMessage: (message: { content: string }) => messages.push(message.content),
     sendUserMessage: () => undefined,
-    testing: options.beforeDisableLock || options.afterEnablementSaved
-      ? { beforeDisableLock: options.beforeDisableLock, afterEnablementSaved: options.afterEnablementSaved }
-      : undefined,
+    testing: {
+      beforeDisableLock: options.beforeDisableLock,
+      afterEnablementSaved: options.afterEnablementSaved,
+      herdrCompatibilityPreflight: options.herdrCompatibilityPreflight || (() => undefined),
+    },
   });
   retainedExtensionShutdowns.push(async () => {
     await events.get("session_shutdown")?.({}, {

@@ -10,6 +10,7 @@ import {
 import { deriveHerdr075AgentName } from "../src/herdr-agent-name";
 
 const { Herdr075RunnerError, createHerdr075Runner } = require("../src/herdr-075-runner.ts");
+const { deriveHerdr075AgentName: deriveRuntimeAgentName } = require("../src/herdr-agent-name.cjs");
 
 const created = {
   result: {
@@ -74,6 +75,22 @@ describe("dormant Herdr 0.7.5 runner", () => {
         launchUuid: "launch-1",
       }),
     ).toMatch(/^dl-x-2147483647-[a-f0-9]{12}$/);
+  });
+
+  it.each([
+    { repository: "octo/deadloop", role: "worker", target: 1, launchUuid: "launch-1" },
+    { repository: "invalid text !", role: "reviewer", target: 2147483647, launchUuid: "launch-2" },
+  ] as const)("keeps the direct runtime agent name equal to the typed implementation", (input) => {
+    expect(deriveRuntimeAgentName(input)).toBe(deriveHerdr075AgentName(input));
+  });
+
+  it("keeps recorded-name collision rejection equal in the direct runtime", () => {
+    const input = { repository: "octo/deadloop", role: "worker" as const, target: 1, launchUuid: "launch-1" };
+    const name = deriveHerdr075AgentName(input);
+    const rejected = (operation: () => unknown) => { try { operation(); return false; } catch { return true; } };
+    expect(rejected(() => deriveRuntimeAgentName({ ...input, recordedNames: { [name]: "another-launch" } }))).toBe(
+      rejected(() => deriveHerdr075AgentName({ ...input, recordedNames: { [name]: "another-launch" } })),
+    );
   });
 
   it.each([0, 1.2, 2147483648])("rejects an invalid Herdr target number", (target) => {

@@ -1,5 +1,7 @@
 # 修正後の PR レビュー再開の Cucumber 移行記録
 
+> **後継仕様あり:** この文書にある同名担当の交代、`pane close`、既存端末の再利用は過去の移行証拠であり、現在の実行契約ではない。現在は [試行ごとに破棄する Herdr 実行場所のライフサイクル](herdr-attempt-workspace-lifecycle-spec.md) に従い、起動ごとに一意な担当名と新しい実行場所を使い、永続化を確認した成功済み試行では実行場所だけを閉じる。
+
 Issue [#124](https://github.com/yasuhito/deadloop/issues/124) では、修正または競合回復で head が変わった pull request を再投入したとき、終了済みのレビュー担当を片付けて通常レビューを一度だけ再開する契約を移行した。新しい正本は [`acceptance/features/requeued-pr-review.feature.md`](../acceptance/features/requeued-pr-review.feature.md) である。
 
 ## 分類 ID と関連する保証

@@ -1,0 +1,22 @@
+{
+  "id": "cli:agent:list",
+  "result": {
+    "type": "agent_list",
+    "agents": [
+      {
+        "terminal_id": "terminal-1",
+        "name": "dl-r-44-123456789abc",
+        "agent": "pi",
+        "agent_status": "done",
+        "workspace_id": "w-issue-12",
+        "tab_id": "w-issue-12:t1",
+        "pane_id": "w-issue-12:p1",
+        "focused": false,
+        "state_change_seq": 9,
+        "cwd": "/worktrees/issue-12",
+        "foreground_cwd": "/worktrees/issue-12",
+        "revision": 4
+      }
+    ]
+  }
+}

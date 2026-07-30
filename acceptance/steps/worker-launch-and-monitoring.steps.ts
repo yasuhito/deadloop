@@ -1,22 +1,22 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
 
 import type { RunnerAdapter, RunnerAgent } from "../../src/runner";
 
-const { launchAgentFlow } = require("../../src/agent-launch-flow.ts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../src/agent-launch-flow.ts");
 const { decideWorkerWatch } = require("../../extensions/deadloop/automations/worker-watch-decision.ts");
 
 const workerName = "demo-issue-12-worker";
 const workerPath = "/worktrees/demo/agent-issue-12-task";
-const reviewerName = "demo-pr-44-reviewer";
-const reviewerPath = "/worktrees/demo/feature-review";
 
 type WorkerWorld = {
   agents?: RunnerAgent[];
-  launchTarget?: "worker" | "reviewer";
-  removedAgentIds?: string[];
+  launchTarget?: "worker";
   launchCount?: number;
   launchEvents?: string[];
   worktreeRequest?: { branch: string; baseBranch: string; label: string };
@@ -27,80 +27,78 @@ type WorkerWorld = {
 };
 
 function launchWorker(world: WorkerWorld): void {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-acceptance-"));
   const agents = world.agents ?? [];
-  const removedAgentIds: string[] = [];
   const launchEvents: string[] = [];
-  const isReviewer = world.launchTarget === "reviewer";
-  const name = isReviewer ? reviewerName : workerName;
-  const worktreePath = isReviewer ? reviewerPath : workerPath;
+  const name = workerName;
+  const worktreePath = workerPath;
   let launchCount = 0;
   const runner: RunnerAdapter = {
     createWorktree: (input) => {
-      if (isReviewer) throw new Error("レビュー担当の作業場所を作ってはならない");
       world.worktreeRequest = { branch: input.branch, baseBranch: input.baseBranch, label: input.label };
-      return { workspaceId: "workspace-12", worktreePath };
+      return { workspaceId: "workspace-12", tabId: "tab-12", rootPaneId: "pane-12", worktreePath };
     },
-    openWorktree: () => {
-      if (!isReviewer) throw new Error("worker の既存作業場所を開いてはならない");
-      return { workspaceId: "workspace-44", worktreePath };
+    openWorktree: () => { throw new Error("worker の既存作業場所を開いてはならない"); },
+    renameWorkspace: () => {
+      launchEvents.push("rename-workspace");
+      return "";
     },
-    createTab: () => {
-      launchEvents.push("create-tab");
-      return { tabId: "tab-12" };
-    },
-    closeTab: () => "",
     startAgent: () => {
       throw new Error("起動は共通ランチャーを経由する");
     },
     listWorktrees: () => [],
     listAgents: () => agents,
-    removeAgent: (agentId) => {
-      launchEvents.push(`remove:${agentId}`);
-      removedAgentIds.push(agentId);
-      const index = agents.findIndex((agent) => agent.agentId === agentId);
-      if (index >= 0) agents.splice(index, 1);
-      return "";
-    },
+    closeWorkspace: () => "",
+    listWorkspaces: () => [],
     removeWorktree: () => "",
   };
 
   try {
-    launchAgentFlow(
-      {
-        worktree: isReviewer
-          ? { mode: "open", branch: "feature/review" }
-          : { mode: "create", branch: "agent/issue-12-task", baseBranch: "origin/main" },
+    const launchInput = {
+        worktree: { mode: "create", branch: "agent/issue-12-task", baseBranch: "origin/main" },
         repoPath: "/repo",
         automationDir: "/automation",
-        stateDir: "/state/deadloop",
-        name,
+        stateDir,
+        workspaceLabel: name,
         agent: "pi",
         model: "",
         level: "medium",
-        uuid: isReviewer ? "reviewer-44" : "worker-12",
-        promptFilePrefix: isReviewer ? "reviewer-prompt" : "worker-prompt",
+        uuid: "worker-12",
+        promptFilePrefix: "worker-prompt",
+        project: "demo",
+        repository: "owner/repo",
+        role: "worker",
+        target: { kind: "issue", number: 12 },
+        inputRevision: { head: "f".repeat(40) },
+        intendedWorktreePath: worktreePath,
+        resolveWorktreeHead: true,
         renderPrompt: ({ promiseFile }: { promiseFile: string }) => `promise: ${promiseFile}`,
-      },
-      {
+      };
+    const ops = {
         mkdirSync: () => {},
         runner,
-        runText: () => {
+        runText: (args) => {
+          if (args.includes("rev-parse")) return `${"f".repeat(40)}\n`;
           launchCount += 1;
           launchEvents.push("launch");
-          agents.push({ name, status: "working", cwd: worktreePath, agentId: "replacement" });
+          const nameIndex = args.indexOf("--name");
+          const paneIndex = args.indexOf("--pane");
+          agents.push({ name: args[nameIndex + 1], status: "working", cwd: worktreePath, paneId: args[paneIndex + 1], agentId: "replacement" });
           return "started";
         },
         writeFileSync: () => {},
-      },
-    );
+      };
+    prepareAgentLaunchFlow(launchInput, ops);
+    recordAgentLaunchGithubClaimed(launchInput);
+    launchAgentFlow(launchInput, ops);
   } catch (error) {
     world.launchError = error instanceof Error ? error : new Error(String(error));
   }
 
   world.agents = agents;
-  world.removedAgentIds = removedAgentIds;
   world.launchCount = launchCount;
   world.launchEvents = launchEvents;
+  rmSync(stateDir, { recursive: true, force: true });
 }
 
 Given("作業を開始できる Issue がある", function (this: WorkerWorld) {
@@ -108,34 +106,7 @@ Given("作業を開始できる Issue がある", function (this: WorkerWorld) {
   this.agents = [];
 });
 
-Given("同じ作業場所に完了済みの同名レビュー担当がいる", function (this: WorkerWorld) {
-  this.launchTarget = "reviewer";
-  this.agents = [{ name: reviewerName, status: "done", cwd: reviewerPath, agentId: "finished" }];
-});
-
-Given("同じ作業場所に稼働中の同名レビュー担当がいる", function (this: WorkerWorld) {
-  this.launchTarget = "reviewer";
-  this.agents = [{ name: reviewerName, status: "working", cwd: reviewerPath, agentId: "working" }];
-});
-
-Given("同じ作業場所に複数の完了済み同名レビュー担当がいる", function (this: WorkerWorld) {
-  this.launchTarget = "reviewer";
-  this.agents = [
-    { name: reviewerName, status: "done", cwd: reviewerPath, agentId: "finished-1" },
-    { name: reviewerName, status: "done", cwd: reviewerPath, agentId: "finished-2" },
-  ];
-});
-
-Given("別の作業場所に完了済みの同名レビュー担当がいる", function (this: WorkerWorld) {
-  this.launchTarget = "reviewer";
-  this.agents = [{ name: reviewerName, status: "done", cwd: "/worktrees/demo/other-task", agentId: "foreign" }];
-});
-
 When("deadloop がその Issue の担当を起動する", function (this: WorkerWorld) {
-  launchWorker(this);
-});
-
-When("deadloop が pull request のレビュー担当を起動する", function (this: WorkerWorld) {
   launchWorker(this);
 });
 
@@ -149,45 +120,6 @@ Then("担当には基準ブランチから Issue 専用の作業場所を作る"
 
 Then("新しい担当を一人だけ起動する", function (this: WorkerWorld) {
   assert.equal(this.launchCount, 1);
-});
-
-Then("完了済みの担当を片付けてから交代を起動する", function (this: WorkerWorld) {
-  assert.equal(this.launchEvents?.join(">"), "remove:finished>create-tab>launch");
-});
-
-Then("一人の交代担当を起動する", function (this: WorkerWorld) {
-  assert.equal(this.launchCount, 1);
-});
-
-Then("稼働中の同名担当がいるため起動を拒否する", function (this: WorkerWorld) {
-  assert.equal(this.launchError?.message, `agent name ${reviewerName} is working; refusing duplicate launch`);
-});
-
-Then("複数の同名担当がいるため起動を拒否する", function (this: WorkerWorld) {
-  assert.equal(this.launchError?.message, `agent name ${reviewerName} has 2 live candidates; refusing cleanup`);
-});
-
-Then("別の作業場所に同名担当がいるため起動を拒否する", function (this: WorkerWorld) {
-  assert.equal(
-    this.launchError?.message,
-    `agent name ${reviewerName} belongs to a different worktree; refusing cleanup`,
-  );
-});
-
-Then("新しい担当は起動しない", function (this: WorkerWorld) {
-  assert.equal(this.launchCount, 0);
-});
-
-Then("稼働中の担当は残る", function (this: WorkerWorld) {
-  assert.equal(this.agents?.some((agent) => agent.agentId === "working"), true);
-});
-
-Then("候補を特定できない同名担当は片付けない", function (this: WorkerWorld) {
-  assert.equal(this.removedAgentIds?.length, 0);
-});
-
-Then("別の作業場所の同名担当は片付けない", function (this: WorkerWorld) {
-  assert.equal(this.removedAgentIds?.length, 0);
 });
 
 Given("作業を開始できる Issue が選ばれている", function (this: WorkerWorld) {
