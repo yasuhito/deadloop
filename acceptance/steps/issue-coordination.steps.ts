@@ -47,8 +47,16 @@ Given("選ばれた Issue が計画をまとめるためのものである", fun
   this.fixtureName = "driver-blocked-prd.json";
 });
 
+Given("選ばれた Issue が子 Issue の一覧をまとめている", function (this: IssueCoordinationWorld) {
+  this.fixtureName = "driver-parent-task-list.json";
+});
+
 Given("選ばれた実装可能な Issue が設計文書を参照している", function (this: IssueCoordinationWorld) {
   this.fixtureName = "driver-prd-doc-reference.json";
+});
+
+Given("選ばれた実装可能な Issue が受け入れ条件で親 Issue を参照している", function (this: IssueCoordinationWorld) {
+  this.fixtureName = "driver-acceptance-parent-reference.json";
 });
 
 Given("選ばれた Issue に実装契約がそろっている", function (this: IssueCoordinationWorld) {

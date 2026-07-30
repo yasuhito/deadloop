@@ -41,4 +41,40 @@ describe("Issue coordinator use-case flow", () => {
 
     expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 70 }).kind).toBe("worker_required");
   });
+
+  it("does not block issues whose acceptance criteria reference a parent issue mid-sentence", () => {
+    const data = fixture("driver-acceptance-parent-reference.json");
+
+    expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 80 }).kind).toBe("worker_required");
+  });
+
+  it("plans planning-blocked for bodies with two checkbox items that lead with an issue reference", () => {
+    const data = fixture("driver-parent-task-list.json");
+
+    expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 81 }).kind).toBe("planning_blocked");
+  });
+
+  it("does not block bodies with a single checkbox item that leads with an issue reference", () => {
+    const data = fixture("driver-single-task-list-reference.json");
+
+    expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 82 }).kind).toBe("worker_required");
+  });
+
+  it("plans planning-blocked for checkbox items that lead with a cross-repository issue reference", () => {
+    const data = fixture("driver-cross-repository-task-list.json");
+
+    expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 85 }).kind).toBe("planning_blocked");
+  });
+
+  it("keeps blocking planning issues recognized by their title", () => {
+    const data = fixture("driver-planning-title.json");
+
+    expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 83 }).kind).toBe("planning_blocked");
+  });
+
+  it("keeps blocking planning issues recognized by their section heading", () => {
+    const data = fixture("driver-planning-section.json");
+
+    expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 84 }).kind).toBe("planning_blocked");
+  });
 });

@@ -1,0 +1,12 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 82,
+      "title": "セッション保存を新しい境界へ移す",
+      "body": "## What to build\nセッション保存を新しい境界へ移す。\n\n## 受け入れ条件\n- [ ] #101 の境界定義に従って移設できている。\n- [ ] 移設後に既存のテストが通る。",
+      "url": "https://github.com/owner/repo/issues/82",
+      "labels": [{"name": "ready-for-agent"}, {"name": "agent:implement"}]
+    }
+  ]
+}
