@@ -29,7 +29,8 @@ const CONTRACT_BRIEF_RE = /^##\s*(?:Agent Brief|What to build)\b/im;
 const CONTRACT_ACCEPTANCE_RE = /^##\s*(?:Acceptance criteria|受け入れ条件)\b|\bAcceptance criteria\b|受け入れ条件/im;
 const PLANNING_TITLE_RE = /^\s*(?:PRD|RFC|設計|計画)\b/i;
 const PLANNING_SECTION_RE = /^##\s*(?:PRD|RFC|設計|計画)\b/im;
-const TASK_LIST_RE = /^\s*- \[[ xX]\] .+#\d+/m;
+const TASK_LIST_LEADING_REFERENCE_RE = /^\s*- \[[ xX]\]\s+(?:[\w.-]+\/[\w.-]+)?#\d+/;
+const TASK_LIST_MIN_ITEMS = 2;
 
 function issueDecisionConfig(env: IssueCoordinatorFlowEnv): JsonObject {
   return defaultIssueDecisionConfig({
@@ -69,10 +70,15 @@ function hasImplementationContract(issue: JsonObject): boolean {
   return CONTRACT_BRIEF_RE.test(body) && CONTRACT_ACCEPTANCE_RE.test(body);
 }
 
+function hasParentTaskList(body: string): boolean {
+  const leadingReferenceItems = body.split(/\r?\n/).filter((line) => TASK_LIST_LEADING_REFERENCE_RE.test(line));
+  return leadingReferenceItems.length >= TASK_LIST_MIN_ITEMS;
+}
+
 function isBlockedPlanningIssue(issue: JsonObject): boolean {
   const title = String(issue.title || "");
   const body = String(issue.body || "");
-  return PLANNING_TITLE_RE.test(title) || PLANNING_SECTION_RE.test(body) || TASK_LIST_RE.test(body);
+  return PLANNING_TITLE_RE.test(title) || PLANNING_SECTION_RE.test(body) || hasParentTaskList(body);
 }
 
 function planIssueCoordinatorAction(issues: JsonObject[], decision: JsonObject): IssueCoordinatorPlan {

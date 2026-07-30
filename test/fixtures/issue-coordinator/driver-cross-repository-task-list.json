@@ -1,0 +1,12 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 85,
+      "title": "配信基盤を切り出す",
+      "body": "## Agent Brief\n別リポジトリの子 issue を順に実装する。\n\n## 受け入れ条件\n- 子 issue がすべて閉じている。\n\n## 子 issue\n- [ ] owner/other#101 配信境界を切り出す\n- [ ] owner/other#102 再送処理を移す",
+      "url": "https://github.com/owner/repo/issues/85",
+      "labels": [{"name": "ready-for-agent"}, {"name": "agent:implement"}]
+    }
+  ]
+}

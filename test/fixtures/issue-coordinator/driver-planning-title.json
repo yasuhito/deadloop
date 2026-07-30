@@ -1,0 +1,12 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 83,
+      "title": "PRD: 認証基盤の分割方針",
+      "body": "## Agent Brief\n認証基盤の分割方針を決める。\n\n## 受け入れ条件\n- 分割方針が文書化されている。",
+      "url": "https://github.com/owner/repo/issues/83",
+      "labels": [{"name": "ready-for-agent"}, {"name": "agent:implement"}]
+    }
+  ]
+}

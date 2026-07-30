@@ -1,0 +1,12 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 80,
+      "title": "直接参照の残存をゼロにする",
+      "body": "## What to build\n直接参照を共有ライブラリ経由の呼び出しへ置き換える。\n\n## 受け入れ条件\n- [ ] 直接参照の残存がゼロになっている。\n- [ ] 残存ゼロを確認し、#79 の第1切り出し判定条件を更新する。",
+      "url": "https://github.com/owner/repo/issues/80",
+      "labels": [{"name": "ready-for-agent"}, {"name": "agent:implement"}]
+    }
+  ]
+}

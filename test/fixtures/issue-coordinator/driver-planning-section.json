@@ -1,0 +1,12 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 84,
+      "title": "認証基盤の分割方針を決める",
+      "body": "## Agent Brief\n分割の順序を決める。\n\n## 受け入れ条件\n- 分割の順序が決まっている。\n\n## RFC\n単一の実装スライスではない。",
+      "url": "https://github.com/owner/repo/issues/84",
+      "labels": [{"name": "ready-for-agent"}, {"name": "agent:implement"}]
+    }
+  ]
+}
