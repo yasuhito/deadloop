@@ -80,11 +80,31 @@ function runCleanupApply(runtimeDirectory: ".deadloop" | ".pi-subagents", tracke
       "#!/usr/bin/env bash",
       "set -euo pipefail",
       `printf '%s\\n' "$*" >> '${herdrLog}'`,
+      'if [ "${1:-}" = "--version" ]; then printf \'herdr 0.7.5\\n\'; exit 0; fi',
+      'if [ "${1:-} ${2:-}" = "status server" ]; then printf \'version: 0.7.5\\ncompatible: yes\\n\'; exit 0; fi',
       'if [ "${1:-}" = "worktree" ] && [ "${2:-}" = "list" ]; then',
-      `  printf '%s\\n' '{"result":{"worktrees":[{"branch":"agent/issue-1-cleanup","is_linked_worktree":true,"open_workspace_id":"wW","path":"${worktreePath}"}]}}'`,
+      `  if [ -f '${tempRoot}/removed' ]; then printf '%s\\n' '{"result":{"worktrees":[]}}'; else printf '%s\\n' '{"result":{"worktrees":[{"branch":"agent/issue-1-cleanup","is_linked_worktree":true,"path":"${worktreePath}"}]}}'; fi`,
       "  exit 0",
       "fi",
-      'if [ "${1:-}" = "worktree" ] && [ "${2:-}" = "remove" ]; then exit 0; fi',
+      "exit 2",
+    ]);
+    writeExecutable(path.join(binPath, "git"), [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `printf '%s\\n' "$*" >> '${herdrLog}'`,
+      'if [[ " $* " = *" fetch --prune "* ]]; then exit 0; fi',
+      'if [[ " $* " = *" ls-files -z "* ]]; then',
+      tracked ? `  printf '%s\\0' '${runtimeDirectory}/artifact.json'` : "  true",
+      "  exit 0",
+      "fi",
+      'if [[ " $* " = *" status --short "* ]]; then',
+      tracked ? "  exit 0" : `  if [ -e '${runtimeFile}' ]; then printf '%s\\n' '?? ${runtimeDirectory}/artifact.json'; fi`,
+      "  exit 0",
+      "fi",
+      'if [[ " $* " = *" worktree remove "* ]]; then',
+      `  touch '${tempRoot}/removed'`,
+      "  exit 0",
+      "fi",
       "exit 2",
     ]);
 
@@ -137,7 +157,7 @@ function runIssuePrecheckWithCleanupCandidate(): number | null {
       "#!/usr/bin/env bash",
       "set -euo pipefail",
       "if [ \"${1:-}\" = \"worktree\" ] && [ \"${2:-}\" = \"list\" ]; then",
-      "  printf '%s\n' '{\"result\":{\"worktrees\":[{\"branch\":\"agent/issue-1-cleanup\",\"is_linked_worktree\":true,\"open_workspace_id\":\"wW\",\"path\":\"/worktrees/repo/agent-issue-1-cleanup\"}]}}'",
+      "  printf '%s\n' '{\"result\":{\"worktrees\":[{\"branch\":\"agent/issue-1-cleanup\",\"is_linked_worktree\":true,\"path\":\"/worktrees/repo/agent-issue-1-cleanup\"}]}}'",
       "  exit 0",
       "fi",
       "echo \"unexpected herdr invocation: $*\" >&2",
@@ -181,7 +201,7 @@ describe("issue coordinator cleanup", () => {
         path: "/worktrees/repo/agent-issue-1-add-safety-controls-for-dogfooding",
         prNumber: 2,
         reason: "merged_pr",
-        workspaceId: "wW",
+        workspaceId: "",
       },
     ]);
   });
@@ -206,8 +226,14 @@ describe("issue coordinator cleanup", () => {
     expect(runCleanupApply(".pi-subagents", false).removedWorkspace).toBe(true);
   });
 
-  it("does not select a Herdr worktree without a workspace id", () => {
-    expect(runCleanupFixture("cleanup-missing-workspace.json").candidates).toEqual([]);
+  it("selects a closed linked worktree without fabricating a workspace id", () => {
+    expect(runCleanupFixture("cleanup-missing-workspace.json").candidates).toEqual([{
+      prNumber: 2,
+      branch: "agent/issue-1-cleanup",
+      path: "/worktrees/repo/agent-issue-1-cleanup",
+      workspaceId: "",
+      reason: "merged_pr",
+    }]);
   });
 
   it("does not select the main workspace for cleanup", () => {
@@ -226,8 +252,8 @@ describe("issue coordinator cleanup", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });
 
-  it("creates a dedicated tab before monitoring a worker", () => {
-    expect(runDriverFixture("driver-ready-worker.json").launch.tabId).toBe("fixture-tab");
+  it("uses the created worktree root pane without adding a tab", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.rootPaneId).toBe("fixture-pane-worker");
   });
 
   it("keeps worker launch out of the monitoring prompt", () => {
@@ -238,16 +264,14 @@ describe("issue coordinator cleanup", () => {
     expect(runDriverFixture("driver-ready-worker.json").prompt).not.toMatch(/herdr agent start[^`\n]*--workspace <workspaceId>/);
   });
 
-  it("creates a dedicated tab before starting a review worker", () => {
+  it("documents direct root-pane startup for review workers", () => {
     expect(readFileSync("extensions/deadloop/automations/pr-reviewer.prompt.md", "utf8")).toContain(
-      'herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "$reviewer_name" --no-focus',
+      "starts the agent in its returned root pane",
     );
   });
 
-  it("forwards the dedicated tab to the launcher for review agents", () => {
-    expect(readFileSync("extensions/deadloop/automations/pr-reviewer.prompt.md", "utf8")).toContain(
-      '--tab "$tab_id"',
-    );
+  it("does not forward a tab to the launcher for review agents", () => {
+    expect(readFileSync("extensions/deadloop/automations/pr-reviewer.prompt.md", "utf8")).not.toContain("--tab");
   });
 
   it("does not document workspace split startup for review workers", () => {
@@ -265,9 +289,9 @@ describe("issue coordinator cleanup", () => {
   });
 
 
-  it("documents dedicated tab startup for branch update workers", () => {
+  it("documents fresh workspace startup for branch update workers", () => {
     expect(readFileSync("extensions/deadloop/automations/pr-reviewer.prompt.md", "utf8")).toContain(
-      "Branch-update workers also need a dedicated tab with the same label as the worker name before `herdr agent start ... --tab <tabId> --no-focus`.",
+      "one fresh Herdr workspace for each reviewer or branch-update attempt",
     );
   });
 });

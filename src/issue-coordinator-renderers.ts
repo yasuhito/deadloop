@@ -102,9 +102,7 @@ function renderIssuePlanningComment(input: IssuePlanningCommentInput): string {
 function renderIssueBlockedComment(input: IssueBlockedCommentInput): string {
   const issue = Number(input.issueNumber);
   const promiseFile = optionalValue(input.promiseFile, "<promiseFile>");
-  const workspaceId = optionalValue(input.workspaceId, "<workspaceId>");
   const worktreePath = optionalValue(input.worktreePath, "<worktreePath>");
-  const branch = optionalValue(input.branch, "<branch>");
   const branchPattern = input.branch ? input.branch : `agent/issue-${issue}-*`;
   const confirmed = bulletLines(input.confirmed, "No additional facts confirmed yet.").join("\n");
   const nextDecision = oneLineForRenderer(input.nextDecision || "Inspect the cause and decide whether the issue is safe to re-queue.");
@@ -124,16 +122,15 @@ node ${shellQuoteForRenderer(input.automationDir)}/extract-worker-promise.ts --f
 herdr agent list
 herdr pane list
 \`\`\`
-2. Inspect leftover worktrees or branches before cleanup.
-   Run cleanup only after confirming the target is clean and no longer needed.
+2. Inspect the retained attempt workspace and linked worktree.
+   Preserve them while the result is blocked or ownership is unclear. Only a bound V1 success plus confirmed GitHub persistence may close the attempt workspace; linked-worktree removal remains reserved for the merged/closed-PR safety gate.
    ${optionalCommandNote(input.workspaceId, "Herdr workspace")}${optionalCommandNote(input.worktreePath, "worktree path")}${optionalCommandNote(input.branch, "branch")}` +
     `\`\`\`bash
+herdr workspace list
 herdr worktree list --cwd ${shellQuoteForRenderer(input.repoPath)} --json
 git -C ${shellQuoteForRenderer(input.repoPath)} worktree list
 git -C ${shellQuoteForRenderer(input.repoPath)} branch --list ${shellQuoteForRenderer(branchPattern)}
-herdr worktree remove --workspace ${shellQuoteForRenderer(workspaceId)}
-git -C ${shellQuoteForRenderer(input.repoPath)} worktree remove ${shellQuoteForRenderer(worktreePath)}
-git -C ${shellQuoteForRenderer(input.repoPath)} branch -d ${shellQuoteForRenderer(branch)}
+git -C ${shellQuoteForRenderer(worktreePath)} status --short
 \`\`\`
 3. Re-queue the issue after fixing the cause.
    \`\`\`bash

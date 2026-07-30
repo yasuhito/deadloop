@@ -6,7 +6,7 @@ import {
   evaluateCompletionPersistence,
   normalizeRunnerUncertainty,
   orchestrateFreshAttemptWorkspace,
-  reconcileAttemptWorkspace,
+  reconcileAttemptWorkspace as reconcileAttemptWorkspaceRuntime,
   reconcileBeforeWorkspaceOpen,
   RunnerUncertaintyError,
   type AttemptReportObservation,
@@ -28,6 +28,8 @@ import {
   workerFixture,
 } from "./fixtures/attempt-workspace";
 
+const { evaluateCompletionPersistence: evaluateSelectedRuntimePersistence } = require("../src/attempt-workspace-predicates.cjs");
+
 function observedV1(report: unknown): AttemptReportObservation {
   return { kind: "v1", promisePath: "/runs/attempt-1/promise.json", report };
 }
@@ -38,11 +40,24 @@ function decide(
   github: GithubCompletionObservation,
   context: CompletionDecisionContext = {},
 ) {
-  return evaluateCompletionPersistence({ record, report: observedV1(report), github, context });
+  return evaluateCompletionPersistence({
+    record, report: observedV1(report), github,
+    context: { workerReviewLabel: "agent:review", ...context },
+  });
 }
 
 function confirmed<T>(value: T): RunnerObservation<T> {
   return { kind: "confirmed", value };
+}
+
+function reconcileAttemptWorkspace(
+  input: Parameters<typeof reconcileAttemptWorkspaceRuntime>[0],
+  dependencies: Parameters<typeof reconcileAttemptWorkspaceRuntime>[1],
+) {
+  return reconcileAttemptWorkspaceRuntime({
+    ...input,
+    context: { workerReviewLabel: "agent:review", ...input.context },
+  }, dependencies);
 }
 
 const ownedWorkspace: WorkspaceOwnership = {
@@ -111,6 +126,15 @@ describe("attempt completion persistence decisions", () => {
     const fixture = workerFixture();
 
     expect(decide(fixture.record, fixture.report, fixture.github)).toEqual({ action: "close" });
+  });
+
+  it("uses the configured Worker review label for persistence proof", () => {
+    const fixture = workerFixture();
+    const github = {
+      ...fixture.github,
+      pullRequests: fixture.github.pullRequests.map((pullRequest) => ({ ...pullRequest, labels: ["custom:review"] })),
+    };
+    expect(decide(fixture.record, fixture.report, github, { workerReviewLabel: "custom:review" })).toEqual({ action: "close" });
   });
 
   it("preserves a blocked Worker result", () => {
@@ -190,6 +214,54 @@ describe("attempt completion persistence decisions", () => {
     const fixture = reviewerFixture("changes_requested");
 
     expect(decide(fixture.record, fixture.report, fixture.github, fixture.context)).toEqual({ action: "close" });
+  });
+
+  it.each([
+    [false, ["ready-for-human"]],
+    [true, ["agent:review", "agent:reviewing"]],
+  ] as const)("allows unrelated labels with autoMerge=%s while requiring exact managed workflow labels", (_autoMerge, expectedLabels) => {
+    const fixture = reviewerFixture("approved");
+    const github = { ...fixture.github, labels: [...expectedLabels, "team:platform"] };
+    const context = {
+      reviewerExpectedLabels: expectedLabels,
+      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:blocked", "ready-for-human"],
+    };
+
+    expect(decide(fixture.record, fixture.report, github, context)).toEqual({ action: "close" });
+  });
+
+  it.each([
+    [false, ["ready-for-human"], "agent:review"],
+    [true, ["agent:review", "agent:reviewing"], "ready-for-human"],
+  ] as const)("preserves autoMerge=%s reviewer ownership when a conflicting managed label remains", (_autoMerge, expectedLabels, conflictingLabel) => {
+    const fixture = reviewerFixture("approved");
+    const github = { ...fixture.github, labels: [...expectedLabels, conflictingLabel, "team:platform"] };
+    const context = {
+      reviewerExpectedLabels: expectedLabels,
+      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:blocked", "ready-for-human"],
+    };
+
+    expect(decide(fixture.record, fixture.report, github, context)).toEqual({
+      action: "preserve",
+      reason: "github_persistence_not_confirmed",
+    });
+  });
+
+  it.each([
+    [false, ["ready-for-human"], "agent:blocked"],
+    [true, ["agent:review", "agent:reviewing"], "ready-for-human"],
+  ] as const)("keeps the selected restart runtime from closing autoMerge=%s with a conflicting managed label", (_autoMerge, expectedLabels, conflictingLabel) => {
+    const fixture = reviewerFixture("approved");
+    const context = {
+      reviewerExpectedLabels: expectedLabels,
+      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:blocked", "ready-for-human"],
+    };
+    expect(evaluateSelectedRuntimePersistence({
+      record: fixture.record,
+      report: { kind: "v1", promisePath: fixture.record.promiseFile, report: fixture.report },
+      github: { ...fixture.github, labels: [...expectedLabels, conflictingLabel, "team:platform"] },
+      context,
+    })).toEqual({ action: "preserve", reason: "github_persistence_not_confirmed" });
   });
 
   it("does not let a reviewer observation self-declare its expected label policy", () => {

@@ -186,8 +186,8 @@ describe("PR reviewer precheck", () => {
     expect(runPrecheck("precheck-reviewing.json", { agentsFixture: "agents-empty.json" })).toBe(0);
   });
 
-  it("skips a reviewing PR while its reviewer agent is working", () => {
-    expect(runPrecheck("precheck-reviewing.json", { agentsFixture: "agents-reviewer-working.json" })).toBe(1);
+  it("does not treat an unjournaled legacy reviewer name as live ownership", () => {
+    expect(runPrecheck("precheck-reviewing.json", { agentsFixture: "agents-reviewer-working.json" })).toBe(0);
   });
 
   it("skips PRs with the blocked label", () => {

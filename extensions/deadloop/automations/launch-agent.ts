@@ -13,17 +13,18 @@
 //
 // Usage:
 //   node launch-agent.ts --agent <pi|claude> --name <name> --cwd <path>
-//     --level <low|medium|high> --prompt-file <path>
-//     [--model <model>] [--uuid <uuid>] [--tab <tabId>] [--repo-path <path>]
+//     --pane <rootPaneId> --level <low|medium|high> --prompt-file <path>
+//     [--model <model>] [--uuid <uuid>] [--repo-path <path>]
 
 const fs = require("node:fs") as typeof import("node:fs");
 const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
 
-const { buildAgentArgv, isAgentKind, AGENT_KINDS, AGENT_PROFILES } = require("../../../src/agent-profiles.cjs");
+const { buildNativeAgentArgv, isAgentKind, AGENT_KINDS, AGENT_PROFILES } = require("../../../src/agent-profiles.cjs");
 const { readClaudeConfig, evaluateWorkspaceTrust } = require("../../../src/agent-trust.cjs");
 const { createHerdrRunner } = require("../../../src/herdr-runner.ts");
+const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 
-const FLAG_KEYS = ["agent", "name", "cwd", "model", "level", "uuid", "prompt-file", "tab", "repo-path"] as const;
+const FLAG_KEYS = ["agent", "name", "cwd", "model", "level", "uuid", "prompt-file", "pane", "repo-path"] as const;
 
 function parseArgs(argv: string[]): Record<string, string> {
   const values: Record<string, string> = {};
@@ -53,11 +54,19 @@ function shellQuote(value: string): string {
 function main(
   argv: string[] = process.argv.slice(2),
   options: {
-    runner?: { startAgent: (input: { name: string; cwd: string; tabId?: string; agentArgv: string[] }) => string };
+    runner?: { startAgent: (input: { name: string; kind: string; rootPaneId: string; nativeAgentArgv: string[] }) => string };
+    compatibilityPreflight?: () => unknown;
     readClaudeConfig?: () => unknown;
     writeOutput?: boolean;
   } = {},
 ): string {
+  try {
+    if (options.compatibilityPreflight) options.compatibilityPreflight();
+    else if (!options.runner) runHerdrCompatibilityPreflight();
+  } catch (error) {
+    fail({ error: "herdr_incompatible", message: error instanceof Error ? error.message : String(error) });
+  }
+
   let args: Record<string, string>;
   try {
     args = parseArgs(argv);
@@ -75,6 +84,8 @@ function main(
   const promptFile = args["prompt-file"] || "";
   if (!cwd) fail({ error: "missing_cwd" });
   if (!promptFile) fail({ error: "missing_prompt_file" });
+  const rootPaneId = args.pane || "";
+  if (!rootPaneId) fail({ error: "missing_root_pane" });
 
   let promptText: string;
   try {
@@ -107,7 +118,7 @@ function main(
 
   let agentArgv: string[];
   try {
-    agentArgv = buildAgentArgv({
+    agentArgv = buildNativeAgentArgv({
       agent,
       name: args.name || "",
       level: args.level || "",
@@ -127,7 +138,12 @@ function main(
     });
 
   try {
-    const stdout = runner.startAgent({ name: args.name || "", cwd, tabId: args.tab, agentArgv });
+    const stdout = runner.startAgent({
+      name: args.name || "",
+      kind: agent,
+      rootPaneId,
+      nativeAgentArgv: agentArgv,
+    });
     if (options.writeOutput !== false) process.stdout.write(stdout);
     return stdout;
   } catch (error) {

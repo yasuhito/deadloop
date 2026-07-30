@@ -13,24 +13,13 @@ deadloop currently leaks two runner concerns into repository automation:
 
 GitHub state and promise reports are authoritative. Herdr `agent_status` is lifecycle evidence, not completion authority.
 
-## Reviewer lifecycle
+## Reviewer lifecycle (superseded)
 
-A reviewer name identifies one project and PR: `<projectId>-pr-<number>-reviewer`.
+The former same-name reviewer replacement and dedicated-tab rules are superseded by [Disposable Herdr workspace lifecycle](herdr-attempt-workspace-lifecycle-spec.md) and the selected lifecycle ADR.
 
-Before launch, deadloop must inspect exact-name matches:
+Every reviewer attempt now receives a launch-unique agent name and a fresh Herdr workspace containing only its first tab and root pane. A successful approved or changes-requested V1 attempt closes that workspace only after exact-head GitHub persistence; a human-required, blocked, legacy, malformed, launch-failed, or ambiguous attempt remains visible. A review repair starts only after the reviewer workspace is closed and opens the same linked worktree in another fresh workspace.
 
-- no match: launch normally;
-- one `working` or `idle` match: do not launch a second reviewer;
-- one `done` match: require a dedicated tab ID, close that tab, then launch the replacement with the same name;
-- multiple matches, a missing tab ID, or a mixed active/done set: fail closed without closing any candidate.
-
-Only an exact name match may be closed. A reviewer belonging to another project or PR must never be changed.
-
-After a reviewer writes `complete` or `blocked`, deadloop must first persist the outcome in GitHub comments and labels. It may close the dedicated reviewer tab only after persistence succeeds. A persistence failure retains the tab and evidence.
-
-If replacement tab closure succeeds but replacement launch fails, deadloop must record an actionable error, clear no evidence, and retry only through the normal schedule. It must not merge or silently treat the review as complete.
-
-A successful later automation result resets `failureStreak`. `lastError` must either be cleared on recovery or explicitly presented as historical data.
+No selected path closes a completed same-name agent, creates a replacement tab, or reuses a reviewer terminal. The successful-automation `failureStreak` and `lastError` recovery rule remains in force.
 
 ## Project-check isolation
 

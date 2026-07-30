@@ -17,6 +17,7 @@ type DriverResult = {
 type ClaimWorld = {
   prs?: Record<string, unknown>[];
   agents?: unknown;
+  attempts?: Record<string, unknown>[];
   driverResult?: DriverResult;
 };
 
@@ -27,9 +28,24 @@ function fixture(name: string): unknown {
   return JSON.parse(fs.readFileSync(path.join(fixtureDirectory, name), "utf8"));
 }
 
+function ownershipAttempt(role: string, agentName: string): Record<string, unknown> {
+  return {
+    attemptId: `${role}-13`, launchUuid: `${role}-launch-13`, project: "demo", repository: "owner/repo", role,
+    target: { kind: "pull-request", number: 13 }, inputRevision: { head: "a".repeat(40) }, branch: "agent/issue-13",
+    worktreePath: "/worktrees/issue-13", agentName, workspaceLabel: `${role}-13`, promptFile: "/runs/prompt.md",
+    promiseFile: "/runs/promise.json", phase: "agent_started", lastSuccessfulPhase: "agent_started",
+    workspaceId: `${role}-workspace`, tabId: `${role}-tab`, rootPaneId: `${role}-pane`,
+  };
+}
+
 function setClaim(world: ClaimWorld, prFixture: string, agentsFixture: string): void {
   world.prs = fixture(prFixture) as Record<string, unknown>[];
-  world.agents = fixture(agentsFixture);
+  const source = fixture(agentsFixture) as { result?: { agents?: Record<string, unknown>[] } };
+  const role = agentsFixture.includes("branch-update") ? "branch-update" : "reviewer";
+  const prefix = role === "branch-update" ? "dl-u" : "dl-r";
+  const agents = (source.result?.agents || []).map((agent) => ({ ...agent, name: `${prefix}-13-111111111111` }));
+  world.agents = { result: { agents } };
+  world.attempts = agents.map((agent) => ownershipAttempt(role, String(agent.name)));
 }
 
 Given("実働担当がいない古いレビュー占有がある", function (this: ClaimWorld) {
@@ -67,6 +83,7 @@ Given("回収済みで新しいレビュー担当が稼働中の占有がある"
       ),
     },
   };
+  this.attempts = starts.flatMap((start) => start.name ? [ownershipAttempt("reviewer", start.name)] : []);
 });
 
 function runDriver(fixtureData: Record<string, unknown>): DriverResult {
@@ -74,6 +91,12 @@ function runDriver(fixtureData: Record<string, unknown>): DriverResult {
   const fixturePath = path.join(tempRoot, "review-cycle.json");
   try {
     fs.writeFileSync(fixturePath, JSON.stringify(fixtureData));
+    const stateDir = path.join(tempRoot, "state");
+    for (const [index, attempt] of ((fixtureData.attempts as Record<string, unknown>[]) || []).entries()) {
+      const runDir = path.join(stateDir, "runs", String(index));
+      fs.mkdirSync(runDir, { recursive: true });
+      fs.writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt));
+    }
     const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts", "--fixture", fixturePath], {
       cwd: process.cwd(),
       encoding: "utf8",
@@ -85,6 +108,7 @@ function runDriver(fixtureData: Record<string, unknown>): DriverResult {
         DEADLOOP_REVIEWER_AGENT: "pi",
         DEADLOOP_AUTO_MERGE: "0",
         DEADLOOP_NOW: fixedNow.toISOString(),
+        DEADLOOP_STATE_DIR: stateDir,
       },
     });
     if (result.status !== 0) throw new Error(result.stderr || result.stdout);
@@ -116,17 +140,17 @@ Then("次の選定周期ではレビュー担当が追加で起動されない",
 
 function runCycle(world: ClaimWorld): void {
   if (!world.prs) throw new Error("review claim is missing");
-  world.driverResult = runDriver({ prs: world.prs, agents: world.agents });
+  world.driverResult = runDriver({ prs: world.prs, agents: world.agents, attempts: world.attempts });
 }
 
 function countReviewerStarts(
   world: ClaimWorld,
   pullRequestNumbers = world.prs?.map((pr) => Number(pr.number)) ?? [],
 ): number {
-  const reviewerNames = new Set(pullRequestNumbers.map((number) => `demo-pr-${number}-reviewer`));
   return (
     world.driverResult?.testAdapterEffects?.herdrStarts?.filter((start) =>
-      reviewerNames.has(start.name ?? ""),
+      pullRequestNumbers.some((number) => start.name === `demo-pr-${number}-reviewer`
+        || new RegExp(`^dl-r-${number}-[0-9a-f]{12}$`).test(start.name ?? "")),
     ).length ?? 0
   );
 }

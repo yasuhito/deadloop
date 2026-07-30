@@ -28,9 +28,9 @@ When `action=needs_llm`, stay inside the driver-selected path.
 - Do not choose another issue.
 - Do not run destructive git commands in the main workspace `{{repoPath}}`.
 - If a Worker is already launched, monitor its promise file; do not relaunch.
-- If a Worker must be launched, create a dedicated Herdr tab and use `launch-agent.ts`.
-- Use a unique Worker name per issue; never launch under the default `pi` name.
-- Treat `<worktreePath>/.deadloop/promise-<uuid>.json` as the only completion authority.
+- The deterministic driver opens one fresh Herdr workspace and starts the Worker directly in its returned root pane. Do not create a tab, split a pane, reuse a terminal, or launch an agent yourself.
+- The driver creates a launch-unique internal agent name; never launch under the default `pi` name.
+- Treat the launch-unique promise file under the deadloop state directory as the only completion authority.
 - Break polling immediately when the promise status is `complete` or `blocked`; Herdr status is only a hint.
 - Generate Worker prompts and blocked comments from structured inputs matching `src/issue-coordinator-renderers.ts` / `renderIssueWorkerPrompt` / `renderIssueBlockedComment`.
 

@@ -18,7 +18,7 @@ Do not commit `projects.json`; it contains local paths and rollout choices.
 
 ## State
 
-Runtime state and locks live under `~/.pi/agent/deadloop/`. Per-launch prompts and promise reports live under `~/.pi/agent/deadloop/runs/<uuid>/`, outside target worktrees.
+Runtime state and locks live under `~/.pi/agent/deadloop/`. Per-launch prompts, promise reports, and atomic attempt journals live under `~/.pi/agent/deadloop/runs/<uuid>/`, outside target worktrees. New writers emit only strongly bound V1 reports; legacy reports remain inspection-only evidence.
 
 Worker, reviewer, and monitor prompts run the configured project check through `run-project-check.ts`. The wrapper temporarily isolates untracked `.deadloop` and `.pi-subagents` from recursive project tooling, then restores them after success, failure, timeout, or interruption. Tracked project files are never hidden; if either runtime directory contains a tracked file, validation fails closed instead.
 
@@ -46,4 +46,8 @@ Each automation may define a `driverFile`. Drivers run after precheck and before
 
 ## Runner boundary
 
-v0 uses Herdr for worktrees, tabs, and agent sessions. Herdr-specific code should remain behind runner/automation boundaries so future runners can be added without changing GitHub Issue / PR state semantics.
+v0 requires stable Herdr 0.7.5 or newer. The host checks the client, server, and protocol at startup and before every tick, before candidate selection or a mutation-capable driver.
+
+Each Worker, reviewer, review-repair, or branch-update attempt uses one fresh workspace with the worktree's first tab and root pane. The launcher starts the configured agent directly in that root pane; it never creates a tab, splits a pane, replaces a same-name agent, or reuses a terminal. Successful strongly bound attempts close only their workspace after role-specific GitHub persistence, while the linked worktree remains until the existing merged/closed-PR cleanup gate. Blocked, human-required, legacy, malformed, launch-failed, and ambiguous attempts remain visible and suppress another launch on the same checkout.
+
+`/deadloop-doctor` reports compatibility, retention, and cleanup-pending findings without closing anything. Herdr-specific code remains behind runner/automation boundaries so future runners can be added without changing GitHub Issue / PR state semantics.

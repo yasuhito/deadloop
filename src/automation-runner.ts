@@ -18,6 +18,7 @@ export type AutomationState = {
 };
 
 export type AutomationRunnerDeps = {
+  compatibilityPreflight?: () => void | Promise<void>;
   enabledAt?: () => number;
   isEnabled?: () => boolean;
   isIdle?: () => boolean;
@@ -356,6 +357,8 @@ export async function runScheduledAutomation(
   state: AutomationState,
   deps: AutomationRunnerDeps,
 ): Promise<void> {
+  // This is deliberately before state setup, precheck, candidate selection, or any mutation-capable driver.
+  await deps.compatibilityPreflight?.();
   const key = automationStateKey(project, automation);
   const entry = state.automations[key] || {};
   state.automations[key] = entry;

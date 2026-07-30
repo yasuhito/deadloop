@@ -56,6 +56,7 @@ function runReviewDriver(world: RequeuedReviewWorld): void {
       PI_CODING_AGENT_DIR: world.configDir,
       DEADLOOP_PROJECT_ID: "demo",
       DEADLOOP_REPO_PATH: world.root,
+      DEADLOOP_WORKTREE_ROOT: path.join(world.root, "worktrees"),
       DEADLOOP_GITHUB_REPO: "owner/repo",
       DEADLOOP_ENABLED_AT: "1",
       DEADLOOP_STATE_DIR: path.join(world.configDir, "deadloop"),
@@ -74,13 +75,13 @@ After("@requeued-pr-review", function (this: RequeuedReviewWorld) {
 Given("修正で head が変わり停止中で終了済みのレビュー担当が残る pull request がある", function (this: RequeuedReviewWorld) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-requeued-review-"));
   const bin = path.join(root, "bin");
-  const worktree = path.join(root, "worktree");
+  const worktree = path.join(root, "worktrees", "agent-issue-44-fix");
   const configDir = path.join(root, "config");
   const state = path.join(configDir, "deadloop");
   const log = path.join(root, "herdr.log");
   const prState = path.join(root, "pr-state.json");
   fs.mkdirSync(bin);
-  fs.mkdirSync(worktree);
+  fs.mkdirSync(worktree, { recursive: true });
   fs.mkdirSync(state, { recursive: true });
   fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
     projects: [{
@@ -96,7 +97,7 @@ Given("修正で head が変わり停止中で終了済みのレビュー担当�
     }],
   }));
 
-  const updatedHead = "feed44";
+  const updatedHead = "feed44".padEnd(40, "0");
   fs.writeFileSync(prState, JSON.stringify([{
     number: 44,
     title: "Updated review",
@@ -128,14 +129,24 @@ if (args.includes("get-url")) process.stdout.write("https://github.com/owner/rep
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.HERDR_TEST_LOG, JSON.stringify(args) + "\\n");
-if (args[0] === "agent" && args[1] === "list") {
-  process.stdout.write(JSON.stringify({result:{agents:[{
-    name:"demo-pr-44-reviewer", agent_status:"Done", cwd:process.env.HERDR_TEST_WORKTREE, pane_id:"pane-old"
-  }]}}));
+if (args[0] === "--version") {
+  process.stdout.write("herdr 0.7.5\\n");
+} else if (args[0] === "status" && args[1] === "server") {
+  process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
+} else if (args[0] === "agent" && args[1] === "list") {
+  const agents = [{terminal_id:"terminal-old",name:"demo-pr-44-reviewer", agent_status:"done", cwd:process.env.HERDR_TEST_WORKTREE, pane_id:"pane-old"}];
+  if (fs.existsSync(process.env.HERDR_TEST_LOG + ".agent")) agents.push(JSON.parse(fs.readFileSync(process.env.HERDR_TEST_LOG + ".agent", "utf8")));
+  process.stdout.write(JSON.stringify({result:{agents}}));
+} else if (args[0] === "worktree" && args[1] === "list") {
+  process.stdout.write(JSON.stringify({result:{worktrees:[{path:process.env.HERDR_TEST_WORKTREE, branch:"agent/issue-44-fix"}]}}));
 } else if (args[0] === "worktree" && args[1] === "open") {
-  process.stdout.write(JSON.stringify({workspace_id:"workspace-1", path:process.env.HERDR_TEST_WORKTREE}));
-} else if (args[0] === "tab" && args[1] === "create") {
-  process.stdout.write(JSON.stringify({tab_id:"tab-new"}));
+  process.stdout.write(JSON.stringify({result:{type:"worktree_opened",already_open:false,workspace:{workspace_id:"workspace-1"},tab:{tab_id:"tab-new",workspace_id:"workspace-1"},root_pane:{pane_id:"pane-new",tab_id:"tab-new",workspace_id:"workspace-1",cwd:process.env.HERDR_TEST_WORKTREE},worktree:{path:process.env.HERDR_TEST_WORKTREE}}}));
+} else if (args[0] === "workspace" && args[1] === "list") {
+  process.stdout.write(JSON.stringify({result:{workspaces:[]}}));
+} else if (args[0] === "workspace" && args[1] === "rename") {
+  process.stdout.write("renamed");
+} else if (args[0] === "agent" && args[1] === "start") {
+  fs.writeFileSync(process.env.HERDR_TEST_LOG + ".agent", JSON.stringify({terminal_id:"terminal-new",name:args[2],agent_status:"working",cwd:process.env.HERDR_TEST_WORKTREE,pane_id:args[args.indexOf("--pane")+1]}));
 }
 `);
 
@@ -155,22 +166,18 @@ When("agent:blocked が外された pull request を deadloop が再確認する
 Then("新しい head のレビュー担当を一人だけ起動する", function (this: RequeuedReviewWorld) {
   const actions = readHerdrActions(this).map(actionName);
 
-  assert.equal(actions.filter((action) => action === "agent start demo-pr-44-reviewer").length, 1);
+  assert.equal(actions.filter((action) => action.startsWith("agent start dl-r-44-")).length, 1);
 });
 
-Then("終了済みのレビュー担当を片付けてから新しい担当を起動する", function (this: RequeuedReviewWorld) {
+Then("終了済みのレビュー担当を再利用せず新しい担当を起動する", function (this: RequeuedReviewWorld) {
   const actions = readHerdrActions(this).map(actionName);
-  const cleanupAndStart = actions.filter((action) =>
-    action === "pane close pane-old" || action === "agent start demo-pr-44-reviewer"
-  );
-
-  assert.equal(cleanupAndStart.join(">"), "pane close pane-old>agent start demo-pr-44-reviewer");
+  assert.deepEqual({ oldPaneClosed: actions.includes("pane close pane-old"), newStarts: actions.filter((action) => action.startsWith("agent start dl-r-44-")).length }, { oldPaneClosed: false, newStarts: 1 });
 });
 
 Then("レビュー担当への引き継ぎに修正後の head を使う", function (this: RequeuedReviewWorld) {
   if (!this.updatedHead) throw new Error("review handoff state is missing");
   const start = readHerdrActions(this)
-    .find((args) => args[0] === "agent" && args[1] === "start" && args[2] === "demo-pr-44-reviewer");
+    .find((args) => args[0] === "agent" && args[1] === "start" && args[2]?.startsWith("dl-r-44-"));
   const promptArgument = start?.at(-1) ?? "";
   const prompt = promptArgument.startsWith("@")
     ? fs.readFileSync(promptArgument.slice(1), "utf8")

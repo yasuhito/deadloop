@@ -31,6 +31,7 @@ type SelectionWorld = {
   driverResult?: DriverResult;
   prs?: PullRequest[];
   agents?: Record<string, unknown>;
+  attempts?: Record<string, unknown>[];
 };
 
 const fixtureDirectory = path.join(process.cwd(), "test/fixtures/pr-reviewer");
@@ -91,7 +92,8 @@ Given("稼働中の担当者がいないレビュー中の pull request があ�
 
 Given("別担当がレビュー中の pull request がある", function (this: SelectionWorld) {
   setFixture(this, "precheck-reviewing.json");
-  this.agentsFixtureName = "agents-reviewer-working.json";
+  this.agents = { result: { agents: [{ name: "dl-r-13-111111111111", agent_status: "working" }] } };
+  this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: 13 }, phase: "agent_started", agentName: "dl-r-13-111111111111" }];
 });
 
 Given("停止中の pull request がある", function (this: SelectionWorld) {
@@ -100,7 +102,8 @@ Given("停止中の pull request がある", function (this: SelectionWorld) {
 
 Given("レビューできない pull request とレビュー可能な pull request が混在している", function (this: SelectionWorld) {
   setFixture(this, "precheck-mixed-candidates.json");
-  this.agentsFixtureName = "agents-reviewer-working.json";
+  this.agents = { result: { agents: [{ name: "dl-r-13-111111111111", agent_status: "working" }] } };
+  this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: 13 }, phase: "agent_started", agentName: "dl-r-13-111111111111" }];
 });
 
 Given("自動マージが有効である", function (this: SelectionWorld) {
@@ -121,16 +124,16 @@ Given("外部レビューが無効である", function (this: SelectionWorld) {
 
 When("deadloop がレビュー対象を探す", function (this: SelectionWorld) {
   if (!this.fixtureName) throw new Error("review state is missing");
-  const agents = this.agentsFixtureName
+  const agents = this.agents ?? (this.agentsFixtureName
     ? JSON.parse(fs.readFileSync(path.join(fixtureDirectory, this.agentsFixtureName), "utf8"))
-    : { result: { agents: [] } };
+    : { result: { agents: [] } });
   const config = defaultDecisionConfig({
     autoMerge: this.autoMerge ?? false,
     externalReviewEnabled: this.externalReviewEnabled ?? false,
     now: fixedNow,
     projectId: "demo",
   });
-  this.decision = selectPrForReview(readFixture(this.fixtureName), config, workingReviewerPrNumbers(agents, config.projectId));
+  this.decision = selectPrForReview(readFixture(this.fixtureName), config, workingReviewerPrNumbers(agents, config.projectId, this.attempts || [], "owner/repo"));
 });
 
 When("deadloop が外部レビューの扱いを決める", function (this: SelectionWorld) {
@@ -172,13 +175,15 @@ Given("別担当が選択後にレビューを開始している", function (thi
   const selected = this.prs.find((pr) => pr.number === firstDecision.number);
   if (!selected) throw new Error("selected pull request is missing");
   selected.labels = [...(selected.labels as unknown[]), { name: "agent:reviewing" }];
-  this.agents = { result: { agents: [{ name: `demo-pr-${firstDecision.number}-reviewer`, agent_status: "working" }] } };
+  const agentName = `dl-r-${firstDecision.number}-111111111111`;
+  this.agents = { result: { agents: [{ name: agentName, agent_status: "working" }] } };
+  this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: firstDecision.number }, phase: "agent_started", agentName }];
 });
 
 When("次の選定周期になる", function (this: SelectionWorld) {
   if (!this.prs || !this.agents) throw new Error("review state is missing");
   const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo" });
-  this.decision = selectPrForReview(this.prs, config, workingReviewerPrNumbers(this.agents, config.projectId));
+  this.decision = selectPrForReview(this.prs, config, workingReviewerPrNumbers(this.agents, config.projectId, this.attempts || [], "owner/repo"));
 });
 
 Then("pull request #{int} をレビュー対象に選ぶ", function (this: SelectionWorld, number: number) {

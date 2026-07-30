@@ -1,0 +1,25 @@
+{
+  "id": "cli:workspace:list",
+  "result": {
+    "type": "workspace_list",
+    "workspaces": [
+      {
+        "workspace_id": "w-issue-12",
+        "number": 3,
+        "label": "Issue 12",
+        "focused": false,
+        "pane_count": 1,
+        "tab_count": 1,
+        "active_tab_id": "w-issue-12:t1",
+        "agent_status": "working",
+        "worktree": {
+          "repo_key": "owner/repo",
+          "repo_name": "repo",
+          "repo_root": "/repo",
+          "checkout_path": "/worktrees/issue-12",
+          "is_linked_worktree": true
+        }
+      }
+    ]
+  }
+}

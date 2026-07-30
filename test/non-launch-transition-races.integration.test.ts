@@ -36,7 +36,12 @@ function runRace(kind: "issue" | "pr") {
   const initialPr = { number: 23, title: "Draft PR", url: "https://github.com/owner/repo/pull/23", state: "OPEN", headRefName: "agent/issue-23-draft", headRefOid: "draftsha", isCrossRepository: false, isDraft: true, mergeStateStatus: "CLEAN", labels: [{ name: "agent:review" }], statusCheckRollup: [], comments: [], reviewRequests: [] };
   const readyPr = { ...initialPr, isDraft: false };
   writeFileSync(path.join(bin, "node"), `#!/bin/sh\ncase "$1" in *cleanup-completed-worker-worktrees.ts) printf '{"candidates":[]}\\n' ;; *) exec ${JSON.stringify(process.execPath)} "$@" ;; esac\n`);
-  writeFileSync(path.join(bin, "herdr"), "#!/bin/sh\nprintf '{\"result\":{\"agents\":[]}}\\n'\n");
+  writeFileSync(path.join(bin, "herdr"), `#!/bin/sh
+if [ "$1" = "--version" ]; then printf 'herdr 0.7.5\\n'
+elif [ "$1 $2" = "status server" ]; then printf 'version: 0.7.5\\ncompatible: yes\\n'
+else printf '{"result":{"agents":[]}}\\n'
+fi
+`);
   writeFileSync(path.join(bin, "gh"), `#!/bin/sh
 case "$1 $2" in
   "repo view") printf '{"id":"R_repo"}\\n' ;;

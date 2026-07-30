@@ -33,10 +33,8 @@ When `action=needs_llm`, stay inside the driver-selected path.
 - If `autoMerge=false`, never merge; hand off review and verification evidence to `{{humanLabel}}`.
 - Use CI fallback only through the conservative helper decision; never guess around failed checks.
 - If a reviewer is already launched, monitor its promise file; do not relaunch.
-- If a reviewer must be launched, create a dedicated Herdr tab and use `launch-agent.ts`.
-  Example: `herdr tab create --workspace <workspaceId> --cwd <worktreePath> --label "$reviewer_name" --no-focus`
-  Example: `node {{automationDir}}/launch-agent.ts --agent "{{reviewerAgent}}" --name "$reviewer_name" --cwd "$worktree_path" --repo-path {{repoPath}} --level "$level" --model "{{reviewerModel}}" --uuid "$uuid" --prompt-file "$prompt_file" --tab "$tab_id"`
-- Branch-update workers also need a dedicated tab with the same label as the worker name before `herdr agent start ... --tab <tabId> --no-focus`.
+- The deterministic driver opens one fresh Herdr workspace for each reviewer or branch-update attempt and starts the agent in its returned root pane. Do not create tabs, split panes, reuse a terminal, or launch an agent yourself.
+- A successful V1-backed attempt is closed only by `complete-attempt-workspace.ts` after its role-specific GitHub result is confirmed. Keep blocked, human-required, malformed, legacy, launch-failed, or ambiguous attempts visible.
 - Treat the promise file as the only completion authority.
 - Break polling immediately when the promise status is `complete` or `blocked`; Herdr status is only a hint.
 
@@ -58,14 +56,12 @@ When moving a PR to `{{blockedLabel}}`, write a comment with these sections in t
    herdr agent list
    herdr pane list
    ```
-2. Inspect leftover worktrees or branches before cleanup.
+2. Inspect the retained attempt workspace and linked worktree. Preserve it unless a bound V1 report and role-specific GitHub result prove that `complete-attempt-workspace.ts` may close only the workspace. Worktree removal remains reserved for the merged/closed-PR safety gate.
    ```bash
+   herdr workspace list
    herdr worktree list --cwd {{repoPath}} --json
    git -C {{repoPath}} worktree list
-   git -C {{repoPath}} branch --list "<headRefName>"
-   herdr worktree remove --workspace <workspaceId>
-   git -C {{repoPath}} worktree remove <worktreePath>
-   git -C {{repoPath}} branch -d <headRefName>
+   git -C <worktreePath> status --short
    ```
 3. Re-queue the target issue after fixing the cause.
    ```bash

@@ -10,6 +10,12 @@ const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
 const key = "abcdef1234567890abcd";
 
+function writeCompatibleHerdr(bin: string): void {
+  const herdr = path.join(bin, "herdr");
+  fs.writeFileSync(herdr, `#!/bin/sh\nif [ "$1" = "--version" ]; then printf 'herdr 0.7.5\\n'; else printf 'version: 0.7.5\\ncompatible: yes\\n'; fi\n`);
+  fs.chmodSync(herdr, 0o755);
+}
+
 function runCompletion(options: {
   promise: Record<string, unknown>;
   receipt?: Record<string, unknown> | string;
@@ -23,13 +29,16 @@ function runCompletion(options: {
   const bin = path.join(root, "bin");
   const stateDir = path.join(root, "config", "deadloop");
   const projectRepo = path.join(root, "repo");
-  const promiseFile = path.join(root, "promise.json");
-  const resultFile = path.join(root, "result.json");
-  const contractFile = path.join(root, "contract.json");
+  const runDir = path.join(stateDir, "runs", "repair-run");
+  const attemptFile = path.join(runDir, "attempt.json");
+  const promiseFile = path.join(runDir, "promise.json");
+  const resultFile = path.join(runDir, "finalizer-result.json");
+  const contractFile = path.join(runDir, "review-contract.json");
   const postedFile = path.join(root, "posted.txt");
   fs.mkdirSync(bin, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(runDir, { recursive: true });
   fs.mkdirSync(projectRepo);
+  writeCompatibleHerdr(bin);
   spawnSync("git", ["-C", projectRepo, "init", "--quiet"]);
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
@@ -37,7 +46,27 @@ function runCompletion(options: {
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
   }] }));
-  fs.writeFileSync(promiseFile, JSON.stringify(options.promise));
+  const outcome = String(options.promise.reason || "");
+  const strongPromise = {
+    schemaVersion: 1, attemptId: key, role: "review-repair",
+    target: { repository: "owner/repo", kind: "pull-request", number: 24 },
+    inputRevision: { head: oldHead }, status: options.promise.status, summary: options.promise.summary,
+    result: outcome === "repair_pushed"
+      ? { outcome, outputRevision: newHead, repairs: options.promise.repairs }
+      : outcome === "stale_head" ? { outcome, outputRevision: options.liveHead || newHead }
+        : options.promise.result,
+    evidence: outcome === "repair_pushed"
+      ? { finalizer: typeof options.receipt === "object" ? { ...options.receipt, reason: outcome } : options.receipt, validations: options.promise.checks }
+      : outcome === "stale_head" ? { finalizer: options.receipt } : options.promise.evidence || {},
+  };
+  fs.writeFileSync(promiseFile, JSON.stringify(strongPromise));
+  fs.writeFileSync(attemptFile, JSON.stringify({
+    schemaVersion: 1, attemptId: key, launchUuid: "repair-run", project: "demo", repository: "owner/repo",
+    role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
+    branch: "agent/issue-24", worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
+    workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
+    phase: "agent_started", lastSuccessfulPhase: "agent_started",
+  }));
   fs.writeFileSync(
     contractFile,
     JSON.stringify({ attemptKey: key, expectedHead: oldHead, findingTitles: ["Unsafe fallback"] }),
@@ -64,6 +93,10 @@ else if (args[0] === "pr" && args[1] === "comment") fs.writeFileSync(process.env
       "extensions/deadloop/automations/pr-review-repair-complete.ts",
       "--promise",
       promiseFile,
+      "--attempt-record",
+      attemptFile,
+      "--project-id",
+      "demo",
       "--result",
       resultFile,
       "--contract",
@@ -105,12 +138,15 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   const stateDir = path.join(configDir, "deadloop");
   const projectRepo = path.join(root, "repo");
   const commentsFile = path.join(root, "comments.json");
-  const promiseFile = path.join(root, "promise.json");
-  const resultFile = path.join(root, "result.json");
-  const contractFile = path.join(root, "contract.json");
+  const runDir = path.join(stateDir, "runs", "repair-run");
+  const attemptFile = path.join(runDir, "attempt.json");
+  const promiseFile = path.join(runDir, "promise.json");
+  const resultFile = path.join(runDir, "finalizer-result.json");
+  const contractFile = path.join(runDir, "review-contract.json");
   fs.mkdirSync(bin, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(runDir, { recursive: true });
   fs.mkdirSync(projectRepo);
+  writeCompatibleHerdr(bin);
   spawnSync("git", ["-C", projectRepo, "init", "--quiet"]);
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
@@ -119,11 +155,22 @@ async function runConcurrentSuccessRetries(): Promise<number> {
     autoMergeAcknowledged: false, enabled: true,
   }] }));
   const checks = [{ command: "npm test", result: "passed" }];
+  const receipt = { action: "pushed", reason: "repair_pushed", originalHeadOid: oldHead, headOid: newHead, checks };
   fs.writeFileSync(promiseFile, JSON.stringify({
-    status: "complete", reason: "repair_pushed", summary: "fixed",
-    repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }], checks,
+    schemaVersion: 1, attemptId: key, role: "review-repair",
+    target: { repository: "owner/repo", kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
+    status: "complete", summary: "fixed",
+    result: { outcome: "repair_pushed", outputRevision: newHead, repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }] },
+    evidence: { finalizer: receipt, validations: checks },
   }));
-  fs.writeFileSync(resultFile, JSON.stringify({ action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks }));
+  fs.writeFileSync(resultFile, JSON.stringify(receipt));
+  fs.writeFileSync(attemptFile, JSON.stringify({
+    schemaVersion: 1, attemptId: key, launchUuid: "repair-run", project: "demo", repository: "owner/repo",
+    role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
+    branch: "agent/issue-24", worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
+    workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
+    phase: "agent_started", lastSuccessfulPhase: "agent_started",
+  }));
   fs.writeFileSync(contractFile, JSON.stringify({ attemptKey: key, expectedHead: oldHead, findingTitles: ["Unsafe fallback"] }));
   fs.writeFileSync(commentsFile, "[]");
   const gh = path.join(bin, "gh");
@@ -142,8 +189,8 @@ else if (args[0] === "pr" && args[1] === "comment") {
   fs.chmodSync(gh, 0o755);
   const args = [
     "extensions/deadloop/automations/pr-review-repair-complete.ts",
-    "--promise", promiseFile, "--result", resultFile, "--contract", contractFile,
-    "--project-repo", projectRepo, "--github-repo", "owner/repo", "--state-dir", stateDir,
+    "--promise", promiseFile, "--attempt-record", attemptFile, "--project-id", "demo",
+    "--result", resultFile, "--contract", contractFile, "--project-repo", projectRepo, "--github-repo", "owner/repo", "--state-dir", stateDir,
     "--enabled-at", "1", "--pr", "24", "--branch", "agent/issue-24", "--expected-head", oldHead,
     "--attempt-key", key, "--review-label", "agent:review", "--reviewing-label", "agent:reviewing",
     "--blocked-label", "agent:blocked",
@@ -162,6 +209,22 @@ afterEach(() => {
 });
 
 describe("review repair deterministic completion", () => {
+  it.each(["--attempt-record", "--project-id"])("requires canonical identity argument %s", (missingFlag) => {
+    const { parseArgs } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
+    const values = {
+      promise: "/state/runs/one/promise.json", attemptRecord: "/state/runs/one/attempt.json", projectId: "demo",
+      result: "/state/runs/one/finalizer-result.json", contract: "/state/runs/one/review-contract.json",
+      projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: "1", pr: "24",
+      branch: "agent/issue-24", expectedHead: oldHead, attemptKey: key, reviewLabel: "review",
+      reviewingLabel: "reviewing", blockedLabel: "blocked",
+    };
+    const args = Object.entries(values).flatMap(([name, value]) => {
+      const flag = `--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)}`;
+      return flag === missingFlag ? [] : [flag, value];
+    });
+    expect(() => parseArgs(args)).toThrow();
+  });
+
   it("posts success after the promise, finalizer receipt, and live head agree", () => {
     const checks = [{ command: "npm test", result: "passed" }];
     const result = runCompletion({

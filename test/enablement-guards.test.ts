@@ -179,6 +179,21 @@ describe("enablement mutation guards", () => {
     },
   );
 
+  it("records the guarded claim before a runner failure", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const events: string[] = [];
+    try {
+      withEnabledDriverLaunch(
+        { ...project, enabledAt: 1 },
+        () => events.push("github-claim"),
+        () => { events.push("runner-open"); throw new Error("runner failed"); },
+        { prepareAttempt: () => events.push("prepared"), recordClaim: () => events.push("claim-recorded") },
+      );
+    } catch {}
+    expect(events).toEqual(["prepared", "github-claim", "claim-recorded", "runner-open"]);
+  });
+
   it("stops final agent start when disable intent arrives during launch preparation", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });

@@ -1,24 +1,23 @@
 export type RunnerWorktreeRequest = {
   repoPath: string;
   branch: string;
-  label: string;
 };
 
 export type RunnerWorktreeCreateRequest = RunnerWorktreeRequest & {
   baseBranch: string;
+  label: string;
+  intendedPath: string;
 };
 
-export type RunnerTabCreateRequest = {
-  workspaceId: string;
-  cwd: string;
-  label: string;
+export type RunnerWorktreeRemoveRequest = RunnerWorktreeRequest & {
+  worktreePath: string;
 };
 
 export type RunnerAgentStartRequest = {
   name: string;
-  cwd: string;
-  tabId?: string;
-  agentArgv: string[];
+  kind: string;
+  rootPaneId: string;
+  nativeAgentArgv: string[];
 };
 
 export type RunnerWorktree = Record<string, any> & {
@@ -32,37 +31,38 @@ export type RunnerAgent = Record<string, any> & {
   name?: string;
   status?: string;
   cwd?: string;
+  paneId?: string;
+};
+
+export type RunnerWorkspace = Record<string, any> & {
+  workspaceId?: string;
+  worktreePath?: string;
+  paneCount?: number;
+  tabCount?: number;
 };
 
 export type RunnerWorktreeLaunch = {
   workspaceId: string;
-  worktreePath: string;
-};
-
-export type RunnerTab = {
   tabId: string;
+  rootPaneId: string;
+  worktreePath: string;
 };
 
 export type RunnerAdapter = {
   createWorktree(input: RunnerWorktreeCreateRequest): RunnerWorktreeLaunch;
   openWorktree(input: RunnerWorktreeRequest): RunnerWorktreeLaunch;
-  createTab(input: RunnerTabCreateRequest): RunnerTab;
-  closeTab(tabId: string): string;
+  renameWorkspace(workspaceId: string, label: string): string;
   startAgent(input: RunnerAgentStartRequest): string;
+  closeWorkspace(workspaceId: string): string;
+  listWorkspaces(): RunnerWorkspace[];
   listWorktrees(repoPath: string): RunnerWorktree[];
   listAgents(): RunnerAgent[];
-  removeAgent(agentId: string): string;
-  removeWorktree(workspaceId: string): string;
+  removeWorktree(input: RunnerWorktreeRemoveRequest): string;
 };
 
 export type AsyncRunnerAdapter = {
-  createWorktree(input: RunnerWorktreeCreateRequest): Promise<RunnerWorktreeLaunch>;
-  openWorktree(input: RunnerWorktreeRequest): Promise<RunnerWorktreeLaunch>;
-  createTab(input: RunnerTabCreateRequest): Promise<RunnerTab>;
-  closeTab(tabId: string): Promise<string>;
-  startAgent(input: RunnerAgentStartRequest): Promise<string>;
+  listWorkspaces(): Promise<RunnerWorkspace[]>;
   listWorktrees(repoPath: string): Promise<RunnerWorktree[]>;
   listAgents(): Promise<RunnerAgent[]>;
-  removeAgent(agentId: string): Promise<string>;
-  removeWorktree(workspaceId: string): Promise<string>;
+  removeWorktree(input: RunnerWorktreeRemoveRequest): Promise<string>;
 };

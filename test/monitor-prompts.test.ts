@@ -20,6 +20,28 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("If the promise status is `complete` or `blocked`, break polling immediately");
   });
 
+  it("passes the configured Worker review label to attempt persistence", () => {
+    const prompt = renderIssueMonitorPrompt({
+      issueNumber: 12, automationDir: "/automation", promiseFile: "/state/runs/one/promise.json", actorName: "Worker",
+      worktreePath: "/wt", branch: "agent/issue-12", checkCommand: "npm test", readyLabel: "custom:ready",
+      implementLabel: "custom:implement", reviewLabel: "custom:review", inProgressLabel: "custom:claimed",
+      blockedLabel: "custom:blocked",
+    });
+
+    expect(prompt).toMatch(/persist-attempt-result\.ts[^`]+--review-label custom:review/);
+  });
+
+  it("passes configured Worker labels to the completion proof", () => {
+    const prompt = renderIssueMonitorPrompt({
+      issueNumber: 12, automationDir: "/automation", promiseFile: "/state/runs/one/promise.json", actorName: "Worker",
+      worktreePath: "/wt", branch: "agent/issue-12", checkCommand: "npm test", readyLabel: "custom:ready",
+      implementLabel: "custom:implement", reviewLabel: "custom:review", inProgressLabel: "custom:claimed",
+      blockedLabel: "custom:blocked",
+    });
+
+    expect(prompt).toContain("--worker-ready-label custom:ready --worker-implement-label custom:implement --worker-review-label custom:review");
+  });
+
   it("renders issue-specific completion instructions", () => {
     const prompt = renderIssueMonitorPrompt({
       issueNumber: 12,
@@ -80,6 +102,26 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("If autoMerge=false, never merge");
   });
 
+  it("renders human-handoff completion labels when automatic merge is disabled", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
+      promiseFile: "/state/runs/one/promise.json", actorName: "reviewer", projectId: "demo", repoPath: "/repo",
+      githubRepo: "owner/repo", stateDir: "/state", autoMerge: false, checkCommand: "npm test",
+      humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+    });
+    expect(prompt).toMatch(/complete-attempt-workspace\.ts[^`]+--expected-label ready-for-human(?![^`]+--expected-label)/);
+  });
+
+  it("renders review-state completion labels when automatic merge is enabled", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
+      promiseFile: "/state/runs/one/promise.json", actorName: "reviewer", projectId: "demo", repoPath: "/repo",
+      githubRepo: "owner/repo", stateDir: "/state", autoMerge: true, checkCommand: "npm test",
+      humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+    });
+    expect(prompt).toMatch(/complete-attempt-workspace\.ts[^`]+--expected-label agent:review --expected-label agent:reviewing/);
+  });
+
   it("routes reviewer changes_requested through a self-contained repair dispatcher command", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24,
@@ -90,6 +132,7 @@ describe("monitor prompts", () => {
       actorName: "reviewer",
       projectId: "demo project",
       repoPath: "/repo path",
+      worktreeRoot: "/custom worktrees",
       githubRepo: "owner/repo",
       stateDir: "/state dir",
       checkCommand: "npm run test -- --grep 'repair'",
@@ -103,19 +146,19 @@ describe("monitor prompts", () => {
       blockedLabel: "custom blocked",
     });
 
-    expect(prompt).toContain("--github-repo owner/repo --repo-path '/repo path' --project-id 'demo project' --state-dir '/state dir' --check-command 'npm run test -- --grep '\"'\"'repair'\"'\"'' --worker-agent claude --worker-model 'model with spaces' --remote 'fork remote' --review-label 'custom review' --reviewing-label 'custom reviewing' --blocked-label 'custom blocked'");
+    expect(prompt).toContain("--github-repo owner/repo --repo-path '/repo path' --worktree-root '/custom worktrees' --project-id 'demo project' --state-dir '/state dir' --check-command 'npm run test -- --grep '\"'\"'repair'\"'\"'' --worker-agent claude --worker-model 'model with spaces' --remote 'fork remote' --review-label 'custom review' --reviewing-label 'custom reviewing' --blocked-label 'custom blocked' --human-label ready-for-human");
   });
 
   it("renders the reviewer dispatcher with its complete authorization context", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/promise.json", actorName: "reviewer", projectId: "demo", repoPath: "/repo path",
-      githubRepo: "owner/repo", stateDir: "/state", enabledAt: 123, projectCheckCommand: "npm test",
+      worktreeRoot: "/custom worktrees", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 123, projectCheckCommand: "npm test",
       workerAgent: "pi", workerModel: "model", repairRemote: "origin", checkCommand: "npm test",
       humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("DEADLOOP_GITHUB_REPO=owner/repo DEADLOOP_ENABLED_AT=123");
+    expect(prompt).toContain("DEADLOOP_WORKTREE_ROOT='/custom worktrees' DEADLOOP_STATE_DIR=/state");
   });
 
   it("routes issue monitor mutations through the enablement guard", () => {

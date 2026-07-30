@@ -29,8 +29,13 @@ beforeEach(() => {
   // the launcher spawns it without a shell, every argument arrives verbatim.
   const fakeHerdr = [
     "#!/usr/bin/env node",
-    `require("node:fs").writeFileSync(${JSON.stringify(argvOut)}, JSON.stringify(process.argv.slice(2)));`,
-    'process.stdout.write(JSON.stringify({ ok: true, result: { tab: { tab_id: "t1" } } }));',
+    "const args = process.argv.slice(2);",
+    'if (args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");',
+    'else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");',
+    "else {",
+    `  require("node:fs").writeFileSync(${JSON.stringify(argvOut)}, JSON.stringify(args));`,
+    '  process.stdout.write(JSON.stringify({ ok: true, result: { tab: { tab_id: "t1" } } }));',
+    "}",
   ].join("\n");
   fs.writeFileSync(path.join(binDir, "herdr"), fakeHerdr, { mode: 0o755 });
 });
@@ -66,12 +71,12 @@ describe("launch-agent integration", () => {
     fs.writeFileSync(promptFile, "prompt body");
     const { recorded } = run([
       "--agent", "pi", "--name", "demo-worker", "--cwd", worktree, "--level", "medium",
-      "--prompt-file", promptFile, "--tab", "t1",
+      "--prompt-file", promptFile, "--pane", "p1",
     ]);
 
     expect(recorded).toEqual([
-      "agent", "start", "demo-worker", "--cwd", worktree, "--no-focus", "--tab", "t1",
-      "--", "pi", "--name", "demo-worker", "--thinking", "medium", "--approve", `@${promptFile}`,
+      "agent", "start", "demo-worker", "--kind", "pi", "--pane", "p1",
+      "--", "--name", "demo-worker", "--thinking", "medium", "--approve", `@${promptFile}`,
     ]);
   });
 
@@ -81,7 +86,7 @@ describe("launch-agent integration", () => {
     fs.writeFileSync(promptFile, payload);
     const { recorded } = run([
       "--agent", "claude", "--name", "demo-worker", "--cwd", worktree, "--level", "high",
-      "--uuid", "U-1", "--prompt-file", promptFile,
+      "--uuid", "U-1", "--prompt-file", promptFile, "--pane", "p1",
     ]);
 
     expect(recorded?.at(-1)).toBe(payload);
@@ -92,7 +97,7 @@ describe("launch-agent integration", () => {
     fs.writeFileSync(promptFile, "body");
     const { recorded } = run([
       "--agent", "claude", "--name", "w", "--cwd", worktree, "--level", "high",
-      "--uuid", "U", "--prompt-file", promptFile,
+      "--uuid", "U", "--prompt-file", promptFile, "--pane", "p1",
     ]);
 
     expect(recorded).toBeNull();
@@ -102,7 +107,7 @@ describe("launch-agent integration", () => {
     fs.writeFileSync(promptFile, "body");
     const { recorded } = run([
       "--agent", "claude", "--name", "w", "--cwd", worktree, "--level", "high",
-      "--uuid", "U", "--prompt-file", promptFile,
+      "--uuid", "U", "--prompt-file", promptFile, "--pane", "p1",
     ]);
 
     expect(recorded).not.toBeNull();
