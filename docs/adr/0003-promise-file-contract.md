@@ -4,12 +4,12 @@ Worker の完了検知はこれまで「assistant テキストに `<promise>COMP
 
 ## Status
 
-Accepted. V1 normalized reports are now written by new Worker, reviewer, review-repair, and branch-update prompts. The reader continues to classify legacy three-field payloads as weak evidence while older attempts drain; they cannot become journal-bound strong evidence.
+採用済み。新しく起動する Worker、レビューエージェント、レビュー修正エージェント、ブランチ更新エージェントは、正規化した V1 報告を書く。読み取り側は、旧試行が終了するまで従来の3項目ペイロードを弱い証拠として扱うが、試行記録に結び付いた強い証拠へ昇格させない。
 
 ## Decision
 
 - 司令塔は Worker 起動ごとに一意な promise ファイルパスを採番し、worker prompt で指示する。現在の配置は [ADR 0010](0010-runtime-artifact-isolation.md) に従い `<deadloopStateDir>/runs/<uuid>/promise.json` とする。uuid は claude の `--session-id` と共用し、同一 issue のリトライ起動時に前回 worker の古い報告を誤読することを構造的に排除する(Orca の dispatchId 権威に相当)。
-- legacy 基本ペイロードは `{"status":"complete"|"blocked","reason":...,"summary":"3文要約(何をした・何が分かった・何が残っている)"}` だった。新規writerは ADR 0006 の V1 正規化報告（schemaVersion、attempt binding、role-specific result/evidence）だけを書く。reader は移行中にlegacyを読めるが、weak evidenceとして扱い、cleanup/reconciliationを許可しない。PR reviewer の結果と構造化 `findings` の詳細は [ADR 0012](0012-automatic-pr-review-repair.md) に従う。
+- 従来の基本ペイロードは `{"status":"complete"|"blocked","reason":...,"summary":"3文要約(何をした・何が分かった・何が残っている)"}` だった。新しい書き込み側は、ADR 0006 の V1 正規化報告（`schemaVersion`、試行との結び付き、役割別の結果と証拠）だけを書く。読み取り側は移行中に従来形式も読めるが、弱い証拠として扱い、後片付けや状態調整の根拠にはしない。PR レビュー結果と構造化された `findings` の詳細は [ADR 0012](0012-automatic-pr-review-repair.md) に従う。
 - 規約: **失敗も必ず書く。黙って終了しない**(blocked も promise である)。
 - `extract-worker-promise.ts` の前身にあった session JSONL パース・`--pane-id` 解決は廃止し、「指定パスの JSON を読んで検証する」薄い helper に置き換える。`<promise>` テキスト規約も廃止する。
 - エージェントの session ファイル・pane 出力・Herdr `agent_status` は完了判定に使わない(監視ヒントのみ)。

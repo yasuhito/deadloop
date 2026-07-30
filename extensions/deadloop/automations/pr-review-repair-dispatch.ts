@@ -229,7 +229,7 @@ Safety contract:
 Promise report:
 - Always write one V1 JSON object to ${promiseFile}. Its immutable identity is ${JSON.stringify({ schemaVersion: 1, attemptId: attemptKey, role: "review-repair", target: { repository: env.githubRepo, kind: "pull-request", number: Number(prNumber) }, inputRevision: { head: expectedHead } })}.
 - After action=pushed, read the finalizer result file beside the promise and write a summary plus status="complete", result={outcome:"repair_pushed",outputRevision:"<finalizer headOid>",repairs:[{title:"exact finding title",summary:"specific change",paths:["changed/repo/path"]}]}, and evidence={finalizer:<entire receipt>,validations:<receipt checks>}. Include exactly one repair entry for every finding and only files actually changed for that finding.
-- After action=stale_head, write a summary plus status="complete", result={outcome:"stale_head"}, and evidence={finalizer:<entire receipt>}.
+- After action=stale_head, read the finalizer result file and write a summary plus status="complete", result={outcome:"stale_head",outputRevision:"<finalizer currentRemoteHeadOid>"}, and evidence={finalizer:<entire receipt>}. The outputRevision is required and must be the current remote head recorded by the finalizer.
 - On technical, validation, invariant, or push failure, write a summary plus status="blocked", result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
 - This attempt key is ${attemptKey}; do not place it or any local path in public text.
 - Do not claim success unless the finalizer returned pushed or stale_head.`;

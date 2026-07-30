@@ -142,6 +142,12 @@ exit 2
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });
 
+  it("binds the Worker V1 identity to an exact commit SHA", () => {
+    const instructions = runDriverFixture("driver-ready-worker.json").launch.instructions;
+
+    expect(instructions).toContain(`"inputRevision":{"head":"${"f".repeat(40)}"}`);
+  });
+
   it("persists the launch-time issue title for monitor revalidation", () => {
     expect(runDriverFixture("driver-ready-worker.json").monitorHandoff.input.issueTitle).toBe("Implement small feature");
   });

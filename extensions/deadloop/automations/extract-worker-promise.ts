@@ -10,6 +10,16 @@ type PromiseValidation = Record<string, any>;
 const VALID_PROMISE_STATUSES = new Set(["complete", "blocked"]);
 const VALID_REVIEW_OUTCOMES = new Set(["approved", "changes_requested", "human_required"]);
 const VALID_FINDING_SEVERITIES = new Set(["blocker", "major", "minor"]);
+const SUCCESSFUL_ATTEMPT_PHASES = new Set([
+  "prepared",
+  "github_claimed",
+  "workspace_opened",
+  "agent_started",
+  "report_received",
+  "github_persisted",
+  "workspace_closed",
+]);
+const ATTEMPT_ROLES = new Set(["worker", "reviewer", "review-repair", "branch-update"]);
 
 function validFinding(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -42,6 +52,57 @@ function validCheck(value: unknown): boolean {
   return typeof check.command === "string" && Boolean(check.command.trim()) && check.result === "passed";
 }
 
+function validStringList(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0
+    && value.every((entry: unknown) => typeof entry === "string" && Boolean(entry.trim()));
+}
+
+function sameText(left: unknown, right: unknown): boolean {
+  return typeof left === "string" && typeof right === "string" && left.toLowerCase() === right.toLowerCase();
+}
+
+function validCommitSha(value: unknown): boolean {
+  return typeof value === "string" && /^[0-9a-f]{40}$/i.test(value);
+}
+
+function validObject(value: unknown): value is PromiseValidation {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function validFinalizerCommon(promise: PromiseValidation): string | undefined {
+  const finalizer = promise.evidence.finalizer;
+  if (!validObject(finalizer) || !validNonEmptyString(finalizer.reason)) return "finalizer_evidence_required";
+  if (!validCommitSha(finalizer.originalHeadOid) || !sameText(finalizer.originalHeadOid, promise.inputRevision.head)) {
+    return "finalizer_input_head_mismatch";
+  }
+  if (promise.role === "branch-update" && (!validCommitSha(finalizer.baseHeadOid) || !sameText(finalizer.baseHeadOid, promise.inputRevision.base))) {
+    return "finalizer_base_head_mismatch";
+  }
+  return undefined;
+}
+
+function validWriterResult(promise: PromiseValidation): string | undefined {
+  if (!validCommitSha(promise.result.outputRevision)) {
+    return promise.result.outcome === "stale_head" ? "stale_requires_output_revision" : "pushed_requires_output_revision";
+  }
+  const commonError = validFinalizerCommon(promise);
+  if (commonError) return commonError;
+  const finalizer = promise.evidence.finalizer;
+  if (promise.result.outcome === "stale_head") {
+    if (finalizer.action !== "stale_head") return "stale_requires_stale_finalizer";
+    if (sameText(promise.result.outputRevision, promise.inputRevision.head)) return "stale_output_matches_input";
+    if (!validCommitSha(finalizer.currentRemoteHeadOid)) return "stale_output_revision_mismatch";
+    return sameText(finalizer.currentRemoteHeadOid, promise.result.outputRevision)
+      ? undefined : "stale_output_revision_mismatch";
+  }
+  if (sameText(promise.result.outputRevision, promise.inputRevision.head)) return "pushed_output_matches_input";
+  if (finalizer.action !== "pushed" || !sameText(finalizer.reason, promise.result.outcome)) return "pushed_finalizer_mismatch";
+  if (!validCommitSha(finalizer.headOid) || !sameText(finalizer.headOid, promise.result.outputRevision)) return "pushed_output_revision_mismatch";
+  if (!Array.isArray(finalizer.checks) || !finalizer.checks.length || !finalizer.checks.every(validCheck)) return "pushed_finalizer_requires_checks";
+  return Array.isArray(promise.evidence.validations) && promise.evidence.validations.length
+    && promise.evidence.validations.every(validCheck) ? undefined : "pushed_requires_validations";
+}
+
 function invalidPromise(filePath: string, error: string): PromiseValidation {
   return { status: "invalid", file: filePath, error };
 }
@@ -54,29 +115,40 @@ function validV1Report(promise: PromiseValidation): string | undefined {
   if (!VALID_PROMISE_STATUSES.has(promise.status)) return "invalid_status";
   if (!validNonEmptyString(promise.attemptId)) return "invalid_attempt_id";
   if (!["worker", "reviewer", "review-repair", "branch-update"].includes(promise.role)) return "invalid_role";
-  if (!promise.target || typeof promise.target !== "object" || !validNonEmptyString(promise.target.repository)) return "invalid_target";
+  if (!validObject(promise.target) || !validNonEmptyString(promise.target.repository)) return "invalid_target";
   if (!["issue", "pull-request"].includes(promise.target.kind) || !Number.isInteger(promise.target.number) || promise.target.number < 1) return "invalid_target";
-  if (!promise.inputRevision || typeof promise.inputRevision !== "object" || !validNonEmptyString(promise.inputRevision.head)) return "invalid_input_revision";
+  if (!validObject(promise.inputRevision) || !validCommitSha(promise.inputRevision.head)) return "invalid_input_revision";
+  if (promise.inputRevision.base !== undefined && !validCommitSha(promise.inputRevision.base)) return "invalid_input_revision";
   if (!validNonEmptyString(promise.summary)) return "invalid_summary";
-  if (!promise.result || typeof promise.result !== "object" || !promise.evidence || typeof promise.evidence !== "object") return "missing_result_or_evidence";
+  if (!validObject(promise.result) || !validObject(promise.evidence)) return "missing_result_or_evidence";
   if (promise.status === "blocked") {
     if (!validNonEmptyString(promise.result.reason) || !validNonEmptyString(promise.result.explanation)) return "invalid_blocked_result";
     if (!validNonEmptyString(promise.result.recovery) && !validNonEmptyString(promise.result.informationRequest)) return "blocked_requires_guidance";
     return undefined;
   }
   if (promise.role === "worker") {
-    return validNonEmptyString(promise.result.outputRevision) && Array.isArray(promise.evidence.validations) && promise.evidence.validations.length
+    return validCommitSha(promise.result.outputRevision) && validStringList(promise.evidence.validations)
       ? undefined : "worker_requires_output_and_validation";
   }
   if (promise.role === "reviewer") {
     if (!["approved", "changes_requested", "human_required"].includes(promise.result.outcome)) return "invalid_reviewer_outcome";
-    if (!validNonEmptyString(promise.result.reviewedHead) || promise.result.reviewedHead !== promise.inputRevision.head) return "invalid_reviewed_head";
+    if (!validCommitSha(promise.result.reviewedHead) || !sameText(promise.result.reviewedHead, promise.inputRevision.head)) return "invalid_reviewed_head";
+    if (promise.result.findings !== undefined && (!Array.isArray(promise.result.findings) || !promise.result.findings.every(validFinding))) return "invalid_reviewer_findings";
     if (promise.result.outcome === "changes_requested" && (!Array.isArray(promise.result.findings) || !promise.result.findings.length)) return "changes_requested_requires_findings";
-    return Array.isArray(promise.evidence.reviewed) && promise.evidence.reviewed.length ? undefined : "reviewer_requires_evidence";
+    if (promise.result.outcome === "changes_requested" && promise.result.findings.some((finding: PromiseValidation) => !VALID_FINDING_SEVERITIES.has(finding.severity))) {
+      return "changes_requested_requires_finding_severity";
+    }
+    return validStringList(promise.evidence.reviewed) ? undefined : "reviewer_requires_evidence";
   }
-  if (!validNonEmptyString(promise.result.outcome) || !promise.evidence.finalizer || typeof promise.evidence.finalizer !== "object") return "finalizer_evidence_required";
-  return !["pushed", "repair_pushed", "branch_updated"].includes(promise.result.outcome) || validNonEmptyString(promise.result.outputRevision)
-    ? undefined : "pushed_requires_output_revision";
+  if (promise.role === "review-repair") {
+    if (!["repair_pushed", "stale_head"].includes(promise.result.outcome)) return "invalid_review_repair_outcome";
+    if (promise.result.outcome === "repair_pushed" && (!Array.isArray(promise.result.repairs) || !promise.result.repairs.length || !promise.result.repairs.every(validRepair))) {
+      return "repair_pushed_requires_repairs";
+    }
+    return validWriterResult(promise);
+  }
+  if (!["branch_update_pushed", "stale_head"].includes(promise.result.outcome)) return "invalid_branch_update_outcome";
+  return validWriterResult(promise);
 }
 
 function normalizeV1Report(promise: PromiseValidation): PromiseValidation {
@@ -91,11 +163,52 @@ function normalizeV1Report(promise: PromiseValidation): PromiseValidation {
   };
 }
 
+function validAttemptTarget(value: unknown): boolean {
+  return validObject(value)
+    && ["issue", "pull-request"].includes(value.kind)
+    && Number.isInteger(value.number)
+    && value.number >= 1;
+}
+
+function validAttemptRevision(value: unknown): boolean {
+  return validObject(value)
+    && validCommitSha(value.head)
+    && (value.base === undefined || validCommitSha(value.base));
+}
+
+function validOptionalNonEmptyString(record: PromiseValidation, name: string): boolean {
+  return record[name] === undefined || validNonEmptyString(record[name]);
+}
+
+function validCanonicalAttemptRecord(record: unknown): record is PromiseValidation {
+  if (!validObject(record)) return false;
+  if (!validNonEmptyString(record.attemptId) || !validNonEmptyString(record.launchUuid)) return false;
+  if (!validNonEmptyString(record.project) || !validNonEmptyString(record.repository)) return false;
+  if (!ATTEMPT_ROLES.has(record.role) || !validAttemptTarget(record.target) || !validAttemptRevision(record.inputRevision)) return false;
+  if (!validNonEmptyString(record.branch) || !validOptionalNonEmptyString(record, "baseBranch")) return false;
+  if (!validNonEmptyString(record.worktreePath) || !validNonEmptyString(record.agentName)) return false;
+  if (!validNonEmptyString(record.workspaceLabel) || !validNonEmptyString(record.promptFile) || !validNonEmptyString(record.promiseFile)) return false;
+  if (!SUCCESSFUL_ATTEMPT_PHASES.has(record.lastSuccessfulPhase)) return false;
+  if (record.phase === "launch_failed") {
+    if (!validNonEmptyString(record.launchError)) return false;
+  } else if (!SUCCESSFUL_ATTEMPT_PHASES.has(record.phase) || record.phase !== record.lastSuccessfulPhase) {
+    return false;
+  }
+  if (!validOptionalNonEmptyString(record, "launchError")) return false;
+  if (!validOptionalNonEmptyString(record, "workspaceId") || !validOptionalNonEmptyString(record, "tabId")) return false;
+  if (!validOptionalNonEmptyString(record, "rootPaneId")) return false;
+  return record.outputRevision === undefined || validCommitSha(record.outputRevision);
+}
+
+function sameOptionalRevision(left: unknown, right: unknown): boolean {
+  return left === undefined && right === undefined || sameText(left, right);
+}
+
 function reportMatchesRecord(promise: PromiseValidation, record: PromiseValidation): boolean {
   return promise.attemptId === record.attemptId && promise.role === record.role &&
     promise.target?.repository === record.repository && promise.target?.kind === record.target?.kind &&
-    promise.target?.number === record.target?.number && promise.inputRevision?.head === record.inputRevision?.head &&
-    promise.inputRevision?.base === record.inputRevision?.base;
+    promise.target?.number === record.target?.number && sameText(promise.inputRevision?.head, record.inputRevision?.head) &&
+    sameOptionalRevision(promise.inputRevision?.base, record.inputRevision?.base);
 }
 
 function validatePromise(filePath: string, attemptRecordFile?: string): PromiseValidation {
@@ -120,6 +233,10 @@ function validatePromise(filePath: string, attemptRecordFile?: string): PromiseV
     if (!fs.existsSync(recordFile)) return { status: promise.status, file: filePath, promise: normalized, evidenceStrength: "unbound-v1" };
     try {
       const record = JSON.parse(fs.readFileSync(recordFile, "utf8"));
+      if (!validCanonicalAttemptRecord(record)) return invalidPromise(filePath, "invalid_attempt_record");
+      if (path.resolve(record.promiseFile) !== path.resolve(filePath)) {
+        return invalidPromise(filePath, "attempt_promise_file_mismatch");
+      }
       if (!reportMatchesRecord(promise, record)) return invalidPromise(filePath, "attempt_binding_mismatch");
       return { status: promise.status, file: filePath, promise: normalized, evidenceStrength: "strong", attemptRecord: recordFile };
     } catch (error) {

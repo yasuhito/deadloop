@@ -221,7 +221,8 @@ Promise report:
 - Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
 - If no actionable defect remains, write a V1 report with a three-sentence summary, status="complete", result={outcome:"approved",reviewedHead:"${String(pr.headRefOid || "")}",findings:[]}, and evidence={reviewed:["diff and configured checks"]}.
 - If actionable defects exist, include a three-sentence summary and use result={outcome:"changes_requested",reviewedHead:"${String(pr.headRefOid || "")}",findings:[{title:"concise defect",body:"bounded required correction and evidence",path:"optional/repo/path",line:1,severity:"blocker|major|minor"}]} with non-empty evidence.reviewed.
-- Use outcome=human_required only when a product/spec/safety decision cannot be repaired within the PR. For blocked reports include a three-sentence summary, result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
+- Use outcome=human_required only when a product/spec/safety decision cannot be repaired within the PR. Include a three-sentence summary and write result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:[]}, and evidence={reviewed:["decision boundary and supporting evidence"]}.
+- For blocked reports include a three-sentence summary, result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
 - Findings are the repair worker's entire contract. Include only verified, actionable defects; #243-style lint or repository-contract failures are changes_requested, not blocked.
 - The reason, summary, finding titles/bodies, and finding paths can be published in a PR comment. Keep them human-readable and never include prompts, promise paths, absolute/local paths, internal agent names, or other runtime details.
 - Always write the promise file, even on failure. Do not exit silently.`;
@@ -289,8 +290,8 @@ Safety contract:
 
 Promise report:
 - Always write one V1 JSON object to ${promiseFile}. Its immutable identity is ${reportBase}.
-- After finalizer action=pushed, write a summary plus status="complete", result={outcome:"branch_updated",outputRevision:"<finalizer headOid>"}, and evidence={finalizer:<finalizer result>,validations:<finalizer checks>}.
-- After finalizer action=stale_head, write a summary plus status="complete", result={outcome:"stale_head"}, and evidence={finalizer:<finalizer result>}.
+- After finalizer action=pushed, write a summary plus status="complete", result={outcome:"branch_update_pushed",outputRevision:"<finalizer headOid>"}, and evidence={finalizer:<finalizer result>,validations:<finalizer checks>}.
+- After finalizer action=stale_head, write a summary plus status="complete", result={outcome:"stale_head",outputRevision:"<finalizer currentRemoteHeadOid>"}, and evidence={finalizer:<finalizer result>}. The outputRevision is required and must be the current remote head recorded by the finalizer.
 - On merge, validation, invariant, or push failure, write a summary plus status="blocked", result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
 - Do not claim complete unless the finalizer returned pushed or stale_head.`;
 }

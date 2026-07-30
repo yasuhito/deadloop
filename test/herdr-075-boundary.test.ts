@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { herdr075DoctorFinding } from "../src/doctor";
+import { compatibilityDiagnosticData } from "../src/herdr-075-compat";
 
 const selectedEntrypoints = [
   "extensions/deadloop/index.ts",
@@ -24,11 +25,14 @@ describe("Herdr 0.7.5 dormant boundary", () => {
   });
 
   it("provides non-destructive incompatible-Herdr doctor finding data", () => {
-    expect(herdr075DoctorFinding("incompatible", "client 0.7.3")).toEqual({
+    expect(herdr075DoctorFinding("incompatible", compatibilityDiagnosticData({
+      clientVersion: "0.7.3",
+      serverVersion: "0.7.4",
+    }))).toEqual({
       id: "herdr-075-incompatible",
       type: "herdr_incompatible",
       title: "unsupported or protocol-incompatible Herdr",
-      summary: "client 0.7.3",
+      summary: "Detected Herdr client 0.7.3 and server 0.7.4; minimum required version is 0.7.5. Quiet active deadloop automations, then run `herdr update --handoff`.",
       commands: ["herdr update --handoff"],
     });
   });

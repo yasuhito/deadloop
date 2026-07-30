@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -64,6 +65,12 @@ describe("PR reviewer deterministic driver", () => {
 
   it("does not ask the LLM to run launch-agent", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).prompt).not.toContain("launch-agent.ts");
+  });
+
+  it("gives human_required reviewers an exact valid V1 result and evidence shape", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain(
+      'result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:[]}, and evidence={reviewed:["decision boundary and supporting evidence"]}',
+    );
   });
 
   it("routes a merge conflict to one dedicated branch-update worker", () => {

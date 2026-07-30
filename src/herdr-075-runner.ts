@@ -18,6 +18,7 @@ type Herdr075Runner = {
     label: string;
   }): Herdr075WorktreeLaunch;
   openWorktree(input: { repoPath: string; branch: string }): Herdr075WorktreeLaunch;
+  renameWorkspace(input: { workspaceId: string; label: string }): string;
   startAgent(input: { name: string; kind: string; rootPaneId: string; nativeAgentArgv: string[] }): string;
   closeWorkspace(input: {
     workspaceId: string;
@@ -123,6 +124,9 @@ function createHerdr075Runner(ops: { runText: RunText; runJson: RunJson }): Herd
     },
     openWorktree(input) {
       return launchFromResponse(ops.runJson("herdr", openArgs(input)), "worktree_opened");
+    },
+    renameWorkspace(input) {
+      return ops.runText("herdr", ["workspace", "rename", input.workspaceId, input.label]);
     },
     startAgent(input) {
       return ops.runText("herdr", [

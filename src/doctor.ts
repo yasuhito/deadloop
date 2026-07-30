@@ -9,6 +9,10 @@ import {
   labelsOf,
   resolveActiveProject,
 } from "./status";
+import {
+  type Herdr075CompatibilityDiagnostic,
+  formatCompatibilityDiagnostic,
+} from "./herdr-075-compat";
 
 const STALE_IN_PROGRESS_MS = 24 * 60 * 60 * 1000;
 const MAX_COMMENT_SUMMARY_LENGTH = 180;
@@ -101,13 +105,21 @@ export type Herdr075DoctorStatus =
   | "incompatible";
 
 /** Dormant 0.7.5 finding data; activation wires this into the doctor probe. */
-export function herdr075DoctorFinding(status: Herdr075DoctorStatus, detail: string): DoctorFinding {
+export function herdr075DoctorFinding(
+  status: Exclude<Herdr075DoctorStatus, "incompatible">,
+  detail: string,
+): DoctorFinding;
+export function herdr075DoctorFinding(status: "incompatible", detail: Herdr075CompatibilityDiagnostic): DoctorFinding;
+export function herdr075DoctorFinding(
+  status: Herdr075DoctorStatus,
+  detail: string | Herdr075CompatibilityDiagnostic,
+): DoctorFinding {
   const incompatible = status === "incompatible";
   return {
     id: `herdr-075-${status}`,
     type: incompatible ? "herdr_incompatible" : "retained_attempt_workspace",
     title: incompatible ? "unsupported or protocol-incompatible Herdr" : `retained attempt workspace: ${status}`,
-    summary: detail,
+    summary: typeof detail === "string" ? detail : formatCompatibilityDiagnostic(detail),
     commands: incompatible ? ["herdr update --handoff"] : [],
   };
 }

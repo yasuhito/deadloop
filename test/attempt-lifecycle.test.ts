@@ -9,6 +9,7 @@ import {
   transitionAttempt,
   transitionPersistedAttempt,
   validateCompletionReportBinding,
+  validateCompletionReportV1,
   withPreparedAttempt,
   writeAttemptRecordAtomically,
 } from "../src/attempt-lifecycle";
@@ -227,6 +228,178 @@ describe("attempt lifecycle contract", () => {
         ...matchingReport(), status: "blocked", result: { reason: "network", explanation: "offline", recovery: "" },
       }),
     ).toThrow("recovery or informationRequest");
+  });
+
+  it("rejects malformed structured reviewer findings", () => {
+    const report = matchingReport();
+
+    expect(() => validateCompletionReportV1({
+      ...report,
+      result: { ...report.result, outcome: "changes_requested", findings: [{ title: "Bug", body: "", severity: "major" }] },
+    })).toThrow("finding");
+  });
+
+  it("requires severity on every changes-requested finding", () => {
+    const report = matchingReport();
+
+    expect(() => validateCompletionReportV1({
+      ...report,
+      result: { ...report.result, outcome: "changes_requested", findings: [{ title: "Bug", body: "Fix it" }] },
+    })).toThrow("severity");
+  });
+
+  it("rejects malformed Worker validation evidence", () => {
+    expect(() => validateCompletionReportV1({
+      ...matchingReport(),
+      role: "worker",
+      target: { repository: "octo/demo", kind: "issue", number: 42 },
+      result: { outputRevision: "c".repeat(40) },
+      evidence: { validations: [""] },
+    })).toThrow("validation evidence");
+  });
+
+  it("rejects malformed reviewer evidence", () => {
+    expect(() => validateCompletionReportV1({
+      ...matchingReport(),
+      evidence: { reviewed: [""] },
+    })).toThrow("review evidence");
+  });
+
+  it("accepts a receipt-bound repair-pushed result", () => {
+    const inputHead = "a".repeat(40);
+    const outputHead = "c".repeat(40);
+
+    expect(validateCompletionReportV1({
+      ...matchingReport(),
+      role: "review-repair",
+      inputRevision: { head: inputHead },
+      result: {
+        outcome: "repair_pushed",
+        outputRevision: outputHead,
+        repairs: [{ title: "Bug", summary: "Fixed it", paths: ["src/a.ts"] }],
+      },
+      evidence: {
+        finalizer: {
+          action: "pushed",
+          reason: "repair_pushed",
+          originalHeadOid: inputHead,
+          headOid: outputHead,
+          checks: [{ command: "npm test", result: "passed" }],
+        },
+        validations: [{ command: "npm test", result: "passed" }],
+      },
+    }).result).toMatchObject({ outcome: "repair_pushed", outputRevision: outputHead });
+  });
+
+  it("requires stale repair outputRevision", () => {
+    const inputHead = "a".repeat(40);
+
+    expect(() => validateCompletionReportV1({
+      ...matchingReport(),
+      role: "review-repair",
+      inputRevision: { head: inputHead },
+      result: { outcome: "stale_head" },
+      evidence: {
+        finalizer: { action: "stale_head", reason: "head_sha_changed", originalHeadOid: inputHead, currentRemoteHeadOid: "d".repeat(40) },
+      },
+    })).toThrow("outputRevision");
+  });
+
+  it("requires repair outputRevision to match the stale finalizer receipt", () => {
+    const inputHead = "a".repeat(40);
+
+    expect(() => validateCompletionReportV1({
+      ...matchingReport(),
+      role: "review-repair",
+      inputRevision: { head: inputHead },
+      result: { outcome: "stale_head", outputRevision: "d".repeat(40) },
+      evidence: {
+        finalizer: { action: "stale_head", reason: "head_sha_changed", originalHeadOid: inputHead, currentRemoteHeadOid: "e".repeat(40) },
+      },
+    })).toThrow("current remote head");
+  });
+
+  it("accepts a receipt-bound branch update result", () => {
+    const inputHead = "a".repeat(40);
+    const baseHead = "b".repeat(40);
+    const outputHead = "c".repeat(40);
+
+    expect(validateCompletionReportV1({
+      ...matchingReport(),
+      role: "branch-update",
+      inputRevision: { head: inputHead, base: baseHead },
+      result: { outcome: "branch_update_pushed", outputRevision: outputHead },
+      evidence: {
+        finalizer: {
+          action: "pushed",
+          reason: "branch_update_pushed",
+          originalHeadOid: inputHead,
+          baseHeadOid: baseHead,
+          headOid: outputHead,
+          checks: [{ command: "npm test", result: "passed" }],
+        },
+        validations: [{ command: "npm test", result: "passed" }],
+      },
+    }).result).toMatchObject({ outcome: "branch_update_pushed", outputRevision: outputHead });
+  });
+
+  it("rejects the retired branch_updated outcome", () => {
+    expect(() => validateCompletionReportV1({
+      ...matchingReport(),
+      role: "branch-update",
+      result: { outcome: "branch_updated", outputRevision: "c".repeat(40) },
+      evidence: { finalizer: {} },
+    })).toThrow("outcome");
+  });
+
+  it("rejects a non-SHA input revision", () => {
+    expect(() => validateCompletionReportV1({
+      ...matchingReport(),
+      inputRevision: { head: "not-a-commit" },
+      result: { ...matchingReport().result, reviewedHead: "not-a-commit" },
+    })).toThrow("40-hex");
+  });
+
+  it("rejects a non-SHA Worker output revision", () => {
+    expect(() => validateCompletionReportV1({
+      ...matchingReport(),
+      role: "worker",
+      target: { repository: "octo/demo", kind: "issue", number: 42 },
+      result: { outputRevision: "not-a-commit" },
+      evidence: { validations: ["npm test passed"] },
+    })).toThrow("outputRevision");
+  });
+
+  it("accepts case-insensitive SHA equality", () => {
+    const upperHead = "a".repeat(40).toUpperCase();
+
+    expect(validateCompletionReportV1({
+      ...matchingReport(),
+      inputRevision: { head: upperHead, base: "b".repeat(40).toUpperCase() },
+      result: { ...matchingReport().result, reviewedHead: "a".repeat(40) },
+    }).status).toBe("complete");
+  });
+
+  it("requires blocked evidence to be an object", () => {
+    expect(() => validateCompletionReportV1({
+      ...matchingReport(),
+      status: "blocked",
+      result: { reason: "unsafe", explanation: "cannot continue", recovery: "inspect" },
+      evidence: [],
+    })).toThrow("evidence");
+  });
+
+  it.each([
+    ["attemptId", { attemptId: "   " }],
+    ["repository", { target: { ...matchingReport().target, repository: "   " } }],
+  ])("rejects whitespace-only %s", (_name, replacement) => {
+    expect(() => validateCompletionReportV1({ ...matchingReport(), ...replacement })).toThrow("non-empty string");
+  });
+
+  it("rejects whitespace-only canonical attempt-record identity", () => {
+    const record = { ...preparedAttempt(), project: "   " };
+
+    expect(() => validateCompletionReportBinding(record, matchingReport())).toThrow("project");
   });
 
   it("writes valid JSON to the durable attempt path", () => {

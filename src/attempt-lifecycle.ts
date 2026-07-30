@@ -36,14 +36,63 @@ export type AttemptIdentity = {
   inputRevision: InputRevision;
 };
 
+export type ReviewerFinding = {
+  title: string;
+  body: string;
+  path?: string;
+  line?: number;
+  severity?: "blocker" | "major" | "minor";
+};
+
+export type ValidationCheck = { command: string; result: "passed" };
+export type RepairOutcome = { title: string; summary: string; paths: string[] };
+export type BlockedCompletionResult = {
+  reason: string;
+  explanation: string;
+  recovery?: string;
+  informationRequest?: string;
+};
+
 export type CompletionReportV1 = {
   schemaVersion: 1;
   attemptId: string;
-  role: AttemptRole;
   target: AttemptTarget & { repository: string };
   inputRevision: InputRevision;
-  status: "complete" | "blocked";
   summary: string;
+} & (
+  | { role: AttemptRole; status: "blocked"; result: BlockedCompletionResult; evidence: Record<string, unknown> }
+  | { role: "worker"; status: "complete"; result: { outputRevision: string }; evidence: { validations: string[] } }
+  | {
+      role: "reviewer";
+      status: "complete";
+      result: {
+        outcome: "approved" | "changes_requested" | "human_required";
+        reviewedHead: string;
+        findings?: ReviewerFinding[];
+      };
+      evidence: { reviewed: string[] };
+    }
+  | {
+      role: "review-repair";
+      status: "complete";
+      result:
+        | { outcome: "repair_pushed"; outputRevision: string; repairs: RepairOutcome[] }
+        | { outcome: "stale_head"; outputRevision: string };
+      evidence: { finalizer: Record<string, unknown>; validations?: ValidationCheck[] };
+    }
+  | {
+      role: "branch-update";
+      status: "complete";
+      result:
+        | { outcome: "branch_update_pushed"; outputRevision: string }
+        | { outcome: "stale_head"; outputRevision: string };
+      evidence: { finalizer: Record<string, unknown>; validations?: ValidationCheck[] };
+    }
+);
+
+type CompletionReportEnvelope = Omit<CompletionReportV1, "role" | "status" | "result" | "evidence"> & {
+  role: AttemptRole;
+  status: "complete" | "blocked";
   result: unknown;
   evidence: unknown;
 };
@@ -97,8 +146,14 @@ function fail(message: string): never {
 }
 
 function nonEmptyString(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value) fail(`${name} must be a non-empty string`);
+  if (typeof value !== "string" || !value.trim()) fail(`${name} must be a non-empty string`);
   return value;
+}
+
+function commitSha(value: unknown, name: string): string {
+  const revision = nonEmptyString(value, name);
+  if (!/^[0-9a-f]{40}$/i.test(revision)) fail(`${name} must be a full 40-hex commit SHA`);
+  return revision;
 }
 
 function parseTarget(value: unknown, name: string): AttemptTarget {
@@ -112,8 +167,8 @@ function parseTarget(value: unknown, name: string): AttemptTarget {
 function parseRevision(value: unknown, name: string): InputRevision {
   if (!value || typeof value !== "object") fail(`${name} must be an object`);
   const revision = value as Record<string, unknown>;
-  const result: InputRevision = { head: nonEmptyString(revision.head, `${name}.head`) };
-  if (revision.base !== undefined) result.base = nonEmptyString(revision.base, `${name}.base`);
+  const result: InputRevision = { head: commitSha(revision.head, `${name}.head`) };
+  if (revision.base !== undefined) result.base = commitSha(revision.base, `${name}.base`);
   return result;
 }
 
@@ -156,7 +211,7 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(record.rootPaneId === undefined ? {} : { rootPaneId: nonEmptyString(record.rootPaneId, "rootPaneId") }),
     ...(record.outputRevision === undefined
       ? {}
-      : { outputRevision: nonEmptyString(record.outputRevision, "outputRevision") }),
+      : { outputRevision: commitSha(record.outputRevision, "outputRevision") }),
   };
 }
 
@@ -265,11 +320,16 @@ export function transitionPersistedAttempt(
   return record;
 }
 
-function sameRevision(left: InputRevision, right: InputRevision): boolean {
-  return left.head === right.head && left.base === right.base;
+function sameOptionalRevision(left: string | undefined, right: string | undefined): boolean {
+  return left === undefined && right === undefined
+    || typeof left === "string" && typeof right === "string" && left.toLowerCase() === right.toLowerCase();
 }
 
-export function parseCompletionReportV1(value: unknown): CompletionReportV1 {
+function sameRevision(left: InputRevision, right: InputRevision): boolean {
+  return sameOptionalRevision(left.head, right.head) && sameOptionalRevision(left.base, right.base);
+}
+
+export function parseCompletionReportV1(value: unknown): CompletionReportEnvelope {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Completion report must be an object");
   }
@@ -283,7 +343,7 @@ export function parseCompletionReportV1(value: unknown): CompletionReportV1 {
   const target = report.target as Record<string, unknown>;
   if (report.status !== "complete" && report.status !== "blocked")
     throw new Error("Completion report status is invalid");
-  if (typeof report.summary !== "string") throw new Error("Completion report summary is invalid");
+  if (typeof report.summary !== "string" || !report.summary.trim()) throw new Error("Completion report summary is invalid");
   if (!("result" in report) || !("evidence" in report))
     throw new Error("Completion report requires result and evidence");
   return {
@@ -311,6 +371,12 @@ function requiredString(value: Record<string, unknown>, name: string): void {
   if (typeof value[name] !== "string" || !value[name].trim()) throw new Error(`${name} must be a non-empty string`);
 }
 
+function requiredCommitSha(value: Record<string, unknown>, name: string): void {
+  if (typeof value[name] !== "string" || !/^[0-9a-f]{40}$/i.test(value[name])) {
+    throw new Error(`${name} must be a full 40-hex commit SHA`);
+  }
+}
+
 function validateBlockedResult(result: unknown): void {
   const blocked = object(result, "Blocked completion result");
   requiredString(blocked, "reason");
@@ -323,45 +389,137 @@ function validateBlockedResult(result: unknown): void {
   }
 }
 
-function validateCompleteResult(report: CompletionReportV1): void {
+const FINDING_SEVERITIES = new Set(["blocker", "major", "minor"]);
+
+function nonEmptyStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === "string" && Boolean(entry.trim()));
+}
+
+function validFinding(value: unknown, severityRequired: boolean): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const finding = value as Record<string, unknown>;
+  if (typeof finding.title !== "string" || !finding.title.trim()) return false;
+  if (typeof finding.body !== "string" || !finding.body.trim()) return false;
+  if (finding.path !== undefined && (typeof finding.path !== "string" || !finding.path.trim())) return false;
+  if (finding.line !== undefined && (!Number.isInteger(finding.line) || (finding.line as number) < 1)) return false;
+  if (severityRequired && !FINDING_SEVERITIES.has(finding.severity as string)) return false;
+  return finding.severity === undefined || FINDING_SEVERITIES.has(finding.severity as string);
+}
+
+function validCheck(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const check = value as Record<string, unknown>;
+  return typeof check.command === "string" && Boolean(check.command.trim()) && check.result === "passed";
+}
+
+function validRepair(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const repair = value as Record<string, unknown>;
+  return typeof repair.title === "string" && Boolean(repair.title.trim())
+    && typeof repair.summary === "string" && Boolean(repair.summary.trim())
+    && nonEmptyStringArray(repair.paths);
+}
+
+function sameText(left: unknown, right: unknown): boolean {
+  return typeof left === "string" && typeof right === "string" && left.toLowerCase() === right.toLowerCase();
+}
+
+function validateFinalizerCommon(report: CompletionReportEnvelope, evidence: Record<string, unknown>): Record<string, unknown> {
+  const finalizer = object(evidence.finalizer, `${report.role} finalizer evidence`);
+  requiredString(finalizer, "reason");
+  requiredCommitSha(finalizer, "originalHeadOid");
+  if (!sameText(finalizer.originalHeadOid, report.inputRevision.head)) {
+    throw new Error(`${report.role} finalizer original head does not match input revision`);
+  }
+  if (report.role === "branch-update") {
+    requiredCommitSha(finalizer, "baseHeadOid");
+    if (!report.inputRevision.base || !sameText(finalizer.baseHeadOid, report.inputRevision.base)) {
+      throw new Error("branch-update finalizer base head does not match input revision");
+    }
+  }
+  return finalizer;
+}
+
+function validateWriterResult(report: CompletionReportEnvelope, result: Record<string, unknown>, evidence: Record<string, unknown>): void {
+  requiredCommitSha(result, "outputRevision");
+  const finalizer = validateFinalizerCommon(report, evidence);
+  if (result.outcome === "stale_head") {
+    if (finalizer.action !== "stale_head") throw new Error(`${report.role} stale outcome requires stale finalizer evidence`);
+    if (sameText(result.outputRevision, report.inputRevision.head)) {
+      throw new Error(`${report.role} stale outputRevision must differ from the input head`);
+    }
+    requiredCommitSha(finalizer, "currentRemoteHeadOid");
+    if (!sameText(finalizer.currentRemoteHeadOid, result.outputRevision)) {
+      throw new Error(`${report.role} outputRevision does not match finalizer current remote head`);
+    }
+    return;
+  }
+
+  if (sameText(result.outputRevision, report.inputRevision.head)) {
+    throw new Error(`${report.role} pushed outputRevision must differ from the input head`);
+  }
+  if (finalizer.action !== "pushed") throw new Error(`${report.role} pushed outcome requires pushed finalizer evidence`);
+  if (!sameText(finalizer.reason, result.outcome)) throw new Error(`${report.role} finalizer reason does not match outcome`);
+  requiredCommitSha(finalizer, "headOid");
+  if (!sameText(finalizer.headOid, result.outputRevision)) {
+    throw new Error(`${report.role} outputRevision does not match finalizer head`);
+  }
+  if (!Array.isArray(finalizer.checks) || finalizer.checks.length === 0 || !finalizer.checks.every(validCheck)) {
+    throw new Error(`${report.role} pushed finalizer requires passed checks`);
+  }
+  if (!Array.isArray(evidence.validations) || evidence.validations.length === 0 || !evidence.validations.every(validCheck)) {
+    throw new Error(`${report.role} pushed completion requires validation evidence`);
+  }
+}
+
+function validateCompleteResult(report: CompletionReportEnvelope): void {
   const result = object(report.result, "Completion result");
   const evidence = object(report.evidence, "Completion evidence");
   if (report.role === "worker") {
-    requiredString(result, "outputRevision");
-    if (!Array.isArray(evidence.validations) || evidence.validations.length === 0) {
-      throw new Error("Worker completion requires validation evidence");
-    }
+    requiredCommitSha(result, "outputRevision");
+    if (!nonEmptyStringArray(evidence.validations)) throw new Error("Worker completion requires validation evidence");
     return;
   }
   if (report.role === "reviewer") {
     if (result.outcome !== "approved" && result.outcome !== "changes_requested" && result.outcome !== "human_required") {
       throw new Error("Reviewer completion outcome is invalid");
     }
-    requiredString(result, "reviewedHead");
-    if (result.reviewedHead !== report.inputRevision.head) throw new Error("Reviewer completion reviewedHead does not match input revision");
+    requiredCommitSha(result, "reviewedHead");
+    if (!sameText(result.reviewedHead, report.inputRevision.head)) throw new Error("Reviewer completion reviewedHead does not match input revision");
+    if (result.findings !== undefined && (!Array.isArray(result.findings) || !result.findings.every((finding) => validFinding(finding, result.outcome === "changes_requested")))) {
+      const suffix = result.outcome === "changes_requested" ? " with severity" : "";
+      throw new Error(`Reviewer completion has an invalid finding${suffix}`);
+    }
     if (result.outcome === "changes_requested" && (!Array.isArray(result.findings) || result.findings.length === 0)) {
-      throw new Error("Reviewer changes_requested requires findings");
+      throw new Error("Reviewer changes_requested requires findings with severity");
     }
-    if (!Array.isArray(evidence.reviewed) || evidence.reviewed.length === 0) {
-      throw new Error("Reviewer completion requires review evidence");
-    }
+    if (!nonEmptyStringArray(evidence.reviewed)) throw new Error("Reviewer completion requires review evidence");
     return;
   }
-  requiredString(result, "outcome");
-  if (result.outcome === "pushed" || result.outcome === "repair_pushed" || result.outcome === "branch_updated") {
-    requiredString(result, "outputRevision");
+  if (report.role === "review-repair") {
+    if (result.outcome !== "repair_pushed" && result.outcome !== "stale_head") {
+      throw new Error("review-repair completion outcome is invalid");
+    }
+    if (result.outcome === "repair_pushed" && (!Array.isArray(result.repairs) || result.repairs.length === 0 || !result.repairs.every(validRepair))) {
+      throw new Error("review-repair repair_pushed requires structured repairs");
+    }
+    validateWriterResult(report, result, evidence);
+    return;
   }
-  if (!evidence.finalizer || typeof evidence.finalizer !== "object") {
-    throw new Error(`${report.role} completion requires finalizer evidence`);
+  if (result.outcome !== "branch_update_pushed" && result.outcome !== "stale_head") {
+    throw new Error("branch-update completion outcome is invalid");
   }
+  validateWriterResult(report, result, evidence);
 }
 
 /** Validates V1's role-specific result and evidence before a journal is available. */
 export function validateCompletionReportV1(value: unknown): CompletionReportV1 {
   const report = parseCompletionReportV1(value);
-  if (report.status === "blocked") validateBlockedResult(report.result);
-  else validateCompleteResult(report);
-  return report;
+  if (report.status === "blocked") {
+    validateBlockedResult(report.result);
+    object(report.evidence, "Blocked completion evidence");
+  } else validateCompleteResult(report);
+  return report as CompletionReportV1;
 }
 
 /** Validates V1's common contract, identity binding, and role-specific evidence. */
@@ -379,7 +537,9 @@ export function validateCompletionReportBinding(record: AttemptRecord, value: un
   if (!sameRevision(report.inputRevision, record.inputRevision)) {
     throw new Error("Completion report inputRevision does not match attempt record");
   }
-  if (report.status === "blocked") validateBlockedResult(report.result);
-  else validateCompleteResult(report);
-  return { strength: "strong", report };
+  if (report.status === "blocked") {
+    validateBlockedResult(report.result);
+    object(report.evidence, "Blocked completion evidence");
+  } else validateCompleteResult(report);
+  return { strength: "strong", report: report as CompletionReportV1 };
 }

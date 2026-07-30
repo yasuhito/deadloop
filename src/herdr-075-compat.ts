@@ -1,6 +1,36 @@
 export const HERDR_075_MINIMUM_VERSION = "0.7.5";
+export const HERDR_075_UPDATE_COMMAND = "herdr update --handoff";
+export const HERDR_075_QUIET_AUTOMATIONS_INSTRUCTION = "Quiet active deadloop automations";
 
 type Semver = { major: number; minor: number; patch: number };
+
+export type Herdr075CompatibilityObservation =
+  | { clientVersion: string; serverVersion: string; probeFailure?: never }
+  | { probeFailure: string; clientVersion?: never; serverVersion?: never };
+
+export type Herdr075CompatibilityDiagnostic = Herdr075CompatibilityObservation & {
+  minimumVersion: typeof HERDR_075_MINIMUM_VERSION;
+  updateCommand: typeof HERDR_075_UPDATE_COMMAND;
+  quietAutomationsInstruction: typeof HERDR_075_QUIET_AUTOMATIONS_INSTRUCTION;
+};
+
+export function compatibilityDiagnosticData(
+  observation: Herdr075CompatibilityObservation,
+): Herdr075CompatibilityDiagnostic {
+  return {
+    ...observation,
+    minimumVersion: HERDR_075_MINIMUM_VERSION,
+    updateCommand: HERDR_075_UPDATE_COMMAND,
+    quietAutomationsInstruction: HERDR_075_QUIET_AUTOMATIONS_INSTRUCTION,
+  };
+}
+
+export function formatCompatibilityDiagnostic(diagnostic: Herdr075CompatibilityDiagnostic): string {
+  const detected = "probeFailure" in diagnostic
+    ? `Herdr compatibility probe failed: ${diagnostic.probeFailure}`
+    : `Detected Herdr client ${diagnostic.clientVersion} and server ${diagnostic.serverVersion}`;
+  return `${detected}; minimum required version is ${diagnostic.minimumVersion}. ${diagnostic.quietAutomationsInstruction}, then run \`${diagnostic.updateCommand}\`.`;
+}
 
 export class Herdr075CompatibilityError extends Error {
   constructor(message: string) {

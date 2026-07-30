@@ -193,6 +193,10 @@ describe("automatic PR review repair", () => {
     expect(prompt()).toContain("Do not run git push directly");
   });
 
+  it("requires stale repair outputRevision from the finalizer receipt", () => {
+    expect(prompt()).toContain('result={outcome:"stale_head",outputRevision:"<finalizer currentRemoteHeadOid>"}');
+  });
+
   it("stops a stale repair without authorizing push", () => {
     expect(
       decideRepairPushGuard(
@@ -289,6 +293,12 @@ describe("automatic PR review repair", () => {
     const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, "c".repeat(40));
 
     expect(result.action).toBe("stale_head");
+  });
+
+  it("records the current remote head in a stale repair receipt", () => {
+    const result = finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, "c".repeat(40));
+
+    expect(result.currentRemoteHeadOid).toBe("c".repeat(40));
   });
 
   it("rejects a concurrent rewind to an ancestor with an exact-head lease", () => {

@@ -151,8 +151,10 @@ function issueWorkerLaunchPlan(issue: JsonObject, env: ReturnType<typeof envConf
       level: "medium",
       uuid,
       promptFilePrefix: "worker-prompt",
-      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-        renderIssueWorkerPrompt({
+      resolveWorktreeHead: true,
+      renderPrompt: ({ promiseFile, worktreePath, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
+        if (!worktreeHead) throw new Error("Worker prompt requires the exact created worktree HEAD");
+        return renderIssueWorkerPrompt({
           launchReason: "The issue is ready for implementation.",
           issueNumber: number,
           issueTitle: String(issue.title || "task"),
@@ -168,8 +170,9 @@ function issueWorkerLaunchPlan(issue: JsonObject, env: ReturnType<typeof envConf
             command: env.checkCommand,
           }),
           promiseFile,
-          reportIdentity: { attemptId: uuid, inputRevision: { head: env.baseBranch } },
-        }),
+          reportIdentity: { attemptId: uuid, inputRevision: { head: worktreeHead } },
+        });
+      },
     },
   };
 }
@@ -201,7 +204,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       worktreePath: simulatedWorktreePath,
       promptFile: `${env.stateDir}/runs/${uuid}/worker-prompt.md`,
       promiseFile,
-      instructions: plan.input.renderPrompt({ promiseFile, worktreePath: simulatedWorktreePath }),
+      instructions: plan.input.renderPrompt({ promiseFile, worktreePath: simulatedWorktreePath, worktreeHead: "f".repeat(40) }),
       simulated: true,
     };
   }

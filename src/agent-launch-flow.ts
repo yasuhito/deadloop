@@ -18,7 +18,8 @@ type AgentLaunchFlowInput = {
   level: string;
   uuid: string;
   promptFilePrefix: string;
-  renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
+  resolveWorktreeHead?: boolean;
+  renderPrompt: (input: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => string;
 };
 
 type AgentLaunchFlowOps = {
@@ -75,7 +76,12 @@ function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): 
   ops.mkdirSync(runDir, { recursive: true });
   const promptFile = path.join(runDir, `${input.promptFilePrefix}.md`);
   const promiseFile = path.join(runDir, "promise.json");
-  ops.writeFileSync(promptFile, input.renderPrompt({ promiseFile, worktreePath }), "utf8");
+  let worktreeHead: string | undefined;
+  if (input.resolveWorktreeHead) {
+    worktreeHead = ops.runText(["git", "-C", worktreePath, "rev-parse", "--verify", "HEAD^{commit}"]).trim();
+    if (!/^[0-9a-f]{40}$/i.test(worktreeHead)) throw new Error("created worktree HEAD is not an exact commit SHA");
+  }
+  ops.writeFileSync(promptFile, input.renderPrompt({ promiseFile, worktreePath, worktreeHead }), "utf8");
 
   ops.beforeAgentStart?.();
   const launchOutput = ops.runText([

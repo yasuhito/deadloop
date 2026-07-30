@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { buildNativeAgentArgv } from "../src/agent-profiles.cjs";
-import { Herdr075CompatibilityError, parseHerdr075Compatibility } from "../src/herdr-075-compat";
+import {
+  Herdr075CompatibilityError,
+  compatibilityDiagnosticData,
+  formatCompatibilityDiagnostic,
+  parseHerdr075Compatibility,
+} from "../src/herdr-075-compat";
 import { deriveHerdr075AgentName } from "../src/herdr-agent-name";
 
 const { Herdr075RunnerError, createHerdr075Runner } = require("../src/herdr-075-runner.ts");
@@ -46,6 +51,18 @@ describe("dormant Herdr 0.7.5 runner", () => {
     ["herdr 0.7.4", "status: running\nversion: 0.7.5\ncompatible: yes"],
   ])("rejects an incompatible probe", (client, server) => {
     expect(() => parseHerdr075Compatibility(client, server)).toThrow(Herdr075CompatibilityError);
+  });
+
+  it("formats detected Herdr versions with deterministic upgrade guidance", () => {
+    expect(formatCompatibilityDiagnostic(compatibilityDiagnosticData({ clientVersion: "0.7.3", serverVersion: "0.7.4" }))).toBe(
+      "Detected Herdr client 0.7.3 and server 0.7.4; minimum required version is 0.7.5. Quiet active deadloop automations, then run `herdr update --handoff`.",
+    );
+  });
+
+  it("formats a Herdr probe failure with deterministic upgrade guidance", () => {
+    expect(formatCompatibilityDiagnostic(compatibilityDiagnosticData({ probeFailure: "server unreachable" }))).toBe(
+      "Herdr compatibility probe failed: server unreachable; minimum required version is 0.7.5. Quiet active deadloop automations, then run `herdr update --handoff`.",
+    );
   });
 
   it("derives the bounded Herdr agent name", () => {
@@ -155,6 +172,21 @@ describe("dormant Herdr 0.7.5 runner", () => {
     expect(commands).toEqual([
       ["herdr", "worktree", "open", "--cwd", "/repo", "--branch", "agent/issue-1", "--no-focus", "--json"],
     ]);
+  });
+
+  it("builds the exact 0.7.5 workspace rename argv", () => {
+    const commands: unknown[] = [];
+    const runner = createHerdr075Runner({
+      runJson: () => created,
+      runText: (command: string, args: string[]) => {
+        commands.push([command, ...args]);
+        return "renamed";
+      },
+    });
+
+    runner.renameWorkspace({ workspaceId: "w1", label: "Issue #1" });
+
+    expect(commands).toEqual([["herdr", "workspace", "rename", "w1", "Issue #1"]]);
   });
 
   it("builds the exact 0.7.5 agent start argv", () => {

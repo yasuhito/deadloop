@@ -29,6 +29,47 @@ function withTempFile(content: string, callback: (filePath: string) => void) {
   }
 }
 
+const inputHead = "a".repeat(40);
+const outputHead = "b".repeat(40);
+
+function workerReport(attemptId = "expected") {
+  return {
+    schemaVersion: 1,
+    attemptId,
+    role: "worker",
+    target: { repository: "octo/demo", kind: "issue", number: 1 },
+    inputRevision: { head: inputHead },
+    status: "complete",
+    summary: "done",
+    result: { outputRevision: outputHead },
+    evidence: { validations: ["npm test passed"] },
+  };
+}
+
+function canonicalAttemptRecord(promiseFile: string) {
+  return {
+    attemptId: "expected",
+    launchUuid: "launch-001",
+    project: "demo",
+    repository: "octo/demo",
+    role: "worker",
+    target: { kind: "issue", number: 1 },
+    inputRevision: { head: inputHead },
+    branch: "agent/issue-1",
+    baseBranch: "main",
+    worktreePath: "/worktrees/issue-1",
+    agentName: "dl-w-1-123456789abc",
+    workspaceLabel: "Issue #1",
+    promptFile: path.join(path.dirname(promiseFile), "worker-prompt.md"),
+    promiseFile,
+    phase: "agent_started",
+    lastSuccessfulPhase: "agent_started",
+    workspaceId: "workspace-1",
+    tabId: "tab-1",
+    rootPaneId: "pane-1",
+  };
+}
+
 describe("extract worker promise helper", () => {
   it("accepts complete promise files", () => {
     withTempFile('{"status":"complete","reason":"","summary":"実装した。検証した。残作業なし。"}', (filePath) => {
@@ -58,7 +99,7 @@ describe("extract worker promise helper", () => {
   });
 
   it("rejects a V1 report with an unknown status", () => {
-    withTempFile('{"schemaVersion":1,"attemptId":"a","role":"worker","target":{"repository":"octo/demo","kind":"issue","number":1},"inputRevision":{"head":"base"},"status":"unknown","summary":"done","result":{"outputRevision":"output"},"evidence":{"validations":["npm test"]}}', (filePath) => {
+    withTempFile('{"schemaVersion":1,"attemptId":"a","role":"worker","target":{"repository":"octo/demo","kind":"issue","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"unknown","summary":"done","result":{"outputRevision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"evidence":{"validations":["npm test"]}}', (filePath) => {
       expect(runHelper(filePath).status).toBe("invalid");
     });
   });
@@ -71,35 +112,157 @@ describe("extract worker promise helper", () => {
 
   it("normalizes a V1 reviewer result for the existing review workflow", () => {
     withTempFile(
-      '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"head"},"status":"complete","summary":"reviewed","result":{"outcome":"approved","reviewedHead":"head","findings":[]},"evidence":{"reviewed":["diff"]}}',
+      '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"complete","summary":"reviewed","result":{"outcome":"approved","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","findings":[]},"evidence":{"reviewed":["diff"]}}',
       (filePath) => {
         expect(runPromise(filePath).promise.outcome).toBe("approved");
       },
     );
   });
 
-  it("rejects a V1 report that mismatches its journal", () => {
+  it("rejects malformed V1 reviewer findings", () => {
     withTempFile(
-      '{"schemaVersion":1,"attemptId":"other","role":"worker","target":{"repository":"octo/demo","kind":"issue","number":1},"inputRevision":{"head":"base"},"status":"complete","summary":"done","result":{"outputRevision":"output"},"evidence":{"validations":["npm test"]}}',
+      '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"complete","summary":"reviewed","result":{"outcome":"changes_requested","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","findings":[{"title":"Bug","body":"","severity":"major"}]},"evidence":{"reviewed":["diff"]}}',
       (filePath) => {
-        writeFileSync(path.join(path.dirname(filePath), "attempt.json"), JSON.stringify({
-          attemptId: "expected", role: "worker", repository: "octo/demo", target: { kind: "issue", number: 1 }, inputRevision: { head: "base" },
-        }));
-        expect(runHelper(filePath).status).toBe("invalid");
+        expect(runPromise(filePath).error).toBe("invalid_reviewer_findings");
       },
     );
   });
 
-  it("accepts a journal-bound V1 worker report as strong evidence", () => {
+  it("rejects V1 changes_requested findings without severity", () => {
     withTempFile(
-      '{"schemaVersion":1,"attemptId":"expected","role":"worker","target":{"repository":"octo/demo","kind":"issue","number":1},"inputRevision":{"head":"base"},"status":"complete","summary":"done","result":{"outputRevision":"output"},"evidence":{"validations":["npm test"]}}',
+      '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"complete","summary":"reviewed","result":{"outcome":"changes_requested","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","findings":[{"title":"Bug","body":"Fix it"}]},"evidence":{"reviewed":["diff"]}}',
       (filePath) => {
-        writeFileSync(path.join(path.dirname(filePath), "attempt.json"), JSON.stringify({
-          attemptId: "expected", role: "worker", repository: "octo/demo", target: { kind: "issue", number: 1 }, inputRevision: { head: "base" },
-        }));
-        expect(runPromise(filePath).evidenceStrength).toBe("strong");
+        expect(runPromise(filePath).error).toBe("changes_requested_requires_finding_severity");
       },
     );
+  });
+
+  it("accepts a receipt-bound V1 repair result", () => {
+    const head = "a".repeat(40);
+    const output = "b".repeat(40);
+    withTempFile(JSON.stringify({
+      schemaVersion: 1, attemptId: "a", role: "review-repair",
+      target: { repository: "octo/demo", kind: "pull-request", number: 1 }, inputRevision: { head },
+      status: "complete", summary: "repaired",
+      result: { outcome: "repair_pushed", outputRevision: output, repairs: [{ title: "Bug", summary: "Fixed", paths: ["src/a.ts"] }] },
+      evidence: {
+        finalizer: { action: "pushed", reason: "repair_pushed", originalHeadOid: head, headOid: output, checks: [{ command: "npm test", result: "passed" }] },
+        validations: [{ command: "npm test", result: "passed" }],
+      },
+    }), (filePath) => {
+      expect(runPromise(filePath).status).toBe("complete");
+    });
+  });
+
+  it("requires stale V1 repair outputRevision", () => {
+    const head = "a".repeat(40);
+    withTempFile(JSON.stringify({
+      schemaVersion: 1, attemptId: "a", role: "review-repair",
+      target: { repository: "octo/demo", kind: "pull-request", number: 1 }, inputRevision: { head },
+      status: "complete", summary: "stale", result: { outcome: "stale_head" },
+      evidence: { finalizer: { action: "stale_head", reason: "head_sha_changed", originalHeadOid: head, currentRemoteHeadOid: "b".repeat(40) } },
+    }), (filePath) => {
+      expect(runPromise(filePath).error).toBe("stale_requires_output_revision");
+    });
+  });
+
+  it("accepts the branch_update_pushed V1 outcome", () => {
+    const head = "a".repeat(40);
+    const base = "b".repeat(40);
+    const output = "c".repeat(40);
+    withTempFile(JSON.stringify({
+      schemaVersion: 1, attemptId: "a", role: "branch-update",
+      target: { repository: "octo/demo", kind: "pull-request", number: 1 }, inputRevision: { head, base },
+      status: "complete", summary: "updated", result: { outcome: "branch_update_pushed", outputRevision: output },
+      evidence: {
+        finalizer: { action: "pushed", reason: "branch_update_pushed", originalHeadOid: head, baseHeadOid: base, headOid: output, checks: [{ command: "npm test", result: "passed" }] },
+        validations: [{ command: "npm test", result: "passed" }],
+      },
+    }), (filePath) => {
+      expect(runPromise(filePath).status).toBe("complete");
+    });
+  });
+
+  it("rejects the retired branch_updated V1 outcome", () => {
+    withTempFile(
+      '{"schemaVersion":1,"attemptId":"a","role":"branch-update","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"status":"complete","summary":"updated","result":{"outcome":"branch_updated","outputRevision":"cccccccccccccccccccccccccccccccccccccccc"},"evidence":{"finalizer":{}}}',
+      (filePath) => {
+        expect(runPromise(filePath).error).toBe("invalid_branch_update_outcome");
+      },
+    );
+  });
+
+  it("rejects a V1 report that mismatches its journal", () => {
+    withTempFile(JSON.stringify(workerReport("other")), (filePath) => {
+      writeFileSync(path.join(path.dirname(filePath), "attempt.json"), JSON.stringify(canonicalAttemptRecord(filePath)));
+
+      expect(runHelper(filePath).status).toBe("invalid");
+    });
+  });
+
+  it("accepts a journal-bound V1 worker report as strong evidence", () => {
+    withTempFile(JSON.stringify(workerReport()), (filePath) => {
+      writeFileSync(path.join(path.dirname(filePath), "attempt.json"), JSON.stringify(canonicalAttemptRecord(filePath)));
+
+      expect(runPromise(filePath).evidenceStrength).toBe("strong");
+    });
+  });
+
+  it("does not promote a partial adjacent attempt record", () => {
+    withTempFile(JSON.stringify(workerReport()), (filePath) => {
+      writeFileSync(path.join(path.dirname(filePath), "attempt.json"), JSON.stringify({
+        attemptId: "expected",
+        role: "worker",
+        repository: "octo/demo",
+        target: { kind: "issue", number: 1 },
+        inputRevision: { head: inputHead },
+      }));
+
+      expect(runPromise(filePath).status).toBe("invalid");
+    });
+  });
+
+  it("does not promote a canonical record for another promise path", () => {
+    withTempFile(JSON.stringify(workerReport()), (filePath) => {
+      writeFileSync(path.join(path.dirname(filePath), "attempt.json"), JSON.stringify({
+        ...canonicalAttemptRecord(filePath),
+        promiseFile: path.join(path.dirname(filePath), "another-promise.json"),
+      }));
+
+      expect(runPromise(filePath).error).toBe("attempt_promise_file_mismatch");
+    });
+  });
+
+  it("does not promote an invalid successful phase relationship", () => {
+    withTempFile(JSON.stringify(workerReport()), (filePath) => {
+      writeFileSync(path.join(path.dirname(filePath), "attempt.json"), JSON.stringify({
+        ...canonicalAttemptRecord(filePath),
+        phase: "workspace_opened",
+        lastSuccessfulPhase: "prepared",
+      }));
+
+      expect(runPromise(filePath).status).toBe("invalid");
+    });
+  });
+
+  it("promotes only a canonical record bound to the exact promise path", () => {
+    withTempFile(JSON.stringify(workerReport()), (filePath) => {
+      writeFileSync(path.join(path.dirname(filePath), "attempt.json"), JSON.stringify(canonicalAttemptRecord(filePath)));
+
+      expect(runPromise(filePath).evidenceStrength).toBe("strong");
+    });
+  });
+
+  it("rejects a V1 Worker report with a symbolic revision", () => {
+    withTempFile(JSON.stringify({ ...workerReport(), inputRevision: { head: "origin/main" } }), (filePath) => {
+      expect(runPromise(filePath).error).toBe("invalid_input_revision");
+    });
+  });
+
+  it("keeps an unrelated legacy three-field report compatible with symbolic text", () => {
+    withTempFile('{"status":"complete","reason":"origin/main","summary":"legacy output value"}', (filePath) => {
+      expect(runPromise(filePath).evidenceStrength).toBe("legacy-weak");
+    });
   });
 
   it("rejects changes_requested without findings", () => {

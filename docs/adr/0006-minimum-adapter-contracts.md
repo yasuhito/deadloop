@@ -76,9 +76,9 @@ journalは次の結果を区別する。
 
 promise fileはPi + Herdr経路の搬送方法であり、deadloop coreの公開契約ではない。process終了、画面出力、session状態、エージェントの最終回答だけでは意味的完了とみなさない。報告の欠落、schema不正、attempt不一致、対象不一致、revision不一致は「有効な完了報告なし」とする。完了報告は証拠であり、GitHub副作用やmergeを許可する命令ではない。
 
-V1 reader/writer migration is active: new Worker、reviewer、review-repair、branch-update writer は V1 を書く。legacy three-field payload は旧試行をdrainするためだけに弱い証拠として読め、保存済みjournalへのbindingやcleanup/reconciliationの強い証拠には昇格しない。
+V1 の読み書きへの移行は進行中である。新しく起動する Worker、レビューエージェント、レビュー修正エージェント、ブランチ更新エージェントは V1 を書く。従来の3項目ペイロードは旧試行を終了させるためだけに弱い証拠として読め、保存済みの試行記録との結び付きや、後片付け・状態調整の強い証拠には昇格しない。
 
-この判断は[ADR 0003](./0003-promise-file-contract.md)のpush型file transportを維持し、3項目のlegacy payloadをversion付き共通報告へ改訂する。移行は、先にreaderをlegacyと新versionの両方へ対応させ、次にwriterを切り替え、旧試行がなくなってからlegacy readerを削除する。legacy payloadは専用promise pathと保存済み起動contextにだけ結び付け、存在しないrevisionや検証証拠を合成して強い証拠へ昇格させない。移行中に必要な証拠を持たない旧報告は、既存の安全ゲートで再検証できなければ人間へ引き渡す。
+この判断は [ADR 0003](./0003-promise-file-contract.md) のプッシュ型ファイル搬送を維持し、3項目の従来ペイロードを版付き共通報告へ改訂する。移行は、先に読み取り側を従来形式と新しい版の両方へ対応させ、次に書き込み側を切り替え、旧試行がなくなってから従来形式の読み取りを削除する。従来ペイロードは専用の promise パスと保存済みの起動情報にだけ結び付け、存在しないリビジョンや検証証拠を合成して強い証拠へ昇格させない。移行中に必要な証拠を持たない旧報告は、既存の安全ゲートで再検証できなければ人間へ引き渡す。
 
 ### 6. Review policy is a pure decision boundary
 

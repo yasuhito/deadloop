@@ -18,10 +18,10 @@ function finalizeWith(
   pushUrl = "https://github.com/owner/repo.git",
   repositoryIds: Record<string, string> = {},
   raceRemoteHead?: string | null,
-  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string } = {},
+  localHeadChanges: { candidate?: string; afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string } = {},
 ) {
   let observedHead = actualHead;
-  let localHead = "cccccccccccccccccccccccccccccccccccccccc";
+  let localHead = localHeadChanges.candidate || "cccccccccccccccccccccccccccccccccccccccc";
   return finalizeBranchUpdate(
     {
       repo: "/worktree",
@@ -185,6 +185,12 @@ describe("PR branch-update safety", () => {
     );
   });
 
+  it("rejects a branch update that produces no new commit", () => {
+    expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { candidate: head })).toThrow(
+      "branch update produced no new commit",
+    );
+  });
+
   it("rejects HEAD changing during configured checks", () => {
     expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { afterChecks: "d".repeat(40) })).toThrow(
       "branch-update HEAD changed during checks",
@@ -228,6 +234,18 @@ describe("PR branch-update safety", () => {
     const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, base);
 
     expect(result.action).toBe("stale_head");
+  });
+
+  it("records the current remote head in a stale branch-update receipt", () => {
+    const result = finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, base);
+
+    expect(result.currentRemoteHeadOid).toBe(base);
+  });
+
+  it("names the pushed branch-update outcome", () => {
+    const result = finalizeWith([]);
+
+    expect(result.reason).toBe("branch_update_pushed");
   });
 
   it("rejects a concurrent rewind to an ancestor with an exact-head lease", () => {

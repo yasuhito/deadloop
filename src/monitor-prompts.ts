@@ -112,7 +112,7 @@ Attempt binding:
 ${renderPromisePollingRules(input)}
 
 Terminal handling:
-- status=complete, reason=branch_updated: re-read the PR and confirm its head changed. Do not change labels; normal PR review resumes on the next automation cycle.
+- status=complete, reason=branch_update_pushed: re-read the PR and confirm its head changed. Do not change labels; normal PR review resumes on the next automation cycle.
 - status=complete, reason=stale_head: stop without any push, comment, or label change. Keep both review labels so the next cycle re-evaluates the new head.
 - status=blocked: write a concise failure comment, remove ${input.reviewingLabel}, and add ${input.blockedLabel}. This is the only terminal path that may add the blocked label; keep ${input.reviewLabel}.
 - Any malformed completion or unsafe/inconclusive update result is a failed update: report it and add ${input.blockedLabel}; never guess success.

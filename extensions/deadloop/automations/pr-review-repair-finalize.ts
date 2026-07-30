@@ -56,23 +56,25 @@ function pushConditionally(
   expectedHead: string,
   candidateOid: string,
   recheck: () => void,
-): boolean {
+): { pushed: boolean; currentRemoteHeadOid: string } {
   const ref = `refs/heads/${branch}`;
   if (checked(ops, ["git", "-C", repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
     throw new Error("repair HEAD changed immediately before push");
   }
   const remoteBeforePush = checked(ops, ["git", "ls-remote", destination, ref], MAX_GUARDED_OPERATION_MS).split(/\s+/)[0] || "";
-  if (remoteBeforePush.toLowerCase() !== expectedHead.toLowerCase()) return false;
+  if (remoteBeforePush.toLowerCase() !== expectedHead.toLowerCase()) {
+    return { pushed: false, currentRemoteHeadOid: remoteBeforePush.toLowerCase() };
+  }
   recheck();
   const push = ops.run(
     ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
-  if (push.status === 0) return true;
+  if (push.status === 0) return { pushed: true, currentRemoteHeadOid: candidateOid.toLowerCase() };
 
   const remoteLine = checked(ops, ["git", "ls-remote", destination, ref], MAX_GUARDED_OPERATION_MS);
-  const remoteHead = remoteLine.split(/\s+/)[0] || "";
-  if (remoteHead.toLowerCase() !== expectedHead.toLowerCase()) return false;
+  const remoteHead = (remoteLine.split(/\s+/)[0] || "").toLowerCase();
+  if (remoteHead !== expectedHead.toLowerCase()) return { pushed: false, currentRemoteHeadOid: remoteHead };
   throw new Error((push.stderr || push.stdout || "conditional push failed").trim());
 }
 
@@ -130,7 +132,11 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       ], MAX_GUARDED_OPERATION_MS),
     );
     const guard = decideRepairPushGuard(pr, args.branch, args.expectedHead);
-    if (guard.action !== "push") return { ...guard, originalHeadOid: args.expectedHead.toLowerCase() };
+    if (guard.action !== "push") return {
+      ...guard,
+      originalHeadOid: args.expectedHead.toLowerCase(),
+      currentRemoteHeadOid: String(pr.headRefOid || "").toLowerCase(),
+    };
     const pushDestination = resolveVerifiedPushDestination(
       ops,
       args.repo,
@@ -139,11 +145,13 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       enabled.githubRepositoryId,
       MAX_GUARDED_OPERATION_MS,
     );
-    if (!pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid, recheck)) {
+    const push = pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid, recheck);
+    if (!push.pushed) {
       return {
         action: "stale_head",
         reason: "head_sha_changed_during_push",
         originalHeadOid: args.expectedHead.toLowerCase(),
+        currentRemoteHeadOid: push.currentRemoteHeadOid,
       };
     }
     return {

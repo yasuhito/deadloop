@@ -68,8 +68,9 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
   const ops = {
     mkdirSync: fs.mkdirSync,
     runner,
-    runText: (command: string[]) =>
-      launchAgent(command.slice(2), {
+    runText: (command: string[]) => {
+      if (command[0] === "git") return `${"a".repeat(40)}\n`;
+      return launchAgent(command.slice(2), {
         readClaudeConfig: () => ({ projects: { "/repo": { hasTrustDialogAccepted: true } } }),
         runner: {
           startAgent: (input: { agentArgv: string[] }) => {
@@ -78,7 +79,8 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
           },
         },
         writeOutput: false,
-      }),
+      });
+    },
     writeFileSync: fs.writeFileSync,
   };
 

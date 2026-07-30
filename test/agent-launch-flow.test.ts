@@ -3,6 +3,44 @@ import { describe, expect, it } from "vitest";
 const { launchAgentFlow } = require("../src/agent-launch-flow.ts");
 
 describe("エージェント起動フロー", () => {
+  it("renders a Worker prompt with the exact created worktree HEAD", () => {
+    let prompt = "";
+
+    launchAgentFlow(
+      {
+        worktree: { mode: "create", branch: "agent/issue-1", baseBranch: "origin/main" },
+        repoPath: "/repo",
+        automationDir: "/automation",
+        stateDir: "/state/deadloop",
+        name: "demo-issue-1-worker",
+        agent: "pi",
+        model: "",
+        level: "medium",
+        uuid: "U-worker",
+        promptFilePrefix: "worker-prompt",
+        resolveWorktreeHead: true,
+        renderPrompt: ({ worktreeHead }: { worktreeHead?: string }) => `head: ${worktreeHead}`,
+      },
+      {
+        mkdirSync: () => {},
+        runner: {
+          createWorktree: () => ({ workspaceId: "workspace-1", worktreePath: "/wt/worker" }),
+          openWorktree: () => { throw new Error("unexpected openWorktree"); },
+          createTab: () => ({ tabId: "tab-1" }),
+          startAgent: () => { throw new Error("unexpected startAgent"); },
+          listWorktrees: () => [],
+          listAgents: () => [],
+          removeAgent: () => "",
+          removeWorktree: () => "",
+        },
+        runText: (args: string[]) => args.includes("rev-parse") ? `${"a".repeat(40)}\n` : "launch output",
+        writeFileSync: (_file: string, text: string) => { prompt = text; },
+      },
+    );
+
+    expect(prompt).toBe(`head: ${"a".repeat(40)}`);
+  });
+
   it("opens a PR worktree through the runner, writes prompt and promise paths, and starts the reviewer through the launcher", () => {
     const calls: string[] = [];
     const writes: Record<string, string> = {};
