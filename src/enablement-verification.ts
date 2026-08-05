@@ -80,27 +80,6 @@ function git(repoPath: string, args: string[]): { status: number; stdout: string
   };
 }
 
-function run(
-  executable: string,
-  args: string[],
-  cwd: string,
-  timeoutMs: number,
-): { code: number; stdout: string; stderr: string; timedOut: boolean } {
-  const result = childProcess.spawnSync(executable, args, {
-    cwd,
-    encoding: "utf8",
-    timeout: timeoutMs,
-    maxBuffer: 10 * 1024 * 1024,
-  });
-  const timedOut = result.error && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
-  return {
-    code: timedOut ? 124 : (result.status ?? 1),
-    stdout: String(result.stdout || ""),
-    stderr: String(result.stderr || result.error?.message || ""),
-    timedOut: Boolean(timedOut),
-  };
-}
-
 function needsNpmDependencies(command: string): boolean {
   return /^\s*npm\s+run(?:\s|$)/.test(command);
 }
@@ -239,7 +218,18 @@ export async function runEnablementVerification(input: EnablementVerificationInp
       };
     } else {
       const remainingMs = Math.max(1, timeoutMs - Math.max(0, now() - startedAtMs));
-      const prepared = run("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], worktreePath, remainingMs);
+      let prepared: { code: number; stdout: string; stderr: string; timedOut: boolean };
+      try {
+        prepared = await runProjectCheck({
+          cwd: worktreePath,
+          command: journal.dependencyPreparation.command,
+          quarantineRoot: path.join(input.stateDir, "check-quarantine"),
+          timeoutMs: remainingMs,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? (error.stack || error.message) : String(error);
+        prepared = { code: 1, stdout: "", stderr: `dependency preparation runner failed: ${message}\n`, timedOut: false };
+      }
       preparationOutput = `${prepared.stdout}${prepared.stderr}`;
       journal = {
         ...journal,
