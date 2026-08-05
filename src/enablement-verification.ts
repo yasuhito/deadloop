@@ -16,6 +16,15 @@ const { runProjectCheck } = require("./project-check.ts") as {
   }) => Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>;
 };
 
+type DependencyPreparation = {
+  strategy: "npm-ci-ignore-scripts";
+  command: string;
+  artifactPath: string;
+  state: "planned" | "installed" | "failed";
+  cleanup?: "removed" | "absent" | "failed";
+  cleanupReason?: string;
+};
+
 type EnablementVerificationJournal = {
   version: 1;
   attemptId: string;
@@ -26,6 +35,7 @@ type EnablementVerificationJournal = {
   targetRevision: string;
   contract: RequiredVerificationContract;
   createdAt: string;
+  dependencyPreparation?: DependencyPreparation;
   recordPath?: string;
   logPath?: string;
   retentionReason?: string;
@@ -70,6 +80,31 @@ function git(repoPath: string, args: string[]): { status: number; stdout: string
   };
 }
 
+function run(
+  executable: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+): { code: number; stdout: string; stderr: string; timedOut: boolean } {
+  const result = childProcess.spawnSync(executable, args, {
+    cwd,
+    encoding: "utf8",
+    timeout: timeoutMs,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  const timedOut = result.error && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+  return {
+    code: timedOut ? 124 : (result.status ?? 1),
+    stdout: String(result.stdout || ""),
+    stderr: String(result.stderr || result.error?.message || ""),
+    timedOut: Boolean(timedOut),
+  };
+}
+
+function needsNpmDependencies(command: string): boolean {
+  return /^\s*npm\s+run(?:\s|$)/.test(command);
+}
+
 function exactRegisteredWorktree(primaryRepoPath: string, worktreePath: string): boolean {
   const listed = git(primaryRepoPath, ["worktree", "list", "--porcelain"]);
   if (listed.status !== 0) return false;
@@ -95,7 +130,33 @@ function safeToRemove(journal: EnablementVerificationJournal): { safe: boolean; 
   return { safe: true };
 }
 
+function cleanupDependencyPreparation(journal: EnablementVerificationJournal): DependencyPreparation | undefined {
+  const preparation = journal.dependencyPreparation;
+  if (!preparation) return undefined;
+  if (preparation.cleanup) return preparation;
+  if (!fs.existsSync(preparation.artifactPath)) return { ...preparation, cleanup: "absent" };
+  const expected = path.join(journal.worktreePath, "node_modules");
+  if (path.resolve(preparation.artifactPath) !== path.resolve(expected)) {
+    return { ...preparation, cleanup: "failed", cleanupReason: "dependency artifact path is outside the owned location" };
+  }
+  try {
+    fs.rmSync(preparation.artifactPath, { recursive: true });
+  } catch (error) {
+    return {
+      ...preparation,
+      cleanup: "failed",
+      cleanupReason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return fs.existsSync(preparation.artifactPath)
+    ? { ...preparation, cleanup: "failed", cleanupReason: "dependency artifact removal was not confirmed" }
+    : { ...preparation, cleanup: "removed" };
+}
+
 function cleanupOwnedWorktree(journal: EnablementVerificationJournal): { cleanup: "removed" | "retained"; reason?: string } {
+  if (journal.dependencyPreparation && !["removed", "absent"].includes(journal.dependencyPreparation.cleanup || "")) {
+    return { cleanup: "retained", reason: journal.dependencyPreparation.cleanupReason || "dependency artifact cleanup was not confirmed" };
+  }
   const safety = safeToRemove(journal);
   if (!safety.safe) return { cleanup: "retained", reason: safety.reason };
   const removed = git(journal.primaryRepoPath, ["worktree", "remove", journal.worktreePath]);
@@ -155,21 +216,61 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     throw new Error(`required verification worktree revision mismatch; log: ${logPath}; retained worktree journal: ${journalPath}`);
   }
 
+  let preparationOutput = "";
   let check: { code: number; stdout: string; stderr: string; timedOut: boolean };
-  try {
-    check = await runProjectCheck({
-      cwd: worktreePath,
-      command: contract.command,
-      quarantineRoot: path.join(input.stateDir, "check-quarantine"),
-      timeoutMs,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? (error.stack || error.message) : String(error);
-    check = { code: 1, stdout: "", stderr: `required verification runner failed: ${message}\n`, timedOut: false };
+  if (needsNpmDependencies(contract.command)) {
+    const artifactPath = path.join(worktreePath, "node_modules");
+    journal = {
+      ...journal,
+      dependencyPreparation: {
+        strategy: "npm-ci-ignore-scripts",
+        command: "npm ci --ignore-scripts --no-audit --no-fund",
+        artifactPath,
+        state: "planned",
+      },
+    };
+    writeJson(journalPath, journal);
+    if (fs.existsSync(artifactPath)) {
+      const reason = "dependency preparation refused a pre-existing node_modules artifact";
+      check = { code: 1, stdout: "", stderr: `${reason}\n`, timedOut: false };
+      journal = {
+        ...journal,
+        dependencyPreparation: { ...journal.dependencyPreparation, state: "failed", cleanup: "failed", cleanupReason: reason },
+      };
+    } else {
+      const remainingMs = Math.max(1, timeoutMs - Math.max(0, now() - startedAtMs));
+      const prepared = run("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], worktreePath, remainingMs);
+      preparationOutput = `${prepared.stdout}${prepared.stderr}`;
+      journal = {
+        ...journal,
+        dependencyPreparation: { ...journal.dependencyPreparation, state: prepared.code === 0 ? "installed" : "failed" },
+      };
+      writeJson(journalPath, journal);
+      check = prepared.code === 0
+        ? { code: 0, stdout: "", stderr: "", timedOut: false }
+        : { code: prepared.code, stdout: "", stderr: "dependency preparation failed\n", timedOut: prepared.timedOut };
+    }
+  } else {
+    check = { code: 0, stdout: "", stderr: "", timedOut: false };
+  }
+
+  if (check.code === 0) {
+    try {
+      const remainingMs = Math.max(1, timeoutMs - Math.max(0, now() - startedAtMs));
+      check = await runProjectCheck({
+        cwd: worktreePath,
+        command: contract.command,
+        quarantineRoot: path.join(input.stateDir, "check-quarantine"),
+        timeoutMs: remainingMs,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? (error.stack || error.message) : String(error);
+      check = { code: 1, stdout: "", stderr: `required verification runner failed: ${message}\n`, timedOut: false };
+    }
   }
   const finishedAtMs = now();
   const timeoutEvidence = check.timedOut ? `required verification timed out after ${timeoutMs}ms\n` : "";
-  fs.writeFileSync(logPath, `${check.stdout}${check.stderr}${timeoutEvidence}`, { encoding: "utf8", mode: 0o600 });
+  fs.writeFileSync(logPath, `${preparationOutput}${check.stdout}${check.stderr}${timeoutEvidence}`, { encoding: "utf8", mode: 0o600 });
   const outcome = check.code === 0 ? "passed" : "failed";
   writeJson(recordPath, {
     version: 1,
@@ -188,6 +289,11 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   journal = { ...journal, state: "checked", recordPath, logPath };
   writeJson(journalPath, journal);
 
+  const dependencyPreparation = cleanupDependencyPreparation(journal);
+  if (dependencyPreparation) {
+    journal = { ...journal, dependencyPreparation };
+    writeJson(journalPath, journal);
+  }
   const cleanup = cleanupOwnedWorktree(journal);
   journal = cleanup.cleanup === "removed"
     ? { ...journal, state: "cleaned" }

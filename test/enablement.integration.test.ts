@@ -562,6 +562,41 @@ describe("enablement command integration", () => {
     expect(await explicitCommandWithBrokenNpmMetadataObservation()).toContain("deadloop enabled");
   });
 
+  it.skipIf(process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK === "1")(
+    "runs the real repository aggregate command from a dependency-free temporary worktree",
+    async () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-real-enablement-"));
+      sandboxes.push(root);
+      const repoPath = path.join(root, "primary");
+      execFileSync("git", ["clone", "--quiet", "--no-hardlinks", process.cwd(), repoPath]);
+      const baseRevision = git(repoPath, ["rev-parse", "HEAD"]).trim();
+      const command = JSON.parse(readFileSync(path.join(repoPath, "deadloop.json"), "utf8")).checkCommand;
+      const previousNestedCheck = process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK;
+      process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK = "1";
+      try {
+        const result = await runEnablementVerification({
+          stateDir: path.join(root, "state"),
+          primaryRepoPath: repoPath,
+          repository: "yasuhito/deadloop",
+          resolution: {
+            status: "resolved",
+            contract: {
+              repository: "yasuhito/deadloop",
+              command,
+              source: { kind: "repo_policy", location: "deadloop.json" },
+              baseRevision,
+            },
+          },
+        });
+        expect({ outcome: result.outcome, cleanup: result.cleanup }).toEqual({ outcome: "passed", cleanup: "removed" });
+      } finally {
+        if (previousNestedCheck === undefined) delete process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK;
+        else process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK = previousNestedCheck;
+      }
+    },
+    10 * 60_000,
+  );
+
   it("records timed-out required verification as failed", async () => {
     expect((await timedOutVerificationObservation()).record.outcome).toBe("failed");
   });
