@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
+import { runEnablementVerification } from "../src/enablement-verification";
 import { schedulerLockName } from "../src/project-identity";
 const { withEnabledProjectLock } = require("../src/enabled-operation.cjs");
 
@@ -294,45 +295,48 @@ afterEach(async () => {
   for (const sandbox of sandboxes.splice(0)) rmSync(sandbox, { recursive: true, force: true });
 });
 
-async function preparedDependencyObservation(): Promise<{ message: string | undefined; worktreeExists: boolean; lifecycleScriptRan: boolean }> {
+async function explicitCommandWithBrokenNpmMetadataObservation(): Promise<string | undefined> {
   const { root, repoPath } = fixtureRepository();
-  const toolPath = path.join(repoPath, "tools", "prepared-tool");
-  const lifecycleMarkerPath = path.join(root, "dependency-lifecycle-ran");
-  mkdirSync(toolPath, { recursive: true });
-  writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({
-    scripts: { check: "prepared-only", preinstall: "node lifecycle-marker.js" },
-    dependencies: { "prepared-tool": "file:tools/prepared-tool" },
+  writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({ dependencies: { missing: "1.0.0" } }));
+  writeFileSync(path.join(repoPath, "package-lock.json"), JSON.stringify({
+    name: "fixture",
+    lockfileVersion: 3,
+    packages: { "": { name: "fixture" } },
   }));
-  writeFileSync(
-    path.join(repoPath, "lifecycle-marker.js"),
-    `require("node:fs").writeFileSync(${JSON.stringify(lifecycleMarkerPath)}, "ran");\n`,
-  );
-  writeFileSync(path.join(toolPath, "package.json"), JSON.stringify({
-    name: "prepared-tool",
-    version: "1.0.0",
-    bin: { "prepared-only": "cli.js" },
-  }));
-  const executablePath = path.join(toolPath, "cli.js");
-  writeFileSync(executablePath, "#!/usr/bin/env node\nprocess.stdout.write('prepared dependency ran\\n');\n");
-  chmodSync(executablePath, 0o755);
-  execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: repoPath });
-  writeFileSync(path.join(repoPath, "deadloop.json"), `${JSON.stringify({ checkCommand: "npm run check" })}\n`);
-  git(repoPath, ["add", "package.json", "package-lock.json", "deadloop.json", "lifecycle-marker.js", "tools"]);
-  git(repoPath, ["commit", "--quiet", "-m", "add locked verification dependency"]);
+  git(repoPath, ["add", "package.json", "package-lock.json"]);
+  git(repoPath, ["commit", "--quiet", "-m", "add inconsistent npm metadata"]);
   git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
-  let worktreePath = "";
-  const extension = await loadExtension(root, {
-    beforeEnablementWorktreeCreate: async (journalPath) => {
-      worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
-    },
-  });
+  const extension = await loadExtension(root);
 
   await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
+  return extension.messages.at(-1);
+}
+
+async function timedOutVerificationObservation(): Promise<{
+  record: { outcome: string; timedOut: boolean; timeoutMs: number };
+  log: string;
+}> {
+  const { root, repoPath } = fixtureRepository();
+  const baseRevision = git(repoPath, ["rev-parse", "origin/master"]).trim();
+  const result = await runEnablementVerification({
+    stateDir: path.join(root, ".pi", "agent", "deadloop"),
+    primaryRepoPath: repoPath,
+    repository: "owner/demo",
+    resolution: {
+      status: "resolved",
+      contract: {
+        repository: "owner/demo",
+        command: "sleep 60",
+        source: { kind: "repo_policy", location: "deadloop.json" },
+        baseRevision,
+      },
+    },
+    timeoutMs: 25,
+  });
   return {
-    message: extension.messages.at(-1),
-    worktreeExists: existsSync(worktreePath),
-    lifecycleScriptRan: existsSync(lifecycleMarkerPath),
+    record: JSON.parse(readFileSync(result.recordPath, "utf8")),
+    log: readFileSync(result.logPath, "utf8"),
   };
 }
 
@@ -443,16 +447,24 @@ describe("enablement command integration", () => {
     expect(extension.messages.at(-1)).toContain("deadloop enabled");
   });
 
-  it("prepares trusted locked dependencies before running verification", async () => {
-    expect((await preparedDependencyObservation()).message).toContain("deadloop enabled");
+  it("uses the explicit verification command as the gate when tracked npm metadata is invalid", async () => {
+    expect(await explicitCommandWithBrokenNpmMetadataObservation()).toContain("deadloop enabled");
   });
 
-  it("removes dependencies generated for enablement verification", async () => {
-    expect((await preparedDependencyObservation()).worktreeExists).toBe(false);
+  it("records timed-out required verification as failed", async () => {
+    expect((await timedOutVerificationObservation()).record.outcome).toBe("failed");
   });
 
-  it("does not run dependency lifecycle scripts during enablement verification", async () => {
-    expect((await preparedDependencyObservation()).lifecycleScriptRan).toBe(false);
+  it("records when required verification times out", async () => {
+    expect((await timedOutVerificationObservation()).record.timedOut).toBe(true);
+  });
+
+  it("records the timeout applied to required verification", async () => {
+    expect((await timedOutVerificationObservation()).record.timeoutMs).toBe(25);
+  });
+
+  it("writes timeout-specific evidence to the durable verification log", async () => {
+    expect((await timedOutVerificationObservation()).log).toContain("required verification timed out after 25ms");
   });
 
   it("does not use Herdr workspaces or agents for enablement verification", async () => {
@@ -707,13 +719,17 @@ describe("enablement command integration", () => {
     expect(JSON.parse(readFileSync(lockPath, "utf8")).projectId).toBe("demo");
   });
 
-  it("records enablement without deadloop.json or projects.json", async () => {
+  it("requires an explicit verification command when deadloop.json and projects.json are absent", async () => {
     const { root, repoPath } = fixtureRepository();
+    rmSync(path.join(repoPath, "deadloop.json"));
+    git(repoPath, ["add", "deadloop.json"]);
+    git(repoPath, ["commit", "--quiet", "-m", "remove repository policy"]);
+    git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
     const extension = await loadExtension(root);
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
-    expect(extension.messages.at(-1)).toContain("deadloop enabled");
+    expect(extension.messages.at(-1)).toContain("required verification blocked: no_source");
   });
 
   it("acknowledges an explicit post-enable change from false to true", async () => {
