@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { automationStateKey, nextSlotAfter, type NormalizedProject, type AutomationStateEntry } from "./core";
+import { formatRequiredVerification } from "./required-verification";
 
 export type LabelLike = string | { name?: string | null };
 
@@ -357,6 +358,7 @@ export function formatStatusReport(snapshot: StatusSnapshot): string {
     `cwd: ${snapshot.cwd}`,
     ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     `config: ${formatConfigSource(project)}`,
+    formatRequiredVerification(project.requiredVerification),
     `autoMerge: ${project.autoMerge ? "on" : "off"}`,
     `externalReview: ${project.externalReview.enabled ? "on" : "off"}`,
     "",

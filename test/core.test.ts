@@ -83,6 +83,13 @@ describe("deterministic extension core", () => {
       baseBranch: "origin/main",
       worktreeRoot: "",
       checkCommand: DEFAULT_CHECK_COMMAND,
+      requiredVerification: {
+        status: "blocked",
+        reason: "no_source",
+        repository: "owner/repo",
+        baseRevision: "unknown",
+        sources: [],
+      },
       autoMerge: false,
       ciFallback: {
         enabled: false,
@@ -134,6 +141,7 @@ describe("deterministic extension core", () => {
         repoPolicyBaseBranch: "origin/main",
         repoPolicyStatus: "not-read",
         repoPolicyAppliedKeys: [],
+        repoPolicyBaseRevision: "unknown",
       },
     });
   });

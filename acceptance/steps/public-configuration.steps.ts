@@ -146,7 +146,8 @@ Then("状態表示は同梱設定ファイルを示す", function (this: Configu
 });
 
 Then("状態表示に標準の自動化が二つある", function (this: ConfigurationWorld) {
-  const automationLines = (this.status ?? "").split("\n").slice(8);
+  const lines = (this.status ?? "").split("\n");
+  const automationLines = lines.slice(lines.indexOf("Automations:") + 1);
   const automationNames = automationLines
     .slice(0, automationLines.indexOf(""))
     .map((line) => line.match(/^- ([^:]+):/)?.[1]);

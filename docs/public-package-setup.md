@@ -52,6 +52,16 @@ For a local development checkout, copy from `/absolute/path/to/deadloop/extensio
 
 Shared repository policy lives in `deadloop.json` at the target repository root. deadloop reads it only from the trusted `baseBranch` after `git fetch`; a PR branch cannot change the policy used to decide that PR. Local `projects.json` explicit values win over repo policy, so remove a key locally when you want to inherit the shared value.
 
+Define the repository-owned aggregate verification command as shared policy whenever possible:
+
+```json
+{
+  "checkCommand": "npm run check"
+}
+```
+
+`/deadloop-status` and `/deadloop-doctor` show the required-verification resolution: the effective command, source identity, trusted base revision, and any local override. During the staged migration, the legacy inferred `checkCommand` remains available to unmigrated execution paths, but it is not reported as a resolved required-verification contract. An absent explicit source is shown as `no_source`, an explicitly empty command as `zero_targets`, and differing values at the same priority as `source_conflict`. A non-empty explicit command is accepted as written and judged by its eventual exit status rather than by command-name heuristics.
+
 If a project uses `workerAgent: "claude"` or `reviewerAgent: "claude"`, run `claude` interactively once from the target repository root and accept Claude Code workspace trust before enabling the automation.
 
 Key fields:
@@ -60,7 +70,7 @@ Key fields:
 - `githubRepo` — GitHub repository in `owner/name` form. `/deadloop-enable` infers it from the canonical `origin` fetch and push URLs; set it in `projects.json` only as a local override.
 - `baseBranch` — branch or remote ref used as the worktree base, usually the current branch upstream or the verified GitHub default branch when no upstream exists. `/deadloop-enable` infers it; set it in `projects.json` only as a local override.
 - `worktreeRoot` — directory where the Herdr runner may create worker worktrees. `/deadloop-enable` defaults it to `~/.herdr/worktrees/<sanitized-checkout-name>-<12-character-identity-hash>/`; the hash is derived from the canonical checkout path and GitHub repository identity. Set it in `projects.json` only to use another local path.
-- `checkCommand` — optional verification command workers and reviewers must pass before handoff. Omit this for the standard convention: run `git diff --check`, then `npm run check` when it exists, otherwise the existing `test`, `lint`, and `typecheck` package scripts.
+- `checkCommand` — explicit aggregate verification command. Prefer setting it in trusted shared `deadloop.json`; use a local value only as a deliberate override. The legacy inferred command remains available only to unmigrated execution paths during the staged rollout.
 - `autoMerge` — keep `false` until the repository has proven safeguards. Only `true` allows the PR reviewer automation to squash merge and delete the head branch after its gates pass.
 - `externalReview` — optional external review service gate. It is disabled by default; set `{ "enabled": true }` only for repositories where the built-in CodeRabbit/Copilot request path is available.
 - `workerInstructionFiles` — optional list of repository instruction files to mention in worker prompts. Omit this to use the standard convention: `AGENTS.md`, `CONTEXT.md`, `README.md`, plus relevant docs.

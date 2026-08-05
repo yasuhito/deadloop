@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
+import { formatRequiredVerification } from "./required-verification";
 import {
   type GithubItem,
   type HerdrWorktree,
@@ -616,6 +617,7 @@ export function formatDoctorReport(snapshot: DoctorSnapshot): string {
     `cwd: ${snapshot.cwd}`,
     ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     `config: ${formatConfigSource(snapshot.project)}`,
+    formatRequiredVerification(snapshot.project.requiredVerification),
     "",
   ];
 

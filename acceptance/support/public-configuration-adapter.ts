@@ -10,6 +10,7 @@ import {
   type RawProject,
 } from "../../src/core";
 import type { RunnerAdapter } from "../../src/runner";
+import { buildDoctorSnapshot, formatDoctorReport } from "../../src/doctor";
 import { buildStatusSnapshot, formatStatusReport } from "../../src/status";
 
 const { decideCiFallback } = require("../../extensions/deadloop/automations/ci-fallback-decision.ts") as {
@@ -141,8 +142,8 @@ export function resolveSelectedProject(input: {
   const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", ...raw }] }), "", {
     configPath: selectedPath,
     repoPolicyProvider: input.policy
-      ? () => ({ status: "loaded", text: JSON.stringify(input.policy) })
-      : () => ({ status: "missing" }),
+      ? () => ({ status: "loaded", text: JSON.stringify(input.policy), baseRevision: "b".repeat(40) })
+      : () => ({ status: "missing", baseRevision: "b".repeat(40) }),
   });
   if (result.ok === false) throw new Error(result.reason);
   const project = result.projects[0];
@@ -152,6 +153,10 @@ export function resolveSelectedProject(input: {
 
 export function observeStatus(project: NormalizedProject): string {
   return formatStatusReport(buildStatusSnapshot({ cwd: "/repo", projects: [project], nowMs: 0 }));
+}
+
+export function observeDoctor(project: NormalizedProject): string {
+  return formatDoctorReport(buildDoctorSnapshot({ cwd: "/repo", projects: [project], nowMs: 0 }));
 }
 
 export function observeWorkerLaunch(project: NormalizedProject): string[] {
