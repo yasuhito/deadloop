@@ -151,12 +151,12 @@ export function resolveSelectedProject(input: {
   return project;
 }
 
-export function observeStatus(project: NormalizedProject): string {
-  return formatStatusReport(buildStatusSnapshot({ cwd: "/repo", projects: [project], nowMs: 0 }));
+export function observeStatus(project: NormalizedProject, cwd = "/repo"): string {
+  return formatStatusReport(buildStatusSnapshot({ cwd, projects: [project], selectedProject: project, nowMs: 0 }));
 }
 
-export function observeDoctor(project: NormalizedProject): string {
-  return formatDoctorReport(buildDoctorSnapshot({ cwd: "/repo", projects: [project], nowMs: 0 }));
+export function observeDoctor(project: NormalizedProject, cwd = "/repo"): string {
+  return formatDoctorReport(buildDoctorSnapshot({ cwd, projects: [project], selectedProject: project, nowMs: 0 }));
 }
 
 export function observeWorkerLaunch(project: NormalizedProject): string[] {

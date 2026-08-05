@@ -69,14 +69,14 @@ When("必須検証を解決する", function (this: VerificationWorld) {
   });
 });
 
-When("状態表示と doctor を要求する", function (this: VerificationWorld) {
+When("リポジトリのサブディレクトリから状態表示と doctor を要求する", function (this: VerificationWorld) {
   const project = resolveSelectedProject({
     env: { DEADLOOP_CONFIG: "/state/projects.json" },
     files: { "/state/projects.json": {} },
     policy: { checkCommand: "npm run check" },
   });
-  this.status = observeStatus(project);
-  this.doctor = observeDoctor(project);
+  this.status = observeStatus(project, "/repo/subdir");
+  this.doctor = observeDoctor(project, "/repo/subdir");
 });
 
 function contract(world: VerificationWorld) {

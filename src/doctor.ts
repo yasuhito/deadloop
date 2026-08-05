@@ -60,6 +60,7 @@ export type HerdrAgent = {
 export type DoctorInput = {
   cwd: string;
   projects: NormalizedProject[];
+  selectedProject?: NormalizedProject | null;
   repositoryEnablement?: RepositoryEnablement;
   warnings?: string[];
   issues?: DoctorGithubItem[];
@@ -557,7 +558,9 @@ function buildWorkspaceTrustFindings(
 }
 
 export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
-  const project = resolveActiveProject(input.cwd, input.projects);
+  const project = input.selectedProject === undefined
+    ? resolveActiveProject(input.cwd, input.projects)
+    : input.selectedProject;
   const repositoryEnablement = project ? "enabled" : input.repositoryEnablement || "unavailable";
   const warnings = input.warnings || [];
   if (!project) return { project: null, repositoryEnablement, cwd: input.cwd, warnings, findings: [] };
