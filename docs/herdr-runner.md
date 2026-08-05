@@ -36,6 +36,8 @@ Worker, reviewer, review-repair, and branch-update launches all follow the same 
 
 No launch creates another tab, splits a pane, uses `agent start --tab`, retires a same-name completed agent, or reuses a terminal. Internal agent names are launch-unique and follow `dl-<role>-<target>-<hash12>`.
 
+A newly opened workspace can return before its root shell reaches an interactive prompt. When `agent start` returns the exact structured Herdr error code `agent_pane_busy`, the runner retries the identical name, pane, kind, and native arguments every 100 ms within a 5-second monotonic grace period. Herdr reports this code before starting an agent, so this narrow retry cannot duplicate a successful launch. Each `agent start` process also has a 35-second wrapper timeout. Any killed, untyped, malformed, different, or persistent error fails closed and retains the attempt workspace.
+
 ## Completion and cleanup
 
 A promise file is transport, not cleanup authority. Only a strong V1 report bound to the attempt journal can proceed to role-specific GitHub confirmation.
