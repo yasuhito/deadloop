@@ -127,7 +127,7 @@ function prepareDependencies(worktreePath: string): DependencyPreparation {
     };
   }
 
-  const result = childProcess.spawnSync("npm", ["ci", "--no-audit", "--no-fund"], {
+  const result = childProcess.spawnSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], {
     cwd: worktreePath,
     encoding: "utf8",
     timeout: 10 * 60_000,

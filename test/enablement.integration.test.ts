@@ -294,14 +294,19 @@ afterEach(async () => {
   for (const sandbox of sandboxes.splice(0)) rmSync(sandbox, { recursive: true, force: true });
 });
 
-async function preparedDependencyObservation(): Promise<{ message: string | undefined; worktreeExists: boolean }> {
+async function preparedDependencyObservation(): Promise<{ message: string | undefined; worktreeExists: boolean; lifecycleScriptRan: boolean }> {
   const { root, repoPath } = fixtureRepository();
   const toolPath = path.join(repoPath, "tools", "prepared-tool");
+  const lifecycleMarkerPath = path.join(root, "dependency-lifecycle-ran");
   mkdirSync(toolPath, { recursive: true });
   writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({
-    scripts: { check: "prepared-only" },
+    scripts: { check: "prepared-only", preinstall: "node lifecycle-marker.js" },
     dependencies: { "prepared-tool": "file:tools/prepared-tool" },
   }));
+  writeFileSync(
+    path.join(repoPath, "lifecycle-marker.js"),
+    `require("node:fs").writeFileSync(${JSON.stringify(lifecycleMarkerPath)}, "ran");\n`,
+  );
   writeFileSync(path.join(toolPath, "package.json"), JSON.stringify({
     name: "prepared-tool",
     version: "1.0.0",
@@ -312,7 +317,7 @@ async function preparedDependencyObservation(): Promise<{ message: string | unde
   chmodSync(executablePath, 0o755);
   execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: repoPath });
   writeFileSync(path.join(repoPath, "deadloop.json"), `${JSON.stringify({ checkCommand: "npm run check" })}\n`);
-  git(repoPath, ["add", "package.json", "package-lock.json", "deadloop.json", "tools"]);
+  git(repoPath, ["add", "package.json", "package-lock.json", "deadloop.json", "lifecycle-marker.js", "tools"]);
   git(repoPath, ["commit", "--quiet", "-m", "add locked verification dependency"]);
   git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
   let worktreePath = "";
@@ -324,7 +329,11 @@ async function preparedDependencyObservation(): Promise<{ message: string | unde
 
   await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
-  return { message: extension.messages.at(-1), worktreeExists: existsSync(worktreePath) };
+  return {
+    message: extension.messages.at(-1),
+    worktreeExists: existsSync(worktreePath),
+    lifecycleScriptRan: existsSync(lifecycleMarkerPath),
+  };
 }
 
 async function dirtyFailureObservation(): Promise<{ messageIncludesLogPath: boolean; logIncludesDirtyFailure: boolean }> {
@@ -440,6 +449,10 @@ describe("enablement command integration", () => {
 
   it("removes dependencies generated for enablement verification", async () => {
     expect((await preparedDependencyObservation()).worktreeExists).toBe(false);
+  });
+
+  it("does not run dependency lifecycle scripts during enablement verification", async () => {
+    expect((await preparedDependencyObservation()).lifecycleScriptRan).toBe(false);
   });
 
   it("does not use Herdr workspaces or agents for enablement verification", async () => {
