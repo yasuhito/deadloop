@@ -55,6 +55,7 @@ const {
   releaseSchedulerLock: releaseSchedulerFileLock,
 } = require("../../src/scheduler-lock.cjs");
 import { inferredProjectId, schedulerLockName } from "../../src/project-identity";
+import { runEnablementVerification } from "../../src/enablement-verification";
 import {
   findEnabledProject,
   normalizeEnablementState,
@@ -344,6 +345,10 @@ function loadProjects(cwd) {
   const result = loadProjectsResult(cwd);
   if (!result.ok) throw new Error(result.reason);
   return result.projects;
+}
+
+function requiredVerificationMatches(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function resolveEnableProject(cwd, identity) {
@@ -1552,7 +1557,28 @@ export default function (pi) {
         });
         identity = await detectProjectIdentity(pi, primaryRepoPath);
         previousEnabledAt = await withEnablementStateLock(async () => findEnabledProject(loadEnablementState(), identity)?.enabledAt);
-        resolveEnableProject(ctx.cwd, identity);
+        const preflightProject = resolveEnableProject(ctx.cwd, identity);
+        const verification = await runEnablementVerification({
+          stateDir: STATE_DIR,
+          primaryRepoPath,
+          repository: identity.githubRepo,
+          resolution: preflightProject.requiredVerification,
+          beforeWorktreeCreate: pi.testing?.beforeEnablementWorktreeCreate,
+        });
+        if (verification.outcome !== "passed") {
+          const retained = verification.cleanup === "retained" ? `; retained worktree journal: ${verification.journalPath}` : "";
+          throw new Error(`required verification failed (exit ${verification.exitCode}); log: ${verification.logPath}${retained}`);
+        }
+        if (verification.cleanup !== "removed") {
+          throw new Error(`required verification worktree was retained because cleanup was not proven safe: ${verification.journalPath}`);
+        }
+        if (!ownsEnableAttempt(primaryRepoPath, enableAttemptToken)) {
+          throw new Error("enablement was revoked while required verification was running");
+        }
+        const verifiedProject = resolveEnableProject(ctx.cwd, identity);
+        if (!requiredVerificationMatches(verifiedProject.requiredVerification, preflightProject.requiredVerification)) {
+          throw new Error("required verification contract changed during enablement");
+        }
         await prepareGithub(pi, identity, primaryRepoPath, enableAttemptToken, disableGeneration);
         await withEnablementStateLock(async () => {
           if (
@@ -1563,6 +1589,9 @@ export default function (pi) {
           }
           await revalidateLocalProjectIdentity(pi, identity);
           const configuredProject = resolveEnableProject(ctx.cwd, identity);
+          if (!requiredVerificationMatches(configuredProject.requiredVerification, preflightProject.requiredVerification)) {
+            throw new Error("required verification contract changed during enablement");
+          }
           const firstEnable = { firstEnableAutoMerge: Boolean(configuredProject.autoMerge) };
           const next = upsertEnabledProject(loadEnablementState(), { ...identity, disableGeneration }, Date.now(), firstEnable, enableAttemptToken);
           enabledAt = findEnabledProject(next, identity)?.enabledAt;
@@ -1576,6 +1605,9 @@ export default function (pi) {
           const projects = loadProjects(ctx.cwd);
           project = await activeSchedulerProject(ctx.cwd, projects);
           if (!project) throw new Error("enabled repository configuration could not be resolved safely");
+          if (!requiredVerificationMatches(project.requiredVerification, preflightProject.requiredVerification)) {
+            throw new Error("required verification contract changed before scheduler startup");
+          }
           const schedulerStart = startScheduler(ctx, project);
           if (!schedulerStart.started) throw new Error(schedulerStart.reason);
         } catch (error) {

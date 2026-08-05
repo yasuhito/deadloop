@@ -57,7 +57,8 @@ function repositoryTemplate(separateGitDir: boolean): string {
   git(repoPath, ["config", "user.email", "test@example.com"]);
   git(repoPath, ["config", "user.name", "Test"]);
   writeFileSync(path.join(repoPath, "README.md"), "fixture\n");
-  git(repoPath, ["add", "README.md"]);
+  writeFileSync(path.join(repoPath, "deadloop.json"), `${JSON.stringify({ checkCommand: "true" })}\n`);
+  git(repoPath, ["add", "README.md", "deadloop.json"]);
   git(repoPath, ["commit", "--quiet", "-m", "initial"]);
   execFileSync("git", ["clone", "--quiet", "--bare", repoPath, path.join(root, "origin.git")]);
   git(repoPath, ["remote", "add", "origin", "https://github.com/owner/demo.git"]);
@@ -67,13 +68,11 @@ function repositoryTemplate(separateGitDir: boolean): string {
   mkdirSync(binDir);
   const gitPath = path.join(binDir, "git");
   writeFileSync(gitPath, `#!/bin/sh
-# The immutable template already contains the fetched base ref, and these tests
-# do not provide repository policy. Avoid only the repeated policy refresh and
-# keep explicit origin/refspec fetches observable through the real Git command.
+# The immutable template already contains the fetched base ref. Avoid only the
+# repeated policy refresh and keep explicit origin/refspec fetches observable
+# through the real Git command.
 if [ "$3" = "fetch" ] && [ "$#" -eq 4 ]; then
   exit 0
-elif [ "$3" = "show" ] && [ "\${4##*:}" = "deadloop.json" ] && [ ! -f "$2/../real-policy-lookup" ]; then
-  exit 1
 elif [ "$3 $4" = "remote get-url" ]; then
   repo="$2"
   if printf '%s\\n' "$@" | grep -qx -- '--push'; then
@@ -142,21 +141,24 @@ async function loadExtension(
     beforeLabelCreate?: (name: string) => Promise<void>;
     beforeDisableLock?: () => Promise<void>;
     afterEnablementSaved?: () => Promise<void>;
+    beforeEnablementWorktreeCreate?: (journalPath: string) => Promise<void>;
     runAutomationScript?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
     herdrCompatibilityPreflight?: () => void;
   } = {},
-): Promise<{ commands: Map<string, CommandHandler>; events: Map<string, EventHandler>; ghCommands: string[][]; messages: string[] }> {
+): Promise<{ commands: Map<string, CommandHandler>; events: Map<string, EventHandler>; execCommands: string[][]; ghCommands: string[][]; messages: string[] }> {
   process.env.HOME = root;
   process.env.PI_CODING_AGENT_DIR = path.join(root, ".pi", "agent");
   process.env.PATH = `${path.join(root, "bin")}:${originalPath || ""}`;
   const commands = new Map<string, CommandHandler>();
   const events = new Map<string, EventHandler>();
   const messages: string[] = [];
+  const execCommands: string[][] = [];
   const ghCommands: string[][] = [];
   // @ts-expect-error Vitest transforms this runtime extension import.
   const extension = (await import("../extensions/deadloop/index")).default;
   extension({
     exec: async (command: string, args: string[]) => {
+      execCommands.push([command, ...args]);
       if (command === "git") {
         if (args.includes("--show-toplevel")) await options.beforePrimaryCheckout?.();
         const primaryRepoPath = path.join(root, "primary");
@@ -228,6 +230,7 @@ async function loadExtension(
     testing: {
       beforeDisableLock: options.beforeDisableLock,
       afterEnablementSaved: options.afterEnablementSaved,
+      beforeEnablementWorktreeCreate: options.beforeEnablementWorktreeCreate,
       herdrCompatibilityPreflight: options.herdrCompatibilityPreflight || (() => undefined),
     },
   });
@@ -238,7 +241,7 @@ async function loadExtension(
       ui: { notify: () => undefined, setStatus: () => undefined },
     });
   });
-  return { commands, events, ghCommands, messages };
+  return { commands, events, execCommands, ghCommands, messages };
 }
 
 function writeConfig(root: string, repoPath: string, options: { autoMerge?: boolean; worktreeRoot?: string; githubRepo?: string; enabled?: boolean } = {}): void {
@@ -292,6 +295,156 @@ afterEach(async () => {
 });
 
 describe("enablement command integration", () => {
+  it("records owned verification worktree intent before creation", async () => {
+    const { root, repoPath } = fixtureRepository();
+    let preparedJournal: unknown;
+    const extension = await loadExtension(root, {
+      beforeEnablementWorktreeCreate: async (journalPath) => {
+        preparedJournal = JSON.parse(readFileSync(journalPath, "utf8"));
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const prepared = preparedJournal as { state?: string; repository?: string; primaryRepoPath?: string };
+    expect(prepared.state === "prepared" && prepared.repository === "owner/demo" && prepared.primaryRepoPath === repoPath).toBe(true);
+  });
+
+  it("records the trusted target revision before worktree creation", async () => {
+    const { root, repoPath } = fixtureRepository();
+    let targetRevision = "";
+    const extension = await loadExtension(root, {
+      beforeEnablementWorktreeCreate: async (journalPath) => {
+        targetRevision = JSON.parse(readFileSync(journalPath, "utf8")).targetRevision;
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(targetRevision).toBe(git(repoPath, ["rev-parse", "origin/master"]).trim());
+  });
+
+  it("verifies the exact trusted base revision without ordinary checkout changes", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeFileSync(path.join(repoPath, "ordinary-uncommitted.txt"), "local only\n");
+    const revision = git(repoPath, ["rev-parse", "origin/master"]).trim();
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ projects: [{
+      id: "demo", repoPath, githubRepo: "owner/demo",
+      checkCommand: `test ! -e ordinary-uncommitted.txt && test \"$(git rev-parse HEAD)\" = ${revision}`,
+    }] }));
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("deadloop enabled");
+  });
+
+  it("does not use Herdr workspaces or agents for enablement verification", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.execCommands.some(([command, noun]) => command === "herdr" && ["workspace", "agent"].includes(noun))).toBe(false);
+  });
+
+  it("retains disabled state when baseline verification fails", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.projects[0].checkCommand = "exit 23";
+    writeFileSync(configPath, JSON.stringify(config));
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"))).toBe(false);
+  });
+
+  it("shows the durable log location when baseline verification fails", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.projects[0].checkCommand = "echo baseline-broke >&2; exit 23";
+    writeFileSync(configPath, JSON.stringify(config));
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const logPath = /log: (.+)$/.exec(extension.messages.at(-1) || "")?.[1] || "";
+    expect(readFileSync(logPath, "utf8")).toContain("baseline-broke");
+  });
+
+  it("shows the durable log when failed verification also retains a dirty worktree", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.projects[0].checkCommand = "touch retained-artifact; echo dirty-failure >&2; exit 23";
+    writeFileSync(configPath, JSON.stringify(config));
+    let logPath = "";
+    const extension = await loadExtension(root, {
+      beforeEnablementWorktreeCreate: async (journalPath) => {
+        logPath = path.join(path.dirname(journalPath), "check.log");
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect((extension.messages.at(-1) || "").includes(logPath) && readFileSync(logPath, "utf8").includes("dirty-failure")).toBe(true);
+  });
+
+  it("removes a clean owned temporary Git worktree after verification", async () => {
+    const { root, repoPath } = fixtureRepository();
+    let worktreePath = "";
+    const extension = await loadExtension(root, {
+      beforeEnablementWorktreeCreate: async (journalPath) => {
+        worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(worktreePath)).toBe(false);
+  });
+
+  it("retains a temporary Git worktree that verification leaves dirty", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.projects[0].checkCommand = "touch created-by-check";
+    writeFileSync(configPath, JSON.stringify(config));
+    let worktreePath = "";
+    const extension = await loadExtension(root, {
+      beforeEnablementWorktreeCreate: async (journalPath) => {
+        worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(path.join(worktreePath, "created-by-check"))).toBe(true);
+  });
+
+  it("persists a passed record before saving enablement", async () => {
+    const { root, repoPath } = fixtureRepository();
+    let attemptDir = "";
+    const extension = await loadExtension(root, {
+      beforeEnablementWorktreeCreate: async (journalPath) => {
+        attemptDir = path.dirname(journalPath);
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome).toBe("passed");
+  });
+
   it.each([
     ["DEADLOOP", "DEADLOOP=off"],
     ["DEADLOOP_AUTOMATIONS", "DEADLOOP_AUTOMATIONS=off"],
@@ -473,7 +626,8 @@ describe("enablement command integration", () => {
     git(otherRepoPath, ["config", "user.email", "test@example.com"]);
     git(otherRepoPath, ["config", "user.name", "Test"]);
     writeFileSync(path.join(otherRepoPath, "README.md"), "other fixture\n");
-    git(otherRepoPath, ["add", "README.md"]);
+    writeFileSync(path.join(otherRepoPath, "deadloop.json"), `${JSON.stringify({ checkCommand: "true" })}\n`);
+    git(otherRepoPath, ["add", "README.md", "deadloop.json"]);
     git(otherRepoPath, ["commit", "--quiet", "-m", "initial"]);
     git(otherRepoPath, ["remote", "add", "origin", "https://github.com/owner/demo.git"]);
     git(otherRepoPath, ["update-ref", "refs/remotes/origin/master", "master"]);
@@ -594,7 +748,7 @@ describe("enablement command integration", () => {
 
     expect({ disabled: disabledState.projects.length === 0, finalMessage: extension.messages.at(-1) }).toEqual({
       disabled: true,
-      finalMessage: "deadloop was not enabled: enablement was revoked while preflight was running",
+      finalMessage: "deadloop was not enabled: enablement was revoked while required verification was running",
     });
   });
 
@@ -717,6 +871,24 @@ describe("enablement command integration", () => {
     await Promise.all([firstEnable, secondEnable]);
 
     expect(extension.ghCommands.filter((args) => args[0] === "label" && args[1] === "create" && args[2] === "ready-for-agent")).toHaveLength(1);
+  });
+
+  it("revokes newly saved enablement when the verification contract changes before scheduler startup", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root, {
+      afterEnablementSaved: async () => {
+        const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+        const config = JSON.parse(readFileSync(configPath, "utf8"));
+        config.projects[0].checkCommand = "false";
+        writeFileSync(configPath, JSON.stringify(config));
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    expect(state.projects[0].enabled).toBe(false);
   });
 
   it("does not let a failed enable revoke a later successful concurrent enable", async () => {
