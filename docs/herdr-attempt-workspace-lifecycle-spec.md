@@ -173,9 +173,10 @@ Phases progress monotonically through the applicable subset of:
 4. `agent_started`;
 5. `report_received`;
 6. `github_persisted`;
-7. `workspace_closed`.
+7. `workspace_closed`;
+8. `abandoned` (only through the explicit guarded launch-failure recovery operation).
 
-A launch error records `launch_failed` together with the last successful phase and available ownership evidence. `launch_failed` is inconclusive, not permission to close an attributed workspace or replay a GitHub claim.
+A launch error records `launch_failed` together with the last successful phase and available ownership evidence. `launch_failed` alone is inconclusive and is not permission to close an attributed workspace or replay a GitHub claim. A Worker or reviewer attempt may move from `launch_failed` to `abandoned` only after `/deadloop-abandon-attempt` proves the unchanged target and revision, a clean retained worktree, one exact one-tab/one-pane owned workspace, no competing attempt, and no agent in the recorded pane or launch-unique name; closes only that workspace; and confirms the linked worktree remains. The record retains the original launch error and adds timestamped abandonment evidence before the target is requeued. Immediately before the close, the operation atomically writes a launch-bound `workspace_close_started` receipt beside the original journal. If the operation stops after closing the workspace but before recording abandonment, an idempotent retry may continue only when that receipt matches and the recorded workspace and every workspace for the same checkout are absent while the linked worktree remains. A requeued Worker creates a new attempt which opens that exact retained checkout in a fresh workspace; it does not create another linked worktree.
 
 Atomic writes must survive a process stop without turning a partial JSON file into an empty attempt. Crash/fault handling is required after the claim, worktree response, record enrichment, and agent-start boundaries.
 
@@ -309,7 +310,7 @@ For each retained attempt workspace, it reports one of:
 - ownership mismatch;
 - unsupported or protocol-incompatible Herdr client/server.
 
-Doctor may print deterministic recovery guidance or identify the next reconciliation cycle. It does not close panes, workspaces, or worktrees.
+Doctor may print deterministic recovery guidance or identify the next reconciliation cycle. It does not close panes, workspaces, or worktrees. For a safely classifiable launch-failed Worker or reviewer attempt it may print `/deadloop-abandon-attempt <attempt-id>`; if any prerequisite cannot be proven it prints manual-review guidance and no label-only recovery command.
 
 ## User-visible acceptance scenarios
 

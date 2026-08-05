@@ -36,6 +36,8 @@ Worker, reviewer, review-repair, and branch-update launches all follow the same 
 
 No launch creates another tab, splits a pane, uses `agent start --tab`, retires a same-name completed agent, or reuses a terminal. Internal agent names are launch-unique and follow `dl-<role>-<target>-<hash12>`.
 
+A newly opened workspace can return before its root shell reaches an interactive prompt. When `agent start` returns the exact structured Herdr error code `agent_pane_busy`, the runner retries the identical name, pane, kind, and native arguments every 100 ms within a 5-second monotonic grace period. Herdr reports this code before starting an agent, so this narrow retry cannot duplicate a successful launch. Each `agent start` process also has a 35-second wrapper timeout. Any killed, untyped, malformed, different, or persistent error fails closed and retains the attempt workspace.
+
 ## Completion and cleanup
 
 A promise file is transport, not cleanup authority. Only a strong V1 report bound to the attempt journal can proceed to role-specific GitHub confirmation.
@@ -48,6 +50,8 @@ A promise file is transport, not cleanup authority. Only a strong V1 report boun
 After confirmation, deadloop records `github_persisted`, runs only `herdr workspace close`, confirms the workspace is absent, confirms the linked worktree and branch remain, and records `workspace_closed`. A close timeout or ambiguous result remains cleanup pending and never replays a push, PR creation, comment, label transition, review, or merge.
 
 Blocked, human-required, legacy, malformed, missing, launch-failed, and ownership-ambiguous attempts remain visible. A retained attempt suppresses another attempt on the same checkout. Restart reconciliation may close only an already-proven successful V1 attempt and is idempotent.
+
+A launch-failed Worker or reviewer attempt can be explicitly abandoned only through `/deadloop-abandon-attempt <attempt-id>`, and only when doctor and the operation can independently prove the unchanged GitHub claim and revision, a clean retained worktree, one exact one-tab/one-pane attempt workspace, no other owning attempt, and no agent in the recorded pane or launch-unique name. The guarded operation closes only that workspace, records `abandoned` evidence without discarding the launch error, confirms the linked worktree remains, and then requeues the target. Immediately before closing, it writes a bound `workspace_close_started` receipt beside the original journal. If a previous invocation stopped after the close, a retry may continue only when that receipt matches and both the recorded workspace and any workspace for the same checkout are absent. Missing or changed evidence stops with manual-review guidance and no label-only recovery command. A requeued Worker starts a new attempt by opening the exact retained abandoned checkout in a fresh workspace; it never tries to create a duplicate linked worktree.
 
 Workspace closure never invokes worktree removal. After the workspace is closed, linked-worktree removal remains restricted to the merged/closed-PR safety gate, including dirty-worktree and closed-unmerged-head protection. Because Herdr 0.7.5 accepts only an open workspace ID for `worktree remove`, the runner verifies one exact closed path/branch identity and uses `git worktree remove <path>` without fabricating a workspace ID.
 

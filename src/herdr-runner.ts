@@ -15,8 +15,10 @@ import type {
 
 type JsonObject = Record<string, any>;
 type SyncOps = {
-  runText?: (command: string, args: string[]) => string;
+  runText?: (command: string, args: string[], timeoutMs?: number) => string;
   runJson?: (command: string, args: string[]) => unknown;
+  sleep?: (milliseconds: number) => void;
+  now?: () => number;
 };
 type AsyncOps = {
   runText?: (command: string, args: string[]) => Promise<string>;
@@ -96,6 +98,58 @@ function agentStartArgs(input: RunnerAgentStartRequest): string[] {
   ];
 }
 
+const AGENT_PANE_READY_GRACE_MS = 5_000;
+const AGENT_PANE_READY_INTERVAL_MS = 100;
+const AGENT_START_WRAPPER_TIMEOUT_MS = 35_000;
+
+function sleep(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function commandWasKilled(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const failure = error as { killed?: unknown; signal?: unknown };
+  return failure.killed === true || typeof failure.signal === "string";
+}
+
+function herdrErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const stderr = (error as { stderr?: unknown }).stderr;
+  const text = Buffer.isBuffer(stderr) ? stderr.toString("utf8") : stderr;
+  if (typeof text !== "string") return undefined;
+  try {
+    const envelope = JSON.parse(text);
+    const code = envelope && typeof envelope === "object" && !Array.isArray(envelope)
+      ? (envelope as { error?: { code?: unknown } }).error?.code
+      : undefined;
+    return typeof code === "string" ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function startAgentWhenPaneReady(
+  input: RunnerAgentStartRequest,
+  runText: (command: string, args: string[], timeoutMs?: number) => string,
+  wait: (milliseconds: number) => void,
+  now: () => number,
+): string {
+  const args = agentStartArgs(input);
+  let busyDeadline: number | undefined;
+  while (true) {
+    try {
+      return runText("herdr", args, AGENT_START_WRAPPER_TIMEOUT_MS);
+    } catch (error) {
+      if (commandWasKilled(error) || herdrErrorCode(error) !== "agent_pane_busy") throw error;
+      busyDeadline ??= now() + AGENT_PANE_READY_GRACE_MS;
+      const remaining = busyDeadline - now();
+      if (remaining <= 0) throw error;
+      wait(Math.min(AGENT_PANE_READY_INTERVAL_MS, remaining));
+      if (now() >= busyDeadline) throw error;
+    }
+  }
+}
+
 function arrayFromResult(payload: unknown, field: string): unknown[] {
   const values = result(payload, `${field} list`)[field];
   if (!Array.isArray(values)) throw new RunnerAdapterError(`${field} list`, [field], payload);
@@ -143,8 +197,8 @@ function normalizeAgent(value: unknown): RunnerAgent {
   return { ...item, agentId, paneId, status, ...(cwd ? { cwd } : {}) };
 }
 
-function defaultRunText(command: string, args: string[]): string {
-  return execFileSync(command, args, { encoding: "utf8" });
+function defaultRunText(command: string, args: string[], timeoutMs?: number): string {
+  return execFileSync(command, args, { encoding: "utf8", ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }) });
 }
 
 function removeLinkedWorktree(
@@ -172,11 +226,13 @@ function removeLinkedWorktree(
 function createHerdrRunner(ops: SyncOps = {}): RunnerAdapter {
   const runText = ops.runText || defaultRunText;
   const runJson = ops.runJson || ((command: string, args: string[]) => JSON.parse(runText(command, args) || "null"));
+  const wait = ops.sleep || sleep;
+  const now = ops.now || performance.now.bind(performance);
   return {
     createWorktree(input) { return launchFromResponse(runJson("herdr", createArgs(input)), "worktree_created"); },
     openWorktree(input) { return launchFromResponse(runJson("herdr", openArgs(input)), "worktree_opened"); },
     renameWorkspace(workspaceId, label) { return runText("herdr", ["workspace", "rename", workspaceId, label]); },
-    startAgent(input) { return runText("herdr", agentStartArgs(input)); },
+    startAgent(input) { return startAgentWhenPaneReady(input, runText, wait, now); },
     closeWorkspace(workspaceId) { return runText("herdr", ["workspace", "close", workspaceId]); },
     listWorkspaces() { return arrayFromResult(runJson("herdr", ["workspace", "list"]), "workspaces").map(normalizeWorkspace); },
     listWorktrees(repoPath) { return arrayFromResult(runJson("herdr", ["worktree", "list", "--cwd", repoPath, "--json"]), "worktrees").map(normalizeWorktree); },

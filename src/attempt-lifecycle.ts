@@ -13,7 +13,12 @@ export type AttemptPhase =
   | "report_received"
   | "github_persisted"
   | "workspace_closed"
-  | "launch_failed";
+  | "launch_failed"
+  | "abandoned";
+
+export function releasesAttemptOwnership(phase: AttemptPhase): boolean {
+  return phase === "workspace_closed" || phase === "abandoned";
+}
 
 export type AttemptTarget = {
   kind: AttemptTargetKind;
@@ -104,6 +109,11 @@ export type ValidatedCompletionReport = {
   report: CompletionReportV1;
 };
 
+export type AttemptAbandonment = {
+  reason: "launch_failed_no_agent";
+  abandonedAt: string;
+};
+
 export type AttemptRecord = AttemptIdentity & {
   branch: string;
   baseBranch?: string;
@@ -113,13 +123,14 @@ export type AttemptRecord = AttemptIdentity & {
   promptFile: string;
   promiseFile: string;
   phase: AttemptPhase;
-  lastSuccessfulPhase: Exclude<AttemptPhase, "launch_failed">;
+  lastSuccessfulPhase: Exclude<AttemptPhase, "launch_failed" | "abandoned">;
   launchError?: string;
   workspaceId?: string;
   tabId?: string;
   rootPaneId?: string;
   outputRevision?: string;
   autoMergePolicy?: boolean;
+  abandonment?: AttemptAbandonment;
 };
 
 export type PreparedAttemptInput = AttemptIdentity & {
@@ -133,7 +144,7 @@ export type PreparedAttemptInput = AttemptIdentity & {
   autoMergePolicy?: boolean;
 };
 
-const SUCCESSFUL_PHASES: Exclude<AttemptPhase, "launch_failed">[] = [
+const SUCCESSFUL_PHASES: Exclude<AttemptPhase, "launch_failed" | "abandoned">[] = [
   "prepared",
   "github_claimed",
   "workspace_opened",
@@ -181,14 +192,36 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
   if (role !== "worker" && role !== "reviewer" && role !== "review-repair" && role !== "branch-update")
     fail("role is invalid");
   const phase = record.phase;
-  if (!SUCCESSFUL_PHASES.includes(phase as Exclude<AttemptPhase, "launch_failed">) && phase !== "launch_failed")
-    fail("phase is invalid");
+  if (!SUCCESSFUL_PHASES.includes(phase as Exclude<AttemptPhase, "launch_failed" | "abandoned">)
+    && phase !== "launch_failed" && phase !== "abandoned") fail("phase is invalid");
   const lastSuccessfulPhase = record.lastSuccessfulPhase;
-  if (!SUCCESSFUL_PHASES.includes(lastSuccessfulPhase as Exclude<AttemptPhase, "launch_failed">))
+  if (!SUCCESSFUL_PHASES.includes(lastSuccessfulPhase as Exclude<AttemptPhase, "launch_failed" | "abandoned">))
     fail("lastSuccessfulPhase is invalid");
-  if (phase === "launch_failed" && typeof record.launchError !== "string") fail("launch_failed requires launchError");
-  if (phase !== "launch_failed" && phase !== lastSuccessfulPhase)
+  if ((phase === "launch_failed" || phase === "abandoned") && typeof record.launchError !== "string") {
+    fail(`${phase} requires launchError`);
+  }
+  if (phase !== "launch_failed" && phase !== "abandoned" && phase !== lastSuccessfulPhase) {
     fail("successful phase must equal lastSuccessfulPhase");
+  }
+  let abandonment: AttemptAbandonment | undefined;
+  if (phase === "abandoned") {
+    if ((role !== "worker" && role !== "reviewer") || lastSuccessfulPhase !== "workspace_opened") {
+      fail("abandoned requires a Worker or reviewer launch failure after workspace_opened");
+    }
+    for (const field of ["workspaceId", "tabId", "rootPaneId"] as const) {
+      nonEmptyString(record[field], field);
+    }
+    if (!record.abandonment || typeof record.abandonment !== "object" || Array.isArray(record.abandonment)) {
+      fail("abandoned requires abandonment evidence");
+    }
+    const evidence = record.abandonment as Record<string, unknown>;
+    if (evidence.reason !== "launch_failed_no_agent") fail("abandonment.reason is invalid");
+    const abandonedAt = nonEmptyString(evidence.abandonedAt, "abandonment.abandonedAt");
+    if (!Number.isFinite(Date.parse(abandonedAt))) fail("abandonment.abandonedAt must be an ISO timestamp");
+    abandonment = { reason: evidence.reason, abandonedAt };
+  } else if (record.abandonment !== undefined) {
+    fail("abandonment evidence requires abandoned phase");
+  }
 
   return {
     attemptId: nonEmptyString(record.attemptId, "attemptId"),
@@ -206,7 +239,7 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     promptFile: nonEmptyString(record.promptFile, "promptFile"),
     promiseFile: nonEmptyString(record.promiseFile, "promiseFile"),
     phase: phase as AttemptPhase,
-    lastSuccessfulPhase: lastSuccessfulPhase as Exclude<AttemptPhase, "launch_failed">,
+    lastSuccessfulPhase: lastSuccessfulPhase as Exclude<AttemptPhase, "launch_failed" | "abandoned">,
     ...(record.launchError === undefined ? {} : { launchError: nonEmptyString(record.launchError, "launchError") }),
     ...(record.workspaceId === undefined ? {} : { workspaceId: nonEmptyString(record.workspaceId, "workspaceId") }),
     ...(record.tabId === undefined ? {} : { tabId: nonEmptyString(record.tabId, "tabId") }),
@@ -217,6 +250,7 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(record.autoMergePolicy === undefined
       ? {}
       : typeof record.autoMergePolicy === "boolean" ? { autoMergePolicy: record.autoMergePolicy } : fail("autoMergePolicy must be boolean")),
+    ...(abandonment ? { abandonment } : {}),
   };
 }
 
@@ -265,6 +299,15 @@ function assertRecordAdvance(current: AttemptRecord, next: AttemptRecord): void 
   }
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"] as const) {
     if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
+  }
+  if (current.abandonment !== undefined && JSON.stringify(current.abandonment) !== JSON.stringify(next.abandonment)) {
+    throw new Error("Attempt record abandonment evidence cannot change");
+  }
+  if (current.phase === "launch_failed" && next.phase === "abandoned") {
+    if (!next.abandonment) throw new Error("abandoned requires abandonment evidence");
+    if (current.lastSuccessfulPhase !== next.lastSuccessfulPhase) throw new Error("Attempt record lastSuccessfulPhase cannot change");
+    if (current.launchError !== next.launchError) throw new Error("Attempt record launchError cannot change");
+    return;
   }
   if (current.phase === next.phase) {
     if (JSON.stringify(current) !== JSON.stringify(next)) throw new Error("Attempt record cannot be enriched without a phase transition");
@@ -315,13 +358,14 @@ const NEXT_SUCCESS_PHASE: Partial<Record<AttemptPhase, AttemptPhase>> = {
 /** Advances a record by exactly one modeled successful phase, or records a launch failure. */
 export function transitionAttempt(record: AttemptRecord, nextPhase: AttemptPhase, launchError?: string): AttemptRecord {
   parseAttemptRecord(record);
-  if (record.phase === "launch_failed" || record.phase === "workspace_closed") {
+  if (record.phase === "launch_failed" || record.phase === "workspace_closed" || record.phase === "abandoned") {
     throw new Error(`Attempt phase ${record.phase} is terminal`);
   }
   if (nextPhase === "launch_failed") {
     if (!launchError) throw new Error("launch_failed requires an error");
     return { ...record, phase: "launch_failed", launchError, lastSuccessfulPhase: record.lastSuccessfulPhase };
   }
+  if (nextPhase === "abandoned") throw new Error("Use abandonPersistedAttempt for abandoned transitions");
   if (NEXT_SUCCESS_PHASE[record.phase] !== nextPhase) {
     throw new Error(`Attempt phase ${record.phase} cannot transition to ${nextPhase}`);
   }
@@ -341,6 +385,25 @@ export function recordPersistedCompletionReport(runDir: string, report: Completi
     ...(outputRevision ? { outputRevision } : {}),
     phase: "report_received",
     lastSuccessfulPhase: "report_received",
+  };
+  writeAttemptRecordAtomically(attemptRecordPath(runDir), next);
+  return next;
+}
+
+export function abandonPersistedAttempt(runDir: string, abandonedAt: string): AttemptRecord {
+  const current = readAttemptRecord(runDir);
+  if (current.phase === "abandoned") return current;
+  if (current.phase !== "launch_failed") throw new Error(`Attempt phase ${current.phase} is not launch_failed`);
+  if ((current.role !== "worker" && current.role !== "reviewer") || current.lastSuccessfulPhase !== "workspace_opened") {
+    throw new Error("Only a Worker or reviewer launch failure after workspace_opened can be abandoned");
+  }
+  if (!current.workspaceId || !current.tabId || !current.rootPaneId) {
+    throw new Error("Abandonment requires complete workspace ownership evidence");
+  }
+  const next: AttemptRecord = {
+    ...current,
+    phase: "abandoned",
+    abandonment: { reason: "launch_failed_no_agent", abandonedAt },
   };
   writeAttemptRecordAtomically(attemptRecordPath(runDir), next);
   return next;

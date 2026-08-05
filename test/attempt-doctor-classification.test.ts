@@ -9,13 +9,14 @@ const { createHerdrRunner } = require("../src/herdr-runner.ts");
 const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-doctor-attempt-"));
 const stateDir = path.join(root, "deadloop");
 let retainedAttemptDoctorFindings: (...args: any[]) => any[];
+let retainedAttemptClaimSnapshot: (...args: any[]) => { claims: unknown[]; ownershipAmbiguous: boolean };
 let reconcilePersistedAttemptJournals: (...args: any[]) => Promise<boolean>;
 
 beforeAll(async () => {
   vi.stubEnv("PI_CODING_AGENT_DIR", root);
   vi.resetModules();
   // @ts-expect-error Vitest transforms this runtime extension import.
-  ({ retainedAttemptDoctorFindings, reconcilePersistedAttemptJournals } = await import("../extensions/deadloop/index"));
+  ({ retainedAttemptDoctorFindings, retainedAttemptClaimSnapshot, reconcilePersistedAttemptJournals } = await import("../extensions/deadloop/index"));
 });
 afterAll(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 
@@ -86,6 +87,35 @@ describe("attempt workspace doctor classifications", () => {
     const fixture = workerFixture(); const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "agent_started", launchError: "failed", outputRevision: undefined };
     expect(classify(record, undefined)).toContain("launch_failed");
   });
+  it("offers the supported abandonment command when launch-failure recovery is proven safe", () => {
+    const fixture = reviewerFixture("approved");
+    const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings(
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", reviewing: "agent:reviewing", blocked: "agent:blocked", human: "ready-for-human" } },
+      [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath, tabCount: 1, paneCount: 1 }],
+      [],
+      {
+        worktrees: [{ branch: record.branch, path: record.worktreePath, workspaceId: record.workspaceId }],
+        gitStatuses: { [record.worktreePath]: "" },
+        gitHeads: { [record.worktreePath]: record.inputRevision.head },
+        openPrs: [{ number: record.target.number, headRefName: record.branch, headRefOid: record.inputRevision.head, labels: ["agent:review", "agent:reviewing"] }],
+      },
+    );
+    expect(findings[0].commands).toEqual([`/deadloop-abandon-attempt ${record.attemptId}`]);
+  });
+  it("requires manual review instead of a partial recovery command when an agent owns the pane", () => {
+    const fixture = reviewerFixture("approved");
+    const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings(
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", reviewing: "agent:reviewing", blocked: "agent:blocked", human: "ready-for-human" } },
+      [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath, tabCount: 1, paneCount: 1 }],
+      [{ name: record.agentName, paneId: record.rootPaneId, status: "working" }],
+      {},
+    );
+    expect({ commands: findings[0].commands, summary: findings[0].summary }).toEqual({ commands: [], summary: expect.stringContaining("manual review required") });
+  });
   it("classifies cleanup pending", () => {
     const fixture = workerFixture(); const record = { ...fixture.record, phase: "github_persisted", lastSuccessfulPhase: "github_persisted" };
     expect(classify(record, undefined)).toContain("cleanup_pending");
@@ -98,6 +128,10 @@ describe("attempt workspace doctor classifications", () => {
     resetRuns(); const runDir = path.join(stateDir, "runs", "one"); mkdirSync(runDir); writeFileSync(path.join(runDir, "attempt.json"), "malformed");
     expect(retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], [])[0].title).toContain("malformed_journal");
   });
+  it("marks retained claim ownership ambiguous for a malformed journal", () => {
+    resetRuns(); const runDir = path.join(stateDir, "runs", "one"); mkdirSync(runDir); writeFileSync(path.join(runDir, "attempt.json"), "malformed");
+    expect(retainedAttemptClaimSnapshot({ id: "demo", githubRepo: "octo/demo" }).ownershipAmbiguous).toBe(true);
+  });
   it("fails startup reconciliation closed for a malformed journal", async () => {
     resetRuns(); const runDir = path.join(stateDir, "runs", "one"); mkdirSync(runDir); writeFileSync(path.join(runDir, "attempt.json"), "malformed");
     expect(await reconcilePersistedAttemptJournals({}, { id: "demo", githubRepo: "octo/demo" })).toBe(false);
@@ -108,8 +142,7 @@ describe("attempt workspace doctor classifications", () => {
     let commandArgs: string[] = [];
     await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { commandArgs = args; return { code: 0, stdout: '{"action":"done"}' }; } }, {
       id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1, autoMerge: true,
-      readyLabel: "ready", implementLabel: "implement", inProgressLabel: "progress", reviewLabel: "review",
-      reviewingLabel: "reviewing", blockedLabel: "blocked", humanLabel: "human",
+      labels: { ready: "ready", implement: "implement", inProgress: "progress", review: "review", reviewing: "reviewing", blocked: "blocked", human: "human" },
     });
     expect(commandArgs.flatMap((value, index) => value === "--managed-label" ? [commandArgs[index + 1]] : [])).toEqual([
       "review", "reviewing", "blocked", "human",
@@ -122,8 +155,7 @@ describe("attempt workspace doctor classifications", () => {
     let commandArgs: string[] = [];
     await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { commandArgs = args; return { code: 0, stdout: '{"action":"done"}' }; } }, {
       id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1, autoMerge: true,
-      readyLabel: "ready", implementLabel: "implement", inProgressLabel: "progress", reviewLabel: "review",
-      reviewingLabel: "reviewing", blockedLabel: "blocked", humanLabel: "human",
+      labels: { ready: "ready", implement: "implement", inProgress: "progress", review: "review", reviewing: "reviewing", blocked: "blocked", human: "human" },
     });
     expect(commandArgs.slice(commandArgs.indexOf("--auto-merge"), commandArgs.indexOf("--auto-merge") + 2)).toEqual(["--auto-merge", "false"]);
   });

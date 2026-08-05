@@ -134,7 +134,8 @@ function main(
   const runner =
     options.runner ??
     createHerdrRunner({
-      runText: (command: string, commandArgs: string[]) => execFileSync(command, commandArgs, { encoding: "utf8" }),
+      runText: (command: string, commandArgs: string[], timeoutMs?: number) =>
+        execFileSync(command, commandArgs, { encoding: "utf8", ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }) }),
     });
 
   try {

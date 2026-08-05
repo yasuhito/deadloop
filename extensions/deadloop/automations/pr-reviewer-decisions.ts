@@ -4,7 +4,7 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
-const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { readAttemptRecord, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 
 type AnyRecord = Record<string, any>;
 
@@ -169,7 +169,7 @@ function workingReviewerPrNumbers(
     if (attempt.project !== projectId || (githubRepo && attempt.repository !== githubRepo)) continue;
     if (!["reviewer", "review-repair", "branch-update"].includes(String(attempt.role || ""))) continue;
     if (attempt.target?.kind !== "pull-request" || !Number.isInteger(attempt.target?.number)) continue;
-    if (attempt.phase === "workspace_closed") continue;
+    if (releasesAttemptOwnership(attempt.phase)) continue;
     owned.add(Number(attempt.target.number));
   }
   return owned;

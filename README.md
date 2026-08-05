@@ -111,6 +111,7 @@ Useful commands:
 /deadloop-disable
 /deadloop-status
 /deadloop-doctor
+/deadloop-abandon-attempt <attempt-id>  # only when doctor presents it
 ```
 
 Operator environment variables:

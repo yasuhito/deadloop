@@ -25,6 +25,9 @@ function open(payload: unknown) {
   return createHerdrRunner({ runJson: () => payload, runText: () => "" })
     .openWorktree({ repoPath: "/repo", branch: "feature/review" });
 }
+function herdrError(code: string) {
+  return Object.assign(new Error(code), { stderr: JSON.stringify({ error: { code } }) });
+}
 
 describe("selected Herdr runner", () => {
   it("creates a fresh worktree with the exact selected argv", () => {
@@ -99,6 +102,115 @@ describe("selected Herdr runner", () => {
     const runner = createHerdrRunner({ runJson: () => opened, runText: (command: string, args: string[]) => (commands.push([command, ...args]), "started") });
     runner.startAgent({ name: "dl-r-44-123456789abc", kind: "pi", rootPaneId: "p1", nativeAgentArgv: ["--approve", "@/prompt"] });
     expect(commands[0]).toEqual(["herdr", "agent", "start", "dl-r-44-123456789abc", "--kind", "pi", "--pane", "p1", "--", "--approve", "@/prompt"]);
+  });
+
+  it("retries a transient typed pane-busy rejection until the new shell is ready", () => {
+    let attempts = 0;
+    const runner = createHerdrRunner({
+      runJson: () => opened,
+      runText: () => {
+        attempts += 1;
+        if (attempts === 1) throw herdrError("agent_pane_busy");
+        return "started";
+      },
+      sleep: () => {},
+    });
+    runner.startAgent({ name: "dl-r-44-123456789abc", kind: "pi", rootPaneId: "p1", nativeAgentArgv: ["--approve", "@/prompt"] });
+    expect(attempts).toBe(2);
+  });
+
+  it("reuses the exact agent start request after a transient pane-busy rejection", () => {
+    const commands: unknown[] = [];
+    const runner = createHerdrRunner({
+      runJson: () => opened,
+      runText: (command: string, args: string[]) => {
+        commands.push([command, ...args]);
+        if (commands.length === 1) throw herdrError("agent_pane_busy");
+        return "started";
+      },
+      sleep: () => {},
+    });
+    runner.startAgent({ name: "dl-r-44-123456789abc", kind: "pi", rootPaneId: "p1", nativeAgentArgv: ["--approve", "@/prompt"] });
+    expect(commands[1]).toEqual(commands[0]);
+  });
+
+  it("fails closed after the bounded pane readiness retry", () => {
+    let elapsed = 0;
+    const busy = herdrError("agent_pane_busy");
+    const runner = createHerdrRunner({
+      runJson: () => opened,
+      runText: () => { throw busy; },
+      sleep: (milliseconds: number) => { elapsed += milliseconds; },
+      now: () => elapsed,
+    });
+    expect(() => runner.startAgent({ name: "dl-r-44-123456789abc", kind: "pi", rootPaneId: "p1", nativeAgentArgv: [] })).toThrow(busy);
+  });
+
+  it("bounds pane readiness retry with a five-second monotonic grace period", () => {
+    let elapsed = 0;
+    const runner = createHerdrRunner({
+      runJson: () => opened,
+      runText: () => { throw herdrError("agent_pane_busy"); },
+      sleep: (milliseconds: number) => { elapsed += milliseconds; },
+      now: () => elapsed,
+    });
+    try { runner.startAgent({ name: "dl-r-44-123456789abc", kind: "pi", rootPaneId: "p1", nativeAgentArgv: [] }); } catch {}
+    expect(elapsed).toBe(5_000);
+  });
+
+  it("applies a finite wrapper timeout to every agent start request", () => {
+    let timeout: number | undefined;
+    const runner = createHerdrRunner({
+      runJson: () => opened,
+      runText: (_command: string, _args: string[], timeoutMs?: number) => { timeout = timeoutMs; return "started"; },
+    });
+    runner.startAgent({ name: "dl-r-44-123456789abc", kind: "pi", rootPaneId: "p1", nativeAgentArgv: [] });
+    expect(timeout).toBe(35_000);
+  });
+
+  it("does not retry a killed agent start even if stderr reports pane busy", () => {
+    let attempts = 0;
+    const killed = Object.assign(herdrError("agent_pane_busy"), { signal: "SIGTERM", status: null });
+    const runner = createHerdrRunner({
+      runJson: () => opened,
+      runText: () => { attempts += 1; throw killed; },
+      sleep: () => {},
+    });
+    try { runner.startAgent({ name: "dl-r-44-123456789abc", kind: "pi", rootPaneId: "p1", nativeAgentArgv: [] }); } catch {}
+    expect(attempts).toBe(1);
+  });
+
+  it("does not retry an untyped pane-busy message", () => {
+    let attempts = 0;
+    const runner = createHerdrRunner({
+      runJson: () => opened,
+      runText: () => { attempts += 1; throw new Error("agent_pane_busy"); },
+      sleep: () => {},
+    });
+    try { runner.startAgent({ name: "dl-r-44-123456789abc", kind: "pi", rootPaneId: "p1", nativeAgentArgv: [] }); } catch {}
+    expect(attempts).toBe(1);
+  });
+
+  it("does not retry malformed Herdr error JSON", () => {
+    let attempts = 0;
+    const runner = createHerdrRunner({
+      runJson: () => opened,
+      runText: () => { attempts += 1; throw Object.assign(new Error("busy"), { stderr: "not-json" }); },
+      sleep: () => {},
+    });
+    try { runner.startAgent({ name: "dl-r-44-123456789abc", kind: "pi", rootPaneId: "p1", nativeAgentArgv: [] }); } catch {}
+    expect(attempts).toBe(1);
+  });
+
+  it("does not retry a different structured Herdr error code", () => {
+    let attempts = 0;
+    const runner = createHerdrRunner({
+      runJson: () => opened,
+      runText: () => { attempts += 1; throw herdrError("agent_name_taken"); },
+      sleep: () => {},
+    });
+    try { runner.startAgent({ name: "dl-r-44-123456789abc", kind: "pi", rootPaneId: "p1", nativeAgentArgv: [] }); } catch {}
+    expect(attempts).toBe(1);
   });
 
   it("normalizes nested 0.7.5 workspace ownership and layout counts", () => {
