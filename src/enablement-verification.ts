@@ -86,7 +86,7 @@ function safeToRemove(journal: EnablementVerificationJournal): { safe: boolean; 
   if (head.status !== 0 || head.stdout.trim() !== journal.targetRevision) {
     return { safe: false, reason: "worktree revision changed" };
   }
-  const status = git(journal.worktreePath, ["status", "--porcelain", "--untracked-files=all"]);
+  const status = git(journal.worktreePath, ["status", "--porcelain", "--untracked-files=all", "--ignored"]);
   if (status.status !== 0 || status.stdout.trim()) return { safe: false, reason: "worktree is not clean" };
   return { safe: true };
 }
@@ -149,11 +149,17 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     throw new Error(`required verification worktree revision mismatch; log: ${logPath}; retained worktree journal: ${journalPath}`);
   }
 
-  const check = await runProjectCheck({
-    cwd: worktreePath,
-    command: contract.command,
-    quarantineRoot: path.join(input.stateDir, "check-quarantine"),
-  });
+  let check: { code: number; stdout: string; stderr: string; timedOut: boolean };
+  try {
+    check = await runProjectCheck({
+      cwd: worktreePath,
+      command: contract.command,
+      quarantineRoot: path.join(input.stateDir, "check-quarantine"),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? (error.stack || error.message) : String(error);
+    check = { code: 1, stdout: "", stderr: `required verification runner failed: ${message}\n`, timedOut: false };
+  }
   const finishedAtMs = now();
   fs.writeFileSync(logPath, `${check.stdout}${check.stderr}`, { encoding: "utf8", mode: 0o600 });
   const outcome = check.code === 0 ? "passed" : "failed";

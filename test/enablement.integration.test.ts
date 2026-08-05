@@ -405,6 +405,37 @@ describe("enablement command integration", () => {
     }).toEqual({ messageIncludesLogPath: true, logIncludesDirtyFailure: true });
   });
 
+  it("durably finalizes a verifier exception before removing its clean worktree", async () => {
+    const { root, repoPath } = fixtureRepository();
+    let attemptDir = "";
+    let worktreePath = "";
+    const extension = await loadExtension(root, {
+      beforeEnablementWorktreeCreate: async (journalPath) => {
+        attemptDir = path.dirname(journalPath);
+        worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
+        const quarantineRoot = path.join(root, ".pi", "agent", "deadloop", "check-quarantine");
+        mkdirSync(path.dirname(quarantineRoot), { recursive: true });
+        writeFileSync(quarantineRoot, "blocks quarantine setup\n");
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect({
+      journal: JSON.parse(readFileSync(path.join(attemptDir, "journal.json"), "utf8")).state,
+      record: JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome,
+      log: readFileSync(path.join(attemptDir, "check.log"), "utf8"),
+      worktreeExists: existsSync(worktreePath),
+      message: extension.messages.at(-1),
+    }).toEqual({
+      journal: "cleaned",
+      record: "failed",
+      log: expect.stringContaining("required verification runner failed"),
+      worktreeExists: false,
+      message: expect.stringContaining(path.join(attemptDir, "check.log")),
+    });
+  });
+
   it("removes a clean owned temporary Git worktree after verification", async () => {
     const { root, repoPath } = fixtureRepository();
     let worktreePath = "";
@@ -436,6 +467,29 @@ describe("enablement command integration", () => {
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
     expect(existsSync(path.join(worktreePath, "created-by-check"))).toBe(true);
+  });
+
+  it("retains a temporary Git worktree containing an ignored artifact", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeFileSync(path.join(repoPath, ".gitignore"), "ignored-by-check\n");
+    git(repoPath, ["add", ".gitignore"]);
+    git(repoPath, ["commit", "--quiet", "-m", "ignore verification artifact"]);
+    git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+    writeConfig(root, repoPath);
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.projects[0].checkCommand = "touch ignored-by-check";
+    writeFileSync(configPath, JSON.stringify(config));
+    let worktreePath = "";
+    const extension = await loadExtension(root, {
+      beforeEnablementWorktreeCreate: async (journalPath) => {
+        worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(path.join(worktreePath, "ignored-by-check"))).toBe(true);
   });
 
   it("persists a passed record before saving enablement", async () => {
