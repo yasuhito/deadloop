@@ -307,7 +307,11 @@ describe("enablement command integration", () => {
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
     const prepared = preparedJournal as { state?: string; repository?: string; primaryRepoPath?: string };
-    expect(prepared.state === "prepared" && prepared.repository === "owner/demo" && prepared.primaryRepoPath === repoPath).toBe(true);
+    expect({
+      state: prepared.state,
+      repository: prepared.repository,
+      primaryRepoPath: prepared.primaryRepoPath,
+    }).toEqual({ state: "prepared", repository: "owner/demo", primaryRepoPath: repoPath });
   });
 
   it("records the trusted target revision before worktree creation", async () => {
@@ -395,7 +399,10 @@ describe("enablement command integration", () => {
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
-    expect((extension.messages.at(-1) || "").includes(logPath) && readFileSync(logPath, "utf8").includes("dirty-failure")).toBe(true);
+    expect({
+      messageIncludesLogPath: (extension.messages.at(-1) || "").includes(logPath),
+      logIncludesDirtyFailure: readFileSync(logPath, "utf8").includes("dirty-failure"),
+    }).toEqual({ messageIncludesLogPath: true, logIncludesDirtyFailure: true });
   });
 
   it("removes a clean owned temporary Git worktree after verification", async () => {
