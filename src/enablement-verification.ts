@@ -101,6 +101,55 @@ function cleanupOwnedWorktree(journal: EnablementVerificationJournal): { cleanup
   return { cleanup: "removed" };
 }
 
+type DependencyPreparation = {
+  code: number;
+  stdout: string;
+  stderr: string;
+  generatedPaths: string[];
+};
+
+function trackedFile(worktreePath: string, name: string): boolean {
+  return git(worktreePath, ["ls-files", "--error-unmatch", "--", name]).status === 0;
+}
+
+function prepareDependencies(worktreePath: string): DependencyPreparation {
+  if (!trackedFile(worktreePath, "package.json") || !trackedFile(worktreePath, "package-lock.json")) {
+    return { code: 0, stdout: "", stderr: "", generatedPaths: [] };
+  }
+
+  const nodeModulesPath = path.join(worktreePath, "node_modules");
+  if (fs.existsSync(nodeModulesPath)) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: "dependency preparation refused to replace an existing node_modules path\n",
+      generatedPaths: [],
+    };
+  }
+
+  const result = childProcess.spawnSync("npm", ["ci", "--no-audit", "--no-fund"], {
+    cwd: worktreePath,
+    encoding: "utf8",
+    timeout: 10 * 60_000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  return {
+    code: result.status ?? (result.signal === "SIGTERM" ? 124 : 1),
+    stdout: String(result.stdout || ""),
+    stderr: String(result.stderr || result.error?.message || ""),
+    generatedPaths: fs.existsSync(nodeModulesPath) ? [nodeModulesPath] : [],
+  };
+}
+
+function removePreparedDependencies(generatedPaths: string[]): string | undefined {
+  try {
+    for (const generatedPath of generatedPaths) fs.rmSync(generatedPath, { recursive: true, force: true });
+    return undefined;
+  } catch (error) {
+    return `prepared dependency cleanup failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 export async function runEnablementVerification(input: EnablementVerificationInput): Promise<EnablementVerificationResult> {
   if (input.resolution.status !== "resolved") {
     throw new Error(`required verification blocked: ${input.resolution.reason}`);
@@ -149,19 +198,29 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     throw new Error(`required verification worktree revision mismatch; log: ${logPath}; retained worktree journal: ${journalPath}`);
   }
 
+  const preparation = prepareDependencies(worktreePath);
   let check: { code: number; stdout: string; stderr: string; timedOut: boolean };
-  try {
-    check = await runProjectCheck({
-      cwd: worktreePath,
-      command: contract.command,
-      quarantineRoot: path.join(input.stateDir, "check-quarantine"),
-    });
-  } catch (error) {
-    const message = error instanceof Error ? (error.stack || error.message) : String(error);
-    check = { code: 1, stdout: "", stderr: `required verification runner failed: ${message}\n`, timedOut: false };
+  if (preparation.code !== 0) {
+    check = {
+      code: preparation.code,
+      stdout: "",
+      stderr: "required verification dependency preparation failed\n",
+      timedOut: preparation.code === 124,
+    };
+  } else {
+    try {
+      check = await runProjectCheck({
+        cwd: worktreePath,
+        command: contract.command,
+        quarantineRoot: path.join(input.stateDir, "check-quarantine"),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? (error.stack || error.message) : String(error);
+      check = { code: 1, stdout: "", stderr: `required verification runner failed: ${message}\n`, timedOut: false };
+    }
   }
   const finishedAtMs = now();
-  fs.writeFileSync(logPath, `${check.stdout}${check.stderr}`, { encoding: "utf8", mode: 0o600 });
+  fs.writeFileSync(logPath, `${preparation.stdout}${preparation.stderr}${check.stdout}${check.stderr}`, { encoding: "utf8", mode: 0o600 });
   const outcome = check.code === 0 ? "passed" : "failed";
   writeJson(recordPath, {
     version: 1,
@@ -178,7 +237,10 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   journal = { ...journal, state: "checked", recordPath, logPath };
   writeJson(journalPath, journal);
 
-  const cleanup = cleanupOwnedWorktree(journal);
+  const dependencyCleanupError = removePreparedDependencies(preparation.generatedPaths);
+  const cleanup = dependencyCleanupError
+    ? { cleanup: "retained" as const, reason: dependencyCleanupError }
+    : cleanupOwnedWorktree(journal);
   journal = cleanup.cleanup === "removed"
     ? { ...journal, state: "cleaned" }
     : { ...journal, state: "retained", retentionReason: cleanup.reason || "cleanup was not proven safe" };

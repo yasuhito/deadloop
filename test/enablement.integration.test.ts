@@ -294,6 +294,95 @@ afterEach(async () => {
   for (const sandbox of sandboxes.splice(0)) rmSync(sandbox, { recursive: true, force: true });
 });
 
+async function preparedDependencyObservation(): Promise<{ message: string | undefined; worktreeExists: boolean }> {
+  const { root, repoPath } = fixtureRepository();
+  const toolPath = path.join(repoPath, "tools", "prepared-tool");
+  mkdirSync(toolPath, { recursive: true });
+  writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({
+    scripts: { check: "prepared-only" },
+    dependencies: { "prepared-tool": "file:tools/prepared-tool" },
+  }));
+  writeFileSync(path.join(toolPath, "package.json"), JSON.stringify({
+    name: "prepared-tool",
+    version: "1.0.0",
+    bin: { "prepared-only": "cli.js" },
+  }));
+  const executablePath = path.join(toolPath, "cli.js");
+  writeFileSync(executablePath, "#!/usr/bin/env node\nprocess.stdout.write('prepared dependency ran\\n');\n");
+  chmodSync(executablePath, 0o755);
+  execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: repoPath });
+  writeFileSync(path.join(repoPath, "deadloop.json"), `${JSON.stringify({ checkCommand: "npm run check" })}\n`);
+  git(repoPath, ["add", "package.json", "package-lock.json", "deadloop.json", "tools"]);
+  git(repoPath, ["commit", "--quiet", "-m", "add locked verification dependency"]);
+  git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+  let worktreePath = "";
+  const extension = await loadExtension(root, {
+    beforeEnablementWorktreeCreate: async (journalPath) => {
+      worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
+    },
+  });
+
+  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+  return { message: extension.messages.at(-1), worktreeExists: existsSync(worktreePath) };
+}
+
+async function dirtyFailureObservation(): Promise<{ messageIncludesLogPath: boolean; logIncludesDirtyFailure: boolean }> {
+  const { root, repoPath } = fixtureRepository();
+  writeConfig(root, repoPath);
+  const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.projects[0].checkCommand = "touch retained-artifact; echo dirty-failure >&2; exit 23";
+  writeFileSync(configPath, JSON.stringify(config));
+  let logPath = "";
+  const extension = await loadExtension(root, {
+    beforeEnablementWorktreeCreate: async (journalPath) => {
+      logPath = path.join(path.dirname(journalPath), "check.log");
+    },
+  });
+
+  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+  return {
+    messageIncludesLogPath: (extension.messages.at(-1) || "").includes(logPath),
+    logIncludesDirtyFailure: readFileSync(logPath, "utf8").includes("dirty-failure"),
+  };
+}
+
+async function verifierExceptionObservation(): Promise<{
+  journal: string;
+  record: string;
+  log: string;
+  worktreeExists: boolean;
+  message: string | undefined;
+  logPath: string;
+}> {
+  const { root, repoPath } = fixtureRepository();
+  let attemptDir = "";
+  let worktreePath = "";
+  const extension = await loadExtension(root, {
+    beforeEnablementWorktreeCreate: async (journalPath) => {
+      attemptDir = path.dirname(journalPath);
+      worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
+      const quarantineRoot = path.join(root, ".pi", "agent", "deadloop", "check-quarantine");
+      mkdirSync(path.dirname(quarantineRoot), { recursive: true });
+      writeFileSync(quarantineRoot, "blocks quarantine setup\n");
+    },
+  });
+
+  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+  const logPath = path.join(attemptDir, "check.log");
+  return {
+    journal: JSON.parse(readFileSync(path.join(attemptDir, "journal.json"), "utf8")).state,
+    record: JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome,
+    log: readFileSync(logPath, "utf8"),
+    worktreeExists: existsSync(worktreePath),
+    message: extension.messages.at(-1),
+    logPath,
+  };
+}
+
 describe("enablement command integration", () => {
   it("records owned verification worktree intent before creation", async () => {
     const { root, repoPath } = fixtureRepository();
@@ -345,6 +434,14 @@ describe("enablement command integration", () => {
     expect(extension.messages.at(-1)).toContain("deadloop enabled");
   });
 
+  it("prepares trusted locked dependencies before running verification", async () => {
+    expect((await preparedDependencyObservation()).message).toContain("deadloop enabled");
+  });
+
+  it("removes dependencies generated for enablement verification", async () => {
+    expect((await preparedDependencyObservation()).worktreeExists).toBe(false);
+  });
+
   it("does not use Herdr workspaces or agents for enablement verification", async () => {
     const { root, repoPath } = fixtureRepository();
     const extension = await loadExtension(root);
@@ -383,57 +480,33 @@ describe("enablement command integration", () => {
     expect(readFileSync(logPath, "utf8")).toContain("baseline-broke");
   });
 
-  it("shows the durable log when failed verification also retains a dirty worktree", async () => {
-    const { root, repoPath } = fixtureRepository();
-    writeConfig(root, repoPath);
-    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
-    config.projects[0].checkCommand = "touch retained-artifact; echo dirty-failure >&2; exit 23";
-    writeFileSync(configPath, JSON.stringify(config));
-    let logPath = "";
-    const extension = await loadExtension(root, {
-      beforeEnablementWorktreeCreate: async (journalPath) => {
-        logPath = path.join(path.dirname(journalPath), "check.log");
-      },
-    });
-
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-    expect({
-      messageIncludesLogPath: (extension.messages.at(-1) || "").includes(logPath),
-      logIncludesDirtyFailure: readFileSync(logPath, "utf8").includes("dirty-failure"),
-    }).toEqual({ messageIncludesLogPath: true, logIncludesDirtyFailure: true });
+  it("shows the durable log path when failed verification retains a dirty worktree", async () => {
+    expect((await dirtyFailureObservation()).messageIncludesLogPath).toBe(true);
   });
 
-  it("durably finalizes a verifier exception before removing its clean worktree", async () => {
-    const { root, repoPath } = fixtureRepository();
-    let attemptDir = "";
-    let worktreePath = "";
-    const extension = await loadExtension(root, {
-      beforeEnablementWorktreeCreate: async (journalPath) => {
-        attemptDir = path.dirname(journalPath);
-        worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
-        const quarantineRoot = path.join(root, ".pi", "agent", "deadloop", "check-quarantine");
-        mkdirSync(path.dirname(quarantineRoot), { recursive: true });
-        writeFileSync(quarantineRoot, "blocks quarantine setup\n");
-      },
-    });
+  it("records failed verification output when its worktree is dirty", async () => {
+    expect((await dirtyFailureObservation()).logIncludesDirtyFailure).toBe(true);
+  });
 
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+  it("journals cleanup after a verifier exception", async () => {
+    expect((await verifierExceptionObservation()).journal).toBe("cleaned");
+  });
 
-    expect({
-      journal: JSON.parse(readFileSync(path.join(attemptDir, "journal.json"), "utf8")).state,
-      record: JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome,
-      log: readFileSync(path.join(attemptDir, "check.log"), "utf8"),
-      worktreeExists: existsSync(worktreePath),
-      message: extension.messages.at(-1),
-    }).toEqual({
-      journal: "cleaned",
-      record: "failed",
-      log: expect.stringContaining("required verification runner failed"),
-      worktreeExists: false,
-      message: expect.stringContaining(path.join(attemptDir, "check.log")),
-    });
+  it("records failure after a verifier exception", async () => {
+    expect((await verifierExceptionObservation()).record).toBe("failed");
+  });
+
+  it("logs a verifier exception", async () => {
+    expect((await verifierExceptionObservation()).log).toContain("required verification runner failed");
+  });
+
+  it("removes the clean worktree after a verifier exception", async () => {
+    expect((await verifierExceptionObservation()).worktreeExists).toBe(false);
+  });
+
+  it("reports the log path after a verifier exception", async () => {
+    const observation = await verifierExceptionObservation();
+    expect(observation.message).toContain(observation.logPath);
   });
 
   it("removes a clean owned temporary Git worktree after verification", async () => {
