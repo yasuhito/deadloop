@@ -13,6 +13,7 @@ let homeDir: string;
 let worktree: string;
 let promptFile: string;
 let argvOut: string;
+let attemptsOut: string;
 
 beforeEach(() => {
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "launch-agent-"));
@@ -21,6 +22,7 @@ beforeEach(() => {
   worktree = path.join(sandbox, "wt");
   promptFile = path.join(sandbox, "prompt.md");
   argvOut = path.join(sandbox, "argv.json");
+  attemptsOut = path.join(sandbox, "attempts");
   fs.mkdirSync(binDir);
   fs.mkdirSync(homeDir);
   fs.mkdirSync(worktree);
@@ -33,8 +35,17 @@ beforeEach(() => {
     'if (args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");',
     'else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");',
     "else {",
-    `  require("node:fs").writeFileSync(${JSON.stringify(argvOut)}, JSON.stringify(args));`,
-    '  process.stdout.write(JSON.stringify({ ok: true, result: { tab: { tab_id: "t1" } } }));',
+    '  const fs = require("node:fs");',
+    `  const attemptsFile = ${JSON.stringify(attemptsOut)};`,
+    '  const attempts = fs.existsSync(attemptsFile) ? Number(fs.readFileSync(attemptsFile, "utf8")) + 1 : 1;',
+    '  fs.writeFileSync(attemptsFile, String(attempts));',
+    `  fs.writeFileSync(${JSON.stringify(argvOut)}, JSON.stringify(args));`,
+    '  if (process.env.HERDR_BUSY_ONCE === "1" && attempts === 1) {',
+    '    process.stderr.write(JSON.stringify({ error: { code: "agent_pane_busy" } }));',
+    "    process.exitCode = 1;",
+    "  } else {",
+    '    process.stdout.write(JSON.stringify({ ok: true, result: { tab: { tab_id: "t1" } } }));',
+    "  }",
     "}",
   ].join("\n");
   fs.writeFileSync(path.join(binDir, "herdr"), fakeHerdr, { mode: 0o755 });
@@ -78,6 +89,16 @@ describe("launch-agent integration", () => {
       "agent", "start", "demo-worker", "--kind", "pi", "--pane", "p1",
       "--", "--name", "demo-worker", "--thinking", "medium", "--approve", `@${promptFile}`,
     ]);
+  });
+
+  it("retries the native launch entrypoint when a new root shell is transiently busy", () => {
+    fs.writeFileSync(promptFile, "prompt body");
+    const { status } = run([
+      "--agent", "pi", "--name", "demo-worker", "--cwd", worktree, "--level", "medium",
+      "--prompt-file", promptFile, "--pane", "p1",
+    ], { HERDR_BUSY_ONCE: "1" });
+
+    expect(status).toBe(0);
   });
 
   it("delivers a prompt containing shell metacharacters as one intact argument", () => {
