@@ -90,6 +90,11 @@ Given("稼働中の担当者がいないレビュー中の pull request があ�
   this.agentsFixtureName = "agents-empty.json";
 });
 
+Given("証拠付きで放棄した試行があるレビュー待ちの pull request がある", function (this: SelectionWorld) {
+  setFixture(this, "precheck-agent-review.json");
+  this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: 7 }, phase: "abandoned" }];
+});
+
 Given("別担当がレビュー中の pull request がある", function (this: SelectionWorld) {
   setFixture(this, "precheck-reviewing.json");
   this.agents = { result: { agents: [{ name: "dl-r-13-111111111111", agent_status: "working" }] } };

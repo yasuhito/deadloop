@@ -8,6 +8,7 @@ const { createHerdrRunnerFromCommandRunner } = require("../../../src/automation-
 const {
   readAttemptRecord,
   recordPersistedCompletionReport,
+  releasesAttemptOwnership,
   transitionPersistedAttempt,
 } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
@@ -274,7 +275,7 @@ function completeLocked(
     }
     if (candidate.project !== record.project || candidate.repository !== record.repository) continue;
     const candidateOwnsWorkspace = !["prepared", "github_claimed"].includes(candidate.phase);
-    if (candidateOwnsWorkspace && candidate.phase !== "workspace_closed" && candidate.attemptId !== record.attemptId
+    if (candidateOwnsWorkspace && !releasesAttemptOwnership(candidate.phase) && candidate.attemptId !== record.attemptId
       && (Boolean(record.workspaceId) && candidate.workspaceId === record.workspaceId
         || path.resolve(candidate.worktreePath) === path.resolve(record.worktreePath))) {
       newerOwner = true;

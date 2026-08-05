@@ -71,6 +71,8 @@ export type DoctorInput = {
   statePath?: string;
   claudeConfig?: ClaudeConfigResult;
   nowMs?: number;
+  retainedClaims?: Array<{ kind: "issue" | "pull-request"; number: number }>;
+  retainedClaimOwnershipAmbiguous?: boolean;
 };
 
 export type DoctorFindingType =
@@ -112,11 +114,13 @@ export type Herdr075DoctorStatus =
 export function herdr075DoctorFinding(
   status: Exclude<Herdr075DoctorStatus, "incompatible">,
   detail: string,
+  commands?: string[],
 ): DoctorFinding;
 export function herdr075DoctorFinding(status: "incompatible", detail: Herdr075CompatibilityDiagnostic): DoctorFinding;
 export function herdr075DoctorFinding(
   status: Herdr075DoctorStatus,
   detail: string | Herdr075CompatibilityDiagnostic,
+  commands: string[] = [],
 ): DoctorFinding {
   const incompatible = status === "incompatible";
   return {
@@ -124,7 +128,7 @@ export function herdr075DoctorFinding(
     type: incompatible ? "herdr_incompatible" : "retained_attempt_workspace",
     title: incompatible ? "unsupported or protocol-incompatible Herdr" : `retained attempt workspace: ${status}`,
     summary: typeof detail === "string" ? detail : formatCompatibilityDiagnostic(detail),
-    commands: incompatible ? ["herdr update --handoff"] : [],
+    commands: incompatible ? ["herdr update --handoff"] : commands,
   };
 }
 
@@ -388,10 +392,12 @@ function buildStuckReviewClaimFindings(
   openPrs: DoctorGithubItem[],
   worktrees: HerdrWorktree[],
   agents: HerdrAgent[],
+  retainedClaims: Set<string>,
 ): DoctorFinding[] {
   const repo = project.githubRepo || "<repo>";
   return openPrs
     .filter((pr) => labelsOf(pr).has(project.labels.reviewing))
+    .filter((pr) => !retainedClaims.has(`pull-request:${pr.number}`))
     .filter((pr) => {
       const reviewerName = `${project.id}-pr-${pr.number ?? "?"}-reviewer`;
       const worktree = findWorktreeForBranch(String(pr.headRefName || ""), worktrees);
@@ -411,9 +417,11 @@ function buildStuckImplementClaimFindings(
   issues: DoctorGithubItem[],
   worktrees: HerdrWorktree[],
   agents: HerdrAgent[],
+  retainedClaims: Set<string>,
 ): DoctorFinding[] {
   return issues
     .filter((issue) => labelsOf(issue).has(project.labels.inProgress))
+    .filter((issue) => !retainedClaims.has(`issue:${issue.number}`))
     .filter((issue) => {
       const workerName = `${project.id}-issue-${issue.number ?? "?"}-worker`;
       const worktree = issue.number ? findWorktreeForIssue(issue.number, worktrees) : null;
@@ -570,6 +578,8 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   const automationDir = input.automationDir || ".";
   const statePath = input.statePath || "state.json";
   const nowMs = input.nowMs ?? Date.now();
+  const retainedClaims = new Set((input.retainedClaims || []).map((claim) => `${claim.kind}:${claim.number}`));
+  const retainedClaimOwnershipAmbiguous = input.retainedClaimOwnershipAmbiguous === true;
 
   return {
     project,
@@ -581,8 +591,8 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
       ...buildStaleInProgressFindings(project, issues, worktrees, nowMs),
       ...buildOrphanWorktreeFindings(project, issues, openPrs, worktrees, gitStatuses),
       ...buildQueueJamFindings(project, issues),
-      ...buildStuckReviewClaimFindings(project, openPrs, worktrees, agents),
-      ...buildStuckImplementClaimFindings(project, issues, worktrees, agents),
+      ...(retainedClaimOwnershipAmbiguous ? [] : buildStuckReviewClaimFindings(project, openPrs, worktrees, agents, retainedClaims)),
+      ...(retainedClaimOwnershipAmbiguous ? [] : buildStuckImplementClaimFindings(project, issues, worktrees, agents, retainedClaims)),
       ...buildAutomationFindings(project, state, automationDir, statePath, nowMs),
       ...buildWorkspaceTrustFindings(project, input.claudeConfig),
     ],

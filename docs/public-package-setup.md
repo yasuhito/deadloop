@@ -143,9 +143,12 @@ Useful commands:
 /deadloop-disable
 /deadloop-status
 /deadloop-doctor
+/deadloop-abandon-attempt <attempt-id>  # only when doctor presents it
 ```
 
 `/deadloop-disable` removes local execution permission, stops the scheduler and releases its lock without killing active agents or deleting GitHub state, worktrees, or run artifacts. Another session owning the lock notices the removal on its next polling tick. To migrate from releases that activated from configuration files, run `/deadloop-enable` once in each repository.
+
+Use `/deadloop-abandon-attempt` only when `/deadloop-doctor` prints the exact command. It is limited to launch-failed Worker and reviewer attempts whose unchanged target, clean revision, owned disposable workspace, and empty recorded pane can all be proven. Otherwise doctor requires manual review and does not suggest removing only the claim label.
 
 ## Verification commands
 

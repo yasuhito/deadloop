@@ -102,6 +102,12 @@ deadloop の利用者に対し、レビュー可能な pull request だけが選
 * もし deadloop がレビュー対象を探す
 * ならば pull request #13 をレビュー対象に選ぶ
 
+## シナリオ: 証拠付きで放棄した試行は pull request を占有しない
+
+* 前提 証拠付きで放棄した試行があるレビュー待ちの pull request がある
+* もし deadloop がレビュー対象を探す
+* ならば pull request #7 をレビュー対象に選ぶ
+
 ## シナリオ: 別担当がレビュー中の pull request を選ばない
 
 * 前提 別担当がレビュー中の pull request がある

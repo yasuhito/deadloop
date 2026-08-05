@@ -23,6 +23,7 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -134,15 +135,85 @@ function shouldSimulateLaunch(fixture: JsonObject | null): boolean {
   return Boolean(fixture);
 }
 
-function issueWorkerLaunchPlan(issue: JsonObject, env: ReturnType<typeof envConfig>, uuid: string, baseHead: string) {
+type AbandonedWorkerCheckout = {
+  branch: string;
+  worktreePath: string;
+  inputHead: string;
+  abandonedAt: string;
+  workspaceId: string;
+  agentName: string;
+};
+
+function abandonedWorkerCheckout(issueNumber: number, env: ReturnType<typeof envConfig>): AbandonedWorkerCheckout | null {
+  const runsRoot = path.join(env.stateDir, "runs");
+  let entries: string[];
+  try { entries = fs.readdirSync(runsRoot); } catch { return null; }
+  const candidates: AbandonedWorkerCheckout[] = [];
+  for (const entry of entries) {
+    const runDir = path.join(runsRoot, entry);
+    if (!fs.existsSync(path.join(runDir, "attempt.json"))) continue;
+    const record = readAttemptRecord(runDir);
+    if (record.project !== env.projectId || record.repository !== env.githubRepo || record.role !== "worker"
+      || record.target?.kind !== "issue" || record.target.number !== issueNumber || record.phase !== "abandoned") continue;
+    candidates.push({
+      branch: record.branch,
+      worktreePath: record.worktreePath,
+      inputHead: record.inputRevision.head,
+      abandonedAt: record.abandonment.abandonedAt,
+      workspaceId: record.workspaceId,
+      agentName: record.agentName,
+    });
+  }
+  if (!candidates.length) return null;
+  const identities = new Set(candidates.map((candidate) =>
+    `${candidate.branch}\0${path.resolve(candidate.worktreePath)}\0${candidate.inputHead.toLowerCase()}`));
+  if (identities.size !== 1) throw new Error(`Issue #${issueNumber} has conflicting abandoned Worker checkouts`);
+  return candidates.sort((left, right) => Date.parse(right.abandonedAt) - Date.parse(left.abandonedAt))[0];
+}
+
+function assertRecoverableWorkerCheckout(
+  checkout: AbandonedWorkerCheckout,
+  env: ReturnType<typeof envConfig>,
+  ops: { runner: ReturnType<typeof herdrRunner>; runText: (args: string[]) => string },
+): void {
+  const expectedPath = path.resolve(checkout.worktreePath);
+  const matches = ops.runner.listWorktrees(env.repoPath).filter((worktree: JsonObject) =>
+    worktree.branch === checkout.branch && typeof worktree.path === "string" && path.resolve(worktree.path) === expectedPath);
+  if (matches.length !== 1 || matches[0].workspaceId) throw new Error("abandoned Worker checkout is not one closed linked worktree");
+  if (ops.runner.listWorkspaces().some((workspace: JsonObject) => workspace.worktreePath
+    && path.resolve(workspace.worktreePath) === expectedPath)) throw new Error("abandoned Worker checkout still has an open workspace");
+  if (ops.runner.listAgents().some((agent: JsonObject) => {
+    const cwd = typeof agent.cwd === "string" ? path.resolve(agent.cwd) : "";
+    const relative = cwd ? path.relative(expectedPath, cwd) : "";
+    const cwdInside = Boolean(cwd) && (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)));
+    return cwdInside || agent.name === checkout.agentName
+      || agent.workspaceId === checkout.workspaceId || agent.workspace_id === checkout.workspaceId;
+  })) throw new Error("abandoned Worker checkout is still occupied by an agent");
+  const head = ops.runText(["git", "-C", checkout.worktreePath, "rev-parse", "--verify", "HEAD^{commit}"]).trim();
+  if (head.toLowerCase() !== checkout.inputHead.toLowerCase()) throw new Error("abandoned Worker checkout HEAD changed");
+  if (ops.runText(["git", "-C", checkout.worktreePath, "status", "--porcelain"]).trim()) {
+    throw new Error("abandoned Worker checkout contains changes");
+  }
+}
+
+function issueWorkerLaunchPlan(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  uuid: string,
+  baseHead: string,
+  recovery: AbandonedWorkerCheckout | null = null,
+) {
   const number = Number(issue.number || 0);
   const workerName = `${env.projectId}-issue-${number}-worker`;
-  const branch = `agent/issue-${number}-${slugForBranch(issue.title)}`;
+  const branch = recovery?.branch || `agent/issue-${number}-${slugForBranch(issue.title)}`;
+  const intendedWorktreePath = recovery?.worktreePath || path.join(env.worktreeRoot, branch.replace(/\//g, "-"));
   return {
     workerName,
     branch,
     input: {
-      worktree: { mode: "create" as const, branch, baseBranch: env.baseBranch },
+      worktree: recovery
+        ? { mode: "open" as const, branch }
+        : { mode: "create" as const, branch, baseBranch: env.baseBranch },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
       stateDir: env.stateDir,
@@ -157,7 +228,7 @@ function issueWorkerLaunchPlan(issue: JsonObject, env: ReturnType<typeof envConf
       role: "worker" as const,
       target: { kind: "issue" as const, number },
       inputRevision: { head: baseHead },
-      intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
+      intendedWorktreePath,
       resolveWorktreeHead: true,
       renderPrompt: ({ promiseFile, worktreePath, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
         if (!worktreeHead) throw new Error("Worker prompt requires the exact created worktree HEAD");
@@ -189,8 +260,11 @@ function launchIssueWorkerFlow(
   env: ReturnType<typeof envConfig>,
   ops: { runText: (args: string[]) => string; [key: string]: any },
 ): JsonObject {
-  const baseHead = ops.runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
-  const plan = issueWorkerLaunchPlan(issue, env, randomUUID(), baseHead);
+  const recovery = abandonedWorkerCheckout(Number(issue.number || 0), env);
+  const baseHead = recovery?.inputHead
+    || ops.runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  const plan = issueWorkerLaunchPlan(issue, env, randomUUID(), baseHead, recovery);
+  if (recovery) assertRecoverableWorkerCheckout(recovery, env, ops as { runner: ReturnType<typeof herdrRunner>; runText: (args: string[]) => string });
   prepareAgentLaunchFlow(plan.input, ops);
   recordAgentLaunchGithubClaimed(plan.input);
   const launch = launchAgentFlow(plan.input, ops);
@@ -200,10 +274,11 @@ function launchIssueWorkerFlow(
 function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
   const number = Number(issue.number || 0);
   const uuid = shouldSimulateLaunch(fixture) ? "fixture-worker-uuid" : randomUUID();
+  const recovery = shouldSimulateLaunch(fixture) ? null : abandonedWorkerCheckout(number, env);
   const baseHead = shouldSimulateLaunch(fixture)
     ? "f".repeat(40)
-    : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
-  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead);
+    : recovery?.inputHead || runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery);
   const { workerName, branch } = plan;
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
 
@@ -224,17 +299,18 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     };
   }
 
+  const runner = herdrRunner();
   const launch = withEnabledDriverLaunch(
     env,
     (recheck: () => void) => githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel }),
     (recheck: () => void) => launchAgentFlow(
       plan.input,
-      { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
+      { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
     ),
     {
       prepareAttempt: () => prepareAgentLaunchFlow(
         plan.input,
-        { mkdirSync: fs.mkdirSync, runner: herdrRunner(), runText, writeFileSync: fs.writeFileSync },
+        { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync },
       ),
       recordClaim: () => recordAgentLaunchGithubClaimed(plan.input),
       revalidate: () => {
@@ -246,6 +322,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         );
         if (livePlan.kind !== "worker_required") throw new StaleLaunchError("selected issue is no longer eligible");
         assertSameLaunchTarget(issue, livePlan.issue, "issue");
+        if (recovery) assertRecoverableWorkerCheckout(recovery, env, { runner, runText });
       },
     },
   );

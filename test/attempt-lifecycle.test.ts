@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  abandonPersistedAttempt,
   attemptRecordPath,
   createPreparedAttempt,
   readAttemptRecord,
@@ -161,6 +162,45 @@ describe("attempt lifecycle contract", () => {
     transitionPersistedAttempt(runDir, "github_claimed");
 
     expect(readAttemptRecord(runDir).phase).toBe("github_claimed");
+  });
+
+  it("abandons a launch-failed attempt while preserving its failure evidence", () => {
+    const runDir = runDirectory();
+    preparedAttempt(runDir);
+    const claimed = transitionPersistedAttempt(runDir, "github_claimed");
+    writeAttemptRecordAtomically(attemptRecordPath(runDir), {
+      ...claimed,
+      workspaceId: "workspace-1",
+      tabId: "tab-1",
+      rootPaneId: "pane-1",
+      phase: "workspace_opened",
+      lastSuccessfulPhase: "workspace_opened",
+    });
+    transitionPersistedAttempt(runDir, "launch_failed", "agent start failed");
+
+    const record = abandonPersistedAttempt(runDir, "2026-07-24T00:00:00.000Z");
+
+    expect({ phase: record.phase, launchError: record.launchError, abandonment: record.abandonment }).toEqual({
+      phase: "abandoned",
+      launchError: "agent start failed",
+      abandonment: { reason: "launch_failed_no_agent", abandonedAt: "2026-07-24T00:00:00.000Z" },
+    });
+  });
+
+  it("refuses to abandon a launch failure before the workspace-opened boundary", () => {
+    const runDir = runDirectory();
+    preparedAttempt(runDir);
+    transitionPersistedAttempt(runDir, "github_claimed");
+    transitionPersistedAttempt(runDir, "launch_failed", "claim failed");
+
+    expect(() => abandonPersistedAttempt(runDir, "2026-07-24T00:00:00.000Z")).toThrow("workspace_opened");
+  });
+
+  it("refuses to abandon an attempt that did not fail during launch", () => {
+    const runDir = runDirectory();
+    preparedAttempt(runDir);
+
+    expect(() => abandonPersistedAttempt(runDir, "2026-07-24T00:00:00.000Z")).toThrow("launch_failed");
   });
 
   it("recovers the complete current record when an interrupted replacement leaves a temporary file", () => {

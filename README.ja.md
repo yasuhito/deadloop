@@ -111,6 +111,7 @@ pi
 /deadloop-disable
 /deadloop-status
 /deadloop-doctor
+/deadloop-abandon-attempt <attempt-id>  # doctor に表示された場合のみ
 ```
 
 運用者向けの環境変数:
