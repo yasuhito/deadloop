@@ -71,7 +71,12 @@ describe("required verification resolution", () => {
   it("formats resolved provenance identically for every operator surface", () => {
     const result = resolve({ sharedSources: [shared("npm run check")] });
     expect(formatRequiredVerification(result)).toBe(
-      `requiredVerification: resolved; command=npm run check; source=repo_policy:deadloop.json; baseRevision=${revision}; override=none`,
+      `requiredVerification: resolved; command="npm run check"; source=repo_policy:deadloop.json; baseRevision=${revision}; override=none`,
     );
+  });
+
+  it("preserves semantically significant whitespace when formatting the command", () => {
+    const result = resolve({ sharedSources: [shared('printf "a  b"\nprintf done')] });
+    expect(formatRequiredVerification(result)).toContain('command="printf \\"a  b\\"\\nprintf done"');
   });
 });

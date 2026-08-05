@@ -103,7 +103,7 @@ Then("停止理由は `{word}` である", function (this: VerificationWorld, re
   assert.equal(this.resolution?.status === "blocked" ? this.resolution.reason : undefined, reason);
 });
 
-Then("解決結果はコマンド、情報源、基準revision、リポジトリを含む", function (this: VerificationWorld) {
+Then("解決結果はコマンド、情報源、基準コミット、リポジトリを含む", function (this: VerificationWorld) {
   assert.deepEqual(contract(this), {
     repository: "owner/repo",
     command: "npm run check",
@@ -114,5 +114,6 @@ Then("解決結果はコマンド、情報源、基準revision、リポジトリ
 
 Then("両方の必須検証表示は同じである", function (this: VerificationWorld) {
   const line = (report: string | undefined) => report?.split("\n").find((candidate) => candidate.startsWith("requiredVerification:"));
-  assert.equal(line(this.status), line(this.doctor));
+  const expected = `requiredVerification: resolved; command="npm run check"; source=repo_policy:deadloop.json; baseRevision=${revision}; override=none`;
+  assert.deepEqual([line(this.status), line(this.doctor)], [expected, expected]);
 });

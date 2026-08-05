@@ -85,15 +85,15 @@ export function resolveRequiredVerification(
   };
 }
 
-function compact(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+function quotedCommand(value: string): string {
+  return JSON.stringify(value);
 }
 
 export function formatRequiredVerification(resolution: RequiredVerificationResolution): string {
   if (resolution.status === "blocked") {
     const sources = resolution.sources.length
       ? resolution.sources
-        .map((source) => `${source.kind}:${source.location}=${compact(source.command) || "<empty>"}`)
+        .map((source) => `${source.kind}:${source.location}=${quotedCommand(source.command)}`)
         .join(",")
       : "none";
     return `requiredVerification: blocked; reason=${resolution.reason}; baseRevision=${resolution.baseRevision}; sources=${sources}`;
@@ -101,7 +101,7 @@ export function formatRequiredVerification(resolution: RequiredVerificationResol
 
   const { contract } = resolution;
   const override = contract.override
-    ? `${contract.override.source.kind}:${contract.override.source.location}=${compact(contract.override.command) || "<empty>"}`
+    ? `${contract.override.source.kind}:${contract.override.source.location}=${quotedCommand(contract.override.command)}`
     : "none";
-  return `requiredVerification: resolved; command=${compact(contract.command)}; source=${contract.source.kind}:${contract.source.location}; baseRevision=${contract.baseRevision}; override=${override}`;
+  return `requiredVerification: resolved; command=${quotedCommand(contract.command)}; source=${contract.source.kind}:${contract.source.location}; baseRevision=${contract.baseRevision}; override=${override}`;
 }
