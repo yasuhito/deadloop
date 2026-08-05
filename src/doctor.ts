@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
+import { formatRequiredVerification } from "./required-verification";
 import {
   type GithubItem,
   type HerdrWorktree,
@@ -59,6 +60,7 @@ export type HerdrAgent = {
 export type DoctorInput = {
   cwd: string;
   projects: NormalizedProject[];
+  selectedProject?: NormalizedProject | null;
   repositoryEnablement?: RepositoryEnablement;
   warnings?: string[];
   issues?: DoctorGithubItem[];
@@ -556,7 +558,9 @@ function buildWorkspaceTrustFindings(
 }
 
 export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
-  const project = resolveActiveProject(input.cwd, input.projects);
+  const project = input.selectedProject === undefined
+    ? resolveActiveProject(input.cwd, input.projects)
+    : input.selectedProject;
   const repositoryEnablement = project ? "enabled" : input.repositoryEnablement || "unavailable";
   const warnings = input.warnings || [];
   if (!project) return { project: null, repositoryEnablement, cwd: input.cwd, warnings, findings: [] };
@@ -616,6 +620,7 @@ export function formatDoctorReport(snapshot: DoctorSnapshot): string {
     `cwd: ${snapshot.cwd}`,
     ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     `config: ${formatConfigSource(snapshot.project)}`,
+    formatRequiredVerification(snapshot.project.requiredVerification),
     "",
   ];
 

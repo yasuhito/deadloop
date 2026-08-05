@@ -1,6 +1,10 @@
 import path from "node:path";
 
 import { AGENT_KINDS, type AgentKind, isAgentKind } from "./agent-profiles.cjs";
+import {
+  resolveRequiredVerification,
+  type RequiredVerificationResolution,
+} from "./required-verification";
 
 export const DEFAULT_TIMEZONE = "Asia/Tokyo";
 
@@ -115,9 +119,9 @@ export type RawProject = {
 };
 
 export type RepoPolicyReadResult =
-  | { status: "missing" }
-  | { status: "loaded"; text: string }
-  | { status: "error"; reason: string };
+  | { status: "missing"; baseRevision?: string }
+  | { status: "loaded"; text: string; baseRevision?: string }
+  | { status: "error"; reason: string; baseRevision?: string };
 
 export type RepoPolicyProvider = (project: RawProject) => RepoPolicyReadResult;
 
@@ -128,6 +132,9 @@ export type ProjectConfigSource = {
   repoPolicyStatus: "not-read" | "missing" | "loaded" | "error";
   repoPolicyError?: string;
   repoPolicyAppliedKeys: string[];
+  repoPolicyBaseRevision: string;
+  localCheckCommand?: string;
+  repoPolicyCheckCommand?: string;
 };
 
 export type NormalizedProject = {
@@ -139,6 +146,7 @@ export type NormalizedProject = {
   baseBranch: string;
   worktreeRoot: string;
   checkCommand: string;
+  requiredVerification: RequiredVerificationResolution;
   autoMerge: boolean;
   ciFallback: NormalizedCiFallbackConfig;
   externalReview: NormalizedExternalReviewConfig;
@@ -452,6 +460,8 @@ function defaultConfigSource(raw: RawProject, localPath?: string): ProjectConfig
     repoPolicyBaseBranch: raw.baseBranch || "origin/main",
     repoPolicyStatus: "not-read",
     repoPolicyAppliedKeys: [],
+    repoPolicyBaseRevision: "unknown",
+    ...(hasOwn(raw, "checkCommand") ? { localCheckCommand: raw.checkCommand } : {}),
   };
 }
 
@@ -468,12 +478,14 @@ function applyRepoPolicy(
   if (!options.repoPolicyProvider) return { raw, source };
   const result = options.repoPolicyProvider(raw);
   source.repoPolicyStatus = result.status;
+  source.repoPolicyBaseRevision = result.baseRevision || "unknown";
   if (result.status === "missing") return { raw, source };
   if (result.status === "error") {
     source.repoPolicyError = result.reason;
     throw new Error(result.reason);
   }
   const policy = parseRepoPolicy(result.text);
+  if (hasOwn(policy, "checkCommand")) source.repoPolicyCheckCommand = policy.checkCommand;
   const merged = mergeRepoPolicy(raw, policy);
   source.repoPolicyAppliedKeys = merged.appliedKeys;
   return { raw: merged.project, source };
@@ -544,6 +556,7 @@ function normalizeAgentKind(value: unknown, field: string): AgentKind {
 
 export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSource): NormalizedProject {
   const id = sanitizeId(raw.id || raw.githubRepo || raw.repoPath);
+  const source = configSource || defaultConfigSource(raw);
   const project: NormalizedProject = {
     id,
     enabled: true,
@@ -552,6 +565,16 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
     baseBranch: raw.baseBranch || "origin/main",
     worktreeRoot: raw.worktreeRoot || "",
     checkCommand: raw.checkCommand || DEFAULT_CHECK_COMMAND,
+    requiredVerification: resolveRequiredVerification({
+      repository: raw.githubRepo || "unknown",
+      baseRevision: source.repoPolicyBaseRevision,
+      localSources: source.localCheckCommand !== undefined
+        ? [{ kind: "local", location: `${source.localPath || "projects.json"}#project=${id}`, command: source.localCheckCommand }]
+        : [],
+      sharedSources: source.repoPolicyCheckCommand !== undefined
+        ? [{ kind: "repo_policy", location: source.repoPolicyPath, command: source.repoPolicyCheckCommand }]
+        : [],
+    }),
     autoMerge: raw.autoMerge === true,
     ciFallback: normalizeCiFallback(raw.ciFallback),
     externalReview: normalizeExternalReview(raw.externalReview),
@@ -563,7 +586,7 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
     reviewerModel: raw.reviewerModel || "",
     labels: normalizeLabels(raw.labels || {}),
     automations: [],
-    configSource: configSource || defaultConfigSource(raw),
+    configSource: source,
   };
   const automations = raw.automations === undefined ? defaultAutomationsForProject(project) : raw.automations;
   project.automations = automations.map((automation) => normalizeAutomation(project, automation));

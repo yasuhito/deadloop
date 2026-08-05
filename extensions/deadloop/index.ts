@@ -176,10 +176,16 @@ function trustedRepoPolicyProvider(project, options: { fetch?: boolean } = {}) {
     }
   }
 
-  const show = gitSync(repoPath, ["show", `${baseBranch}:${REPO_POLICY_FILE}`], 10_000);
-  if (show.status === 0) return { status: "loaded" as const, text: show.stdout || "{}" };
+  const revision = gitSync(repoPath, ["rev-parse", `${baseBranch}^{commit}`], 10_000);
+  if (revision.status !== 0) {
+    const reason = (revision.stderr || revision.stdout || revision.error?.message || "git rev-parse failed").trim();
+    return { status: "error" as const, reason: `trusted base revision resolution failed for ${baseBranch}: ${reason}` };
+  }
+  const baseRevision = String(revision.stdout || "").trim();
+  const show = gitSync(repoPath, ["show", `${baseRevision}:${REPO_POLICY_FILE}`], 10_000);
+  if (show.status === 0) return { status: "loaded" as const, text: show.stdout || "{}", baseRevision };
   debugLog("trusted repo policy missing", repoPath, baseBranch, String(show.stderr || show.stdout || "").trim());
-  return { status: "missing" as const };
+  return { status: "missing" as const, baseRevision };
 }
 
 function projectFilter() {

@@ -47,7 +47,7 @@ cp ~/.pi/agent/git/github.com/yasuhito/deadloop/extensions/deadloop/projects.exa
 $EDITOR ~/.pi/agent/deadloop/projects.json
 ```
 
-`projects.json` にはローカルのパスや運用設定が含まれるため、リポジトリにはコミットしないでください。すべての設定項目は [設定ガイド](docs/public-package-setup.md) を参照してください。
+`projects.json` にはローカルのパスや運用設定が含まれるため、リポジトリにはコミットしないでください。リポジトリが所有する集約検証コマンドは、可能な限り信頼済みの `deadloop.json` に定義します（例: `"checkCommand": "npm run check"`）。ローカル値は意図的な上書きに限って使ってください。`/deadloop-status` と `/deadloop-doctor` は、実効必須検証コマンド、情報源、信頼済み基準コミット、上書き情報を表示します。すべての設定項目は [設定ガイド](docs/public-package-setup.md) を参照してください。
 
 ## 安全装置
 

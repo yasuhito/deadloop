@@ -83,6 +83,13 @@ describe("deterministic extension core", () => {
       baseBranch: "origin/main",
       worktreeRoot: "",
       checkCommand: DEFAULT_CHECK_COMMAND,
+      requiredVerification: {
+        status: "blocked",
+        reason: "no_source",
+        repository: "owner/repo",
+        baseRevision: "unknown",
+        sources: [],
+      },
       autoMerge: false,
       ciFallback: {
         enabled: false,
@@ -134,6 +141,7 @@ describe("deterministic extension core", () => {
         repoPolicyBaseBranch: "origin/main",
         repoPolicyStatus: "not-read",
         repoPolicyAppliedKeys: [],
+        repoPolicyBaseRevision: "unknown",
       },
     });
   });
@@ -351,6 +359,35 @@ describe("deterministic extension core", () => {
     });
   });
 
+  it("blocks a directly normalized local command without base revision evidence", () => {
+    expect(normalizeProject({
+      id: "demo",
+      githubRepo: "owner/repo",
+      checkCommand: "npm run local",
+    }).requiredVerification).toMatchObject({
+      status: "blocked",
+      reason: "missing_base_revision",
+      sources: [{ kind: "local", location: "projects.json#project=demo", command: "npm run local" }],
+    });
+  });
+
+  it("binds a local check command to the trusted base revision", () => {
+    const revision = "a".repeat(40);
+    const result = parseProjectsConfig(
+      JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm run local" }] }),
+      undefined,
+      {
+        configPath: "/state/projects.json",
+        repoPolicyProvider: () => ({ status: "missing", baseRevision: revision }),
+      },
+    );
+
+    expect(result.ok && result.projects[0].requiredVerification).toMatchObject({
+      status: "resolved",
+      contract: { command: "npm run local", baseRevision: revision },
+    });
+  });
+
   it("defaults auto merge to disabled", () => {
     expect(normalizeProject({}).autoMerge).toBe(false);
   });
@@ -434,6 +471,17 @@ describe("deterministic extension core", () => {
     });
 
     expect(result.ok && result.projects[0].workerModel).toBe("repo-model");
+  });
+
+  it("blocks a loaded shared verification command without base revision evidence", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo" }] }), "", {
+      repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ checkCommand: "npm run shared" }) }),
+    });
+
+    expect(result.ok && result.projects[0].requiredVerification).toMatchObject({
+      status: "blocked",
+      reason: "missing_base_revision",
+    });
   });
 
   it("allows trusted repo policy to provide worker instruction files", () => {
