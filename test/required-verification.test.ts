@@ -59,6 +59,19 @@ describe("required verification resolution", () => {
     expect(resolved(resolve({ sharedSources: [shared("true")] })).command).toBe("true");
   });
 
+  it("blocks a shared command without trusted base revision evidence", () => {
+    expect(resolve({ baseRevision: "unknown", sharedSources: [shared("npm run check")] }))
+      .toMatchObject({ status: "blocked", reason: "missing_base_revision" });
+  });
+
+  it("blocks an untrusted shared override even when a local command wins", () => {
+    expect(resolve({
+      baseRevision: "unknown",
+      localSources: [local("npm run local")],
+      sharedSources: [shared("npm run shared")],
+    })).toMatchObject({ status: "blocked", reason: "missing_base_revision" });
+  });
+
   it("binds the effective command to provenance and the trusted base revision", () => {
     expect(resolved(resolve({ sharedSources: [shared("npm run check")] }))).toEqual({
       repository: "owner/repo",

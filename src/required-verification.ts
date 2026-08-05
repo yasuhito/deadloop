@@ -19,7 +19,7 @@ export type RequiredVerificationContract = {
   };
 };
 
-export type RequiredVerificationBlockReason = "source_conflict" | "no_source" | "zero_targets";
+export type RequiredVerificationBlockReason = "source_conflict" | "no_source" | "zero_targets" | "missing_base_revision";
 
 export type RequiredVerificationResolution =
   | { status: "resolved"; contract: RequiredVerificationContract }
@@ -69,6 +69,9 @@ export function resolveRequiredVerification(
   const selected = input.localSources[0] || input.sharedSources[0];
   if (!selected) return blocked(input, "no_source");
   if (!selected.command.trim()) return blocked(input, "zero_targets");
+  if (input.sharedSources.length && (!input.baseRevision.trim() || input.baseRevision === "unknown")) {
+    return blocked(input, "missing_base_revision");
+  }
 
   const replaced = input.localSources.length ? input.sharedSources[0] : undefined;
   return {

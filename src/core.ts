@@ -556,6 +556,7 @@ function normalizeAgentKind(value: unknown, field: string): AgentKind {
 
 export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSource): NormalizedProject {
   const id = sanitizeId(raw.id || raw.githubRepo || raw.repoPath);
+  const source = configSource || defaultConfigSource(raw);
   const project: NormalizedProject = {
     id,
     enabled: true,
@@ -566,12 +567,12 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
     checkCommand: raw.checkCommand || DEFAULT_CHECK_COMMAND,
     requiredVerification: resolveRequiredVerification({
       repository: raw.githubRepo || "unknown",
-      baseRevision: configSource?.repoPolicyBaseRevision || "unknown",
-      localSources: configSource?.localCheckCommand !== undefined
-        ? [{ kind: "local", location: `${configSource.localPath || "projects.json"}#project=${id}`, command: configSource.localCheckCommand }]
+      baseRevision: source.repoPolicyBaseRevision,
+      localSources: source.localCheckCommand !== undefined
+        ? [{ kind: "local", location: `${source.localPath || "projects.json"}#project=${id}`, command: source.localCheckCommand }]
         : [],
-      sharedSources: configSource?.repoPolicyCheckCommand !== undefined
-        ? [{ kind: "repo_policy", location: configSource.repoPolicyPath, command: configSource.repoPolicyCheckCommand }]
+      sharedSources: source.repoPolicyCheckCommand !== undefined
+        ? [{ kind: "repo_policy", location: source.repoPolicyPath, command: source.repoPolicyCheckCommand }]
         : [],
     }),
     autoMerge: raw.autoMerge === true,
@@ -585,7 +586,7 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
     reviewerModel: raw.reviewerModel || "",
     labels: normalizeLabels(raw.labels || {}),
     automations: [],
-    configSource: configSource || defaultConfigSource(raw),
+    configSource: source,
   };
   const automations = raw.automations === undefined ? defaultAutomationsForProject(project) : raw.automations;
   project.automations = automations.map((automation) => normalizeAutomation(project, automation));

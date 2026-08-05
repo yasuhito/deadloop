@@ -359,6 +359,20 @@ describe("deterministic extension core", () => {
     });
   });
 
+  it("resolves a directly normalized legacy local check command", () => {
+    expect(normalizeProject({
+      id: "demo",
+      githubRepo: "owner/repo",
+      checkCommand: "npm run local",
+    }).requiredVerification).toMatchObject({
+      status: "resolved",
+      contract: {
+        command: "npm run local",
+        source: { kind: "local", location: "projects.json#project=demo" },
+      },
+    });
+  });
+
   it("defaults auto merge to disabled", () => {
     expect(normalizeProject({}).autoMerge).toBe(false);
   });
@@ -442,6 +456,17 @@ describe("deterministic extension core", () => {
     });
 
     expect(result.ok && result.projects[0].workerModel).toBe("repo-model");
+  });
+
+  it("blocks a loaded shared verification command without base revision evidence", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo" }] }), "", {
+      repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ checkCommand: "npm run shared" }) }),
+    });
+
+    expect(result.ok && result.projects[0].requiredVerification).toMatchObject({
+      status: "blocked",
+      reason: "missing_base_revision",
+    });
   });
 
   it("allows trusted repo policy to provide worker instruction files", () => {
