@@ -144,6 +144,20 @@ Given("動いているレビューエージェントがいない `agent:reviewin
   setInput(this, { openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:reviewing"] }] });
 });
 
+Given("保持中の起動失敗試行がある `agent:reviewing` の pull request がある", function (this: DoctorWorld) {
+  setInput(this, {
+    openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:reviewing"] }],
+    retainedClaims: [{ kind: "pull-request", number: 10 }],
+  });
+});
+
+Given("保持中の試行記録の所有対象を判定できない `agent:reviewing` の pull request がある", function (this: DoctorWorld) {
+  setInput(this, {
+    openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:reviewing"] }],
+    retainedClaimOwnershipAmbiguous: true,
+  });
+});
+
 Given("動いているレビューエージェントがある `agent:reviewing` の pull request がある", function (this: DoctorWorld) {
   setInput(this, {
     openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:reviewing"] }],
@@ -229,6 +243,10 @@ Then("Claude の信頼設定を調べるコマンドが表示される", functio
 
 Then("レビュー占有を解放するコマンドが表示される", function (this: DoctorWorld) {
   assert.match(this.report || "", /gh pr edit 10 -R owner\/repo --remove-label agent:reviewing/);
+});
+
+Then("レビュー占有だけを解放するコマンドは表示されない", function (this: DoctorWorld) {
+  assert.doesNotMatch(this.report || "", /gh pr edit 10 .*--remove-label agent:reviewing/);
 });
 
 Then("作業場所のコミットを確認するコマンドが表示される", function (this: DoctorWorld) {

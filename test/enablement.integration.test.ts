@@ -292,6 +292,13 @@ afterEach(async () => {
 });
 
 describe("enablement command integration", () => {
+  it("registers the explicit launch-failed attempt abandonment command", async () => {
+    const { root } = fixtureRepository();
+    const extension = await loadExtension(root);
+
+    expect(extension.commands.has("deadloop-abandon-attempt")).toBe(true);
+  });
+
   it.each([
     ["DEADLOOP", "DEADLOOP=off"],
     ["DEADLOOP_AUTOMATIONS", "DEADLOOP_AUTOMATIONS=off"],

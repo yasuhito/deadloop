@@ -31,7 +31,12 @@ import {
   runScheduledAutomation,
 } from "../../src/automation-runner";
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
-const { readAttemptRecord, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
+const {
+  agentOccupiesAttemptWorkspace,
+  readWorkspaceCloseStartedReceipt,
+  workspaceProof,
+} = require("./automations/abandon-launch-failed-attempt.ts");
+const { readAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
 const {
   defaultIssueDecisionConfig,
   issueBlockedByNumbers,
@@ -839,7 +844,87 @@ async function buildLiveStatusReport(pi, cwd) {
   return formatStatusReport(buildStatusSnapshot(data));
 }
 
-function retainedAttemptDoctorFindings(project, workspaces, agents = []) {
+function labelNames(item) {
+  return new Set((item?.labels || []).map((label) => typeof label === "string" ? label : String(label?.name || "")));
+}
+
+function launchFailedRecoveryGuidance(record, runDir, project, workspaces, agents, evidence) {
+  const refuse = (reason) => ({ commands: [], detail: `manual review required: ${reason}` });
+  if (!project || !["worker", "reviewer"].includes(record.role)) return refuse(`attempt role ${record.role} has no safe requeue policy`);
+  if (record.lastSuccessfulPhase !== "workspace_opened" || !record.workspaceId || !record.tabId || !record.rootPaneId) {
+    return refuse("the journal does not prove a fully identified workspace opened before agent start");
+  }
+  const workspace = workspaceProof(record, workspaces, readWorkspaceCloseStartedReceipt(runDir, record));
+  if (!workspace.safe) return refuse(workspace.reason || "workspace ownership is not proven");
+  if (agents.some((agent) => agentOccupiesAttemptWorkspace(agent, record))) {
+    return refuse("an agent still owns the recorded pane or launch-unique name");
+  }
+  if (String(evidence?.gitStatuses?.[record.worktreePath] ?? "__unknown__").trim()) {
+    return refuse("the linked worktree is changed or its clean status is unavailable");
+  }
+  if (String(evidence?.gitHeads?.[record.worktreePath] || "").toLowerCase() !== record.inputRevision.head.toLowerCase()) {
+    return refuse("the linked worktree HEAD does not match the recorded input revision");
+  }
+  const registered = (evidence?.worktrees || []).filter((worktree) => worktree.branch === record.branch
+    && worktree.path && path.resolve(worktree.path) === path.resolve(record.worktreePath));
+  if (registered.length !== 1) return refuse("the linked worktree is not uniquely retained by the configured repository");
+
+  let entries = [];
+  try { entries = fs.readdirSync(path.dirname(runDir)); } catch { return refuse("other attempt journals cannot be inspected"); }
+  for (const entry of entries) {
+    const candidateDir = path.join(path.dirname(runDir), entry);
+    if (candidateDir === runDir || !fs.existsSync(path.join(candidateDir, "attempt.json"))) continue;
+    let candidate;
+    try { candidate = readAttemptRecord(candidateDir); }
+    catch { return refuse("another attempt journal is malformed"); }
+    if (candidate.project !== record.project || candidate.repository !== record.repository
+      || releasesAttemptOwnership(candidate.phase)) continue;
+    if (candidate.workspaceId === record.workspaceId
+      || path.resolve(candidate.worktreePath) === path.resolve(record.worktreePath)) {
+      return refuse("another nonterminal attempt owns the checkout");
+    }
+  }
+
+  if (record.role === "worker") {
+    const issue = (evidence?.issues || []).find((item) => Number(item.number) === record.target.number);
+    const labels = labelNames(issue);
+    if (!issue || !labels.has(project.readyLabel) || !labels.has(project.inProgressLabel) || labels.has(project.implementLabel)
+      || labels.has(project.blockedLabel) || labels.has(project.humanLabel)) {
+      return refuse("the Issue no longer has the exact safe launch claim");
+    }
+  } else {
+    const pr = (evidence?.openPrs || []).find((item) => Number(item.number) === record.target.number);
+    const labels = labelNames(pr);
+    if (!pr || pr.headRefName !== record.branch || String(pr.headRefOid || "").toLowerCase() !== record.inputRevision.head.toLowerCase()
+      || !labels.has(project.reviewLabel) || !labels.has(project.reviewingLabel)
+      || labels.has(project.blockedLabel) || labels.has(project.humanLabel)) {
+      return refuse("the pull request no longer has the exact safe launch claim and head");
+    }
+  }
+  return { commands: [`/deadloop-abandon-attempt ${record.attemptId}`], detail: "safe abandonment and requeue prerequisites are currently proven" };
+}
+
+function retainedAttemptClaimSnapshot(project) {
+  const runsDir = path.join(STATE_DIR, "runs");
+  let runs = [];
+  try { runs = fs.readdirSync(runsDir); } catch { return { claims: [], ownershipAmbiguous: false }; }
+  const claims = [];
+  let ownershipAmbiguous = false;
+  for (const run of runs) {
+    const runDir = path.join(runsDir, run);
+    if (!fs.existsSync(path.join(runDir, "attempt.json"))) continue;
+    try {
+      const record = readAttemptRecord(runDir);
+      if (record.project === project?.id && record.repository === project?.githubRepo
+        && !releasesAttemptOwnership(record.phase)) claims.push(record.target);
+    } catch {
+      ownershipAmbiguous = true;
+    }
+  }
+  return { claims, ownershipAmbiguous };
+}
+
+function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidence = {}) {
   const runsDir = path.join(STATE_DIR, "runs");
   let runs = [];
   try { runs = fs.readdirSync(runsDir); } catch { return []; }
@@ -852,14 +937,21 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = []) {
     catch (error) {
       if (fs.existsSync(attemptRecord)) findings.push(herdr075DoctorFinding(
         "malformed_journal",
-        `attempt journal ${attemptRecord} is malformed: ${error instanceof Error ? error.message : String(error)}`,
+        `attempt journal ${attemptRecord} is malformed: ${error instanceof Error ? error.message : String(error)}; manual review required before changing any claim label`,
       ));
       continue;
     }
-    if (record.project !== project?.id || record.repository !== project?.githubRepo || record.phase === "workspace_closed") continue;
+    if (record.project !== project?.id || record.repository !== project?.githubRepo
+      || releasesAttemptOwnership(record.phase)) continue;
     let status: import("../../src/doctor").Herdr075DoctorStatus = "missing_report";
     let detail = `attempt ${record.attemptId} (${record.role}) is retained at phase ${record.phase}`;
-    if (record.phase === "launch_failed") status = "launch_failed";
+    if (record.phase === "launch_failed") {
+      status = "launch_failed";
+      const guidance = launchFailedRecoveryGuidance(record, runDir, project, workspaces, agents, evidence);
+      detail = `${detail}; ${guidance.detail}`;
+      findings.push(herdr075DoctorFinding(status, detail, guidance.commands));
+      continue;
+    }
     else if (record.phase === "github_persisted") status = "cleanup_pending";
     else {
       if (record.workspaceId) {
@@ -902,8 +994,18 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = []) {
 
 async function buildLiveDoctorReport(pi, cwd) {
   const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true, includeAgents: true });
-  const snapshot = buildDoctorSnapshot(data);
-  snapshot.findings.unshift(...retainedAttemptDoctorFindings(data.selectedProject, data.workspaces || [], data.agents || []));
+  const retained = retainedAttemptClaimSnapshot(data.selectedProject);
+  const snapshot = buildDoctorSnapshot({
+    ...data,
+    retainedClaims: retained.claims,
+    retainedClaimOwnershipAmbiguous: retained.ownershipAmbiguous,
+  });
+  snapshot.findings.unshift(...retainedAttemptDoctorFindings(
+    data.selectedProject,
+    data.workspaces || [],
+    data.agents || [],
+    data,
+  ));
   try {
     herdrCompatibilityPreflight();
   } catch (error) {
@@ -1221,7 +1323,8 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       }
       continue;
     }
-    if (record.project !== project.id || record.repository !== project.githubRepo || record.phase === "workspace_closed") continue;
+    if (record.project !== project.id || record.repository !== project.githubRepo
+      || releasesAttemptOwnership(record.phase)) continue;
     if (record.phase === "prepared") {
       const claimResult = await execJson(pi, "node", [
         path.join(AUTOMATION_DIR, "reconcile-prepared-attempt.ts"),
@@ -1286,7 +1389,31 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
   return safeToSchedule;
 }
 
-export { reconcilePersistedAttemptJournals, retainedAttemptDoctorFindings };
+export { reconcilePersistedAttemptJournals, retainedAttemptClaimSnapshot, retainedAttemptDoctorFindings };
+
+function attemptRecordForId(project, attemptId) {
+  const runsDir = path.join(STATE_DIR, "runs");
+  let runs = [];
+  try { runs = fs.readdirSync(runsDir); } catch { throw new Error("No deadloop attempt journals were found."); }
+  const matches = [];
+  for (const run of runs) {
+    const runDir = path.join(runsDir, run);
+    if (!fs.existsSync(path.join(runDir, "attempt.json"))) continue;
+    let record;
+    try { record = readAttemptRecord(runDir); }
+    catch (error) { throw new Error(`Cannot safely search attempts because ${path.join(runDir, "attempt.json")} is malformed: ${error instanceof Error ? error.message : String(error)}`); }
+    if (record.project === project.id && record.repository === project.githubRepo && record.attemptId === attemptId) {
+      matches.push(path.join(runDir, "attempt.json"));
+    }
+  }
+  if (matches.length !== 1) throw new Error(`Expected one attempt ${attemptId} for ${project.id}; found ${matches.length}.`);
+  return matches[0];
+}
+
+function displayCommandResult(pi, ctx, customType, content) {
+  if (ctx.mode === "print" || ctx.mode === "json") console.log(content);
+  else pi.sendMessage({ customType, content, display: true });
+}
 
 export default function (pi) {
   const compatibilityPreflight = typeof pi.testing?.herdrCompatibilityPreflight === "function"
@@ -1306,6 +1433,47 @@ export default function (pi) {
     "deadloop-doctor",
     buildLiveDoctorReport,
   );
+  pi.registerCommand("deadloop-abandon-attempt", {
+    description: "Safely abandon one proven launch-failed attempt and requeue its unchanged Issue or PR",
+    handler: async (args, ctx) => {
+      const attemptId = String(args || "").trim();
+      if (!attemptId || /\s/.test(attemptId)) {
+        displayCommandResult(pi, ctx, "deadloop-abandon-attempt", "Usage: /deadloop-abandon-attempt <attempt-id>");
+        return;
+      }
+      try {
+        const data = await collectLiveSnapshotData(pi, ctx.cwd);
+        const project = data.selectedProject;
+        if (!project) throw new Error("deadloop is not enabled for the current repository.");
+        const attemptRecord = attemptRecordForId(project, attemptId);
+        const commandArgs = [
+          path.join(AUTOMATION_DIR, "abandon-launch-failed-attempt.ts"),
+          "--attempt-record", attemptRecord,
+          "--project-id", project.id,
+          "--project-repo", project.repoPath,
+          "--github-repo", project.githubRepo,
+          "--state-dir", STATE_DIR,
+          "--enabled-at", String(project.enabledAt),
+          "--ready-label", project.readyLabel,
+          "--implement-label", project.implementLabel,
+          "--in-progress-label", project.inProgressLabel,
+          "--review-label", project.reviewLabel,
+          "--reviewing-label", project.reviewingLabel,
+          "--blocked-label", project.blockedLabel,
+          "--human-label", project.humanLabel,
+        ];
+        const completed = await pi.exec("node", commandArgs, { timeout: 90_000 });
+        if (completed.code !== 0) throw new Error((completed.stderr || completed.stdout || "attempt abandonment failed").trim());
+        const result = JSON.parse(completed.stdout || "null");
+        const content = result?.action === "done"
+          ? result.summary
+          : `${result?.summary || "manual review required"}\nInspect the original attempt journal and retained linked worktree before taking any label action.`;
+        displayCommandResult(pi, ctx, "deadloop-abandon-attempt", content);
+      } catch (error) {
+        displayCommandResult(pi, ctx, "deadloop-abandon-attempt", `manual review required: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  });
 
   let timer = null;
   let running = false;

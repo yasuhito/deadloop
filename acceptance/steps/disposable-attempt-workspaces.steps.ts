@@ -8,6 +8,7 @@ import { Given, Then, When } from "@cucumber/cucumber";
 
 import type { AttemptRecord, CompletionReportV1 } from "../../src/attempt-lifecycle";
 import {
+  abandonPersistedAttempt,
   attemptRecordPath,
   createPreparedAttempt,
   readAttemptRecord,
@@ -38,6 +39,7 @@ type World = {
   currentWorkspace?: any;
   mutationCount?: number;
   layoutObservation?: { workspaces: Array<{ workspace_id: string; tab_count: number; pane_count: number }>; extraLayoutActions: string[] };
+  recoveredWorker?: { worktreePath: string; opened: number };
   runDir?: string;
 };
 
@@ -134,6 +136,73 @@ When("deadloop が担当を起動する", function (this: World) {
     },
     writeFileSync: fs.writeFileSync,
   });
+});
+
+Given("起動失敗を証拠付きで放棄した Worker の作業ツリーがある", function (this: World) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cucumber-abandoned-worker-"));
+  this.root = root;
+  const worktreePath = path.join(root, "agent-issue-12-retry");
+  const runDir = path.join(root, "runs", "old-launch");
+  createPreparedAttempt(runDir, {
+    attemptId: "old-attempt", launchUuid: "old-launch", project: "demo", repository: "owner/repo",
+    role: "worker", target: { kind: "issue", number: 12 }, inputRevision: { head: inputHead },
+    branch: "agent/issue-12-retry", baseBranch: "origin/main", worktreePath,
+    agentName: "dl-w-12-old000000000", workspaceLabel: "old worker", promptFile: path.join(runDir, "prompt.md"),
+    promiseFile: path.join(runDir, "promise.json"),
+  });
+  transitionPersistedAttempt(runDir, "github_claimed");
+  const claimed = readAttemptRecord(runDir);
+  writeAttemptRecordAtomically(attemptRecordPath(runDir), {
+    ...claimed, workspaceId: "workspace-old", tabId: "tab-old", rootPaneId: "pane-old",
+    phase: "workspace_opened", lastSuccessfulPhase: "workspace_opened",
+  });
+  transitionPersistedAttempt(runDir, "launch_failed", "agent did not start");
+  abandonPersistedAttempt(runDir, "2026-07-24T00:00:00.000Z");
+  this.recoveredWorker = { worktreePath, opened: 0 };
+});
+
+When("deadloop が再投入された Worker を起動する", function (this: World) {
+  const root = this.root!;
+  const recovered = this.recoveredWorker!;
+  let launchedName = "";
+  let openedWorkspace = false;
+  const runner = {
+    createWorktree: () => { throw new Error("requeued Worker must not create a duplicate worktree"); },
+    openWorktree: () => {
+      recovered.opened += 1;
+      openedWorkspace = true;
+      return { workspaceId: "workspace-new", tabId: "tab-new", rootPaneId: "pane-new", worktreePath: recovered.worktreePath };
+    },
+    renameWorkspace: () => "", startAgent: () => "", closeWorkspace: () => "",
+    listWorkspaces: () => [],
+    listWorktrees: () => [{ branch: "agent/issue-12-retry", path: recovered.worktreePath }],
+    listAgents: () => launchedName && openedWorkspace
+      ? [{ name: launchedName, paneId: "pane-new", workspace_id: "workspace-new", cwd: recovered.worktreePath, status: "working" }]
+      : [],
+    removeWorktree: () => "",
+  };
+  const env = workerEnvironment({
+    DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo",
+    DEADLOOP_BASE_BRANCH: "origin/main", DEADLOOP_WORKTREE_ROOT: root, DEADLOOP_STATE_DIR: root,
+  });
+  this.result = launchIssueWorkerFlow({ number: 12, title: "renamed issue" }, env, {
+    mkdirSync: fs.mkdirSync,
+    runner,
+    runText: (args: string[]) => {
+      const nameIndex = args.indexOf("--name");
+      if (nameIndex >= 0) launchedName = args[nameIndex + 1];
+      if (args[0] === "git" && args.includes("status")) return "";
+      return args[0] === "git" ? `${inputHead}\n` : "started";
+    },
+    writeFileSync: fs.writeFileSync,
+  });
+});
+
+Then("同じ作業ツリーを新しい実行場所で開く", function (this: World) {
+  assert.deepEqual({ opened: this.recoveredWorker?.opened, workspaceId: this.result.workspaceId, worktreePath: this.result.worktreePath }, {
+    opened: 1, workspaceId: "workspace-new", worktreePath: this.recoveredWorker?.worktreePath,
+  });
+  rmSync(this.root!, { recursive: true, force: true });
 });
 
 Then("担当は一つの実行場所と一つの画面に表示される", function (this: World) {
