@@ -174,6 +174,16 @@ function abandonLocked(args: JsonObject, dependencies: RecoveryDependencies, rec
     if (dependencies.workspaceStillExists(record)) {
       return manualReview("workspace closure could not be confirmed without affecting the linked worktree");
     }
+    const worktreeAfterClose = dependencies.inspectWorktree(record);
+    if (!worktreeAfterClose.retained) {
+      return manualReview("the recorded linked worktree disappeared while closing the workspace");
+    }
+    if (worktreeAfterClose.head.toLowerCase() !== record.inputRevision.head.toLowerCase()) {
+      return manualReview("the linked worktree HEAD changed while closing the workspace");
+    }
+    if (worktreeAfterClose.status.trim()) {
+      return manualReview("the linked worktree changed while closing the workspace");
+    }
     const targetAfterClose = dependencies.observeTarget(record);
     if (targetAfterClose.state === "unsafe") return manualReview(targetAfterClose.reason);
     record = dependencies.abandonAttempt(runDir);

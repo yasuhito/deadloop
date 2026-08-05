@@ -145,6 +145,30 @@ describe("launch-failed attempt abandonment", () => {
     expect({ action: result.action, events: fixture.events }).toEqual({ action: "error", events: [] });
   });
 
+  it.each([
+    ["becomes dirty", { head: "a".repeat(40), status: " M changed.ts", retained: true }],
+    ["moves to another revision", { head: "b".repeat(40), status: "", retained: true }],
+    ["is no longer retained", { head: "a".repeat(40), status: "", retained: false }],
+  ])("refuses to abandon when the retained checkout %s while its workspace closes", (_case, changedWorktree) => {
+    const attempt = failedAttempt("reviewer");
+    let inspections = 0;
+    const fixture = dependencies({
+      inspectWorktree: () => {
+        inspections += 1;
+        return inspections === 1
+          ? { head: "a".repeat(40), status: "", retained: true }
+          : changedWorktree;
+      },
+    });
+
+    const result = abandonLocked({ attemptRecord: attempt.recordFile }, fixture.deps, () => fixture.events.push("recheck"));
+
+    expect({ action: result.action, events: fixture.events }).toEqual({
+      action: "error",
+      events: ["recheck", "authorize-close", "close"],
+    });
+  });
+
   it("refuses to requeue when the target changed after launch", () => {
     const attempt = failedAttempt("worker");
     const fixture = dependencies({ observeTarget: () => ({ state: "unsafe" as const, reason: "issue labels changed" }) });
