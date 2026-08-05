@@ -848,6 +848,12 @@ function labelNames(item) {
   return new Set((item?.labels || []).map((label) => typeof label === "string" ? label : String(label?.name || "")));
 }
 
+function projectLabels(project) {
+  const labels = project?.labels;
+  if (!labels) throw new Error(`normalized labels are unavailable for project ${project?.id || "unknown"}`);
+  return labels;
+}
+
 function launchFailedRecoveryGuidance(record, runDir, project, workspaces, agents, evidence) {
   const refuse = (reason) => ({ commands: [], detail: `manual review required: ${reason}` });
   if (!project || !["worker", "reviewer"].includes(record.role)) return refuse(`attempt role ${record.role} has no safe requeue policy`);
@@ -885,19 +891,20 @@ function launchFailedRecoveryGuidance(record, runDir, project, workspaces, agent
     }
   }
 
+  const configured = projectLabels(project);
   if (record.role === "worker") {
     const issue = (evidence?.issues || []).find((item) => Number(item.number) === record.target.number);
     const labels = labelNames(issue);
-    if (!issue || !labels.has(project.readyLabel) || !labels.has(project.inProgressLabel) || labels.has(project.implementLabel)
-      || labels.has(project.blockedLabel) || labels.has(project.humanLabel)) {
+    if (!issue || !labels.has(configured.ready) || !labels.has(configured.inProgress) || labels.has(configured.implement)
+      || labels.has(configured.blocked) || labels.has(configured.human)) {
       return refuse("the Issue no longer has the exact safe launch claim");
     }
   } else {
     const pr = (evidence?.openPrs || []).find((item) => Number(item.number) === record.target.number);
     const labels = labelNames(pr);
     if (!pr || pr.headRefName !== record.branch || String(pr.headRefOid || "").toLowerCase() !== record.inputRevision.head.toLowerCase()
-      || !labels.has(project.reviewLabel) || !labels.has(project.reviewingLabel)
-      || labels.has(project.blockedLabel) || labels.has(project.humanLabel)) {
+      || !labels.has(configured.review) || !labels.has(configured.reviewing)
+      || labels.has(configured.blocked) || labels.has(configured.human)) {
       return refuse("the pull request no longer has the exact safe launch claim and head");
     }
   }
@@ -1325,6 +1332,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
     }
     if (record.project !== project.id || record.repository !== project.githubRepo
       || releasesAttemptOwnership(record.phase)) continue;
+    const labels = projectLabels(project);
     if (record.phase === "prepared") {
       const claimResult = await execJson(pi, "node", [
         path.join(AUTOMATION_DIR, "reconcile-prepared-attempt.ts"),
@@ -1334,12 +1342,12 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         "--github-repo", project.githubRepo,
         "--state-dir", STATE_DIR,
         "--enabled-at", String(project.enabledAt),
-        "--ready-label", project.readyLabel,
-        "--implement-label", project.implementLabel,
-        "--in-progress-label", project.inProgressLabel,
-        "--review-label", project.reviewLabel,
-        "--reviewing-label", project.reviewingLabel,
-        "--blocked-label", project.blockedLabel,
+        "--ready-label", labels.ready,
+        "--implement-label", labels.implement,
+        "--in-progress-label", labels.inProgress,
+        "--review-label", labels.review,
+        "--reviewing-label", labels.reviewing,
+        "--blocked-label", labels.blocked,
       ], null);
       if (claimResult?.action === "error") debugLog("prepared attempt claim reconciliation blocked", claimResult.reason || claimResult.driverAction);
       try { record = readAttemptRecord(runDir); }
@@ -1362,10 +1370,10 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
     const reviewerAutoMerge = record.autoMergePolicy ?? project.autoMerge;
     const expectedLabels = report?.role === "reviewer"
       ? report.result?.outcome === "changes_requested"
-        ? [project.reviewLabel, project.reviewingLabel]
+        ? [labels.review, labels.reviewing]
         : reviewerAutoMerge
-          ? [project.reviewLabel, project.reviewingLabel]
-          : [project.humanLabel]
+          ? [labels.review, labels.reviewing]
+          : [labels.human]
       : [];
     const args = [
       path.join(AUTOMATION_DIR, "complete-attempt-workspace.ts"),
@@ -1375,12 +1383,12 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       "--github-repo", project.githubRepo,
       "--state-dir", STATE_DIR,
       "--enabled-at", String(project.enabledAt),
-      "--worker-ready-label", project.readyLabel,
-      "--worker-implement-label", project.implementLabel,
-      "--worker-review-label", project.reviewLabel,
+      "--worker-ready-label", labels.ready,
+      "--worker-implement-label", labels.implement,
+      "--worker-review-label", labels.review,
       "--auto-merge", reviewerAutoMerge ? "true" : "false",
       ...expectedLabels.flatMap((label) => ["--expected-label", label]),
-      ...[project.reviewLabel, project.reviewingLabel, project.blockedLabel, project.humanLabel]
+      ...[labels.review, labels.reviewing, labels.blocked, labels.human]
         .flatMap((label) => ["--managed-label", label]),
     ];
     const result = await execJson(pi, "node", args, null);
@@ -1446,6 +1454,7 @@ export default function (pi) {
         const project = data.selectedProject;
         if (!project) throw new Error("deadloop is not enabled for the current repository.");
         const attemptRecord = attemptRecordForId(project, attemptId);
+        const labels = projectLabels(project);
         const commandArgs = [
           path.join(AUTOMATION_DIR, "abandon-launch-failed-attempt.ts"),
           "--attempt-record", attemptRecord,
@@ -1454,13 +1463,13 @@ export default function (pi) {
           "--github-repo", project.githubRepo,
           "--state-dir", STATE_DIR,
           "--enabled-at", String(project.enabledAt),
-          "--ready-label", project.readyLabel,
-          "--implement-label", project.implementLabel,
-          "--in-progress-label", project.inProgressLabel,
-          "--review-label", project.reviewLabel,
-          "--reviewing-label", project.reviewingLabel,
-          "--blocked-label", project.blockedLabel,
-          "--human-label", project.humanLabel,
+          "--ready-label", labels.ready,
+          "--implement-label", labels.implement,
+          "--in-progress-label", labels.inProgress,
+          "--review-label", labels.review,
+          "--reviewing-label", labels.reviewing,
+          "--blocked-label", labels.blocked,
+          "--human-label", labels.human,
         ];
         const completed = await pi.exec("node", commandArgs, { timeout: 90_000 });
         if (completed.code !== 0) throw new Error((completed.stderr || completed.stdout || "attempt abandonment failed").trim());

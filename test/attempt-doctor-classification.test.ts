@@ -92,7 +92,7 @@ describe("attempt workspace doctor classifications", () => {
     const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
     writeAttempt(record, undefined);
     const findings = retainedAttemptDoctorFindings(
-      { id: "demo", githubRepo: "octo/demo", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", reviewing: "agent:reviewing", blocked: "agent:blocked", human: "ready-for-human" } },
       [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath, tabCount: 1, paneCount: 1 }],
       [],
       {
@@ -109,7 +109,7 @@ describe("attempt workspace doctor classifications", () => {
     const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
     writeAttempt(record, undefined);
     const findings = retainedAttemptDoctorFindings(
-      { id: "demo", githubRepo: "octo/demo", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", reviewing: "agent:reviewing", blocked: "agent:blocked", human: "ready-for-human" } },
       [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath, tabCount: 1, paneCount: 1 }],
       [{ name: record.agentName, paneId: record.rootPaneId, status: "working" }],
       {},
@@ -142,8 +142,7 @@ describe("attempt workspace doctor classifications", () => {
     let commandArgs: string[] = [];
     await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { commandArgs = args; return { code: 0, stdout: '{"action":"done"}' }; } }, {
       id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1, autoMerge: true,
-      readyLabel: "ready", implementLabel: "implement", inProgressLabel: "progress", reviewLabel: "review",
-      reviewingLabel: "reviewing", blockedLabel: "blocked", humanLabel: "human",
+      labels: { ready: "ready", implement: "implement", inProgress: "progress", review: "review", reviewing: "reviewing", blocked: "blocked", human: "human" },
     });
     expect(commandArgs.flatMap((value, index) => value === "--managed-label" ? [commandArgs[index + 1]] : [])).toEqual([
       "review", "reviewing", "blocked", "human",
@@ -156,8 +155,7 @@ describe("attempt workspace doctor classifications", () => {
     let commandArgs: string[] = [];
     await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { commandArgs = args; return { code: 0, stdout: '{"action":"done"}' }; } }, {
       id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1, autoMerge: true,
-      readyLabel: "ready", implementLabel: "implement", inProgressLabel: "progress", reviewLabel: "review",
-      reviewingLabel: "reviewing", blockedLabel: "blocked", humanLabel: "human",
+      labels: { ready: "ready", implement: "implement", inProgress: "progress", review: "review", reviewing: "reviewing", blocked: "blocked", human: "human" },
     });
     expect(commandArgs.slice(commandArgs.indexOf("--auto-merge"), commandArgs.indexOf("--auto-merge") + 2)).toEqual(["--auto-merge", "false"]);
   });

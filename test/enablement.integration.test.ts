@@ -144,6 +144,13 @@ async function loadExtension(
     afterEnablementSaved?: () => Promise<void>;
     runAutomationScript?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
     herdrCompatibilityPreflight?: () => void;
+    recoveryFixture?: {
+      issues: unknown[];
+      worktrees: unknown[];
+      workspaces: unknown[];
+      agents: unknown[];
+      runNodeScript?: (args: string[]) => { code: number; stdout: string; stderr: string };
+    };
   } = {},
 ): Promise<{ commands: Map<string, CommandHandler>; events: Map<string, EventHandler>; ghCommands: string[][]; messages: string[] }> {
   process.env.HOME = root;
@@ -183,6 +190,7 @@ async function loadExtension(
         }
       }
       if (command === "bash" && options.runAutomationScript) return await options.runAutomationScript(args);
+      if (command === "node" && options.recoveryFixture?.runNodeScript) return options.recoveryFixture.runNodeScript(args);
       if (command === "gh") ghCommands.push(args);
       if (command === "gh" && args[0] === "auth") return { code: 0, stdout: "", stderr: "" };
       if (command === "gh" && args[0] === "repo") {
@@ -199,6 +207,12 @@ async function loadExtension(
           stderr: "",
         };
       }
+      if (command === "gh" && args[0] === "issue" && args[1] === "list" && options.recoveryFixture) {
+        return { code: 0, stdout: JSON.stringify(options.recoveryFixture.issues), stderr: "" };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "list" && options.recoveryFixture) {
+        return { code: 0, stdout: "[]", stderr: "" };
+      }
       if (command === "gh" && args[0] === "api") {
         const name = decodeURIComponent(args.at(-1)?.split("/").at(-1) || "");
         await options.beforeLabelLookup?.(name);
@@ -211,13 +225,13 @@ async function loadExtension(
         return options.failLabel ? { code: 1, stdout: "", stderr: "label denied" } : { code: 0, stdout: "", stderr: "" };
       }
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
-        return { code: 0, stdout: '{"id":"cli:worktree:list","result":{"type":"worktree_list","worktrees":[]}}', stderr: "" };
+        return { code: 0, stdout: JSON.stringify({ id: "cli:worktree:list", result: { type: "worktree_list", worktrees: options.recoveryFixture?.worktrees || [] } }), stderr: "" };
       }
       if (command === "herdr" && args[0] === "agent" && args[1] === "list" && args.length === 2) {
-        return { code: 0, stdout: '{"id":"cli:agent:list","result":{"type":"agent_list","agents":[]}}', stderr: "" };
+        return { code: 0, stdout: JSON.stringify({ id: "cli:agent:list", result: { type: "agent_list", agents: options.recoveryFixture?.agents || [] } }), stderr: "" };
       }
       if (command === "herdr" && args[0] === "workspace" && args[1] === "list" && args.length === 2) {
-        return { code: 0, stdout: '{"id":"cli:workspace:list","result":{"type":"workspace_list","workspaces":[]}}', stderr: "" };
+        return { code: 0, stdout: JSON.stringify({ id: "cli:workspace:list", result: { type: "workspace_list", workspaces: options.recoveryFixture?.workspaces || [] } }), stderr: "" };
       }
       throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
     },
@@ -291,12 +305,141 @@ afterEach(async () => {
   for (const sandbox of sandboxes.splice(0)) rmSync(sandbox, { recursive: true, force: true });
 });
 
+async function launchFailedRecoveryScenario() {
+  const { root, repoPath } = fixtureRepository();
+  writeConfig(root, repoPath);
+  const stateDir = path.join(root, ".pi", "agent", "deadloop");
+  const configPath = path.join(stateDir, "projects.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.projects[0].baseBranch = "origin/master";
+  config.projects[0].labels = {
+    ready: "custom:ready",
+    implement: "custom:implement",
+    inProgress: "custom:in-progress",
+    blocked: "custom:blocked",
+    review: "custom:review",
+    reviewing: "custom:reviewing",
+    human: "custom:human",
+  };
+  writeFileSync(configPath, JSON.stringify(config));
+  writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({
+    projects: [{ repoPath, githubRepo: "owner/demo", ...enabledSafetyFields, enabledAt: 1 }],
+  }));
+  const head = git(repoPath, ["rev-parse", "HEAD"]).trim();
+  const runDir = path.join(stateDir, "runs", "attempt-211");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+    attemptId: "attempt-211",
+    launchUuid: "launch-211",
+    project: "demo",
+    repository: "owner/demo",
+    role: "worker",
+    target: { kind: "issue", number: 197 },
+    inputRevision: { head },
+    branch: "master",
+    baseBranch: "origin/master",
+    worktreePath: repoPath,
+    agentName: "dl-w-197-123456789abc",
+    workspaceLabel: "Issue 197",
+    promptFile: path.join(runDir, "prompt.md"),
+    promiseFile: path.join(runDir, "promise.json"),
+    phase: "launch_failed",
+    lastSuccessfulPhase: "workspace_opened",
+    workspaceId: "workspace-211",
+    tabId: "tab-211",
+    rootPaneId: "pane-211",
+    launchError: "agent start failed",
+  }));
+  const targetState = path.join(root, "target-state");
+  const workspaceState = path.join(root, "workspace-state");
+  writeFileSync(targetState, "claimed");
+  writeFileSync(workspaceState, "open");
+  const binDir = path.join(root, "bin");
+  writeFileSync(path.join(binDir, "gh"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({ id: "R_demo" }));
+} else if (args[0] === "issue" && args[1] === "view") {
+  const requeued = fs.readFileSync(${JSON.stringify(targetState)}, "utf8") === "requeued";
+  process.stdout.write(JSON.stringify({ number: 197, state: "OPEN", labels: (requeued ? ["custom:ready", "custom:implement"] : ["custom:ready", "custom:in-progress"]).map((name) => ({ name })) }));
+} else if (args[0] === "issue" && args[1] === "edit") {
+  const expected = ["issue", "edit", "197", "-R", "owner/demo", "--remove-label", "custom:in-progress", "--add-label", "custom:ready", "--add-label", "custom:implement"];
+  if (JSON.stringify(args) !== JSON.stringify(expected)) process.exit(2);
+  fs.writeFileSync(${JSON.stringify(targetState)}, "requeued");
+} else {
+  process.exit(1);
+}
+`);
+  writeFileSync(path.join(binDir, "herdr"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const workspaceOpen = fs.readFileSync(${JSON.stringify(workspaceState)}, "utf8") === "open";
+if (args.length === 1 && args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");
+else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
+else if (args[0] === "workspace" && args[1] === "list") process.stdout.write(JSON.stringify({ result: { workspaces: workspaceOpen ? [{ workspace_id: "workspace-211", pane_count: 1, tab_count: 1, worktree: { checkout_path: ${JSON.stringify(repoPath)} } }] : [] } }));
+else if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({ result: { worktrees: [{ branch: "master", path: ${JSON.stringify(repoPath)}, open_workspace_id: workspaceOpen ? "workspace-211" : null }] } }));
+else if (args[0] === "agent" && args[1] === "list") process.stdout.write(JSON.stringify({ result: { agents: [] } }));
+else if (args[0] === "workspace" && args[1] === "close" && args[2] === "workspace-211") fs.writeFileSync(${JSON.stringify(workspaceState)}, "closed");
+else process.exit(1);
+`);
+  chmodSync(path.join(binDir, "gh"), 0o755);
+  chmodSync(path.join(binDir, "herdr"), 0o755);
+  const recoveryFixture = {
+    issues: [{ number: 197, title: "fixture", updatedAt: "2026-08-05T00:00:00Z", labels: ["custom:ready", "custom:in-progress"] }],
+    worktrees: [{ branch: "master", path: repoPath, open_workspace_id: "workspace-211" }],
+    workspaces: [{ workspace_id: "workspace-211", pane_count: 1, tab_count: 1, worktree: { checkout_path: repoPath } }],
+    agents: [],
+    runNodeScript: (args: string[]) => {
+      try {
+        return { code: 0, stdout: execFileSync(process.execPath, args, { encoding: "utf8" }), stderr: "" };
+      } catch (error: any) {
+        return { code: error.status || 1, stdout: String(error.stdout || ""), stderr: String(error.stderr || error) };
+      }
+    },
+  };
+  const extension = await loadExtension(root, { recoveryFixture });
+  return { extension, repoPath, runDir, targetState };
+}
+
 describe("enablement command integration", () => {
   it("registers the explicit launch-failed attempt abandonment command", async () => {
     const { root } = fixtureRepository();
     const extension = await loadExtension(root);
 
     expect(extension.commands.has("deadloop-abandon-attempt")).toBe(true);
+  });
+
+  it("offers launch-failed recovery using normalized project labels", async () => {
+    const { extension, repoPath } = await launchFailedRecoveryScenario();
+
+    await invoke(extension.commands.get("deadloop-doctor")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("/deadloop-abandon-attempt attempt-211");
+  });
+
+  it("requeues through the real recovery script using normalized project labels", async () => {
+    const { extension, repoPath, targetState } = await launchFailedRecoveryScenario();
+
+    await extension.commands.get("deadloop-abandon-attempt")!("attempt-211", {
+      cwd: repoPath,
+      mode: "interactive",
+      ui: { notify: () => undefined, setStatus: () => undefined },
+    });
+
+    expect(readFileSync(targetState, "utf8")).toBe("requeued");
+  });
+
+  it("records abandonment through the real recovery script", async () => {
+    const { extension, repoPath, runDir } = await launchFailedRecoveryScenario();
+
+    await extension.commands.get("deadloop-abandon-attempt")!("attempt-211", {
+      cwd: repoPath,
+      mode: "interactive",
+      ui: { notify: () => undefined, setStatus: () => undefined },
+    });
+
+    expect(JSON.parse(readFileSync(path.join(runDir, "attempt.json"), "utf8")).phase).toBe("abandoned");
   });
 
   it.each([
