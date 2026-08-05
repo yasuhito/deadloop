@@ -60,7 +60,7 @@ Define the repository-owned aggregate verification command as shared policy when
 }
 ```
 
-`/deadloop-status` and `/deadloop-doctor` show the required-verification resolution: the effective command, source identity, trusted base revision, and any local override. During the staged migration, the legacy inferred `checkCommand` remains available to unmigrated execution paths, but it is not reported as a resolved required-verification contract. An absent explicit source is shown as `no_source`, an explicitly empty command as `zero_targets`, differing values at the same priority as `source_conflict`, and shared policy without trusted base revision evidence as `missing_base_revision`. A non-empty explicit command is accepted as written and judged by its eventual exit status rather than by command-name heuristics.
+`/deadloop-status` and `/deadloop-doctor` show the required-verification resolution: the effective command, source identity, trusted base revision, and any local override. During the staged migration, the legacy inferred `checkCommand` remains available to unmigrated execution paths, but it is not reported as a resolved required-verification contract. An absent explicit source is shown as `no_source`, an explicitly empty command as `zero_targets`, differing values at the same priority as `source_conflict`, and any explicit command without trusted base revision evidence as `missing_base_revision`. A non-empty explicit command is accepted as written and judged by its eventual exit status rather than by command-name heuristics.
 
 If a project uses `workerAgent: "claude"` or `reviewerAgent: "claude"`, run `claude` interactively once from the target repository root and accept Claude Code workspace trust before enabling the automation.
 

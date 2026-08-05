@@ -359,17 +359,32 @@ describe("deterministic extension core", () => {
     });
   });
 
-  it("resolves a directly normalized legacy local check command", () => {
+  it("blocks a directly normalized local command without base revision evidence", () => {
     expect(normalizeProject({
       id: "demo",
       githubRepo: "owner/repo",
       checkCommand: "npm run local",
     }).requiredVerification).toMatchObject({
-      status: "resolved",
-      contract: {
-        command: "npm run local",
-        source: { kind: "local", location: "projects.json#project=demo" },
+      status: "blocked",
+      reason: "missing_base_revision",
+      sources: [{ kind: "local", location: "projects.json#project=demo", command: "npm run local" }],
+    });
+  });
+
+  it("binds a local check command to the trusted base revision", () => {
+    const revision = "a".repeat(40);
+    const result = parseProjectsConfig(
+      JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm run local" }] }),
+      undefined,
+      {
+        configPath: "/state/projects.json",
+        repoPolicyProvider: () => ({ status: "missing", baseRevision: revision }),
       },
+    );
+
+    expect(result.ok && result.projects[0].requiredVerification).toMatchObject({
+      status: "resolved",
+      contract: { command: "npm run local", baseRevision: revision },
     });
   });
 

@@ -69,7 +69,7 @@ export function resolveRequiredVerification(
   const selected = input.localSources[0] || input.sharedSources[0];
   if (!selected) return blocked(input, "no_source");
   if (!selected.command.trim()) return blocked(input, "zero_targets");
-  if (input.sharedSources.length && (!input.baseRevision.trim() || input.baseRevision === "unknown")) {
+  if (!input.baseRevision.trim() || input.baseRevision === "unknown") {
     return blocked(input, "missing_base_revision");
   }
 
