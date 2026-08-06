@@ -1719,6 +1719,7 @@ export default function (pi) {
       let primaryRepoPath;
       let identity;
       let previousEnabledAt;
+      let retainedVerificationJournalPath;
       let enablementSaved = false;
       const enableAttemptToken = crypto.randomUUID();
       try {
@@ -1746,8 +1747,8 @@ export default function (pi) {
           const retained = verification.cleanup === "retained" ? `; retained worktree journal: ${verification.journalPath}` : "";
           throw new Error(`required verification failed (exit ${verification.exitCode}); log: ${verification.logPath}${retained}`);
         }
-        if (verification.cleanup !== "removed") {
-          throw new Error(`required verification worktree was retained because cleanup was not proven safe: ${verification.journalPath}`);
+        if (verification.cleanup === "retained") {
+          retainedVerificationJournalPath = verification.journalPath;
         }
         if (!ownsEnableAttempt(primaryRepoPath, enableAttemptToken)) {
           throw new Error("enablement was revoked while required verification was running");
@@ -1794,7 +1795,10 @@ export default function (pi) {
           throw error;
         }
         const owner = ownsLock ? "this session" : `another session (pid ${readLock(projectLockPath(project))?.pid || "unknown"})`;
-        const message = `deadloop enabled for ${identity.githubRepo}; scheduler owner: ${owner}. autoMerge is ${project.autoMerge ? "on (existing local setting preserved)" : "off"}.`;
+        const retainedVerification = retainedVerificationJournalPath
+          ? ` Required-verification worktree was retained for inspection because cleanup was not proven safe; journal: ${retainedVerificationJournalPath}.`
+          : "";
+        const message = `deadloop enabled for ${identity.githubRepo}; scheduler owner: ${owner}. autoMerge is ${project.autoMerge ? "on (existing local setting preserved)" : "off"}.${retainedVerification}`;
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
       } catch (error) {

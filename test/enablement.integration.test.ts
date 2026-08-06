@@ -585,6 +585,36 @@ describe("enablement command integration", () => {
     expect(await explicitNpmCommandWithoutLockfileObservation()).toContain("deadloop enabled");
   });
 
+  it("enables after an aggregate command installs dependencies in the verification worktree", async () => {
+    const { root, repoPath } = fixtureRepository();
+    mkdirSync(path.join(repoPath, "vendor", "fixture-dependency"), { recursive: true });
+    writeFileSync(path.join(repoPath, "vendor", "fixture-dependency", "package.json"), JSON.stringify({ name: "fixture-dependency", version: "1.0.0" }));
+    writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({ dependencies: { "fixture-dependency": "file:vendor/fixture-dependency" } }));
+    writeFileSync(path.join(repoPath, ".gitignore"), "node_modules/\n");
+    execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: repoPath, stdio: "ignore" });
+    rmSync(path.join(repoPath, "node_modules"), { recursive: true, force: true });
+    writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({
+      checkCommand: "npm ci --ignore-scripts --no-audit --no-fund && test -f node_modules/fixture-dependency/package.json",
+    }));
+    git(repoPath, ["add", ".gitignore", "package.json", "package-lock.json", "vendor", "deadloop.json"]);
+    git(repoPath, ["commit", "--quiet", "-m", "add dependency verification fixture"]);
+    git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+    let journalPath = "";
+    const extension = await loadExtension(root, {
+      beforeEnablementWorktreeCreate: async (path) => {
+        journalPath = path;
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect({
+      enabled: extension.messages.at(-1)?.includes("deadloop enabled"),
+      retentionReported: extension.messages.at(-1)?.includes(journalPath),
+      cleanup: JSON.parse(readFileSync(journalPath, "utf8")).state,
+    }).toEqual({ enabled: true, retentionReported: true, cleanup: "retained" });
+  });
+
   it.skipIf(process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK === "1")(
     "runs an explicit aggregate command that includes its dependency setup",
     async () => {
