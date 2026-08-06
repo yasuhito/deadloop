@@ -2,7 +2,11 @@ import path from "node:path";
 
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
-import { formatRequiredVerification } from "./required-verification";
+import {
+  formatRequiredVerification,
+  formatVerificationCandidates,
+  type VerificationCandidateDiscovery,
+} from "./required-verification";
 import {
   type GithubItem,
   type HerdrWorktree,
@@ -75,6 +79,7 @@ export type DoctorInput = {
   nowMs?: number;
   retainedClaims?: Array<{ kind: "issue" | "pull-request"; number: number }>;
   retainedClaimOwnershipAmbiguous?: boolean;
+  verificationCandidates?: VerificationCandidateDiscovery;
 };
 
 export type DoctorFindingType =
@@ -140,6 +145,7 @@ export type DoctorSnapshot = {
   cwd: string;
   warnings: string[];
   findings: DoctorFinding[];
+  verificationCandidates?: VerificationCandidateDiscovery;
 };
 
 function isPathInside(child: string, parent: string): boolean {
@@ -590,6 +596,7 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
     repositoryEnablement,
     cwd: input.cwd,
     warnings,
+    verificationCandidates: input.verificationCandidates,
     findings: [
       ...buildBlockedIssueFindings(project, issues),
       ...buildStaleInProgressFindings(project, issues, worktrees, nowMs),
@@ -631,6 +638,10 @@ export function formatDoctorReport(snapshot: DoctorSnapshot): string {
     ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     `config: ${formatConfigSource(snapshot.project)}`,
     formatRequiredVerification(snapshot.project.requiredVerification),
+    ...(snapshot.verificationCandidates ? formatVerificationCandidates(snapshot.verificationCandidates) : []),
+    ...(snapshot.project.requiredVerification.status === "blocked" && snapshot.project.requiredVerification.reason === "no_source"
+      ? ["recovery: add a repository-owned aggregate checkCommand to trusted deadloop.json; use a local override only for a non-shareable exception"]
+      : []),
     "",
   ];
 

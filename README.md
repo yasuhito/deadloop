@@ -47,7 +47,7 @@ cp ~/.pi/agent/git/github.com/yasuhito/deadloop/extensions/deadloop/projects.exa
 $EDITOR ~/.pi/agent/deadloop/projects.json
 ```
 
-`projects.json` contains local paths and rollout choices. Do not commit it. Define the repository-owned aggregate verification command in trusted `deadloop.json` (for example, `"checkCommand": "npm run check"`) whenever possible; use a local value only as an intentional override. `/deadloop-status` and `/deadloop-doctor` display the effective required-verification command, source, trusted base revision, and override information. See the [setup guide](docs/public-package-setup.md) for every available setting.
+`projects.json` contains local paths and rollout choices. Do not commit it. Define the repository-owned aggregate verification command in trusted `deadloop.json` (for example, `"checkCommand": "npm run check"`) whenever possible; use a local value only as an intentional override. `/deadloop-status` and `/deadloop-doctor` display the effective required-verification command, source, trusted base revision, and override information. When required verification is unresolved, doctor also lists non-authoritative candidates from `package.json` verification scripts and individual GitHub Actions `run` steps, preserving each source, working directory, and explicit execution context; it never promotes or combines those candidates. See the [setup guide](docs/public-package-setup.md) for every available setting.
 
 ## Safety controls
 

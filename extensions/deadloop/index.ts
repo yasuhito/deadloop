@@ -23,6 +23,7 @@ import {
 import { buildDoctorSnapshot, formatDoctorReport, herdr075DoctorFinding } from "../../src/doctor";
 import { compatibilityDiagnosticData } from "../../src/herdr-075-compat";
 import { runHerdrCompatibilityPreflight } from "../../src/herdr-preflight";
+import { discoverVerificationCandidates } from "../../src/required-verification";
 import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } from "../../src/status";
 import { readClaudeConfig } from "../../src/agent-trust.cjs";
 import {
@@ -1011,6 +1012,9 @@ async function buildLiveDoctorReport(pi, cwd) {
     ...data,
     retainedClaims: retained.claims,
     retainedClaimOwnershipAmbiguous: retained.ownershipAmbiguous,
+    ...(data.selectedProject?.repoPath && data.selectedProject.requiredVerification.status === "blocked"
+      ? { verificationCandidates: discoverVerificationCandidates({ repositoryRoot: data.selectedProject.repoPath }) }
+      : {}),
   });
   snapshot.findings.unshift(...retainedAttemptDoctorFindings(
     data.selectedProject,
