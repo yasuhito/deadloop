@@ -7,11 +7,18 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
 const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
+const trustedCumulativeComments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
+  ...comment,
+  author: { login: "deadloop-bot" },
+}));
 
 const tempDirs: string[] = [];
 
 function executable(file: string, content: string): void {
-  fs.writeFileSync(file, content);
+  const prepared = path.basename(file) === "gh"
+    ? content.replace("\n", `\nconst deadloopGhArgs = process.argv.slice(2);\nif (deadloopGhArgs[0] === "api" && deadloopGhArgs[1] === "user") { process.stdout.write("deadloop-bot\\n"); process.exit(0); }\n`)
+    : content;
+  fs.writeFileSync(file, prepared);
   fs.chmodSync(file, 0o755);
 }
 
@@ -484,7 +491,7 @@ function runV1ChangesRequestedTwice(options: {
   const head = spawnSync("git", ["-C", worktree, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
   fs.writeFileSync(
     comments,
-    JSON.stringify(options.injectCumulativeLimitRace ? cumulativeRepairFixture.comments.slice(0, 2) : []),
+    JSON.stringify(options.injectCumulativeLimitRace ? trustedCumulativeComments.slice(0, 2) : []),
   );
   fs.writeFileSync(runtime, JSON.stringify({ workspace: "reviewer-workspace", agent: null, launches: 0 }));
   fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ projects: [{
@@ -514,12 +521,12 @@ else if(a[0]==="pr"&&a[1]==="view") {
   fs.writeFileSync(process.env.GH_VIEW_COUNT,String(count+1));
   const comments=JSON.parse(fs.readFileSync(process.env.COMMENTS,"utf8"));
   if(process.env.INJECT_LIMIT_RACE==="1"&&count===2) {
-    comments.push(${JSON.stringify(cumulativeRepairFixture.comments[2])});
+    comments.push(${JSON.stringify({ ...cumulativeRepairFixture.comments[2], author: { login: "deadloop-bot" } })});
     fs.writeFileSync(process.env.COMMENTS,JSON.stringify(comments));
   }
   process.stdout.write(JSON.stringify({number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:process.env.HEAD,isCrossRepository:false,labels:${JSON.stringify(liveLabels)},comments}));
 }
-else if(a[0]==="pr"&&a[1]==="comment"){const c=JSON.parse(fs.readFileSync(process.env.COMMENTS,"utf8"));c.push({body:a[a.indexOf("--body")+1]});fs.writeFileSync(process.env.COMMENTS,JSON.stringify(c));}
+else if(a[0]==="pr"&&a[1]==="comment"){const c=JSON.parse(fs.readFileSync(process.env.COMMENTS,"utf8"));c.push({body:a[a.indexOf("--body")+1],author:{login:"deadloop-bot"}});fs.writeFileSync(process.env.COMMENTS,JSON.stringify(c));}
 `);
   executable(path.join(bin, "herdr"), `#!/usr/bin/env node
 const fs=require("node:fs");const a=process.argv.slice(2);const f=process.env.RUNTIME;const s=JSON.parse(fs.readFileSync(f,"utf8"));
@@ -1081,7 +1088,7 @@ else if (args[0] === "agent" && args[1] === "start") {
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
-  number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${head}",isCrossRepository:false,labels:[{name:"agent:reviewing"}],comments:[{body:${JSON.stringify(marker)}}]
+  number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${head}",isCrossRepository:false,labels:[{name:"agent:reviewing"}],comments:[{body:${JSON.stringify(marker)},author:{login:"deadloop-bot"}}]
 }));
 else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
 `,
@@ -1168,7 +1175,7 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
-  number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${head}",isCrossRepository:false,labels:[{name:"agent:reviewing"}],comments:[{body:${JSON.stringify(marker)}}]
+  number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${head}",isCrossRepository:false,labels:[{name:"agent:reviewing"}],comments:[{body:${JSON.stringify(marker)},author:{login:"deadloop-bot"}}]
 }));
 else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
 `,

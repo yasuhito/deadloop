@@ -43,9 +43,10 @@ function renderRepairMarker(headOid: string, reviewFingerprint: string): string 
   return `<!-- deadloop:review-repair-attempt key=${repairAttemptKey(headOid, reviewFingerprint)} head=${headOid.toLowerCase()} review=${reviewFingerprint.toLowerCase()} -->`;
 }
 
-function repairAttempts(comments: JsonObject[]): JsonObject[] {
+function repairAttempts(comments: JsonObject[], authorLogin: string): JsonObject[] {
   const attempts: JsonObject[] = [];
   for (const comment of comments || []) {
+    if (String(comment?.author?.login || "").toLowerCase() !== authorLogin.toLowerCase()) continue;
     const body = String(comment?.body || "");
     REPAIR_MARKER_RE.lastIndex = 0;
     for (let match = REPAIR_MARKER_RE.exec(body); match; match = REPAIR_MARKER_RE.exec(body)) {
@@ -55,10 +56,10 @@ function repairAttempts(comments: JsonObject[]): JsonObject[] {
   return attempts;
 }
 
-function selectRepairAttempt(comments: JsonObject[], headOid: string, findings: JsonObject[]): JsonObject {
+function selectRepairAttempt(comments: JsonObject[], headOid: string, findings: JsonObject[], authorLogin: string): JsonObject {
   const reviewFingerprint = reviewResultFingerprint(findings);
   const key = repairAttemptKey(headOid, reviewFingerprint);
-  const attempts = repairAttempts(comments);
+  const attempts = repairAttempts(comments, authorLogin);
   if (attempts.some((attempt) => attempt.key === key)) {
     return {
       action: "already_attempted",

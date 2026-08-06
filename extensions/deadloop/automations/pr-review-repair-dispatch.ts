@@ -107,7 +107,10 @@ function readLivePr(repo: string, prNumber: string, runner = commandRunner): Jso
   if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
     throw new Error(`PR #${prNumber} comments pagination returned an invalid response`);
   }
-  return { ...pr, comments: pages.flat() };
+  return {
+    ...pr,
+    comments: pages.flat().map((comment) => ({ ...comment, author: comment.author || comment.user })),
+  };
 }
 
 type RepairWorktreeInspection =
@@ -586,7 +589,9 @@ function dispatch(args: JsonObject): DriverResult {
     return driverResult("done", `PR #${prNumber} repair worktree does not match its current head; marked blocked`, { driverAction: "review_repair_worktree_mismatch", comment });
   }
 
-  const selection = selectRepairAttempt(refreshedPr.comments || [], expectedHead, findings);
+  const automationLogin = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim();
+  if (!automationLogin) throw new Error("authenticated GitHub identity is unavailable");
+  const selection = selectRepairAttempt(refreshedPr.comments || [], expectedHead, findings, automationLogin);
   if (selection.cumulativeLimitExceeded) {
     const comment = applyHumanBlock(
       prNumber,
@@ -621,7 +626,7 @@ function dispatch(args: JsonObject): DriverResult {
               const livePr = readLivePr(env.githubRepo, prNumber);
               assertSameLaunchTarget(refreshedPr, livePr, "pr");
               const labels = labelNames(livePr.labels);
-              const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings);
+              const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
               if (liveSelection.cumulativeLimitExceeded) {
                 throw new Error("cumulative_repair_limit_exceeded_before_recovery");
               }
@@ -781,7 +786,7 @@ function dispatch(args: JsonObject): DriverResult {
           if (!labels.includes(env.reviewLabel) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)) {
             throw new StaleLaunchError(`PR #${prNumber} is no longer eligible for repair`);
           }
-          const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings);
+          const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
           const markerOwnedByPreparedRepair = liveSelection.action === "already_attempted"
             && liveSelection.key === selection.key
             && preparedRepair.promiseFile === path.join(env.stateDir, "runs", repairLaunchUuid, "promise.json")

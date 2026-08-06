@@ -15,6 +15,11 @@ const {
 const { readLivePr, repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
 
+const automationLogin = "deadloop-bot";
+const cumulativeComments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
+  ...comment,
+  author: { login: automationLogin },
+}));
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const findings = [
   {
@@ -143,7 +148,7 @@ function prompt() {
 
 describe("automatic PR review repair", () => {
   it("selects a first repair for an exact head and review result", () => {
-    expect(selectRepairAttempt([], head, findings).action).toBe("launch_repair");
+    expect(selectRepairAttempt([], head, findings, automationLogin).action).toBe("launch_repair");
   });
 
   it("persists the exact head and review fingerprint attempt", () => {
@@ -154,24 +159,25 @@ describe("automatic PR review repair", () => {
 
   it("does not relaunch an already-recorded exact repair attempt", () => {
     const fingerprint = reviewResultFingerprint(findings);
-    const comments = [{ body: renderRepairMarker(head, fingerprint) }];
+    const comments = [{ body: renderRepairMarker(head, fingerprint), author: { login: automationLogin } }];
 
-    expect(selectRepairAttempt(comments, head, findings).action).toBe("already_attempted");
+    expect(selectRepairAttempt(comments, head, findings, automationLogin).action).toBe("already_attempted");
   });
 
   it("requires a human when the same findings recur after repair", () => {
     const fingerprint = reviewResultFingerprint(findings);
-    const comments = [{ body: renderRepairMarker(head, fingerprint) }];
+    const comments = [{ body: renderRepairMarker(head, fingerprint), author: { login: automationLogin } }];
 
-    expect(selectRepairAttempt(comments, "b".repeat(40), findings).reason).toBe("repeated_findings");
+    expect(selectRepairAttempt(comments, "b".repeat(40), findings, automationLogin).reason).toBe("repeated_findings");
   });
 
   it("launches the third cumulative repair attempt", () => {
     expect(
       selectRepairAttempt(
-        cumulativeRepairFixture.comments.slice(0, 2),
+        cumulativeComments.slice(0, 2),
         cumulativeRepairFixture.nextHead,
         cumulativeRepairFixture.nextFindings,
+        automationLogin,
       ).action,
     ).toBe("launch_repair");
   });
@@ -179,9 +185,10 @@ describe("automatic PR review repair", () => {
   it("requires a human after three cumulative repair attempts", () => {
     expect(
       selectRepairAttempt(
-        cumulativeRepairFixture.comments,
+        cumulativeComments,
         cumulativeRepairFixture.nextHead,
         cumulativeRepairFixture.nextFindings,
+        automationLogin,
       ).reason,
     ).toBe("cumulative_repair_limit");
   });
@@ -189,27 +196,45 @@ describe("automatic PR review repair", () => {
   it("flags duplicate recovery after the cumulative limit is exceeded", () => {
     const fingerprint = reviewResultFingerprint(cumulativeRepairFixture.nextFindings);
     const comments = [
-      ...cumulativeRepairFixture.comments,
-      { body: renderRepairMarker(cumulativeRepairFixture.nextHead, fingerprint) },
+      ...cumulativeComments,
+      {
+        body: renderRepairMarker(cumulativeRepairFixture.nextHead, fingerprint),
+        author: { login: automationLogin },
+      },
     ];
 
     expect(
-      selectRepairAttempt(comments, cumulativeRepairFixture.nextHead, cumulativeRepairFixture.nextFindings)
+      selectRepairAttempt(comments, cumulativeRepairFixture.nextHead, cumulativeRepairFixture.nextFindings, automationLogin)
         .cumulativeLimitExceeded,
     ).toBe(true);
   });
 
-  it("counts repair markers beyond the first GitHub comment page", () => {
+  it("does not count repair markers from untrusted authors", () => {
+    const comments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
+      ...comment,
+      author: { login: "untrusted-user" },
+    }));
+
+    expect(
+      selectRepairAttempt(comments, cumulativeRepairFixture.nextHead, cumulativeRepairFixture.nextFindings, automationLogin).action,
+    ).toBe("launch_repair");
+  });
+
+  it("counts trusted repair markers beyond the first GitHub comment page", () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({ body: `comment ${index}` }));
+    const apiComments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
+      ...comment,
+      user: { login: automationLogin },
+    }));
     const runner = {
       runJson: (args: string[]) => args[1] === "pr"
         ? { comments: firstPage }
-        : [firstPage, cumulativeRepairFixture.comments],
+        : [firstPage, apiComments],
     };
     const pr = readLivePr("owner/repo", "243", runner);
 
     expect(
-      selectRepairAttempt(pr.comments, cumulativeRepairFixture.nextHead, cumulativeRepairFixture.nextFindings).reason,
+      selectRepairAttempt(pr.comments, cumulativeRepairFixture.nextHead, cumulativeRepairFixture.nextFindings, automationLogin).reason,
     ).toBe("cumulative_repair_limit");
   });
 
