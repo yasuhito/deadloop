@@ -17,35 +17,35 @@ type TransitionWorld = {
   completionCommands?: string[][];
 };
 
-Given("現在レビューできる pull request がない", function (this: TransitionWorld) {
+Given("No pull request is currently reviewable", function (this: TransitionWorld) {
   this.fixtureName = "no-candidate.json";
 });
 
-Given("pull request の CI が実行中である", function (this: TransitionWorld) {
+Given("The pull request CI is running", function (this: TransitionWorld) {
   this.fixtureName = "pending-ci.json";
 });
 
-Given("CI が完了したレビュー待ちの pull request がある", function (this: TransitionWorld) {
+Given("A pull request is waiting for review after CI completes", function (this: TransitionWorld) {
   this.fixtureName = "external-review-request.json";
 });
 
-Given("以前の pull request head にだけ外部レビューを依頼している", function (this: TransitionWorld) {
+Given("External review was requested only for a previous pull request head", function (this: TransitionWorld) {
   this.fixtureName = "previous-head-external-review.json";
 });
 
-Given("外部レビューが無効に設定されている", function (this: TransitionWorld) {
+Given("External review is configured as disabled", function (this: TransitionWorld) {
   this.externalReviewEnabled = false;
 });
 
-Given("外部レビューが有効に設定されている", function (this: TransitionWorld) {
+Given("External review is configured as enabled", function (this: TransitionWorld) {
   this.externalReviewEnabled = true;
 });
 
-Given("以前の pull request head に対する承認結果がある", function (this: TransitionWorld) {
+Given("An approval result exists for a previous pull request head", function (this: TransitionWorld) {
   this.staleApproval = true;
 });
 
-When("deadloop が pull request の次の処理を決める", function (this: TransitionWorld) {
+When("deadloop decides the pull request's next action", function (this: TransitionWorld) {
   if (!this.fixtureName) throw new Error("pull request state is missing");
   this.result = runPrReviewerDriverFixture(
     path.join("test/fixtures/pr-reviewer-driver", this.fixtureName),
@@ -53,19 +53,19 @@ When("deadloop が pull request の次の処理を決める", function (this: Tr
   );
 });
 
-Then("レビュー処理は開始されない", function (this: TransitionWorld) {
+Then("Review processing does not start", function (this: TransitionWorld) {
   assert.equal(this.result?.testAdapterEffects?.herdrStarts?.length ?? 0, 0);
 });
 
-Then("CI の完了待ちになる", function (this: TransitionWorld) {
+Then("deadloop waits for CI to complete", function (this: TransitionWorld) {
   assert.equal(this.result?.driverAction, "wait");
 });
 
-Then("通常レビューを開始する", function (this: TransitionWorld) {
+Then("deadloop starts normal review", function (this: TransitionWorld) {
   assert.equal(this.result?.testAdapterEffects?.herdrStarts?.length, 1);
 });
 
-Then("現在の head の外部レビューを依頼する", function (this: TransitionWorld) {
+Then("deadloop requests external review for the current head", function (this: TransitionWorld) {
   assert.equal(
     this.result?.githubEffects?.some(
       (effect) => effect.operation === "comment_pr"
@@ -75,7 +75,7 @@ Then("現在の head の外部レビューを依頼する", function (this: Tran
   );
 });
 
-When("deadloop が現在の pull request の承認処理を完了する", function (this: TransitionWorld) {
+When("deadloop completes approval processing for the current pull request", function (this: TransitionWorld) {
   if (!this.staleApproval) throw new Error("approval result is missing");
   const commands: string[][] = [];
   try {
@@ -139,7 +139,7 @@ When("deadloop が現在の pull request の承認処理を完了する", functi
   this.completionCommands = commands;
 });
 
-Then("現在の pull request はマージされない", function (this: TransitionWorld) {
+Then("The current pull request is not merged", function (this: TransitionWorld) {
   assert.equal(
     this.completionCommands?.some((args) => args[0] === "gh" && args[1] === "pr" && args[2] === "merge"),
     false,

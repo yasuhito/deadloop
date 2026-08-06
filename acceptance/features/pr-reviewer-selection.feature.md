@@ -1,146 +1,146 @@
-# 機能: pull request のレビュー処理を安全に進める
+# Feature: Safely proceed with the pull request review process
 
-deadloop の利用者に対し、レビュー可能な pull request だけが選ばれ、外部レビューの状態や下書き状態に応じて安全に処理されることを保証する。
-これにより、準備中、停止中、または別の担当者が処理中の pull request に対する重複・早期レビューを防ぐ。
+deadloop selects only reviewable pull requests and handles them safely according to external-review and draft state.
+This prevents duplicate and early reviews of pull requests that are being prepared, are blocked, or are being processed by another agent.
 
-## シナリオ: レビュー待ちの pull request を選ぶ
+## Scenario: Select a pull request waiting for review
 
-* 前提 レビュー待ちの pull request がある
-* もし deadloop がレビュー対象を探す
-* ならば pull request #7 をレビュー対象に選ぶ
+* Given There is a pull request waiting for review.
+* When deadloop searches for review target
+* Then deadloop selects pull request #7 for review
 
-## シナリオ: 自動マージが無効なら人間確認待ちの pull request を選ばない
+## Scenario: If automatic merge is disabled, do not select a pull request that is ready for human review.
 
-* 前提 人間確認待ちの pull request がある
-* かつ 自動マージが無効である
-* もし deadloop がレビュー対象を探す
-* ならば レビュー対象は選ばれない
+* Given There is a pull request ready for human review.
+* And Automatic merge is disabled
+* When deadloop searches for review target
+* Then No review target is selected
 
-## シナリオ: 自動マージが有効なら人間確認待ちの pull request を選ぶ
+## Scenario: If automatic merge is enabled, select a pull request that is ready for human review.
 
-* 前提 人間確認待ちの pull request がある
-* かつ 自動マージが有効である
-* もし deadloop がレビュー対象を探す
-* ならば pull request #42 をレビュー対象に選ぶ
+* Given There is a pull request ready for human review.
+* And automatic merge is enabled
+* When deadloop searches for review target
+* Then deadloop selects pull request #42 for review
 
-## シナリオ: レビュー対象外のラベルだけを持つ pull request を選ばない
+## Scenario: Do not select a pull request that only has labels that are not subject to review.
 
-* 前提 レビュー対象外のラベルだけを持つ pull request がある
-* もし deadloop がレビュー対象を探す
-* ならば レビュー対象は選ばれない
+* Given There is a pull request that only has labels that are not subject to review.
+* When deadloop searches for review target
+* Then No review target is selected
 
-## シナリオ: CI 実行中の pull request を選ばない
+## Scenario: Do not select a pull request while CI is running
 
-* 前提 CI 実行中の pull request がある
-* もし deadloop がレビュー対象を探す
-* ならば レビュー対象は選ばれない
+* Given A pull request has CI running
+* When deadloop searches for review target
+* Then No review target is selected
 
-## シナリオ: 外部レビューの待機期限が切れた pull request を選ぶ
+## Scenario: Select a pull request after its external-review wait expires
 
-* 前提 外部レビューの待機期限が切れた pull request がある
-* かつ 外部レビューが有効である
-* もし deadloop がレビュー対象を探す
-* ならば pull request #9 をレビュー対象に選ぶ
+* Given There is a pull request whose waiting period for external review has expired.
+* And External review is enabled
+* When deadloop searches for review target
+* Then deadloop selects pull request #9 for review
 
-## シナリオ: 外部レビューが無効なら外部レビュー待ちの pull request を選ぶ
+## Scenario: If external review is disabled, select a pull request waiting for external review.
 
-* 前提 外部レビュー待ちの pull request がある
-* かつ 外部レビューが無効である
-* もし deadloop がレビュー対象を探す
-* ならば pull request #10 をレビュー対象に選ぶ
+* Given There is a pull request waiting for external review
+* And External review is disabled
+* When deadloop searches for review target
+* Then deadloop selects pull request #10 for review
 
-## シナリオ: 外部レビュー担当が処理中の pull request を選ばない
+## Scenario: Do not select a pull request being processed by an external reviewer
 
-* 前提 外部レビュー担当が処理中の pull request がある
-* かつ 外部レビューが有効である
-* もし deadloop がレビュー対象を探す
-* ならば レビュー対象は選ばれない
+* Given pull request is being processed by an external reviewer
+* And External review is enabled
+* When deadloop searches for review target
+* Then No review target is selected
 
-## シナリオ: 別の外部レビュー担当が処理中の pull request を選ばない
+## Scenario: Do not select a pull request that is being processed by another external reviewer
 
-* 前提 別の外部レビュー担当が処理中の pull request がある
-* かつ 外部レビューが有効である
-* もし deadloop がレビュー対象を探す
-* ならば レビュー対象は選ばれない
+* Given pull request is being processed by another external reviewer
+* And External review is enabled
+* When deadloop searches for review target
+* Then No review target is selected
 
-## シナリオ: 外部レビューをまだ依頼していない pull request には外部レビューを依頼する
+## Scenario: Request external review for a pull request that has not been sent for external review
 
-* 前提 レビュー待ちの pull request がある
-* かつ 外部レビューが有効である
-* もし deadloop が外部レビューの扱いを決める
-* ならば deadloop は外部レビューを依頼する
+* Given There is a pull request waiting for review.
+* And External review is enabled
+* When deadloop decides how to handle external reviews
+* Then deadloop requests external review
 
-## シナリオ: 外部レビュー待ちでは通常レビューを開始しない
+## Scenario: Do not start normal review while waiting for an external review.
 
-* 前提 外部レビュー待ちの pull request がある
-* かつ 外部レビューが有効である
-* もし deadloop が外部レビューの扱いを決める
-* ならば 外部レビューの完了待ちになる
+* Given There is a pull request waiting for external review
+* And External review is enabled
+* When deadloop decides how to handle external reviews
+* Then deadloop waits for external review to complete
 
-## シナリオ: 外部レビューの待機期限が切れたら通常レビューを開始する
+## Scenario: Start normal review when external review waiting period expires
 
-* 前提 外部レビューの待機期限が切れた pull request がある
-* かつ 外部レビューが有効である
-* もし deadloop が外部レビューの扱いを決める
-* ならば レビュー担当が起動される
+* Given There is a pull request whose waiting period for external review has expired.
+* And External review is enabled
+* When deadloop decides how to handle external reviews
+* Then deadloop starts the Reviewer for normal review
 
-## シナリオ: 下書きの pull request はレビューを開始しない
+## Scenario: Do not start review for a draft pull request
 
-* 前提 下書きの pull request がある
-* もし deadloop がレビュー対象を選んで処理する
-* ならば レビュー担当は起動されない
+* Given There is a draft pull request
+* When deadloop selects and processes the review target
+* Then deadloop does not start the Reviewer
 
-## シナリオ: 下書きの pull request には復旧手順を示す
+## Scenario: Show recovery steps for a draft pull request
 
-* 前提 下書きの pull request がある
-* もし deadloop がレビューを開始しようとする
-* ならば pull request の復旧手順を示す
+* Given There is a draft pull request
+* When deadloop tries to start a review
+* Then deadloop shows recovery steps for pull request
 
-## シナリオ: 古いレビュー占有を回収して pull request を選ぶ
+## Scenario: Reclaim a stale review claim and select its pull request
 
-* 前提 稼働中の担当者がいないレビュー中の pull request がある
-* もし deadloop がレビュー対象を探す
-* ならば pull request #13 をレビュー対象に選ぶ
+* Given There is a pull request under review with no active agents.
+* When deadloop searches for review target
+* Then deadloop selects pull request #13 for review
 
-## シナリオ: 古いレビュー占有の回収理由を記録する
+## Scenario: Record stale review claim recovery as the selection reason
 
-* 前提 稼働中の担当者がいないレビュー中の pull request がある
-* もし deadloop がレビュー対象を探す
-* ならば 選定理由は古いレビュー占有の回収である
+* Given There is a pull request under review with no active agents.
+* When deadloop searches for review target
+* Then The selection reason is stale review claim recovery
 
-## シナリオ: 修復完了後の再レビュー理由を記録する
+## Scenario: Record repair re-review as the selection reason
 
-* 前提 修復完了後に再レビューを待つ pull request がある
-* もし deadloop がレビュー対象を探す
-* ならば 選定理由は修復完了後の再レビューである
+* Given There is a pull request waiting for re-review after repair
+* When deadloop searches for review target
+* Then The selection reason is repair re-review
 
-## シナリオ: 証拠付きで放棄した試行は pull request を占有しない
+## Scenario: Do not treat an attempt abandoned with evidence as owning the pull request
 
-* 前提 証拠付きで放棄した試行があるレビュー待ちの pull request がある
-* もし deadloop がレビュー対象を探す
-* ならば pull request #7 をレビュー対象に選ぶ
+* Given There is a pull request waiting for review with an abandoned attempt with evidence.
+* When deadloop searches for review target
+* Then deadloop selects pull request #7 for review
 
-## シナリオ: 別担当がレビュー中の pull request を選ばない
+## Scenario: Do not select a pull request that is being reviewed by another agent
 
-* 前提 別担当がレビュー中の pull request がある
-* もし deadloop がレビュー対象を探す
-* ならば レビュー対象は選ばれない
+* Given There is a pull request being reviewed by another agent.
+* When deadloop searches for review target
+* Then No review target is selected
 
-## シナリオ: 停止中の pull request を選ばない
+## Scenario: Do not select a blocked pull request
 
-* 前提 停止中の pull request がある
-* もし deadloop がレビュー対象を探す
-* ならば レビュー対象は選ばれない
+* Given There is a blocked pull request
+* When deadloop searches for review target
+* Then No review target is selected
 
-## シナリオ: 複数候補ではレビュー可能な pull request だけを選ぶ
+## Scenario: Select only a reviewable pull request from multiple candidates
 
-* 前提 レビューできない pull request とレビュー可能な pull request が混在している
-* もし deadloop がレビュー対象を探す
-* ならば pull request #15 をレビュー対象に選ぶ
+* Given Reviewable and unreviewable pull requests are both available
+* When deadloop searches for review target
+* Then deadloop selects pull request #15 for review
 
-## シナリオ: 別担当が選択後に作業を始めた pull request を再度選ばない
+## Scenario: Do not select a pull request again after another agent starts its review
 
-* 前提 レビュー待ちの pull request がある
-* かつ 別担当が選択後にレビューを開始している
-* もし 次の選定周期になる
-* ならば レビュー対象は選ばれない
+* Given There is a pull request waiting for review.
+* And Another agent has started the review after selection.
+* When The next selection cycle begins
+* Then No review target is selected

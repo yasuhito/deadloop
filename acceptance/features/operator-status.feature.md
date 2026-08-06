@@ -1,93 +1,93 @@
-# 機能: オペレーターが deadloop の現在地と安全な復旧手順を確認する
+# Feature: Show deadloop status and safe recovery steps to the operator
 
-オペレーターは、次の安全な行動を決めるために、Issue、pull request、作業場所、設定条件、停止した作業の復旧手順を確認できる。
+The operator can inspect Issues, pull requests, worktrees, configuration conditions, and recovery steps for blocked work before choosing the next safe action.
 
-## シナリオ: 実装待ちの Issue がない場合はそのことを表示する
+## Scenario: Report when no Issue is waiting for implementation
 
-* 前提 実装待ちの Issue がない
-* もしオペレーターが deadloop の状態を表示する
-* ならば実装待ちの Issue はないと表示される
+* Given There is no Issue waiting for implementation.
+* When The operator requests deadloop status
+* Then Status reports that no Issue is waiting for implementation
 
-## シナリオ: 対象の Issue を表示する
+## Scenario: Show target Issue
 
-* 前提 Issue #13 が実装中である
-* もしオペレーターが deadloop の状態を表示する
-* ならば対象の Issue が表示される
+* Given Issue #13 is being implemented
+* When The operator requests deadloop status
+* Then Status shows the target Issue
 
-## シナリオ: レビュー対象の pull request を表示する
+## Scenario: Show pull request for review
 
-* 前提 pull request #21 がレビュー待ちである
-* もしオペレーターが deadloop の状態を表示する
-* ならばレビュー対象の pull request が表示される
+* Given pull request #21 is waiting for review
+* When The operator requests deadloop status
+* Then Status shows the pull request awaiting review
 
-## シナリオ: 片付け候補の作業場所を表示する
+## Scenario: Show worktrees that are candidates for cleanup
 
-* 前提 マージ済み pull request #20 の作業場所が残っている
-* もしオペレーターが deadloop の状態を表示する
-* ならば片付け候補の作業場所が表示される
+* Given Worktree remains for merged pull request #20
+* When The operator requests deadloop status
+* Then Status shows cleanup-candidate worktrees
 
-## シナリオ: 稼働中の作業場所を表示する
+## Scenario: Show active worktrees
 
-* 前提 実装中の Issue #13 の作業場所が稼働している
-* もしオペレーターが deadloop の状態を表示する
-* ならば稼働中の作業場所が表示される
+* Given Worktree of Issue #13 in progress is up and running
+* When The operator requests deadloop status
+* Then Status displays active worktrees
 
-## シナリオ: コード更新の警告を表示する
+## Scenario: Show code update warning
 
-* 前提 deadloop 拡張のコード更新が状態表示に反映されていない
-* もしオペレーターが deadloop の状態を表示する
-* ならばコード更新の警告が表示される
+* Given deadloop Extension code update not reflected in status display
+* When The operator requests deadloop status
+* Then Status shows the code-update warning
 
-## シナリオ: 自動化の直近の判断を表示する
+## Scenario: Show the most recent automation decision
 
-* 前提 自動化が直近の実行で Issue #12 を選んでいる
-* もしオペレーターが deadloop の状態を表示する
-* ならば自動化の直近の判断が表示される
+* Given Automation selected Issue #12 in most recent run
+* When The operator requests deadloop status
+* Then Status shows the most recent automation decision
 
-## シナリオ: 設定元を表示する
+## Scenario: Show the configuration source
 
-* 前提 ローカル設定の場所が不明で、リポジトリ設定を origin/main の deadloop.json から読む設定である
-* もしオペレーターが deadloop の状態を表示する
-* ならば設定元が表示される
+* Given The location of the local configuration is unknown, and the repository configuration is read from deadloop.json in origin/main.
+* When The operator requests deadloop status
+* Then Status shows the configuration source
 
-## シナリオ: Issue の停止コメントに理由を表示する
+## Scenario: Show reason in blocking comment for Issue
 
-* 前提 PRD、設計、または親課題に相当する Issue #11 が実装待ちである
-* もし deadloop が停止コメントを作成する
-* ならば停止コメントに理由が表示される
+* Given Issue #11, representing a PRD, design, or parent task, is awaiting implementation.
+* When deadloop creates the blocking comment
+* Then The blocking comment shows the reason
 
-## シナリオ: Issue の停止コメントに復旧手順を表示する
+## Scenario: Show recovery procedure in blocking comment of Issue
 
-* 前提 PRD、設計、または親課題に相当する Issue #11 が実装待ちである
-* もし deadloop が停止コメントを作成する
-* ならば停止コメントに復旧手順が表示される
+* Given Issue #11, representing a PRD, design, or parent task, is awaiting implementation.
+* When deadloop creates the blocking comment
+* Then The blocking comment shows recovery steps
 
-## シナリオ: Issue の停止コメントに安全な再投入方法を表示する
+## Scenario: Show safe requeue method in blocking comment for Issue
 
-* 前提 PRD、設計、または親課題に相当する Issue #11 が実装待ちである
-* もし deadloop が停止コメントを作成する
-* ならば停止コメントに安全な再投入方法が表示される
+* Given Issue #11, representing a PRD, design, or parent task, is awaiting implementation.
+* When deadloop creates the blocking comment
+* Then The blocking comment shows a safe requeue method
 
-## シナリオ: pull request の停止コメントに理由を表示する
+## Scenario: Show reason in blocking comment for pull request
 
-* 前提 pull request #23 が下書きでレビュー待ちである
-* もし deadloop が停止コメントを作成する
-* ならば pull request の停止コメントに理由が表示される
+* Given pull request #23 is a draft and waiting for review.
+* When deadloop creates the blocking comment
+* Then The pull request blocking comment shows the reason
 
-## シナリオ: pull request の停止コメントに復旧手順を表示する
+## Scenario: Show recovery procedure in blocking comment of pull request
 
-* 前提 pull request #23 が下書きでレビュー待ちである
-* もし deadloop が停止コメントを作成する
-* ならば pull request の停止コメントに復旧手順が表示される
+* Given pull request #23 is a draft and waiting for review.
+* When deadloop creates the blocking comment
+* Then The blocking comment shows recovery steps of pull request
 
-## シナリオ: pull request の停止コメントに安全な再投入方法を表示する
+## Scenario: Show safe requeue method in blocking comment for pull request
 
-* 前提 pull request #23 が下書きでレビュー待ちである
-* もし deadloop が停止コメントを作成する
-* ならば pull request の停止コメントに安全な再投入方法が表示される
+* Given pull request #23 is a draft and waiting for review.
+* When deadloop creates the blocking comment
+* Then The pull request blocking comment shows a safe requeue method
 
-## シナリオ: 現行の状態表示コマンドを登録する
+## Scenario: Register the current status display command
 
-* 前提 deadloop 拡張を起動できる
-* もし deadloop 拡張が公開コマンドを登録する
-* ならば `/deadloop-status` が利用できる
+* Given The deadloop extension can start
+* When The deadloop extension registers public commands
+* Then `/deadloop-status` is available

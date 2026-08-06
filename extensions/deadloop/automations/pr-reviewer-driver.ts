@@ -326,7 +326,7 @@ function liveBranchUpdateDecision(pr: JsonObject, env: ReturnType<typeof envConf
 }
 
 function branchUpdateDecision(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
-  if (String(pr.mergeStateStatus || "").toUpperCase() !== "CONFLICTING") {
+  if (String(pr.mergeable || "").toUpperCase() !== "CONFLICTING") {
     return { action: "no_update", reason: "pr_not_conflicting", headOid: pr.headRefOid || "", baseOid: "" };
   }
   return fixture ? fixtureBranchUpdateDecision(pr, fixture) : liveBranchUpdateDecision(pr, env);

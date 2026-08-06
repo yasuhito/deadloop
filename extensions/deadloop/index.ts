@@ -4,13 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { reconcileAndSelectDueAutomation } from "../../src/automation-scheduler";
 import {
   DEFAULT_TIMEZONE,
   REPO_POLICY_FILE,
   automationEnvironment,
   automationStateKey,
   codeFreshnessWarning,
-  getDueSlot,
   isLinkedGitWorktree,
   nextSlotAfter,
   parseProjectsConfig,
@@ -1566,17 +1566,10 @@ export default function (pi) {
         }
       }
 
-      const now = Date.now();
-      for (const automation of project.automations) {
-        const key = automationStateKey(project, automation);
-        const entry = state.automations[key] || {};
-        state.automations[key] = entry;
-        const dueSlot = getDueSlot(automation, entry, now);
-        if (!dueSlot) continue;
-
-        await runAutomation(pi, ctx, project, automation, dueSlot, state, deps);
+      const selected = reconcileAndSelectDueAutomation(project, state.automations, Date.now());
+      if (selected) {
+        await runAutomation(pi, ctx, project, selected.automation, selected.dueSlot, state, deps);
         if (active === schedulerRun && ownsLock && !stopRequested) updateStatus(ctx, project, state);
-        break;
       }
 
       if (active === schedulerRun && ownsLock && !stopRequested) deps.saveState(state);

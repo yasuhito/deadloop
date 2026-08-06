@@ -9,7 +9,7 @@ module.exports = {
     paths: ["acceptance/features/**/*.feature.md"],
     requireModule: ["tsx/cjs"],
     require: ["acceptance/steps/**/*.ts", "acceptance/support/**/*.ts"],
-    language: "ja",
+    language: "en",
     strict: true,
     format: ["progress", `message:${messagePath}`],
   },

@@ -24,7 +24,8 @@
         }
       ],
       "reviewRequests": [],
-      "mergeStateStatus": "CONFLICTING"
+      "mergeable": "CONFLICTING",
+      "mergeStateStatus": "DIRTY"
     }
   ],
   "agents": {

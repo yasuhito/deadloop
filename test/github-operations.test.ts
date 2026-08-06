@@ -33,6 +33,15 @@ describe("GitHub operations", () => {
     ]);
   });
 
+  it("requests live PR mergeability for conflict recovery", () => {
+    const commands: string[][] = [];
+    const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), []) });
+
+    github.listOpenPrs("owner/repo");
+
+    expect(commands[0].at(-1)).toContain("mergeable");
+  });
+
   it("requests live PR merge state for conflict recovery", () => {
     const commands: string[][] = [];
     const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), []) });

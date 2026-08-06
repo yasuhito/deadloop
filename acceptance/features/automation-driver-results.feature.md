@@ -1,46 +1,45 @@
-# 機能: 決定論的な自動化判断に応じて必要な次の処理だけを実行する
+# Feature: Perform only the next action required by a deterministic automation decision
 
-自動化を使う利用者は、決定論的に判断できる結果で不要なエージェント実行が始まらず、
-判断が必要な場合だけ適切な依頼が一度届くことを期待する。
+Automation users expect deterministic results not to start unnecessary agents and expect exactly one appropriate request only when judgment is required.
 
-## シナリオ: 処理不要と判断された場合はプロンプトを送信しない
+## Scenario: Do not send a prompt when no action is required
 
-* 前提 自動化が処理不要と判断している
-* もし deadloop が自動化を実行する
-* ならば deadloop はプロンプトを送信しない
+* Given Automation determines that no action is required
+* When deadloop runs the automation
+* Then deadloop does not send a prompt
 
-## シナリオ: 処理完了と報告された場合はプロンプトを送信しない
+## Scenario: Do not send a prompt when processing is complete
 
-* 前提 自動化が処理完了と報告している
-* もし deadloop が自動化を実行する
-* ならば deadloop はプロンプトを送信しない
+* Given Automation reports that processing is complete
+* When deadloop runs the automation
+* Then deadloop does not send a prompt
 
-## シナリオ: 判断が必要な場合は判断用プロンプトだけを送信する
+## Scenario: Send only the decision prompt when judgment is required
 
-* 前提 自動化が判断を必要としている
-* もし deadloop が自動化を実行する
-* ならば deadloop は判断用プロンプトだけを送信する
+* Given Automation requires judgment
+* When deadloop runs the automation
+* Then deadloop sends only the decision prompt
 
-## シナリオ: 自動化の応答が不正な場合はプロンプトを送信しない
+## Scenario: Do not send a prompt for an invalid automation response
 
-* 前提 自動化の応答が不正である
-* もし deadloop が自動化を実行する
-* ならば deadloop はプロンプトを送信しない
+* Given Automation returns an invalid response
+* When deadloop runs the automation
+* Then deadloop does not send a prompt
 
-## シナリオ: 自動化が失敗した場合はプロンプトを送信しない
+## Scenario: Do not send a prompt when automation fails
 
-* 前提 自動化が失敗している
-* もし deadloop が自動化を実行する
-* ならば deadloop はプロンプトを送信しない
+* Given Automation has failed
+* When deadloop runs the automation
+* Then deadloop does not send a prompt
 
-## シナリオ: 自動化が停止を報告した場合はプロンプトを送信しない
+## Scenario: Do not send a prompt when automation reports a stop
 
-* 前提 自動化が停止を報告している
-* もし deadloop が自動化を実行する
-* ならば deadloop はプロンプトを送信しない
+* Given Automation reports a stop
+* When deadloop runs the automation
+* Then deadloop does not send a prompt
 
-## シナリオ: 決定論的な判断を設定していない場合は通常のプロンプトを送信する
+## Scenario: Send the normal prompt when no deterministic driver is configured
 
-* 前提 決定論的な判断を設定していない自動化がある
-* もし deadloop が自動化を実行する
-* ならば deadloop は通常のプロンプトを送信する
+* Given Automation has no deterministic driver configured
+* When deadloop runs the automation
+* Then deadloop sends the normal prompt
