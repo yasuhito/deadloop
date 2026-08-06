@@ -41,6 +41,7 @@ type ProjectCheckResult = {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  interrupted: boolean;
 };
 
 type HiddenArtifact = {
@@ -180,7 +181,7 @@ function runShell(
       if (timer) clearTimeout(timer);
       if (escalationTimer) clearTimeout(escalationTimer);
       signal?.removeEventListener("abort", interrupt);
-      resolve({ code: timedOut ? 124 : interrupted ? 130 : (code ?? 1), stdout, stderr, timedOut });
+      resolve({ code: timedOut ? 124 : interrupted ? 130 : (code ?? 1), stdout, stderr, timedOut, interrupted });
     });
   });
 }
@@ -195,6 +196,7 @@ async function runProjectCheck(input: ProjectCheckInput): Promise<ProjectCheckRe
       stdout: "",
       stderr: `project-check could not inspect tracked runtime paths: ${error instanceof Error ? error.message : String(error)}\n`,
       timedOut: false,
+      interrupted: false,
     };
   }
   if (tracked.length) {
@@ -203,6 +205,7 @@ async function runProjectCheck(input: ProjectCheckInput): Promise<ProjectCheckRe
       stdout: "",
       stderr: `project-check refuses to hide tracked runtime paths: ${tracked.join(", ")}\n`,
       timedOut: false,
+      interrupted: false,
     };
   }
 

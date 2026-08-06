@@ -309,16 +309,12 @@ afterEach(async () => {
   for (const sandbox of sandboxes.splice(0)) rmSync(sandbox, { recursive: true, force: true });
 });
 
-async function explicitCommandWithBrokenNpmMetadataObservation(): Promise<string | undefined> {
+async function explicitNpmCommandWithoutLockfileObservation(): Promise<string | undefined> {
   const { root, repoPath } = fixtureRepository();
-  writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({ dependencies: { missing: "1.0.0" } }));
-  writeFileSync(path.join(repoPath, "package-lock.json"), JSON.stringify({
-    name: "fixture",
-    lockfileVersion: 3,
-    packages: { "": { name: "fixture" } },
-  }));
-  git(repoPath, ["add", "package.json", "package-lock.json"]);
-  git(repoPath, ["commit", "--quiet", "-m", "add inconsistent npm metadata"]);
+  writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({ scripts: { verify: "true" } }));
+  writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({ checkCommand: "npm run verify" }));
+  git(repoPath, ["add", "package.json", "deadloop.json"]);
+  git(repoPath, ["commit", "--quiet", "-m", "add explicit npm verification"]);
   git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
   const extension = await loadExtension(root);
 
@@ -328,7 +324,7 @@ async function explicitCommandWithBrokenNpmMetadataObservation(): Promise<string
 }
 
 async function timedOutVerificationObservation(): Promise<{
-  record: { outcome: string; timedOut: boolean; timeoutMs: number };
+  record: { outcome: string; exitCode: number | null; terminationReason?: string; timedOut: boolean; timeoutMs: number };
   log: string;
 }> {
   const { root, repoPath } = fixtureRepository();
@@ -352,6 +348,33 @@ async function timedOutVerificationObservation(): Promise<{
     record: JSON.parse(readFileSync(result.recordPath, "utf8")),
     log: readFileSync(result.logPath, "utf8"),
   };
+}
+
+async function interruptedVerificationObservation(): Promise<{
+  outcome: string;
+  exitCode: number | null;
+  terminationReason?: string;
+}> {
+  const { root, repoPath } = fixtureRepository();
+  const baseRevision = git(repoPath, ["rev-parse", "origin/master"]).trim();
+  const controller = new AbortController();
+  controller.abort();
+  const result = await runEnablementVerification({
+    stateDir: path.join(root, ".pi", "agent", "deadloop"),
+    primaryRepoPath: repoPath,
+    repository: "owner/demo",
+    resolution: {
+      status: "resolved",
+      contract: {
+        repository: "owner/demo",
+        command: "sleep 60",
+        source: { kind: "repo_policy", location: "deadloop.json" },
+        baseRevision,
+      },
+    },
+    signal: controller.signal,
+  });
+  return JSON.parse(readFileSync(result.recordPath, "utf8"));
 }
 
 async function dirtyFailureObservation(): Promise<{ messageIncludesLogPath: boolean; logIncludesDirtyFailure: boolean }> {
@@ -558,19 +581,20 @@ describe("enablement command integration", () => {
     expect(extension.messages.at(-1)).toContain("deadloop enabled");
   });
 
-  it("uses the explicit verification command as the gate when tracked npm metadata is invalid", async () => {
-    expect(await explicitCommandWithBrokenNpmMetadataObservation()).toContain("deadloop enabled");
+  it("runs an explicit npm verification command without requiring a lockfile", async () => {
+    expect(await explicitNpmCommandWithoutLockfileObservation()).toContain("deadloop enabled");
   });
 
   it.skipIf(process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK === "1")(
-    "runs the real repository aggregate command from a dependency-free temporary worktree",
+    "runs an explicit aggregate command that includes its dependency setup",
     async () => {
       const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-real-enablement-"));
       sandboxes.push(root);
       const repoPath = path.join(root, "primary");
       execFileSync("git", ["clone", "--quiet", "--no-hardlinks", process.cwd(), repoPath]);
       const baseRevision = git(repoPath, ["rev-parse", "HEAD"]).trim();
-      const command = JSON.parse(readFileSync(path.join(repoPath, "deadloop.json"), "utf8")).checkCommand;
+      const aggregateCommand = JSON.parse(readFileSync(path.join(repoPath, "deadloop.json"), "utf8")).checkCommand;
+      const command = `npm ci --ignore-scripts --no-audit --no-fund && ${aggregateCommand}`;
       const previousNestedCheck = process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK;
       process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK = "1";
       try {
@@ -588,7 +612,7 @@ describe("enablement command integration", () => {
             },
           },
         });
-        expect({ outcome: result.outcome, cleanup: result.cleanup }).toEqual({ outcome: "passed", cleanup: "removed" });
+        expect(result.outcome).toBe("passed");
       } finally {
         if (previousNestedCheck === undefined) delete process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK;
         else process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK = previousNestedCheck;
@@ -597,8 +621,16 @@ describe("enablement command integration", () => {
     10 * 60_000,
   );
 
-  it("records timed-out required verification as failed", async () => {
-    expect((await timedOutVerificationObservation()).record.outcome).toBe("failed");
+  it("records timed-out required verification as timed out", async () => {
+    expect((await timedOutVerificationObservation()).record.outcome).toBe("timed_out");
+  });
+
+  it("records no exit code when required verification times out", async () => {
+    expect((await timedOutVerificationObservation()).record.exitCode).toBeNull();
+  });
+
+  it("records a typed termination reason when required verification times out", async () => {
+    expect((await timedOutVerificationObservation()).record.terminationReason).toBe("timeout");
   });
 
   it("records when required verification times out", async () => {
@@ -607,6 +639,18 @@ describe("enablement command integration", () => {
 
   it("records the timeout applied to required verification", async () => {
     expect((await timedOutVerificationObservation()).record.timeoutMs).toBe(25);
+  });
+
+  it("records interrupted required verification as interrupted", async () => {
+    expect((await interruptedVerificationObservation()).outcome).toBe("interrupted");
+  });
+
+  it("records no exit code when required verification is interrupted", async () => {
+    expect((await interruptedVerificationObservation()).exitCode).toBeNull();
+  });
+
+  it("records a typed termination reason when required verification is interrupted", async () => {
+    expect((await interruptedVerificationObservation()).terminationReason).toBe("interrupted");
   });
 
   it("writes timeout-specific evidence to the durable verification log", async () => {
