@@ -2,6 +2,7 @@ import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import type { RequiredVerificationContract, RequiredVerificationResolution } from "./required-verification";
 
@@ -39,6 +40,19 @@ export type EnablementVerificationResult = {
   logPath: string;
   recordPath: string;
   cleanup: "removed" | "retained";
+  reused: boolean;
+};
+
+export type RetainedEnablementVerification = {
+  attemptId: string;
+  repository: string;
+  primaryRepoPath: string;
+  worktreePath: string;
+  targetRevision: string;
+  journalPath: string;
+  recordPath?: string;
+  logPath?: string;
+  retentionReason: string;
 };
 
 export type EnablementVerificationInput = {
@@ -51,6 +65,109 @@ export type EnablementVerificationInput = {
   timeoutMs?: number;
   signal?: AbortSignal;
 };
+
+function verificationRoot(stateDir: string): string {
+  return path.join(stateDir, "required-verification", "enablement");
+}
+
+function readJson(file: string): any | undefined {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function attemptDirectories(stateDir: string): string[] {
+  const root = verificationRoot(stateDir);
+  try {
+    return fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .map((entry) => path.join(root, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+function bindingFor(contract: RequiredVerificationContract) {
+  return {
+    repository: contract.repository,
+    targetCommit: contract.baseRevision,
+    command: contract.command,
+    source: contract.source,
+    baseRevision: contract.baseRevision,
+    ...(contract.override ? { override: contract.override } : {}),
+  };
+}
+
+function reusableSuccess(
+  stateDir: string,
+  contract: RequiredVerificationContract,
+): EnablementVerificationResult | undefined {
+  const expected = bindingFor(contract);
+  const candidates = attemptDirectories(stateDir)
+    .map((directory) => ({ directory, record: readJson(path.join(directory, "record.json")) }))
+    .filter(({ record }) => record?.version === 1 && record.outcome === "passed")
+    .sort((left, right) => String(right.record.startedAt || "").localeCompare(String(left.record.startedAt || "")));
+
+  for (const { directory, record } of candidates) {
+    const actual = record.binding || {
+      repository: record.repository,
+      targetCommit: record.targetCommit,
+      command: record.contract?.command,
+      source: record.contract?.source,
+      baseRevision: record.contract?.baseRevision,
+      ...(record.contract?.override ? { override: record.contract.override } : {}),
+    };
+    if (!isDeepStrictEqual(actual, expected)) continue;
+    if (
+      record.attemptId !== path.basename(directory) || record.exitCode !== 0 || record.timedOut !== false
+      || record.terminationReason !== undefined || typeof record.startedAt !== "string"
+      || !Number.isFinite(record.durationMs) || record.durationMs < 0
+    ) continue;
+    const logPath = record.logPath;
+    if (logPath !== path.join(directory, "check.log") || !fs.existsSync(logPath)) continue;
+    const journalPath = path.join(directory, "journal.json");
+    const journal = readJson(journalPath);
+    return {
+      outcome: "passed",
+      exitCode: 0,
+      journalPath,
+      logPath,
+      recordPath: path.join(directory, "record.json"),
+      cleanup: journal?.state === "cleaned" ? "removed" : "retained",
+      reused: true,
+    };
+  }
+  return undefined;
+}
+
+export function inspectRetainedEnablementVerifications(
+  stateDir: string,
+  primaryRepoPath?: string,
+): RetainedEnablementVerification[] {
+  const expectedPath = primaryRepoPath ? path.resolve(primaryRepoPath) : undefined;
+  const findings: RetainedEnablementVerification[] = [];
+  for (const directory of attemptDirectories(stateDir)) {
+    const journalPath = path.join(directory, "journal.json");
+    const journal = readJson(journalPath);
+    if (journal?.version !== 1 || journal.state !== "retained") continue;
+    if (typeof journal.primaryRepoPath !== "string" || (expectedPath && path.resolve(journal.primaryRepoPath) !== expectedPath)) continue;
+    if (typeof journal.worktreePath !== "string") continue;
+    findings.push({
+      attemptId: String(journal.attemptId || path.basename(directory)),
+      repository: String(journal.repository || "unknown"),
+      primaryRepoPath: journal.primaryRepoPath,
+      worktreePath: journal.worktreePath,
+      targetRevision: String(journal.targetRevision || "unknown"),
+      journalPath,
+      ...(typeof journal.recordPath === "string" ? { recordPath: journal.recordPath } : {}),
+      ...(typeof journal.logPath === "string" ? { logPath: journal.logPath } : {}),
+      retentionReason: String(journal.retentionReason || "cleanup was not proven safe"),
+    });
+  }
+  return findings.sort((left, right) => left.attemptId.localeCompare(right.attemptId));
+}
 
 function writeJson(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -113,9 +230,11 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   }
   const contract = input.resolution.contract;
   if (contract.repository !== input.repository) throw new Error("required verification repository binding does not match enablement identity");
+  const reused = reusableSuccess(input.stateDir, contract);
+  if (reused) return reused;
 
   const attemptId = crypto.randomUUID();
-  const attemptDir = path.join(input.stateDir, "required-verification", "enablement", attemptId);
+  const attemptDir = path.join(verificationRoot(input.stateDir), attemptId);
   const worktreePath = path.join(input.stateDir, "required-verification", "worktrees", attemptId);
   const journalPath = path.join(attemptDir, "journal.json");
   const logPath = path.join(attemptDir, "check.log");
@@ -188,6 +307,7 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   writeJson(recordPath, {
     version: 1,
     attemptId,
+    binding: bindingFor(contract),
     repository: input.repository,
     targetCommit: contract.baseRevision,
     contract,
@@ -209,5 +329,5 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     : { ...journal, state: "retained", retentionReason: cleanup.reason || "cleanup was not proven safe" };
   writeJson(journalPath, journal);
 
-  return { outcome, exitCode, journalPath, logPath, recordPath, cleanup: cleanup.cleanup };
+  return { outcome, exitCode, journalPath, logPath, recordPath, cleanup: cleanup.cleanup, reused: false };
 }

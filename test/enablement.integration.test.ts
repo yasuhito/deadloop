@@ -875,6 +875,34 @@ describe("enablement command integration", () => {
     expect(JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome).toBe("passed");
   });
 
+  it("shows retained verification evidence and a confirmation command in doctor", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.projects[0].checkCommand = "touch retained-by-verification";
+    writeFileSync(configPath, JSON.stringify(config));
+    let journalPath = "";
+    const extension = await loadExtension(root, {
+      beforeEnablementWorktreeCreate: async (value) => { journalPath = value; },
+    });
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+
+    await invoke(extension.commands.get("deadloop-doctor")!, repoPath);
+
+    const report = extension.messages.at(-1) || "";
+    expect([
+      journal.worktreePath,
+      journal.targetRevision,
+      journalPath,
+      journal.recordPath,
+      journal.logPath,
+      "git -C",
+      "status --short --untracked-files=all",
+    ].every((value) => report.includes(value))).toBe(true);
+  });
+
   it("registers the explicit launch-failed attempt abandonment command", async () => {
     const { root } = fixtureRepository();
     const extension = await loadExtension(root);

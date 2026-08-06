@@ -60,7 +60,10 @@ const {
   releaseSchedulerLock: releaseSchedulerFileLock,
 } = require("../../src/scheduler-lock.cjs");
 import { inferredProjectId, schedulerLockName } from "../../src/project-identity";
-import { runEnablementVerification } from "../../src/enablement-verification";
+import {
+  inspectRetainedEnablementVerifications,
+  runEnablementVerification,
+} from "../../src/enablement-verification";
 import {
   findEnabledProject,
   normalizeEnablementState,
@@ -1004,6 +1007,32 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
   return findings;
 }
 
+function shellCommandArgument(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function retainedVerificationReport(repositoryRoot: string | undefined): string {
+  const retained = inspectRetainedEnablementVerifications(STATE_DIR, repositoryRoot);
+  if (!retained.length) return "";
+  const lines = ["", `Retained required-verification worktrees: ${retained.length}`];
+  for (const item of retained) {
+    const worktree = shellCommandArgument(item.worktreePath);
+    const primary = shellCommandArgument(item.primaryRepoPath);
+    lines.push(
+      `- ${item.worktreePath}`,
+      `  repository: ${item.repository}`,
+      `  revision: ${item.targetRevision}`,
+      `  reason: ${item.retentionReason}`,
+      `  journal: ${item.journalPath}`,
+      `  record: ${item.recordPath || "not written"}`,
+      `  log: ${item.logPath || "not written"}`,
+      `  confirm: git -C ${primary} worktree list --porcelain && git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all`,
+    );
+  }
+  return lines.join("\n");
+}
+
 async function buildLiveDoctorReport(pi, cwd) {
   const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true, includeAgents: true });
   const retained = retainedAttemptClaimSnapshot(data.selectedProject);
@@ -1026,7 +1055,8 @@ async function buildLiveDoctorReport(pi, cwd) {
       compatibilityDiagnosticData({ probeFailure: error instanceof Error ? error.message : String(error) }),
     ));
   }
-  return formatDoctorReport(snapshot);
+  const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
+  return `${formatDoctorReport(snapshot)}${retainedVerificationReport(repositoryRoot)}`;
 }
 
 const STANDARD_LABELS = [

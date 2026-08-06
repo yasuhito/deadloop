@@ -1,0 +1,131 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  inspectRetainedEnablementVerifications,
+  runEnablementVerification,
+} from "../src/enablement-verification";
+import type { RequiredVerificationContract } from "../src/required-verification";
+
+const sandboxes: string[] = [];
+
+function fixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-verification-"));
+  sandboxes.push(root);
+  const repoPath = path.join(root, "repo");
+  fs.mkdirSync(repoPath);
+  execFileSync("git", ["-C", repoPath, "init", "--quiet"]);
+  execFileSync("git", ["-C", repoPath, "config", "user.email", "test@example.com"]);
+  execFileSync("git", ["-C", repoPath, "config", "user.name", "Test"]);
+  fs.writeFileSync(path.join(repoPath, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", repoPath, "add", "README.md"]);
+  execFileSync("git", ["-C", repoPath, "commit", "--quiet", "-m", "initial"]);
+  const baseRevision = execFileSync("git", ["-C", repoPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const stateDir = path.join(root, "state");
+  const countPath = path.join(root, "count");
+  const contract: RequiredVerificationContract = {
+    repository: "owner/demo",
+    command: `printf x >> ${countPath}`,
+    source: { kind: "repo_policy", location: "deadloop.json" },
+    baseRevision,
+  };
+  const run = (selectedContract = contract) => runEnablementVerification({
+    stateDir,
+    primaryRepoPath: repoPath,
+    repository: selectedContract.repository,
+    resolution: { status: "resolved", contract: selectedContract },
+  });
+  return { root, repoPath, stateDir, countPath, contract, run };
+}
+
+afterEach(() => {
+  for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
+});
+
+describe("enablement required-verification records", () => {
+  it("reuses a completely matching successful record", async () => {
+    const scenario = fixture();
+    await scenario.run();
+
+    expect((await scenario.run()).reused).toBe(true);
+  });
+
+  it("does not execute the command again when a successful record is reused", async () => {
+    const scenario = fixture();
+    await scenario.run();
+    await scenario.run();
+
+    expect(fs.readFileSync(scenario.countPath, "utf8")).toBe("x");
+  });
+
+  it("reruns verification when the command binding changes", async () => {
+    const scenario = fixture();
+    await scenario.run();
+
+    expect((await scenario.run({ ...scenario.contract, command: `${scenario.contract.command}; true` })).reused).toBe(false);
+  });
+
+  it("reruns verification when the source identity changes", async () => {
+    const scenario = fixture();
+    await scenario.run();
+
+    expect((await scenario.run({ ...scenario.contract, source: { kind: "local", location: "projects.json" } })).reused).toBe(false);
+  });
+
+  it("reruns verification when the repository binding changes", async () => {
+    const scenario = fixture();
+    await scenario.run();
+
+    expect((await scenario.run({ ...scenario.contract, repository: "owner/renamed" })).reused).toBe(false);
+  });
+
+  it("reruns verification when the base revision changes", async () => {
+    const scenario = fixture();
+    await scenario.run();
+    fs.writeFileSync(path.join(scenario.repoPath, "NEXT.md"), "next\n");
+    execFileSync("git", ["-C", scenario.repoPath, "add", "NEXT.md"]);
+    execFileSync("git", ["-C", scenario.repoPath, "commit", "--quiet", "-m", "next"]);
+    const baseRevision = execFileSync("git", ["-C", scenario.repoPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    expect((await scenario.run({ ...scenario.contract, baseRevision })).reused).toBe(false);
+  });
+
+  it("never reuses a failed record", async () => {
+    const scenario = fixture();
+    const failing = { ...scenario.contract, command: "exit 9" };
+    await scenario.run(failing);
+
+    expect((await scenario.run(failing)).reused).toBe(false);
+  });
+
+  it("records every success binding explicitly", async () => {
+    const scenario = fixture();
+    const result = await scenario.run();
+    const record = JSON.parse(fs.readFileSync(result.recordPath, "utf8"));
+
+    expect(record.binding).toEqual({
+      repository: "owner/demo",
+      targetCommit: scenario.contract.baseRevision,
+      command: scenario.contract.command,
+      source: scenario.contract.source,
+      baseRevision: scenario.contract.baseRevision,
+    });
+  });
+
+  it("reports a retained dirty verification worktree for doctor inspection", async () => {
+    const scenario = fixture();
+    const result = await scenario.run({ ...scenario.contract, command: "touch generated" });
+
+    expect(inspectRetainedEnablementVerifications(scenario.stateDir, scenario.repoPath)[0]).toMatchObject({
+      worktreePath: JSON.parse(fs.readFileSync(result.journalPath, "utf8")).worktreePath,
+      targetRevision: scenario.contract.baseRevision,
+      journalPath: result.journalPath,
+      recordPath: result.recordPath,
+      logPath: result.logPath,
+    });
+  });
+});
