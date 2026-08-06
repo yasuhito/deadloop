@@ -1,0 +1,49 @@
+{
+  "prs": [
+    {
+      "number": 31,
+      "title": "Updated repaired PR",
+      "url": "https://github.com/owner/repo/pull/31",
+      "updatedAt": "2026-07-08T00:00:00Z",
+      "headRefName": "agent/issue-31",
+      "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+      "isCrossRepository": false,
+      "isDraft": false,
+      "labels": [
+        {
+          "name": "agent:review"
+        },
+        {
+          "name": "agent:reviewing"
+        }
+      ],
+      "statusCheckRollup": [],
+      "comments": [
+        {
+          "author": {
+            "login": "deadloop-bot"
+          },
+          "body": "<!-- deadloop:review-repair-result key=c4ddc9641edec4e267b2 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->"
+        },
+        {
+          "author": {
+            "login": "deadloop-bot"
+          },
+          "body": "<!-- deadloop:branch-update-attempt key=63bdfe090637cf9ff5d4 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa base=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->"
+        }
+      ],
+      "reviewRequests": [],
+      "mergeStateStatus": "CONFLICTING"
+    }
+  ],
+  "agents": {
+    "result": {
+      "agents": []
+    }
+  },
+  "branchUpdate": {
+    "action": "no_update",
+    "reason": "head_contains_base",
+    "baseOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}

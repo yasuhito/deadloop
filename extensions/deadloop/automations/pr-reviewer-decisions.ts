@@ -24,6 +24,7 @@ type ReviewDecisionConfig = {
 const PENDING_CHECK_STATES = new Set(["QUEUED", "IN_PROGRESS", "PENDING", "EXPECTED", "WAITING"]);
 const EXTERNAL_REVIEW_MARKER_RE = /<!--\s*deadloop:external-review-request\s+head=([0-9a-fA-F]+)\s*-->/g;
 const REPAIR_RESULT_MARKER_RE = /<!--\s*deadloop:review-repair-result\s+key=[0-9a-fA-F]+\s+head=([0-9a-fA-F]{40})\s*-->/g;
+const BRANCH_UPDATE_MARKER_RE = /<!--\s*deadloop:branch-update-attempt\s+key=[0-9a-fA-F]+\s+head=([0-9a-fA-F]{40})\s+base=[0-9a-fA-F]{40}\s*-->/g;
 
 function defaultDecisionConfig(overrides: Partial<ReviewDecisionConfig> = {}): ReviewDecisionConfig {
   return {
@@ -109,17 +110,33 @@ function matchingMarkerAges(pr: AnyRecord, now: Date): number[] {
   return ages;
 }
 
-function hasRepairResultForCurrentHead(pr: AnyRecord, automationLogin: string): boolean {
-  const head = String(pr.headRefOid || "").toLowerCase();
+function repairResultHeads(pr: AnyRecord, automationLogin: string): Set<string> {
   const expectedAuthor = automationLogin.toLowerCase();
-  if (!head || !expectedAuthor) return false;
+  const heads = new Set<string>();
+  if (!expectedAuthor) return heads;
+  for (const comment of pr.comments || []) {
+    if (!comment || typeof comment !== "object") continue;
+    const record = comment as AnyRecord;
+    if (String(record.author?.login || "").toLowerCase() !== expectedAuthor) continue;
+    REPAIR_RESULT_MARKER_RE.lastIndex = 0;
+    for (const match of String(record.body || "").matchAll(REPAIR_RESULT_MARKER_RE)) heads.add(match[1].toLowerCase());
+  }
+  return heads;
+}
+
+function hasRepairRereviewProvenance(pr: AnyRecord, automationLogin: string): boolean {
+  const expectedAuthor = automationLogin.toLowerCase();
+  const repairedHeads = repairResultHeads(pr, automationLogin);
+  const currentHead = String(pr.headRefOid || "").toLowerCase();
+  if (!expectedAuthor || !currentHead || repairedHeads.size === 0) return false;
+  if (repairedHeads.has(currentHead)) return true;
   return (pr.comments || []).some((comment: unknown) => {
     if (!comment || typeof comment !== "object") return false;
     const record = comment as AnyRecord;
     if (String(record.author?.login || "").toLowerCase() !== expectedAuthor) return false;
-    REPAIR_RESULT_MARKER_RE.lastIndex = 0;
-    return Array.from(String(record.body || "").matchAll(REPAIR_RESULT_MARKER_RE))
-      .some((match) => match[1].toLowerCase() === head);
+    BRANCH_UPDATE_MARKER_RE.lastIndex = 0;
+    return Array.from(String(record.body || "").matchAll(BRANCH_UPDATE_MARKER_RE))
+      .some((match) => repairedHeads.has(match[1].toLowerCase()));
   });
 }
 
@@ -174,6 +191,21 @@ function attemptJournalsForPrReviewer(stateDir: string): AnyRecord[] {
   return attempts;
 }
 
+function reviewerClaimKey(prNumber: number, headOid: string): string {
+  return `${prNumber}:${headOid.toLowerCase()}`;
+}
+
+function claimedReviewerHeads(projectId: string, attempts: AnyRecord[] = [], githubRepo = ""): Set<string> {
+  const claimed = new Set<string>();
+  for (const attempt of attempts) {
+    if (attempt.project !== projectId || (githubRepo && attempt.repository !== githubRepo)) continue;
+    if (attempt.role !== "reviewer" || attempt.target?.kind !== "pull-request" || !Number.isInteger(attempt.target?.number)) continue;
+    const head = String(attempt.inputRevision?.head || "");
+    if (head) claimed.add(reviewerClaimKey(Number(attempt.target.number), head));
+  }
+  return claimed;
+}
+
 function workingReviewerPrNumbers(
   _agents: unknown,
   projectId: string,
@@ -196,7 +228,12 @@ function skipForPrReviewer(reason: string, pr: AnyRecord): AnyRecord {
   return { number: pr.number, reason };
 }
 
-function selectPrForReview(prs: AnyRecord[], config: ReviewDecisionConfig = defaultDecisionConfig(), workingReviewerPrs: Set<number> = new Set()): AnyRecord {
+function selectPrForReview(
+  prs: AnyRecord[],
+  config: ReviewDecisionConfig = defaultDecisionConfig(),
+  workingReviewerPrs: Set<number> = new Set(),
+  claimedReviewerHeadKeys: Set<string> = new Set(),
+): AnyRecord {
   const candidateLabels = config.autoMerge ? new Set([config.reviewLabel, config.humanLabel]) : new Set([config.reviewLabel]);
   const skipped: AnyRecord[] = [];
 
@@ -214,8 +251,10 @@ function selectPrForReview(prs: AnyRecord[], config: ReviewDecisionConfig = defa
       skipped.push(skipForPrReviewer("reviewer_working", pr));
       continue;
     }
-    const staleReclaim = labels.has(config.reviewingLabel);
-    const repairRereview = !staleReclaim && hasRepairResultForCurrentHead(pr, config.automationLogin);
+    const hasReviewingLabel = labels.has(config.reviewingLabel);
+    const currentHeadWasClaimed = claimedReviewerHeadKeys.has(reviewerClaimKey(prNumberForPrReviewer(pr), String(pr.headRefOid || "")));
+    const repairRereview = hasRepairRereviewProvenance(pr, config.automationLogin) && (!hasReviewingLabel || !currentHeadWasClaimed);
+    const staleReclaim = hasReviewingLabel && !repairRereview;
     if (pr.isDraft) {
       return { selected: true, number: pr.number, action: "draft_gate", reason: "draft", staleReclaim, skipped };
     }
@@ -314,14 +353,15 @@ function main(argv: string[] = process.argv.slice(2)): number {
     throw new Error("--mode must be one of: select, external-review-gate");
   }
   const config = cliConfig(args);
+  const attempts = args.stateDir ? attemptJournalsForPrReviewer(args.stateDir) : [];
   const decision = args.mode === "external-review-gate"
     ? externalReviewGate(loadPr(args.input), config)
-    : selectPrForReview(loadPrs(args.input), config, workingReviewerPrNumbers(
-      loadAgents(args.agents),
-      config.projectId,
-      args.stateDir ? attemptJournalsForPrReviewer(args.stateDir) : [],
-      args.githubRepo || "",
-    ));
+    : selectPrForReview(
+      loadPrs(args.input),
+      config,
+      workingReviewerPrNumbers(loadAgents(args.agents), config.projectId, attempts, args.githubRepo || ""),
+      claimedReviewerHeads(config.projectId, attempts, args.githubRepo || ""),
+    );
   process.stdout.write(`${JSON.stringify(decision)}\n`);
   return args.exitCode && !decision.selected ? 1 : 0;
 }
@@ -341,4 +381,5 @@ module.exports = {
   selectPrForReview,
   attemptJournalsForPrReviewer,
   workingReviewerPrNumbers,
+  claimedReviewerHeads,
 };

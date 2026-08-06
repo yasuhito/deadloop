@@ -38,6 +38,18 @@
 * もし deadloop が pull request を確認する
 * ならば deadloop は通常レビューを開始する
 
+## シナリオ: 修復後の競合回復で head が変わった pull request は再レビューを開始する
+
+* 前提 修復後の競合回復で head が変わった pull request がある
+* もし deadloop が pull request を確認する
+* ならば deadloop は通常レビューを開始する
+
+## シナリオ: 修復後の競合回復で head が変わっても選定理由を維持する
+
+* 前提 修復後の競合回復で head が変わった pull request がある
+* もし deadloop が pull request を確認する
+* ならば 競合回復後の選定理由は修復完了後の再レビューである
+
 ## シナリオ: 競合回復中もレビュー状態を維持する
 
 * 前提 回復できる競合状態の pull request がある

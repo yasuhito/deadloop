@@ -54,6 +54,21 @@ describe("PR reviewer stale reviewing reclaim", () => {
     expect(selectPrForReview(prs, defaultDecisionConfig({ automationLogin: "deadloop-bot" })).reason).toBe("selectable");
   });
 
+  it("reclaims a reviewer claim after preserved repair re-review provenance is consumed", () => {
+    const { claimedReviewerHeads, defaultDecisionConfig, selectPrForReview } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const prs = require("./fixtures/pr-reviewer-driver/repaired-merge-conflict-updated.json").prs;
+    const attempts = [{
+      project: "demo", repository: "owner/repo", role: "reviewer",
+      target: { kind: "pull-request", number: 31 }, inputRevision: { head: prs[0].headRefOid },
+    }];
+    expect(selectPrForReview(
+      prs,
+      defaultDecisionConfig({ automationLogin: "deadloop-bot" }),
+      new Set(),
+      claimedReviewerHeads("demo", attempts, "owner/repo"),
+    ).reason).toBe("stale_reclaim");
+  });
+
   it("does not infer ownership from a legacy reviewer agent name", () => {
     expect(runSelect("precheck-reviewing.json", { agents: "agents-reviewer-working.json" }).selected).toBe(true);
   });

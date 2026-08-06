@@ -296,6 +296,10 @@ Given("競合回復で head が変わった pull request がある", function (t
   this.case = "resolved-conflict";
 });
 
+Given("修復後の競合回復で head が変わった pull request がある", function (this: RecoveryWorld) {
+  this.case = "resolved-repaired-conflict";
+});
+
 Given("初めての対応可能なレビュー指摘がある pull request がある", function (this: RecoveryWorld) {
   this.case = "first-repair";
 });
@@ -336,6 +340,7 @@ When("deadloop が pull request を確認する", function (this: RecoveryWorld)
   if (this.case === "conflict") this.result = reviewerDriver("merge-conflict.json");
   if (this.case === "repeated-conflict") this.result = reviewerDriver("merge-conflict-double-attempt.json");
   if (this.case === "resolved-conflict") this.result = reviewerDriver("merge-conflict-updated.json");
+  if (this.case === "resolved-repaired-conflict") this.result = reviewerDriver("repaired-merge-conflict-updated.json");
   if (this.case === "repaired-head") this.result = reviewerDriver("review-repair-pushed.json");
 });
 
@@ -378,6 +383,10 @@ Then("deadloop は専用の競合回復作業を開始しない", function (this
 Then("deadloop は通常レビューを開始する", function (this: RecoveryWorld) {
   const starts = adapterEffects(this.result)?.herdrStarts?.filter((start: any) => start.name.endsWith("-reviewer")) ?? [];
   assert.equal(starts.length, 1);
+});
+
+Then("競合回復後の選定理由は修復完了後の再レビューである", function (this: RecoveryWorld) {
+  assert.equal((this.result?.decision as { reason?: string } | undefined)?.reason, "repair_rereview");
 });
 
 Then("deadloop はレビュー状態を維持する", function (this: RecoveryWorld) {
