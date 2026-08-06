@@ -64,4 +64,15 @@ describe("verified Worker push boundary", () => {
   it("rejects another repository before push", () => { const f = fixture(); expect(() => runGuardedPush({ ...f.args, githubRepo: "other/repo" }, f.ops)).toThrow("repository"); });
   it("rejects another branch before push", () => { const f = fixture(); expect(() => runGuardedPush({ ...f.args, branch: "agent/issue-2" }, f.ops)).toThrow("branch"); });
   it("rejects another worktree before push", () => { const f = fixture(); expect(() => runGuardedPush({ ...f.args, worktree: path.dirname(f.args.worktree) }, f.ops)).toThrow("worktree"); });
+  it("reauthorizes after the final enablement recheck", () => {
+    const f = fixture(); let calls = 0; let error = "";
+    try {
+      runGuardedPush(f.args, f.ops, () => {
+        calls += 1;
+        if (calls === 3) throw new Error("stale_policy");
+        return f.output;
+      });
+    } catch (caught) { error = String(caught); }
+    expect({ calls, pushed: f.pushedRef(), stale: error.includes("stale_policy") }).toEqual({ calls: 3, pushed: "", stale: true });
+  });
 });

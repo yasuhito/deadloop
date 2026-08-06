@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createPreparedAttempt, readAttemptRecord, transitionPersistedAttempt } from "../src/attempt-lifecycle";
 
-const { completeLocked } = require("../extensions/deadloop/automations/complete-attempt-workspace.ts");
+const { assertWorkerPersistenceAuthorized, completeLocked: completeLockedRaw } = require("../extensions/deadloop/automations/complete-attempt-workspace.ts");
+const completeLocked = (args: any, runner: any, recheck: () => void, authorizeWorker?: (...values: any[]) => void) =>
+  completeLockedRaw(args, runner, recheck, authorizeWorker || (() => {}));
 const { renderAttemptPersistenceMarker } = require("../src/attempt-persistence-marker.cjs");
 
 const roots: string[] = [];
@@ -87,6 +89,24 @@ describe("selected attempt workspace completion", () => {
     const data = fixture(true);
     data.setWorkspaceOpen(false);
     const result = completeLocked(data.args, data.runner, () => undefined);
+    expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
+  });
+
+  it("retains a proven Worker workspace when authoritative verification evidence is missing", () => {
+    const data = fixture(true);
+    const result = completeLocked(data.args, data.runner, () => undefined, (record: any, report: any, args: any) =>
+      assertWorkerPersistenceAuthorized(record, report, args, () => record.requiredVerification));
+    expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
+  });
+
+  it("retains a proven Worker workspace when verification evidence names another output", () => {
+    const data = fixture(true); const record = readAttemptRecord(data.runDir);
+    writeFileSync(path.join(data.runDir, "required-verification.json"), JSON.stringify({
+      version: 1, binding: { ...record.requiredVerification, targetCommit: "c".repeat(40) },
+      outcome: "passed", exitCode: 0,
+    }));
+    const result = completeLocked(data.args, data.runner, () => undefined, (attempt: any, report: any, args: any) =>
+      assertWorkerPersistenceAuthorized(attempt, report, args, () => attempt.requiredVerification));
     expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
   });
 

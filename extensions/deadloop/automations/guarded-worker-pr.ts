@@ -46,6 +46,7 @@ type WorkerPrOps = {
   remoteHead: () => string;
   gh: (args: string[], json?: boolean) => any;
   recheck: () => void;
+  authorize: () => void;
 };
 function assertWorkerPrReadyForReview(
   pr: Record<string, any>,
@@ -74,6 +75,7 @@ function ensureWorkerPr(
   if (!Array.isArray(existing) || existing.length !== 0) throw new Error("Worker branch must have zero or one open PR");
   ops.recheck();
   if (ops.remoteHead().toLowerCase() !== outputRevision.toLowerCase()) throw new Error("remote Worker branch changed at the PR creation boundary");
+  ops.authorize();
   const url = ops.gh(["pr", "create", "-R", args.githubRepo, "--base", String(attempt.baseBranch || "origin/main").replace(/^origin\//, ""), "--head", attempt.branch, "--title", args.title, "--body", `Closes #${attempt.target.number}`]);
   const match = String(url).match(/\/(\d+)\/?$/);
   if (!match) throw new Error("created Worker PR number was not returned");
@@ -84,6 +86,24 @@ function ensureWorkerPr(
     throw new Error("created Worker PR head is not the verified output commit; PR closed");
   }
   return number;
+}
+function addWorkerReviewLabel(
+  number: number,
+  attempt: { branch: string; baseBranch?: string; target: { number: number } },
+  outputRevision: string,
+  args: Pick<Args, "githubRepo" | "reviewLabel">,
+  ops: Pick<WorkerPrOps, "gh" | "recheck" | "authorize">,
+): void {
+  ops.recheck();
+  const observedBeforeLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences"], true);
+  assertWorkerPrReadyForReview(observedBeforeLabel, attempt, outputRevision);
+  ops.authorize();
+  ops.gh(["pr", "edit", String(number), "-R", args.githubRepo, "--add-label", args.reviewLabel]);
+  const observedAfterLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefOid"], true);
+  if (String(observedAfterLabel.headRefOid).toLowerCase() !== outputRevision.toLowerCase()) {
+    ops.gh(["pr", "edit", String(number), "-R", args.githubRepo, "--remove-label", args.reviewLabel]);
+    throw new Error("Worker PR head changed while adding the success label; label removed");
+  }
 }
 function verified(args: Args) {
   const location = canonicalAttemptLocation(args);
@@ -113,20 +133,13 @@ function run(args: Args): number {
         MAX_GUARDED_OPERATION_MS,
       );
       const remoteHead = () => command("git", ["ls-remote", "--heads", destination, `refs/heads/${attempt.branch}`]).split(/\s+/, 1)[0] || "";
-      const number = ensureWorkerPr(attempt, report.result.outputRevision, args, { remoteHead, gh, recheck });
-      recheck();
-      const observedBeforeLabel = gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences"], true);
-      assertWorkerPrReadyForReview(observedBeforeLabel, attempt, report.result.outputRevision);
-      gh(["pr", "edit", String(number), "-R", args.githubRepo, "--add-label", args.reviewLabel]);
-      const observedAfterLabel = gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefOid"], true);
-      if (String(observedAfterLabel.headRefOid).toLowerCase() !== report.result.outputRevision.toLowerCase()) {
-        gh(["pr", "edit", String(number), "-R", args.githubRepo, "--remove-label", args.reviewLabel]);
-        throw new Error("Worker PR head changed while adding the success label; label removed");
-      }
+      const authorize = () => { verified(args); };
+      const number = ensureWorkerPr(attempt, report.result.outputRevision, args, { remoteHead, gh, recheck, authorize });
+      addWorkerReviewLabel(number, attempt, report.result.outputRevision, args, { gh, recheck, authorize });
       return 0;
     },
   );
 }
 function main() { try { process.exitCode = run(parseArgs(process.argv.slice(2))); } catch (error) { console.error(`guarded-worker-pr.ts: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 2; } }
 if (require.main === module) main();
-module.exports = { assertWorkerPrBinding, assertWorkerPrReadyForReview, ensureWorkerPr, parseArgs, run, verified };
+module.exports = { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrReadyForReview, ensureWorkerPr, parseArgs, run, verified };

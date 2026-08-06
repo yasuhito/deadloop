@@ -24,6 +24,7 @@ const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src
 const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -201,8 +202,13 @@ function requiredVerificationContract(env: ReturnType<typeof envConfig>, baseHea
     let contract: JsonObject;
     try { contract = JSON.parse(env.requiredVerification); }
     catch { throw new Error("DEADLOOP_REQUIRED_VERIFICATION must be valid JSON"); }
-    if (!contract || typeof contract !== "object" || !String(contract.command || "").trim()) {
-      throw new Error("required verification contract is unresolved or empty");
+    // Validate every persisted contract field, then bind it to this exact launch.
+    requiredVerificationBinding(contract, baseHead);
+    if (contract.repository !== env.githubRepo) {
+      throw new Error("required verification contract repository does not match the launch repository");
+    }
+    if (String(contract.baseRevision).toLowerCase() !== baseHead.toLowerCase()) {
+      throw new Error("required verification contract base revision does not match the selected base commit");
     }
     return contract;
   }
@@ -279,6 +285,17 @@ function issueWorkerLaunchPlan(
   };
 }
 
+function assertWorkerLaunchBaseCurrent(
+  env: Pick<ReturnType<typeof envConfig>, "repoPath" | "baseBranch">,
+  baseHead: string,
+  run: (args: string[]) => string,
+): void {
+  const current = run(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  if (current.toLowerCase() !== baseHead.toLowerCase()) {
+    throw new StaleLaunchError("selected Worker base commit changed before launch");
+  }
+}
+
 function launchIssueWorkerFlow(
   issue: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -346,6 +363,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         );
         if (livePlan.kind !== "worker_required") throw new StaleLaunchError("selected issue is no longer eligible");
         assertSameLaunchTarget(issue, livePlan.issue, "issue");
+        assertWorkerLaunchBaseCurrent(env, baseHead, runText);
         if (recovery) assertRecoverableWorkerCheckout(recovery, env, { runner, runText });
       },
     },
@@ -498,4 +516,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };
+module.exports = { assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };

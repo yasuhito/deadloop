@@ -21,6 +21,12 @@ const {
   assertWorktreeBelongsToProject,
   canonicalAttemptLocation,
 } = require("../../../src/attempt-project-confinement.cjs");
+const {
+  assertCurrentWorkerContract,
+  assertWorkerCompletionAuthorized,
+  readRequiredVerificationRecord,
+  workerRequiredVerificationPath,
+} = require("../../../src/worker-required-verification-runtime.cjs");
 
 import type { AttemptRecord, CompletionReportV1 } from "../../../src/attempt-lifecycle";
 import type { GithubCompletionObservation } from "../../../src/attempt-workspace-lifecycle";
@@ -155,6 +161,17 @@ function writerObservation(record: AttemptRecord, report: CompletionReportV1, pr
   };
 }
 
+function assertWorkerPersistenceAuthorized(
+  record: AttemptRecord,
+  report: CompletionReportV1,
+  args: JsonObject,
+  currentContract: (record: AttemptRecord, projectRepo: string) => unknown = assertCurrentWorkerContract,
+): void {
+  const current = currentContract(record, String(args.projectRepo));
+  const verification = readRequiredVerificationRecord(workerRequiredVerificationPath(String(args.attemptRecord)));
+  assertWorkerCompletionAuthorized(record, report, verification, current);
+}
+
 function cleanupPending(message: string, detail?: string) {
   return driverResult("done", message, {
     driverAction: "cleanup_pending",
@@ -171,7 +188,9 @@ function completeLocked(
   args: JsonObject,
   commandRunner: ReturnType<typeof createCommandRunner>,
   recheck: () => void,
+  authorizeWorker?: (record: AttemptRecord, report: CompletionReportV1, args: JsonObject) => void,
 ) {
+  const authorizeWorkerCompletion = authorizeWorker || assertWorkerPersistenceAuthorized;
   const { attemptRecord, runDir, runsRoot } = canonicalAttemptLocation(args);
   let record = readAttemptRecord(runDir) as AttemptRecord;
   assertAttemptProjectBinding(record, args);
@@ -302,6 +321,14 @@ function completeLocked(
     if (decision.action !== "close") {
       return driverResult("done", "attempt workspace retained because GitHub persistence is not confirmed", { driverAction: "workspace_retained" });
     }
+    if (record.role === "worker") {
+      try { authorizeWorkerCompletion(record, report as CompletionReportV1, { ...args, attemptRecord }); }
+      catch (error) {
+        return driverResult("done", "attempt workspace retained because required verification is not authoritative", {
+          driverAction: "workspace_retained", detail: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     assertWorktreeBelongsToProject(commandRunner, record, args);
     record = transitionPersistedAttempt(runDir, "github_persisted");
   }
@@ -353,4 +380,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { complete, completeLocked, parseArgs, persistedMarker, workerObservation, reviewerObservation, writerObservation };
+module.exports = { assertWorkerPersistenceAuthorized, complete, completeLocked, parseArgs, persistedMarker, workerObservation, reviewerObservation, writerObservation };

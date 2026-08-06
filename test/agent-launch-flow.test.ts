@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../src/agent-launch-flow.ts");
-const { issueWorkerLaunchPlan } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
+const { assertWorkerLaunchBaseCurrent, issueWorkerLaunchPlan } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
 const { transitionPersistedAttempt } = require("../src/attempt-lifecycle-runtime.cjs");
 
 function input(root: string, role: "worker" | "reviewer" = "worker") {
@@ -84,6 +84,30 @@ describe("0.7.5 エージェント起動フロー", () => {
       const prepared = prepareAgentLaunchFlow(input(root), operations(root, "worker", []));
       expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).requiredVerification.command).toBe("npm test");
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("起動リポジトリと異なる必須検証契約を拒否する", () => {
+    expect(() => issueWorkerLaunchPlan(
+      { number: 1, title: "Task" },
+      { projectId: "demo", githubRepo: "owner/repo", baseBranch: "origin/main", checkCommand: "npm test", requiredVerification: JSON.stringify({ repository: "other/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "a".repeat(40) }), fixtureMode: false, worktreeRoot: "/wt", automationDir: "/automation", stateDir: "/state", workerAgent: "pi", workerModel: "", workerInstructions: "" },
+      "launch", "a".repeat(40),
+    )).toThrow("repository");
+  });
+
+  it("選択したベースと異なる必須検証契約を拒否する", () => {
+    expect(() => issueWorkerLaunchPlan(
+      { number: 1, title: "Task" },
+      { projectId: "demo", githubRepo: "owner/repo", baseBranch: "origin/main", checkCommand: "npm test", requiredVerification: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "b".repeat(40) }), fixtureMode: false, worktreeRoot: "/wt", automationDir: "/automation", stateDir: "/state", workerAgent: "pi", workerModel: "", workerInstructions: "" },
+      "launch", "a".repeat(40),
+    )).toThrow("base revision");
+  });
+
+  it("選択後にベースが進んだ Worker 起動を拒否する", () => {
+    expect(() => assertWorkerLaunchBaseCurrent(
+      { repoPath: "/repo", baseBranch: "origin/main" },
+      "a".repeat(40),
+      () => "b".repeat(40),
+    )).toThrow("base commit changed");
   });
 
   it("既存作業ツリーを開き直す Worker に設定済みの非 main ベースを記録する", () => {

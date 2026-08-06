@@ -140,6 +140,10 @@ function runGuardedPush(
       );
       const ref = `refs/heads/${args.branch}`;
       recheck();
+      const finalOutputRevision = authorize(args, ops);
+      if (finalOutputRevision.toLowerCase() !== outputRevision.toLowerCase()) {
+        throw new Error("Worker authorization output changed at the push boundary");
+      }
       assertWorkerHead(args, ops, outputRevision, "Worker HEAD changed after verification");
       const result = ops.run(["git", "-C", args.worktree, "push", "--porcelain", destination, `${outputRevision}:${ref}`], MAX_GUARDED_OPERATION_MS);
       if (result.status !== 0) throw new Error((result.stderr || result.stdout || "push failed").trim());
