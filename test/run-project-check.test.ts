@@ -38,6 +38,14 @@ function run(project: string, command: string, timeoutMs = 10_000) {
   });
 }
 
+function runShared(project: string, command: string) {
+  const quarantineRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-project-check-quarantine-"));
+  temporaryDirectories.push(quarantineRoot);
+  return spawnSync(process.execPath, [helper, "--cwd", project, "--command", command, "--quarantine-root", quarantineRoot], {
+    encoding: "utf8",
+  });
+}
+
 async function waitForFile(file: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (!fs.existsSync(file)) {
@@ -163,5 +171,19 @@ describe("run-project-check", () => {
     writeEvidence(project);
 
     expect(run(project, "mkdir .deadloop").status).toBe(1);
+  });
+
+  it("preserves both old and new conflicting artifacts in the shared checker", () => {
+    const project = temporaryProject();
+    spawnSync("git", ["-C", project, "init", "--quiet"]);
+    fs.mkdirSync(path.join(project, ".deadloop"));
+    fs.writeFileSync(path.join(project, ".deadloop", "promise.json"), "old\n");
+
+    const result = runShared(project, "mkdir .deadloop && printf 'new\\n' > .deadloop/promise.json");
+    const contents = fs.readdirSync(path.join(project, ".deadloop"))
+      .map((name) => fs.readFileSync(path.join(project, ".deadloop", name), "utf8"))
+      .sort();
+
+    expect({ status: result.status, contents }).toEqual({ status: 0, contents: ["new\n", "old\n"] });
   });
 });

@@ -15,7 +15,14 @@ const { runProjectCheck } = require("./project-check.ts") as {
     quarantineRoot: string;
     timeoutMs: number;
     signal?: AbortSignal;
-  }) => Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean; interrupted: boolean }>;
+  }) => Promise<{
+    code: number | null;
+    stdout: string;
+    stderr: string;
+    timedOut: boolean;
+    interrupted: boolean;
+    signal: NodeJS.Signals | null;
+  }>;
 };
 
 type EnablementVerificationJournal = {
@@ -129,6 +136,7 @@ function reusableSuccess(
     if (logPath !== path.join(directory, "check.log") || !fs.existsSync(logPath)) continue;
     const journalPath = path.join(directory, "journal.json");
     const journal = readJson(journalPath);
+    if (!journal || !["cleaned", "retained"].includes(journal.state)) continue;
     return {
       outcome: "passed",
       exitCode: 0,
@@ -151,9 +159,9 @@ export function inspectRetainedEnablementVerifications(
   for (const directory of attemptDirectories(stateDir)) {
     const journalPath = path.join(directory, "journal.json");
     const journal = readJson(journalPath);
-    if (journal?.version !== 1 || journal.state !== "retained") continue;
+    if (journal?.version !== 1 || !["prepared", "created", "checked", "retained"].includes(journal.state)) continue;
     if (typeof journal.primaryRepoPath !== "string" || (expectedPath && path.resolve(journal.primaryRepoPath) !== expectedPath)) continue;
-    if (typeof journal.worktreePath !== "string") continue;
+    if (typeof journal.worktreePath !== "string" || (!fs.existsSync(journal.worktreePath) && journal.state !== "retained")) continue;
     findings.push({
       attemptId: String(journal.attemptId || path.basename(directory)),
       repository: String(journal.repository || "unknown"),
@@ -163,7 +171,7 @@ export function inspectRetainedEnablementVerifications(
       journalPath,
       ...(typeof journal.recordPath === "string" ? { recordPath: journal.recordPath } : {}),
       ...(typeof journal.logPath === "string" ? { logPath: journal.logPath } : {}),
-      retentionReason: String(journal.retentionReason || "cleanup was not proven safe"),
+      retentionReason: String(journal.retentionReason || `cleanup result is unknown after journal state ${journal.state}`),
     });
   }
   return findings.sort((left, right) => left.attemptId.localeCompare(right.attemptId));
@@ -276,7 +284,14 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     throw new Error(`required verification worktree revision mismatch; log: ${logPath}; retained worktree journal: ${journalPath}`);
   }
 
-  let check: { code: number; stdout: string; stderr: string; timedOut: boolean; interrupted: boolean };
+  let check: {
+    code: number | null;
+    stdout: string;
+    stderr: string;
+    timedOut: boolean;
+    interrupted: boolean;
+    signal: NodeJS.Signals | null;
+  };
   let runnerFailed = false;
   try {
     const remainingMs = Math.max(1, timeoutMs - Math.max(0, now() - startedAtMs));
@@ -290,7 +305,14 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   } catch (error) {
     runnerFailed = true;
     const message = error instanceof Error ? (error.stack || error.message) : String(error);
-    check = { code: 1, stdout: "", stderr: `required verification runner failed: ${message}\n`, timedOut: false, interrupted: false };
+    check = {
+      code: null,
+      stdout: "",
+      stderr: `required verification runner failed: ${message}\n`,
+      timedOut: false,
+      interrupted: false,
+      signal: null,
+    };
   }
   const finishedAtMs = now();
   const terminationEvidence = check.timedOut
@@ -302,7 +324,13 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     : check.interrupted ? "interrupted" : check.code === 0 ? "passed" : "failed";
   const terminationReason = check.timedOut
     ? "timeout"
-    : check.interrupted ? "interrupted" : runnerFailed ? "runner_failure" : undefined;
+    : check.interrupted
+      ? "interrupted"
+      : runnerFailed
+        ? "runner_failure"
+        : check.signal
+          ? "signal"
+          : undefined;
   const exitCode = terminationReason ? null : check.code;
   writeJson(recordPath, {
     version: 1,
@@ -314,6 +342,7 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     outcome,
     exitCode,
     terminationReason,
+    ...(check.signal ? { terminationSignal: check.signal } : {}),
     timedOut: check.timedOut,
     timeoutMs,
     startedAt: new Date(startedAtMs).toISOString(),

@@ -102,6 +102,38 @@ describe("enablement required-verification records", () => {
     expect((await scenario.run(failing)).reused).toBe(false);
   });
 
+  it("records a signal termination with no exit code", async () => {
+    const scenario = fixture();
+    const result = await scenario.run({ ...scenario.contract, command: "kill -TERM $$" });
+    const record = JSON.parse(fs.readFileSync(result.recordPath, "utf8"));
+
+    expect({ outcome: record.outcome, exitCode: record.exitCode, reason: record.terminationReason, signal: record.terminationSignal }).toEqual({
+      outcome: "failed",
+      exitCode: null,
+      reason: "signal",
+      signal: "SIGTERM",
+    });
+  });
+
+  it("does not reuse a success whose cleanup result is unknown", async () => {
+    const scenario = fixture();
+    const dirtyContract = { ...scenario.contract, command: "touch generated" };
+    const result = await scenario.run(dirtyContract);
+    const journal = JSON.parse(fs.readFileSync(result.journalPath, "utf8"));
+    fs.writeFileSync(result.journalPath, `${JSON.stringify({ ...journal, state: "checked" })}\n`);
+
+    expect((await scenario.run(dirtyContract)).reused).toBe(false);
+  });
+
+  it("exposes a cleanup-unknown worktree for doctor inspection", async () => {
+    const scenario = fixture();
+    const result = await scenario.run({ ...scenario.contract, command: "touch generated" });
+    const journal = JSON.parse(fs.readFileSync(result.journalPath, "utf8"));
+    fs.writeFileSync(result.journalPath, `${JSON.stringify({ ...journal, state: "checked", retentionReason: undefined })}\n`);
+
+    expect(inspectRetainedEnablementVerifications(scenario.stateDir, scenario.repoPath)[0]?.retentionReason).toContain("cleanup result is unknown");
+  });
+
   it("records every success binding explicitly", async () => {
     const scenario = fixture();
     const result = await scenario.run();

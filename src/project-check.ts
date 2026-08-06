@@ -37,11 +37,12 @@ type ProjectCheckInput = {
 };
 
 type ProjectCheckResult = {
-  code: number;
+  code: number | null;
   stdout: string;
   stderr: string;
   timedOut: boolean;
   interrupted: boolean;
+  signal: NodeJS.Signals | null;
 };
 
 type HiddenArtifact = {
@@ -166,6 +167,7 @@ function runShell(
       escalationTimer = setTimeout(() => kill("SIGKILL"), terminationGraceMs);
     };
     const interrupt = () => {
+      if (terminationStarted) return;
       interrupted = true;
       terminate();
     };
@@ -173,15 +175,23 @@ function runShell(
     if (signal?.aborted) interrupt();
     const timer = timeoutMs
       ? setTimeout(() => {
+          if (terminationStarted) return;
           timedOut = true;
           terminate();
         }, timeoutMs)
       : undefined;
-    child.once("close", (code) => {
+    child.once("close", (code, closeSignal) => {
       if (timer) clearTimeout(timer);
       if (escalationTimer) clearTimeout(escalationTimer);
       signal?.removeEventListener("abort", interrupt);
-      resolve({ code: timedOut ? 124 : interrupted ? 130 : (code ?? 1), stdout, stderr, timedOut, interrupted });
+      resolve({
+        code: timedOut ? 124 : interrupted ? 130 : code,
+        stdout,
+        stderr,
+        timedOut,
+        interrupted,
+        signal: closeSignal,
+      });
     });
   });
 }
@@ -197,6 +207,7 @@ async function runProjectCheck(input: ProjectCheckInput): Promise<ProjectCheckRe
       stderr: `project-check could not inspect tracked runtime paths: ${error instanceof Error ? error.message : String(error)}\n`,
       timedOut: false,
       interrupted: false,
+      signal: null,
     };
   }
   if (tracked.length) {
@@ -206,6 +217,7 @@ async function runProjectCheck(input: ProjectCheckInput): Promise<ProjectCheckRe
       stderr: `project-check refuses to hide tracked runtime paths: ${tracked.join(", ")}\n`,
       timedOut: false,
       interrupted: false,
+      signal: null,
     };
   }
 
@@ -242,7 +254,7 @@ async function projectCheckMain(argv: string[] = process.argv.slice(2)): Promise
     const result = await runProjectCheck({ ...parseCliArgs(argv), signal: controller.signal });
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
-    process.exitCode = result.code;
+    process.exitCode = result.code ?? 1;
   } finally {
     process.removeListener("SIGINT", interrupt);
     process.removeListener("SIGTERM", interrupt);
