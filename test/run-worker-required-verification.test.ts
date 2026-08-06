@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,7 +18,7 @@ function verificationAttempt() {
   const promiseFile = path.join(runDir, "promise.json");
   writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({ attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command: "true", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head }, branch: "agent/issue-1", baseBranch: "trusted/main", worktreePath: fixture.root, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile, phase: "agent_started", lastSuccessfulPhase: "agent_started" }));
   writeFileSync(promiseFile, JSON.stringify({ schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head }, status: "complete", summary: "done", result: { outputRevision: head }, evidence: { validations: ["additional check"] } }));
-  return { args: { attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: fixture.root, githubRepo: "owner/repo", stateDir, worktree: fixture.root, quarantineRoot: path.join(stateDir, "check-quarantine") }, record: path.join(runDir, "required-verification.json"), log: path.join(runDir, "required-verification.log"), root: fixture.root };
+  return { args: { attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: fixture.root, githubRepo: "owner/repo", stateDir, worktree: fixture.root, quarantineRoot: path.join(stateDir, "check-quarantine") }, record: path.join(runDir, "required-verification.json"), log: path.join(runDir, "required-verification.log"), root: fixture.root, head };
 }
 function repository() {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-verification-"));
@@ -76,6 +76,29 @@ describe("Worker required-verification checkout binding", () => {
       async (input: { signal?: AbortSignal }) => ({ code: 130, stdout: "", stderr: "", timedOut: false, interrupted: input.signal?.aborted, signal: "SIGTERM" }),
     );
     expect(result.check.interrupted).toBe(true);
+  });
+
+  it("reuses an exact passed record without invoking the executor", async () => {
+    const fixture = verificationAttempt();
+    writeFileSync(fixture.record, JSON.stringify({ version: 1, binding: { repository: "owner/repo", targetCommit: fixture.head, command: "true", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: fixture.head }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: fixture.log }));
+    let invocations = 0;
+
+    await run(fixture.args, undefined, async () => { invocations += 1; throw new Error("must not run"); });
+
+    expect(invocations).toBe(0);
+  });
+
+  it("does not follow a pre-existing verification-log symlink", async () => {
+    const fixture = verificationAttempt();
+    const target = path.join(path.dirname(fixture.log), "operator-file");
+    writeFileSync(target, "keep\n");
+    symlinkSync(target, fixture.log);
+
+    let rejected = false;
+    try { await run(fixture.args, undefined, async () => ({ check: { code: 0, stdout: "replace\n", stderr: "", timedOut: false, interrupted: false, signal: null } })); }
+    catch { rejected = true; }
+
+    expect({ rejected, target: readFileSync(target, "utf8") }).toEqual({ rejected: true, target: "keep\n" });
   });
 
   it("persists typed failed evidence when the check process cannot start", async () => {

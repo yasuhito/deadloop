@@ -8,6 +8,8 @@ const { createCommandRunner } = require("../../../src/automation-driver-kit.ts")
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
   assertCurrentWorkerContract,
+  assertWorkerCompletionAuthorized,
+  readRequiredVerificationRecord,
   requiredVerificationBinding,
   workerRequiredVerificationPath,
   writeRequiredVerificationRecord,
@@ -65,6 +67,23 @@ async function runWorkerProjectCheck(
     : undefined;
   return { check, restorationFailureRecordPath };
 }
+function writeVerificationLog(logPath: string, contents: string): void {
+  try {
+    const existing = fs.lstatSync(logPath);
+    if (!existing.isFile() || existing.isSymbolicLink()) throw new Error("required verification log path is not a regular file");
+    fs.unlinkSync(logPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
+  const descriptor = fs.openSync(logPath, flags, 0o600);
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) throw new Error("required verification log is not a regular file");
+    fs.writeFileSync(descriptor, contents, { encoding: "utf8" });
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
 async function run(args: Args, signal?: AbortSignal, verificationRunner: typeof runWorkerProjectCheck = runWorkerProjectCheck) {
   const location = canonicalAttemptLocation(args);
   const runDir = location.runDir;
@@ -80,6 +99,13 @@ async function run(args: Args, signal?: AbortSignal, verificationRunner: typeof 
   const outputRevision = report.result.outputRevision;
   assertCleanOutput(args.worktree, outputRevision);
   const recordFile = workerRequiredVerificationPath(args.attemptRecord);
+  const existingRecord = readRequiredVerificationRecord(recordFile);
+  try {
+    const reusable = assertWorkerCompletionAuthorized(attempt, report, existingRecord, contract);
+    return { status: "passed", outputRevision, recordFile, logPath: reusable.record.logPath };
+  } catch {
+    // Every non-exact or invalid record must be replaced by a fresh verification run.
+  }
   const logPath = path.join(runDir, "required-verification.log");
   const started = Date.now();
   let check;
@@ -113,7 +139,7 @@ async function run(args: Args, signal?: AbortSignal, verificationRunner: typeof 
           : check.restorationFailure ? "artifact_restoration_failure"
             : check.signal ? "signal" : undefined;
   const outputEvidence = outputFailure ? `required verification post-check binding failed: ${outputFailure instanceof Error ? outputFailure.message : String(outputFailure)}\n` : "";
-  fs.writeFileSync(logPath, `${check.stdout}${check.stderr}${outputEvidence}`, { encoding: "utf8", mode: 0o600 });
+  writeVerificationLog(logPath, `${check.stdout}${check.stderr}${outputEvidence}`);
   const record = {
     version: 1 as const,
     binding: requiredVerificationBinding(contract, outputRevision),
@@ -143,4 +169,4 @@ async function main() {
   }
 }
 if (require.main === module) void main();
-module.exports = { assertCleanOutput, parseArgs, run, runWorkerProjectCheck };
+module.exports = { assertCleanOutput, parseArgs, run, runWorkerProjectCheck, writeVerificationLog };

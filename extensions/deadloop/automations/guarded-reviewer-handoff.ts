@@ -9,7 +9,7 @@ const { readAttemptRecord, validateCompletionReportBinding } = require("../../..
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const {
   assertCurrentWorkerContract,
-  requiredVerificationBinding,
+  assertWorkerCompletionAuthorized,
   readRequiredVerificationRecord,
   workerRequiredVerificationPath,
 } = require("../../../src/worker-required-verification-runtime.cjs");
@@ -96,13 +96,10 @@ function assertCurrentHeadVerification(args: Args): void {
     const { attempt, attemptRecord } = candidates[0];
     if (attempt.role === "worker") {
       const current = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"));
+      const report = readJsonFile(attempt.promiseFile, "Worker completion report");
+      validateCompletionReportBinding(attempt, report);
       const record = readRequiredVerificationRecord(workerRequiredVerificationPath(attemptRecord));
-      if (!record || record.version !== 1 || record.outcome !== "passed" || record.exitCode !== 0) {
-        throw new Error("required verification record did not pass");
-      }
-      if (JSON.stringify(record.binding) !== JSON.stringify(requiredVerificationBinding(current, normalizedHead))) {
-        throw new Error("required verification record does not match the current PR head and trusted contract");
-      }
+      assertWorkerCompletionAuthorized(attempt, report, record, current);
       return current;
     }
     if (attempt.target?.kind !== "pull-request" || String(attempt.target.number) !== args.pr) {
