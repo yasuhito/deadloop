@@ -165,9 +165,10 @@ function assertWorkerPersistenceAuthorized(
   record: AttemptRecord,
   report: CompletionReportV1,
   args: JsonObject,
-  currentContract: (record: AttemptRecord, projectRepo: string) => unknown = assertCurrentWorkerContract,
+  currentContract: (record: AttemptRecord, projectRepo: string, localConfigPath?: string) => unknown = assertCurrentWorkerContract,
 ): void {
-  const current = currentContract(record, String(args.projectRepo));
+  const localConfigPath = process.env.DEADLOOP_CONFIG || path.join(String(args.stateDir), "projects.json");
+  const current = currentContract(record, String(args.projectRepo), localConfigPath);
   const verification = readRequiredVerificationRecord(workerRequiredVerificationPath(String(args.attemptRecord)));
   assertWorkerCompletionAuthorized(record, report, verification, current);
 }

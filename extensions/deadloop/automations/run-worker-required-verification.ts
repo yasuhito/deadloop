@@ -8,8 +8,6 @@ const { createCommandRunner } = require("../../../src/automation-driver-kit.ts")
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
   assertCurrentWorkerContract,
-  assertWorkerCompletionAuthorized,
-  readRequiredVerificationRecord,
   requiredVerificationBinding,
   workerRequiredVerificationPath,
   writeRequiredVerificationRecord,
@@ -99,13 +97,8 @@ async function run(args: Args, signal?: AbortSignal, verificationRunner: typeof 
   const outputRevision = report.result.outputRevision;
   assertCleanOutput(args.worktree, outputRevision);
   const recordFile = workerRequiredVerificationPath(args.attemptRecord);
-  const existingRecord = readRequiredVerificationRecord(recordFile);
-  try {
-    const reusable = assertWorkerCompletionAuthorized(attempt, report, existingRecord, contract);
-    return { status: "passed", outputRevision, recordFile, logPath: reusable.record.logPath };
-  } catch {
-    // Every non-exact or invalid record must be replaced by a fresh verification run.
-  }
+  // Attempt-local files are Worker-writable, so they cannot authenticate host execution.
+  // Always replace any existing record with evidence from a fresh fixed-command run.
   const logPath = path.join(runDir, "required-verification.log");
   const started = Date.now();
   let check;

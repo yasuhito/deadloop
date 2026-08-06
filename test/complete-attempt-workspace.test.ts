@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -97,6 +98,28 @@ describe("selected attempt workspace completion", () => {
     const result = completeLocked(data.args, data.runner, () => undefined, (record: any, report: any, args: any) =>
       assertWorkerPersistenceAuthorized(record, report, args, () => record.requiredVerification));
     expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
+  });
+
+  it("authorizes persistence from the active state configuration for a local-source contract", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-complete-local-policy-")); roots.push(root);
+    const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout");
+    const stateDir = path.join(root, "state"); const runDir = path.join(stateDir, "runs", "attempt-1");
+    execFileSync("git", ["init", "--bare", "--quiet", remote]);
+    execFileSync("git", ["init", "--quiet", "-b", "main", seed]);
+    execFileSync("git", ["-C", seed, "config", "user.name", "Test"]); execFileSync("git", ["-C", seed, "config", "user.email", "test@example.com"]);
+    writeFileSync(path.join(seed, "file.txt"), "base\n"); execFileSync("git", ["-C", seed, "add", "file.txt"]); execFileSync("git", ["-C", seed, "commit", "--quiet", "-m", "base"]);
+    execFileSync("git", ["-C", seed, "remote", "add", "origin", remote]); execFileSync("git", ["-C", seed, "push", "--quiet", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", "--quiet", "-b", "main", remote, checkout]); mkdirSync(runDir, { recursive: true });
+    const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
+    const configFile = path.join(stateDir, "projects.json");
+    writeFileSync(configFile, JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm test" }] }));
+    const contract = { repository: "owner/repo", command: "npm test", source: { kind: "local", location: `${configFile}#project=demo` }, baseRevision };
+    const attempt = { project: "demo", repository: "owner/repo", role: "worker", baseBranch: "origin/main", requiredVerification: contract };
+    const report = { role: "worker", status: "complete", result: { outputRevision: baseRevision } };
+    const attemptRecord = path.join(runDir, "attempt.json");
+    writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { ...contract, targetCommit: baseRevision }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "required-verification.log") }));
+
+    expect(() => assertWorkerPersistenceAuthorized(attempt, report, { attemptRecord, projectRepo: checkout, stateDir })).not.toThrow();
   });
 
   it("retains a proven Worker workspace when verification evidence names another output", () => {

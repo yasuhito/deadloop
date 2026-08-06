@@ -78,14 +78,17 @@ describe("Worker required-verification checkout binding", () => {
     expect(result.check.interrupted).toBe(true);
   });
 
-  it("reuses an exact passed record without invoking the executor", async () => {
+  it("reruns verification when a passed attempt-local record already exists", async () => {
     const fixture = verificationAttempt();
     writeFileSync(fixture.record, JSON.stringify({ version: 1, binding: { repository: "owner/repo", targetCommit: fixture.head, command: "true", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: fixture.head }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: fixture.log }));
     let invocations = 0;
 
-    await run(fixture.args, undefined, async () => { invocations += 1; throw new Error("must not run"); });
+    await run(fixture.args, undefined, async () => {
+      invocations += 1;
+      return { check: { code: 0, stdout: "fresh verification\n", stderr: "", timedOut: false, interrupted: false, signal: null } };
+    });
 
-    expect(invocations).toBe(0);
+    expect(invocations).toBe(1);
   });
 
   it("does not follow a pre-existing verification-log symlink", async () => {
