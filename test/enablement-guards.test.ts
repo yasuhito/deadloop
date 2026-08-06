@@ -328,14 +328,41 @@ describe("enablement mutation guards", () => {
           calls.push(args.join(" "));
           if (args[2] === "view") {
             viewed += 1;
-            const labels = viewed === 1 ? ["agent:review", "agent:reviewing"] : ["ready-for-human"];
+            const labels = viewed <= 2 ? ["agent:review", "agent:reviewing"] : ["ready-for-human"];
             return { status: 0, stdout: JSON.stringify({ state: "OPEN", isDraft: false, headRefOid: head, labels: labels.map((name) => ({ name })) }), stderr: "" };
           }
           return { status: 0, stdout: "", stderr: "" };
         },
       },
     );
-    expect({ result, mutation: calls[1] }).toEqual({ result: 0, mutation: "gh pr edit 24 -R owner/repo --remove-label agent:review --remove-label agent:reviewing --remove-label agent:blocked --add-label ready-for-human" });
+    expect({ result, mutation: calls[2] }).toEqual({ result: 0, mutation: "gh pr edit 24 -R owner/repo --remove-label agent:review --remove-label agent:reviewing --add-label ready-for-human" });
+  });
+
+  it("preserves a blocker added during the human-handoff mutation", () => {
+    const head = "a".repeat(40); const calls: string[] = []; let viewed = 0; let error = "";
+    try {
+      handoffReviewedPr(
+        { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "/promise", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
+        {
+          validateReviewPromise: () => ({ status: "complete", evidenceStrength: "strong", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [] } }),
+          withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
+          run: (args: string[]) => {
+            calls.push(args.join(" "));
+            if (args[2] === "view") {
+              viewed += 1;
+              const names = viewed <= 2 ? ["agent:review", "agent:reviewing"] : ["ready-for-human", "agent:blocked"];
+              return { status: 0, stdout: JSON.stringify({ state: "OPEN", isDraft: false, headRefOid: head, labels: names.map((name) => ({ name })) }), stderr: "" };
+            }
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+      );
+    } catch (caught) { error = String(caught); }
+    expect({ mutation: calls[2], rollback: calls.at(-1), blocked: error.includes("blocker preserved") }).toEqual({
+      mutation: "gh pr edit 24 -R owner/repo --remove-label agent:review --remove-label agent:reviewing --add-label ready-for-human",
+      rollback: "gh pr edit 24 -R owner/repo --remove-label ready-for-human --add-label agent:review --add-label agent:reviewing",
+      blocked: true,
+    });
   });
 
   it("rejects an unbound V1 reviewer report without changing labels", () => {

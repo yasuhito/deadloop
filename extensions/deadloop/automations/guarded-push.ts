@@ -107,7 +107,7 @@ function assertVerifiedWorkerOutput(args: Args, ops: CommandOps = defaultOps()):
   assertWorktreeBelongsToProject({ runText: (argv: string[]) => gitOutput(ops, argv, "attempt worktree confinement failed") }, attempt, args);
   const report = JSON.parse(require("node:fs").readFileSync(attempt.promiseFile, "utf8"));
   validateCompletionReportBinding(attempt, report);
-  const current = assertCurrentWorkerContract(attempt, args.projectRepo);
+  const current = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"));
   const verification = readRequiredVerificationRecord(workerRequiredVerificationPath(args.attemptRecord));
   return assertWorkerCompletionAuthorized(attempt, report, verification, current).outputRevision;
 }

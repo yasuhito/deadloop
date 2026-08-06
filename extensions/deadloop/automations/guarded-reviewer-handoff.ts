@@ -58,20 +58,24 @@ function handoffReviewedPr(args: Args, ops: Ops = { run: defaultRun }): number {
   assertApprovedReview(args, ops);
   const project = { projectRepo: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
   const operation = (_enabled: unknown, recheck: () => void) => {
-    const beforeLabels = assertEligible(args, livePr(args, ops));
+    assertEligible(args, livePr(args, ops));
     recheck();
+    const boundaryLabels = assertEligible(args, livePr(args, ops));
     runChecked(ops, ["gh", "pr", "edit", args.pr, "-R", args.githubRepo,
       "--remove-label", args.reviewLabel, "--remove-label", args.reviewingLabel,
-      "--remove-label", args.blockedLabel, "--add-label", args.humanLabel]);
+      "--add-label", args.humanLabel]);
     const after = livePr(args, ops);
     const finalLabels = labelsOf(after);
     const headChanged = String(after.headRefOid || "").toLowerCase() !== args.expectedHead.toLowerCase();
     const managed = [args.reviewLabel, args.reviewingLabel, args.blockedLabel].filter((label) => finalLabels.has(label));
     if (headChanged || !finalLabels.has(args.humanLabel) || managed.length) {
       const rollback = ["gh", "pr", "edit", args.pr, "-R", args.githubRepo, "--remove-label", args.humanLabel];
-      for (const label of [args.reviewLabel, args.reviewingLabel, args.blockedLabel]) if (beforeLabels.has(label)) rollback.push("--add-label", label);
+      for (const label of [args.reviewLabel, args.reviewingLabel]) {
+        if (boundaryLabels.has(label) && !finalLabels.has(label)) rollback.push("--add-label", label);
+      }
       runChecked(ops, rollback);
       if (headChanged) throw new Error("PR head changed during human handoff; reviewer labels restored");
+      if (finalLabels.has(args.blockedLabel)) throw new Error("PR became blocked during human handoff; blocker preserved and reviewer labels restored");
       throw new Error("human handoff labels were not persisted exactly; reviewer labels restored");
     }
     return 0;

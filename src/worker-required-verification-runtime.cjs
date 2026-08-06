@@ -19,7 +19,7 @@ function workerRequiredVerificationPath(attemptRecordFile) { return path.join(pa
 function readRequiredVerificationRecord(file) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return undefined; } }
 function writeRequiredVerificationRecord(file, record) { fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); const temporary = `${file}.${process.pid}.tmp`; fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 }); fs.renameSync(temporary, file); }
 function git(repoPath, args) { const result = childProcess.spawnSync("git", ["-C", repoPath, ...args], { encoding: "utf8", timeout: 30000 }); if (result.status !== 0) throw new Error(String(result.stderr || result.stdout || "git command failed").trim()); return String(result.stdout || "").trim(); }
-function assertCurrentWorkerContract(attempt, projectRepo) {
+function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath) {
   assertContract(attempt.requiredVerification); const contract = attempt.requiredVerification; const baseBranch = attempt.baseBranch || "origin/main";
   const separator = baseBranch.indexOf("/");
   if (separator <= 0 || separator === baseBranch.length - 1) throw new Error("required verification blocked: stale_policy; trusted base is not a remote-tracking branch");
@@ -27,15 +27,51 @@ function assertCurrentWorkerContract(attempt, projectRepo) {
   git(projectRepo, ["fetch", "--no-tags", remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
   const currentBase = git(projectRepo, ["rev-parse", "--verify", `${baseBranch}^{commit}`]);
   if (currentBase.toLowerCase() !== contract.baseRevision.toLowerCase()) throw new Error("required verification blocked: stale_policy; trusted base revision changed");
-  if (contract.source.kind === "repo_policy") {
-    let policy; try { policy = JSON.parse(git(projectRepo, ["show", `${contract.baseRevision}:${contract.source.location}`])); } catch { throw new Error("required verification blocked: stale_policy; trusted policy is malformed"); }
-    if (!policy || policy.checkCommand !== contract.command) throw new Error("required verification blocked: stale_policy; trusted policy changed");
-  } else {
-    let config; try { config = JSON.parse(fs.readFileSync(contract.source.location.split("#", 1)[0], "utf8")); } catch { throw new Error("required verification blocked: stale_policy; local policy is unavailable"); }
-    const projects = config && Array.isArray(config.projects) ? config.projects : []; const selected = projects.find((project) => project.id === attempt.project || project.githubRepo === attempt.repository);
-    if (!selected || selected.checkCommand !== contract.command) throw new Error("required verification blocked: stale_policy; local policy changed");
+
+  const persistedLocalSource = contract.source.kind === "local" ? contract.source : contract.override?.source?.kind === "local" ? contract.override.source : undefined;
+  const configFile = persistedLocalSource?.location.split("#", 1)[0] || localConfigPath;
+  const localSources = [];
+  if (configFile && fs.existsSync(configFile)) {
+    let config; try { config = JSON.parse(fs.readFileSync(configFile, "utf8")); } catch { throw new Error("required verification blocked: stale_policy; local policy is malformed"); }
+    if (!config || typeof config !== "object" || Array.isArray(config) || (config.projects !== undefined && !Array.isArray(config.projects))) {
+      throw new Error("required verification blocked: stale_policy; local policy is malformed");
+    }
+    const selected = (config.projects || []).find((project) => project && typeof project === "object" && (project.id === attempt.project || project.githubRepo === attempt.repository));
+    if (selected && Object.prototype.hasOwnProperty.call(selected, "checkCommand")) {
+      localSources.push({ kind: "local", location: `${configFile}#project=${attempt.project}`, command: selected.checkCommand });
+    }
+  } else if (persistedLocalSource) {
+    throw new Error("required verification blocked: stale_policy; local policy is unavailable");
   }
-  return contract;
+
+  let policyText;
+  try { policyText = git(projectRepo, ["show", `${contract.baseRevision}:deadloop.json`]); }
+  catch { policyText = undefined; }
+  let policy;
+  if (policyText !== undefined) {
+    try { policy = JSON.parse(policyText); }
+    catch { throw new Error("required verification blocked: stale_policy; trusted policy is malformed"); }
+  }
+  if (policy !== undefined && (!policy || typeof policy !== "object" || Array.isArray(policy))) {
+    throw new Error("required verification blocked: stale_policy; trusted policy is malformed");
+  }
+  const sharedSources = policy && Object.prototype.hasOwnProperty.call(policy, "checkCommand")
+    ? [{ kind: "repo_policy", location: "deadloop.json", command: policy.checkCommand }]
+    : [];
+  const sourcesConflict = (sources) => new Set(sources.map((source) => source.command)).size > 1;
+  if (sourcesConflict(localSources) || sourcesConflict(sharedSources)) throw new Error("required verification blocked: stale_policy; current policy is conflicted");
+  const selected = localSources[0] || sharedSources[0];
+  if (!selected || typeof selected.command !== "string" || !selected.command.trim()) throw new Error("required verification blocked: stale_policy; current policy is unresolved");
+  const replaced = localSources.length ? sharedSources[0] : undefined;
+  const current = {
+    repository: attempt.repository,
+    command: selected.command,
+    source: { kind: selected.kind, location: selected.location },
+    baseRevision: currentBase,
+    ...(replaced && replaced.command !== selected.command ? { override: { source: { kind: replaced.kind, location: replaced.location }, command: replaced.command } } : {}),
+  };
+  if (!isDeepStrictEqual(current, contract)) throw new Error("required verification blocked: stale_policy; current policy differs from the fixed attempt contract");
+  return current;
 }
 function assertWorkerCompletionAuthorized(attempt, report, record, currentContract) {
   if (attempt.role !== "worker" || report.role !== "worker" || report.status !== "complete") throw new Error("Worker completion gate requires a complete Worker report");

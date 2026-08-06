@@ -31,6 +31,7 @@ type Runtime = {
   assertCurrentWorkerContract: (
     attempt: AttemptRecord,
     projectRepo: string,
+    localConfigPath?: string,
   ) => RequiredVerificationContract;
   assertWorkerCompletionAuthorized: (
     attempt: AttemptRecord,

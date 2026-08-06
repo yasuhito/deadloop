@@ -103,6 +103,24 @@ describe("Worker required-verification completion gate", () => {
     expect(assertWorkerCompletionAuthorized({ ...attempt, requiredVerification: explicit }, report, exact, explicit).outputRevision).toBe(outputHead);
   });
 
+  it("stops when a local override is added after a repo-policy-backed attempt starts", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-local-override-"));
+    try {
+      const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout"); const configFile = path.join(root, "projects.json");
+      execFileSync("git", ["init", "--bare", "--quiet", remote]);
+      execFileSync("git", ["init", "--quiet", "-b", "main", seed]);
+      execFileSync("git", ["-C", seed, "config", "user.name", "Test"]); execFileSync("git", ["-C", seed, "config", "user.email", "test@example.com"]);
+      writeFileSync(path.join(seed, "deadloop.json"), JSON.stringify({ checkCommand: contract.command }));
+      execFileSync("git", ["-C", seed, "add", "deadloop.json"]); execFileSync("git", ["-C", seed, "commit", "--quiet", "-m", "policy"]);
+      execFileSync("git", ["-C", seed, "remote", "add", "origin", remote]); execFileSync("git", ["-C", seed, "push", "--quiet", "-u", "origin", "main"]);
+      execFileSync("git", ["clone", "--quiet", remote, checkout]);
+      const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
+      writeFileSync(configFile, JSON.stringify({ projects: [{ id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run local-check" }] }));
+      const fixedAttempt = { ...attempt, requiredVerification: { ...contract, baseRevision } };
+      expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout, configFile)).toThrow("stale_policy");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("fetches the configured trusted base before checking for policy changes", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-policy-"));
     try {

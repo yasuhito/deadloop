@@ -76,6 +76,49 @@ describe("guarded Worker PR binding", () => {
     expect({ labeled, stale: error.includes("stale_policy") }).toEqual({ labeled: false, stale: true });
   });
 
+  it("removes the review label when the base branch changes during labeling", () => {
+    const head = "a".repeat(40); const edits: string[] = []; let viewed = 0;
+    let error = "";
+    try {
+      addWorkerReviewLabel(
+        17,
+        { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
+        head,
+        { githubRepo: "owner/repo", reviewLabel: "agent:review" },
+        {
+          recheck: () => {}, authorize: () => {},
+          gh: (args: string[]) => {
+            if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
+            viewed += 1;
+            return { headRefName: "agent/issue-1", headRefOid: head, baseRefName: viewed === 1 ? "main" : "release", closingIssuesReferences: [{ number: 1 }] };
+          },
+        },
+      );
+    } catch (caught) { error = String(caught); }
+    expect({ removed: edits.at(-1)?.includes("--remove-label agent:review"), rejected: error.includes("base branch") }).toEqual({ removed: true, rejected: true });
+  });
+
+  it("removes the review label when the closing Issue changes during labeling", () => {
+    const head = "a".repeat(40); const edits: string[] = []; let viewed = 0;
+    try {
+      addWorkerReviewLabel(
+        17,
+        { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
+        head,
+        { githubRepo: "owner/repo", reviewLabel: "agent:review" },
+        {
+          recheck: () => {}, authorize: () => {},
+          gh: (args: string[]) => {
+            if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
+            viewed += 1;
+            return { headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: viewed === 1 ? [{ number: 1 }] : [{ number: 2 }] };
+          },
+        },
+      );
+    } catch {}
+    expect(edits.at(-1)).toContain("--remove-label agent:review");
+  });
+
   it("reauthorizes after the final PR creation recheck", () => {
     const head = "a".repeat(40); let created = false;
     let error = "";

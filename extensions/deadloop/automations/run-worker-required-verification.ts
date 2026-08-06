@@ -49,7 +49,7 @@ async function run(args: Args) {
   const report = JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8"));
   validateCompletionReportBinding(attempt, report);
   if (attempt.role !== "worker" || report.status !== "complete") throw new Error("complete Worker report is required");
-  const contract = assertCurrentWorkerContract(attempt, args.projectRepo);
+  const contract = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"));
   const outputRevision = report.result.outputRevision;
   assertCleanOutput(args.worktree, outputRevision);
   const recordFile = workerRequiredVerificationPath(args.attemptRecord);
