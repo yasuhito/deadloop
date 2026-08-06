@@ -8,6 +8,9 @@ const authenticatedRecords = new WeakSet();
 const HOST_VERIFICATION_EVIDENCE_DIRECTORY = "required-verification-evidence";
 function nonEmpty(value) { return typeof value === "string" && Boolean(value.trim()); }
 function validSha(value) { return nonEmpty(value) && /^[0-9a-f]{40}$/i.test(value); }
+function sanitizeId(value) {
+  return String(value || "project").toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
+}
 function assertContract(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("required verification persisted contract is missing");
   if (!nonEmpty(value.command)) throw new Error("required verification blocked: zero_targets");
@@ -114,11 +117,16 @@ function authenticatedFetchUrl(projectRepo, remote, repository, repositoryId) {
 }
 function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repositoryId) {
   assertContract(attempt.requiredVerification); const contract = attempt.requiredVerification; const baseBranch = attempt.baseBranch || "origin/main";
-  const separator = baseBranch.indexOf("/");
-  if (separator <= 0 || separator === baseBranch.length - 1) throw new Error("required verification blocked: stale_policy; trusted base is not a remote-tracking branch");
-  const remote = baseBranch.slice(0, separator); const branch = baseBranch.slice(separator + 1);
-  const fetchUrl = authenticatedFetchUrl(projectRepo, remote, attempt.repository, repositoryId);
-  git(projectRepo, ["fetch", "--no-tags", fetchUrl, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+  const remoteRef = baseBranch.startsWith("refs/remotes/") ? baseBranch.slice("refs/remotes/".length) : baseBranch;
+  const separator = remoteRef.indexOf("/");
+  const remotes = new Set(git(projectRepo, ["remote"]).split(/\r?\n/).filter(Boolean));
+  const remote = separator > 0 ? remoteRef.slice(0, separator) : "";
+  if (remotes.has(remote)) {
+    const branch = remoteRef.slice(separator + 1);
+    if (!branch) throw new Error("required verification blocked: stale_policy; trusted remote branch is invalid");
+    const fetchUrl = authenticatedFetchUrl(projectRepo, remote, attempt.repository, repositoryId);
+    git(projectRepo, ["fetch", "--no-tags", fetchUrl, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+  }
   const currentBase = git(projectRepo, ["rev-parse", "--verify", `${baseBranch}^{commit}`]);
   if (currentBase.toLowerCase() !== contract.baseRevision.toLowerCase()) throw new Error("required verification blocked: stale_policy; trusted base revision changed");
 
@@ -131,7 +139,7 @@ function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repo
       throw new Error("required verification blocked: stale_policy; local policy is malformed");
     }
     const matches = (config.projects || []).filter((project) => project && typeof project === "object"
-      && project.id === attempt.project && project.githubRepo === attempt.repository);
+      && sanitizeId(project.id || project.githubRepo || project.repoPath) === attempt.project && project.githubRepo === attempt.repository);
     if (matches.length > 1) throw new Error("required verification blocked: stale_policy; local policy project identity is ambiguous");
     const selected = matches[0];
     if (selected && Object.prototype.hasOwnProperty.call(selected, "checkCommand")) {

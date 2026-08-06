@@ -159,6 +159,66 @@ describe("Worker required-verification completion gate", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("re-reads local policy for a project whose ID was inferred from its GitHub repository", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-inferred-id-"));
+    try {
+      const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout"); const configFile = path.join(root, "projects.json");
+      execFileSync("git", ["init", "--bare", "--quiet", remote]);
+      execFileSync("git", ["init", "--quiet", "-b", "main", seed]);
+      execFileSync("git", ["-C", seed, "config", "user.name", "Test"]); execFileSync("git", ["-C", seed, "config", "user.email", "test@example.com"]);
+      writeFileSync(path.join(seed, "file.txt"), "policy base\n");
+      execFileSync("git", ["-C", seed, "add", "file.txt"]); execFileSync("git", ["-C", seed, "commit", "--quiet", "-m", "base"]);
+      execFileSync("git", ["-C", seed, "remote", "add", "origin", remote]); execFileSync("git", ["-C", seed, "push", "--quiet", "-u", "origin", "main"]);
+      execFileSync("git", ["clone", "--quiet", "-b", "main", remote, checkout]);
+      const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
+      writeFileSync(configFile, JSON.stringify({ projects: [{ githubRepo: attempt.repository, checkCommand: contract.command }] }));
+      const project = "octo-demo";
+      const fixedContract = { repository: attempt.repository, command: contract.command, source: { kind: "local", location: `${configFile}#project=${project}` }, baseRevision };
+      const fixedAttempt = { ...attempt, project, requiredVerification: fixedContract };
+
+      expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout, configFile)).not.toThrow();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("re-reads local policy after sanitizing its configured project ID", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-sanitized-id-"));
+    try {
+      const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout"); const configFile = path.join(root, "projects.json");
+      execFileSync("git", ["init", "--bare", "--quiet", remote]);
+      execFileSync("git", ["init", "--quiet", "-b", "main", seed]);
+      execFileSync("git", ["-C", seed, "config", "user.name", "Test"]); execFileSync("git", ["-C", seed, "config", "user.email", "test@example.com"]);
+      writeFileSync(path.join(seed, "file.txt"), "policy base\n");
+      execFileSync("git", ["-C", seed, "add", "file.txt"]); execFileSync("git", ["-C", seed, "commit", "--quiet", "-m", "base"]);
+      execFileSync("git", ["-C", seed, "remote", "add", "origin", remote]); execFileSync("git", ["-C", seed, "push", "--quiet", "-u", "origin", "main"]);
+      execFileSync("git", ["clone", "--quiet", "-b", "main", remote, checkout]);
+      const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
+      writeFileSync(configFile, JSON.stringify({ projects: [{ id: "Demo Project", githubRepo: attempt.repository, checkCommand: contract.command }] }));
+      const project = "demo-project";
+      const fixedContract = { repository: attempt.repository, command: contract.command, source: { kind: "local", location: `${configFile}#project=${project}` }, baseRevision };
+      const fixedAttempt = { ...attempt, project, requiredVerification: fixedContract };
+
+      expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout, configFile)).not.toThrow();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("revalidates policy against a configured local base branch", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-local-base-"));
+    try {
+      const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout");
+      execFileSync("git", ["init", "--bare", "--quiet", remote]);
+      execFileSync("git", ["init", "--quiet", "-b", "main", seed]);
+      execFileSync("git", ["-C", seed, "config", "user.name", "Test"]); execFileSync("git", ["-C", seed, "config", "user.email", "test@example.com"]);
+      writeFileSync(path.join(seed, "deadloop.json"), JSON.stringify({ checkCommand: contract.command }));
+      execFileSync("git", ["-C", seed, "add", "deadloop.json"]); execFileSync("git", ["-C", seed, "commit", "--quiet", "-m", "policy"]);
+      execFileSync("git", ["-C", seed, "remote", "add", "origin", remote]); execFileSync("git", ["-C", seed, "push", "--quiet", "-u", "origin", "main"]);
+      execFileSync("git", ["clone", "--quiet", "-b", "main", remote, checkout]);
+      const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "main"], { encoding: "utf8" }).trim();
+      const fixedAttempt = { ...attempt, baseBranch: "main", requiredVerification: { ...contract, baseRevision } };
+
+      expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout)).not.toThrow();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("rejects a replaced fetch URL even when the push URL names the trusted repository", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-split-remote-"));
     try {
