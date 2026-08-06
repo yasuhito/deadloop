@@ -18,7 +18,7 @@ const {
   runProjectCheck,
 } = require("../../../src/project-check.ts");
 
-type Args = { attemptRecord: string; projectId: string; projectRepo: string; githubRepo: string; stateDir: string; worktree: string; quarantineRoot: string };
+type Args = { attemptRecord: string; projectId: string; projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; worktree: string; quarantineRoot: string };
 function parseArgs(argv: string[]): Args {
   const values: Record<string, string> = {};
   for (let index = 0; index < argv.length; index += 2) {
@@ -26,8 +26,10 @@ function parseArgs(argv: string[]): Args {
     if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs");
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
-  for (const field of ["attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "worktree", "quarantineRoot"])  if (!values[field]) throw new Error(`--${field} is required`);
-  return values as Args;
+  for (const field of ["attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "enabledAt", "worktree", "quarantineRoot"])  if (!values[field]) throw new Error(`--${field} is required`);
+  const enabledAt = Number(values.enabledAt);
+  if (!Number.isFinite(enabledAt)) throw new Error("--enabled-at is required");
+  return { ...values, enabledAt } as Args;
 }
 function gitText(worktree: string, args: string[]): string {
   const result = require("node:child_process").spawnSync("git", ["-C", worktree, ...args], { encoding: "utf8" });
@@ -38,6 +40,8 @@ function assertCleanOutput(worktree: string, outputRevision: string): void {
   if (gitText(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]).toLowerCase() !== outputRevision.toLowerCase()) {
     throw new Error("Worker outputRevision does not match worktree HEAD");
   }
+  const flagged = gitText(worktree, ["ls-files", "-v"]).split(/\r?\n/).filter((line) => /^[a-zS]/.test(line));
+  if (flagged.length) throw new Error("Worker output checkout has assume-unchanged or skip-worktree index flags");
   if (gitText(worktree, [
     "status", "--porcelain", "--untracked-files=all", "--", ".",
     ":(exclude).deadloop", ":(exclude).deadloop/**",
@@ -82,7 +86,12 @@ function writeVerificationLog(logPath: string, contents: string): void {
     fs.closeSync(descriptor);
   }
 }
-async function run(args: Args, signal?: AbortSignal, verificationRunner: typeof runWorkerProjectCheck = runWorkerProjectCheck) {
+async function run(
+  args: Args,
+  signal?: AbortSignal,
+  verificationRunner: typeof runWorkerProjectCheck = runWorkerProjectCheck,
+  enabledResolver: (project: Record<string, unknown>) => { githubRepositoryId?: string } = require("../../../src/enabled-operation.cjs").assertLocallyEnabled,
+) {
   const location = canonicalAttemptLocation(args);
   const runDir = location.runDir;
   const attempt = readAttemptRecord(runDir);
@@ -93,7 +102,8 @@ async function run(args: Args, signal?: AbortSignal, verificationRunner: typeof 
   const report = JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8"));
   validateCompletionReportBinding(attempt, report);
   if (attempt.role !== "worker" || report.status !== "complete") throw new Error("complete Worker report is required");
-  const contract = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"));
+  const enabled = enabledResolver({ repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt });
+  const contract = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"), enabled.githubRepositoryId);
   const outputRevision = report.result.outputRevision;
   assertCleanOutput(args.worktree, outputRevision);
   const recordFile = workerRequiredVerificationPath(args.attemptRecord);
@@ -122,8 +132,11 @@ async function run(args: Args, signal?: AbortSignal, verificationRunner: typeof 
     };
   }
   let outputFailure: unknown;
-  try { assertCleanOutput(args.worktree, outputRevision); }
-  catch (error) { outputFailure = error; }
+  try {
+    assertCleanOutput(args.worktree, outputRevision);
+    const currentAfterCheck = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"), enabled.githubRepositoryId);
+    if (JSON.stringify(currentAfterCheck) !== JSON.stringify(contract)) throw new Error("required verification blocked: stale_policy; policy changed during verification");
+  } catch (error) { outputFailure = error; }
   const outcome = check.timedOut ? "timed_out" : check.interrupted ? "interrupted" : check.code === 0 && !check.restorationFailure && !outputFailure ? "passed" : "failed";
   const terminationReason = check.timedOut ? "timeout"
     : check.interrupted ? "interrupted"

@@ -19,6 +19,7 @@ function requiredVerificationBinding(contract, targetCommit) {
 function workerRequiredVerificationPath(attemptRecordFile) { return path.join(path.dirname(attemptRecordFile), WORKER_REQUIRED_VERIFICATION_FILE); }
 function cleanWorkerOutput(worktree, outputRevision) {
   if (git(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]).toLowerCase() !== outputRevision.toLowerCase()) return false;
+  if (git(worktree, ["ls-files", "-v"]).split(/\r?\n/).some((line) => /^[a-zS]/.test(line))) return false;
   return !git(worktree, ["status", "--porcelain", "--untracked-files=all", "--", ".",
     ":(exclude).deadloop", ":(exclude).deadloop/**", ":(exclude).pi-subagents", ":(exclude).pi-subagents/**"]);
 }
@@ -59,12 +60,31 @@ function readRequiredVerificationRecord(file) {
 }
 function writeRequiredVerificationRecord(file, record) { fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); const temporary = `${file}.${process.pid}.tmp`; fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 }); fs.renameSync(temporary, file); }
 function git(repoPath, args) { const result = childProcess.spawnSync("git", ["-C", repoPath, ...args], { encoding: "utf8", timeout: 30000 }); if (result.status !== 0) throw new Error(String(result.stderr || result.stdout || "git command failed").trim()); return String(result.stdout || "").trim(); }
-function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath) {
+function githubRepoFromRemote(remote) {
+  const match = /^(?:git@github\.com:|https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(remote);
+  return match ? match[1] : "";
+}
+function authenticatedFetchUrl(projectRepo, remote, repository, repositoryId) {
+  if (!nonEmpty(repositoryId)) return remote;
+  const urls = git(projectRepo, ["remote", "get-url", "--all", remote]).split(/\r?\n/).filter(Boolean);
+  if (urls.length !== 1) throw new Error("required verification blocked: stale_policy; trusted fetch source is ambiguous");
+  const identity = githubRepoFromRemote(urls[0]);
+  if (!identity) throw new Error("required verification blocked: stale_policy; trusted fetch source is not GitHub");
+  const result = childProcess.spawnSync("gh", ["repo", "view", identity, "--json", "id"], { encoding: "utf8", timeout: 30000 });
+  let actualId = "";
+  try { actualId = result.status === 0 ? String(JSON.parse(result.stdout || "{}").id || "") : ""; } catch {}
+  if (actualId !== repositoryId) {
+    throw new Error(`required verification blocked: stale_policy; trusted fetch source repository identity differs from ${repository}`);
+  }
+  return urls[0];
+}
+function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repositoryId) {
   assertContract(attempt.requiredVerification); const contract = attempt.requiredVerification; const baseBranch = attempt.baseBranch || "origin/main";
   const separator = baseBranch.indexOf("/");
   if (separator <= 0 || separator === baseBranch.length - 1) throw new Error("required verification blocked: stale_policy; trusted base is not a remote-tracking branch");
   const remote = baseBranch.slice(0, separator); const branch = baseBranch.slice(separator + 1);
-  git(projectRepo, ["fetch", "--no-tags", remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+  const fetchUrl = authenticatedFetchUrl(projectRepo, remote, attempt.repository, repositoryId);
+  git(projectRepo, ["fetch", "--no-tags", fetchUrl, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
   const currentBase = git(projectRepo, ["rev-parse", "--verify", `${baseBranch}^{commit}`]);
   if (currentBase.toLowerCase() !== contract.baseRevision.toLowerCase()) throw new Error("required verification blocked: stale_policy; trusted base revision changed");
 

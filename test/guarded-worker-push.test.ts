@@ -8,6 +8,7 @@ const { runGuardedPush } = require("../extensions/deadloop/automations/guarded-p
 const roots: string[] = [];
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
+const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
 function fixture(checkCommand = "true") {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-push-")); roots.push(root);
   const repo = path.join(root, "repo"); const stateDir = path.join(root, "deadloop");
@@ -22,13 +23,13 @@ function fixture(checkCommand = "true") {
   execFileSync("git", ["-C", repo, "add", "."]); execFileSync("git", ["-C", repo, "commit", "--quiet", "-m", "base"]);
   const base = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const trustedRemote = path.join(root, "trusted.git"); execFileSync("git", ["init", "--bare", "--quiet", trustedRemote]);
-  execFileSync("git", ["-C", repo, "remote", "add", "trusted", trustedRemote]); execFileSync("git", ["-C", repo, "push", "--quiet", "trusted", "HEAD:main"]);
+  execFileSync("git", ["-C", repo, "remote", "add", "origin", trustedRemote]); execFileSync("git", ["-C", repo, "push", "--quiet", "origin", "HEAD:main"]);
+  execFileSync("git", ["-C", repo, "remote", "set-url", "origin", "https://github.com/owner/repo.git"]);
   execFileSync("git", ["-C", repo, "checkout", "-q", "-b", "agent/issue-1"]);
   writeFileSync(path.join(repo, "change.txt"), "done\n"); execFileSync("git", ["-C", repo, "add", "."]); execFileSync("git", ["-C", repo, "commit", "--quiet", "-m", "feat: change"]);
   const output = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  execFileSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   const contract = { repository: "owner/repo", command: checkCommand, source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: base };
-  const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head: base }, requiredVerification: contract, branch: "agent/issue-1", baseBranch: "trusted/main", worktreePath: repo, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"), phase: "agent_started", lastSuccessfulPhase: "agent_started" };
+  const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head: base }, requiredVerification: contract, branch: "agent/issue-1", baseBranch: "origin/main", worktreePath: repo, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"), phase: "agent_started", lastSuccessfulPhase: "agent_started" };
   const report = { schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head: base }, status: "complete", summary: "Implemented and validated.", result: { outputRevision: output }, evidence: { validations: ["extra check passed"] } };
   writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt)); writeFileSync(path.join(runDir, "promise.json"), JSON.stringify(report));
   writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { repository: "owner/repo", targetCommit: output, command: checkCommand, source: contract.source, baseRevision: base }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "check.log") }));
@@ -46,6 +47,9 @@ function fixture(checkCommand = "true") {
     if (argv.includes("push")) { pushedRef = argv[6] || ""; return { status: 0, stdout: "", stderr: "" }; }
     return { status: 1, stdout: "", stderr: `unexpected: ${argv.join(" ")}` };
   } };
+  const git = path.join(bin, "git");
+  writeFileSync(git, `#!/bin/sh\nif [ "$1" = "-C" ] && [ "$3" = "fetch" ] && [ "$5" = "https://github.com/owner/repo.git" ]; then exec '${realGit}' -C "$2" fetch "$4" '${trustedRemote}' "$6"; fi\nexec '${realGit}' "$@"\n`);
+  execFileSync("chmod", ["+x", git]);
   const args = { attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: repo, worktree: repo, githubRepo: "owner/repo", stateDir, enabledAt: 1, remote: "origin", branch: "agent/issue-1" };
   return { args, ops, output, pushedRef: () => pushedRef, verification: path.join(runDir, "required-verification.json") };
 }

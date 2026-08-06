@@ -31,6 +31,7 @@ function transformedEvidence(role: "review-repair" | "branch-update") {
   const outcome = role === "review-repair" ? "repair_pushed" : "branch_update_pushed";
   const finalizer = { action: "pushed", reason: outcome, originalHeadOid: inputHead, ...(role === "branch-update" ? { baseHeadOid: inputHead } : {}), headOid: outputHead, checks: [{ command: "true", result: "passed" }] };
   writeFileSync(attempt.promiseFile, JSON.stringify({ schemaVersion: 1, attemptId: role, role, target: { repository: "owner/repo", kind: "pull-request", number: 24 }, inputRevision: attempt.inputRevision, status: "complete", summary: "verified", result: { outcome, outputRevision: outputHead, ...(role === "review-repair" ? { repairs: [{ title: "finding", summary: "fixed", paths: ["src/a.ts"] }] } : {}) }, evidence: { finalizer, validations: finalizer.checks } }));
+  writeFileSync(path.join(runDir, "finalizer-result.json"), JSON.stringify(finalizer));
   fixture.expectedHead = outputHead; return fixture;
 }
 
@@ -55,8 +56,15 @@ describe("human-handoff verification provenance", () => {
     expect(() => assertCurrentHeadVerification(fixture)).toThrow("required verification passed record is missing");
   });
 
-  it.each(["review-repair", "branch-update"] as const)("authorizes a %s head through its bound passed check and Worker provenance", (role) => {
+  it.each(["review-repair", "branch-update"] as const)("authorizes a %s head through its host finalizer record and Worker provenance", (role) => {
     expect(() => assertCurrentHeadVerification(transformedEvidence(role))).not.toThrow();
+  });
+
+  it("does not promote repair checks reported only by the agent", () => {
+    const fixture = transformedEvidence("review-repair");
+    rmSync(path.join(fixture.stateDir, "runs", "review-repair", "finalizer-result.json"));
+
+    expect(() => assertCurrentHeadVerification(fixture)).toThrow("host finalizer verification record");
   });
 
   it.each([

@@ -4,7 +4,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-const { withEnabledProjectLock, MAX_GUARDED_OPERATION_MS } = require("../../../src/enabled-operation.cjs");
+const { assertLocallyEnabled, withEnabledProjectLock, MAX_GUARDED_OPERATION_MS } = require("../../../src/enabled-operation.cjs");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { createCommandRunner } = require("../../../src/automation-driver-kit.ts");
@@ -97,18 +97,20 @@ function addWorkerReviewLabel(
   ops: Pick<WorkerPrOps, "gh" | "recheck" | "authorize">,
 ): void {
   ops.recheck();
-  const observedBeforeLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences"], true);
+  const observedBeforeLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
   assertWorkerPrReadyForReview(observedBeforeLabel, attempt, outputRevision);
   ops.authorize();
-  const observedAfterAuthorization = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences"], true);
+  const observedAfterAuthorization = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
   assertWorkerPrReadyForReview(observedAfterAuthorization, attempt, outputRevision);
+  const reviewLabelAlreadyPresent = Array.isArray(observedAfterAuthorization.labels)
+    && observedAfterAuthorization.labels.some((label: any) => (typeof label === "string" ? label : label?.name) === args.reviewLabel);
   ops.gh(["pr", "edit", String(number), "-R", args.githubRepo, "--add-label", args.reviewLabel]);
-  const observedAfterLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences"], true);
+  const observedAfterLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
   try {
     assertWorkerPrReadyForReview(observedAfterLabel, attempt, outputRevision);
   } catch (error) {
-    ops.gh(["pr", "edit", String(number), "-R", args.githubRepo, "--remove-label", args.reviewLabel]);
-    throw new Error(`Worker PR contract changed while adding the success label; label removed: ${error instanceof Error ? error.message : String(error)}`);
+    if (!reviewLabelAlreadyPresent) ops.gh(["pr", "edit", String(number), "-R", args.githubRepo, "--remove-label", args.reviewLabel]);
+    throw new Error(`Worker PR contract changed while adding the success label; ${reviewLabelAlreadyPresent ? "pre-existing label preserved" : "label removed"}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 function verified(args: Args) {
@@ -119,8 +121,11 @@ function verified(args: Args) {
   assertWorktreeBelongsToProject(createCommandRunner(), attempt, args);
   const report = JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8"));
   validateCompletionReportBinding(attempt, report);
-  const current = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"));
+  const enabled = assertLocallyEnabled({ repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt });
+  const configFile = process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json");
+  assertCurrentWorkerContract(attempt, args.projectRepo, configFile, enabled.githubRepositoryId);
   const record = readRequiredVerificationRecord(workerRequiredVerificationPath(args.attemptRecord));
+  const current = assertCurrentWorkerContract(attempt, args.projectRepo, configFile, enabled.githubRepositoryId);
   assertWorkerCompletionAuthorized(attempt, report, record, current);
   return { attempt, report };
 }

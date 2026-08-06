@@ -148,6 +148,19 @@ describe("Worker required-verification completion gate", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("rejects a replaced fetch URL even when the push URL names the trusted repository", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-split-remote-"));
+    try {
+      const oldRemote = path.join(root, "old.git"); const checkout = path.join(root, "checkout");
+      execFileSync("git", ["init", "--bare", "--quiet", oldRemote]);
+      execFileSync("git", ["clone", "--quiet", oldRemote, checkout]);
+      execFileSync("git", ["-C", checkout, "remote", "set-url", "--push", "origin", "https://github.com/octo/demo.git"]);
+      const fixedAttempt = { ...attempt, baseBranch: "origin/main" };
+
+      expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout, undefined, "R_demo")).toThrow("trusted fetch source is not GitHub");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("fetches the configured trusted base before checking for policy changes", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-policy-"));
     try {

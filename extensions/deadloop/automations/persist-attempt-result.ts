@@ -4,6 +4,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { assertLocallyEnabled } = require("../../../src/enabled-operation.cjs");
 const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
@@ -54,8 +55,11 @@ function persist(args: JsonObject) {
   const report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
   if (report.status !== "complete" || !["worker", "branch-update"].includes(record.role)) return driverResult("done", "role result is not marker-eligible", { driverAction: "result_not_persisted" });
   const authorizeWorker = () => {
-    const current = assertCurrentWorkerContract(record, String(args.projectRepo), process.env.DEADLOOP_CONFIG || path.join(String(args.stateDir), "projects.json"));
+    const enabled = assertLocallyEnabled({ repoPath: String(args.projectRepo), githubRepo: String(args.githubRepo), stateDir: String(args.stateDir), enabledAt: Number(args.enabledAt) });
+    const configFile = process.env.DEADLOOP_CONFIG || path.join(String(args.stateDir), "projects.json");
+    assertCurrentWorkerContract(record, String(args.projectRepo), configFile, enabled.githubRepositoryId);
     const verification = readRequiredVerificationRecord(workerRequiredVerificationPath(attemptRecord));
+    const current = assertCurrentWorkerContract(record, String(args.projectRepo), configFile, enabled.githubRepositoryId);
     assertWorkerCompletionAuthorized(record, report, verification, current);
   };
   if (record.role === "worker") authorizeWorker();

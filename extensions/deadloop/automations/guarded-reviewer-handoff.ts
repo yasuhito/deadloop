@@ -69,7 +69,7 @@ function readJsonFile(file: string, description: string): Record<string, any> {
     throw new Error(`${description} is missing, unreadable, or malformed`, { cause: error });
   }
 }
-function assertCurrentHeadVerification(args: Args): void {
+function assertCurrentHeadVerification(args: Args, repositoryId?: string): void {
   const runsDir = path.join(args.stateDir, "runs");
   let entries: import("node:fs").Dirent[];
   try { entries = fs.readdirSync(runsDir, { withFileTypes: true }); }
@@ -95,10 +95,12 @@ function assertCurrentHeadVerification(args: Args): void {
     }
     const { attempt, attemptRecord } = candidates[0];
     if (attempt.role === "worker") {
-      const current = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"));
+      const configFile = process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json");
+      assertCurrentWorkerContract(attempt, args.projectRepo, configFile, repositoryId);
       const report = readJsonFile(attempt.promiseFile, "Worker completion report");
       validateCompletionReportBinding(attempt, report);
       const record = readRequiredVerificationRecord(workerRequiredVerificationPath(attemptRecord));
+      const current = assertCurrentWorkerContract(attempt, args.projectRepo, configFile, repositoryId);
       assertWorkerCompletionAuthorized(attempt, report, record, current);
       return current;
     }
@@ -114,9 +116,13 @@ function assertCurrentHeadVerification(args: Args): void {
       || String(report.result?.outputRevision || "").toLowerCase() !== normalizedHead) {
       throw new Error("current-head verification completion report is not a successful bound push");
     }
-    const checks = report.evidence?.finalizer?.checks;
-    if (!Array.isArray(checks) || checks.length !== 1 || checks[0]?.result !== "passed" || checks[0]?.command !== current.command) {
-      throw new Error("current-head verification does not match the trusted contract");
+    const receipt = readJsonFile(path.join(path.dirname(attempt.promiseFile), "finalizer-result.json"), "host finalizer verification record");
+    const checks = receipt.checks;
+    if (receipt.action !== "pushed" || receipt.reason !== expectedOutcome
+      || String(receipt.originalHeadOid || "").toLowerCase() !== String(attempt.inputRevision?.head || "").toLowerCase()
+      || String(receipt.headOid || "").toLowerCase() !== normalizedHead
+      || !Array.isArray(checks) || checks.length !== 1 || checks[0]?.result !== "passed" || checks[0]?.command !== current.command) {
+      throw new Error("host finalizer verification record does not match the trusted contract and current head");
     }
     return current;
   };
@@ -136,11 +142,12 @@ function handoffReviewedPr(args: Args, ops: Ops = { run: defaultRun }): number {
   const authorizeVerification = ops.authorizeVerification || assertCurrentHeadVerification;
   authorizeVerification(args);
   const project = { projectRepo: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
-  const operation = (_enabled: unknown, recheck: () => void) => {
+  const operation = (enabled: { githubRepositoryId?: string }, recheck: () => void) => {
     assertEligible(args, livePr(args, ops));
     recheck();
     assertEligible(args, livePr(args, ops));
-    authorizeVerification(args);
+    if (ops.authorizeVerification) authorizeVerification(args);
+    else assertCurrentHeadVerification(args, enabled.githubRepositoryId);
     const boundaryLabels = assertEligible(args, livePr(args, ops));
     runChecked(ops, ["gh", "pr", "edit", args.pr, "-R", args.githubRepo,
       "--remove-label", args.reviewLabel, "--remove-label", args.reviewingLabel,

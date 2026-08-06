@@ -3,7 +3,7 @@
 // holding the enablement lock. Remote configuration changes cannot redirect it.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { assertLocallyEnabled, MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const path = require("node:path") as typeof import("node:path");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
@@ -107,8 +107,11 @@ function assertVerifiedWorkerOutput(args: Args, ops: CommandOps = defaultOps()):
   assertWorktreeBelongsToProject({ runText: (argv: string[]) => gitOutput(ops, argv, "attempt worktree confinement failed") }, attempt, args);
   const report = JSON.parse(require("node:fs").readFileSync(attempt.promiseFile, "utf8"));
   validateCompletionReportBinding(attempt, report);
-  const current = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"));
+  const enabled = assertLocallyEnabled({ repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt });
+  const configFile = process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json");
+  assertCurrentWorkerContract(attempt, args.projectRepo, configFile, enabled.githubRepositoryId);
   const verification = readRequiredVerificationRecord(workerRequiredVerificationPath(args.attemptRecord));
+  const current = assertCurrentWorkerContract(attempt, args.projectRepo, configFile, enabled.githubRepositoryId);
   return assertWorkerCompletionAuthorized(attempt, report, verification, current).outputRevision;
 }
 

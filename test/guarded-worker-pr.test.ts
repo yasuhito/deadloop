@@ -119,6 +119,28 @@ describe("guarded Worker PR binding", () => {
     expect(edits).toEqual([]);
   });
 
+  it("preserves a review label that existed before a failed label boundary", () => {
+    const head = "a".repeat(40); const edits: string[] = []; let viewed = 0;
+    try {
+      addWorkerReviewLabel(
+        17,
+        { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
+        head,
+        { githubRepo: "owner/repo", reviewLabel: "agent:review" },
+        {
+          recheck: () => {}, authorize: () => {},
+          gh: (args: string[]) => {
+            if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
+            viewed += 1;
+            return { headRefName: "agent/issue-1", headRefOid: viewed < 3 ? head : "b".repeat(40), baseRefName: "main", closingIssuesReferences: [{ number: 1 }], labels: [{ name: "agent:review" }] };
+          },
+        },
+      );
+    } catch {}
+
+    expect(edits.some((call) => call.includes("--remove-label agent:review"))).toBe(false);
+  });
+
   it("does not create a PR when authorization races the remote head", () => {
     const head = "a".repeat(40); const raced = "b".repeat(40); let remote = head; let created = false;
     let error = "";

@@ -18,7 +18,7 @@ function verificationAttempt() {
   const promiseFile = path.join(runDir, "promise.json");
   writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({ attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command: "true", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head }, branch: "agent/issue-1", baseBranch: "trusted/main", worktreePath: fixture.root, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile, phase: "agent_started", lastSuccessfulPhase: "agent_started" }));
   writeFileSync(promiseFile, JSON.stringify({ schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head }, status: "complete", summary: "done", result: { outputRevision: head }, evidence: { validations: ["additional check"] } }));
-  return { args: { attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: fixture.root, githubRepo: "owner/repo", stateDir, worktree: fixture.root, quarantineRoot: path.join(stateDir, "check-quarantine") }, record: path.join(runDir, "required-verification.json"), log: path.join(runDir, "required-verification.log"), root: fixture.root, head };
+  return { args: { attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: fixture.root, githubRepo: "owner/repo", stateDir, enabledAt: 1, worktree: fixture.root, quarantineRoot: path.join(stateDir, "check-quarantine") }, record: path.join(runDir, "required-verification.json"), log: path.join(runDir, "required-verification.log"), root: fixture.root, head };
 }
 function repository() {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-verification-"));
@@ -44,6 +44,13 @@ describe("Worker required-verification checkout binding", () => {
     const fixture = repository();
     writeFileSync(path.join(fixture.root, "file.txt"), "dirty\n");
     expect(() => assertCleanOutput(fixture.root, fixture.head)).toThrow("must be clean");
+  });
+
+  it.each(["--assume-unchanged", "--skip-worktree"])("rejects tracked bytes hidden with %s", (flag) => {
+    const fixture = repository();
+    execFileSync("git", ["-C", fixture.root, "update-index", flag, "file.txt"]);
+    writeFileSync(path.join(fixture.root, "file.txt"), "different bytes\n");
+    expect(() => assertCleanOutput(fixture.root, fixture.head)).toThrow("index flags");
   });
 
   it("allows only quarantinable runtime artifacts in an otherwise clean checkout", () => {
@@ -86,9 +93,22 @@ describe("Worker required-verification checkout binding", () => {
     await run(fixture.args, undefined, async () => {
       invocations += 1;
       return { check: { code: 0, stdout: "fresh verification\n", stderr: "", timedOut: false, interrupted: false, signal: null } };
-    });
+    }, () => ({}));
 
     expect(invocations).toBe(1);
+  });
+
+  it("rejects policy changes made while required verification is running", async () => {
+    const fixture = verificationAttempt();
+    let rejected = false;
+    try {
+      await run(fixture.args, undefined, async () => {
+        writeFileSync(path.join(fixture.args.stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "false" }] }));
+        return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
+      }, () => ({}));
+    } catch { rejected = true; }
+
+    expect(rejected).toBe(true);
   });
 
   it("does not follow a pre-existing verification-log symlink", async () => {
@@ -98,7 +118,7 @@ describe("Worker required-verification checkout binding", () => {
     symlinkSync(target, fixture.log);
 
     let rejected = false;
-    try { await run(fixture.args, undefined, async () => ({ check: { code: 0, stdout: "replace\n", stderr: "", timedOut: false, interrupted: false, signal: null } })); }
+    try { await run(fixture.args, undefined, async () => ({ check: { code: 0, stdout: "replace\n", stderr: "", timedOut: false, interrupted: false, signal: null } }), () => ({})); }
     catch { rejected = true; }
 
     expect({ rejected, target: readFileSync(target, "utf8") }).toEqual({ rejected: true, target: "keep\n" });
@@ -106,7 +126,7 @@ describe("Worker required-verification checkout binding", () => {
 
   it("persists typed failed evidence when the check process cannot start", async () => {
     const fixture = verificationAttempt(); let rejected = false;
-    try { await run(fixture.args, undefined, async () => { throw new Error("spawn rejected"); }); }
+    try { await run(fixture.args, undefined, async () => { throw new Error("spawn rejected"); }, () => ({})); }
     catch { rejected = true; }
     const record = JSON.parse(require("node:fs").readFileSync(fixture.record, "utf8"));
     expect({ rejected, outcome: record.outcome, exitCode: record.exitCode, reason: record.terminationReason }).toEqual({ rejected: true, outcome: "failed", exitCode: null, reason: "runner_failure" });
@@ -118,7 +138,7 @@ describe("Worker required-verification checkout binding", () => {
       await run(fixture.args, undefined, async () => {
         writeFileSync(path.join(fixture.root, "generated.txt"), "output\n");
         return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
-      });
+      }, () => ({}));
     } catch { rejected = true; }
     const record = JSON.parse(require("node:fs").readFileSync(fixture.record, "utf8"));
     expect({ rejected, outcome: record.outcome, reason: record.terminationReason }).toEqual({ rejected: true, outcome: "failed", reason: "output_not_clean" });

@@ -278,6 +278,8 @@ function branchUpdateWorkerPrompt(
     String(env.enabledAt),
     "--check-command",
     shellQuote(env.checkCommand),
+    "--result-file",
+    shellQuote(path.join(path.dirname(promiseFile), "finalizer-result.json")),
   ].join(" ");
   return `Update the existing branch for PR #${number} by merging the selected base head and resolving its conflicts.
 
