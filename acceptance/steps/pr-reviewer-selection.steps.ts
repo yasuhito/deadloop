@@ -45,89 +45,89 @@ function setFixture(world: SelectionWorld, fixtureName: string): void {
   world.fixtureName = fixtureName;
 }
 
-Given("レビュー待ちの pull request がある", function (this: SelectionWorld) {
+Given("There is a pull request waiting for review.", function (this: SelectionWorld) {
   setFixture(this, "precheck-agent-review.json");
   this.driverFixtureName = "external-review-request.json";
 });
 
-Given("人間確認待ちの pull request がある", function (this: SelectionWorld) {
+Given("There is a pull request ready for human review.", function (this: SelectionWorld) {
   setFixture(this, "precheck-ready-for-human.json");
 });
 
-Given("レビュー対象外のラベルだけを持つ pull request がある", function (this: SelectionWorld) {
+Given("There is a pull request that only has labels that are not subject to review.", function (this: SelectionWorld) {
   setFixture(this, "precheck-non-candidate-label.json");
 });
 
-Given("CI 実行中の pull request がある", function (this: SelectionWorld) {
+Given("A pull request has CI running", function (this: SelectionWorld) {
   setFixture(this, "precheck-pending-checks.json");
 });
 
-Given("外部レビューの待機期限が切れた pull request がある", function (this: SelectionWorld) {
+Given("There is a pull request whose waiting period for external review has expired.", function (this: SelectionWorld) {
   setFixture(this, "precheck-stale-external-marker.json");
   this.driverFixtureName = "fallback-review.json";
 });
 
-Given("外部レビュー待ちの pull request がある", function (this: SelectionWorld) {
+Given("There is a pull request waiting for external review", function (this: SelectionWorld) {
   setFixture(this, "precheck-fresh-copilot-request.json");
   this.driverFixtureName = "external-review-wait.json";
 });
 
-Given("外部レビュー担当が処理中の pull request がある", function (this: SelectionWorld) {
+Given("pull request is being processed by an external reviewer", function (this: SelectionWorld) {
   setFixture(this, "precheck-fresh-copilot-request.json");
 });
 
-Given("別の外部レビュー担当が処理中の pull request がある", function (this: SelectionWorld) {
+Given("pull request is being processed by another external reviewer", function (this: SelectionWorld) {
   setFixture(this, "precheck-coderabbit-processing.json");
 });
 
-Given("下書きの pull request がある", function (this: SelectionWorld) {
+Given("There is a draft pull request", function (this: SelectionWorld) {
   setFixture(this, "precheck-draft.json");
   this.driverFixtureName = "draft-pr.json";
 });
 
-Given("稼働中の担当者がいないレビュー中の pull request がある", function (this: SelectionWorld) {
+Given("There is a pull request under review with no active agents.", function (this: SelectionWorld) {
   setFixture(this, "precheck-reviewing.json");
   this.agentsFixtureName = "agents-empty.json";
 });
 
-Given("証拠付きで放棄した試行があるレビュー待ちの pull request がある", function (this: SelectionWorld) {
+Given("There is a pull request waiting for review with an abandoned attempt with evidence.", function (this: SelectionWorld) {
   setFixture(this, "precheck-agent-review.json");
   this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: 7 }, phase: "abandoned" }];
 });
 
-Given("別担当がレビュー中の pull request がある", function (this: SelectionWorld) {
+Given("There is a pull request being reviewed by another agent.", function (this: SelectionWorld) {
   setFixture(this, "precheck-reviewing.json");
   this.agents = { result: { agents: [{ name: "dl-r-13-111111111111", agent_status: "working" }] } };
   this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: 13 }, phase: "agent_started", agentName: "dl-r-13-111111111111" }];
 });
 
-Given("停止中の pull request がある", function (this: SelectionWorld) {
+Given("There is a blocked pull request", function (this: SelectionWorld) {
   setFixture(this, "precheck-blocked.json");
 });
 
-Given("レビューできない pull request とレビュー可能な pull request が混在している", function (this: SelectionWorld) {
+Given("Reviewable and unreviewable pull requests are both available", function (this: SelectionWorld) {
   setFixture(this, "precheck-mixed-candidates.json");
   this.agents = { result: { agents: [{ name: "dl-r-13-111111111111", agent_status: "working" }] } };
   this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: 13 }, phase: "agent_started", agentName: "dl-r-13-111111111111" }];
 });
 
-Given("自動マージが有効である", function (this: SelectionWorld) {
+Given("automatic merge is enabled", function (this: SelectionWorld) {
   this.autoMerge = true;
 });
 
-Given("自動マージが無効である", function (this: SelectionWorld) {
+Given("Automatic merge is disabled", function (this: SelectionWorld) {
   this.autoMerge = false;
 });
 
-Given("外部レビューが有効である", function (this: SelectionWorld) {
+Given("External review is enabled", function (this: SelectionWorld) {
   this.externalReviewEnabled = true;
 });
 
-Given("外部レビューが無効である", function (this: SelectionWorld) {
+Given("External review is disabled", function (this: SelectionWorld) {
   this.externalReviewEnabled = false;
 });
 
-When("deadloop がレビュー対象を探す", function (this: SelectionWorld) {
+When("deadloop searches for review target", function (this: SelectionWorld) {
   if (!this.fixtureName) throw new Error("review state is missing");
   const agents = this.agents ?? (this.agentsFixtureName
     ? JSON.parse(fs.readFileSync(path.join(fixtureDirectory, this.agentsFixtureName), "utf8"))
@@ -141,7 +141,7 @@ When("deadloop がレビュー対象を探す", function (this: SelectionWorld) 
   this.decision = selectPrForReview(readFixture(this.fixtureName), config, workingReviewerPrNumbers(agents, config.projectId, this.attempts || [], "owner/repo"));
 });
 
-When("deadloop が外部レビューの扱いを決める", function (this: SelectionWorld) {
+When("deadloop decides how to handle external reviews", function (this: SelectionWorld) {
   if (!this.driverFixtureName) throw new Error("review state is missing");
   if (this.externalReviewEnabled === undefined) throw new Error("external review state is missing");
   this.driverResult = runDriver(this.driverFixtureName, { DEADLOOP_EXTERNAL_REVIEW_ENABLED: this.externalReviewEnabled ? "1" : "0" });
@@ -155,12 +155,12 @@ function runDriverPath(fixturePath: string, extraEnv: Record<string, string> = {
   return runPrReviewerDriverFixture(fixturePath, extraEnv);
 }
 
-When("deadloop がレビューを開始しようとする", function (this: SelectionWorld) {
+When("deadloop tries to start a review", function (this: SelectionWorld) {
   if (!this.driverFixtureName) throw new Error("review state is missing");
   this.driverResult = runDriver(this.driverFixtureName);
 });
 
-When("deadloop がレビュー対象を選んで処理する", function (this: SelectionWorld) {
+When("deadloop selects and processes the review target", function (this: SelectionWorld) {
   if (!this.fixtureName) throw new Error("review state is missing");
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-acceptance-"));
   const fixturePath = path.join(tempRoot, "selection-cycle.json");
@@ -172,7 +172,7 @@ When("deadloop がレビュー対象を選んで処理する", function (this: S
   }
 });
 
-Given("別担当が選択後にレビューを開始している", function (this: SelectionWorld) {
+Given("Another agent has started the review after selection.", function (this: SelectionWorld) {
   if (!this.fixtureName) throw new Error("review state is missing");
   const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo" });
   this.prs = readFixture(this.fixtureName);
@@ -185,21 +185,21 @@ Given("別担当が選択後にレビューを開始している", function (thi
   this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: firstDecision.number }, phase: "agent_started", agentName }];
 });
 
-When("次の選定周期になる", function (this: SelectionWorld) {
+When("The next selection cycle begins", function (this: SelectionWorld) {
   if (!this.prs || !this.agents) throw new Error("review state is missing");
   const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo" });
   this.decision = selectPrForReview(this.prs, config, workingReviewerPrNumbers(this.agents, config.projectId, this.attempts || [], "owner/repo"));
 });
 
-Then("pull request #{int} をレビュー対象に選ぶ", function (this: SelectionWorld, number: number) {
+Then("deadloop selects pull request #{int} for review", function (this: SelectionWorld, number: number) {
   assert.equal(this.decision?.number, number);
 });
 
-Then("レビュー対象は選ばれない", function (this: SelectionWorld) {
+Then("No review target is selected", function (this: SelectionWorld) {
   assert.equal(this.decision?.selected, false);
 });
 
-Then("deadloop は外部レビューを依頼する", function (this: SelectionWorld) {
+Then("deadloop requests external review", function (this: SelectionWorld) {
   assert.equal(
     this.driverResult?.githubEffects?.some(
       (effect) => effect.operation === "add_pr_reviewer" && effect.reviewer === "@copilot",
@@ -208,19 +208,19 @@ Then("deadloop は外部レビューを依頼する", function (this: SelectionW
   );
 });
 
-Then("レビュー担当は起動されない", function (this: SelectionWorld) {
+Then("deadloop does not start the Reviewer", function (this: SelectionWorld) {
   assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0, 0);
 });
 
-Then("外部レビューの完了待ちになる", function (this: SelectionWorld) {
+Then("deadloop waits for external review to complete", function (this: SelectionWorld) {
   assert.equal(this.driverResult?.driverAction, "wait");
 });
 
-Then("レビュー担当が起動される", function (this: SelectionWorld) {
+Then("deadloop starts the Reviewer for normal review", function (this: SelectionWorld) {
   assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length, 1);
 });
 
-Then("pull request の復旧手順を示す", function (this: SelectionWorld) {
+Then("deadloop shows recovery steps for pull request", function (this: SelectionWorld) {
   const commentEffect = this.driverResult?.githubEffects?.find((effect) => effect.operation === "comment_pr");
   assert.match(commentEffect?.body ?? "", /## Recovery steps/);
 });

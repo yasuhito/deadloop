@@ -1,40 +1,40 @@
-# 機能: 古いレビュー占有だけを回収する
+# Feature: Reclaim only stale review claims
 
-deadloop の利用者に対し、実働担当がいないレビュー占有だけを回収し、同じ pull request のレビューを再開できることを保証する。
-これにより、稼働中や更新作業中の担当者、意図的に停止されたレビューを奪わず、回収後の重複処理も防ぐ。
+A deadloop user can reclaim a review claim only when no agent is active, then resume review of the same pull request.
+This avoids taking a claim from an active or updating agent or from an intentionally blocked review, and prevents duplicate processing after reclaim.
 
-## シナリオ: 実働担当がいない古いレビュー占有を回収する
+## Scenario: Reclaim a stale review claim with no active agent
 
-* 前提 実働担当がいない古いレビュー占有がある
-* もし deadloop が古いレビュー占有の回収対象を探す
-* ならば pull request #13 のレビューを再開する
+* Given A stale review claim has no active agent
+* When deadloop searches for stale review claims to reclaim
+* Then Review of pull request #13 resumes
 
-## シナリオ: レビュー担当が稼働中の占有を回収しない
+## Scenario: Do not reclaim a claim while the Reviewer is active
 
-* 前提 レビュー担当が稼働中のレビュー占有がある
-* もし deadloop が古いレビュー占有の回収対象を探す
-* ならば レビュー占有は回収されない
+* Given A review claim has an active Reviewer
+* When deadloop searches for stale review claims to reclaim
+* Then The review claim is not reclaimed
 
-## シナリオ: ブランチ更新担当の完了を待つ猶予中の占有を回収しない
+## Scenario: Do not reclaim a claim during the grace period for a branch-update agent
 
-* 前提 ブランチ更新担当の完了を待つ猶予中のレビュー占有がある
-* もし deadloop が古いレビュー占有の回収対象を探す
-* ならば レビュー占有は回収されない
+* Given A review claim is in the grace period while a branch-update agent completes
+* When deadloop searches for stale review claims to reclaim
+* Then The review claim is not reclaimed
 
-## シナリオ: 終了済みでも試行記録が残るレビュー占有を回収しない
+## Scenario: Do not reclaim a claim whose completed Reviewer still has an attempt record
 
-* 前提 終了済みのレビュー担当だけが残るレビュー占有がある
-* もし deadloop が古いレビュー占有の回収対象を探す
-* ならば レビュー占有は回収されない
+* Given A review claim has only a completed Reviewer and its attempt record remains
+* When deadloop searches for stale review claims to reclaim
+* Then The review claim is not reclaimed
 
-## シナリオ: 意図的に停止されたレビュー占有を回収しない
+## Scenario: Do not reclaim an intentionally blocked review claim
 
-* 前提 意図的に停止されたレビュー占有がある
-* もし deadloop が古いレビュー占有の回収対象を探す
-* ならば レビュー占有は回収されない
+* Given A review claim is intentionally blocked
+* When deadloop searches for stale review claims to reclaim
+* Then The review claim is not reclaimed
 
-## シナリオ: 回収後に新しい担当が稼働した占有を重ねて回収しない
+## Scenario: Do not reclaim a claim again after a new Reviewer becomes active
 
-* 前提 回収済みで新しいレビュー担当が稼働中の占有がある
-* もし deadloop が次の選定周期を実行する
-* ならば 次の選定周期ではレビュー担当が追加で起動されない
+* Given A reclaimed claim now has an active Reviewer
+* When deadloop runs the next selection cycle
+* Then The next selection cycle does not start another Reviewer

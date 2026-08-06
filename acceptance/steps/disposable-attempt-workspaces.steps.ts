@@ -100,11 +100,11 @@ function persistFixtureJournal(world: World, phase: "report_received" | "github_
   world.record = readAttemptRecord(runDir);
 }
 
-Given("新しい作業試行を開始できる", function (this: World) {
+Given("A new work attempt can start", function (this: World) {
   this.root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cucumber-workspace-"));
 });
 
-When("deadloop が担当を起動する", function (this: World) {
+When("deadloop starts the agent", function (this: World) {
   const root = this.root!;
   let launchedName = "";
   this.layoutObservation = { workspaces: [], extraLayoutActions: [] };
@@ -138,7 +138,7 @@ When("deadloop が担当を起動する", function (this: World) {
   });
 });
 
-Given("起動失敗を証拠付きで放棄した Worker の作業ツリーがある", function (this: World) {
+Given("A Worker's worktree remains after its launch failure was abandoned with evidence", function (this: World) {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cucumber-abandoned-worker-"));
   this.root = root;
   const worktreePath = path.join(root, "agent-issue-12-retry");
@@ -161,7 +161,7 @@ Given("起動失敗を証拠付きで放棄した Worker の作業ツリーが�
   this.recoveredWorker = { worktreePath, opened: 0 };
 });
 
-When("deadloop が再投入された Worker を起動する", function (this: World) {
+When("deadloop starts the requeued Worker", function (this: World) {
   const root = this.root!;
   const recovered = this.recoveredWorker!;
   let launchedName = "";
@@ -198,14 +198,14 @@ When("deadloop が再投入された Worker を起動する", function (this: Wo
   });
 });
 
-Then("同じ作業ツリーを新しい実行場所で開く", function (this: World) {
+Then("deadloop opens the same worktree in a fresh workspace", function (this: World) {
   assert.deepEqual({ opened: this.recoveredWorker?.opened, workspaceId: this.result.workspaceId, worktreePath: this.result.worktreePath }, {
     opened: 1, workspaceId: "workspace-new", worktreePath: this.recoveredWorker?.worktreePath,
   });
   rmSync(this.root!, { recursive: true, force: true });
 });
 
-Then("担当は一つの実行場所と一つの画面に表示される", function (this: World) {
+Then("The agent appears in exactly one workspace and one pane", function (this: World) {
   assert.deepEqual(this.layoutObservation, {
     workspaces: [{ workspace_id: this.result.workspaceId, tab_count: 1, pane_count: 1 }],
     extraLayoutActions: [],
@@ -213,28 +213,28 @@ Then("担当は一つの実行場所と一つの画面に表示される", funct
   rmSync(this.root!, { recursive: true, force: true });
 });
 
-Given("担当の PR と完了報告が一致している", function (this: World) {
+Given("The agent's PR and completion report agree", function (this: World) {
   Object.assign(this, workerFixture());
   persistFixtureJournal(this);
   this.worktreeExists = true;
 });
 
-Given("担当が安全上の理由で作業を遮断した", function (this: World) {
+Given("The agent blocked its work for a safety reason", function (this: World) {
   Object.assign(this, workerFixture());
   this.report = { ...this.report, status: "blocked", result: { reason: "unsafe", explanation: "unsafe", recovery: "inspect" }, evidence: {} };
 });
 
-Given("担当の完了報告が壊れている", function (this: World) {
+Given("The agent's completion report is malformed", function (this: World) {
   Object.assign(this, workerFixture());
   this.report = { status: "complete" };
 });
 
-Given("担当の結果を GitHub で確認できない", function (this: World) {
+Given("The agent's result cannot be confirmed on GitHub", function (this: World) {
   Object.assign(this, workerFixture());
   this.github = { kind: "uncertain", reason: "timeout", detail: "GitHub timeout" };
 });
 
-When("deadloop が完了した試行を照合する", async function (this: World) {
+When("deadloop reconciles the completed attempt", async function (this: World) {
   const decision = evaluateCompletionPersistence({
     record: this.record!, report: { kind: "v1", promisePath: this.record!.promiseFile, report: this.report }, github: this.github,
     context: { workerReviewLabel: "agent:review" },
@@ -258,18 +258,18 @@ When("deadloop が完了した試行を照合する", async function (this: Worl
   this.worktreeExists = true;
 });
 
-Then("担当の実行場所は消えて作業ツリーは残る", function (this: World) {
+Then("The agent's workspace is gone and the worktree remains", function (this: World) {
   assert.deepEqual({ action: this.result.action, phase: readAttemptRecord(this.runDir!).phase, worktree: this.worktreeExists }, {
     action: "closed", phase: "workspace_closed", worktree: true,
   });
   rmSync(this.root!, { recursive: true, force: true });
 });
 
-Given("作業担当の実行場所を安全に閉じている", function (this: World) {
+Given("The Worker's workspace was closed safely", function (this: World) {
   this.priorWorkspace = { workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1", canonicalWorktreePath: "/worktrees/issue-12" };
 });
 
-Given("レビュー結果を GitHub に保存して実行場所を閉じている", function (this: World) {
+Given("The review result was saved to GitHub and the Reviewer workspace was closed", function (this: World) {
   this.priorWorkspace = { workspaceId: "workspace-2", tabId: "tab-2", rootPaneId: "pane-2", canonicalWorktreePath: "/worktrees/issue-12" };
 });
 
@@ -369,7 +369,7 @@ function launchBranchUpdateBoundary(workspaceId: string) {
   }
 }
 
-When("deadloop がレビュー担当を起動する", function (this: World) {
+When("deadloop starts the Reviewer in a fresh workspace", function (this: World) {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cucumber-reviewer-"));
   const env = reviewerEnvironment({
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo",
@@ -380,17 +380,17 @@ When("deadloop がレビュー担当を起動する", function (this: World) {
   }, env, "acceptance", roleLaunchOps(root, "workspace-2"));
   rmSync(root, { recursive: true, force: true });
 });
-When("deadloop が修正担当とブランチ更新担当を起動する", function (this: World) {
+When("deadloop starts the repair agent and branch-update agent", function (this: World) {
   this.currentWorkspace = {
     repair: launchRepairBoundary("workspace-3"),
     branchUpdate: launchBranchUpdateBoundary("workspace-4"),
   };
 });
 
-Then("レビュー担当は別の新しい実行場所を使う", function (this: World) {
+Then("The Reviewer uses a separate fresh workspace", function (this: World) {
   assert.notEqual(this.currentWorkspace.workspaceId, this.priorWorkspace.workspaceId);
 });
-Then("修正担当とブランチ更新担当はそれぞれ新しい実行場所を使う", function (this: World) {
+Then("Each agent uses a fresh workspace", function (this: World) {
   assert.deepEqual({
     prior: [this.priorWorkspace.workspaceId, this.priorWorkspace.tabId, this.priorWorkspace.rootPaneId],
     repair: [this.currentWorkspace.repair.workspaceId, this.currentWorkspace.repair.tabId, this.currentWorkspace.repair.rootPaneId],
@@ -403,11 +403,11 @@ Then("修正担当とブランチ更新担当はそれぞれ新しい実行場�
     branchUpdateGuarded: true,
   });
 });
-Then("担当の実行場所と作業ツリーを残す", function (this: World) { assert.equal(this.result.action, "preserve"); });
+Then("deadloop preserves the agent's workspace and worktree", function (this: World) { assert.equal(this.result.action, "preserve"); });
 
-Given("自動化の実行元が対応外の Herdr に接続している", function (this: World) { this.mutationCount = 0; });
+Given("The automation host is connected to an unsupported Herdr", function (this: World) { this.mutationCount = 0; });
 
-When("deadloop が自動化の周期を開始する", async function (this: World) {
+When("deadloop starts an automation cycle", async function (this: World) {
   const project = normalizeProject({ id: "demo", repoPath: "/repo", githubRepo: "owner/repo", automations: [{ id: "a", name: "a" }] });
   try {
     await runScheduledAutomation(project, project.automations[0], 1, { automations: {} }, {
@@ -419,13 +419,13 @@ When("deadloop が自動化の周期を開始する", async function (this: Worl
   } catch {}
 });
 
-Then("GitHub と実行場所を変更せずに停止する", function (this: World) { assert.equal(this.mutationCount, 0); });
+Then("deadloop stops without changing GitHub or a workspace", function (this: World) { assert.equal(this.mutationCount, 0); });
 
-Given("同じ作業ツリーに調査中の実行場所が残っている", function (this: World) {
+Given("A workspace retained for investigation remains on the same worktree", function (this: World) {
   this.priorWorkspace = { workspaceId: "workspace-retained", tabId: "tab-retained", rootPaneId: "pane-retained", canonicalWorktreePath: "/worktrees/issue-12" };
   this.mutationCount = 0;
 });
-When("deadloop が次の担当を検討する", async function (this: World) {
+When("deadloop considers starting the next agent", async function (this: World) {
   this.result = await orchestrateFreshAttemptWorkspace({
     mode: "open", repoPath: "/repo", branch: "agent/issue-12", workspaceLabel: "retry",
     expectedCanonicalWorktreePath: "/worktrees/issue-12", priorAttempt: this.priorWorkspace,
@@ -437,16 +437,16 @@ When("deadloop が次の担当を検討する", async function (this: World) {
     renameWorkspace: () => { this.mutationCount!++; return { kind: "confirmed", value: undefined }; },
   });
 });
-Then("同じ作業ツリーには新しい担当を起動しない", function (this: World) {
+Then("deadloop does not start a new agent on the same worktree", function (this: World) {
   assert.deepEqual({ action: this.result.action, mutations: this.mutationCount }, { action: "rejected", mutations: 0 });
 });
 
-Given("GitHub への保存後に実行元が停止した", function (this: World) {
+Given("The automation host stopped after persisting the result to GitHub", function (this: World) {
   Object.assign(this, workerFixture());
   persistFixtureJournal(this, "github_persisted");
   this.worktreeExists = true;
 });
-When("deadloop が再起動時に試行を照合する", async function (this: World) {
+When("deadloop reconciles the attempt after restart", async function (this: World) {
   const ambiguous = this.result?.ambiguous === true;
   this.result = await reconcileAttemptWorkspace({
     record: this.record!, report: { kind: "v1", promisePath: this.record!.promiseFile, report: this.report }, github: this.github,
@@ -462,24 +462,24 @@ When("deadloop が再起動時に試行を照合する", async function (this: W
     observeWorktree: () => ({ kind: "confirmed", value: { exists: true, canonicalPath: "/worktrees/issue-12", branch: "agent/issue-12" } }),
   });
 });
-Then("保存済みの実行場所だけを閉じて作業ツリーを残す", function (this: World) {
+Then("deadloop closes only the persisted workspace and leaves the worktree", function (this: World) {
   assert.deepEqual({ action: this.result.action, phase: readAttemptRecord(this.runDir!).phase }, {
     action: "closed", phase: "workspace_closed",
   });
   rmSync(this.root!, { recursive: true, force: true });
 });
 
-Given("再起動時に実行場所の所有者を特定できない", function (this: World) {
+Given("The workspace owner cannot be identified after restart", function (this: World) {
   Object.assign(this, workerFixture());
   persistFixtureJournal(this, "github_persisted");
   this.result = { ambiguous: true };
 });
-Then("所有者不明の実行場所を閉じない", function (this: World) {
+Then("deadloop does not close a workspace with an unknown owner", function (this: World) {
   assert.equal(this.result.action, "cleanup_pending");
   rmSync(this.root!, { recursive: true, force: true });
 });
 
-Given("PR が完了し作業ツリーが清浄で追跡中ではない", function (this: World) {
+Given("The PR is complete and its worktree is clean and untracked by Herdr", function (this: World) {
   this.result = {
     config: { repo: "owner/repo", repoPath: "/repo", worktreeRoot: "/worktrees", reviewLabel: "agent:review", humanLabel: "ready-for-human" },
     prs: [{ number: 21, state: "MERGED", headRefName: "agent/issue-12", headRefOid: outputHead, labels: [] }],
@@ -487,5 +487,5 @@ Given("PR が完了し作業ツリーが清浄で追跡中ではない", functio
     gitStatuses: { "/worktrees/issue-12": "" },
   };
 });
-When("deadloop が PR の作業ツリーを片付ける", function (this: World) { this.result = selectCleanupPlan(this.result); });
-Then("安全確認を満たした作業ツリーだけが削除対象になる", function (this: World) { assert.equal(this.result.candidates.length, 1); });
+When("deadloop cleans up the PR worktree", function (this: World) { this.result = selectCleanupPlan(this.result); });
+Then("Only a worktree that passes the safety checks is selected for removal", function (this: World) { assert.equal(this.result.candidates.length, 1); });

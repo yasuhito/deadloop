@@ -39,89 +39,89 @@ function coordinateIssue(fixtureName: string): IssueCoordinationResult {
   return JSON.parse(result.stdout);
 }
 
-Given("選ばれた Issue に必要な実装契約がそろっていない", function (this: IssueCoordinationWorld) {
+Given("The selected Issue lacks the required implementation contract", function (this: IssueCoordinationWorld) {
   this.fixtureName = "driver-contract-missing.json";
 });
 
-Given("選ばれた Issue が計画をまとめるためのものである", function (this: IssueCoordinationWorld) {
+Given("The selected Issue is a planning Issue", function (this: IssueCoordinationWorld) {
   this.fixtureName = "driver-blocked-prd.json";
 });
 
-Given("選ばれた Issue が子 Issue の一覧をまとめている", function (this: IssueCoordinationWorld) {
+Given("The selected Issue only lists child Issues", function (this: IssueCoordinationWorld) {
   this.fixtureName = "driver-parent-task-list.json";
 });
 
-Given("選ばれた実装可能な Issue が設計文書を参照している", function (this: IssueCoordinationWorld) {
+Given("Selected implementable Issue references design document", function (this: IssueCoordinationWorld) {
   this.fixtureName = "driver-prd-doc-reference.json";
 });
 
-Given("選ばれた実装可能な Issue が受け入れ条件で親 Issue を参照している", function (this: IssueCoordinationWorld) {
+Given("Selected implementable Issue references parent Issue in acceptance criteria", function (this: IssueCoordinationWorld) {
   this.fixtureName = "driver-acceptance-parent-reference.json";
 });
 
-Given("選ばれた Issue に実装契約がそろっている", function (this: IssueCoordinationWorld) {
+Given("The selected Issue has an implementation contract.", function (this: IssueCoordinationWorld) {
   this.fixtureName = "driver-ready-worker.json";
 });
 
-When("deadloop が選ばれた Issue の次処理を決める", function (this: IssueCoordinationWorld) {
+When("deadloop decides the selected Issue's next action", function (this: IssueCoordinationWorld) {
   if (!this.fixtureName) throw new Error("issue precondition is missing");
   this.result = coordinateIssue(this.fixtureName);
 });
 
-Then("その Issue は言語モデルを使わずに停止される", function (this: IssueCoordinationWorld) {
+Then("deadloop blocks the Issue without using the language model", function (this: IssueCoordinationWorld) {
   assert.equal(this.result?.action, "done");
 });
 
-Then("その Issue の作業は開始されない", function (this: IssueCoordinationWorld) {
+Then("Work on the Issue does not start", function (this: IssueCoordinationWorld) {
   assert.equal(this.result?.launch, undefined);
 });
 
-Then("Issue に追加する実装契約の項目が案内される", function (this: IssueCoordinationWorld) {
+Then("deadloop lists the implementation-contract items to add to the Issue", function (this: IssueCoordinationWorld) {
   assert.match(this.result?.comment || "", /`## Agent Brief` or `## What to build`[\s\S]*`## Acceptance criteria`/);
 });
 
-Then("修正した Issue を再投入する方法が案内される", function (this: IssueCoordinationWorld) {
+Then("deadloop explains how to requeue the corrected Issue", function (this: IssueCoordinationWorld) {
   assert.match(this.result?.comment || "", /Update the issue body, then add `agent:implement` again\./);
 });
 
-Then("実装可能な Issue への分割方法が案内される", function (this: IssueCoordinationWorld) {
+Then("deadloop explains how to split the plan into implementable Issues", function (this: IssueCoordinationWorld) {
   assert.match(this.result?.comment || "", /Create a separate implementable issue or split this issue's scope\./);
 });
 
-Then("停止後の復旧手順が案内される", function (this: IssueCoordinationWorld) {
+Then("deadloop provides recovery steps after blocking the Issue", function (this: IssueCoordinationWorld) {
   assert.match(this.result?.comment || "", /## Recovery steps/);
 });
 
-Then("分割した Issue に選定に必要なラベルを付ける方法が案内される", function (this: IssueCoordinationWorld) {
+Then("deadloop explains how to add the selection labels to the split Issues", function (this: IssueCoordinationWorld) {
   assert.match(
     this.result?.comment || "",
     /gh issue edit "\$implementable_issue_number"[^\n]*--add-label ready-for-agent[^\n]*--add-label agent:implement/,
   );
 });
 
-Then("停止コメントは利用者向けの案内だけで作られる", function (this: IssueCoordinationWorld) {
+Then("The blocking comment are created only as a guide for users.", function (this: IssueCoordinationWorld) {
   assert.doesNotMatch(
     this.result?.comment || "",
     /extract-worker-promise|herdr|\/example\/repository|<(?:promiseFile|workspaceId|worktreePath|branch)>/i,
   );
 });
 
-Then("その Issue の作業が開始される", function (this: IssueCoordinationWorld) {
+Then("Work on the Issue starts", function (this: IssueCoordinationWorld) {
   assert.equal(this.result?.launch?.simulated, true);
 });
 
-Then("作業指示は実装担当者に必要な情報だけで作られる", function (this: IssueCoordinationWorld) {
+Then("The work instructions contain only information needed by the implementation agent", function (this: IssueCoordinationWorld) {
   assert.doesNotMatch(this.result?.launch?.instructions || "", /issue coordinator|driver|renderer/i);
 });
 
-Then("その Issue の完了監視が開始される", function (this: IssueCoordinationWorld) {
+Then("Completion monitoring starts for the Issue", function (this: IssueCoordinationWorld) {
   assert.equal(this.result?.monitorHandoff?.kind, "issue");
 });
 
-Then("その Issue の完了監視は開始されない", function (this: IssueCoordinationWorld) {
+Then("Completion monitoring for the Issue does not start", function (this: IssueCoordinationWorld) {
   assert.equal(this.result?.monitorHandoff, undefined);
 });
 
-Then("その Issue に停止案内は作られない", function (this: IssueCoordinationWorld) {
+Then("No blocking guidance is created for the Issue", function (this: IssueCoordinationWorld) {
   assert.equal(this.result?.comment, undefined);
 });

@@ -1,114 +1,113 @@
-# 機能: 選ばれた Issue を一つの次処理へ進める
+# Feature: Advance a selected Issue to exactly one next action
 
-deadloop は、選ばれた Issue の実装契約と役割を確認し、利用者に必要な案内、
-計画の分割待ち、または実装開始後の監視のいずれかへ安全に進める。
+deadloop checks the selected Issue's implementation contract and role, then safely provides user guidance, waits for a plan to be split, or monitors started implementation.
 
-これにより、準備不足の Issue を実装したり、同じ Issue に複数の処理を重ねたりしない。
+This prevents implementation of an unprepared Issue and overlapping actions on the same Issue.
 
-## シナリオ: 実装契約が不足している場合は言語モデルへ判断を引き渡さない
+## Scenario: Do not delegate a missing implementation contract to the language model
 
-* 前提 選ばれた Issue に必要な実装契約がそろっていない
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば その Issue は言語モデルを使わずに停止される
+* Given The selected Issue lacks the required implementation contract
+* When deadloop decides the selected Issue's next action
+* Then deadloop blocks the Issue without using the language model
 
-## シナリオ: 実装契約が不足している場合は作業を開始しない
+## Scenario: Do not start work if implementation contract is missing
 
-* 前提 選ばれた Issue に必要な実装契約がそろっていない
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば その Issue の作業は開始されない
+* Given The selected Issue lacks the required implementation contract
+* When deadloop decides the selected Issue's next action
+* Then Work on the Issue does not start
 
-## シナリオ: 実装契約が不足している場合は完了監視を開始しない
+## Scenario: Do not start completion monitoring if there is a missing implementation contract
 
-* 前提 選ばれた Issue に必要な実装契約がそろっていない
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば その Issue の完了監視は開始されない
+* Given The selected Issue lacks the required implementation contract
+* When deadloop decides the selected Issue's next action
+* Then Completion monitoring for the Issue does not start
 
-## シナリオ: 実装契約が不足している場合は必要な項目を案内する
+## Scenario: List required items when the implementation contract is missing
 
-* 前提 選ばれた Issue に必要な実装契約がそろっていない
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば Issue に追加する実装契約の項目が案内される
+* Given The selected Issue lacks the required implementation contract
+* When deadloop decides the selected Issue's next action
+* Then deadloop lists the implementation-contract items to add to the Issue
 
-## シナリオ: 実装契約の修正後に再投入する方法を案内する
+## Scenario: Provide guidance on how to requeue after modifying the implementation contract
 
-* 前提 選ばれた Issue に必要な実装契約がそろっていない
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば 修正した Issue を再投入する方法が案内される
+* Given The selected Issue lacks the required implementation contract
+* When deadloop decides the selected Issue's next action
+* Then deadloop explains how to requeue the corrected Issue
 
-## シナリオ: 計画用の Issue は実装可能な単位への分割を待つ
+## Scenario: Wait for a planning Issue to be split into implementable units
 
-* 前提 選ばれた Issue が計画をまとめるためのものである
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば 実装可能な Issue への分割方法が案内される
+* Given The selected Issue is a planning Issue
+* When deadloop decides the selected Issue's next action
+* Then deadloop explains how to split the plan into implementable Issues
 
-## シナリオ: 計画用の Issue には復旧手順を案内する
+## Scenario: Provide recovery steps for a planning Issue
 
-* 前提 選ばれた Issue が計画をまとめるためのものである
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば 停止後の復旧手順が案内される
+* Given The selected Issue is a planning Issue
+* When deadloop decides the selected Issue's next action
+* Then deadloop provides recovery steps after blocking the Issue
 
-## シナリオ: 分割した実装可能な Issue を再投入できる
+## Scenario: Explain how to requeue the split implementable Issues
 
-* 前提 選ばれた Issue が計画をまとめるためのものである
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば 分割した Issue に選定に必要なラベルを付ける方法が案内される
+* Given The selected Issue is a planning Issue
+* When deadloop decides the selected Issue's next action
+* Then deadloop explains how to add the selection labels to the split Issues
 
-## シナリオ: 計画用の Issue の停止コメントに内部運用情報を含めない
+## Scenario: Do not include internal operational information in the blocking comment of Issue for planning
 
-* 前提 選ばれた Issue が計画をまとめるためのものである
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば 停止コメントは利用者向けの案内だけで作られる
+* Given The selected Issue is a planning Issue
+* When deadloop decides the selected Issue's next action
+* Then The blocking comment are created only as a guide for users.
 
-## シナリオ: 計画用の Issue は作業を開始しない
+## Scenario: Do not start work for a planning Issue
 
-* 前提 選ばれた Issue が計画をまとめるためのものである
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば その Issue の作業は開始されない
+* Given The selected Issue is a planning Issue
+* When deadloop decides the selected Issue's next action
+* Then Work on the Issue does not start
 
-## シナリオ: 計画用の Issue は完了監視を開始しない
+## Scenario: Do not start completion monitoring for a planning Issue
 
-* 前提 選ばれた Issue が計画をまとめるためのものである
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば その Issue の完了監視は開始されない
+* Given The selected Issue is a planning Issue
+* When deadloop decides the selected Issue's next action
+* Then Completion monitoring for the Issue does not start
 
-## シナリオ: 子 Issue の一覧をまとめた Issue は作業を開始しない
+## Scenario: Do not start work for an Issue that only lists child Issues
 
-* 前提 選ばれた Issue が子 Issue の一覧をまとめている
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば その Issue の作業は開始されない
+* Given The selected Issue only lists child Issues
+* When deadloop decides the selected Issue's next action
+* Then Work on the Issue does not start
 
-## シナリオ: 設計文書への参照だけを持つ Issue は完了監視へ進む
+## Scenario: Monitor an implementable Issue that references a design document
 
-* 前提 選ばれた実装可能な Issue が設計文書を参照している
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば その Issue の完了監視が開始される
+* Given Selected implementable Issue references design document
+* When deadloop decides the selected Issue's next action
+* Then Completion monitoring starts for the Issue
 
-## シナリオ: 受け入れ条件で親 Issue を参照する Issue は完了監視へ進む
+## Scenario: Monitor an implementable Issue that references its parent in acceptance criteria
 
-* 前提 選ばれた実装可能な Issue が受け入れ条件で親 Issue を参照している
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば その Issue の完了監視が開始される
+* Given Selected implementable Issue references parent Issue in acceptance criteria
+* When deadloop decides the selected Issue's next action
+* Then Completion monitoring starts for the Issue
 
-## シナリオ: 実装可能な Issue は作業を開始する
+## Scenario: Start work for an implementable Issue
 
-* 前提 選ばれた Issue に実装契約がそろっている
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば その Issue の作業が開始される
+* Given The selected Issue has an implementation contract.
+* When deadloop decides the selected Issue's next action
+* Then Work on the Issue starts
 
-## シナリオ: 実装可能な Issue の作業指示に内部実装名を含めない
+## Scenario: Do not include internal implementation name in implementable Issue work instructions
 
-* 前提 選ばれた Issue に実装契約がそろっている
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば 作業指示は実装担当者に必要な情報だけで作られる
+* Given The selected Issue has an implementation contract.
+* When deadloop decides the selected Issue's next action
+* Then The work instructions contain only information needed by the implementation agent
 
-## シナリオ: 実装可能な Issue は完了監視へ進む
+## Scenario: Monitor an implementable Issue after starting work
 
-* 前提 選ばれた Issue に実装契約がそろっている
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば その Issue の完了監視が開始される
+* Given The selected Issue has an implementation contract.
+* When deadloop decides the selected Issue's next action
+* Then Completion monitoring starts for the Issue
 
-## シナリオ: 実装可能な Issue には停止案内を重ねない
+## Scenario: Do not overlay blocking guidance on implementable Issue
 
-* 前提 選ばれた Issue に実装契約がそろっている
-* もし deadloop が選ばれた Issue の次処理を決める
-* ならば その Issue に停止案内は作られない
+* Given The selected Issue has an implementation contract.
+* When deadloop decides the selected Issue's next action
+* Then No blocking guidance is created for the Issue

@@ -33,35 +33,35 @@ function driverPayload(action: string, extra: Record<string, string> = {}): stri
   return JSON.stringify({ action, summary: "acceptance result", ...extra });
 }
 
-Given("自動化が処理不要と判断している", function (this: DriverWorld) {
+Given("Automation determines that no action is required", function (this: DriverWorld) {
   configureAutomation(this, { code: 0, stdout: driverPayload("skip"), stderr: "" });
 });
 
-Given("自動化が処理完了と報告している", function (this: DriverWorld) {
+Given("Automation reports that processing is complete", function (this: DriverWorld) {
   configureAutomation(this, { code: 0, stdout: driverPayload("done"), stderr: "" });
 });
 
-Given("自動化が判断を必要としている", function (this: DriverWorld) {
+Given("Automation requires judgment", function (this: DriverWorld) {
   configureAutomation(this, { code: 0, stdout: driverPayload("needs_llm", { prompt: "decision prompt" }), stderr: "" });
 });
 
-Given("自動化の応答が不正である", function (this: DriverWorld) {
+Given("Automation returns an invalid response", function (this: DriverWorld) {
   configureAutomation(this, { code: 0, stdout: "not json", stderr: "" });
 });
 
-Given("自動化が失敗している", function (this: DriverWorld) {
+Given("Automation has failed", function (this: DriverWorld) {
   configureAutomation(this, { code: 1, stdout: "", stderr: "driver failed" });
 });
 
-Given("自動化が停止を報告している", function (this: DriverWorld) {
+Given("Automation reports a stop", function (this: DriverWorld) {
   configureAutomation(this, { code: 0, stdout: driverPayload("error", { error: "stop" }), stderr: "" });
 });
 
-Given("決定論的な判断を設定していない自動化がある", function (this: DriverWorld) {
+Given("Automation has no deterministic driver configured", function (this: DriverWorld) {
   configureAutomation(this, { code: 0, stdout: "", stderr: "" }, false);
 });
 
-When("deadloop が自動化を実行する", async function (this: DriverWorld) {
+When("deadloop runs the automation", async function (this: DriverWorld) {
   if (!this.project || !this.automation) throw new Error("automation precondition is missing");
   this.sent = [];
   await runScheduledAutomation(this.project, this.automation, 123, { automations: {} }, {
@@ -83,14 +83,14 @@ When("deadloop が自動化を実行する", async function (this: DriverWorld) 
   });
 });
 
-Then("deadloop はプロンプトを送信しない", function (this: DriverWorld) {
+Then("deadloop does not send a prompt", function (this: DriverWorld) {
   assert.deepEqual(this.sent, []);
 });
 
-Then("deadloop は判断用プロンプトだけを送信する", function (this: DriverWorld) {
+Then("deadloop sends only the decision prompt", function (this: DriverWorld) {
   assert.deepEqual(this.sent, ["decision prompt"]);
 });
 
-Then("deadloop は通常のプロンプトを送信する", function (this: DriverWorld) {
+Then("deadloop sends the normal prompt", function (this: DriverWorld) {
   assert.deepEqual(this.sent, ["normal prompt"]);
 });

@@ -48,27 +48,27 @@ function setClaim(world: ClaimWorld, prFixture: string, agentsFixture: string): 
   world.attempts = agents.map((agent) => ownershipAttempt(role, String(agent.name)));
 }
 
-Given("実働担当がいない古いレビュー占有がある", function (this: ClaimWorld) {
+Given("A stale review claim has no active agent", function (this: ClaimWorld) {
   setClaim(this, "precheck-reviewing.json", "agents-empty.json");
 });
 
-Given("レビュー担当が稼働中のレビュー占有がある", function (this: ClaimWorld) {
+Given("A review claim has an active Reviewer", function (this: ClaimWorld) {
   setClaim(this, "precheck-reviewing.json", "agents-reviewer-working.json");
 });
 
-Given("ブランチ更新担当の完了を待つ猶予中のレビュー占有がある", function (this: ClaimWorld) {
+Given("A review claim is in the grace period while a branch-update agent completes", function (this: ClaimWorld) {
   setClaim(this, "precheck-reviewing.json", "agents-branch-update-working.json");
 });
 
-Given("終了済みのレビュー担当だけが残るレビュー占有がある", function (this: ClaimWorld) {
+Given("A review claim has only a completed Reviewer and its attempt record remains", function (this: ClaimWorld) {
   setClaim(this, "precheck-reviewing.json", "agents-reviewer-idle.json");
 });
 
-Given("意図的に停止されたレビュー占有がある", function (this: ClaimWorld) {
+Given("A review claim is intentionally blocked", function (this: ClaimWorld) {
   setClaim(this, "precheck-blocked.json", "agents-empty.json");
 });
 
-Given("回収済みで新しいレビュー担当が稼働中の占有がある", function (this: ClaimWorld) {
+Given("A reclaimed claim now has an active Reviewer", function (this: ClaimWorld) {
   setClaim(this, "precheck-reviewing.json", "agents-empty.json");
   const firstCycle = runDriver({ prs: this.prs, agents: this.agents });
   const starts = firstCycle.testAdapterEffects?.herdrStarts ?? [];
@@ -118,23 +118,23 @@ function runDriver(fixtureData: Record<string, unknown>): DriverResult {
   }
 }
 
-When("deadloop が次の選定周期を実行する", function (this: ClaimWorld) {
+When("deadloop runs the next selection cycle", function (this: ClaimWorld) {
   runCycle(this);
 });
 
-When("deadloop が古いレビュー占有の回収対象を探す", function (this: ClaimWorld) {
+When("deadloop searches for stale review claims to reclaim", function (this: ClaimWorld) {
   runCycle(this);
 });
 
-Then("pull request #{int} のレビューを再開する", function (this: ClaimWorld, number: number) {
+Then("Review of pull request #{int} resumes", function (this: ClaimWorld, number: number) {
   assert.equal(countReviewerStarts(this, [number]), 1);
 });
 
-Then("レビュー占有は回収されない", function (this: ClaimWorld) {
+Then("The review claim is not reclaimed", function (this: ClaimWorld) {
   assert.equal(countReviewerStarts(this), 0);
 });
 
-Then("次の選定周期ではレビュー担当が追加で起動されない", function (this: ClaimWorld) {
+Then("The next selection cycle does not start another Reviewer", function (this: ClaimWorld) {
   assert.equal(countReviewerStarts(this), 0);
 });
 

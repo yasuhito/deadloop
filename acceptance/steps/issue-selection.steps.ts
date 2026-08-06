@@ -81,78 +81,78 @@ function runClosedIssuePrecheck(): number | null {
   }
 }
 
-Given("選定可能な Issue が `ready-for-agent` と `agent:implement` のラベルを持つ", function (this: IssueSelectionWorld) {
+Given("An eligible Issue has the `ready-for-agent` and `agent:implement` labels", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-ready-implement.json";
 });
 
-Given("必要な公開ラベルがそろった Issue がクローズ済みである", function (this: IssueSelectionWorld) {
+Given("An Issue with all required public labels is closed", function (this: IssueSelectionWorld) {
   this.precheckMode = "closed-issue";
 });
 
-Given("準備不足の Issue に必要な公開ラベルがそろっていない", function (this: IssueSelectionWorld) {
+Given("An unprepared Issue lacks required public labels", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-missing-required-label.json";
 });
 
-Given("作業中の Issue が `agent:in-progress` ラベルを持つ", function (this: IssueSelectionWorld) {
+Given("An Issue in progress has the `agent:in-progress` label", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-in-progress.json";
 });
 
-Given("停止中の Issue が `agent:blocked` ラベルを持つ", function (this: IssueSelectionWorld) {
+Given("A blocked Issue has the `agent:blocked` label", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-blocked.json";
 });
 
-Given("必要な公開ラベルがそろった Issue が本文の{string}で未完了の依存を示す", function (this: IssueSelectionWorld, location: string) {
+Given("An Issue with all required public labels has an unfinished dependency in the {string}", function (this: IssueSelectionWorld, location: string) {
   const fixtures: Record<string, string> = {
-    "依存欄": "selection-open-body-dependency.json",
-    "末尾": "selection-open-final-section-dependency.json",
+    "dependency section": "selection-open-body-dependency.json",
+    "end": "selection-open-final-section-dependency.json",
   };
   const fixtureName = fixtures[location];
   if (!fixtureName) throw new Error(`unknown dependency location: ${location}`);
   this.fixtureName = fixtureName;
 });
 
-Given("選定可能な Issue が本文で完了した依存を示す", function (this: IssueSelectionWorld) {
+Given("An eligible Issue has a completed dependency in its body", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-closed-body-dependency.json";
 });
 
-Given("必要な公開ラベルがそろった Issue が GitHub 上で未完了の依存を持つ", function (this: IssueSelectionWorld) {
+Given("An Issue with all required public labels has an unfinished dependency on GitHub", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-open-relationship-dependency.json";
 });
 
-When("deadloop が作業対象を探す", function (this: IssueSelectionWorld) {
+When("deadloop searches for a work target", function (this: IssueSelectionWorld) {
   if (this.precheckMode !== "closed-issue") throw new Error("precheck precondition is missing");
   this.precheckStatus = runClosedIssuePrecheck();
 });
 
-When("deadloop が作業対象を選ぶ", function (this: IssueSelectionWorld) {
+When("deadloop selects a work target", function (this: IssueSelectionWorld) {
   if (!this.fixtureName) throw new Error("issue precondition is missing");
   this.decision = selectIssue(this.fixtureName);
 });
 
-Then("Issue #{int} が作業対象に選ばれる", function (this: IssueSelectionWorld, issueNumber: number) {
+Then("Issue #{int} is selected for work", function (this: IssueSelectionWorld, issueNumber: number) {
   assert.equal(this.decision?.number, issueNumber);
 });
 
-Then("クローズ済みの Issue は作業対象に選ばれない", function (this: IssueSelectionWorld) {
+Then("The closed Issue is not selected for work", function (this: IssueSelectionWorld) {
   assert.equal(this.precheckStatus, 1);
 });
 
-Then("準備不足の Issue は作業対象に選ばれない", function (this: IssueSelectionWorld) {
+Then("The unprepared Issue is not selected for work", function (this: IssueSelectionWorld) {
   assert.equal(this.decision?.selected, false);
 });
 
-Then("作業中の Issue は作業対象に選ばれない", function (this: IssueSelectionWorld) {
+Then("The Issue in progress is not selected for work", function (this: IssueSelectionWorld) {
   assert.equal(this.decision?.selected, false);
 });
 
-Then("停止中の Issue は作業対象に選ばれない", function (this: IssueSelectionWorld) {
+Then("The blocked Issue is not selected for work", function (this: IssueSelectionWorld) {
   assert.equal(this.decision?.selected, false);
 });
 
-Then("未完了の依存を持つ Issue は作業対象に選ばれない", function (this: IssueSelectionWorld) {
+Then("The Issue with an unfinished dependency is not selected for work", function (this: IssueSelectionWorld) {
   assert.equal(this.decision?.selected, false);
 });
 
-Then("GitHub 上の未完了の依存を持つ Issue は作業対象に選ばれない", function (this: IssueSelectionWorld) {
+Then("The Issue with an unfinished GitHub dependency is not selected for work", function (this: IssueSelectionWorld) {
   assert.equal(this.decision?.selected, false);
 });

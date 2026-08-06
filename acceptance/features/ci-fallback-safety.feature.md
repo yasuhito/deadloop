@@ -1,58 +1,58 @@
-# 機能: CI 代替検証は確認済みの基盤障害でだけ許可する
+# Feature: Allow CI fallback verification only for confirmed infrastructure failures
 
-CI の通常失敗を見逃さず、確認できた基盤障害のときだけ安全に代替検証を使えるようにする。
+Do not overlook ordinary CI failures; use fallback verification only for a confirmed infrastructure failure.
 
-## シナリオ: 明示設定がない場合は CI 代替検証を許可しない
+## Scenario: Do not allow CI fallback verification without explicit configuration
 
-* 前提 CI 代替検証を明示設定していない
-* もし deadloop が CI 代替検証の可否を判定する
-* ならば CI 代替検証は許可されない
+* Given CI fallback verification is not explicitly configured
+* When deadloop decides whether CI fallback verification is allowed
+* Then CI fallback verification is not allowed
 
-## シナリオ: すべてのジョブが実行前に失敗した基盤障害では CI 代替検証を許可する
+## Scenario: Allow CI fallback verification when every job fails before execution
 
-* 前提 CI 代替検証を明示的に有効にしている
-* かつ すべての CI ジョブが実行前にすぐ失敗している
-* もし deadloop が CI 代替検証の可否を判定する
-* ならば CI 代替検証は許可される
+* Given CI fallback verification is explicitly enabled
+* And Every CI job fails immediately before execution
+* When deadloop decides whether CI fallback verification is allowed
+* Then CI fallback verification is allowed
 
-## シナリオ: すべてのジョブが実行前に失敗した基盤障害を CI 障害として分類する
+## Scenario: Classify every job failing before execution as a CI infrastructure failure
 
-* 前提 CI 代替検証を明示的に有効にしている
-* かつ すべての CI ジョブが実行前にすぐ失敗している
-* もし deadloop が CI 代替検証の可否を判定する
-* ならば CI 障害として分類される
+* Given CI fallback verification is explicitly enabled
+* And Every CI job fails immediately before execution
+* When deadloop decides whether CI fallback verification is allowed
+* Then The failure is classified as a CI infrastructure failure
 
-## シナリオ: 通常のテスト失敗では CI 代替検証を許可しない
+## Scenario: Do not allow CI fallback verification for an ordinary test failure
 
-* 前提 CI 代替検証を明示的に有効にしている
-* かつ 通常のテストが CI で失敗している
-* もし deadloop が CI 代替検証の可否を判定する
-* ならば CI 代替検証は許可されない
+* Given CI fallback verification is explicitly enabled
+* And An ordinary test fails in CI
+* When deadloop decides whether CI fallback verification is allowed
+* Then CI fallback verification is not allowed
 
-## シナリオ: 通常のテスト失敗を通常の CI 失敗として分類する
+## Scenario: Classify an ordinary test failure as an ordinary CI failure
 
-* 前提 CI 代替検証を明示的に有効にしている
-* かつ 通常のテストが CI で失敗している
-* もし deadloop が CI 代替検証の可否を判定する
-* ならば 通常の CI 失敗として分類される
+* Given CI fallback verification is explicitly enabled
+* And An ordinary test fails in CI
+* When deadloop decides whether CI fallback verification is allowed
+* Then The failure is classified as an ordinary CI failure
 
-## シナリオ: 課金制限で CI を実行できない場合は CI 代替検証を許可する
+## Scenario: Allow CI fallback verification when billing restrictions prevent CI from running
 
-* 前提 CI 代替検証を明示的に有効にしている
-* かつ CI が課金制限により実行できない
-* もし deadloop が CI 代替検証の可否を判定する
-* ならば CI 代替検証は許可される
+* Given CI fallback verification is explicitly enabled
+* And Billing restrictions prevent CI from running
+* When deadloop decides whether CI fallback verification is allowed
+* Then CI fallback verification is allowed
 
-## シナリオ: 一部の CI ジョブだけが失敗した場合は CI 代替検証を許可しない
+## Scenario: Do not allow CI fallback verification when only some CI jobs fail
 
-* 前提 CI 代替検証を明示的に有効にしている
-* かつ 一部の CI ジョブだけが失敗している
-* もし deadloop が CI 代替検証の可否を判定する
-* ならば CI 代替検証は許可されない
+* Given CI fallback verification is explicitly enabled
+* And Only some CI jobs fail
+* When deadloop decides whether CI fallback verification is allowed
+* Then CI fallback verification is not allowed
 
-## シナリオ: CI ジョブが実行後に失敗した場合は CI 代替検証を許可しない
+## Scenario: Do not allow CI fallback verification when a CI job fails after execution starts
 
-* 前提 CI 代替検証を明示的に有効にしている
-* かつ CI ジョブが実行後に失敗している
-* もし deadloop が CI 代替検証の可否を判定する
-* ならば CI 代替検証は許可されない
+* Given CI fallback verification is explicitly enabled
+* And A CI job fails after execution starts
+* When deadloop decides whether CI fallback verification is allowed
+* Then CI fallback verification is not allowed
