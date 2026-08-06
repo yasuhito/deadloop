@@ -88,27 +88,27 @@ function trackedFileSurvivesCleanup(): boolean {
   }
 }
 
-Given("マージ済みで変更のない deadloop の作業場所がある", function (this: CleanupWorld) {
+Given("A deadloop worktree is merged and clean", function (this: CleanupWorld) {
   this.fixtureName = "cleanup-merged-clean.json";
 });
 
-Given("変更中のマージ済み deadloop 作業場所がある", function (this: CleanupWorld) {
+Given("A merged deadloop worktree has changes", function (this: CleanupWorld) {
   this.fixtureName = "cleanup-dirty-worktree.json";
 });
 
-Given("Git 管理ファイルを含むマージ済み deadloop 作業場所がある", function (this: CleanupWorld) {
+Given("A merged deadloop worktree contains a tracked file", function (this: CleanupWorld) {
   this.trackedWorktree = true;
 });
 
-Given("別のリポジトリにあるマージ済み deadloop 作業場所がある", function (this: CleanupWorld) {
+Given("A merged deadloop worktree belongs to another repository", function (this: CleanupWorld) {
   this.fixtureName = "cleanup-outside-root.json";
 });
 
-Given("未マージの pull request に対応する deadloop 作業場所がある", function (this: CleanupWorld) {
+Given("A deadloop worktree belongs to an unmerged pull request", function (this: CleanupWorld) {
   this.fixtureName = "cleanup-unmerged.json";
 });
 
-When("deadloop が片付けを開始する", function (this: CleanupWorld) {
+When("deadloop starts cleanup", function (this: CleanupWorld) {
   if (this.trackedWorktree) {
     this.trackedFileExists = trackedFileSurvivesCleanup();
     return;
@@ -117,14 +117,14 @@ When("deadloop が片付けを開始する", function (this: CleanupWorld) {
   this.plan = planFromFixture(this.fixtureName);
 });
 
-Then("その作業場所は片付け候補になる", function (this: CleanupWorld) {
+Then("The worktree is selected as a cleanup candidate", function (this: CleanupWorld) {
   assert.equal(this.plan?.candidates.length, 1);
 });
 
-Then("その作業場所は片付け候補にならない", function (this: CleanupWorld) {
+Then("The worktree is not selected as a cleanup candidate", function (this: CleanupWorld) {
   assert.equal(this.plan?.candidates.length, 0);
 });
 
-Then("その作業場所の Git 管理ファイルは残る", function (this: CleanupWorld) {
+Then("The tracked file remains in the worktree", function (this: CleanupWorld) {
   assert.equal(this.trackedFileExists, true);
 });

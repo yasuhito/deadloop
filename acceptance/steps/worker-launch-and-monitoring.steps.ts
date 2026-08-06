@@ -101,16 +101,16 @@ function launchWorker(world: WorkerWorld): void {
   rmSync(stateDir, { recursive: true, force: true });
 }
 
-Given("作業を開始できる Issue がある", function (this: WorkerWorld) {
+Given("An Issue is ready for work", function (this: WorkerWorld) {
   this.launchTarget = "worker";
   this.agents = [];
 });
 
-When("deadloop がその Issue の担当を起動する", function (this: WorkerWorld) {
+When("deadloop starts the Issue's agent", function (this: WorkerWorld) {
   launchWorker(this);
 });
 
-Then("担当には基準ブランチから Issue 専用の作業場所を作る", function (this: WorkerWorld) {
+Then("The agent receives a dedicated Issue worktree from the base branch", function (this: WorkerWorld) {
   assert.deepEqual(this.worktreeRequest, {
     branch: "agent/issue-12-task",
     baseBranch: "origin/main",
@@ -118,15 +118,15 @@ Then("担当には基準ブランチから Issue 専用の作業場所を作る"
   });
 });
 
-Then("新しい担当を一人だけ起動する", function (this: WorkerWorld) {
+Then("deadloop starts exactly one new agent", function (this: WorkerWorld) {
   assert.equal(this.launchCount, 1);
 });
 
-Given("作業を開始できる Issue が選ばれている", function (this: WorkerWorld) {
+Given("An Issue ready for work has been selected", function (this: WorkerWorld) {
   this.coordinatorResult = undefined;
 });
 
-When("deadloop が選ばれた Issue の作業を開始する", function (this: WorkerWorld) {
+When("deadloop starts work on the selected Issue", function (this: WorkerWorld) {
   const result = spawnSync(
     "node",
     ["extensions/deadloop/automations/issue-coordinator-driver.ts", "--fixture", "test/fixtures/issue-coordinator/driver-ready-worker.json"],
@@ -143,11 +143,11 @@ When("deadloop が選ばれた Issue の作業を開始する", function (this: 
   this.coordinatorResult = JSON.parse(result.stdout);
 });
 
-Then("その Issue は完了ファイルの監視対象になる", function (this: WorkerWorld) {
+Then("The Issue enters promise-file monitoring", function (this: WorkerWorld) {
   assert.equal(this.coordinatorResult?.driverAction, "worker_monitor_request");
 });
 
-Given("完了ファイルを求めた後に担当の最近の活動がある", function (this: WorkerWorld) {
+Given("The agent has recent activity after being asked for a promise file", function (this: WorkerWorld) {
   this.watchInput = {
     now: "2026-07-07T11:17:37Z",
     promiseStatus: "none",
@@ -158,7 +158,7 @@ Given("完了ファイルを求めた後に担当の最近の活動がある", f
   };
 });
 
-Given("完了ファイルを求めてから猶予時間内である", function (this: WorkerWorld) {
+Given("The promise-file request is still within its grace period", function (this: WorkerWorld) {
   this.watchInput = {
     now: "2026-07-07T11:17:00Z",
     promiseStatus: "none",
@@ -167,11 +167,11 @@ Given("完了ファイルを求めてから猶予時間内である", function (
   };
 });
 
-Given("活動を終えた担当の完了ファイルがない", function (this: WorkerWorld) {
+Given("An agent has finished activity without writing a promise file", function (this: WorkerWorld) {
   this.watchInput = { now: "2026-07-07T11:17:00Z", promiseStatus: "none", agentStatus: "done" };
 });
 
-Given("担当の活動停止と報告要求後の猶予経過を確認できる", function (this: WorkerWorld) {
+Given("Agent inactivity and expiry of the post-request grace period are confirmed", function (this: WorkerWorld) {
   this.watchInput = {
     now: "2026-07-07T11:30:00Z",
     promiseStatus: "none",
@@ -182,7 +182,7 @@ Given("担当の活動停止と報告要求後の猶予経過を確認できる"
   };
 });
 
-Given("報告要求後の猶予は過ぎたが担当画面の観測がない", function (this: WorkerWorld) {
+Given("The post-request grace period expired without an observation of the agent pane", function (this: WorkerWorld) {
   this.watchInput = {
     now: "2026-07-07T11:30:00Z",
     promiseStatus: "none",
@@ -192,34 +192,34 @@ Given("報告要求後の猶予は過ぎたが担当画面の観測がない", f
   };
 });
 
-Given("{word}の担当が完了ファイルを書き終えている", function (this: WorkerWorld, status: string) {
+Given("The {word} agent has finished writing the promise file", function (this: WorkerWorld, status: string) {
   this.watchInput = {
     now: "2026-07-07T11:30:00Z",
     promiseStatus: "complete",
-    agentStatus: status === "稼働中" ? "working" : "done",
+    agentStatus: status === "working" ? "working" : "done",
   };
 });
 
-When("deadloop が担当の監視状態を判断する", function (this: WorkerWorld) {
+When("deadloop evaluates the agent's monitoring state", function (this: WorkerWorld) {
   this.watchDecision = decideWorkerWatch(this.watchInput ?? {});
 });
 
-Then("担当の監視を続ける", function (this: WorkerWorld) {
+Then("deadloop continues monitoring the agent", function (this: WorkerWorld) {
   assert.equal(this.watchDecision?.action, "continue_waiting");
 });
 
-Then("担当に完了ファイルを書くよう求める", function (this: WorkerWorld) {
+Then("deadloop asks the agent to write the promise file", function (this: WorkerWorld) {
   assert.equal(this.watchDecision?.action, "nudge_worker");
 });
 
-Then("担当画面の終了を許す", function (this: WorkerWorld) {
+Then("deadloop permits the agent pane to close", function (this: WorkerWorld) {
   assert.equal(this.watchDecision?.action, "may_close_pane");
 });
 
-Then("終了前に不足した観測を集める", function (this: WorkerWorld) {
+Then("deadloop collects the missing observation before termination", function (this: WorkerWorld) {
   assert.equal(this.watchDecision?.action, "collect_observations");
 });
 
-Then("完了ファイルに従って監視を終える", function (this: WorkerWorld) {
+Then("deadloop ends monitoring according to the promise file", function (this: WorkerWorld) {
   assert.equal(this.watchDecision?.action, "promise_settled");
 });

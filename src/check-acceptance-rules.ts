@@ -36,6 +36,17 @@ function scenarios(document: GherkinDocument): EffectiveScenario[] {
   return found;
 }
 
+const japaneseGherkinStructure = /^\s*(?:#{1,3}\s*(?:フィーチャ|機能|シナリオ(?:アウトライン|テンプレート|テンプレ)?|テンプレ|背景|ルール|例|サンプル)\s*:|[-+*]\s*(?:前提|もし|ならば|且つ|かつ|然し|しかし|但し|ただし)(?:\s|$))/;
+const japaneseText = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u;
+
+function withoutBacktickLiterals(text: string): string {
+  return text.replace(/`[^`]*`/g, "");
+}
+
+function containsJapaneseProse(text: string): boolean {
+  return japaneseText.test(withoutBacktickLiterals(text));
+}
+
 function checkFeature(file: SourceFile): string[] {
   const errors: string[] = [];
   const lines = file.source.split(/\r?\n/);
@@ -44,9 +55,14 @@ function checkFeature(file: SourceFile): string[] {
     if (/^\s*#\s*language\s*:/.test(line)) {
       errors.push(`${file.path}:${index + 1}: language directives are not allowed`);
     }
+    if (japaneseGherkinStructure.test(line)) {
+      errors.push(`${file.path}:${index + 1}: Japanese Gherkin keywords are not allowed`);
+    } else if (containsJapaneseProse(line)) {
+      errors.push(`${file.path}:${index + 1}: Japanese prose is not allowed`);
+    }
   }
   const envelopes = generateMessages(file.source, file.path, SourceMediaType.TEXT_X_CUCUMBER_GHERKIN_MARKDOWN, {
-    defaultDialect: "ja",
+    defaultDialect: "en",
     includeGherkinDocument: true,
     includePickles: false,
     includeSource: false,
@@ -579,7 +595,7 @@ function featureStepKinds(files: SourceFile[]): StepKindsByText {
       file.path,
       SourceMediaType.TEXT_X_CUCUMBER_GHERKIN_MARKDOWN,
       {
-        defaultDialect: "ja",
+        defaultDialect: "en",
         includeGherkinDocument: true,
         includePickles: false,
         includeSource: false,
@@ -729,8 +745,16 @@ function checkStepDefinitions(
       const assertions =
         implementation && ts.isFunctionLike(implementation) ? directAssertions(implementation, bindings) : [];
       for (const assertion of assertions) assertionsInStepCallbacks.add(assertion);
-      const matchedKinds = matchedStepKinds(node.arguments[0], kindsByText);
-      if (kind === "defineStep") {
+      const stepExpression = node.arguments[0];
+      const registeredText = stepExpression && (
+        ts.isStringLiteral(stepExpression) ||
+        ts.isNoSubstitutionTemplateLiteral(stepExpression) ||
+        ts.isRegularExpressionLiteral(stepExpression)
+      ) ? stepExpression.text : undefined;
+      const matchedKinds = matchedStepKinds(stepExpression, kindsByText);
+      if (registeredText && containsJapaneseProse(registeredText)) {
+        errors.push(`${file.path}:${line}: registered step expression must not contain Japanese prose`);
+      } else if (kind === "defineStep") {
         errors.push(`${file.path}:${line}: defineStep is not allowed; use Given, When, or Then`);
       } else if (!matchedKinds) {
         errors.push(`${file.path}:${line}: step definition pattern must be a string or regular expression literal`);
@@ -836,8 +860,8 @@ function checkCucumberConfig(config: SourceFile): string[] {
   }
 
   const language = objectProperty(profile, "language");
-  if (!language || !ts.isStringLiteral(language) || language.text !== "ja") {
-    errors.push(`${config.path}: Cucumber language must be explicitly set to 'ja'`);
+  if (!language || !ts.isStringLiteral(language) || language.text !== "en") {
+    errors.push(`${config.path}: Cucumber language must be explicitly set to 'en'`);
   }
   if (objectProperty(profile, "strict")?.kind !== ts.SyntaxKind.TrueKeyword) {
     errors.push(`${config.path}: Cucumber strict mode must be explicitly enabled`);

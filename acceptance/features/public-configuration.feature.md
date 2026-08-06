@@ -1,161 +1,161 @@
-# 機能: 公開設定は実際の起動、表示、自動化判断へ安全に反映される
+# Feature: Apply public configuration safely to launches, status, and automation decisions
 
-deadloop の利用者は、どの設定元が採用され、エージェントがどのように起動され、危険な自動化が有効かを実行結果から確認できる。
+A deadloop user can observe which configuration source was selected, how an agent is launched, and whether dangerous automation is enabled.
 
-## シナリオ: 環境変数で指定した設定ファイルを状態表示に使う
+## Scenario: Use the configuration file specified by an environment variable in status
 
-* 前提 環境変数、利用者領域、同梱領域に異なる設定がある
-* かつ `DEADLOOP_CONFIG` で環境変数の設定を指定する
-* もし deadloop の状態表示を要求する
-* ならば 状態表示は環境変数の設定ファイルを示す
+* Given Environment, user, and bundled scopes contain different configuration
+* And `DEADLOOP_CONFIG` selects the environment configuration
+* When deadloop status is requested
+* Then Status shows the environment configuration file
 
-## シナリオ: 利用者設定を同梱設定より優先して状態表示に使う
+## Scenario: Prefer user configuration over bundled configuration in status
 
-* 前提 環境変数、利用者領域、同梱領域に異なる設定がある
-* かつ `DEADLOOP_CONFIG` を指定しない
-* もし deadloop の状態表示を要求する
-* ならば 状態表示は利用者設定ファイルを示す
+* Given Environment, user, and bundled scopes contain different configuration
+* And `DEADLOOP_CONFIG` is not specified
+* When deadloop status is requested
+* Then Status shows the user configuration file
 
-## シナリオ: 利用者設定がない場合は同梱設定を状態表示に使う
+## Scenario: Use bundled configuration in status when user configuration is absent
 
-* 前提 同梱設定だけがある
-* もし deadloop の状態表示を要求する
-* ならば 状態表示は同梱設定ファイルを示す
+* Given Only bundled configuration is available
+* When deadloop status is requested
+* Then Status shows the bundled configuration file
 
-## シナリオ: 設定を省略した場合は標準の自動化を表示する
+## Scenario: Show the two default automations when automation configuration is omitted
 
-* 前提 空のローカル設定がある
-* もし deadloop の状態表示を要求する
-* ならば 状態表示に標準の自動化が二つある
+* Given Local configuration is empty
+* When deadloop status is requested
+* Then Status shows two default automations
 
-## シナリオ: 空の自動化設定は自動化を無効のまま表示する
+## Scenario: Show no enabled automation when automation configuration is empty
 
-* 前提 自動化を空にしたローカル設定がある
-* もし deadloop の状態表示を要求する
-* ならば 状態表示に有効な自動化はない
+* Given Local configuration contains no automations
+* When deadloop status is requested
+* Then Status shows no enabled automation
 
-## シナリオ: 設定を省略した Worker は pi で起動する
+## Scenario: Launch a Worker with pi when agent configuration is omitted
 
-* 前提 空のローカル設定がある
-* もし Worker の起動を要求する
-* ならば Worker の起動コマンドは pi である
+* Given Local configuration is empty
+* When A Worker launch is requested
+* Then The Worker launch command is pi
 
-## シナリオ: 設定を省略した Reviewer は pi で起動する
+## Scenario: Launch a Reviewer with pi when agent configuration is omitted
 
-* 前提 空のローカル設定がある
-* もし Reviewer の起動を要求する
-* ならば Reviewer の起動コマンドは pi である
+* Given Local configuration is empty
+* When A Reviewer launch is requested
+* Then The Reviewer launch command is pi
 
-## シナリオ: 指定した Worker エージェントで起動する
+## Scenario: Launch the configured Worker agent
 
-* 前提 Worker に claude と `worker-local-model` を指定したローカル設定がある
-* もし Worker の起動を要求する
-* ならば Worker は指定したエージェントで起動する
+* Given Local configuration specifies claude and `worker-local-model` for Worker
+* When A Worker launch is requested
+* Then The Worker is launched with the configured agent type
 
-## シナリオ: 指定した Worker モデルで起動する
+## Scenario: Launch the configured Worker model
 
-* 前提 Worker に claude と `worker-local-model` を指定したローカル設定がある
-* もし Worker の起動を要求する
-* ならば Worker は指定したモデルで起動する
+* Given Local configuration specifies claude and `worker-local-model` for Worker
+* When A Worker launch is requested
+* Then The Worker is launched with the configured model
 
-## シナリオ: 指定した Reviewer エージェントで起動する
+## Scenario: Launch the configured Reviewer agent
 
-* 前提 Reviewer に claude と `reviewer-local-model` を指定したローカル設定がある
-* もし Reviewer の起動を要求する
-* ならば Reviewer は指定したエージェントで起動する
+* Given Local configuration specifies claude and `reviewer-local-model` for Reviewer
+* When A Reviewer launch is requested
+* Then The Reviewer is launched with the configured agent type
 
-## シナリオ: 指定した Reviewer モデルで起動する
+## Scenario: Launch the configured Reviewer model
 
-* 前提 Reviewer に claude と `reviewer-local-model` を指定したローカル設定がある
-* もし Reviewer の起動を要求する
-* ならば Reviewer は指定したモデルで起動する
+* Given Local configuration specifies claude and `reviewer-local-model` for Reviewer
+* When A Reviewer launch is requested
+* Then The Reviewer is launched with the configured model
 
-## シナリオ: 共有方針はローカルで省略した Worker の種別を補う
+## Scenario: Fill an omitted Worker agent type from shared policy
 
-* 前提 Worker の種別とモデルを含む共有方針と空のローカル設定がある
-* もし Worker の起動を要求する
-* ならば Worker は共有方針の種別で起動する
+* Given Shared policy specifies a Worker agent type and model and local configuration is empty
+* When A Worker launch is requested
+* Then The Worker is launched with the shared-policy agent type
 
-## シナリオ: 共有方針はローカルで省略した Worker のモデルを補う
+## Scenario: Fill an omitted Worker model from shared policy
 
-* 前提 Worker の種別とモデルを含む共有方針と空のローカル設定がある
-* もし Worker の起動を要求する
-* ならば Worker は共有方針のモデルで起動する
+* Given Shared policy specifies a Worker agent type and model and local configuration is empty
+* When A Worker launch is requested
+* Then The Worker is launched with the shared-policy model
 
-## シナリオ: ローカルの Worker の種別は共有方針より優先する
+## Scenario: Prefer the local Worker agent type over shared policy
 
-* 前提 Worker の種別とモデルが異なる共有方針とローカル設定がある
-* もし Worker の起動を要求する
-* ならば Worker はローカルの種別で起動する
+* Given Local configuration and shared policy specify different Worker agent types and models
+* When A Worker launch is requested
+* Then The Worker is launched with the local agent type
 
-## シナリオ: ローカルの Worker のモデルは共有方針より優先する
+## Scenario: Prefer the local Worker model over shared policy
 
-* 前提 Worker の種別とモデルが異なる共有方針とローカル設定がある
-* もし Worker の起動を要求する
-* ならば Worker はローカルのモデルで起動する
+* Given Local configuration and shared policy specify different Worker agent types and models
+* When A Worker launch is requested
+* Then The Worker is launched with the local model
 
-## シナリオ: 共有方針はローカルで省略した Reviewer の種別を補う
+## Scenario: Fill an omitted Reviewer agent type from shared policy
 
-* 前提 Reviewer の種別とモデルを含む共有方針と空のローカル設定がある
-* もし Reviewer の起動を要求する
-* ならば Reviewer は共有方針の種別で起動する
+* Given Shared policy specifies a Reviewer agent type and model and local configuration is empty
+* When A Reviewer launch is requested
+* Then The Reviewer is launched with the shared-policy agent type
 
-## シナリオ: 共有方針はローカルで省略した Reviewer のモデルを補う
+## Scenario: Fill an omitted Reviewer model from shared policy
 
-* 前提 Reviewer の種別とモデルを含む共有方針と空のローカル設定がある
-* もし Reviewer の起動を要求する
-* ならば Reviewer は共有方針のモデルで起動する
+* Given Shared policy specifies a Reviewer agent type and model and local configuration is empty
+* When A Reviewer launch is requested
+* Then The Reviewer is launched with the shared-policy model
 
-## シナリオ: ローカルの Reviewer の種別は共有方針より優先する
+## Scenario: Prefer the local Reviewer agent type over shared policy
 
-* 前提 Reviewer の種別とモデルが異なる共有方針とローカル設定がある
-* もし Reviewer の起動を要求する
-* ならば Reviewer はローカルの種別で起動する
+* Given Local configuration and shared policy specify different Reviewer agent types and models
+* When A Reviewer launch is requested
+* Then The Reviewer is launched with the local agent type
 
-## シナリオ: ローカルの Reviewer のモデルは共有方針より優先する
+## Scenario: Prefer the local Reviewer model over shared policy
 
-* 前提 Reviewer の種別とモデルが異なる共有方針とローカル設定がある
-* もし Reviewer の起動を要求する
-* ならば Reviewer はローカルのモデルで起動する
+* Given Local configuration and shared policy specify different Reviewer agent types and models
+* When A Reviewer launch is requested
+* Then The Reviewer is launched with the local model
 
-## シナリオ: 共有方針の空の自動化設定は自動化を無効のまま表示する
+## Scenario: Preserve disabled automation from an empty shared-policy automation list
 
-* 前提 自動化を空にした共有方針と空のローカル設定がある
-* もし deadloop の状態表示を要求する
-* ならば 状態表示に有効な自動化はない
+* Given Shared policy contains no automations and local configuration is empty
+* When deadloop status is requested
+* Then Status shows no enabled automation
 
-## シナリオ: 共有方針はローカルで省略した自動化を表示へ反映する
+## Scenario: Show shared-policy automation omitted from local configuration
 
-* 前提 自動化を含む共有方針と空のローカル設定がある
-* もし deadloop の状態表示を要求する
-* ならば 状態表示に共有方針の自動化がある
+* Given Shared policy contains automation and local configuration is empty
+* When deadloop status is requested
+* Then Status shows the shared-policy automation
 
-## シナリオ: 自動マージは設定を省略すると無効と表示する
+## Scenario: Show automatic merge as disabled when configuration is omitted
 
-* 前提 空のローカル設定がある
-* もし deadloop の状態表示を要求する
-* ならば 状態表示で自動マージは無効である
+* Given Local configuration is empty
+* When deadloop status is requested
+* Then Status shows automatic merge as disabled
 
-## シナリオ: CI 代替検証は設定を省略すると許可しない
+## Scenario: Disallow CI fallback verification when configuration is omitted
 
-* 前提 空のローカル設定がある
-* もし 公開設定から CI 代替検証の可否を判定する
-* ならば 公開設定からの CI 代替検証は許可されない
+* Given Local configuration is empty
+* When CI fallback permission is determined from public configuration
+* Then Public configuration does not allow CI fallback verification
 
-## シナリオ: 外部レビューは設定を省略すると無効と表示する
+## Scenario: Show external review as disabled when configuration is omitted
 
-* 前提 空のローカル設定がある
-* もし deadloop の状態表示を要求する
-* ならば 状態表示で外部レビューは無効である
+* Given Local configuration is empty
+* When deadloop status is requested
+* Then Status shows external review as disabled
 
-## シナリオ: 自動マージはローカルで明示した場合だけ有効と表示する
+## Scenario: Show automatic merge as enabled only when explicitly enabled locally
 
-* 前提 自動マージを有効にしたローカル設定がある
-* もし deadloop の状態表示を要求する
-* ならば 状態表示で自動マージは有効である
+* Given Local configuration explicitly enables automatic merge
+* When deadloop status is requested
+* Then Status shows automatic merge as enabled
 
-## シナリオ: 共有方針はローカルで省略した外部レビューを表示へ反映する
+## Scenario: Show external review inherited from shared policy
 
-* 前提 外部レビューを有効にした共有方針と空のローカル設定がある
-* もし deadloop の状態表示を要求する
-* ならば 状態表示で外部レビューは有効である
+* Given Shared policy enables external review and local configuration is empty
+* When deadloop status is requested
+* Then Status shows external review as enabled
