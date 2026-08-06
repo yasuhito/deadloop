@@ -112,6 +112,16 @@ describe("monitor prompts", () => {
     expect(prompt).toMatch(/complete-attempt-workspace\.ts[^`]+--expected-label ready-for-human(?![^`]+--expected-label)/);
   });
 
+  it("renders the exact head-bound reviewer human-handoff command", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
+      promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo",
+      stateDir: "/state", enabledAt: 123, autoMerge: false, checkCommand: "npm test", humanLabel: "ready-for-human",
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+    });
+    expect(prompt).toContain("guarded-reviewer-handoff.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --review-label agent:review --reviewing-label agent:reviewing --blocked-label agent:blocked --human-label ready-for-human");
+  });
+
   it("renders review-state completion labels when automatic merge is enabled", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",

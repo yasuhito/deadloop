@@ -16,7 +16,7 @@ import type { RunnerAdapter } from "./runner";
 
 type WorktreeRequest =
   | { mode: "create"; branch: string; baseBranch: string }
-  | { mode: "open"; branch: string };
+  | { mode: "open"; branch: string; baseBranch?: string };
 
 type AgentLaunchFlowInput = {
   worktree: WorktreeRequest;
@@ -92,7 +92,7 @@ function preparedRecordInput(input: AgentLaunchFlowInput, prepared: PreparedLaun
     target: input.target,
     inputRevision: input.inputRevision,
     branch: input.worktree.branch,
-    ...(input.worktree.mode === "create" ? { baseBranch: input.worktree.baseBranch } : {}),
+    ...(input.worktree.baseBranch === undefined ? {} : { baseBranch: input.worktree.baseBranch }),
     worktreePath: input.intendedWorktreePath,
     agentName: prepared.agentName,
     workspaceLabel: input.workspaceLabel,

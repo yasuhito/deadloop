@@ -42,6 +42,37 @@ function assertWorkerPrBinding(attempt: { project: string; repository: string },
   if (attempt.project !== args.projectId) throw new Error("attempt project does not match Worker PR project");
   if (attempt.repository !== args.githubRepo) throw new Error("attempt repository does not match Worker PR repository");
 }
+type WorkerPrOps = {
+  remoteHead: () => string;
+  gh: (args: string[], json?: boolean) => any;
+  recheck: () => void;
+};
+function ensureWorkerPr(
+  attempt: { branch: string; baseBranch?: string; target: { number: number } },
+  outputRevision: string,
+  args: Pick<Args, "githubRepo" | "title">,
+  ops: WorkerPrOps,
+): number {
+  if (ops.remoteHead().toLowerCase() !== outputRevision.toLowerCase()) throw new Error("remote Worker branch is not the verified output commit");
+  const existing = ops.gh(["pr", "list", "-R", args.githubRepo, "--state", "open", "--head", attempt.branch, "--json", "number,headRefOid"], true);
+  if (Array.isArray(existing) && existing.length === 1) {
+    if (String(existing[0].headRefOid).toLowerCase() !== outputRevision.toLowerCase()) throw new Error("existing Worker PR head is not the verified output commit");
+    return Number(existing[0].number);
+  }
+  if (!Array.isArray(existing) || existing.length !== 0) throw new Error("Worker branch must have zero or one open PR");
+  ops.recheck();
+  if (ops.remoteHead().toLowerCase() !== outputRevision.toLowerCase()) throw new Error("remote Worker branch changed at the PR creation boundary");
+  const url = ops.gh(["pr", "create", "-R", args.githubRepo, "--base", String(attempt.baseBranch || "origin/main").replace(/^origin\//, ""), "--head", attempt.branch, "--title", args.title, "--body", `Closes #${attempt.target.number}`]);
+  const match = String(url).match(/\/(\d+)\/?$/);
+  if (!match) throw new Error("created Worker PR number was not returned");
+  const number = Number(match[1]);
+  const created = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefOid"], true);
+  if (String(created.headRefOid).toLowerCase() !== outputRevision.toLowerCase()) {
+    ops.gh(["pr", "close", String(number), "-R", args.githubRepo]);
+    throw new Error("created Worker PR head is not the verified output commit; PR closed");
+  }
+  return number;
+}
 function verified(args: Args) {
   const location = canonicalAttemptLocation(args);
   const attempt = readAttemptRecord(location.runDir);
@@ -69,21 +100,8 @@ function run(args: Args): number {
         enabled.githubRepositoryId,
         MAX_GUARDED_OPERATION_MS,
       );
-      const remoteLine = command("git", ["ls-remote", "--heads", destination, `refs/heads/${attempt.branch}`]);
-      const remoteHead = remoteLine.split(/\s+/, 1)[0] || "";
-      if (remoteHead.toLowerCase() !== report.result.outputRevision.toLowerCase()) throw new Error("remote Worker branch is not the verified output commit");
-      const existing = gh(["pr", "list", "-R", args.githubRepo, "--state", "open", "--head", attempt.branch, "--json", "number,headRefOid"], true);
-      let number: number;
-      if (Array.isArray(existing) && existing.length === 1) {
-        if (String(existing[0].headRefOid).toLowerCase() !== report.result.outputRevision.toLowerCase()) throw new Error("existing Worker PR head is not the verified output commit");
-        number = Number(existing[0].number);
-      } else if (Array.isArray(existing) && existing.length === 0) {
-        recheck();
-        const url = gh(["pr", "create", "-R", args.githubRepo, "--base", String(attempt.baseBranch || "origin/main").replace(/^origin\//, ""), "--head", attempt.branch, "--title", args.title, "--body", `Closes #${attempt.target.number}`]);
-        const match = String(url).match(/\/(\d+)\/?$/);
-        if (!match) throw new Error("created Worker PR number was not returned");
-        number = Number(match[1]);
-      } else throw new Error("Worker branch must have zero or one open PR");
+      const remoteHead = () => command("git", ["ls-remote", "--heads", destination, `refs/heads/${attempt.branch}`]).split(/\s+/, 1)[0] || "";
+      const number = ensureWorkerPr(attempt, report.result.outputRevision, args, { remoteHead, gh, recheck });
       const observedBeforeLabel = gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefOid"], true);
       if (String(observedBeforeLabel.headRefOid).toLowerCase() !== report.result.outputRevision.toLowerCase()) {
         throw new Error("Worker PR head changed before the success label");
@@ -101,4 +119,4 @@ function run(args: Args): number {
 }
 function main() { try { process.exitCode = run(parseArgs(process.argv.slice(2))); } catch (error) { console.error(`guarded-worker-pr.ts: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 2; } }
 if (require.main === module) main();
-module.exports = { assertWorkerPrBinding, parseArgs, run, verified };
+module.exports = { assertWorkerPrBinding, ensureWorkerPr, parseArgs, run, verified };

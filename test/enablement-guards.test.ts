@@ -15,6 +15,7 @@ const {
 } = require("../src/driver-enablement.cjs");
 const { acquireLockSync, reclaimStale } = require("../src/enablement-lock.cjs");
 const { GUARDED_OPERATION_TIMEOUT_MS, runGuarded } = require("../extensions/deadloop/automations/guarded-operation.ts");
+const { handoffReviewedPr } = require("../extensions/deadloop/automations/guarded-reviewer-handoff.ts");
 const { assertWorkerHead, assertWorkerPushBinding, parseArgs: parseGuardedPushArgs, runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.ts");
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
@@ -314,6 +315,27 @@ describe("enablement mutation guards", () => {
     expect(() => runGuarded(
       { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "pr", "edit", "1", "-R", project.githubRepo, "--add-label", "agent:review"] },
     )).toThrow("not approved");
+  });
+
+  it("moves an approved reviewed head through the dedicated human-handoff guard", () => {
+    const head = "a".repeat(40); const calls: string[] = []; let viewed = 0;
+    const result = handoffReviewedPr(
+      { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "/promise", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
+      {
+        validateReviewPromise: () => ({ status: "complete", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [] } }),
+        withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
+        run: (args: string[]) => {
+          calls.push(args.join(" "));
+          if (args[2] === "view") {
+            viewed += 1;
+            const labels = viewed === 1 ? ["agent:review", "agent:reviewing"] : ["ready-for-human"];
+            return { status: 0, stdout: JSON.stringify({ state: "OPEN", isDraft: false, headRefOid: head, labels: labels.map((name) => ({ name })) }), stderr: "" };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    expect({ result, mutation: calls[1] }).toEqual({ result: 0, mutation: "gh pr edit 24 -R owner/repo --remove-label agent:review --remove-label agent:reviewing --remove-label agent:blocked --add-label ready-for-human" });
   });
 
   it("rejects a GitHub mutation targeting another repository", () => {

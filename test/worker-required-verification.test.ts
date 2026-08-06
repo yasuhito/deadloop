@@ -1,3 +1,8 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import type { AttemptRecord, CompletionReportV1 } from "../src/attempt-lifecycle";
@@ -96,5 +101,24 @@ describe("Worker required-verification completion gate", () => {
     const explicit = { ...contract, command: "printf '0 tests\\n'" };
     const exact = { ...verification, binding: { ...verification.binding, command: explicit.command } };
     expect(assertWorkerCompletionAuthorized({ ...attempt, requiredVerification: explicit }, report, exact, explicit).outputRevision).toBe(outputHead);
+  });
+
+  it("fetches the configured trusted base before checking for policy changes", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-policy-"));
+    try {
+      const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout");
+      execFileSync("git", ["init", "--bare", "--quiet", remote]);
+      execFileSync("git", ["init", "--quiet", "-b", "release", seed]);
+      execFileSync("git", ["-C", seed, "config", "user.name", "Test"]); execFileSync("git", ["-C", seed, "config", "user.email", "test@example.com"]);
+      writeFileSync(path.join(seed, "deadloop.json"), JSON.stringify({ checkCommand: contract.command }));
+      execFileSync("git", ["-C", seed, "add", "deadloop.json"]); execFileSync("git", ["-C", seed, "commit", "--quiet", "-m", "policy"]);
+      execFileSync("git", ["-C", seed, "remote", "add", "origin", remote]); execFileSync("git", ["-C", seed, "push", "--quiet", "-u", "origin", "release"]);
+      execFileSync("git", ["clone", "--quiet", "-b", "release", remote, checkout]);
+      const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/release"], { encoding: "utf8" }).trim();
+      writeFileSync(path.join(seed, "deadloop.json"), JSON.stringify({ checkCommand: "npm run stricter-check" }));
+      execFileSync("git", ["-C", seed, "commit", "--quiet", "-am", "stricter policy"]); execFileSync("git", ["-C", seed, "push", "--quiet"]);
+      const staleAttempt = { ...attempt, baseBranch: "origin/release", requiredVerification: { ...contract, baseRevision } };
+      expect(() => runtime.assertCurrentWorkerContract(staleAttempt, checkout)).toThrow("stale_policy");
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

@@ -235,7 +235,7 @@ function issueWorkerLaunchPlan(
     branch,
     input: {
       worktree: recovery
-        ? { mode: "open" as const, branch }
+        ? { mode: "open" as const, branch, baseBranch: env.baseBranch }
         : { mode: "create" as const, branch, baseBranch: env.baseBranch },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
@@ -498,4 +498,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { envConfig, launchIssueWorkerFlow };
+module.exports = { envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };

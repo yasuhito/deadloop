@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../src/agent-launch-flow.ts");
+const { issueWorkerLaunchPlan } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
 const { transitionPersistedAttempt } = require("../src/attempt-lifecycle-runtime.cjs");
 
 function input(root: string, role: "worker" | "reviewer" = "worker") {
@@ -82,6 +83,21 @@ describe("0.7.5 エージェント起動フロー", () => {
     try {
       const prepared = prepareAgentLaunchFlow(input(root), operations(root, "worker", []));
       expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).requiredVerification.command).toBe("npm test");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("既存作業ツリーを開き直す Worker に設定済みの非 main ベースを記録する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const plan = issueWorkerLaunchPlan(
+        { number: 1, title: "Task" },
+        { projectId: "demo", githubRepo: "owner/repo", baseBranch: "origin/release", checkCommand: "npm test", fixtureMode: true, worktreeRoot: "/wt", automationDir: "/automation", stateDir: root, workerAgent: "pi", workerModel: "", workerInstructions: "" },
+        "requeue-launch",
+        "a".repeat(40),
+        { branch: "agent/issue-1", worktreePath: "/wt/agent-issue-1", inputHead: "a".repeat(40), abandonedAt: "now", workspaceId: "old", agentName: "old" },
+      );
+      const prepared = prepareAgentLaunchFlow(plan.input, operations(root, "worker", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).baseBranch).toBe("origin/release");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

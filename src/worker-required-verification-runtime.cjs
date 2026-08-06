@@ -21,6 +21,10 @@ function writeRequiredVerificationRecord(file, record) { fs.mkdirSync(path.dirna
 function git(repoPath, args) { const result = childProcess.spawnSync("git", ["-C", repoPath, ...args], { encoding: "utf8", timeout: 30000 }); if (result.status !== 0) throw new Error(String(result.stderr || result.stdout || "git command failed").trim()); return String(result.stdout || "").trim(); }
 function assertCurrentWorkerContract(attempt, projectRepo) {
   assertContract(attempt.requiredVerification); const contract = attempt.requiredVerification; const baseBranch = attempt.baseBranch || "origin/main";
+  const separator = baseBranch.indexOf("/");
+  if (separator <= 0 || separator === baseBranch.length - 1) throw new Error("required verification blocked: stale_policy; trusted base is not a remote-tracking branch");
+  const remote = baseBranch.slice(0, separator); const branch = baseBranch.slice(separator + 1);
+  git(projectRepo, ["fetch", "--no-tags", remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
   const currentBase = git(projectRepo, ["rev-parse", "--verify", `${baseBranch}^{commit}`]);
   if (currentBase.toLowerCase() !== contract.baseRevision.toLowerCase()) throw new Error("required verification blocked: stale_policy; trusted base revision changed");
   if (contract.source.kind === "repo_policy") {
