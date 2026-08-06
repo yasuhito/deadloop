@@ -109,6 +109,42 @@ function readJson(file: string): any | undefined {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRequiredVerificationContract(value: unknown): value is RequiredVerificationContract {
+  if (!isRecord(value) || typeof value.repository !== "string" || typeof value.command !== "string"
+    || typeof value.baseRevision !== "string" || !isRecord(value.source)
+    || !["local", "repo_policy"].includes(String(value.source.kind)) || typeof value.source.location !== "string") return false;
+  if (value.override === undefined) return true;
+  return isRecord(value.override) && typeof value.override.command === "string" && isRecord(value.override.source)
+    && ["local", "repo_policy"].includes(String(value.override.source.kind))
+    && typeof value.override.source.location === "string";
+}
+
+function isEnablementVerificationJournal(value: unknown): value is EnablementVerificationJournal {
+  if (!isRecord(value) || value.version !== 1
+    || !["prepared", "created", "checked", "cleaned", "retained", "creation_failed"].includes(String(value.state))
+    || typeof value.attemptId !== "string" || typeof value.repository !== "string"
+    || typeof value.primaryRepoPath !== "string" || typeof value.worktreePath !== "string"
+    || typeof value.targetRevision !== "string" || typeof value.createdAt !== "string"
+    || !isRequiredVerificationContract(value.contract)) return false;
+  return (value.recordPath === undefined || typeof value.recordPath === "string")
+    && (value.logPath === undefined || typeof value.logPath === "string")
+    && (value.retentionReason === undefined || typeof value.retentionReason === "string");
+}
+
+function restorationFailureFrom(error: unknown): ProjectCheckResult["restorationFailure"] {
+  if (!isRecord(error) || !isRecord(error.restorationFailure)
+    || typeof error.restorationFailure.message !== "string"
+    || typeof error.restorationFailure.quarantinePath !== "string") return undefined;
+  return {
+    message: error.restorationFailure.message,
+    quarantinePath: error.restorationFailure.quarantinePath,
+  };
+}
+
 function attemptDirectories(stateDir: string): string[] {
   const root = verificationRoot(stateDir);
   try {
@@ -177,7 +213,7 @@ export function inspectRetainedEnablementVerifications(
   for (const directory of attemptDirectories(stateDir)) {
     const journalPath = path.join(directory, "journal.json");
     const journal = readJson(journalPath);
-    if (journal?.version !== 1) {
+    if (!isEnablementVerificationJournal(journal)) {
       const worktreePath = path.join(stateDir, "required-verification", "worktrees", path.basename(directory));
       if (!fs.existsSync(worktreePath)) continue;
       findings.push({
@@ -191,8 +227,7 @@ export function inspectRetainedEnablementVerifications(
       continue;
     }
     if (!["prepared", "created", "checked", "retained"].includes(journal.state)) continue;
-    if (typeof journal.primaryRepoPath !== "string" || (expectedPath && path.resolve(journal.primaryRepoPath) !== expectedPath)) continue;
-    if (typeof journal.worktreePath !== "string") continue;
+    if (expectedPath && path.resolve(journal.primaryRepoPath) !== expectedPath) continue;
     findings.push({
       attemptId: String(journal.attemptId || path.basename(directory)),
       repository: String(journal.repository || "unknown"),
@@ -343,6 +378,7 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   } catch (error) {
     runnerFailed = true;
     const message = error instanceof Error ? (error.stack || error.message) : String(error);
+    const restorationFailure = restorationFailureFrom(error);
     check = {
       code: null,
       stdout: "",
@@ -350,6 +386,7 @@ export async function runEnablementVerification(input: EnablementVerificationInp
       timedOut: false,
       interrupted: false,
       signal: null,
+      ...(restorationFailure ? { restorationFailure } : {}),
     };
   }
   const finishedAtMs = now();

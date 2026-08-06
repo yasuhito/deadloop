@@ -1019,8 +1019,8 @@ function retainedVerificationReport(repositoryRoot: string | undefined): string 
   for (const item of retained) {
     const worktree = shellCommandArgument(item.worktreePath);
     const confirmation = item.primaryRepoPath
-      ? `git -C ${shellCommandArgument(item.primaryRepoPath)} worktree list --porcelain && git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all`
-      : `git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all`;
+      ? `git -C ${shellCommandArgument(item.primaryRepoPath)} worktree list --porcelain && git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all --ignored`
+      : `git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all --ignored`;
     lines.push(
       `- ${item.worktreePath}`,
       `  repository: ${item.repository}`,

@@ -7,6 +7,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const helper = path.resolve("extensions/deadloop/automations/run-project-check.ts");
 const formatter = path.resolve("test/fixtures/project-check/recursive-json-formatter.cjs");
+const { runProjectCheck } = require("../src/project-check.ts") as {
+  runProjectCheck: (input: { cwd: string; command: string; quarantineRoot: string }) => Promise<unknown>;
+};
 const temporaryDirectories: string[] = [];
 
 function temporaryProject(): string {
@@ -109,12 +112,38 @@ describe("run-project-check", () => {
     expectEvidence(project, evidence);
   });
 
-  it("restores generated evidence after a spawn failure", () => {
+  it("preserves restoration failure evidence when the checker cannot spawn", async () => {
     const project = temporaryProject();
-    const evidence = writeEvidence(project);
-    spawnSync(process.execPath, [helper, "--cwd", project, "--", path.join(project, "missing-executable")]);
+    writeEvidence(project);
+    spawnSync("git", ["-C", project, "init", "--quiet"]);
+    const quarantineRoot = temporaryProject();
+    const bin = temporaryProject();
+    fs.symlinkSync(spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim(), path.join(bin, "git"));
+    const originalPath = process.env.PATH;
+    let failure: any;
+    try {
+      process.env.PATH = bin;
+      const running = runProjectCheck({ cwd: project, command: "true", quarantineRoot });
+      fs.mkdirSync(path.join(project, ".deadloop"), { recursive: true });
+      fs.chmodSync(path.join(project, ".deadloop"), 0o500);
+      failure = await running.catch((error) => error);
+    } finally {
+      process.env.PATH = originalPath;
+      fs.chmodSync(path.join(project, ".deadloop"), 0o700);
+    }
 
-    expectEvidence(project, evidence);
+    expect({
+      message: failure?.message,
+      restorationFailure: failure?.restorationFailure,
+      quarantineRetained: fs.existsSync(failure?.restorationFailure?.quarantinePath || ""),
+    }).toMatchObject({
+      message: expect.stringContaining("spawn bash ENOENT"),
+      restorationFailure: {
+        message: expect.any(String),
+        quarantinePath: expect.stringContaining(quarantineRoot),
+      },
+      quarantineRetained: true,
+    });
   });
 
   it("returns 124 after a timeout", () => {

@@ -905,7 +905,7 @@ describe("enablement command integration", () => {
     ["record path", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journal.recordPath],
     ["log path", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journal.logPath],
     ["confirmation command Git prefix", () => "git -C"],
-    ["confirmation command status arguments", () => "status --short --untracked-files=all"],
+    ["confirmation command status arguments", () => "status --short --untracked-files=all --ignored"],
   ] as const)("shows retained verification %s in doctor", async (_name, expectedValue) => {
     const observation = await retainedVerificationDoctorObservation();
 

@@ -242,7 +242,13 @@ async function runProjectCheck(input: ProjectCheckInput): Promise<ProjectCheckRe
   try {
     result = await runShell(input.command, input.cwd, input.timeoutMs, input.terminationGraceMs ?? 1000, input.signal);
   } catch (error) {
-    hidden.restore();
+    const restorationFailure = hidden.restore();
+    if (restorationFailure) {
+      throw Object.assign(
+        new Error(error instanceof Error ? error.message : String(error), { cause: error }),
+        { restorationFailure },
+      );
+    }
     throw error;
   }
   const restorationFailure = hidden.restore();

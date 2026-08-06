@@ -190,14 +190,17 @@ describe("enablement required-verification records", () => {
     expect(inspectRetainedEnablementVerifications(scenario.stateDir, scenario.repoPath)[0]?.journalPath).toBe(result.journalPath);
   });
 
-  it("reports a malformed journal beside a retained deterministic worktree without claiming ownership", () => {
+  it.each([
+    ["invalid JSON", "{malformed"],
+    ["incomplete V1 JSON", JSON.stringify({ version: 1, state: "retained" })],
+  ])("reports a %s journal beside a retained deterministic worktree without claiming ownership", (_case, journalContents) => {
     const scenario = fixture();
     const attemptId = "malformed-attempt";
     const attemptDir = path.join(scenario.stateDir, "required-verification", "enablement", attemptId);
     const worktreePath = path.join(scenario.stateDir, "required-verification", "worktrees", attemptId);
     fs.mkdirSync(attemptDir, { recursive: true });
     fs.mkdirSync(worktreePath, { recursive: true });
-    fs.writeFileSync(path.join(attemptDir, "journal.json"), "{malformed");
+    fs.writeFileSync(path.join(attemptDir, "journal.json"), journalContents);
 
     const finding = inspectRetainedEnablementVerifications(scenario.stateDir, scenario.repoPath)[0];
     expect({ ...finding, ownershipClaimed: Object.hasOwn(finding || {}, "primaryRepoPath") }).toMatchObject({
@@ -220,6 +223,38 @@ describe("enablement required-verification records", () => {
       command: scenario.contract.command,
       source: scenario.contract.source,
       baseRevision: scenario.contract.baseRevision,
+    });
+  });
+
+  it("retains restoration evidence when the project-check runner throws", async () => {
+    const scenario = fixture();
+    const quarantinePath = path.join(scenario.stateDir, "check-quarantine", "retained-after-throw");
+    fs.mkdirSync(quarantinePath, { recursive: true });
+    const failure = Object.assign(new Error("checker spawn failed"), {
+      restorationFailure: { message: "restore failed after spawn failure", quarantinePath },
+    });
+    const result = await runEnablementVerification({
+      stateDir: scenario.stateDir,
+      primaryRepoPath: scenario.repoPath,
+      repository: scenario.contract.repository,
+      resolution: { status: "resolved", contract: scenario.contract },
+      projectCheckRunner: async () => { throw failure; },
+    });
+    const record = JSON.parse(fs.readFileSync(result.recordPath, "utf8"));
+    const journal = JSON.parse(fs.readFileSync(result.journalPath, "utf8"));
+
+    expect({
+      reason: record.terminationReason,
+      restorationFailure: record.artifactRestorationFailure,
+      cleanup: result.cleanup,
+      worktreeRetained: fs.existsSync(journal.worktreePath),
+      quarantineRetained: fs.existsSync(quarantinePath),
+    }).toEqual({
+      reason: "artifact_restoration_failure",
+      restorationFailure: failure.restorationFailure,
+      cleanup: "retained",
+      worktreeRetained: true,
+      quarantineRetained: true,
     });
   });
 
