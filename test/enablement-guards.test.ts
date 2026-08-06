@@ -341,7 +341,7 @@ describe("enablement mutation guards", () => {
     const result = handoffReviewedPr(
       { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "/promise", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
       {
-        validateReviewPromise: () => ({ status: "complete", evidenceStrength: "strong", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [] } }),
+        validateReviewPromise: () => ({ status: "complete", evidenceStrength: "strong", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [], target: { repository: "owner/repo", kind: "pull-request", number: 24 } } }),
         authorizeVerification: () => {},
         withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
         run: (args: string[]) => {
@@ -364,7 +364,7 @@ describe("enablement mutation guards", () => {
       handoffReviewedPr(
         { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "/promise", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
         {
-          validateReviewPromise: () => ({ status: "complete", evidenceStrength: "strong", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [] } }),
+          validateReviewPromise: () => ({ status: "complete", evidenceStrength: "strong", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [], target: { repository: "owner/repo", kind: "pull-request", number: 24 } } }),
           authorizeVerification: () => { throw new Error(`${reason} required verification`); },
           withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
           run: (args: string[]) => { calls.push(args.join(" ")); return { status: 0, stdout: "", stderr: "" }; },
@@ -380,7 +380,7 @@ describe("enablement mutation guards", () => {
       handoffReviewedPr(
         { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "/promise", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
         {
-          validateReviewPromise: () => ({ status: "complete", evidenceStrength: "strong", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [] } }),
+          validateReviewPromise: () => ({ status: "complete", evidenceStrength: "strong", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [], target: { repository: "owner/repo", kind: "pull-request", number: 24 } } }),
           authorizeVerification: () => {},
           withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
           run: (args: string[]) => {
@@ -409,6 +409,22 @@ describe("enablement mutation guards", () => {
         { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "/promise", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
         {
           validateReviewPromise: () => ({ status: "complete", evidenceStrength: "unbound-v1", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [] } }),
+          authorizeVerification: () => {},
+          withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
+          run: (args: string[]) => { calls.push(args.join(" ")); return { status: 0, stdout: "", stderr: "" }; },
+        },
+      );
+    } catch {}
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects reviewer approval bound to another pull request", () => {
+    const head = "a".repeat(40); const calls: string[] = [];
+    try {
+      handoffReviewedPr(
+        { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "/promise", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
+        {
+          validateReviewPromise: () => ({ status: "complete", evidenceStrength: "strong", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [], target: { repository: "owner/repo", kind: "pull-request", number: 25 } } }),
           authorizeVerification: () => {},
           withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
           run: (args: string[]) => { calls.push(args.join(" ")); return { status: 0, stdout: "", stderr: "" }; },

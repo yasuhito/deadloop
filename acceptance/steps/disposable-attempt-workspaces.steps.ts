@@ -27,6 +27,7 @@ const { selectCleanupPlan } = require("../../extensions/deadloop/automations/cle
 
 const inputHead = "a".repeat(40);
 const outputHead = "b".repeat(40);
+const advancedBaseHead = "c".repeat(40);
 
 type World = {
   root?: string;
@@ -39,7 +40,7 @@ type World = {
   currentWorkspace?: any;
   mutationCount?: number;
   layoutObservation?: { workspaces: Array<{ workspace_id: string; tab_count: number; pane_count: number }>; extraLayoutActions: string[] };
-  recoveredWorker?: { worktreePath: string; opened: number };
+  recoveredWorker?: { worktreePath: string; opened: number; inputHead?: string; policyBaseHead?: string };
   runDir?: string;
 };
 
@@ -188,7 +189,7 @@ When("deadloop starts the requeued Worker", function (this: World) {
   const env = workerEnvironment({
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo",
     DEADLOOP_BASE_BRANCH: "origin/main", DEADLOOP_WORKTREE_ROOT: root, DEADLOOP_STATE_DIR: root,
-    DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: inputHead }),
+    DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: advancedBaseHead }),
   });
   this.result = launchIssueWorkerFlow({ number: 12, title: "renamed issue" }, env, {
     mkdirSync: fs.mkdirSync,
@@ -197,15 +198,20 @@ When("deadloop starts the requeued Worker", function (this: World) {
       const nameIndex = args.indexOf("--name");
       if (nameIndex >= 0) launchedName = args[nameIndex + 1];
       if (args[0] === "git" && args.includes("status")) return "";
+      if (args[0] === "git" && args[2] === "/repo") return `${advancedBaseHead}\n`;
       return args[0] === "git" ? `${inputHead}\n` : "started";
     },
     writeFileSync: fs.writeFileSync,
   });
+  const newRun = fs.readdirSync(path.join(root, "runs")).find((entry) => entry !== "old-launch");
+  const attempt = readAttemptRecord(path.join(root, "runs", String(newRun)));
+  recovered.inputHead = attempt.inputRevision.head;
+  recovered.policyBaseHead = attempt.requiredVerification?.baseRevision;
 });
 
 Then("deadloop opens the same worktree in a fresh workspace", function (this: World) {
-  assert.deepEqual({ opened: this.recoveredWorker?.opened, workspaceId: this.result.workspaceId, worktreePath: this.result.worktreePath }, {
-    opened: 1, workspaceId: "workspace-new", worktreePath: this.recoveredWorker?.worktreePath,
+  assert.deepEqual({ opened: this.recoveredWorker?.opened, workspaceId: this.result.workspaceId, worktreePath: this.result.worktreePath, inputHead: this.recoveredWorker?.inputHead, policyBaseHead: this.recoveredWorker?.policyBaseHead }, {
+    opened: 1, workspaceId: "workspace-new", worktreePath: this.recoveredWorker?.worktreePath, inputHead, policyBaseHead: advancedBaseHead,
   });
   rmSync(this.root!, { recursive: true, force: true });
 });

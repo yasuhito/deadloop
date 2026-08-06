@@ -780,6 +780,7 @@ export function automationEnvironment(
   const values = automationRuntimeValues(project, automation, "");
   return {
     DEADLOOP_PROJECT_ID: envText(values.projectId),
+    DEADLOOP_CONFIG: envText(project.configSource.localPath),
     DEADLOOP_REPO_PATH: envText(values.repoPath),
     DEADLOOP_GITHUB_REPO: envText(values.githubRepo),
     DEADLOOP_BASE_BRANCH: envText(values.baseBranch),

@@ -231,6 +231,7 @@ function issueWorkerLaunchPlan(
   uuid: string,
   baseHead: string,
   recovery: AbandonedWorkerCheckout | null = null,
+  verificationBaseHead: string = baseHead,
 ) {
   const number = Number(issue.number || 0);
   const workerName = `${env.projectId}-issue-${number}-worker`;
@@ -257,7 +258,7 @@ function issueWorkerLaunchPlan(
       role: "worker" as const,
       target: { kind: "issue" as const, number },
       inputRevision: { head: baseHead },
-      requiredVerification: requiredVerificationContract(env, baseHead),
+      requiredVerification: requiredVerificationContract(env, verificationBaseHead),
       intendedWorktreePath,
       resolveWorktreeHead: true,
       renderPrompt: ({ promiseFile, worktreePath, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
@@ -302,9 +303,9 @@ function launchIssueWorkerFlow(
   ops: { runText: (args: string[]) => string; [key: string]: any },
 ): JsonObject {
   const recovery = abandonedWorkerCheckout(Number(issue.number || 0), env);
-  const baseHead = recovery?.inputHead
-    || ops.runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
-  const plan = issueWorkerLaunchPlan(issue, env, randomUUID(), baseHead, recovery);
+  const currentBaseHead = ops.runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  const baseHead = recovery?.inputHead || currentBaseHead;
+  const plan = issueWorkerLaunchPlan(issue, env, randomUUID(), baseHead, recovery, currentBaseHead);
   if (recovery) assertRecoverableWorkerCheckout(recovery, env, ops as { runner: ReturnType<typeof herdrRunner>; runText: (args: string[]) => string });
   prepareAgentLaunchFlow(plan.input, ops);
   recordAgentLaunchGithubClaimed(plan.input);
@@ -316,10 +317,11 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   const number = Number(issue.number || 0);
   const uuid = shouldSimulateLaunch(fixture) ? "fixture-worker-uuid" : randomUUID();
   const recovery = shouldSimulateLaunch(fixture) ? null : abandonedWorkerCheckout(number, env);
-  const baseHead = shouldSimulateLaunch(fixture)
+  const currentBaseHead = shouldSimulateLaunch(fixture)
     ? "f".repeat(40)
-    : recovery?.inputHead || runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
-  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery);
+    : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  const baseHead = recovery?.inputHead || currentBaseHead;
+  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery, currentBaseHead);
   const { workerName, branch } = plan;
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
 
@@ -363,7 +365,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         );
         if (livePlan.kind !== "worker_required") throw new StaleLaunchError("selected issue is no longer eligible");
         assertSameLaunchTarget(issue, livePlan.issue, "issue");
-        assertWorkerLaunchBaseCurrent(env, baseHead, runText);
+        assertWorkerLaunchBaseCurrent(env, currentBaseHead, runText);
         if (recovery) assertRecoverableWorkerCheckout(recovery, env, { runner, runText });
       },
     },

@@ -54,6 +54,9 @@ function assertApprovedReview(args: Args, ops: Ops): void {
   if (validation.evidenceStrength !== "strong") throw new Error("reviewer completion is not strongly bound to its attempt; human handoff stopped");
   if (validation.status !== "complete" || !promise || promise.status !== "complete") throw new Error("validated reviewer completion is missing; human handoff stopped");
   if (String(promise.outcome || "approved") !== "approved") throw new Error("review result is not approved; human handoff stopped");
+  if (promise.target?.repository !== args.githubRepo || promise.target?.kind !== "pull-request" || String(promise.target?.number) !== args.pr) {
+    throw new Error("review result target does not match the guarded pull request");
+  }
   if (String(promise.reviewedHead || "").toLowerCase() !== args.expectedHead.toLowerCase()) throw new Error("reviewed head does not match the guarded handoff head");
   if (Array.isArray(promise.findings) && promise.findings.length !== 0) throw new Error("approved review has findings; human handoff stopped");
 }
@@ -61,14 +64,17 @@ function assertCurrentHeadVerification(args: Args): void {
   const runsDir = path.join(args.stateDir, "runs");
   let entries: import("node:fs").Dirent[];
   try { entries = fs.readdirSync(runsDir, { withFileTypes: true }); }
-  catch { throw new Error("required verification passed record is missing; human handoff stopped"); }
+  catch { return; }
   const failures: string[] = [];
+  let workerProducedHead = false;
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     const attemptRecord = path.join(runsDir, entry.name, "attempt.json");
     try {
       const attempt = readAttemptRecord(path.dirname(attemptRecord));
-      if (attempt.repository !== args.githubRepo || !attempt.requiredVerification) continue;
+      if (attempt.repository !== args.githubRepo || attempt.role !== "worker" || !attempt.requiredVerification
+        || String(attempt.outputRevision || "").toLowerCase() !== args.expectedHead.toLowerCase()) continue;
+      workerProducedHead = true;
       const current = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"));
       const record = readRequiredVerificationRecord(workerRequiredVerificationPath(attemptRecord));
       if (!record || record.version !== 1 || record.outcome !== "passed" || record.exitCode !== 0) {
@@ -82,6 +88,7 @@ function assertCurrentHeadVerification(args: Args): void {
       failures.push(error instanceof Error ? error.message : String(error));
     }
   }
+  if (!workerProducedHead) return;
   throw new Error(`${failures.at(-1) || "required verification passed record is missing"}; human handoff stopped`);
 }
 function assertEligible(args: Args, pr: Record<string, any>): Set<string> {
