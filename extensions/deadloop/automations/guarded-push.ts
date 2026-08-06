@@ -7,6 +7,7 @@ const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../s
 const path = require("node:path") as typeof import("node:path");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
   assertCurrentWorkerContract,
   assertWorkerCompletionAuthorized,
@@ -15,6 +16,7 @@ const {
 } = require("../../../src/worker-required-verification-runtime.cjs");
 
 type Args = {
+  projectId: string;
   projectRepo: string;
   worktree: string;
   githubRepo: string;
@@ -22,7 +24,7 @@ type Args = {
   enabledAt: number;
   remote: string;
   branch: string;
-  attemptRecord?: string;
+  attemptRecord: string;
 };
 
 type CommandResult = { status: number; stdout: string; stderr: string };
@@ -38,8 +40,8 @@ function parseArgs(argv: string[]): Args {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  if (!values.projectRepo || !values.worktree || !values.githubRepo || !values.stateDir || !values.remote || !values.branch || !values.attemptRecord || !Number.isFinite(enabledAt)) {
-    throw new Error("--project-repo, --worktree, --github-repo, --state-dir, --enabled-at, --remote, --branch, and --attempt-record are required");
+  if (!values.projectId || !values.projectRepo || !values.worktree || !values.githubRepo || !values.stateDir || !values.remote || !values.branch || !values.attemptRecord || !Number.isFinite(enabledAt)) {
+    throw new Error("--project-id, --project-repo, --worktree, --github-repo, --state-dir, --enabled-at, --remote, --branch, and --attempt-record are required");
   }
   return { ...values, enabledAt } as Args;
 }
@@ -87,8 +89,22 @@ function assertAuthorizedSource(args: Args, enabled: EnabledProject, ops: Comman
   if (checkedOutBranch !== args.branch) throw new Error("source worktree branch does not match the requested branch");
 }
 
-function assertVerifiedWorkerOutput(args: Args & { attemptRecord: string }): string {
-  const attempt = readAttemptRecord(path.dirname(args.attemptRecord));
+function assertWorkerPushBinding(
+  attempt: { project: string; repository: string; branch: string; worktreePath: string },
+  args: Pick<Args, "projectId" | "githubRepo" | "branch" | "worktree">,
+): void {
+  if (attempt.project !== args.projectId) throw new Error("attempt project does not match push project");
+  if (attempt.repository !== args.githubRepo) throw new Error("attempt repository does not match push repository");
+  if (attempt.branch !== args.branch) throw new Error("attempt branch does not match push destination");
+  if (path.resolve(attempt.worktreePath) !== path.resolve(args.worktree)) throw new Error("attempt worktree does not match push source");
+}
+
+function assertVerifiedWorkerOutput(args: Args, ops: CommandOps = defaultOps()): string {
+  const location = canonicalAttemptLocation(args);
+  const attempt = readAttemptRecord(location.runDir);
+  assertWorkerPushBinding(attempt, args);
+  assertAttemptProjectBinding(attempt, args);
+  assertWorktreeBelongsToProject({ runText: (argv: string[]) => gitOutput(ops, argv, "attempt worktree confinement failed") }, attempt, args);
   const report = JSON.parse(require("node:fs").readFileSync(attempt.promiseFile, "utf8"));
   validateCompletionReportBinding(attempt, report);
   const current = assertCurrentWorkerContract(attempt, args.projectRepo);
@@ -102,16 +118,18 @@ function assertWorkerHead(args: Pick<Args, "worktree">, ops: CommandOps, outputR
   }
 }
 
-function runGuardedPush(args: Args, ops: CommandOps = defaultOps()): number {
-  if (args.attemptRecord) assertVerifiedWorkerOutput(args as Args & { attemptRecord: string });
+function runGuardedPush(
+  args: Args,
+  ops: CommandOps = defaultOps(),
+  authorize: (args: Args, ops: CommandOps) => string = assertVerifiedWorkerOutput,
+): number {
+  authorize(args, ops);
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
     (enabled: EnabledProject, recheck: () => void) => {
-      const outputRevision = args.attemptRecord
-        ? assertVerifiedWorkerOutput(args as Args & { attemptRecord: string })
-        : undefined;
+      const outputRevision = authorize(args, ops);
       assertAuthorizedSource(args, enabled, ops);
-      if (outputRevision) assertWorkerHead(args, ops, outputRevision, "Worker HEAD is not the verified output commit");
+      assertWorkerHead(args, ops, outputRevision, "Worker HEAD is not the verified output commit");
       const destination = resolveVerifiedPushDestination(
         ops,
         args.projectRepo,
@@ -122,8 +140,8 @@ function runGuardedPush(args: Args, ops: CommandOps = defaultOps()): number {
       );
       const ref = `refs/heads/${args.branch}`;
       recheck();
-      if (outputRevision) assertWorkerHead(args, ops, outputRevision, "Worker HEAD changed after verification");
-      const result = ops.run(["git", "-C", args.worktree, "push", "--porcelain", destination, `HEAD:${ref}`], MAX_GUARDED_OPERATION_MS);
+      assertWorkerHead(args, ops, outputRevision, "Worker HEAD changed after verification");
+      const result = ops.run(["git", "-C", args.worktree, "push", "--porcelain", destination, `${outputRevision}:${ref}`], MAX_GUARDED_OPERATION_MS);
       if (result.status !== 0) throw new Error((result.stderr || result.stdout || "push failed").trim());
       return 0;
     },
@@ -140,4 +158,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { assertAuthorizedSource, assertVerifiedWorkerOutput, assertWorkerHead, parseArgs, runGuardedPush };
+module.exports = { assertAuthorizedSource, assertVerifiedWorkerOutput, assertWorkerHead, assertWorkerPushBinding, parseArgs, runGuardedPush };

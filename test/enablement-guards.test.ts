@@ -15,7 +15,7 @@ const {
 } = require("../src/driver-enablement.cjs");
 const { acquireLockSync, reclaimStale } = require("../src/enablement-lock.cjs");
 const { GUARDED_OPERATION_TIMEOUT_MS, runGuarded } = require("../extensions/deadloop/automations/guarded-operation.ts");
-const { assertWorkerHead, runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.ts");
+const { assertWorkerHead, assertWorkerPushBinding, parseArgs: parseGuardedPushArgs, runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.ts");
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
 const sandboxes: string[] = [];
@@ -332,6 +332,21 @@ describe("enablement mutation guards", () => {
     )).toThrow("only approved gh mutations");
   });
 
+  it("rejects another attempt repository before Worker push", () => {
+    expect(() => assertWorkerPushBinding(
+      { project: "demo", repository: "owner/repo", branch: "agent/issue-1", worktreePath: "/worktree" },
+      { projectId: "demo", githubRepo: "other/repo", branch: "agent/issue-1", worktree: "/worktree" },
+    )).toThrow("repository");
+  });
+
+  it("requires an attempt record for every guarded Worker push", () => {
+    expect(() => parseGuardedPushArgs([
+      "--project-id", "demo", "--project-repo", "/repo", "--worktree", "/worktree",
+      "--github-repo", "owner/repo", "--state-dir", "/state", "--enabled-at", "1",
+      "--remote", "origin", "--branch", "agent/issue-1",
+    ])).toThrow("attempt-record");
+  });
+
   it("rejects a Worker HEAD that changed after required verification", () => {
     expect(() => assertWorkerHead(
       { worktree: "/worktree" },
@@ -345,19 +360,25 @@ describe("enablement mutation guards", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     let pushedDestination = "";
+    let pushedRefspec = "";
     const ops = { run: (args: string[]) => {
       if (args.includes("--git-common-dir")) return { status: 0, stdout: `${project.repoPath}/.git\n`, stderr: "" };
       if (args.includes("symbolic-ref")) return { status: 0, stdout: "agent/issue-1\n", stderr: "" };
+      if (args.includes("HEAD^{commit}")) return { status: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" };
       if (args.includes("get-url")) return { status: 0, stdout: "https://github.com/owner/repo.git\n", stderr: "" };
       if (args[0] === "gh") return { status: 0, stdout: '{"id":"R_repo"}', stderr: "" };
       pushedDestination = args[5] || "";
+      pushedRefspec = args[6] || "";
       execFileSync("git", ["-C", project.repoPath, "remote", "set-url", "origin", "https://github.com/attacker/wrong.git"]);
       return { status: 0, stdout: "", stderr: "" };
     } };
 
-    runGuardedPush({ projectRepo: project.repoPath, worktree: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, remote: "origin", branch: "agent/issue-1" }, ops);
+    runGuardedPush({ attemptRecord: "/attempt.json", projectId: "demo", projectRepo: project.repoPath, worktree: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, remote: "origin", branch: "agent/issue-1" }, ops, () => "a".repeat(40));
 
-    expect(pushedDestination).toBe("https://github.com/owner/repo.git");
+    expect({ pushedDestination, pushedRefspec }).toEqual({
+      pushedDestination: "https://github.com/owner/repo.git",
+      pushedRefspec: `${"a".repeat(40)}:refs/heads/agent/issue-1`,
+    });
   });
 
   it("rejects a source checkout from a different Git common directory", () => {
@@ -369,7 +390,7 @@ describe("enablement mutation guards", () => {
       stderr: "",
     }) };
 
-    expect(() => runGuardedPush({ projectRepo: project.repoPath, worktree: "/foreign", githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, remote: "origin", branch: "agent/issue-1" }, ops)).toThrow("does not belong to the enabled checkout");
+    expect(() => runGuardedPush({ attemptRecord: "/attempt.json", projectId: "demo", projectRepo: project.repoPath, worktree: "/foreign", githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, remote: "origin", branch: "agent/issue-1" }, ops, () => "a".repeat(40))).toThrow("does not belong to the enabled checkout");
   });
 
   it("rejects a requested branch that is not checked out in the source worktree", () => {
@@ -381,14 +402,14 @@ describe("enablement mutation guards", () => {
       stderr: "",
     }) };
 
-    expect(() => runGuardedPush({ projectRepo: project.repoPath, worktree: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, remote: "origin", branch: "agent/issue-1" }, ops)).toThrow("does not match the requested branch");
+    expect(() => runGuardedPush({ attemptRecord: "/attempt.json", projectId: "demo", projectRepo: project.repoPath, worktree: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, remote: "origin", branch: "agent/issue-1" }, ops, () => "a".repeat(40))).toThrow("does not match the requested branch");
   });
 
   it("rejects the configured base branch as the push destination", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1, baseBranch: "origin/main" });
 
-    expect(() => runGuardedPush({ projectRepo: project.repoPath, worktree: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, remote: "origin", branch: "main" }, { run: () => ({ status: 0, stdout: "", stderr: "" }) })).toThrow("configured base branch");
+    expect(() => runGuardedPush({ attemptRecord: "/attempt.json", projectId: "demo", projectRepo: project.repoPath, worktree: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, remote: "origin", branch: "main" }, { run: () => ({ status: 0, stdout: "", stderr: "" }) }, () => "a".repeat(40))).toThrow("configured base branch");
   });
 
   it("recovers an old empty lock left before metadata was written", () => {
