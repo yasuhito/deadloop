@@ -429,6 +429,34 @@ describe("enablement mutation guards", () => {
     });
   });
 
+  it("preserves a pre-existing human-handoff label when the head changes during mutation", () => {
+    const head = "a".repeat(40); const newHead = "b".repeat(40); const calls: string[] = []; let viewed = 0; let error = "";
+    try {
+      handoffReviewedPr(
+        { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "/promise", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
+        {
+          validateReviewPromise: () => ({ status: "complete", evidenceStrength: "strong", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [], target: { repository: "owner/repo", kind: "pull-request", number: 24 } } }),
+          authorizeVerification: () => {},
+          withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
+          run: (args: string[]) => {
+            calls.push(args.join(" "));
+            if (args[2] === "view") {
+              viewed += 1;
+              const changed = viewed > 3;
+              const names = changed ? ["ready-for-human"] : ["agent:review", "agent:reviewing", "ready-for-human"];
+              return { status: 0, stdout: JSON.stringify({ state: "OPEN", isDraft: false, headRefOid: changed ? newHead : head, labels: names.map((name) => ({ name })) }), stderr: "" };
+            }
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+      );
+    } catch (caught) { error = String(caught); }
+    expect({ rollback: calls.at(-1), raced: error.includes("head changed") }).toEqual({
+      rollback: "gh pr edit 24 -R owner/repo --add-label agent:review --add-label agent:reviewing",
+      raced: true,
+    });
+  });
+
   it("rejects an unbound V1 reviewer report without changing labels", () => {
     const head = "a".repeat(40); const calls: string[] = [];
     try {

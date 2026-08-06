@@ -26,6 +26,7 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
+const { requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 import type { RunnerAdapter } from "../../../src/runner";
@@ -60,6 +61,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
       source.DEADLOOP_STATE_DIR ||
       path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
+    requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION || "",
     reviewerAgent: source.DEADLOOP_REVIEWER_AGENT || "pi",
     reviewerModel: source.DEADLOOP_REVIEWER_MODEL || "",
     branchUpdateAgent: source.DEADLOOP_WORKER_AGENT || "pi",
@@ -136,6 +138,8 @@ type DriverLaunchInput = {
   target: { kind: "pull-request"; number: number };
   inputRevision: { head: string; base?: string };
   intendedWorktreePath: string;
+  baseBranch?: string;
+  requiredVerification?: Record<string, any>;
   autoMergePolicy?: boolean;
   renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
 };
@@ -473,6 +477,18 @@ function launchBranchUpdate(
   return { updaterName: plan.updaterName, headRefName: branch, retryKey: key, ...launch, ...(fixture && !operations?.agentLaunchOps ? { simulated: true } : {}) };
 }
 
+function reviewerRequiredVerification(env: ReturnType<typeof envConfig>): Record<string, any> | undefined {
+  if (!env.requiredVerification) return undefined;
+  let contract: Record<string, any>;
+  try { contract = JSON.parse(env.requiredVerification); }
+  catch { throw new Error("DEADLOOP_REQUIRED_VERIFICATION must be valid JSON"); }
+  requiredVerificationBinding(contract, contract.baseRevision);
+  if (contract.repository !== env.githubRepo) {
+    throw new Error("required verification contract repository does not match the review repository");
+  }
+  return contract;
+}
+
 function prReviewerLaunchPlan(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -482,6 +498,7 @@ function prReviewerLaunchPlan(
   const number = Number(pr.number || 0);
   const reviewerName = `${env.projectId}-pr-${number}-reviewer`;
   const headRefName = String(pr.headRefName || `pr-${number}`);
+  const requiredVerification = reviewerRequiredVerification(env);
   return {
     reviewerName,
     headRefName,
@@ -503,6 +520,8 @@ function prReviewerLaunchPlan(
       target: { kind: "pull-request", number },
       inputRevision: { head: String(pr.headRefOid || "") },
       intendedWorktreePath: path.join(env.worktreeRoot, headRefName.replace(/\//g, "-")),
+      baseBranch: env.baseBranch,
+      ...(requiredVerification ? { requiredVerification } : {}),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath, uuid),
     },

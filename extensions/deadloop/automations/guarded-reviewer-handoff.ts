@@ -120,9 +120,17 @@ function assertCurrentHeadVerification(args: Args, repositoryId?: string): void 
   const authorize = (head: string, visited: Set<string>): { contract: Record<string, any>; workerAttempt: Record<string, any> } => {
     const normalizedHead = head.toLowerCase();
     if (visited.has(normalizedHead)) throw new Error("required verification provenance contains a cycle");
-    const candidates = attempts.filter(({ attempt }) => attempt.repository === args.githubRepo
-      && String(attempt.outputRevision || "").toLowerCase() === normalizedHead
-      && (attempt.role === "worker" || attempt.role === "review-repair" || attempt.role === "branch-update"));
+    const provenanceCandidates = attempts.filter(({ attempt }) => attempt.repository === args.githubRepo
+      && (attempt.role === "worker" || attempt.role === "review-repair" || attempt.role === "branch-update")
+      && String(attempt.outputRevision || "").toLowerCase() === normalizedHead);
+    const reviewerCandidates = attempts.filter(({ attempt }) => attempt.repository === args.githubRepo
+      && attempt.role === "reviewer"
+      && attempt.promiseFile === args.reviewPromise
+      && attempt.target?.kind === "pull-request"
+      && String(attempt.target.number) === args.pr
+      && String(attempt.inputRevision?.head || "").toLowerCase() === normalizedHead
+      && attempt.requiredVerification);
+    const candidates = provenanceCandidates.length ? provenanceCandidates : reviewerCandidates;
     if (candidates.length !== 1) {
       throw new Error(candidates.length ? "required verification provenance is ambiguous" : "authoritative current-head verification is missing");
     }
@@ -135,6 +143,20 @@ function assertCurrentHeadVerification(args: Args, repositoryId?: string): void 
       const current = assertCurrentWorkerContract(attempt, args.projectRepo, configFile, repositoryId);
       assertWorkerCompletionAuthorized(attempt, report, record, current);
       return { contract: current, workerAttempt: attempt };
+    }
+    if (attempt.role === "reviewer") {
+      const current = assertCurrentWorkerContract(attempt, args.projectRepo, configFile, repositoryId);
+      const verification = assertFreshTransformedHeadVerification(args, attempt, attemptRecord, normalizedHead, current);
+      const currentAfterVerification = assertCurrentWorkerContract(attempt, args.projectRepo, configFile, repositoryId);
+      if (!isDeepStrictEqual(currentAfterVerification, current)) {
+        throw new Error("required verification blocked: stale_policy; policy changed during current-head verification");
+      }
+      const persisted = readJsonFile(workerRequiredVerificationPath(attemptRecord), "current-head verification record");
+      if (!isDeepStrictEqual(persisted, verification)
+        || !isDeepStrictEqual(verification.binding, requiredVerificationBinding(currentAfterVerification, normalizedHead))) {
+        throw new Error("current-head verification record does not match the reviewed head and fixed contract");
+      }
+      return { contract: currentAfterVerification, workerAttempt: attempt };
     }
     if (attempt.target?.kind !== "pull-request" || String(attempt.target.number) !== args.pr) {
       throw new Error("current-head verification provenance targets another pull request");
@@ -199,7 +221,8 @@ function handoffReviewedPr(args: Args, ops: Ops = { run: defaultRun }): number {
     const headChanged = String(after.headRefOid || "").toLowerCase() !== args.expectedHead.toLowerCase();
     const managed = [args.reviewLabel, args.reviewingLabel, args.blockedLabel].filter((label) => finalLabels.has(label));
     if (headChanged || !finalLabels.has(args.humanLabel) || managed.length) {
-      const rollback = ["gh", "pr", "edit", args.pr, "-R", args.githubRepo, "--remove-label", args.humanLabel];
+      const rollback = ["gh", "pr", "edit", args.pr, "-R", args.githubRepo];
+      if (!boundaryLabels.has(args.humanLabel)) rollback.push("--remove-label", args.humanLabel);
       for (const label of [args.reviewLabel, args.reviewingLabel]) {
         if (boundaryLabels.has(label) && !finalLabels.has(label)) rollback.push("--add-label", label);
       }

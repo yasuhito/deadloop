@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { assertCurrentHeadVerification } = require("../extensions/deadloop/automations/guarded-reviewer-handoff.ts");
+const { assertCurrentHeadVerification, handoffReviewedPr } = require("../extensions/deadloop/automations/guarded-reviewer-handoff.ts");
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -19,7 +19,7 @@ function evidence(role: "worker" | "reviewer" | "review-repair" | "branch-update
   writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({ attemptId: "evidence", launchUuid: "launch", project: "demo", repository: "owner/repo", role, target: { kind: "pull-request", number: 24 }, inputRevision: { head }, requiredVerification: contract, branch: "agent/issue-1", baseBranch: "origin/main", worktreePath: repo, agentName: "dl-r-24-abcdef123456", workspaceLabel: role, promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"), phase: "agent_started", lastSuccessfulPhase: "agent_started", outputRevision: head }));
   writeFileSync(path.join(runDir, "promise.json"), JSON.stringify({ schemaVersion: 1, attemptId: "evidence", role, target: { repository: "owner/repo", kind: "pull-request", number: 24 }, inputRevision: { head }, status: "complete", summary: "done", result: { outputRevision: head }, evidence: { validations: ["check"] } }));
   writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { repository: "owner/repo", targetCommit: head, command: contract.command, source: contract.source, baseRevision: head }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "check.log") }));
-  return { projectRepo: repo, githubRepo: "owner/repo", stateDir, enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "unused", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" };
+  return { projectRepo: repo, githubRepo: "owner/repo", stateDir, enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: path.join(runDir, "promise.json"), reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" };
 }
 
 function transformedEvidence(role: "review-repair" | "branch-update", checkCommand = "true") {
@@ -43,6 +43,21 @@ function transformedEvidence(role: "review-repair" | "branch-update", checkComma
 describe("human-handoff verification provenance", () => {
   it("authorizes a Worker-produced head from its current-head verification record", () => {
     expect(() => assertCurrentHeadVerification(evidence("worker"))).not.toThrow();
+  });
+
+  it("hands off a successfully host-verified pre-existing PR head", () => {
+    const fixture = evidence("reviewer"); let viewed = 0;
+    const result = handoffReviewedPr(fixture, {
+      validateReviewPromise: () => ({ status: "complete", evidenceStrength: "strong", promise: { status: "complete", outcome: "approved", reviewedHead: fixture.expectedHead, findings: [], target: { repository: "owner/repo", kind: "pull-request", number: 24 } } }),
+      withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
+      run: (command: string[]) => {
+        if (command[2] !== "view") return { status: 0, stdout: "", stderr: "" };
+        viewed += 1;
+        const labels = viewed <= 3 ? ["agent:review", "agent:reviewing"] : ["ready-for-human"];
+        return { status: 0, stdout: JSON.stringify({ state: "OPEN", isDraft: false, headRefOid: fixture.expectedHead, labels: labels.map((name) => ({ name })) }), stderr: "" };
+      },
+    });
+    expect(result).toBe(0);
   });
 
   it("rejects incomplete Worker verification metadata", () => {
@@ -103,7 +118,6 @@ describe("human-handoff verification provenance", () => {
   it.each([
     ["a repaired head", "review-repair"],
     ["a branch-updated head", "branch-update"],
-    ["a pre-existing PR head", "reviewer"],
   ] as const)("rejects %s without authoritative current-head evidence", (_name, role) => {
     const fixture = evidence(role);
     rmSync(path.join(fixture.stateDir, "runs", "evidence", "required-verification.json"));
