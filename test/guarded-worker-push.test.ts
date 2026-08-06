@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -51,7 +51,15 @@ function fixture(checkCommand = "true") {
   writeFileSync(git, `#!/bin/sh\nif [ "$1" = "-C" ] && [ "$3" = "fetch" ] && [ "$5" = "https://github.com/owner/repo.git" ]; then exec '${realGit}' -C "$2" fetch "$4" '${trustedRemote}' "$6"; fi\nexec '${realGit}' "$@"\n`);
   execFileSync("chmod", ["+x", git]);
   const args = { attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: repo, worktree: repo, githubRepo: "owner/repo", stateDir, enabledAt: 1, remote: "origin", branch: "agent/issue-1" };
-  return { args, ops, output, pushedRef: () => pushedRef, verification: path.join(runDir, "required-verification.json") };
+  return {
+    args,
+    ops,
+    output,
+    pushedRef: () => pushedRef,
+    attempt: path.join(runDir, "attempt.json"),
+    promise: path.join(runDir, "promise.json"),
+    verification: path.join(runDir, "required-verification.json"),
+  };
 }
 afterEach(() => {
   if (originalConfigDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -65,6 +73,29 @@ describe("verified Worker push boundary", () => {
   it("pushes the immutable verified revision", () => { const f = fixture(); runGuardedPush(f.args, f.ops); expect(f.pushedRef()).toBe(`${f.output}:refs/heads/agent/issue-1`); });
   it("rejects a missing passed record before push", () => { const f = fixture(); rmSync(f.verification); expect(() => runGuardedPush(f.args, f.ops)).toThrow("record is missing"); });
   it("rejects a forged passed record when the fixed command fails", () => { const f = fixture("false"); expect(() => runGuardedPush(f.args, f.ops)).toThrow("fresh required verification failed"); });
+  it("persists a failed gate-time verification record", () => {
+    const f = fixture("false");
+    try { runGuardedPush(f.args, f.ops); } catch {}
+    expect(JSON.parse(readFileSync(f.verification, "utf8")).outcome).toBe("failed");
+  });
+  it("persists every gate-time verification execution", () => {
+    const f = fixture();
+    runGuardedPush(f.args, f.ops);
+    const record = JSON.parse(readFileSync(f.verification, "utf8"));
+    expect(readdirSync(path.dirname(record.provenance.recordPath)).filter((entry) => entry.endsWith(".json"))).toHaveLength(3);
+  });
+  it("stores the output from the gate-time execution in its own log", () => {
+    const f = fixture("printf gate-output");
+    runGuardedPush(f.args, f.ops);
+    const record = JSON.parse(readFileSync(f.verification, "utf8"));
+    expect(readFileSync(record.logPath, "utf8")).toBe("gate-output");
+  });
+  it("authenticates persisted gate evidence in a later host process", () => {
+    const f = fixture();
+    runGuardedPush(f.args, f.ops);
+    const script = `const fs=require("node:fs");const runtime=require(${JSON.stringify(path.resolve("src/worker-required-verification-runtime.cjs"))});const attempt=JSON.parse(fs.readFileSync(${JSON.stringify(f.attempt)},"utf8"));const report=JSON.parse(fs.readFileSync(${JSON.stringify(f.promise)},"utf8"));const record=JSON.parse(fs.readFileSync(${JSON.stringify(f.verification)},"utf8"));runtime.assertWorkerCompletionAuthorized(attempt,report,record,attempt.requiredVerification);`;
+    expect(() => execFileSync(process.execPath, ["-e", script])).not.toThrow();
+  });
   it("rejects another project before push", () => { const f = fixture(); expect(() => runGuardedPush({ ...f.args, projectId: "other" }, f.ops)).toThrow("project"); });
   it("rejects another repository before push", () => { const f = fixture(); expect(() => runGuardedPush({ ...f.args, githubRepo: "other/repo" }, f.ops)).toThrow("repository"); });
   it("rejects another branch before push", () => { const f = fixture(); expect(() => runGuardedPush({ ...f.args, branch: "agent/issue-2" }, f.ops)).toThrow("branch"); });

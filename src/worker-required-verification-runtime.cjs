@@ -1,9 +1,11 @@
 const childProcess = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { isDeepStrictEqual } = require("node:util");
 const WORKER_REQUIRED_VERIFICATION_FILE = "required-verification.json";
 const authenticatedRecords = new WeakSet();
+const HOST_VERIFICATION_EVIDENCE_DIRECTORY = "required-verification-evidence";
 function nonEmpty(value) { return typeof value === "string" && Boolean(value.trim()); }
 function validSha(value) { return nonEmpty(value) && /^[0-9a-f]{40}$/i.test(value); }
 function assertContract(value) {
@@ -23,6 +25,55 @@ function cleanWorkerOutput(worktree, outputRevision) {
   return !git(worktree, ["status", "--porcelain", "--untracked-files=all", "--", ".",
     ":(exclude).deadloop", ":(exclude).deadloop/**", ":(exclude).pi-subagents", ":(exclude).pi-subagents/**"]);
 }
+function fsyncDirectory(directory) { const descriptor = fs.openSync(directory, "r"); try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); } }
+function durableWriteJson(file, value) {
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  const descriptor = fs.openSync(temporary, "wx", 0o600);
+  try { fs.writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, "utf8"); fs.fsyncSync(descriptor); }
+  finally { fs.closeSync(descriptor); }
+  fs.renameSync(temporary, file); fsyncDirectory(path.dirname(file));
+}
+function durableWriteLog(file, contents) {
+  const descriptor = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  try { fs.writeFileSync(descriptor, contents, "utf8"); fs.fsyncSync(descriptor); }
+  finally { fs.closeSync(descriptor); }
+  fsyncDirectory(path.dirname(file));
+}
+function hostEvidenceDirectory(runDir) {
+  const stateDir = path.dirname(path.dirname(runDir));
+  const attemptKey = crypto.createHash("sha256").update(path.resolve(runDir)).digest("hex");
+  return path.join(stateDir, HOST_VERIFICATION_EVIDENCE_DIRECTORY, attemptKey);
+}
+function executeAndRecordGateVerification(file, attempt, outputRevision) {
+  const runDir = path.dirname(file); const stateDir = path.dirname(path.dirname(runDir));
+  const evidenceDir = hostEvidenceDirectory(runDir); fs.mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
+  const executionId = crypto.randomUUID(); const logPath = path.join(evidenceDir, `${executionId}.log`); const recordPath = path.join(evidenceDir, `${executionId}.json`);
+  const script = path.join(__dirname, "../extensions/deadloop/automations/run-project-check.ts"); const started = Date.now();
+  const result = childProcess.spawnSync(process.execPath, [script,
+    "--cwd", attempt.worktreePath, "--timeout-ms", String(10 * 60_000),
+    "--command", attempt.requiredVerification.command,
+    "--quarantine-root", path.join(stateDir, "check-quarantine"),
+  ], { encoding: "utf8", timeout: 11 * 60_000, killSignal: "SIGKILL" });
+  let outputFailure;
+  try { if (!cleanWorkerOutput(attempt.worktreePath, outputRevision)) throw new Error("fresh required verification output binding failed"); }
+  catch (error) { outputFailure = error; }
+  const timedOut = result.status === 124 || (result.error && "code" in result.error && result.error.code === "ETIMEDOUT");
+  const outcome = timedOut ? "timed_out" : result.status === 0 && !result.error && !outputFailure ? "passed" : "failed";
+  const terminationReason = timedOut ? "timeout" : result.error ? "runner_failure" : outputFailure ? "output_not_clean" : result.signal ? "signal" : undefined;
+  const runnerEvidence = result.error ? `required verification runner failed: ${result.error.message}\n` : "";
+  const outputEvidence = outputFailure ? `required verification post-check binding failed: ${outputFailure.message}\n` : "";
+  durableWriteLog(logPath, `${result.stdout || ""}${result.stderr || ""}${runnerEvidence}${outputEvidence}`);
+  const record = {
+    version: 1, binding: requiredVerificationBinding(attempt.requiredVerification, outputRevision), outcome,
+    exitCode: timedOut || result.error ? null : result.status, ...(terminationReason ? { terminationReason } : {}),
+    ...(result.signal ? { terminationSignal: result.signal } : {}), startedAt: new Date(started).toISOString(),
+    durationMs: Math.max(0, Date.now() - started), logPath,
+    provenance: { kind: "host_gate_execution", recordPath },
+  };
+  durableWriteJson(recordPath, record); writeRequiredVerificationRecord(file, record); authenticatedRecords.add(record);
+  if (outcome !== "passed") throw new Error(String(result.stderr || result.stdout || result.error?.message || outputFailure?.message || "fresh required verification failed").trim());
+  return record;
+}
 function readRequiredVerificationRecord(file) {
   let persisted;
   try { persisted = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return undefined; }
@@ -39,24 +90,7 @@ function readRequiredVerificationRecord(file) {
   if (!validSha(outputRevision) || !attempt?.requiredVerification || !cleanWorkerOutput(attempt.worktreePath, outputRevision)) {
     throw new Error("fresh required verification output binding failed");
   }
-  const stateDir = path.dirname(path.dirname(runDir));
-  const script = path.join(__dirname, "../extensions/deadloop/automations/run-project-check.ts");
-  const started = Date.now();
-  const result = childProcess.spawnSync(process.execPath, [script,
-    "--cwd", attempt.worktreePath, "--timeout-ms", String(10 * 60_000),
-    "--command", attempt.requiredVerification.command,
-    "--quarantine-root", path.join(stateDir, "check-quarantine"),
-  ], { encoding: "utf8", timeout: 11 * 60_000, killSignal: "SIGKILL" });
-  if (result.status !== 0 || !cleanWorkerOutput(attempt.worktreePath, outputRevision)) {
-    throw new Error(String(result.stderr || result.stdout || "fresh required verification failed").trim());
-  }
-  const record = {
-    version: 1, binding: requiredVerificationBinding(attempt.requiredVerification, outputRevision),
-    outcome: "passed", exitCode: 0, startedAt: new Date(started).toISOString(),
-    durationMs: Math.max(0, Date.now() - started), logPath: persisted.logPath,
-  };
-  authenticatedRecords.add(record);
-  return record;
+  return executeAndRecordGateVerification(file, attempt, outputRevision);
 }
 function writeRequiredVerificationRecord(file, record) { fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); const temporary = `${file}.${process.pid}.tmp`; fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 }); fs.renameSync(temporary, file); }
 function git(repoPath, args) { const result = childProcess.spawnSync("git", ["-C", repoPath, ...args], { encoding: "utf8", timeout: 30000 }); if (result.status !== 0) throw new Error(String(result.stderr || result.stdout || "git command failed").trim()); return String(result.stdout || "").trim(); }
@@ -142,7 +176,20 @@ function assertWorkerCompletionAuthorized(attempt, report, record, currentContra
   if (!nonEmpty(record.startedAt) || !Number.isFinite(record.durationMs) || record.durationMs < 0 || !nonEmpty(record.logPath)) throw new Error("required verification record is invalid");
   if (record.outcome !== "passed" || record.exitCode !== 0) throw new Error("required verification record did not pass");
   if (!isDeepStrictEqual(record.binding, requiredVerificationBinding(attempt.requiredVerification, report.result.outputRevision))) throw new Error("required verification record does not match the Worker output commit and fixed contract");
-  if (!authenticatedRecords.has(record)) throw new Error("required verification host execution authenticity is missing");
+  if (!authenticatedRecords.has(record)) {
+    const provenance = record.provenance;
+    if (!provenance || provenance.kind !== "host_gate_execution" || !nonEmpty(provenance.recordPath) || !nonEmpty(attempt.promiseFile)) {
+      throw new Error("required verification host execution authenticity is missing");
+    }
+    const expectedDirectory = hostEvidenceDirectory(path.dirname(attempt.promiseFile));
+    if (path.dirname(provenance.recordPath) !== expectedDirectory) throw new Error("required verification host execution authenticity is missing");
+    let persisted; let stat;
+    try { stat = fs.lstatSync(provenance.recordPath); persisted = JSON.parse(fs.readFileSync(provenance.recordPath, "utf8")); }
+    catch { throw new Error("required verification host execution authenticity is missing"); }
+    if (!stat.isFile() || stat.isSymbolicLink() || !isDeepStrictEqual(persisted, record)) {
+      throw new Error("required verification host execution authenticity is missing");
+    }
+  }
   return { outputRevision: report.result.outputRevision, record };
 }
 module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertWorkerCompletionAuthorized, readRequiredVerificationRecord, requiredVerificationBinding, workerRequiredVerificationPath, writeRequiredVerificationRecord };

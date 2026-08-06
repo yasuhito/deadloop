@@ -19,6 +19,7 @@ export type RequiredVerificationRecord = {
   startedAt: string;
   durationMs: number;
   logPath: string;
+  provenance?: { kind: "host_gate_execution"; recordPath: string };
   artifactRestorationFailure?: { message: string; quarantinePath: string };
   restorationFailureRecordPath?: string;
 };
