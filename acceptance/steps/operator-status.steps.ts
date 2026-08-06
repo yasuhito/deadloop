@@ -64,19 +64,19 @@ function runDriverFixture(target: StoppedTarget): string {
   return JSON.parse(result.stdout).comment;
 }
 
-Given("実装待ちの Issue がない", function (this: OperatorStatusWorld) {
+Given("There is no Issue waiting for implementation.", function (this: OperatorStatusWorld) {
   this.statusInput = { ...baseStatusInput(), issues: [] };
 });
 
-Given("Issue #13 が実装中である", function (this: OperatorStatusWorld) {
+Given("Issue #13 is being implemented", function (this: OperatorStatusWorld) {
   this.statusInput = { ...baseStatusInput(), issues: fixture.issues };
 });
 
-Given("pull request #21 がレビュー待ちである", function (this: OperatorStatusWorld) {
+Given("pull request #21 is waiting for review", function (this: OperatorStatusWorld) {
   this.statusInput = { ...baseStatusInput(), openPrs: fixture.openPrs };
 });
 
-Given("マージ済み pull request #20 の作業場所が残っている", function (this: OperatorStatusWorld) {
+Given("Worktree remains for merged pull request #20", function (this: OperatorStatusWorld) {
   this.statusInput = {
     ...baseStatusInput(),
     closedPrs: fixture.closedPrs,
@@ -86,110 +86,110 @@ Given("マージ済み pull request #20 の作業場所が残っている", func
   };
 });
 
-Given("実装中の Issue #13 の作業場所が稼働している", function (this: OperatorStatusWorld) {
+Given("Worktree of Issue #13 in progress is up and running", function (this: OperatorStatusWorld) {
   this.statusInput = { ...baseStatusInput(), worktrees: [fixture.worktrees[1]] };
 });
 
-Given("deadloop 拡張のコード更新が状態表示に反映されていない", function (this: OperatorStatusWorld) {
+Given("deadloop Extension code update not reflected in status display", function (this: OperatorStatusWorld) {
   this.statusInput = { ...baseStatusInput(), warnings: [EXTENSION_CODE_CHANGED_WARNING] };
 });
 
-Given("自動化が直近の実行で Issue #12 を選んでいる", function (this: OperatorStatusWorld) {
+Given("Automation selected Issue #12 in most recent run", function (this: OperatorStatusWorld) {
   this.statusInput = { ...baseStatusInput(), state: fixture.state };
 });
 
 Given(
-  "ローカル設定の場所が不明で、リポジトリ設定を origin\\/main の deadloop.json から読む設定である",
+  "The location of the local configuration is unknown, and the repository configuration is read from deadloop.json in origin\\/main.",
   function (this: OperatorStatusWorld) {
     this.statusInput = baseStatusInput();
   },
 );
 
-When("オペレーターが deadloop の状態を表示する", function (this: OperatorStatusWorld) {
+When("The operator requests deadloop status", function (this: OperatorStatusWorld) {
   if (!this.statusInput) throw new Error("status input is required");
   this.report = statusReport(this.statusInput);
 });
 
-Then("実装待ちの Issue はないと表示される", function (this: OperatorStatusWorld) {
+Then("Status reports that no Issue is waiting for implementation", function (this: OperatorStatusWorld) {
   assert.match(this.report || "", /- eligible: none/);
 });
 
-Then("対象の Issue が表示される", function (this: OperatorStatusWorld) {
+Then("Status shows the target Issue", function (this: OperatorStatusWorld) {
   assert.match(this.report || "", /- in-progress: #13 Add deadloop status report/);
 });
 
-Then("レビュー対象の pull request が表示される", function (this: OperatorStatusWorld) {
+Then("Status shows the pull request awaiting review", function (this: OperatorStatusWorld) {
   assert.match(this.report || "", /- review target: #21 Add status report/);
 });
 
-Then("片付け候補の作業場所が表示される", function (this: OperatorStatusWorld) {
+Then("Status shows cleanup-candidate worktrees", function (this: OperatorStatusWorld) {
   assert.match(this.report || "", /#20 agent\/issue-12-old -> .*\(workspace-20; merged_pr\)/);
 });
 
-Then("稼働中の作業場所が表示される", function (this: OperatorStatusWorld) {
+Then("Status displays active worktrees", function (this: OperatorStatusWorld) {
   assert.match(this.report || "", /agent\/issue-13-add-deadloop-status-report -> .*\(workspace-13\)/);
 });
 
-Then("コード更新の警告が表示される", function (this: OperatorStatusWorld) {
+Then("Status shows the code-update warning", function (this: OperatorStatusWorld) {
   assert.match(this.report || "", new RegExp(EXTENSION_CODE_CHANGED_WARNING));
 });
 
-Then("自動化の直近の判断が表示される", function (this: OperatorStatusWorld) {
+Then("Status shows the most recent automation decision", function (this: OperatorStatusWorld) {
   assert.match(this.report || "", /summary=driver selected Issue #12/);
 });
 
-Then("設定元が表示される", function (this: OperatorStatusWorld) {
+Then("Status shows the configuration source", function (this: OperatorStatusWorld) {
   assert.match(this.report || "", /config: local=unknown local projects\.json; repoPolicy=origin\/main:deadloop\.json \(not-read\)/);
 });
 
 Given(
-  "PRD、設計、または親課題に相当する Issue #11 が実装待ちである",
+  "Issue #11, representing a PRD, design, or parent task, is awaiting implementation.",
   function (this: OperatorStatusWorld) {
     this.stoppedTarget = "issue";
   },
 );
 
-When("deadloop が停止コメントを作成する", function (this: OperatorStatusWorld) {
+When("deadloop creates the blocking comment", function (this: OperatorStatusWorld) {
   if (!this.stoppedTarget) throw new Error("stopped target is required");
   this.blockedComment = runDriverFixture(this.stoppedTarget);
 });
 
-Then("停止コメントに理由が表示される", function (this: OperatorStatusWorld) {
+Then("The blocking comment shows the reason", function (this: OperatorStatusWorld) {
   assert.match(this.blockedComment || "", /Skipped automated implementation because this looks like a PRD, design, or parent issue/);
 });
 
-Then("停止コメントに復旧手順が表示される", function (this: OperatorStatusWorld) {
+Then("The blocking comment shows recovery steps", function (this: OperatorStatusWorld) {
   assert.match(this.blockedComment || "", /## Recovery steps/);
 });
 
-Then("停止コメントに安全な再投入方法が表示される", function (this: OperatorStatusWorld) {
+Then("The blocking comment shows a safe requeue method", function (this: OperatorStatusWorld) {
   assert.match(
     this.blockedComment || "",
     /implementable_issue_number=123\ngh issue edit "\$implementable_issue_number" -R owner\/repo --remove-label agent:blocked --add-label ready-for-agent --add-label agent:implement/,
   );
 });
 
-Given("pull request #23 が下書きでレビュー待ちである", function (this: OperatorStatusWorld) {
+Given("pull request #23 is a draft and waiting for review.", function (this: OperatorStatusWorld) {
   this.stoppedTarget = "pull-request";
 });
 
-Then("pull request の停止コメントに理由が表示される", function (this: OperatorStatusWorld) {
+Then("The pull request blocking comment shows the reason", function (this: OperatorStatusWorld) {
   assert.match(this.blockedComment || "", /Skipped automated review and auto-merge because the PR is a draft/);
 });
 
-Then("pull request の停止コメントに復旧手順が表示される", function (this: OperatorStatusWorld) {
+Then("The blocking comment shows recovery steps of pull request", function (this: OperatorStatusWorld) {
   assert.match(this.blockedComment || "", /## Recovery steps/);
 });
 
-Then("pull request の停止コメントに安全な再投入方法が表示される", function (this: OperatorStatusWorld) {
+Then("The pull request blocking comment shows a safe requeue method", function (this: OperatorStatusWorld) {
   assert.match(this.blockedComment || "", /gh issue edit <issueNumber> -R owner\/repo --remove-label agent:blocked --add-label agent:implement/);
 });
 
-Given("deadloop 拡張を起動できる", function (this: OperatorStatusWorld) {
+Given("The deadloop extension can start", function (this: OperatorStatusWorld) {
   this.commands = [];
 });
 
-When("deadloop 拡張が公開コマンドを登録する", function (this: OperatorStatusWorld) {
+When("The deadloop extension registers public commands", function (this: OperatorStatusWorld) {
   const extension = require("../../extensions/deadloop/index.ts").default;
   extension({
     registerCommand: (name: string) => this.commands?.push(name),
@@ -197,6 +197,6 @@ When("deadloop 拡張が公開コマンドを登録する", function (this: Oper
   });
 });
 
-Then("`\\/deadloop-status` が利用できる", function (this: OperatorStatusWorld) {
+Then("`\\/deadloop-status` is available", function (this: OperatorStatusWorld) {
   assert.ok(this.commands?.includes("deadloop-status"));
 });

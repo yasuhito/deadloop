@@ -141,21 +141,21 @@ function temporaryRoot(world: SafetyWorld, prefix: string): string {
   return root;
 }
 
-Given("更新前に確認した pull request head がある", function (this: SafetyWorld) {
+Given("The pull request head was verified before the update", function (this: SafetyWorld) {
   this.actualHead = head;
   this.crossRepository = false;
 });
 
-When("自動チェック後に pull request head が変わる", function (this: SafetyWorld) {
+When("The pull request head changes after the project check", function (this: SafetyWorld) {
   this.changeHeadAfterChecks = true;
   finalize(this);
 });
 
-Given("pull request が別リポジトリから作られている", function (this: SafetyWorld) {
+Given("The pull request comes from another repository", function (this: SafetyWorld) {
   this.crossRepository = true;
 });
 
-When("自動チェック後に作業場所へ追跡中の変更が生じる", function (this: SafetyWorld) {
+When("Tracked changes appear in the worktree after the project check", function (this: SafetyWorld) {
   this.trackedChangesAfterChecks = true;
   try {
     finalize(this);
@@ -165,7 +165,7 @@ When("自動チェック後に作業場所へ追跡中の変更が生じる", fu
   }
 });
 
-When("deadloop が branch 更新を完了しようとする", function (this: SafetyWorld) {
+When("deadloop attempts to complete the branch update", function (this: SafetyWorld) {
   try {
     finalize(this);
   } catch (error) {
@@ -174,15 +174,15 @@ When("deadloop が branch 更新を完了しようとする", function (this: Sa
   }
 });
 
-Then("branch への push は行われない", function (this: SafetyWorld) {
+Then("The branch is not pushed", function (this: SafetyWorld) {
   assert.deepEqual(pushCommands(this), []);
 });
 
-Then("完了結果は古い head として観測される", function (this: SafetyWorld) {
+Then("The completion result reports a stale head", function (this: SafetyWorld) {
   assert.equal(this.finalizeResult?.action, "stale_head");
 });
 
-Given("作業場所の信頼が承認されていない", function (this: SafetyWorld) {
+Given("The worktree has not been trusted", function (this: SafetyWorld) {
   this.trustRoot = temporaryRoot(this, "deadloop-untrusted-");
   const binDir = path.join(this.trustRoot, "bin");
   this.trustLaunchMarker = path.join(this.trustRoot, "herdr-started");
@@ -201,7 +201,7 @@ else require("node:fs").writeFileSync(${JSON.stringify(this.trustLaunchMarker)},
   );
 });
 
-When("deadloop が Claude の作業エージェントを起動しようとする", function (this: SafetyWorld) {
+When("deadloop attempts to start a Claude work agent", function (this: SafetyWorld) {
   if (!this.trustRoot) throw new Error("trust precondition is missing");
   spawnSync(
     "node",
@@ -230,15 +230,15 @@ When("deadloop が Claude の作業エージェントを起動しようとする
   );
 });
 
-Then("作業エージェントは起動されない", function (this: SafetyWorld) {
+Then("The work agent is not started", function (this: SafetyWorld) {
   assert.equal(fs.existsSync(this.trustLaunchMarker ?? ""), false);
 });
 
-Then("選択された branch だけが push の対象になる", function (this: SafetyWorld) {
+Then("Only the selected branch is pushed", function (this: SafetyWorld) {
   assert.deepEqual(pushTargets(this), [[pushUrl, `${candidate}:refs/heads/${branch}`]]);
 });
 
-Then("branch は強制せずに push される", function (this: SafetyWorld) {
+Then("The branch is pushed without force", function (this: SafetyWorld) {
   assert.deepEqual(successfulPushForceOptions(this), [[]]);
 });
 

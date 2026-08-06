@@ -1,34 +1,34 @@
-# 機能: 完了して安全に片付けられる作業場所だけを選ぶ
+# Feature: Select only completed worktrees that are safe to clean up
 
-実行基盤は、完了した作業場所だけを片付け候補にし、変更中または確認できない作業場所を保全する。
-これにより、deadloop は別の作業や未完了の pull request を誤って削除しない。
+The runner selects only completed worktrees as cleanup candidates and preserves worktrees that have changes or cannot be verified.
+This prevents deadloop from accidentally deleting another task or an unfinished pull request.
 
-## シナリオ: マージ済みで変更のない作業場所は片付け候補になる
+## Scenario: Select a clean worktree for a merged pull request as a cleanup candidate
 
-* 前提 マージ済みで変更のない deadloop の作業場所がある
-* もし deadloop が片付けを開始する
-* ならば その作業場所は片付け候補になる
+* Given A deadloop worktree is merged and clean
+* When deadloop starts cleanup
+* Then The worktree is selected as a cleanup candidate
 
-## シナリオ: 変更中の作業場所は片付け候補にならない
+## Scenario: Do not select a worktree with changes as a cleanup candidate
 
-* 前提 変更中のマージ済み deadloop 作業場所がある
-* もし deadloop が片付けを開始する
-* ならば その作業場所は片付け候補にならない
+* Given A merged deadloop worktree has changes
+* When deadloop starts cleanup
+* Then The worktree is not selected as a cleanup candidate
 
-## シナリオ: Git 管理ファイルは片付け後も残る
+## Scenario: Preserve a tracked file during cleanup
 
-* 前提 Git 管理ファイルを含むマージ済み deadloop 作業場所がある
-* もし deadloop が片付けを開始する
-* ならば その作業場所の Git 管理ファイルは残る
+* Given A merged deadloop worktree contains a tracked file
+* When deadloop starts cleanup
+* Then The tracked file remains in the worktree
 
-## シナリオ: 別のリポジトリの作業場所は片付け候補にならない
+## Scenario: Do not select a worktree from another repository as a cleanup candidate
 
-* 前提 別のリポジトリにあるマージ済み deadloop 作業場所がある
-* もし deadloop が片付けを開始する
-* ならば その作業場所は片付け候補にならない
+* Given A merged deadloop worktree belongs to another repository
+* When deadloop starts cleanup
+* Then The worktree is not selected as a cleanup candidate
 
-## シナリオ: 未マージの pull request の作業場所は片付け候補にならない
+## Scenario: Do not select the worktree of an unmerged pull request as a cleanup candidate
 
-* 前提 未マージの pull request に対応する deadloop 作業場所がある
-* もし deadloop が片付けを開始する
-* ならば その作業場所は片付け候補にならない
+* Given A deadloop worktree belongs to an unmerged pull request
+* When deadloop starts cleanup
+* Then The worktree is not selected as a cleanup candidate

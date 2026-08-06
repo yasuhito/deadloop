@@ -113,7 +113,7 @@ function discoveredPickleIdentities(cwd: string): Set<string> {
           file,
           SourceMediaType.TEXT_X_CUCUMBER_GHERKIN_MARKDOWN,
           {
-            defaultDialect: "ja",
+            defaultDialect: "en",
             includeGherkinDocument: false,
             includePickles: true,
             includeSource: false,

@@ -1,51 +1,51 @@
-# 機能: 必須検証契約を既存設定と並存させて表示する
+# Feature: Show the required verification contract alongside existing configuration
 
-利用者は、既存の検証文字列を使う経路を残したまま、ローカル設定と信頼済み共有方針から解決された必須検証契約または停止理由を確認できる。
+Users can keep existing string-based verification paths while seeing the required verification contract resolved from local configuration and trusted shared policy, or the reason it is blocked.
 
-## シナリオ: ローカルの必須検証は共有方針より優先される
+## Scenario: Local required verification takes precedence over shared policy
 
-* 前提 ローカルに `npm run local-check`、共有方針に `npm run shared-check` がある
-* もし 必須検証を解決する
-* ならば 実効コマンドは `npm run local-check` である
+* Given Local configuration has `npm run local-check` and shared policy has `npm run shared-check`
+* When required verification is resolved
+* Then The effective command is `npm run local-check`
 
-## シナリオ: ローカル値と共有値の違いは上書きとして示される
+## Scenario: Report differing local and shared values as an override
 
-* 前提 ローカルに `npm run local-check`、共有方針に `npm run shared-check` がある
-* もし 必須検証を解決する
-* ならば 共有方針の値は上書き情報に残る
+* Given Local configuration has `npm run local-check` and shared policy has `npm run shared-check`
+* When required verification is resolved
+* Then The shared-policy value remains in the override information
 
-## シナリオ: 同じ優先順位の異なる値は衝突になる
+## Scenario: Treat different values at the same precedence as a conflict
 
-* 前提 同じローカル優先順位に異なる必須検証がある
-* もし 必須検証を解決する
-* ならば 停止理由は `source_conflict` である
+* Given The same local precedence contains different required verification values
+* When required verification is resolved
+* Then The blocked reason is `source_conflict`
 
-## シナリオ: 情報源がない場合は停止する
+## Scenario: Block when no source is available
 
-* 前提 必須検証の情報源がない
-* もし 必須検証を解決する
-* ならば 停止理由は `no_source` である
+* Given No required verification source is available
+* When required verification is resolved
+* Then The blocked reason is `no_source`
 
-## シナリオ: 空の明示コマンドは実行対象なしとして停止する
+## Scenario: Block an explicitly empty command because it has no target
 
-* 前提 共有方針に空の必須検証がある
-* もし 必須検証を解決する
-* ならば 停止理由は `zero_targets` である
+* Given Shared policy contains an empty required verification command
+* When required verification is resolved
+* Then The blocked reason is `zero_targets`
 
-## シナリオ: 空でない明示コマンドは内容を推測して拒否しない
+## Scenario: Do not infer and reject the contents of a nonempty explicit command
 
-* 前提 共有方針に `true` がある
-* もし 必須検証を解決する
-* ならば 実効コマンドは `true` である
+* Given Shared policy contains `true`
+* When required verification is resolved
+* Then The effective command is `true`
 
-## シナリオ: 解決結果は契約の結び付きを保持する
+## Scenario: Preserve the contract binding in the resolution
 
-* 前提 共有方針に `npm run check` がある
-* もし 必須検証を解決する
-* ならば 解決結果はコマンド、情報源、基準コミット、リポジトリを含む
+* Given Shared policy contains `npm run check`
+* When required verification is resolved
+* Then The resolution includes the command, source, base revision, and repository
 
-## シナリオ: サブディレクトリからの状態表示と doctor は同じ解決結果を示す
+## Scenario: Status and doctor show the same resolution from a repository subdirectory
 
-* 前提 共有方針に `npm run check` がある
-* もし リポジトリのサブディレクトリから状態表示と doctor を要求する
-* ならば 両方の必須検証表示は同じである
+* Given Shared policy contains `npm run check`
+* When Status and doctor are requested from a repository subdirectory
+* Then Both required verification displays are identical

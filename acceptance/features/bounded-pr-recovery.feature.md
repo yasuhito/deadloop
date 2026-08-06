@@ -1,183 +1,183 @@
-# 機能: pull request の自動修正と競合回復を一回に制限する
+# Feature: Bound automatic pull request repair and conflict recovery to one attempt
 
-レビューで見つかった修正や競合を安全に処理し、同じ変更を繰り返したり別の変更を上書きしたりしないことを保証する。
+Handle review findings and conflicts safely without repeating the same change or overwriting another change.
 
-## シナリオ: 競合した pull request は一度だけ専用の回復作業を開始する
+## Scenario: Start one dedicated conflict-recovery attempt for a conflicted pull request
 
-* 前提 回復できる競合状態の pull request がある
-* もし deadloop が pull request を確認する
-* ならば deadloop は専用の競合回復作業を開始する
+* Given A pull request has a conflict that can be recovered
+* When deadloop checks the pull request
+* Then deadloop starts a dedicated conflict-recovery attempt
 
-## シナリオ: 同じ pull request head と base の競合回復は二度開始しない
+## Scenario: Do not start conflict recovery twice for the same pull request head and base
 
-* 前提 同じ pull request head と base の競合回復を一度試した pull request がある
-* もし deadloop が pull request を確認する
-* ならば deadloop は専用の競合回復作業を開始しない
+* Given Conflict recovery was already attempted for the same pull request head and base
+* When deadloop checks the pull request
+* Then deadloop does not start another dedicated conflict-recovery attempt
 
-## シナリオ: 同じ pull request head と base の競合回復を再試行してもレビュー対象に残す
+## Scenario: Keep the pull request under review after a repeated conflict-recovery request
 
-* 前提 同じ pull request head と base の競合回復を一度試した pull request がある
-* もし deadloop が pull request を確認する
-* ならば deadloop はレビュー対象に残す
+* Given Conflict recovery was already attempted for the same pull request head and base
+* When deadloop checks the pull request
+* Then deadloop keeps the pull request under review
 
-## シナリオ: 同じ pull request head と base の競合回復を再試行すると人間対応へ移る
+## Scenario: Escalate a repeated conflict-recovery request for human handling
 
-* 前提 同じ pull request head と base の競合回復を一度試した pull request がある
-* もし deadloop が pull request を確認する
-* ならば deadloop は人間対応へ移す
+* Given Conflict recovery was already attempted for the same pull request head and base
+* When deadloop checks the pull request
+* Then deadloop escalates the pull request for human handling
 
-## シナリオ: 同じ pull request head と base の競合回復を再試行すると回復案内を残す
+## Scenario: Leave recovery guidance after a repeated conflict-recovery request
 
-* 前提 同じ pull request head と base の競合回復を一度試した pull request がある
-* もし deadloop が pull request を確認する
-* ならば deadloop は回復案内を残す
+* Given Conflict recovery was already attempted for the same pull request head and base
+* When deadloop checks the pull request
+* Then deadloop leaves recovery guidance
 
-## シナリオ: 競合回復で head が変わった pull request は通常レビューへ戻る
+## Scenario: Return a pull request with a conflict-recovery head update to normal review
 
-* 前提 競合回復で head が変わった pull request がある
-* もし deadloop が pull request を確認する
-* ならば deadloop は通常レビューを開始する
+* Given Conflict recovery changed the pull request head
+* When deadloop checks the pull request
+* Then deadloop returns the pull request to normal review
 
-## シナリオ: 競合回復中もレビュー状態を維持する
+## Scenario: Preserve review state during conflict recovery
 
-* 前提 回復できる競合状態の pull request がある
-* もし deadloop が pull request を確認する
-* ならば deadloop はレビュー状態を維持する
+* Given A pull request has a conflict that can be recovered
+* When deadloop checks the pull request
+* Then deadloop preserves the review state
 
-## シナリオ: 最初のレビュー指摘は専用の修正作業を開始する
+## Scenario: Start a dedicated repair attempt for the first actionable review findings
 
-* 前提 初めての対応可能なレビュー指摘がある pull request がある
-* もし deadloop がレビュー結果を処理する
-* ならば deadloop は専用の修正作業を開始する
+* Given A pull request has actionable review findings for the first time
+* When deadloop processes the review result
+* Then deadloop starts a dedicated repair attempt
 
-## シナリオ: 修正中もレビュー状態を維持する
+## Scenario: Preserve review state during repair
 
-* 前提 レビュー指摘の修正中である pull request がある
-* もし deadloop がレビュー指摘の修正を開始する
-* ならば deadloop はレビュー状態を維持する
+* Given A pull request is being repaired for review findings
+* When deadloop starts the review repair
+* Then deadloop preserves the review state
 
-## シナリオ: 修正の push で head が変わった pull request は通常レビューへ戻る
+## Scenario: Return a pull request with a repaired head to normal review
 
-* 前提 修正の push で head が変わった pull request がある
-* もし deadloop が pull request を確認する
-* ならば deadloop は通常レビューを開始する
+* Given A repair push changed the pull request head
+* When deadloop checks the pull request
+* Then deadloop returns the pull request to normal review
 
-## シナリオ: 修正後の新しい head では同じレビュー指摘の修正を二度開始しない
+## Scenario: Do not start the same repair twice on the new head
 
-* 前提 修正後の新しい head でも同じレビュー指摘が残った pull request がある
-* もし deadloop がレビュー結果を処理する
-* ならば deadloop は専用の修正作業を開始しない
+* Given The same review findings remain on the new head after repair
+* When deadloop processes the review result
+* Then deadloop does not start another dedicated repair attempt
 
-## シナリオ: 修正後の新しい head で同じレビュー指摘が残ってもレビュー対象に残す
+## Scenario: Keep the new head under review when the same findings remain after repair
 
-* 前提 修正後の新しい head でも同じレビュー指摘が残った pull request がある
-* もし deadloop がレビュー結果を処理する
-* ならば deadloop はレビュー対象に残す
+* Given The same review findings remain on the new head after repair
+* When deadloop processes the review result
+* Then deadloop keeps the pull request under review
 
-## シナリオ: 修正後の新しい head で同じレビュー指摘が残ると人間対応へ移る
+## Scenario: Escalate the new head for human handling when the same findings remain after repair
 
-* 前提 修正後の新しい head でも同じレビュー指摘が残った pull request がある
-* もし deadloop がレビュー結果を処理する
-* ならば deadloop は人間対応へ移す
+* Given The same review findings remain on the new head after repair
+* When deadloop processes the review result
+* Then deadloop escalates the pull request for human handling
 
-## シナリオ: 修正後の新しい head で同じレビュー指摘が残ると回復案内を残す
+## Scenario: Leave recovery guidance when the same findings remain after repair
 
-* 前提 修正後の新しい head でも同じレビュー指摘が残った pull request がある
-* もし deadloop がレビュー結果を処理する
-* ならば deadloop は回復案内を残す
+* Given The same review findings remain on the new head after repair
+* When deadloop processes the review result
+* Then deadloop leaves recovery guidance
 
-## シナリオ: 最初の技術的なレビュー失敗は一度だけ再試行する
+## Scenario: Retry the first technical review failure exactly once
 
-* 前提 初めて技術的に失敗したレビューがある pull request がある
-* もし deadloop がレビュー結果を処理する
-* ならば deadloop はレビューを一度だけ再試行する
+* Given A pull request has its first technical review failure
+* When deadloop processes the review result
+* Then deadloop retries the review exactly once
 
-## シナリオ: 最初の技術的なレビュー失敗では人間対応にしない
+## Scenario: Do not escalate the first technical review failure for human handling
 
-* 前提 初めて技術的に失敗したレビューがある pull request がある
-* もし deadloop がレビュー結果を処理する
-* ならば deadloop は人間対応にしない
+* Given A pull request has its first technical review failure
+* When deadloop processes the review result
+* Then deadloop does not escalate the pull request for human handling
 
-## シナリオ: 二度目の技術的なレビュー失敗は再試行しない
+## Scenario: Do not retry a second technical review failure
 
-* 前提 技術的に一度失敗したレビューがある pull request がある
-* もし deadloop がレビュー結果を処理する
-* ならば deadloop は通常レビューを開始しない
+* Given A pull request already had one technical review failure
+* When deadloop processes the review result
+* Then deadloop does not start normal review
 
-## シナリオ: 二度目の技術的なレビュー失敗後もレビュー対象に残す
+## Scenario: Keep the pull request under review after a second technical review failure
 
-* 前提 技術的に一度失敗したレビューがある pull request がある
-* もし deadloop がレビュー結果を処理する
-* ならば deadloop はレビュー対象に残す
+* Given A pull request already had one technical review failure
+* When deadloop processes the review result
+* Then deadloop keeps the pull request under review
 
-## シナリオ: 二度目の技術的なレビュー失敗は人間対応へ移る
+## Scenario: Escalate a second technical review failure for human handling
 
-* 前提 技術的に一度失敗したレビューがある pull request がある
-* もし deadloop がレビュー結果を処理する
-* ならば deadloop は人間対応へ移す
+* Given A pull request already had one technical review failure
+* When deadloop processes the review result
+* Then deadloop escalates the pull request for human handling
 
-## シナリオ: 二度目の技術的なレビュー失敗は回復案内を残す
+## Scenario: Leave recovery guidance after a second technical review failure
 
-* 前提 技術的に一度失敗したレビューがある pull request がある
-* もし deadloop がレビュー結果を処理する
-* ならば deadloop は回復案内を残す
+* Given A pull request already had one technical review failure
+* When deadloop processes the review result
+* Then deadloop leaves recovery guidance
 
-## シナリオ: 古い pull request head の修正は push しない
+## Scenario: Do not push a repair for a stale pull request head
 
-* 前提 修正対象の pull request head が確認済みである
-* もし push の直前に pull request head が変わる
-* ならば deadloop は branch へ push しない
+* Given The pull request head selected for repair has been verified
+* When The pull request head changes immediately before push
+* Then deadloop does not push to the branch
 
-## シナリオ: 指摘数に対して変更ファイルが多すぎる修正は push しない
+## Scenario: Do not push a repair that changes too many files for its findings
 
-* 前提 一件の指摘に対して六ファイルを変更した修正がある
-* もし deadloop が修正を完了する
-* ならば deadloop は branch へ push しない
+* Given A repair changes six files for one finding
+* When deadloop completes the repair
+* Then deadloop does not push to the branch
 
-## シナリオ: 指摘数に対して変更ファイルが多すぎる修正は人へ引き渡す
+## Scenario: Hand a repair that changes too many files to a human
 
-* 前提 一件の指摘に対して六ファイルを変更した修正がある
-* もし deadloop が修正を完了する
-* ならば deadloop は修正に人の確認が必要と判定する
+* Given A repair changes six files for one finding
+* When deadloop completes the repair
+* Then deadloop requires human review for the repair
 
-## シナリオ: 変更ファイル数が上限内の修正は push する
+## Scenario: Push a repair whose changed-file count is within the limit
 
-* 前提 一件の指摘に対して五ファイルを変更した修正がある
-* もし deadloop が修正を完了する
-* ならば deadloop は確認した branch へ非強制で push する
+* Given A repair changes five files for one finding
+* When deadloop completes the repair
+* Then deadloop pushes non-forcibly to the verified branch
 
-## シナリオ: 修正は確認した既存 branch へ非強制でだけ push する
+## Scenario: Push a repair non-forcibly to only the verified existing branch
 
-* 前提 修正対象の pull request head が確認済みである
-* もし deadloop が修正を完了する
-* ならば deadloop は確認した branch へ非強制で push する
+* Given The pull request head selected for repair has been verified
+* When deadloop completes the repair
+* Then deadloop pushes non-forcibly to the verified branch
 
-## シナリオ: 修正のチェックは push 直前の head 確認より先に実行する
+## Scenario: Run repair checks before the final pull request head check
 
-* 前提 修正対象の pull request head が確認済みである
-* もし deadloop が修正を完了する
-* ならば deadloop は最後の pull request head 確認より先に設定済みチェックを実行する
+* Given The pull request head selected for repair has been verified
+* When deadloop completes the repair
+* Then deadloop runs the configured checks before the final pull request head check
 
-## シナリオ: 別のリポジトリからの pull request の競合回復は push しない
+## Scenario: Do not push conflict recovery for a pull request from another repository
 
-* 前提 別のリポジトリからの pull request が競合している
-* もし deadloop が競合回復を完了する
-* ならば deadloop は競合回復 branch へ push しない
+* Given A pull request from another repository has a conflict
+* When deadloop completes conflict recovery
+* Then deadloop does not push to the conflict-recovery branch
 
-## シナリオ: 競合回復は確認した既存 branch へ非強制でだけ push する
+## Scenario: Push conflict recovery non-forcibly to only the verified existing branch
 
-* 前提 競合回復対象の pull request head が確認済みである
-* もし deadloop が競合回復を完了する
-* ならば deadloop は競合回復 branch へ非強制で push する
+* Given The pull request head selected for conflict recovery has been verified
+* When deadloop completes conflict recovery
+* Then deadloop pushes non-forcibly to the conflict-recovery branch
 
-## シナリオ: 競合回復のチェックは push 直前の head 確認より先に実行する
+## Scenario: Run conflict-recovery checks before the final pull request head check
 
-* 前提 競合回復対象の pull request head が確認済みである
-* もし deadloop が競合回復を完了する
-* ならば deadloop は競合回復の最後の pull request head 確認より先に設定済みチェックを実行する
+* Given The pull request head selected for conflict recovery has been verified
+* When deadloop completes conflict recovery
+* Then deadloop runs the configured checks before the final conflict-recovery pull request head check
 
-## シナリオ: 古い pull request head の競合回復は push しない
+## Scenario: Do not push conflict recovery for a stale pull request head
 
-* 前提 競合回復対象の pull request head が確認済みである
-* もし push の直前に pull request head が変わる
-* ならば deadloop は競合回復 branch へ push しない
+* Given The pull request head selected for conflict recovery has been verified
+* When The pull request head changes immediately before push
+* Then deadloop does not push to the conflict-recovery branch

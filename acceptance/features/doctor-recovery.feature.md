@@ -1,177 +1,177 @@
-# 機能: doctor が停止した Issue と作業場所を安全に復旧へ導く
+# Feature: Guide safe recovery of blocked Issues and worktrees with doctor
 
-オペレーターは `/deadloop-doctor` の表示だけで、停止した作業を確認し、安全な対象だけを片付け、通常の作業を誤って問題扱いしない。
+Operators can check blocked work simply by viewing `/deadloop-doctor`, clean up only safe targets, and avoid mistakenly treating normal work as a problem.
 
-## シナリオ: 停止した Issue を再投入するコマンドを表示する
+## Scenario: Show the command to requeue the blocked Issue
 
-* 前提 `agent:blocked` の Issue がある
-* もし オペレーターが doctor を実行する
-* ならば Issue を再投入するコマンドが表示される
+* Given An Issue has `agent:blocked`
+* When The operator runs doctor
+* Then doctor shows a command to requeue the Issue
 
-## シナリオ: 停止した Issue の最新の説明を表示する
+## Scenario: Show the latest blocking reason for an Issue
 
-* 前提 停止理由が記録された `agent:blocked` の Issue がある
-* もし オペレーターが doctor を実行する
-* ならば 最新の停止理由が表示される
+* Given A blocking reason is recorded for an Issue with `agent:blocked`
+* When The operator runs doctor
+* Then doctor displays the latest blocking reason
 
-## シナリオ: 更新の止まった進行中 Issue の作業場所を確認するコマンドを表示する
+## Scenario: Show the command to check the worktree of a stale in-progress Issue.
 
-* 前提 更新が24時間以上止まった `agent:in-progress` の Issue と作業場所がある
-* もし オペレーターが doctor を実行する
-* ならば 古い作業場所の変更を確認するコマンドが表示される
+* Given A worktree exists for an Issue with `agent:in-progress` whose updates stopped more than 24 hours ago
+* When The operator runs doctor
+* Then doctor shows a command to inspect changes in the stale worktree
 
-## シナリオ: 最近更新された進行中 Issue を問題として表示しない
+## Scenario: Do not report a recently updated in-progress Issue as a problem
 
-* 前提 最近更新され作業中の `agent:in-progress` の Issue がある
-* もし オペレーターが doctor を実行する
-* ならば doctor は問題を表示しない
+* Given An actively worked Issue with `agent:in-progress` was updated recently
+* When The operator runs doctor
+* Then doctor shows no findings
 
-## シナリオ: 変更のない孤立作業場所を片付けるコマンドを表示する
+## Scenario: Show command to clean up orphan worktrees that have no changes
 
-* 前提 変更のない孤立した作業場所がある
-* もし オペレーターが doctor を実行する
-* ならば 作業場所を片付けるコマンドが表示される
+* Given A clean orphaned worktree exists
+* When The operator runs doctor
+* Then doctor shows a command to clean up the worktree
 
-## シナリオ: 変更中の孤立作業場所には確認コマンドを表示する
+## Scenario: Show confirmation command for orphaned worktrees that are being changed
 
-* 前提 変更中の孤立した作業場所がある
-* もし オペレーターが doctor を実行する
-* ならば 変更中の作業場所を確認するコマンドが表示される
+* Given An orphaned worktree has changes
+* When The operator runs doctor
+* Then doctor shows a command to inspect the worktree with changes
 
-## シナリオ: 開いている pull request の作業場所を問題として表示しない
+## Scenario: Do not report an open pull request worktree as a problem
 
-* 前提 開いている pull request に紐づく作業場所がある
-* もし オペレーターが doctor を実行する
-* ならば doctor は問題を表示しない
+* Given A worktree is linked to an open pull request
+* When The operator runs doctor
+* Then doctor shows no findings
 
-## シナリオ: 準備済みだが未投入の Issue を投入するコマンドを表示する
+## Scenario: Show the command to enqueue a prepared Issue that has not been submitted
 
-* 前提 `ready-for-agent` だけが付いた Issue がある
-* もし オペレーターが doctor を実行する
-* ならば Issue を投入するコマンドが表示される
+* Given An Issue has only `ready-for-agent`
+* When The operator runs doctor
+* Then doctor shows a command to enqueue the Issue
 
-## シナリオ: 要確認の Issue を確認するコマンドを表示する
+## Scenario: Show a command to inspect an Issue that needs triage
 
-* 前提 `needs-triage` の Issue がある
-* もし オペレーターが doctor を実行する
-* ならば Issue を確認するコマンドが表示される
+* Given An Issue has `needs-triage`
+* When The operator runs doctor
+* Then doctor shows a command to inspect the Issue
 
-## シナリオ: 要確認の Issue を再投入するコマンドを表示する
+## Scenario: Show a command to requeue an Issue that needs triage
 
-* 前提 `needs-triage` の Issue がある
-* もし オペレーターが doctor を実行する
-* ならば 要確認の Issue を再投入するコマンドが表示される
+* Given An Issue has `needs-triage`
+* When The operator runs doctor
+* Then doctor shows a command to requeue the Issue that needs triage
 
-## シナリオ: 実行前確認が利用できないとき確認ファイルを表示する
+## Scenario: Show precheck file when precheck is not available
 
-* 前提 実行前確認が利用できない記録がある
-* もし オペレーターが doctor を実行する
-* ならば 実行前確認ファイルを調べるコマンドが表示される
+* Given A record says the precheck is unavailable
+* When The operator runs doctor
+* Then doctor shows a command to inspect the precheck file
 
-## シナリオ: 実行前確認ファイルがないとき確認ファイルを表示する
+## Scenario: Show the precheck file when there is no precheck file
 
-* 前提 実行前確認ファイルがない記録がある
-* もし オペレーターが doctor を実行する
-* ならば 実行前確認ファイルを調べるコマンドが表示される
+* Given A record says the precheck file is missing
+* When The operator runs doctor
+* Then doctor shows a command to inspect the precheck file
 
-## シナリオ: 同じ自動化失敗の繰り返しを表示する
+## Scenario: Show repeated instances of the same automation failure
 
-* 前提 同じ自動化失敗が繰り返された記録がある
-* もし オペレーターが doctor を実行する
-* ならば 繰り返している自動化失敗が表示される
+* Given A record contains repeated instances of the same automation failure
+* When The operator runs doctor
+* Then doctor shows the recurring automation failure
 
-## シナリオ: 作業がない通常の待機を問題として表示しない
+## Scenario: Do not report a normal idle wait as a problem
 
-* 前提 作業がない通常の待機の記録がある
-* もし オペレーターが doctor を実行する
-* ならば doctor は問題を表示しない
+* Given A record contains a normal idle wait with no work
+* When The operator runs doctor
+* Then doctor shows no findings
 
-## シナリオ: 自動化の試行停止を表示する
+## Scenario: Show stalled automation attempts
 
-* 前提 自動化の試行が3回分以上止まっている
-* もし オペレーターが doctor を実行する
-* ならば 停止した自動化が表示される
+* Given Automation has been stuck for at least three attempts
+* When The operator runs doctor
+* Then doctor shows the stuck automation
 
-## シナリオ: 最近試行した正常な自動化を問題として表示しない
+## Scenario: Do not show recently attempted normal automations as problems
 
-* 前提 最近試行した正常な自動化がある
-* もし オペレーターが doctor を実行する
-* ならば doctor は問題を表示しない
+* Given There is a recent normal automation attempt
+* When The operator runs doctor
+* Then doctor shows no findings
 
-## シナリオ: 信頼していない Claude の作業場所を開くコマンドを表示する
+## Scenario: Show a command to open an untrusted Claude worktree
 
-* 前提 信頼していない Claude の作業場所がある
-* もし オペレーターが doctor を実行する
-* ならば Claude の作業場所を開くコマンドが表示される
+* Given A Claude worktree is not trusted
+* When The operator runs doctor
+* Then doctor shows a command to open the Claude worktree
 
-## シナリオ: 信頼済み Claude の作業場所を問題として表示しない
+## Scenario: Do not report a trusted Claude worktree as a problem
 
-* 前提 信頼済み Claude の作業場所がある
-* もし オペレーターが doctor を実行する
-* ならば doctor は問題を表示しない
+* Given A Claude worktree is trusted
+* When The operator runs doctor
+* Then doctor shows no findings
 
-## シナリオ: Claude のレビュー作業場所が未信頼なら開くコマンドを表示する
+## Scenario: Show a command to open an untrusted Claude review worktree
 
-* 前提 信頼していない Claude のレビュー作業場所がある
-* もし オペレーターが doctor を実行する
-* ならば Claude の作業場所を開くコマンドが表示される
+* Given A Claude review worktree is not trusted
+* When The operator runs doctor
+* Then doctor shows a command to open the Claude worktree
 
-## シナリオ: Pi だけを使う作業場所を信頼問題として表示しない
+## Scenario: Do not show worktrees that only use Pi as trust issues
 
-* 前提 Pi だけを使う作業場所がある
-* もし オペレーターが doctor を実行する
-* ならば doctor は問題を表示しない
+* Given A worktree uses only Pi
+* When The operator runs doctor
+* Then doctor shows no findings
 
-## シナリオ: Claude の信頼設定を読めないとき確認コマンドを表示する
+## Scenario: Show an inspection command when Claude trust configuration cannot be read
 
-* 前提 Claude の信頼設定を読めない作業場所がある
-* もし オペレーターが doctor を実行する
-* ならば Claude の信頼設定を調べるコマンドが表示される
+* Given Claude trust configuration cannot be read for a worktree
+* When The operator runs doctor
+* Then doctor shows a command to inspect Claude trust configuration
 
-## シナリオ: 動いていないレビュー占有を解放するコマンドを表示する
+## Scenario: Show a command to release an inactive review claim
 
-* 前提 動いているレビューエージェントがいない `agent:reviewing` の pull request がある
-* もし オペレーターが doctor を実行する
-* ならば レビュー占有を解放するコマンドが表示される
+* Given A pull request has `agent:reviewing` but no active review agent
+* When The operator runs doctor
+* Then doctor shows a command to release the review claim
 
-## シナリオ: 保持中の試行があるレビュー占有には不完全な解放コマンドを表示しない
+## Scenario: Do not show incomplete release commands for review claims with held attempts
 
-* 前提 保持中の起動失敗試行がある `agent:reviewing` の pull request がある
-* もし オペレーターが doctor を実行する
-* ならば レビュー占有だけを解放するコマンドは表示されない
+* Given A pull request has `agent:reviewing` and a retained launch-failed attempt
+* When The operator runs doctor
+* Then doctor does not show a command that releases only the review claim
 
-## シナリオ: 保持中の試行記録が壊れているとき不完全な解放コマンドを表示しない
+## Scenario: Do not display incomplete release commands when held attempt records are corrupted
 
-* 前提 保持中の試行記録の所有対象を判定できない `agent:reviewing` の pull request がある
-* もし オペレーターが doctor を実行する
-* ならば レビュー占有だけを解放するコマンドは表示されない
+* Given A pull request has `agent:reviewing` and ownership of its retained attempt record cannot be determined
+* When The operator runs doctor
+* Then doctor does not show a command that releases only the review claim
 
-## シナリオ: 動いているレビューエージェントの占有を問題として表示しない
+## Scenario: Do not report a claim with an active review agent as a problem
 
-* 前提 動いているレビューエージェントがある `agent:reviewing` の pull request がある
-* もし オペレーターが doctor を実行する
-* ならば doctor は問題を表示しない
+* Given A pull request has `agent:reviewing` and an active review agent
+* When The operator runs doctor
+* Then doctor shows no findings
 
-## シナリオ: 動いていない実装占有の作業場所を確認するコマンドを表示する
+## Scenario: Show a command to inspect an implementation worktree with no active Worker
 
-* 前提 動いている Worker がいない `agent:in-progress` の Issue と作業場所がある
-* もし オペレーターが doctor を実行する
-* ならば 作業場所のコミットを確認するコマンドが表示される
+* Given An Issue with `agent:in-progress` has a worktree but no active Worker
+* When The operator runs doctor
+* Then doctor shows a command to inspect commits in the worktree
 
-## シナリオ: 占有されていない対象を問題として表示しない
+## Scenario: Do not report unclaimed targets as problems
 
-* 前提 占有ラベルのない Issue と pull request がある
-* もし オペレーターが doctor を実行する
-* ならば doctor は問題を表示しない
+* Given An Issue and a pull request have no claim labels
+* When The operator runs doctor
+* Then doctor shows no findings
 
-## シナリオ: 問題がないとき問題なしを表示する
+## Scenario: Explicitly report no findings when no problem exists
 
-* 前提 問題のない deadloop プロジェクトがある
-* もし オペレーターが doctor を実行する
-* ならば doctor は問題なしを表示する
+* Given A deadloop project has no problems
+* When The operator runs doctor
+* Then doctor explicitly reports no findings
 
-## シナリオ: 読み込んだ設定の出所を表示する
+## Scenario: Show the source of imported configuration
 
-* 前提 問題のない deadloop プロジェクトがある
-* もし オペレーターが doctor を実行する
-* ならば 設定の出所が表示される
+* Given A deadloop project has no problems
+* When The operator runs doctor
+* Then doctor shows the configuration source

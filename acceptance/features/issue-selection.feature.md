@@ -1,60 +1,58 @@
-# 機能: 着手可能な Issue だけを選ぶ
+# Feature: Select only an Issue that is ready to start
 
-deadloop は、公開ラベル、依存関係、Issue の状態を確認して、安全に作業を開始できる
-Issue だけを作業対象にする。
+deadloop checks public labels, dependencies, and Issue state and selects only an Issue that can be started safely.
+This prevents duplicate work on an Issue that is closed, unprepared, in progress, blocked, or has unfinished dependencies.
 
-これにより、クローズ済み、準備不足、作業中、停止中、または未完了の作業に重複して着手しない。
+## Scenario: Select a prepared Issue for work
 
-## シナリオ: 準備済みの Issue を作業対象に選ぶ
+* Given An eligible Issue has the `ready-for-agent` and `agent:implement` labels
+* When deadloop selects a work target
+* Then Issue #1 is selected for work
 
-* 前提 選定可能な Issue が `ready-for-agent` と `agent:implement` のラベルを持つ
-* もし deadloop が作業対象を選ぶ
-* ならば Issue #1 が作業対象に選ばれる
+## Scenario: Do not select a closed Issue for work
 
-## シナリオ: クローズ済みの Issue を作業対象に選ばない
+* Given An Issue with all required public labels is closed
+* When deadloop searches for a work target
+* Then The closed Issue is not selected for work
 
-* 前提 必要な公開ラベルがそろった Issue がクローズ済みである
-* もし deadloop が作業対象を探す
-* ならば クローズ済みの Issue は作業対象に選ばれない
+## Scenario: Do not select an unprepared Issue for work
 
-## シナリオ: 準備不足の Issue を作業対象に選ばない
+* Given An unprepared Issue lacks required public labels
+* When deadloop selects a work target
+* Then The unprepared Issue is not selected for work
 
-* 前提 準備不足の Issue に必要な公開ラベルがそろっていない
-* もし deadloop が作業対象を選ぶ
-* ならば 準備不足の Issue は作業対象に選ばれない
+## Scenario: Do not select an Issue already in progress
 
-## シナリオ: 作業中の Issue を作業対象に選ばない
+* Given An Issue in progress has the `agent:in-progress` label
+* When deadloop selects a work target
+* Then The Issue in progress is not selected for work
 
-* 前提 作業中の Issue が `agent:in-progress` ラベルを持つ
-* もし deadloop が作業対象を選ぶ
-* ならば 作業中の Issue は作業対象に選ばれない
+## Scenario: Do not select a blocked Issue for work
 
-## シナリオ: 停止中の Issue を作業対象に選ばない
+* Given A blocked Issue has the `agent:blocked` label
+* When deadloop selects a work target
+* Then The blocked Issue is not selected for work
 
-* 前提 停止中の Issue が `agent:blocked` ラベルを持つ
-* もし deadloop が作業対象を選ぶ
-* ならば 停止中の Issue は作業対象に選ばれない
+## Scenario Outline: Do not select an Issue with an unfinished dependency in its body
 
-## シナリオアウトライン: 未完了の本文依存を持つ Issue を作業対象に選ばない
+* Given An Issue with all required public labels has an unfinished dependency in the "<location>"
+* When deadloop selects a work target
+* Then The Issue with an unfinished dependency is not selected for work
 
-* 前提 必要な公開ラベルがそろった Issue が本文の"<位置>"で未完了の依存を示す
-* もし deadloop が作業対象を選ぶ
-* ならば 未完了の依存を持つ Issue は作業対象に選ばれない
+### Examples:
 
-### 例:
+  | location |
+  | dependency section |
+  | end |
 
-  | 位置 |
-  | 依存欄 |
-  | 末尾 |
+## Scenario: Select an Issue with a completed dependency in its body
 
-## シナリオ: 完了した本文依存を持つ Issue を作業対象に選ぶ
+* Given An eligible Issue has a completed dependency in its body
+* When deadloop selects a work target
+* Then Issue #2 is selected for work
 
-* 前提 選定可能な Issue が本文で完了した依存を示す
-* もし deadloop が作業対象を選ぶ
-* ならば Issue #2 が作業対象に選ばれる
+## Scenario: Do not select an Issue with an unfinished GitHub dependency
 
-## シナリオ: GitHub 上の未完了の依存を持つ Issue を作業対象に選ばない
-
-* 前提 必要な公開ラベルがそろった Issue が GitHub 上で未完了の依存を持つ
-* もし deadloop が作業対象を選ぶ
-* ならば GitHub 上の未完了の依存を持つ Issue は作業対象に選ばれない
+* Given An Issue with all required public labels has an unfinished dependency on GitHub
+* When deadloop selects a work target
+* Then The Issue with an unfinished GitHub dependency is not selected for work

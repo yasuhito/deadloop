@@ -32,35 +32,35 @@ function shared(command: string): RequiredVerificationSource {
 }
 
 Given(
-  "ローカルに `npm run local-check`、共有方針に `npm run shared-check` がある",
+  "Local configuration has `npm run local-check` and shared policy has `npm run shared-check`",
   function (this: VerificationWorld) {
     this.localSources = [local("npm run local-check")];
     this.sharedSources = [shared("npm run shared-check")];
   },
 );
 
-Given("同じローカル優先順位に異なる必須検証がある", function (this: VerificationWorld) {
+Given("The same local precedence contains different required verification values", function (this: VerificationWorld) {
   this.localSources = [local("npm test", "/first"), local("npm run check", "/second")];
 });
 
-Given("必須検証の情報源がない", function (this: VerificationWorld) {
+Given("No required verification source is available", function (this: VerificationWorld) {
   this.localSources = [];
   this.sharedSources = [];
 });
 
-Given("共有方針に空の必須検証がある", function (this: VerificationWorld) {
+Given("Shared policy contains an empty required verification command", function (this: VerificationWorld) {
   this.sharedSources = [shared("")];
 });
 
-Given("共有方針に `true` がある", function (this: VerificationWorld) {
+Given("Shared policy contains `true`", function (this: VerificationWorld) {
   this.sharedSources = [shared("true")];
 });
 
-Given("共有方針に `npm run check` がある", function (this: VerificationWorld) {
+Given("Shared policy contains `npm run check`", function (this: VerificationWorld) {
   this.sharedSources = [shared("npm run check")];
 });
 
-When("必須検証を解決する", function (this: VerificationWorld) {
+When("required verification is resolved", function (this: VerificationWorld) {
   this.resolution = resolveRequiredVerification({
     repository: "owner/repo",
     baseRevision: revision,
@@ -69,7 +69,7 @@ When("必須検証を解決する", function (this: VerificationWorld) {
   });
 });
 
-When("リポジトリのサブディレクトリから状態表示と doctor を要求する", function (this: VerificationWorld) {
+When("Status and doctor are requested from a repository subdirectory", function (this: VerificationWorld) {
   const project = resolveSelectedProject({
     env: { DEADLOOP_CONFIG: "/state/projects.json" },
     files: { "/state/projects.json": {} },
@@ -84,26 +84,26 @@ function contract(world: VerificationWorld) {
   return world.resolution.contract;
 }
 
-Then("実効コマンドは `npm run local-check` である", function (this: VerificationWorld) {
+Then("The effective command is `npm run local-check`", function (this: VerificationWorld) {
   assert.equal(contract(this).command, "npm run local-check");
 });
 
-Then("実効コマンドは `true` である", function (this: VerificationWorld) {
+Then("The effective command is `true`", function (this: VerificationWorld) {
   assert.equal(contract(this).command, "true");
 });
 
-Then("共有方針の値は上書き情報に残る", function (this: VerificationWorld) {
+Then("The shared-policy value remains in the override information", function (this: VerificationWorld) {
   assert.deepEqual(contract(this).override, {
     source: { kind: "repo_policy", location: "deadloop.json" },
     command: "npm run shared-check",
   });
 });
 
-Then("停止理由は `{word}` である", function (this: VerificationWorld, reason: string) {
+Then("The blocked reason is `{word}`", function (this: VerificationWorld, reason: string) {
   assert.equal(this.resolution?.status === "blocked" ? this.resolution.reason : undefined, reason);
 });
 
-Then("解決結果はコマンド、情報源、基準コミット、リポジトリを含む", function (this: VerificationWorld) {
+Then("The resolution includes the command, source, base revision, and repository", function (this: VerificationWorld) {
   assert.deepEqual(contract(this), {
     repository: "owner/repo",
     command: "npm run check",
@@ -112,7 +112,7 @@ Then("解決結果はコマンド、情報源、基準コミット、リポジ�
   });
 });
 
-Then("両方の必須検証表示は同じである", function (this: VerificationWorld) {
+Then("Both required verification displays are identical", function (this: VerificationWorld) {
   const line = (report: string | undefined) => report?.split("\n").find((candidate) => candidate.startsWith("requiredVerification:"));
   const expected = `requiredVerification: resolved; command="npm run check"; source=repo_policy:deadloop.json; baseRevision=${revision}; override=none`;
   assert.deepEqual([line(this.status), line(this.doctor)], [expected, expected]);

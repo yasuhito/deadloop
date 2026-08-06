@@ -2,23 +2,23 @@ import { describe, expect, it } from "vitest";
 
 import { checkAcceptanceRules, type AcceptanceSource } from "../src/check-acceptance-rules";
 
-const validFeature = `# 機能: 安全な検証
+const validFeature = `# Feature: Safe verification
 
-追跡ファイルを隠さないことを保証する。
+Ensure that tracked files are not hidden.
 
-## シナリオ: 追跡ファイルがある場合は検証を拒否する
+## Scenario: Reject verification when a tracked file exists
 
-* 前提 実行用ディレクトリに追跡ファイルがある
-* もし 通常検証を開始する
-* ならば 検証は安全のため拒否される
+* Given the runtime directory contains a tracked file
+* When normal verification starts
+* Then verification is rejected for safety
 `;
 
 const validSteps = `
 import assert from "node:assert/strict";
 import { Given, Then, When } from "@cucumber/cucumber";
-Given("実行用ディレクトリに追跡ファイルがある", function () { this.tracked = true; });
-When("通常検証を開始する", function () { this.code = 1; });
-Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });
+Given("the runtime directory contains a tracked file", function () { this.tracked = true; });
+When("normal verification starts", function () { this.code = 1; });
+Then("verification is rejected for safety", function () { assert.equal(this.code, 1); });
 `;
 
 function sources(overrides: Partial<AcceptanceSource> = {}): AcceptanceSource {
@@ -26,7 +26,7 @@ function sources(overrides: Partial<AcceptanceSource> = {}): AcceptanceSource {
     config: {
       path: "cucumber.cjs",
       source:
-        "module.exports = { default: { paths: ['acceptance/features/**/*.feature.md'], requireModule: ['tsx/cjs'], require: ['acceptance/steps/**/*.ts', 'acceptance/support/**/*.ts'], language: 'ja', strict: true } };",
+        "module.exports = { default: { paths: ['acceptance/features/**/*.feature.md'], requireModule: ['tsx/cjs'], require: ['acceptance/steps/**/*.ts', 'acceptance/support/**/*.ts'], language: 'en', strict: true } };",
     },
     features: [{ path: "acceptance/features/safety.feature.md", source: validFeature }],
     stepDefinitions: [{ path: "acceptance/steps/safety.steps.ts", source: validSteps }],
@@ -36,8 +36,62 @@ function sources(overrides: Partial<AcceptanceSource> = {}): AcceptanceSource {
 }
 
 describe("acceptance test rules", () => {
-  it("accepts one Japanese scenario with one result and one assertion", () => {
+  it("accepts one English scenario with one result and one assertion", () => {
     expect(checkAcceptanceRules(sources())).toEqual([]);
+  });
+
+  it("rejects a residual Japanese Feature keyword", () => {
+    const source = validFeature.replace("# Feature:", "# 機能:");
+    expect(checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source }] }))).toContain(
+      "bad.feature.md:1: Japanese Gherkin keywords are not allowed",
+    );
+  });
+
+  it("rejects a residual Japanese step keyword", () => {
+    const source = validFeature.replace("* Given", "* 前提");
+    expect(checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source }] }))).toContain(
+      "bad.feature.md:7: Japanese Gherkin keywords are not allowed",
+    );
+  });
+
+  it("rejects Japanese prose in a Feature title", () => {
+    const source = validFeature.replace("Safe verification", "安全な verification");
+    expect(checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source }] }))).toContain(
+      "bad.feature.md:1: Japanese prose is not allowed",
+    );
+  });
+
+  it("rejects Japanese prose in a Feature description", () => {
+    const source = validFeature.replace("Ensure that tracked files are not hidden.", "追跡 files are not hidden.");
+    expect(checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source }] }))).toContain(
+      "bad.feature.md:3: Japanese prose is not allowed",
+    );
+  });
+
+  it("rejects Japanese prose in a Scenario title", () => {
+    const source = validFeature.replace("Reject verification", "検証を reject");
+    expect(checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source }] }))).toContain(
+      "bad.feature.md:5: Japanese prose is not allowed",
+    );
+  });
+
+  it("rejects Japanese prose in a registered step expression", () => {
+    const source = validSteps.replace("normal verification starts", "通常 verification starts");
+    expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
+      "bad.steps.ts:5: registered step expression must not contain Japanese prose",
+    );
+  });
+
+  it("allows Japanese in a backtick-delimited Feature literal", () => {
+    const source = validFeature.replace("a tracked file", "the literal `停止`");
+    const stepDefinitions = validSteps.replaceAll("a tracked file", "the literal `停止`");
+    expect(checkAcceptanceRules(sources({ features: [{ path: "literal.feature.md", source }], stepDefinitions: [{ path: "literal.steps.ts", source: stepDefinitions }] }))).toEqual([]);
+  });
+
+  it("allows Japanese in a backtick-delimited registered step literal", () => {
+    const source = validFeature.replace("normal verification starts", "status `停止` is observed");
+    const stepDefinitions = validSteps.replace("normal verification starts", "status `停止` is observed");
+    expect(checkAcceptanceRules(sources({ features: [{ path: "literal.feature.md", source }], stepDefinitions: [{ path: "literal.steps.ts", source: stepDefinitions }] }))).toEqual([]);
   });
 
   it("rejects front matter", () => {
@@ -62,8 +116,8 @@ describe("acceptance test rules", () => {
 
   it("rejects a language directive after the Feature description", () => {
     const source = validFeature.replace(
-      "追跡ファイルを隠さないことを保証する。",
-      "追跡ファイルを隠さないことを保証する。\n\n# language: ja",
+      "Ensure that tracked files are not hidden.",
+      "Ensure that tracked files are not hidden.\n\n# language: ja",
     );
     expect(checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source }] }))).toContain(
       "bad.feature.md:5: language directives are not allowed",
@@ -73,7 +127,7 @@ describe("acceptance test rules", () => {
   it("rejects prose before the Feature heading", () => {
     expect(
       checkAcceptanceRules(sources({
-        features: [{ path: "bad.feature.md", source: `前置きの説明\n\n${validFeature}` }],
+        features: [{ path: "bad.feature.md", source: `introductory prose\n\n${validFeature}` }],
       })),
     ).toContain("bad.feature.md:1: file must start with an explicit Feature heading");
   });
@@ -94,8 +148,8 @@ describe("acceptance test rules", () => {
 
   it("rejects a scenario with two result steps", () => {
     const source = validFeature.replace(
-      "* ならば 検証は安全のため拒否される",
-      "* ならば 検証は安全のため拒否される\n* ならば コマンドは実行されない",
+      "* Then verification is rejected for safety",
+      "* Then verification is rejected for safety\n* Then the command is not run",
     );
     expect(checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source }] }))).toContain(
       "bad.feature.md:5: scenario must contain exactly one result step (found 2)",
@@ -104,8 +158,8 @@ describe("acceptance test rules", () => {
 
   it("counts a Feature Background result in each scenario", () => {
     const source = validFeature.replace(
-      "## シナリオ:",
-      "## 背景:\n\n* ならば 共通の結果がある\n\n## シナリオ:",
+      "## Scenario:",
+      "## Background:\n\n* Then a shared result exists\n\n## Scenario:",
     );
     expect(checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source }] }))).toContain(
       "bad.feature.md:9: scenario must contain exactly one result step (found 2)",
@@ -114,8 +168,8 @@ describe("acceptance test rules", () => {
 
   it("counts a Rule Background result in each scenario", () => {
     const source = validFeature.replace(
-      "## シナリオ:",
-      "## ルール: 安全規則\n\n### 背景:\n\n* ならば 共通の結果がある\n\n### シナリオ:",
+      "## Scenario:",
+      "## Rule: Safety rule\n\n### Background:\n\n* Then a shared result exists\n\n### Scenario:",
     );
     expect(checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source }] }))).toContain(
       "bad.feature.md:11: scenario must contain exactly one result step (found 2)",
@@ -124,8 +178,8 @@ describe("acceptance test rules", () => {
 
   it("rejects And after Then", () => {
     const source = validFeature.replace(
-      "* ならば 検証は安全のため拒否される",
-      "* ならば 検証は安全のため拒否される\n* かつ コマンドは実行されない",
+      "* Then verification is rejected for safety",
+      "* Then verification is rejected for safety\n* And the command is not run",
     );
     expect(checkAcceptanceRules(sources({ features: [{ path: "bad.feature.md", source }] }))).toContain(
       "bad.feature.md:10: And/But after Then is not allowed",
@@ -289,9 +343,9 @@ describe("acceptance test rules", () => {
     const source = `
 const assert = require("node:assert/strict");
 const { Given: setup, When, Then } = require("@cucumber/cucumber");
-setup("前提", function () { assert.ok(true); });
-When("操作", function () { this.code = 1; });
-Then("結果", function () { assert.equal(this.code, 1); });
+setup("precondition", function () { assert.ok(true); });
+When("action", function () { this.code = 1; });
+Then("result", function () { assert.equal(this.code, 1); });
 `;
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:4: Given step definition must not contain assertions",
@@ -300,7 +354,7 @@ Then("結果", function () { assert.equal(this.code, 1); });
 
   it("rejects an assertion in a direct-require Cucumber Given registration", () => {
     const source = `
-require("@cucumber/cucumber").Given("実行用ディレクトリに追跡ファイルがある", function () { require("node:assert/strict").ok(true); });
+require("@cucumber/cucumber").Given("the runtime directory contains a tracked file", function () { require("node:assert/strict").ok(true); });
 `;
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:2: Given step definition must not contain assertions",
@@ -309,7 +363,7 @@ require("@cucumber/cucumber").Given("実行用ディレクトリに追跡ファ�
 
   it("rejects a direct-require Cucumber Then registration without an assertion", () => {
     const source = `
-require("@cucumber/cucumber").Then("検証は安全のため拒否される", function () {});
+require("@cucumber/cucumber").Then("verification is rejected for safety", function () {});
 `;
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:2: Then step definition must contain exactly one direct assertion (found 0)",
@@ -319,7 +373,7 @@ require("@cucumber/cucumber").Then("検証は安全のため拒否される", fu
   it("rejects a Cucumber Then registration invoked with Reflect.apply", () => {
     const source = `
 import { Then } from "@cucumber/cucumber";
-Reflect.apply(Then, undefined, ["検証は安全のため拒否される", () => {}]);
+Reflect.apply(Then, undefined, ["verification is rejected for safety", () => {}]);
 `;
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:3: indirect Cucumber Then registration is not allowed",
@@ -329,7 +383,7 @@ Reflect.apply(Then, undefined, ["検証は安全のため拒否される", () =>
   it("rejects a Cucumber Then registration invoked with Function.prototype.call", () => {
     const source = `
 import { Then } from "@cucumber/cucumber";
-Then.call(undefined, "検証は安全のため拒否される", () => {});
+Then.call(undefined, "verification is rejected for safety", () => {});
 `;
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:3: indirect Cucumber Then registration is not allowed",
@@ -339,7 +393,7 @@ Then.call(undefined, "検証は安全のため拒否される", () => {});
   it("rejects a Cucumber Then registration invoked with Function.prototype.apply", () => {
     const source = `
 import { Then } from "@cucumber/cucumber";
-Then.apply(undefined, ["検証は安全のため拒否される", () => {}]);
+Then.apply(undefined, ["verification is rejected for safety", () => {}]);
 `;
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:3: indirect Cucumber Then registration is not allowed",
@@ -350,7 +404,7 @@ Then.apply(undefined, ["検証は安全のため拒否される", () => {}]);
     const source = `
 import { Then } from "@cucumber/cucumber";
 const outcome = Then.call.bind(Then, undefined);
-outcome("検証は安全のため拒否される", () => {});
+outcome("verification is rejected for safety", () => {});
 `;
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:4: indirect Cucumber Then registration is not allowed",
@@ -371,9 +425,9 @@ outcome("検証は安全のため拒否される", () => {});
     const source = `
 const assert = require("node:assert/strict");
 const { Given, When, Then: outcome } = require("@cucumber/cucumber");
-Given("前提", function () { this.tracked = true; });
-When("操作", function () { this.code = 1; });
-outcome("結果", function () { this.observed = this.code; });
+Given("precondition", function () { this.tracked = true; });
+When("action", function () { this.code = 1; });
+outcome("result", function () { this.observed = this.code; });
 `;
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:6: Then step definition must contain exactly one direct assertion (found 0)",
@@ -387,8 +441,8 @@ outcome("結果", function () { this.observed = this.code; });
         'import { Given, Then, When } from "@cucumber/cucumber";\nconst outcome = Then.bind(null);',
       )
       .replace(
-        'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
-        'outcome("検証は安全のため拒否される", function () {});',
+        'Then("verification is rejected for safety", function () { assert.equal(this.code, 1); });',
+        'outcome("verification is rejected for safety", function () {});',
       );
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:7: Then step definition must contain exactly one direct assertion (found 0)",
@@ -399,8 +453,8 @@ outcome("結果", function () { this.observed = this.code; });
     const source = validSteps
       .replace("Given, Then, When", "Given, Then, When as action")
       .replace(
-        'When("通常検証を開始する", function () { this.code = 1; });',
-        'action("通常検証を開始する", function () { assert.ok(true); this.code = 1; });',
+        'When("normal verification starts", function () { this.code = 1; });',
+        'action("normal verification starts", function () { assert.ok(true); this.code = 1; });',
       );
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:5: When step definition must not contain assertions",
@@ -462,8 +516,8 @@ outcome("結果", function () { this.observed = this.code; });
     const source = validSteps
       .replace("Given, Then, When", "Given, Then as outcome, When")
       .replace(
-        'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
-        'outcome("検証は安全のため拒否される", function () { this.observed = this.code; });',
+        'Then("verification is rejected for safety", function () { assert.equal(this.code, 1); });',
+        'outcome("verification is rejected for safety", function () { this.observed = this.code; });',
       );
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:6: Then step definition must contain exactly one direct assertion (found 0)",
@@ -474,8 +528,8 @@ outcome("結果", function () { this.observed = this.code; });
     const source = validSteps
       .replace('import { Given, Then, When } from "@cucumber/cucumber";', 'import { Given, Then, When } from "@cucumber/cucumber";\nconst outcome = Then;')
       .replace(
-        'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
-        'outcome("検証は安全のため拒否される", function () { this.observed = this.code; });',
+        'Then("verification is rejected for safety", function () { assert.equal(this.code, 1); });',
+        'outcome("verification is rejected for safety", function () { this.observed = this.code; });',
       );
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:7: Then step definition must contain exactly one direct assertion (found 0)",
@@ -486,7 +540,7 @@ outcome("結果", function () { this.observed = this.code; });
     const source = `import { Then } from "@cucumber/cucumber";
 {
   const outcome = Then;
-  outcome("検証は安全のため拒否される", () => {});
+  outcome("verification is rejected for safety", () => {});
 }`;
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:4: Then step definition must contain exactly one direct assertion (found 0)",
@@ -497,7 +551,7 @@ outcome("結果", function () { this.observed = this.code; });
     const source = `import { Then } from "@cucumber/cucumber";
 let result;
 result = Then;
-result("検証は安全のため拒否される", () => {});`;
+result("verification is rejected for safety", () => {});`;
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:4: Then step definition must contain exactly one direct assertion (found 0)",
     );
@@ -505,7 +559,7 @@ result("検証は安全のため拒否される", () => {});`;
 
   it("rejects a dynamic step definition pattern", () => {
     const source = `import { Given } from "@cucumber/cucumber";
-const outcomePattern = "検証は安全のため拒否される";
+const outcomePattern = "verification is rejected for safety";
 Given(outcomePattern, () => {});`;
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:3: step definition pattern must be a string or regular expression literal",
@@ -514,8 +568,8 @@ Given(outcomePattern, () => {});`;
 
   it("rejects a Then phrase registered through Given", () => {
     const source = validSteps.replace(
-      'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
-      'Given("検証は安全のため拒否される", function () {});',
+      'Then("verification is rejected for safety", function () { assert.equal(this.code, 1); });',
+      'Given("verification is rejected for safety", function () {});',
     );
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:6: step definition registered with Given matches a Then step",
@@ -524,8 +578,8 @@ Given(outcomePattern, () => {});`;
 
   it("rejects a Then phrase registered through When", () => {
     const source = validSteps.replace(
-      'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
-      'When("検証は安全のため拒否される", function () {});',
+      'Then("verification is rejected for safety", function () { assert.equal(this.code, 1); });',
+      'When("verification is rejected for safety", function () {});',
     );
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:6: step definition registered with When matches a Then step",
@@ -533,10 +587,10 @@ Given(outcomePattern, () => {});`;
   });
 
   it("rejects a Then Cucumber Expression registered through Given", () => {
-    const feature = validFeature.replace("検証は安全のため拒否される", "結果 1 がある");
+    const feature = validFeature.replace("verification is rejected for safety", "result 1 exists");
     const source = validSteps.replace(
-      'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
-      'Given("結果 {int} がある", function () {});',
+      'Then("verification is rejected for safety", function () { assert.equal(this.code, 1); });',
+      'Given("result {int} exists", function () {});',
     );
     expect(
       checkAcceptanceRules(
@@ -549,10 +603,10 @@ Given(outcomePattern, () => {});`;
   });
 
   it("rejects a Then Cucumber Expression without an assertion", () => {
-    const feature = validFeature.replace("検証は安全のため拒否される", "結果 1 がある");
+    const feature = validFeature.replace("verification is rejected for safety", "result 1 exists");
     const source = validSteps.replace(
-      'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
-      'Then("結果 {int} がある", function () {});',
+      'Then("verification is rejected for safety", function () { assert.equal(this.code, 1); });',
+      'Then("result {int} exists", function () {});',
     );
     expect(
       checkAcceptanceRules(
@@ -568,8 +622,8 @@ Given(outcomePattern, () => {});`;
     const source = validSteps
       .replace("Given, Then, When", "Given, defineStep as step, When")
       .replace(
-        'Then("検証は安全のため拒否される", function () { assert.equal(this.code, 1); });',
-        'step("検証は安全のため拒否される", function () { this.observed = this.code; });',
+        'Then("verification is rejected for safety", function () { assert.equal(this.code, 1); });',
+        'step("verification is rejected for safety", function () { this.observed = this.code; });',
       );
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts:6: defineStep is not allowed; use Given, When, or Then",
@@ -671,8 +725,8 @@ Given(outcomePattern, () => {});`;
 
   it("rejects an assertion in a local helper within a step definition file", () => {
     const source = validSteps.replace(
-      'Given("実行用ディレクトリに追跡ファイルがある", function () { this.tracked = true; });',
-      'function helper() { assert.ok(false); }\nGiven("実行用ディレクトリに追跡ファイルがある", function () { helper(); this.tracked = true; });',
+      'Given("the runtime directory contains a tracked file", function () { this.tracked = true; });',
+      'function helper() { assert.ok(false); }\nGiven("the runtime directory contains a tracked file", function () { helper(); this.tracked = true; });',
     );
     expect(checkAcceptanceRules(sources({ stepDefinitions: [{ path: "bad.steps.ts", source }] }))).toContain(
       "bad.steps.ts: assertions are not allowed outside step definition callbacks",
@@ -680,7 +734,7 @@ Given(outcomePattern, () => {});`;
   });
 
   it.each([
-    ["language", "language='en'"],
+    ["language", "language='ja'"],
     ["strict", "strict=false"],
     ["dryRun", "dryRun=true"],
     ["retry", "retry=2"],
@@ -695,9 +749,9 @@ Given(outcomePattern, () => {});`;
 
   it("uses the last duplicate Cucumber property value", () => {
     const config = sources().config;
-    config.source = config.source.replace("language: 'ja'", "language: 'ja', language: 'en'");
+    config.source = config.source.replace("language: 'en'", "language: 'en', language: 'ja'");
     expect(checkAcceptanceRules(sources({ config }))).toContain(
-      "cucumber.cjs: Cucumber language must be explicitly set to 'ja'",
+      "cucumber.cjs: Cucumber language must be explicitly set to 'en'",
     );
   });
 
@@ -711,7 +765,7 @@ Given(outcomePattern, () => {});`;
 
   it("rejects a computed Cucumber profile property", () => {
     const config = sources().config;
-    config.source = config.source.replace("language: 'ja'", "['language']: 'ja'");
+    config.source = config.source.replace("language: 'en'", "['language']: 'en'");
     expect(checkAcceptanceRules(sources({ config }))).toContain(
       "cucumber.cjs: a literal default Cucumber profile is required",
     );
@@ -741,11 +795,11 @@ Given(outcomePattern, () => {});`;
     );
   });
 
-  it("rejects a non-Japanese Cucumber language", () => {
+  it("rejects a non-English Cucumber language", () => {
     const config = sources().config;
-    config.source = config.source.replace("language: 'ja'", "language: 'en'");
+    config.source = config.source.replace("language: 'en'", "language: 'ja'");
     expect(checkAcceptanceRules(sources({ config }))).toContain(
-      "cucumber.cjs: Cucumber language must be explicitly set to 'ja'",
+      "cucumber.cjs: Cucumber language must be explicitly set to 'en'",
     );
   });
 

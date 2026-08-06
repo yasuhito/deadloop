@@ -15,15 +15,15 @@ function fixtureWithDryRun(): string {
   fs.mkdirSync(path.join(root, "acceptance/steps"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "acceptance/features/dry-run.feature.md"),
-    "# 機能: dry-run 検査\n\n## シナリオ: ステップを実行する\n\n* 前提 必ず失敗する\n* もし 実行する\n* ならば 結果がある\n",
+    "# Feature: dry-run check\n\n## Scenario: execute the steps\n\n* Given a step always fails\n* When the scenario runs\n* Then a result exists\n",
   );
   fs.writeFileSync(
     path.join(root, "acceptance/steps/dry-run.steps.ts"),
     `import assert from "node:assert/strict";
 import { Given, Then, When } from "@cucumber/cucumber";
-Given("必ず失敗する", function () { throw new Error("must execute"); });
-When("実行する", function () {});
-Then("結果がある", function () { assert.ok(true); });
+Given("a step always fails", function () { throw new Error("must execute"); });
+When("the scenario runs", function () {});
+Then("a result exists", function () { assert.ok(true); });
 `,
   );
   fs.writeFileSync(
@@ -32,7 +32,7 @@ Then("結果がある", function () { assert.ok(true); });
   paths: ["acceptance/features/**/*.feature.md"],
   requireModule: ["tsx/cjs"],
   require: ["acceptance/steps/**/*.ts", "acceptance/support/**/*.ts"],
-  language: "ja",
+  language: "en",
   strict: true,
   dryRun: true,
   format: ["progress", \`message:\${process.env.DEADLOOP_CUCUMBER_MESSAGE_PATH}\`],
@@ -48,15 +48,15 @@ function fixtureWithStaticRuleViolation(): string {
   fs.mkdirSync(path.join(root, "acceptance/steps"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "acceptance/features/static-rule.feature.md"),
-    "# 機能: Cucumber 単独実行\n\n## シナリオ: 静的規約検査を分離する\n\n* 前提 状態がある\n* もし 操作する\n* ならば 結果がある\n",
+    "# Feature: Standalone Cucumber execution\n\n## Scenario: separate the static rule check\n\n* Given a state exists\n* When an action runs\n* Then a result exists\n",
   );
   fs.writeFileSync(
     path.join(root, "acceptance/steps/static-rule.steps.ts"),
     `import assert from "node:assert/strict";
 import { Given, Then, When } from "@cucumber/cucumber";
-Given("状態がある", function () { assert.ok(true); });
-When("操作する", function () {});
-Then("結果がある", function () { assert.ok(true); });
+Given("a state exists", function () { assert.ok(true); });
+When("an action runs", function () {});
+Then("a result exists", function () { assert.ok(true); });
 `,
   );
   fs.writeFileSync(
@@ -65,7 +65,7 @@ Then("結果がある", function () { assert.ok(true); });
   paths: ["acceptance/features/**/*.feature.md"],
   requireModule: ["tsx/cjs"],
   require: ["acceptance/steps/**/*.ts"],
-  language: "ja",
+  language: "en",
   strict: true,
   format: ["progress", \`message:\${process.env.DEADLOOP_CUCUMBER_MESSAGE_PATH}\`],
 } };\n`,
@@ -81,15 +81,15 @@ function fixtureWithSkippedScenarioAndPassingHook(forgeMessages = false): string
   fs.mkdirSync(path.join(root, "acceptance/support"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "acceptance/features/skipped.feature.md"),
-    "# 機能: スキップ検査\n\n実行済みシナリオだけを数える。\n\n## シナリオ: 全ステップをスキップする\n\n* 前提 スキップする\n* もし 後続処理がある\n* ならば 結果がある\n",
+    "# Feature: skipped-scenario check\n\nCount only executed scenarios.\n\n## Scenario: skip every step\n\n* Given the scenario is skipped\n* When a later action exists\n* Then a result exists\n",
   );
   fs.writeFileSync(
     path.join(root, "acceptance/steps/skipped.steps.ts"),
     `import assert from "node:assert/strict";
 import { Given, Then, When } from "@cucumber/cucumber";
-Given("スキップする", function () { return "skipped"; });
-When("後続処理がある", function () {});
-Then("結果がある", function () { assert.ok(true); });
+Given("the scenario is skipped", function () { return "skipped"; });
+When("a later action exists", function () {});
+Then("a result exists", function () { assert.ok(true); });
 `,
   );
   fs.writeFileSync(
@@ -118,7 +118,7 @@ ${
   paths: ["acceptance/features/**/*.feature.md"],
   requireModule: ["tsx/cjs"],
   require: ["acceptance/steps/**/*.ts", "acceptance/support/**/*.ts"],
-  language: "ja",
+  language: "en",
   strict: true,
   format: ["progress", \`message:\${process.env.DEADLOOP_CUCUMBER_MESSAGE_PATH}\`],
 } };\n`,
@@ -132,7 +132,7 @@ function fixtureWithUnmatchedFeatureLanguage(forgeMessages = false): string {
   fs.mkdirSync(path.join(root, "acceptance/features"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "acceptance/features/present.feature.md"),
-    "# Feature: discovery check\n\n## Scenario: a target exists\n\n* Given a state\n* When an action occurs\n* Then a result is visible\n",
+    "# 機能: discovery check\n\n## シナリオ: a target exists\n\n* 前提 a state\n* もし an action occurs\n* ならば a result is visible\n",
   );
   if (forgeMessages) {
     fs.mkdirSync(path.join(root, "acceptance/support"), { recursive: true });
@@ -158,7 +158,7 @@ process.on("exit", () => {
   paths: ["acceptance/features/**/*.feature.md"],
   requireModule: ["tsx/cjs"],
   require: ["acceptance/steps/**/*.ts", "acceptance/support/**/*.ts"],
-  language: "ja",
+  language: "en",
   strict: true,
   format: ["progress", \`message:\${process.env.DEADLOOP_CUCUMBER_MESSAGE_PATH}\`],
 } };\n`,

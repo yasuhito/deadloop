@@ -72,7 +72,7 @@ After("@requeued-pr-review", function (this: RequeuedReviewWorld) {
   if (this.root) fs.rmSync(this.root, { recursive: true, force: true });
 });
 
-Given("修正で head が変わり停止中で終了済みのレビュー担当が残る pull request がある", function (this: RequeuedReviewWorld) {
+Given("A blocked pull request has a completed Reviewer and its head changed after repair", function (this: RequeuedReviewWorld) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-requeued-review-"));
   const bin = path.join(root, "bin");
   const worktree = path.join(root, "worktrees", "agent-issue-44-fix");
@@ -153,7 +153,7 @@ if (args[0] === "--version") {
   Object.assign(this, { root, bin, worktree, configDir, log, prState, updatedHead });
 });
 
-When("agent:blocked が外された pull request を deadloop が再確認する", function (this: RequeuedReviewWorld) {
+When("deadloop checks the pull request after agent:blocked is removed", function (this: RequeuedReviewWorld) {
   if (!this.prState) throw new Error("requeued pull request state is missing");
   const pullRequests = JSON.parse(fs.readFileSync(this.prState, "utf8")) as Array<{
     labels: Array<{ name: string }>;
@@ -163,18 +163,18 @@ When("agent:blocked が外された pull request を deadloop が再確認する
   runReviewDriver(this);
 });
 
-Then("新しい head のレビュー担当を一人だけ起動する", function (this: RequeuedReviewWorld) {
+Then("deadloop starts exactly one Reviewer for the new head", function (this: RequeuedReviewWorld) {
   const actions = readHerdrActions(this).map(actionName);
 
   assert.equal(actions.filter((action) => action.startsWith("agent start dl-r-44-")).length, 1);
 });
 
-Then("終了済みのレビュー担当を再利用せず新しい担当を起動する", function (this: RequeuedReviewWorld) {
+Then("deadloop starts a new Reviewer without reusing the completed Reviewer", function (this: RequeuedReviewWorld) {
   const actions = readHerdrActions(this).map(actionName);
   assert.deepEqual({ oldPaneClosed: actions.includes("pane close pane-old"), newStarts: actions.filter((action) => action.startsWith("agent start dl-r-44-")).length }, { oldPaneClosed: false, newStarts: 1 });
 });
 
-Then("レビュー担当への引き継ぎに修正後の head を使う", function (this: RequeuedReviewWorld) {
+Then("The Reviewer handoff uses the repaired head", function (this: RequeuedReviewWorld) {
   if (!this.updatedHead) throw new Error("review handoff state is missing");
   const start = readHerdrActions(this)
     .find((args) => args[0] === "agent" && args[1] === "start" && args[2]?.startsWith("dl-r-44-"));

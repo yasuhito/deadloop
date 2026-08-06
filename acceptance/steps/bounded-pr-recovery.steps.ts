@@ -289,178 +289,178 @@ function branchUpdateFinalizer(commands: string[][], actualHead = head, isCrossR
   );
 }
 
-Given("回復できる競合状態の pull request がある", function (this: RecoveryWorld) {
+Given("A pull request has a conflict that can be recovered", function (this: RecoveryWorld) {
   this.case = "conflict";
 });
 
-Given("同じ pull request head と base の競合回復を一度試した pull request がある", function (this: RecoveryWorld) {
+Given("Conflict recovery was already attempted for the same pull request head and base", function (this: RecoveryWorld) {
   this.case = "repeated-conflict";
 });
 
-Given("競合回復で head が変わった pull request がある", function (this: RecoveryWorld) {
+Given("Conflict recovery changed the pull request head", function (this: RecoveryWorld) {
   this.case = "resolved-conflict";
 });
 
-Given("初めての対応可能なレビュー指摘がある pull request がある", function (this: RecoveryWorld) {
+Given("A pull request has actionable review findings for the first time", function (this: RecoveryWorld) {
   this.case = "first-repair";
 });
 
-Given("修正後の新しい head でも同じレビュー指摘が残った pull request がある", function (this: RecoveryWorld) {
+Given("The same review findings remain on the new head after repair", function (this: RecoveryWorld) {
   this.case = "repeated-repair";
 });
 
-Given("レビュー指摘の修正中である pull request がある", function (this: RecoveryWorld) {
+Given("A pull request is being repaired for review findings", function (this: RecoveryWorld) {
   this.case = "repair-dispatch";
 });
 
-Given("修正の push で head が変わった pull request がある", function (this: RecoveryWorld) {
+Given("A repair push changed the pull request head", function (this: RecoveryWorld) {
   this.case = "repaired-head";
 });
 
-Given("初めて技術的に失敗したレビューがある pull request がある", function (this: RecoveryWorld) {
+Given("A pull request has its first technical review failure", function (this: RecoveryWorld) {
   this.case = "first-technical-failure";
 });
 
-Given("技術的に一度失敗したレビューがある pull request がある", function (this: RecoveryWorld) {
+Given("A pull request already had one technical review failure", function (this: RecoveryWorld) {
   this.case = "repeated-technical-failure";
 });
 
-Given("修正対象の pull request head が確認済みである", function (this: RecoveryWorld) {
+Given("The pull request head selected for repair has been verified", function (this: RecoveryWorld) {
   this.case = "repair-finalize";
 });
 
-Given("一件の指摘に対して六ファイルを変更した修正がある", function (this: RecoveryWorld) {
+Given("A repair changes six files for one finding", function (this: RecoveryWorld) {
   this.case = "oversized-repair";
 });
 
-Given("一件の指摘に対して五ファイルを変更した修正がある", function (this: RecoveryWorld) {
+Given("A repair changes five files for one finding", function (this: RecoveryWorld) {
   this.case = "bounded-repair";
 });
 
-Given("競合回復対象の pull request head が確認済みである", function (this: RecoveryWorld) {
+Given("The pull request head selected for conflict recovery has been verified", function (this: RecoveryWorld) {
   this.case = "branch-update-finalize";
 });
 
-Given("別のリポジトリからの pull request が競合している", function (this: RecoveryWorld) {
+Given("A pull request from another repository has a conflict", function (this: RecoveryWorld) {
   this.case = "cross-repository-branch-update";
 });
 
-When("deadloop が pull request を確認する", function (this: RecoveryWorld) {
+When("deadloop checks the pull request", function (this: RecoveryWorld) {
   if (this.case === "conflict") this.result = reviewerDriver("merge-conflict.json");
   if (this.case === "repeated-conflict") this.result = reviewerDriver("merge-conflict-double-attempt.json");
   if (this.case === "resolved-conflict") this.result = reviewerDriver("merge-conflict-updated.json");
   if (this.case === "repaired-head") this.result = reviewerDriver("review-repair-pushed.json");
 });
 
-When("deadloop がレビュー結果を処理する", function (this: RecoveryWorld) {
+When("deadloop processes the review result", function (this: RecoveryWorld) {
   if (!this.case) throw new Error("review recovery case is missing");
   this.result = repairDispatch(this.case);
 });
 
-When("deadloop がレビュー指摘の修正を開始する", function (this: RecoveryWorld) {
+When("deadloop starts the review repair", function (this: RecoveryWorld) {
   if (!this.case) throw new Error("review repair case is missing");
   this.result = repairDispatch(this.case);
 });
 
-When("push の直前に pull request head が変わる", function (this: RecoveryWorld) {
+When("The pull request head changes immediately before push", function (this: RecoveryWorld) {
   this.commands = [];
   if (this.case === "repair-finalize") this.result = repairFinalizer(this.commands, base);
   if (this.case === "branch-update-finalize") this.result = branchUpdateFinalizer(this.commands, base);
 });
 
-When("deadloop が修正を完了する", function (this: RecoveryWorld) {
+When("deadloop completes the repair", function (this: RecoveryWorld) {
   this.commands = [];
   const changedFileCount = this.case === "oversized-repair" ? 6 : this.case === "bounded-repair" ? 5 : 0;
   this.result = repairFinalizer(this.commands, head, changedFileCount);
 });
 
-When("deadloop が競合回復を完了する", function (this: RecoveryWorld) {
+When("deadloop completes conflict recovery", function (this: RecoveryWorld) {
   this.commands = [];
   this.result = branchUpdateFinalizer(this.commands, head, this.case === "cross-repository-branch-update");
 });
 
-Then("deadloop は専用の競合回復作業を開始する", function (this: RecoveryWorld) {
+Then("deadloop starts a dedicated conflict-recovery attempt", function (this: RecoveryWorld) {
   const starts = adapterEffects(this.result)?.herdrStarts?.filter((start: any) => start.name.includes("branch-update")) ?? [];
   assert.equal(starts.length, 1);
 });
 
-Then("deadloop は専用の競合回復作業を開始しない", function (this: RecoveryWorld) {
+Then("deadloop does not start another dedicated conflict-recovery attempt", function (this: RecoveryWorld) {
   const starts = adapterEffects(this.result)?.herdrStarts?.filter((start: any) => start.name.includes("branch-update")) ?? [];
   assert.equal(starts.length, 0);
 });
 
-Then("deadloop は通常レビューを開始する", function (this: RecoveryWorld) {
+Then("deadloop returns the pull request to normal review", function (this: RecoveryWorld) {
   const starts = adapterEffects(this.result)?.herdrStarts?.filter((start: any) => start.name.endsWith("-reviewer")) ?? [];
   assert.equal(starts.length, 1);
 });
 
-Then("deadloop はレビュー状態を維持する", function (this: RecoveryWorld) {
+Then("deadloop preserves the review state", function (this: RecoveryWorld) {
   const labels = adapterEffects(this.result)?.labels?.["31"] ?? this.result?.observedLabels;
   assert.deepEqual(labels, ["agent:review", "agent:reviewing"]);
 });
 
-Then("deadloop は専用の修正作業を開始する", function (this: RecoveryWorld) {
+Then("deadloop starts a dedicated repair attempt", function (this: RecoveryWorld) {
   assert.equal(loggedRepairAgentStartCount(this.result), 1);
 });
 
-Then("deadloop は専用の修正作業を開始しない", function (this: RecoveryWorld) {
+Then("deadloop does not start another dedicated repair attempt", function (this: RecoveryWorld) {
   assert.equal(loggedAgentStartCount(this.result), 0);
 });
 
-Then("deadloop はレビュー対象に残す", function (this: RecoveryWorld) {
+Then("deadloop keeps the pull request under review", function (this: RecoveryWorld) {
   assert.equal(observedLabels(this.result).includes("agent:review"), true);
 });
 
-Then("deadloop は人間対応へ移す", function (this: RecoveryWorld) {
+Then("deadloop escalates the pull request for human handling", function (this: RecoveryWorld) {
   assert.equal(observedLabels(this.result).includes("agent:blocked"), true);
 });
 
-Then("deadloop は回復案内を残す", function (this: RecoveryWorld) {
+Then("deadloop leaves recovery guidance", function (this: RecoveryWorld) {
   assert.equal(observedComments(this.result).some((comment) => comment.body.includes("## Recovery steps")), true);
 });
 
-Then("deadloop はレビューを一度だけ再試行する", function (this: RecoveryWorld) {
+Then("deadloop retries the review exactly once", function (this: RecoveryWorld) {
   const starts = (this.result?.retryCycleEffects as any)?.herdrStarts?.filter((start: any) => start.name.endsWith("-reviewer")) ?? [];
   assert.equal(starts.length, 1);
 });
 
-Then("deadloop は人間対応にしない", function (this: RecoveryWorld) {
+Then("deadloop does not escalate the pull request for human handling", function (this: RecoveryWorld) {
   assert.equal((this.result?.observedLabels as string[]).includes("agent:blocked"), false);
 });
 
-Then("deadloop は通常レビューを開始しない", function (this: RecoveryWorld) {
+Then("deadloop does not start normal review", function (this: RecoveryWorld) {
   const starts = (this.result?.retryCycleEffects as any)?.herdrStarts?.filter((start: any) => start.name.endsWith("-reviewer")) ?? [];
   assert.equal(starts.length, 0);
 });
 
-Then("deadloop は branch へ push しない", function (this: RecoveryWorld) {
+Then("deadloop does not push to the branch", function (this: RecoveryWorld) {
   assert.equal(this.commands?.some((command) => command.includes("push")), false);
 });
 
-Then("deadloop は修正に人の確認が必要と判定する", function (this: RecoveryWorld) {
+Then("deadloop requires human review for the repair", function (this: RecoveryWorld) {
   assert.equal(this.result?.reason, "repair_size_limit_exceeded");
 });
 
-Then("deadloop は確認した branch へ非強制で push する", function (this: RecoveryWorld) {
+Then("deadloop pushes non-forcibly to the verified branch", function (this: RecoveryWorld) {
   assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
 });
 
-Then("deadloop は最後の pull request head 確認より先に設定済みチェックを実行する", function (this: RecoveryWorld) {
+Then("deadloop runs the configured checks before the final pull request head check", function (this: RecoveryWorld) {
   const checkIndex = this.commands?.findIndex((command) => command[0] === "node") ?? -1;
   const headCheckIndex = this.commands?.findIndex((command) => command[0] === "gh") ?? -1;
   assert.ok(checkIndex >= 0 && checkIndex < headCheckIndex);
 });
 
-Then("deadloop は競合回復 branch へ非強制で push する", function (this: RecoveryWorld) {
+Then("deadloop pushes non-forcibly to the conflict-recovery branch", function (this: RecoveryWorld) {
   assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
 });
 
-Then("deadloop は競合回復の最後の pull request head 確認より先に設定済みチェックを実行する", function (this: RecoveryWorld) {
+Then("deadloop runs the configured checks before the final conflict-recovery pull request head check", function (this: RecoveryWorld) {
   const checkIndex = this.commands?.findIndex((command) => command[0] === "node") ?? -1;
   const headCheckIndex = this.commands?.findIndex((command) => command[0] === "gh") ?? -1;
   assert.ok(checkIndex >= 0 && checkIndex < headCheckIndex);
 });
 
-Then("deadloop は競合回復 branch へ push しない", function (this: RecoveryWorld) {
+Then("deadloop does not push to the conflict-recovery branch", function (this: RecoveryWorld) {
   assert.equal(this.commands?.some((command) => command.includes("push")), false);
 });

@@ -1,81 +1,81 @@
-# 機能: 試行ごとに新しい実行画面を使う
+# Feature: Use a fresh pane for every attempt
 
-作業ツリーを次の試行へ安全に引き継ぎながら、完了した担当の実行画面を活動中として残さない。
+Safely hand a worktree to the next attempt without leaving the completed agent's pane active.
 
-## シナリオ: 作業中の担当は一つの実行場所だけに表示する
+## Scenario: Show a running agent in only one workspace and one pane
 
-* 前提 新しい作業試行を開始できる
-* もし deadloop が担当を起動する
-* ならば 担当は一つの実行場所と一つの画面に表示される
+* Given A new work attempt can start
+* When deadloop starts the agent
+* Then The agent appears in exactly one workspace and one pane
 
-## シナリオ: 放棄した Worker の作業ツリーを新しい試行で開き直す
+## Scenario: Reopen an abandoned Worker's worktree for a new attempt
 
-* 前提 起動失敗を証拠付きで放棄した Worker の作業ツリーがある
-* もし deadloop が再投入された Worker を起動する
-* ならば 同じ作業ツリーを新しい実行場所で開く
+* Given A Worker's worktree remains after its launch failure was abandoned with evidence
+* When deadloop starts the requeued Worker
+* Then deadloop opens the same worktree in a fresh workspace
 
-## シナリオ: PR を引き渡した担当の実行場所だけを閉じる
+## Scenario: Close only the workspace of the agent that handed off the PR
 
-* 前提 担当の PR と完了報告が一致している
-* もし deadloop が完了した試行を照合する
-* ならば 担当の実行場所は消えて作業ツリーは残る
+* Given The agent's PR and completion report agree
+* When deadloop reconciles the completed attempt
+* Then The agent's workspace is gone and the worktree remains
 
-## シナリオ: レビュー担当は同じ作業ツリーを新しい実行場所で開く
+## Scenario: Open the same worktree in a fresh workspace for the Reviewer
 
-* 前提 作業担当の実行場所を安全に閉じている
-* もし deadloop がレビュー担当を起動する
-* ならば レビュー担当は別の新しい実行場所を使う
+* Given The Worker's workspace was closed safely
+* When deadloop starts the Reviewer
+* Then The Reviewer uses a separate fresh workspace
 
-## シナリオ: 修正担当とブランチ更新担当はレビュー担当の端末を引き継がない
+## Scenario: Do not reuse the Reviewer's pane for repair and branch-update agents
 
-* 前提 レビュー結果を GitHub に保存して実行場所を閉じている
-* もし deadloop が修正担当とブランチ更新担当を起動する
-* ならば 修正担当とブランチ更新担当はそれぞれ新しい実行場所を使う
+* Given The review result was saved to GitHub and the Reviewer workspace was closed
+* When deadloop starts the repair agent and branch-update agent
+* Then Each agent uses a fresh workspace
 
-## シナリオ: 遮断された試行は調査できるように残す
+## Scenario: Preserve a blocked attempt for investigation
 
-* 前提 担当が安全上の理由で作業を遮断した
-* もし deadloop が完了した試行を照合する
-* ならば 担当の実行場所と作業ツリーを残す
+* Given The agent blocked its work for a safety reason
+* When deadloop reconciles the completed attempt
+* Then deadloop preserves the agent's workspace and worktree
 
-## シナリオ: 壊れた完了報告では実行場所を閉じない
+## Scenario: Do not close a workspace for a malformed completion report
 
-* 前提 担当の完了報告が壊れている
-* もし deadloop が完了した試行を照合する
-* ならば 担当の実行場所と作業ツリーを残す
+* Given The agent's completion report is malformed
+* When deadloop reconciles the completed attempt
+* Then deadloop preserves the agent's workspace and worktree
 
-## シナリオ: GitHub への保存を確認できないときは実行場所を閉じない
+## Scenario: Do not close a workspace when GitHub persistence cannot be confirmed
 
-* 前提 担当の結果を GitHub で確認できない
-* もし deadloop が完了した試行を照合する
-* ならば 担当の実行場所と作業ツリーを残す
+* Given The agent's result cannot be confirmed on GitHub
+* When deadloop reconciles the completed attempt
+* Then deadloop preserves the agent's workspace and worktree
 
-## シナリオ: 対応外の Herdr では候補を選ぶ前に停止する
+## Scenario: Stop before candidate selection when Herdr is unsupported
 
-* 前提 自動化の実行元が対応外の Herdr に接続している
-* もし deadloop が自動化の周期を開始する
-* ならば GitHub と実行場所を変更せずに停止する
+* Given The automation host is connected to an unsupported Herdr
+* When deadloop starts an automation cycle
+* Then deadloop stops without changing GitHub or a workspace
 
-## シナリオ: 調査用に残した実行場所がある間は再試行しない
+## Scenario: Do not retry while a retained workspace remains under investigation
 
-* 前提 同じ作業ツリーに調査中の実行場所が残っている
-* もし deadloop が次の担当を検討する
-* ならば 同じ作業ツリーには新しい担当を起動しない
+* Given A workspace retained for investigation remains on the same worktree
+* When deadloop considers starting the next agent
+* Then deadloop does not start a new agent on the same worktree
 
-## シナリオ: 再起動後に保存済みの成功を安全に回収する
+## Scenario: Reclaim a persisted success safely after restart
 
-* 前提 GitHub への保存後に実行元が停止した
-* もし deadloop が再起動時に試行を照合する
-* ならば 保存済みの実行場所だけを閉じて作業ツリーを残す
+* Given The automation host stopped after persisting the result to GitHub
+* When deadloop reconciles the attempt after restart
+* Then deadloop closes only the persisted workspace and leaves the worktree
 
-## シナリオ: 再起動後に所有者を特定できない実行場所を残す
+## Scenario: Preserve a workspace whose owner cannot be identified after restart
 
-* 前提 再起動時に実行場所の所有者を特定できない
-* もし deadloop が再起動時に試行を照合する
-* ならば 所有者不明の実行場所を閉じない
+* Given The workspace owner cannot be identified after restart
+* When deadloop reconciles the attempt after restart
+* Then deadloop does not close a workspace with an unknown owner
 
-## シナリオ: PR 完了後の安全確認を満たした作業ツリーだけを削除する
+## Scenario: Remove only worktrees that pass post-PR safety checks
 
-* 前提 PR が完了し作業ツリーが清浄で追跡中ではない
-* もし deadloop が PR の作業ツリーを片付ける
-* ならば 安全確認を満たした作業ツリーだけが削除対象になる
+* Given The PR is complete and its worktree is clean and untracked by Herdr
+* When deadloop cleans up the PR worktree
+* Then Only a worktree that passes the safety checks is selected for removal

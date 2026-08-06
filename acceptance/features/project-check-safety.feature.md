@@ -1,82 +1,82 @@
-# 機能: 自動チェック後に実行時成果物を復元する
+# Feature: Restore runtime artifacts after a project check
 
-検証中だけ未追跡の実行時成果物を隔離し、チェックの終了理由にかかわらず証跡を失わない。
-Git 管理された成果物は隔離せず、安全側に停止する。
+Isolate untracked runtime artifacts only during verification and preserve their evidence regardless of how the check ends.
+Do not isolate tracked artifacts; fail closed instead.
 
-## シナリオ: 未追跡の実行時成果物を隔離して再帰的な検証を成功させる
+## Scenario: Isolate untracked runtime artifacts so recursive verification succeeds
 
-* 前提 deadloop が自動チェックするプロジェクトがある
-* かつ プロジェクトに未追跡の実行時成果物がある
-* もし deadloop が再帰的な検証を実行する
-* ならば 再帰的な検証は成功する
+* Given A project is configured for deadloop project checks
+* And The project contains untracked runtime artifacts
+* When deadloop runs recursive verification
+* Then Recursive verification succeeds
 
-## シナリオ: 成功した自動チェック後に完了報告を復元する
+## Scenario: Restore the completion report after a successful project check
 
-* 前提 deadloop が自動チェックするプロジェクトがある
-* かつ プロジェクトに未追跡の実行時成果物がある
-* もし deadloop が成功する自動チェックを実行する
-* ならば 完了報告は元の内容で復元される
+* Given A project is configured for deadloop project checks
+* And The project contains untracked runtime artifacts
+* When deadloop runs a successful project check
+* Then The completion report is restored with its original contents
 
-## シナリオ: Git 管理された製品ファイルは再帰的な検証で失敗する
+## Scenario: Fail recursive verification for an invalid tracked product file
 
-* 前提 deadloop が自動チェックするプロジェクトがある
-* かつ プロジェクトに未追跡の実行時成果物がある
-* かつ プロジェクトに不正な Git 管理ファイルがある
-* もし deadloop が再帰的な検証を実行する
-* ならば 再帰的な検証は失敗する
+* Given A project is configured for deadloop project checks
+* And The project contains untracked runtime artifacts
+* And The project contains an invalid tracked file
+* When deadloop runs recursive verification
+* Then Recursive verification fails
 
-## シナリオ: `.deadloop` に Git 管理ファイルがある場合は自動チェックを実行しない
+## Scenario: Do not run a project check when `.deadloop` contains a tracked file
 
-* 前提 deadloop が自動チェックするプロジェクトがある
-* かつ `.deadloop` ディレクトリに Git 管理ファイルがある
-* もし deadloop が自動チェックを開始しようとする
-* ならば deadloop は自動チェックを実行しない
+* Given A project is configured for deadloop project checks
+* And The `.deadloop` directory contains a tracked file
+* When deadloop attempts to start a project check
+* Then deadloop does not run the project check
 
-## シナリオ: `.deadloop` に Git 管理ファイルがある場合は安全停止する
+## Scenario: Fail closed when `.deadloop` contains a tracked file
 
-* 前提 deadloop が自動チェックするプロジェクトがある
-* かつ `.deadloop` ディレクトリに Git 管理ファイルがある
-* もし deadloop が自動チェックを開始しようとする
-* ならば 自動チェックは失敗結果を返す
+* Given A project is configured for deadloop project checks
+* And The `.deadloop` directory contains a tracked file
+* When deadloop attempts to start a project check
+* Then The project check returns a failure result
 
-## シナリオ: 失敗した自動チェック後に完了報告を復元する
+## Scenario: Restore the completion report after a failed project check
 
-* 前提 deadloop が自動チェックするプロジェクトがある
-* かつ プロジェクトに未追跡の実行時成果物がある
-* もし deadloop が失敗する自動チェックを実行する
-* ならば 完了報告は元の内容で復元される
+* Given A project is configured for deadloop project checks
+* And The project contains untracked runtime artifacts
+* When deadloop runs a failing project check
+* Then The completion report is restored with its original contents
 
-## シナリオ: 時間切れの自動チェック後に診断情報を復元する
+## Scenario: Restore diagnostic information after a timed-out project check
 
-* 前提 deadloop が自動チェックするプロジェクトがある
-* かつ プロジェクトに未追跡の実行時成果物がある
-* もし deadloop が時間切れになる自動チェックを実行する
-* ならば 診断情報は元の内容で復元される
+* Given A project is configured for deadloop project checks
+* And The project contains untracked runtime artifacts
+* When deadloop runs a project check that times out
+* Then The diagnostic information is restored with its original contents
 
-## シナリオ: 終了要求を無視した時間切れの自動チェックを停止する
+## Scenario: Terminate a timed-out project check that ignores the termination request
 
-* 前提 deadloop が自動チェックするプロジェクトがある
-* かつ プロジェクトに未追跡の実行時成果物がある
-* もし deadloop が終了要求を無視する自動チェックを時間切れにする
-* ならば 時間切れの自動チェックはすぐに終了する
+* Given A project is configured for deadloop project checks
+* And The project contains untracked runtime artifacts
+* When deadloop times out a project check that ignores termination requests
+* Then The timed-out project check terminates promptly
 
-## シナリオ: 強制停止した時間切れの自動チェック後に診断情報を復元する
+## Scenario: Restore diagnostic information after forcibly terminating a timed-out project check
 
-* 前提 deadloop が自動チェックするプロジェクトがある
-* かつ プロジェクトに未追跡の実行時成果物がある
-* もし deadloop が終了要求を無視する自動チェックを時間切れにする
-* ならば 診断情報は元の内容で復元される
+* Given A project is configured for deadloop project checks
+* And The project contains untracked runtime artifacts
+* When deadloop times out a project check that ignores termination requests
+* Then The diagnostic information is restored with its original contents
 
-## シナリオ: CLI を中断した後に診断情報を復元する
+## Scenario: Restore diagnostic information after interrupting the CLI
 
-* 前提 deadloop が自動チェックするプロジェクトがある
-* かつ プロジェクトに未追跡の実行時成果物がある
-* もし deadloop の自動チェック CLI を中断する
-* ならば 診断情報は元の内容で復元される
+* Given A project is configured for deadloop project checks
+* And The project contains untracked runtime artifacts
+* When The deadloop project-check CLI is interrupted
+* Then The diagnostic information is restored with its original contents
 
-## シナリオ: 中断した自動チェックは中断として報告する
+## Scenario: Report an interrupted project check as interrupted
 
-* 前提 deadloop が自動チェックするプロジェクトがある
-* かつ プロジェクトに未追跡の実行時成果物がある
-* もし deadloop が自動チェックを中断する
-* ならば 自動チェックは中断として報告される
+* Given A project is configured for deadloop project checks
+* And The project contains untracked runtime artifacts
+* When deadloop interrupts the project check
+* Then The project check is reported as interrupted
