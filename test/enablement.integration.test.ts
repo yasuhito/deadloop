@@ -7,6 +7,9 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { runEnablementVerification } from "../src/enablement-verification";
 import { schedulerLockName } from "../src/project-identity";
 const { withEnabledProjectLock } = require("../src/enabled-operation.cjs");
+const { projectCheckMain } = require("../src/project-check.ts") as {
+  projectCheckMain: (argv: string[], runner: (input: unknown) => Promise<unknown>) => Promise<void>;
+};
 
 type CommandContext = { cwd: string; mode: string; ui: { notify: () => void; setStatus: () => void }; isIdle?: () => boolean; hasPendingMessages?: () => boolean };
 type CommandHandler = (_args: string, ctx: CommandContext) => Promise<void>;
@@ -143,6 +146,7 @@ async function loadExtension(
     beforeDisableLock?: () => Promise<void>;
     afterEnablementSaved?: () => Promise<void>;
     beforeEnablementWorktreeCreate?: (journalPath: string) => Promise<void>;
+    beforeEnablementProjectCheck?: (worktreePath: string) => Promise<void>;
     runAutomationScript?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
     herdrCompatibilityPreflight?: () => void;
     recoveryFixture?: {
@@ -246,6 +250,7 @@ async function loadExtension(
       beforeDisableLock: options.beforeDisableLock,
       afterEnablementSaved: options.afterEnablementSaved,
       beforeEnablementWorktreeCreate: options.beforeEnablementWorktreeCreate,
+      beforeEnablementProjectCheck: options.beforeEnablementProjectCheck,
       herdrCompatibilityPreflight: options.herdrCompatibilityPreflight || (() => undefined),
     },
   });
@@ -375,6 +380,48 @@ async function interruptedVerificationObservation(): Promise<{
     signal: controller.signal,
   });
   return JSON.parse(readFileSync(result.recordPath, "utf8"));
+}
+
+async function interruptedEnablementCommandObservation(trigger: "disable" | "shutdown"): Promise<{
+  outcome: string;
+  restoredArtifact: string;
+}> {
+  const { root, repoPath } = fixtureRepository();
+  writeConfig(root, repoPath);
+  const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.projects[0].checkCommand = "sleep 60";
+  writeFileSync(configPath, JSON.stringify(config));
+  let worktreePath = "";
+  let projectCheckStarted!: () => void;
+  const started = new Promise<void>((resolve) => { projectCheckStarted = resolve; });
+  const extension = await loadExtension(root, {
+    beforeEnablementProjectCheck: async (candidate) => {
+      worktreePath = candidate;
+      mkdirSync(path.join(candidate, ".deadloop"));
+      writeFileSync(path.join(candidate, ".deadloop", "evidence"), "restored\n");
+      projectCheckStarted();
+    },
+  });
+
+  const enabling = invoke(extension.commands.get("deadloop-enable")!, repoPath);
+  await started;
+  if (trigger === "disable") {
+    await invoke(extension.commands.get("deadloop-disable")!, repoPath);
+  } else {
+    await extension.events.get("session_shutdown")?.({}, {
+      cwd: repoPath,
+      mode: "interactive",
+      ui: { notify: () => undefined, setStatus: () => undefined },
+    });
+  }
+  await enabling;
+  const attemptsRoot = path.join(root, ".pi", "agent", "deadloop", "required-verification", "enablement");
+  const attemptDir = path.join(attemptsRoot, readdirSync(attemptsRoot)[0]);
+  return {
+    outcome: JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome,
+    restoredArtifact: readFileSync(path.join(worktreePath, ".deadloop", "evidence"), "utf8"),
+  };
 }
 
 async function dirtyFailureObservation(): Promise<{ messageIncludesLogPath: boolean; logIncludesDirtyFailure: boolean }> {
@@ -611,6 +658,55 @@ async function dependencySetupObservation(): Promise<{
   };
 }
 
+async function retainedGeneralProjectCheckDoctorObservation(): Promise<{ report: string; quarantinePath: string }> {
+  const { root, repoPath } = fixtureRepository();
+  writeConfig(root, repoPath);
+  const stateDir = path.join(root, ".pi", "agent", "deadloop");
+  const extension = await loadExtension(root);
+  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+  const runDir = path.join(stateDir, "runs", "project-check-attempt");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+    attemptId: "attempt-project-check",
+    launchUuid: "project-check-attempt",
+    project: "demo",
+    repository: "owner/demo",
+    role: "worker",
+    target: { kind: "issue", number: 198 },
+    inputRevision: { head: "a".repeat(40) },
+    branch: "agent/issue-198",
+    worktreePath: repoPath,
+    agentName: "worker",
+    workspaceLabel: "worker",
+    promptFile: path.join(runDir, "prompt.md"),
+    promiseFile: path.join(runDir, "promise.json"),
+    phase: "prepared",
+    lastSuccessfulPhase: "prepared",
+  }));
+  const quarantinePath = path.join(stateDir, "check-quarantine", "retained");
+  mkdirSync(quarantinePath, { recursive: true });
+  const previousExitCode = process.exitCode;
+  try {
+    await projectCheckMain([
+      "--cwd", repoPath,
+      "--command", "true",
+      "--quarantine-root", path.join(stateDir, "check-quarantine"),
+    ], async () => ({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      interrupted: false,
+      signal: null,
+      restorationFailure: { message: "restore blocked", quarantinePath },
+    }));
+  } finally {
+    process.exitCode = previousExitCode;
+  }
+  await invoke(extension.commands.get("deadloop-doctor")!, repoPath);
+  return { report: extension.messages.at(-1) || "", quarantinePath };
+}
+
 describe("enablement command integration", () => {
   it("records prepared verification worktree intent before creation", async () => {
     expect((await ownedWorktreeIntentObservation()).state).toBe("prepared");
@@ -747,6 +843,18 @@ describe("enablement command integration", () => {
 
   it("records a typed termination reason when required verification is interrupted", async () => {
     expect((await interruptedVerificationObservation()).terminationReason).toBe("interrupted");
+  });
+
+  it("records disable of the public enable command as interrupted", async () => {
+    expect((await interruptedEnablementCommandObservation("disable")).outcome).toBe("interrupted");
+  });
+
+  it("records session shutdown of the public enable command as interrupted", async () => {
+    expect((await interruptedEnablementCommandObservation("shutdown")).outcome).toBe("interrupted");
+  });
+
+  it("waits for isolated artifacts to be restored during enable-command shutdown", async () => {
+    expect((await interruptedEnablementCommandObservation("shutdown")).restoredArtifact).toBe("restored\n");
   });
 
   it("writes timeout-specific evidence to the durable verification log", async () => {
@@ -910,6 +1018,16 @@ describe("enablement command integration", () => {
     const observation = await retainedVerificationDoctorObservation();
 
     expect(observation.report).toContain(expectedValue(observation));
+  });
+
+  it("shows a general project-check restoration quarantine in doctor", async () => {
+    const observation = await retainedGeneralProjectCheckDoctorObservation();
+
+    expect(observation.report).toContain(observation.quarantinePath);
+  });
+
+  it("links a general project-check restoration failure to its attempt in doctor", async () => {
+    expect((await retainedGeneralProjectCheckDoctorObservation()).report).toContain("attempt-project-check");
   });
 
   it("registers the explicit launch-failed attempt abandonment command", async () => {

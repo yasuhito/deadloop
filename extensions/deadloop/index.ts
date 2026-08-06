@@ -64,6 +64,16 @@ import {
   inspectRetainedEnablementVerifications,
   runEnablementVerification,
 } from "../../src/enablement-verification";
+const { inspectRetainedProjectCheckFailures } = require("../../src/project-check.ts") as {
+  inspectRetainedProjectCheckFailures: (stateDir: string, project?: { id: string; githubRepo: string }) => Array<{
+    attemptId?: string;
+    worktreePath: string;
+    quarantinePath: string;
+    message: string;
+    recordPath: string;
+    attemptRecordPath?: string;
+  }>;
+};
 import {
   findEnabledProject,
   normalizeEnablementState,
@@ -1035,6 +1045,24 @@ function retainedVerificationReport(repositoryRoot: string | undefined): string 
   return lines.join("\n");
 }
 
+function retainedProjectCheckReport(project): string {
+  if (!project) return "";
+  const retained = inspectRetainedProjectCheckFailures(STATE_DIR, project);
+  if (!retained.length) return "";
+  const lines = ["", `Retained project-check artifacts: ${retained.length}`];
+  for (const item of retained) {
+    lines.push(
+      `- attempt: ${item.attemptId || "unresolved"}`,
+      `  worktree: ${item.worktreePath}`,
+      `  quarantine: ${item.quarantinePath}`,
+      `  reason: ${item.message}`,
+      `  record: ${item.recordPath}`,
+      `  attempt journal: ${item.attemptRecordPath || "not resolved"}`,
+    );
+  }
+  return lines.join("\n");
+}
+
 async function buildLiveDoctorReport(pi, cwd) {
   const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true, includeAgents: true });
   const retained = retainedAttemptClaimSnapshot(data.selectedProject);
@@ -1058,7 +1086,7 @@ async function buildLiveDoctorReport(pi, cwd) {
     ));
   }
   const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
-  return `${formatDoctorReport(snapshot)}${retainedVerificationReport(repositoryRoot)}`;
+  return `${formatDoctorReport(snapshot)}${retainedVerificationReport(repositoryRoot)}${retainedProjectCheckReport(data.selectedProject)}`;
 }
 
 const STANDARD_LABELS = [
@@ -1529,6 +1557,30 @@ export default function (pi) {
   let stopRequested = false;
   let pendingStart = null;
   let activeTickPromise = null;
+  const activeEnablementVerifications = new Map();
+
+  function registerEnablementVerification(repoPath, controller, settled) {
+    const key = path.resolve(repoPath);
+    const runs = activeEnablementVerifications.get(key) || new Set();
+    runs.add({ controller, settled });
+    activeEnablementVerifications.set(key, runs);
+  }
+
+  function unregisterEnablementVerification(repoPath, controller) {
+    const key = path.resolve(repoPath);
+    const runs = activeEnablementVerifications.get(key);
+    if (!runs) return;
+    for (const run of runs) if (run.controller === controller) runs.delete(run);
+    if (!runs.size) activeEnablementVerifications.delete(key);
+  }
+
+  async function interruptEnablementVerifications(repoPath?) {
+    const runs = repoPath
+      ? [...(activeEnablementVerifications.get(path.resolve(repoPath)) || [])]
+      : [...activeEnablementVerifications.values()].flatMap((entries) => [...entries]);
+    for (const run of runs) run.controller.abort();
+    await Promise.allSettled(runs.map((run) => run.settled));
+  }
 
   async function tick(ctx) {
     if (!active) return;
@@ -1768,13 +1820,25 @@ export default function (pi) {
         identity = await detectProjectIdentity(pi, primaryRepoPath);
         previousEnabledAt = await withEnablementStateLock(async () => findEnabledProject(loadEnablementState(), identity)?.enabledAt);
         const preflightProject = resolveEnableProject(ctx.cwd, identity);
-        const verification = await runEnablementVerification({
-          stateDir: STATE_DIR,
-          primaryRepoPath,
-          repository: identity.githubRepo,
-          resolution: preflightProject.requiredVerification,
-          beforeWorktreeCreate: pi.testing?.beforeEnablementWorktreeCreate,
-        });
+        const verificationController = new AbortController();
+        let settleVerification;
+        const verificationSettled = new Promise<void>((resolve) => { settleVerification = resolve; });
+        registerEnablementVerification(primaryRepoPath, verificationController, verificationSettled);
+        let verification;
+        try {
+          verification = await runEnablementVerification({
+            stateDir: STATE_DIR,
+            primaryRepoPath,
+            repository: identity.githubRepo,
+            resolution: preflightProject.requiredVerification,
+            beforeWorktreeCreate: pi.testing?.beforeEnablementWorktreeCreate,
+            beforeProjectCheck: pi.testing?.beforeEnablementProjectCheck,
+            signal: verificationController.signal,
+          });
+        } finally {
+          unregisterEnablementVerification(primaryRepoPath, verificationController);
+          settleVerification();
+        }
         if (verification.outcome !== "passed") {
           const retained = verification.cleanup === "retained" ? `; retained worktree journal: ${verification.journalPath}` : "";
           throw new Error(`required verification failed (exit ${verification.exitCode}); log: ${verification.logPath}${retained}`);
@@ -1852,6 +1916,7 @@ export default function (pi) {
         let message;
         const repoPath = await detectPrimaryCheckout(pi, ctx.cwd, true);
         advanceDisableGeneration(STATE_DIR, repoPath, writeJsonFile);
+        await interruptEnablementVerifications(repoPath);
         await pi.testing?.beforeDisableLock?.();
         await withEnablementStateLock(async () => {
           const attempt = readJsonFile(enableAttemptPath(repoPath), null);
@@ -1890,6 +1955,7 @@ export default function (pi) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    await interruptEnablementVerifications();
     await stopScheduler(ctx);
   });
 }

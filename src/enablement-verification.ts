@@ -85,6 +85,7 @@ export type EnablementVerificationInput = {
   repository: string;
   resolution: RequiredVerificationResolution;
   beforeWorktreeCreate?: (journalPath: string) => Promise<void> | void;
+  beforeProjectCheck?: (worktreePath: string) => Promise<void> | void;
   projectCheckRunner?: (input: {
     cwd: string;
     command: string;
@@ -364,6 +365,7 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     throw new Error(`required verification worktree revision mismatch; log: ${logPath}; retained worktree journal: ${journalPath}`);
   }
 
+  await input.beforeProjectCheck?.(worktreePath);
   let check: ProjectCheckResult;
   let runnerFailed = false;
   try {
