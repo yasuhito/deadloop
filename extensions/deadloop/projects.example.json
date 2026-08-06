@@ -10,7 +10,6 @@
       "ciFallback": {
         "enabled": false,
         "mode": "billing-only",
-        "allowAutoMerge": false,
         "localCommands": ["git diff --check"]
       },
       "externalReview": {
