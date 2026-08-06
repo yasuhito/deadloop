@@ -383,6 +383,15 @@ function inspectRetainedProjectCheckFailures(
   }).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
 
+function inspectUnresolvedProjectCheckFailures(stateDir: string): RetainedProjectCheckFailure[] {
+  return inspectRetainedProjectCheckFailures(stateDir).filter((failure) =>
+    typeof failure.attemptId !== "string"
+    || typeof failure.project !== "string"
+    || typeof failure.repository !== "string"
+    || typeof failure.attemptRecordPath !== "string"
+  );
+}
+
 function parseCliArgs(argv: string[]): ProjectCheckInput {
   const values: Record<string, string> = {};
   for (let index = 0; index < argv.length; index += 2) {
@@ -430,7 +439,13 @@ async function projectCheckMain(
   }
 }
 
-module.exports = { inspectRetainedProjectCheckFailures, projectCheckMain, renderProjectCheckCommand, runProjectCheck };
+module.exports = {
+  inspectRetainedProjectCheckFailures,
+  inspectUnresolvedProjectCheckFailures,
+  projectCheckMain,
+  renderProjectCheckCommand,
+  runProjectCheck,
+};
 
 if (require.main === module) {
   projectCheckMain().catch((error) => {

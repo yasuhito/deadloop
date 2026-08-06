@@ -707,6 +707,41 @@ async function retainedGeneralProjectCheckDoctorObservation(): Promise<{ report:
   return { report: extension.messages.at(-1) || "", quarantinePath };
 }
 
+async function unresolvedProjectCheckDoctorObservation(attemptRecord: "missing" | "corrupt") {
+  const { root, repoPath } = fixtureRepository();
+  writeConfig(root, repoPath);
+  const stateDir = path.join(root, ".pi", "agent", "deadloop");
+  const extension = await loadExtension(root);
+  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+  if (attemptRecord === "corrupt") {
+    const runDir = path.join(stateDir, "runs", "corrupt-project-check-attempt");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, "attempt.json"), "{malformed");
+  }
+  const quarantinePath = path.join(stateDir, "check-quarantine", `unresolved-${attemptRecord}`);
+  mkdirSync(quarantinePath, { recursive: true });
+  const previousExitCode = process.exitCode;
+  try {
+    await projectCheckMain([
+      "--cwd", repoPath,
+      "--command", "true",
+      "--quarantine-root", path.join(stateDir, "check-quarantine"),
+    ], async () => ({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      interrupted: false,
+      signal: null,
+      restorationFailure: { message: "restore blocked", quarantinePath },
+    }));
+  } finally {
+    process.exitCode = previousExitCode;
+  }
+  await invoke(extension.commands.get("deadloop-doctor")!, repoPath);
+  return { report: extension.messages.at(-1) || "", quarantinePath };
+}
+
 describe("enablement command integration", () => {
   it("records prepared verification worktree intent before creation", async () => {
     expect((await ownedWorktreeIntentObservation()).state).toBe("prepared");
@@ -1028,6 +1063,15 @@ describe("enablement command integration", () => {
 
   it("links a general project-check restoration failure to its attempt in doctor", async () => {
     expect((await retainedGeneralProjectCheckDoctorObservation()).report).toContain("attempt-project-check");
+  });
+
+  it.each(["missing", "corrupt"] as const)("shows %s attempt records in an independent unresolved doctor section", async (attemptRecord) => {
+    const observation = await unresolvedProjectCheckDoctorObservation(attemptRecord);
+
+    expect({
+      hasSection: observation.report.includes("Unresolved retained project-check artifacts"),
+      hasQuarantine: observation.report.includes(observation.quarantinePath),
+    }).toEqual({ hasSection: true, hasQuarantine: true });
   });
 
   it("registers the explicit launch-failed attempt abandonment command", async () => {

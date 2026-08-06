@@ -95,6 +95,31 @@ async function returnedRestorationFailureScenario() {
   };
 }
 
+async function completedRestorationFailureRecord(code: number) {
+  const scenario = fixture();
+  const quarantinePath = path.join(scenario.stateDir, "check-quarantine", `retained-${code}`);
+  const restorationFailure = { message: "deterministic restoration failure", quarantinePath };
+  const result = await runEnablementVerification({
+    stateDir: scenario.stateDir,
+    primaryRepoPath: scenario.repoPath,
+    repository: scenario.contract.repository,
+    resolution: { status: "resolved", contract: scenario.contract },
+    projectCheckRunner: async () => {
+      fs.mkdirSync(quarantinePath, { recursive: true });
+      return {
+        code,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        interrupted: false,
+        signal: null,
+        restorationFailure,
+      };
+    },
+  });
+  return { record: JSON.parse(fs.readFileSync(result.recordPath, "utf8")), restorationFailure };
+}
+
 afterEach(() => {
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
 });
@@ -289,6 +314,20 @@ describe("enablement required-verification records", () => {
     const { failure, record } = await thrownRestorationFailureScenario();
 
     expect(record.artifactRestorationFailure).toEqual(failure.restorationFailure);
+  });
+
+  it.each([0, 17])("preserves exit code %s alongside restoration failure evidence", async (code) => {
+    const { record, restorationFailure } = await completedRestorationFailureRecord(code);
+
+    expect({
+      exitCode: record.exitCode,
+      terminationReason: record.terminationReason,
+      artifactRestorationFailure: record.artifactRestorationFailure,
+    }).toEqual({
+      exitCode: code,
+      terminationReason: undefined,
+      artifactRestorationFailure: restorationFailure,
+    });
   });
 
   it("retains cleanup when a thrown runner cannot restore artifacts", async () => {

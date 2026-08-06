@@ -64,15 +64,17 @@ import {
   inspectRetainedEnablementVerifications,
   runEnablementVerification,
 } from "../../src/enablement-verification";
-const { inspectRetainedProjectCheckFailures } = require("../../src/project-check.ts") as {
-  inspectRetainedProjectCheckFailures: (stateDir: string, project?: { id: string; githubRepo: string }) => Array<{
-    attemptId?: string;
-    worktreePath: string;
-    quarantinePath: string;
-    message: string;
-    recordPath: string;
-    attemptRecordPath?: string;
-  }>;
+type RetainedProjectCheckFailure = {
+  attemptId?: string;
+  worktreePath: string;
+  quarantinePath: string;
+  message: string;
+  recordPath: string;
+  attemptRecordPath?: string;
+};
+const { inspectRetainedProjectCheckFailures, inspectUnresolvedProjectCheckFailures } = require("../../src/project-check.ts") as {
+  inspectRetainedProjectCheckFailures: (stateDir: string, project?: { id: string; githubRepo: string }) => RetainedProjectCheckFailure[];
+  inspectUnresolvedProjectCheckFailures: (stateDir: string) => RetainedProjectCheckFailure[];
 };
 import {
   findEnabledProject,
@@ -1045,11 +1047,9 @@ function retainedVerificationReport(repositoryRoot: string | undefined): string 
   return lines.join("\n");
 }
 
-function retainedProjectCheckReport(project): string {
-  if (!project) return "";
-  const retained = inspectRetainedProjectCheckFailures(STATE_DIR, project);
+function renderRetainedProjectCheckReport(title: string, retained: RetainedProjectCheckFailure[]): string {
   if (!retained.length) return "";
-  const lines = ["", `Retained project-check artifacts: ${retained.length}`];
+  const lines = ["", `${title}: ${retained.length}`];
   for (const item of retained) {
     lines.push(
       `- attempt: ${item.attemptId || "unresolved"}`,
@@ -1061,6 +1061,21 @@ function retainedProjectCheckReport(project): string {
     );
   }
   return lines.join("\n");
+}
+
+function retainedProjectCheckReport(project): string {
+  if (!project) return "";
+  return renderRetainedProjectCheckReport(
+    "Retained project-check artifacts",
+    inspectRetainedProjectCheckFailures(STATE_DIR, project),
+  );
+}
+
+function unresolvedProjectCheckReport(): string {
+  return renderRetainedProjectCheckReport(
+    "Unresolved retained project-check artifacts",
+    inspectUnresolvedProjectCheckFailures(STATE_DIR),
+  );
 }
 
 async function buildLiveDoctorReport(pi, cwd) {
@@ -1086,7 +1101,7 @@ async function buildLiveDoctorReport(pi, cwd) {
     ));
   }
   const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
-  return `${formatDoctorReport(snapshot)}${retainedVerificationReport(repositoryRoot)}${retainedProjectCheckReport(data.selectedProject)}`;
+  return `${formatDoctorReport(snapshot)}${retainedVerificationReport(repositoryRoot)}${retainedProjectCheckReport(data.selectedProject)}${unresolvedProjectCheckReport()}`;
 }
 
 const STANDARD_LABELS = [

@@ -406,14 +406,16 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     ? "timeout"
     : check.interrupted
       ? "interrupted"
-      : check.restorationFailure
-        ? "artifact_restoration_failure"
-        : runnerFailed
-          ? "runner_failure"
-          : check.signal
-            ? "signal"
-            : undefined;
-  const exitCode = terminationReason ? null : check.code;
+      : check.code === null
+        ? check.restorationFailure
+          ? "artifact_restoration_failure"
+          : runnerFailed
+            ? "runner_failure"
+            : check.signal
+              ? "signal"
+              : undefined
+        : undefined;
+  const exitCode = check.timedOut || check.interrupted ? null : check.code;
   writeJson(recordPath, {
     version: 1,
     attemptId,
