@@ -99,7 +99,7 @@ Then("deadloop explains how to add the selection labels to the split Issues", fu
   );
 });
 
-Then("The blocking comment are created only as a guide for users.", function (this: IssueCoordinationWorld) {
+Then("The blocking comment contains only user-facing guidance", function (this: IssueCoordinationWorld) {
   assert.doesNotMatch(
     this.result?.comment || "",
     /extract-worker-promise|herdr|\/example\/repository|<(?:promiseFile|workspaceId|worktreePath|branch)>/i,

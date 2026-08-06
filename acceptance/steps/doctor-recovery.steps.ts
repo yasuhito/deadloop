@@ -116,7 +116,7 @@ Given("Automation has been stuck for at least three attempts", function (this: D
   setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "queued", lastAttemptAt: nowMs - 1_800_001 } } } });
 });
 
-Given("There is a recent successful automation attempt", function (this: DoctorWorld) {
+Given("There is a recent normal automation attempt", function (this: DoctorWorld) {
   setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "queued", lastAttemptAt: nowMs } } } });
 });
 

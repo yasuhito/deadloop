@@ -23,7 +23,7 @@ Safely hand a worktree to the next attempt without leaving the completed agent's
 ## Scenario: Open the same worktree in a fresh workspace for the Reviewer
 
 * Given The Worker's workspace was closed safely
-* When deadloop starts the Reviewer in a fresh workspace
+* When deadloop starts the Reviewer
 * Then The Reviewer uses a separate fresh workspace
 
 ## Scenario: Do not reuse the Reviewer's pane for repair and branch-update agents

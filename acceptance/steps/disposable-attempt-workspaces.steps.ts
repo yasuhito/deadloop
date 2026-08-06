@@ -369,7 +369,7 @@ function launchBranchUpdateBoundary(workspaceId: string) {
   }
 }
 
-When("deadloop starts the Reviewer in a fresh workspace", function (this: World) {
+When("deadloop starts the Reviewer", function (this: World) {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cucumber-reviewer-"));
   const env = reviewerEnvironment({
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo",

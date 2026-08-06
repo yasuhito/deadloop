@@ -92,9 +92,9 @@ Operators can check blocked work simply by viewing `/deadloop-doctor`, clean up 
 * When The operator runs doctor
 * Then doctor shows the stuck automation
 
-## Scenario: Do not show recently attempted successful automations as problems
+## Scenario: Do not show recently attempted normal automations as problems
 
-* Given There is a recent successful automation attempt
+* Given There is a recent normal automation attempt
 * When The operator runs doctor
 * Then doctor shows no findings
 

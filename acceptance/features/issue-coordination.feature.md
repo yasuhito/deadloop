@@ -56,7 +56,7 @@ This prevents implementation of an unprepared Issue and overlapping actions on t
 
 * Given The selected Issue is a planning Issue
 * When deadloop decides the selected Issue's next action
-* Then The blocking comment are created only as a guide for users.
+* Then The blocking comment contains only user-facing guidance
 
 ## Scenario: Do not start work for a planning Issue
 
