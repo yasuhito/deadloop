@@ -11,6 +11,7 @@ type JsonObject = Record<string, any>;
 type PrReviewerFlowEnv = {
   projectId: string;
   githubRepo: string;
+  automationLogin: string;
   stateDir: string;
   reviewLabel: string;
   reviewingLabel: string;
@@ -47,6 +48,7 @@ function decisionConfig(env: PrReviewerFlowEnv): JsonObject {
     externalReviewEnabled: env.externalReviewEnabled,
     externalReviewWaitSeconds,
     projectId: env.projectId,
+    automationLogin: env.automationLogin,
     now,
   });
 }

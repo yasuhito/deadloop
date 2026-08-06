@@ -17,6 +17,8 @@ function runSelect(
     path.join("test/fixtures/pr-reviewer", prsFixture),
     "--project-id",
     options.projectId ?? "demo",
+    "--automation-login",
+    "deadloop-bot",
     "--now",
     options.now ?? "2026-07-04T00:30:00Z",
   ];
@@ -35,6 +37,21 @@ describe("PR reviewer stale reviewing reclaim", () => {
 
   it("marks the reclaimed reviewing PR as a stale reclaim", () => {
     expect(runSelect("precheck-reviewing.json", { agents: "agents-empty.json" }).staleReclaim).toBe(true);
+  });
+
+  it("identifies a repaired head as a repair re-review", () => {
+    expect(runSelect("precheck-repair-rereview.json", { agents: "agents-empty.json" }).reason).toBe("repair_rereview");
+  });
+
+  it("does not classify a repaired head as a stale reclaim", () => {
+    expect(runSelect("precheck-repair-rereview.json", { agents: "agents-empty.json" }).staleReclaim).toBe(false);
+  });
+
+  it("does not trust a copied repair result marker", () => {
+    const { defaultDecisionConfig, selectPrForReview } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const prs = structuredClone(require("./fixtures/pr-reviewer/precheck-repair-rereview.json"));
+    prs[0].comments[0].author.login = "attacker";
+    expect(selectPrForReview(prs, defaultDecisionConfig({ automationLogin: "deadloop-bot" })).reason).toBe("selectable");
   });
 
   it("does not infer ownership from a legacy reviewer agent name", () => {

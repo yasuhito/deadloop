@@ -14,6 +14,7 @@ function fixture(name: string) {
 function env(overrides: Record<string, unknown> = {}) {
   return {
     projectId: "demo",
+    automationLogin: "deadloop-bot",
     reviewLabel: "agent:review",
     reviewingLabel: "agent:reviewing",
     humanLabel: "ready-for-human",

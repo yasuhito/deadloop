@@ -52,6 +52,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     projectId: source.DEADLOOP_PROJECT_ID || "project",
     repoPath: source.DEADLOOP_REPO_PATH || ".",
     githubRepo: source.DEADLOOP_GITHUB_REPO || "",
+    automationLogin: source.DEADLOOP_AUTOMATION_LOGIN || "",
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
@@ -611,10 +612,19 @@ function drive(fixturePath: string | undefined): DriverResult {
     runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   }
   const fixture = loadFixture(fixturePath);
-  const env = envConfig();
-  if (!env.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
-
-  const prs = fixture ? fixture.prs || [] : livePrs(env.githubRepo);
+  const configuredEnv = envConfig();
+  if (!configuredEnv.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
+  const prs = fixture ? fixture.prs || [] : livePrs(configuredEnv.githubRepo);
+  const hasRepairResultMarker = prs.some((pr: JsonObject) =>
+    (pr.comments || []).some((comment: JsonObject) => String(comment.body || "").includes("<!-- deadloop:review-repair-result ")),
+  );
+  const automationLogin = fixture
+    ? String(fixture.automationLogin || "deadloop-bot")
+    : configuredEnv.automationLogin || (hasRepairResultMarker ? runText(["gh", "api", "user", "--jq", ".login"]).trim() : "");
+  if (hasRepairResultMarker && !automationLogin) {
+    return driverResult("error", "authenticated GitHub identity is unavailable", { driverAction: "configuration_error" });
+  }
+  const env = { ...configuredEnv, automationLogin };
   const agents = fixture ? fixture.agents || { result: { agents: [] } } : liveAgents();
   const plan = planPrReviewerAction(prs, agents, env);
 

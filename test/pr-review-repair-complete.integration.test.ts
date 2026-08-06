@@ -35,6 +35,7 @@ function runCompletion(options: {
   const resultFile = path.join(runDir, "finalizer-result.json");
   const contractFile = path.join(runDir, "review-contract.json");
   const postedFile = path.join(root, "posted.txt");
+  const actionsFile = path.join(root, "actions.txt");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(runDir, { recursive: true });
   fs.mkdirSync(projectRepo);
@@ -84,6 +85,7 @@ if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringif
 else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:review" }, { name: "agent:reviewing" }])},comments:${JSON.stringify(options.comments || [])}}));
 else if (args[0] === "pr" && args[1] === "comment") fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
+else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.ACTIONS_FILE, args.join(" ") + "\\n");
 `,
   );
   fs.chmodSync(gh, 0o755);
@@ -124,10 +126,14 @@ else if (args[0] === "pr" && args[1] === "comment") fs.writeFileSync(process.env
       "--blocked-label",
       "agent:blocked",
     ],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"), POSTED_FILE: postedFile } },
+    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"), POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile } },
   );
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-  return { output: JSON.parse(result.stdout), posted: fs.existsSync(postedFile) ? fs.readFileSync(postedFile, "utf8") : "" };
+  return {
+    output: JSON.parse(result.stdout),
+    posted: fs.existsSync(postedFile) ? fs.readFileSync(postedFile, "utf8") : "",
+    actions: fs.existsSync(actionsFile) ? fs.readFileSync(actionsFile, "utf8") : "",
+  };
 }
 
 async function runConcurrentSuccessRetries(): Promise<number> {
@@ -241,6 +247,22 @@ describe("review repair deterministic completion", () => {
     expect(result.posted).toContain(`New commit: \`${newHead}\``);
   });
 
+  it("releases the active review claim after recording successful repair", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: {
+        status: "complete",
+        reason: "repair_pushed",
+        summary: "fixed",
+        repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }],
+        checks,
+      },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+    });
+
+    expect(result.actions).toContain("--remove-label agent:reviewing");
+  });
+
   it("turns a malformed finalizer receipt into recovery instead of an exception", () => {
     const result = runCompletion({
       promise: { status: "blocked", reason: "check_failed", summary: "checks stopped" },
@@ -319,6 +341,23 @@ describe("review repair deterministic completion", () => {
     });
 
     expect(result.output.driverAction).toBe("repair_result_duplicate");
+  });
+
+  it("releases the active review claim when reconciling a duplicate result", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: {
+        status: "complete",
+        reason: "repair_pushed",
+        summary: "fixed",
+        repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }],
+        checks,
+      },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      comments: [{ body: `<!-- deadloop:review-repair-result key=${key} head=${newHead} -->`, author: { login: "deadloop-bot" } }],
+    });
+
+    expect(result.actions).toContain("--remove-label agent:reviewing");
   });
 
   it("serializes concurrent completion retries to one success comment", async () => {

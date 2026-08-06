@@ -17,11 +17,13 @@ type ReviewDecisionConfig = {
   externalReviewEnabled: boolean;
   externalReviewWaitSeconds: number;
   projectId: string;
+  automationLogin: string;
   now: Date;
 };
 
 const PENDING_CHECK_STATES = new Set(["QUEUED", "IN_PROGRESS", "PENDING", "EXPECTED", "WAITING"]);
 const EXTERNAL_REVIEW_MARKER_RE = /<!--\s*deadloop:external-review-request\s+head=([0-9a-fA-F]+)\s*-->/g;
+const REPAIR_RESULT_MARKER_RE = /<!--\s*deadloop:review-repair-result\s+key=[0-9a-fA-F]+\s+head=([0-9a-fA-F]{40})\s*-->/g;
 
 function defaultDecisionConfig(overrides: Partial<ReviewDecisionConfig> = {}): ReviewDecisionConfig {
   return {
@@ -33,6 +35,7 @@ function defaultDecisionConfig(overrides: Partial<ReviewDecisionConfig> = {}): R
     externalReviewEnabled: false,
     externalReviewWaitSeconds: 1800,
     projectId: "",
+    automationLogin: "",
     now: new Date(),
     ...overrides,
   };
@@ -104,6 +107,20 @@ function matchingMarkerAges(pr: AnyRecord, now: Date): number[] {
     }
   }
   return ages;
+}
+
+function hasRepairResultForCurrentHead(pr: AnyRecord, automationLogin: string): boolean {
+  const head = String(pr.headRefOid || "").toLowerCase();
+  const expectedAuthor = automationLogin.toLowerCase();
+  if (!head || !expectedAuthor) return false;
+  return (pr.comments || []).some((comment: unknown) => {
+    if (!comment || typeof comment !== "object") return false;
+    const record = comment as AnyRecord;
+    if (String(record.author?.login || "").toLowerCase() !== expectedAuthor) return false;
+    REPAIR_RESULT_MARKER_RE.lastIndex = 0;
+    return Array.from(String(record.body || "").matchAll(REPAIR_RESULT_MARKER_RE))
+      .some((match) => match[1].toLowerCase() === head);
+  });
 }
 
 function externalReviewWaitIsStale(pr: AnyRecord, config: ReviewDecisionConfig): boolean {
@@ -198,6 +215,7 @@ function selectPrForReview(prs: AnyRecord[], config: ReviewDecisionConfig = defa
       continue;
     }
     const staleReclaim = labels.has(config.reviewingLabel);
+    const repairRereview = !staleReclaim && hasRepairResultForCurrentHead(pr, config.automationLogin);
     if (pr.isDraft) {
       return { selected: true, number: pr.number, action: "draft_gate", reason: "draft", staleReclaim, skipped };
     }
@@ -217,7 +235,7 @@ function selectPrForReview(prs: AnyRecord[], config: ReviewDecisionConfig = defa
       selected: true,
       number: pr.number,
       action: "review",
-      reason: staleReclaim ? "stale_reclaim" : "selectable",
+      reason: staleReclaim ? "stale_reclaim" : repairRereview ? "repair_rereview" : "selectable",
       staleReclaim,
       skipped,
     };
@@ -285,6 +303,7 @@ function cliConfig(args: AnyRecord): ReviewDecisionConfig {
     externalReviewEnabled: parseBoolForPrReviewer(args.externalReviewEnabled),
     externalReviewWaitSeconds: parseWaitSecondsForPrReviewer(args.externalReviewWaitSeconds),
     projectId: args.projectId || "",
+    automationLogin: args.automationLogin || "",
     now,
   });
 }

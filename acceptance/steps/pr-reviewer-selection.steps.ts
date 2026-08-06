@@ -27,7 +27,7 @@ type SelectionWorld = {
   autoMerge?: boolean;
   externalReviewEnabled?: boolean;
   driverFixtureName?: string;
-  decision?: { selected?: boolean; number?: number };
+  decision?: { selected?: boolean; number?: number; reason?: string };
   driverResult?: DriverResult;
   prs?: PullRequest[];
   agents?: Record<string, unknown>;
@@ -90,6 +90,11 @@ Given("稼働中の担当者がいないレビュー中の pull request があ�
   this.agentsFixtureName = "agents-empty.json";
 });
 
+Given("修復完了後に再レビューを待つ pull request がある", function (this: SelectionWorld) {
+  setFixture(this, "precheck-repair-rereview.json");
+  this.agentsFixtureName = "agents-empty.json";
+});
+
 Given("証拠付きで放棄した試行があるレビュー待ちの pull request がある", function (this: SelectionWorld) {
   setFixture(this, "precheck-agent-review.json");
   this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: 7 }, phase: "abandoned" }];
@@ -137,6 +142,7 @@ When("deadloop がレビュー対象を探す", function (this: SelectionWorld) 
     externalReviewEnabled: this.externalReviewEnabled ?? false,
     now: fixedNow,
     projectId: "demo",
+    automationLogin: "deadloop-bot",
   });
   this.decision = selectPrForReview(readFixture(this.fixtureName), config, workingReviewerPrNumbers(agents, config.projectId, this.attempts || [], "owner/repo"));
 });
@@ -174,7 +180,7 @@ When("deadloop がレビュー対象を選んで処理する", function (this: S
 
 Given("別担当が選択後にレビューを開始している", function (this: SelectionWorld) {
   if (!this.fixtureName) throw new Error("review state is missing");
-  const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo" });
+  const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo", automationLogin: "deadloop-bot" });
   this.prs = readFixture(this.fixtureName);
   const firstDecision = selectPrForReview(this.prs, config);
   const selected = this.prs.find((pr) => pr.number === firstDecision.number);
@@ -187,7 +193,7 @@ Given("別担当が選択後にレビューを開始している", function (thi
 
 When("次の選定周期になる", function (this: SelectionWorld) {
   if (!this.prs || !this.agents) throw new Error("review state is missing");
-  const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo" });
+  const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo", automationLogin: "deadloop-bot" });
   this.decision = selectPrForReview(this.prs, config, workingReviewerPrNumbers(this.agents, config.projectId, this.attempts || [], "owner/repo"));
 });
 
@@ -197,6 +203,14 @@ Then("pull request #{int} をレビュー対象に選ぶ", function (this: Selec
 
 Then("レビュー対象は選ばれない", function (this: SelectionWorld) {
   assert.equal(this.decision?.selected, false);
+});
+
+Then("選定理由は古いレビュー占有の回収である", function (this: SelectionWorld) {
+  assert.equal(this.decision?.reason, "stale_reclaim");
+});
+
+Then("選定理由は修復完了後の再レビューである", function (this: SelectionWorld) {
+  assert.equal(this.decision?.reason, "repair_rereview");
 });
 
 Then("deadloop は外部レビューを依頼する", function (this: SelectionWorld) {

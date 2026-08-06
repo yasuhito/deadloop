@@ -121,7 +121,7 @@ ${repairs.join("\n\n")}
 ${checks.join("\n")}
 
 ## Next step
-The new head will be reviewed again. Review labels remain in place.
+The new head will be reviewed again. The review queue label remains in place while the active-review claim is released.
 
 <!-- deadloop:review-repair-result key=${String(input.attemptKey).toLowerCase()} head=${String(input.newHeadOid).toLowerCase()} -->`;
 }
