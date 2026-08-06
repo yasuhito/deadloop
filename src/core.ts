@@ -75,14 +75,12 @@ export type ReviewerAgent = AgentKind;
 export type RawCiFallbackConfig = {
   enabled?: boolean;
   mode?: string;
-  allowAutoMerge?: boolean;
   localCommands?: string | string[];
 };
 
 export type NormalizedCiFallbackConfig = {
   enabled: boolean;
   mode: string;
-  allowAutoMerge: boolean;
   localCommands: string;
 };
 
@@ -503,7 +501,6 @@ function normalizeCiFallback(value: RawCiFallbackConfig | undefined): Normalized
   return {
     enabled: value?.enabled === true,
     mode: value?.mode || "billing-only",
-    allowAutoMerge: value?.allowAutoMerge === true,
     localCommands: normalizeLocalCommands(value?.localCommands),
   };
 }
@@ -737,7 +734,6 @@ function automationRuntimeValues(
     autoMerge: project.autoMerge,
     ciFallbackEnabled: project.ciFallback.enabled,
     ciFallbackMode: project.ciFallback.mode,
-    ciFallbackAllowAutoMerge: project.ciFallback.allowAutoMerge,
     ciFallbackLocalCommands: project.ciFallback.localCommands,
     externalReviewEnabled: project.externalReview.enabled,
     externalReviewWaitSeconds: project.externalReview.waitSeconds,
@@ -798,7 +794,6 @@ export function automationEnvironment(
     DEADLOOP_AUTO_MERGE: envText(values.autoMerge),
     DEADLOOP_CI_FALLBACK_ENABLED: envText(values.ciFallbackEnabled),
     DEADLOOP_CI_FALLBACK_MODE: envText(values.ciFallbackMode),
-    DEADLOOP_CI_FALLBACK_ALLOW_AUTO_MERGE: envText(values.ciFallbackAllowAutoMerge),
     DEADLOOP_CI_FALLBACK_LOCAL_COMMANDS: envText(values.ciFallbackLocalCommands),
     DEADLOOP_EXTERNAL_REVIEW_ENABLED: envText(values.externalReviewEnabled),
     DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS: envText(values.externalReviewWaitSeconds),
