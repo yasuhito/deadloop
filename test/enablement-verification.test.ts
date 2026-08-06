@@ -128,6 +128,15 @@ describe("enablement required-verification records", () => {
     expect((await scenario.run(failing)).reused).toBe(false);
   });
 
+  it("reruns a passed record that contains a termination signal", async () => {
+    const scenario = fixture();
+    const result = await scenario.run();
+    const record = JSON.parse(fs.readFileSync(result.recordPath, "utf8"));
+    fs.writeFileSync(result.recordPath, `${JSON.stringify({ ...record, terminationSignal: "SIGTERM" })}\n`);
+
+    expect((await scenario.run()).reused).toBe(false);
+  });
+
   it("records a signal termination with no exit code", async () => {
     const scenario = fixture();
     const result = await scenario.run({ ...scenario.contract, command: "kill -TERM $$" });
@@ -169,6 +178,25 @@ describe("enablement required-verification records", () => {
     expect(inspectRetainedEnablementVerifications(scenario.stateDir, scenario.repoPath)[0]?.journalPath).toBe(result.journalPath);
   });
 
+  it("reports a malformed journal beside a retained deterministic worktree without claiming ownership", () => {
+    const scenario = fixture();
+    const attemptId = "malformed-attempt";
+    const attemptDir = path.join(scenario.stateDir, "required-verification", "enablement", attemptId);
+    const worktreePath = path.join(scenario.stateDir, "required-verification", "worktrees", attemptId);
+    fs.mkdirSync(attemptDir, { recursive: true });
+    fs.mkdirSync(worktreePath, { recursive: true });
+    fs.writeFileSync(path.join(attemptDir, "journal.json"), "{malformed");
+
+    const finding = inspectRetainedEnablementVerifications(scenario.stateDir, scenario.repoPath)[0];
+    expect({ ...finding, ownershipClaimed: Object.hasOwn(finding || {}, "primaryRepoPath") }).toMatchObject({
+      attemptId,
+      repository: "unknown",
+      worktreePath,
+      retentionReason: expect.stringContaining("ownership and cleanup state are unknown"),
+      ownershipClaimed: false,
+    });
+  });
+
   it("records every success binding explicitly", async () => {
     const scenario = fixture();
     const result = await scenario.run();
@@ -181,6 +209,30 @@ describe("enablement required-verification records", () => {
       source: scenario.contract.source,
       baseRevision: scenario.contract.baseRevision,
     });
+  });
+
+  it("preserves timeout classification and retained quarantine evidence when restoration fails", async () => {
+    const scenario = fixture();
+    const hookPath = path.join(scenario.repoPath, ".git", "hooks", "post-checkout");
+    fs.writeFileSync(hookPath, "#!/bin/sh\nmkdir .deadloop\nprintf evidence > .deadloop/promise.json\n", { mode: 0o755 });
+    const contract = { ...scenario.contract, command: "chmod a-w .; sleep 60" };
+    const result = await runEnablementVerification({
+      stateDir: scenario.stateDir,
+      primaryRepoPath: scenario.repoPath,
+      repository: contract.repository,
+      resolution: { status: "resolved", contract },
+      timeoutMs: 100,
+    });
+    const record = JSON.parse(fs.readFileSync(result.recordPath, "utf8"));
+    const journal = JSON.parse(fs.readFileSync(result.journalPath, "utf8"));
+    fs.chmodSync(journal.worktreePath, 0o700);
+
+    expect({
+      outcome: record.outcome,
+      reason: record.terminationReason,
+      timedOut: record.timedOut,
+      quarantineRetained: fs.existsSync(record.artifactRestorationFailure.quarantinePath),
+    }).toEqual({ outcome: "timed_out", reason: "timeout", timedOut: true, quarantineRetained: true });
   });
 
   it("reports a retained dirty verification worktree for doctor inspection", async () => {

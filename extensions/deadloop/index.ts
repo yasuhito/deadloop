@@ -1018,7 +1018,9 @@ function retainedVerificationReport(repositoryRoot: string | undefined): string 
   const lines = ["", `Retained required-verification worktrees: ${retained.length}`];
   for (const item of retained) {
     const worktree = shellCommandArgument(item.worktreePath);
-    const primary = shellCommandArgument(item.primaryRepoPath);
+    const confirmation = item.primaryRepoPath
+      ? `git -C ${shellCommandArgument(item.primaryRepoPath)} worktree list --porcelain && git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all`
+      : `git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all`;
     lines.push(
       `- ${item.worktreePath}`,
       `  repository: ${item.repository}`,
@@ -1027,7 +1029,7 @@ function retainedVerificationReport(repositoryRoot: string | undefined): string 
       `  journal: ${item.journalPath}`,
       `  record: ${item.recordPath || "not written"}`,
       `  log: ${item.logPath || "not written"}`,
-      `  confirm: git -C ${primary} worktree list --porcelain && git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all`,
+      `  confirm: ${confirmation}`,
     );
   }
   return lines.join("\n");

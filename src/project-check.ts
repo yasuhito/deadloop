@@ -36,6 +36,11 @@ type ProjectCheckInput = {
   signal?: AbortSignal;
 };
 
+type ArtifactRestorationFailure = {
+  message: string;
+  quarantinePath: string;
+};
+
 type ProjectCheckResult = {
   code: number | null;
   stdout: string;
@@ -43,6 +48,7 @@ type ProjectCheckResult = {
   timedOut: boolean;
   interrupted: boolean;
   signal: NodeJS.Signals | null;
+  restorationFailure?: ArtifactRestorationFailure;
 };
 
 type HiddenArtifact = {
@@ -83,7 +89,7 @@ function trackedRuntimeFiles(cwd: string): string[] {
   return output.split("\0").filter(Boolean);
 }
 
-function hideRuntimeArtifacts(cwd: string, quarantineRoot: string): { restore: () => void } {
+function hideRuntimeArtifacts(cwd: string, quarantineRoot: string): { restore: () => ArtifactRestorationFailure | undefined } {
   const resolvedCwd = path.resolve(cwd);
   const resolvedRoot = path.resolve(quarantineRoot);
   if (resolvedRoot === resolvedCwd || resolvedRoot.startsWith(`${resolvedCwd}${path.sep}`)) {
@@ -117,8 +123,18 @@ function hideRuntimeArtifacts(cwd: string, quarantineRoot: string): { restore: (
           restoreError ||= error;
         }
       }
-      if (!restoreError) fs.rmSync(quarantineDir, { recursive: true, force: true });
-      if (restoreError) throw restoreError;
+      if (!restoreError) {
+        try {
+          fs.rmSync(quarantineDir, { recursive: true, force: true });
+        } catch (error) {
+          restoreError = error;
+        }
+      }
+      if (!restoreError) return undefined;
+      return {
+        message: restoreError instanceof Error ? restoreError.message : String(restoreError),
+        quarantinePath: quarantineDir,
+      };
     },
   };
 }
@@ -222,11 +238,15 @@ async function runProjectCheck(input: ProjectCheckInput): Promise<ProjectCheckRe
   }
 
   const hidden = hideRuntimeArtifacts(input.cwd, input.quarantineRoot);
+  let result: ProjectCheckResult;
   try {
-    return await runShell(input.command, input.cwd, input.timeoutMs, input.terminationGraceMs ?? 1000, input.signal);
-  } finally {
+    result = await runShell(input.command, input.cwd, input.timeoutMs, input.terminationGraceMs ?? 1000, input.signal);
+  } catch (error) {
     hidden.restore();
+    throw error;
   }
+  const restorationFailure = hidden.restore();
+  return restorationFailure ? { ...result, restorationFailure } : result;
 }
 
 function parseCliArgs(argv: string[]): ProjectCheckInput {
@@ -254,7 +274,10 @@ async function projectCheckMain(argv: string[] = process.argv.slice(2)): Promise
     const result = await runProjectCheck({ ...parseCliArgs(argv), signal: controller.signal });
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
-    process.exitCode = result.code ?? 1;
+    if (result.restorationFailure) {
+      process.stderr.write(`project-check could not restore runtime artifacts; retained quarantine: ${result.restorationFailure.quarantinePath}; ${result.restorationFailure.message}\n`);
+    }
+    process.exitCode = result.restorationFailure && result.code === 0 ? 1 : result.code ?? 1;
   } finally {
     process.removeListener("SIGINT", interrupt);
     process.removeListener("SIGTERM", interrupt);

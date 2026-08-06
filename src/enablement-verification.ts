@@ -22,6 +22,10 @@ const { runProjectCheck } = require("./project-check.ts") as {
     timedOut: boolean;
     interrupted: boolean;
     signal: NodeJS.Signals | null;
+    restorationFailure?: {
+      message: string;
+      quarantinePath: string;
+    };
   }>;
 };
 
@@ -53,7 +57,7 @@ export type EnablementVerificationResult = {
 export type RetainedEnablementVerification = {
   attemptId: string;
   repository: string;
-  primaryRepoPath: string;
+  primaryRepoPath?: string;
   worktreePath: string;
   targetRevision: string;
   journalPath: string;
@@ -122,7 +126,7 @@ function reusableSuccess(
     if (record.repository !== expected.repository || record.targetCommit !== expected.targetCommit) continue;
     if (
       record.attemptId !== path.basename(directory) || record.exitCode !== 0 || record.timedOut !== false
-      || record.terminationReason !== undefined || typeof record.startedAt !== "string"
+      || record.terminationReason !== undefined || record.terminationSignal !== undefined || typeof record.startedAt !== "string"
       || !Number.isFinite(record.durationMs) || record.durationMs < 0
     ) continue;
     const logPath = record.logPath;
@@ -152,7 +156,20 @@ export function inspectRetainedEnablementVerifications(
   for (const directory of attemptDirectories(stateDir)) {
     const journalPath = path.join(directory, "journal.json");
     const journal = readJson(journalPath);
-    if (journal?.version !== 1 || !["prepared", "created", "checked", "retained"].includes(journal.state)) continue;
+    if (journal?.version !== 1) {
+      const worktreePath = path.join(stateDir, "required-verification", "worktrees", path.basename(directory));
+      if (!fs.existsSync(worktreePath)) continue;
+      findings.push({
+        attemptId: path.basename(directory),
+        repository: "unknown",
+        worktreePath,
+        targetRevision: "unknown",
+        journalPath,
+        retentionReason: "verification journal is missing or malformed; worktree ownership and cleanup state are unknown",
+      });
+      continue;
+    }
+    if (!["prepared", "created", "checked", "retained"].includes(journal.state)) continue;
     if (typeof journal.primaryRepoPath !== "string" || (expectedPath && path.resolve(journal.primaryRepoPath) !== expectedPath)) continue;
     if (typeof journal.worktreePath !== "string") continue;
     findings.push({
@@ -298,6 +315,10 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     timedOut: boolean;
     interrupted: boolean;
     signal: NodeJS.Signals | null;
+    restorationFailure?: {
+      message: string;
+      quarantinePath: string;
+    };
   };
   let runnerFailed = false;
   try {
@@ -325,19 +346,24 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   const terminationEvidence = check.timedOut
     ? `required verification timed out after ${timeoutMs}ms\n`
     : check.interrupted ? "required verification was interrupted\n" : "";
-  fs.writeFileSync(logPath, `${check.stdout}${check.stderr}${terminationEvidence}`, { encoding: "utf8", mode: 0o600 });
+  const restorationEvidence = check.restorationFailure
+    ? `required verification could not restore runtime artifacts; retained quarantine: ${check.restorationFailure.quarantinePath}; ${check.restorationFailure.message}\n`
+    : "";
+  fs.writeFileSync(logPath, `${check.stdout}${check.stderr}${terminationEvidence}${restorationEvidence}`, { encoding: "utf8", mode: 0o600 });
   const outcome: EnablementVerificationResult["outcome"] = check.timedOut
     ? "timed_out"
-    : check.interrupted ? "interrupted" : check.code === 0 ? "passed" : "failed";
+    : check.interrupted ? "interrupted" : check.code === 0 && !check.restorationFailure ? "passed" : "failed";
   const terminationReason = check.timedOut
     ? "timeout"
     : check.interrupted
       ? "interrupted"
-      : runnerFailed
-        ? "runner_failure"
-        : check.signal
-          ? "signal"
-          : undefined;
+      : check.restorationFailure
+        ? "artifact_restoration_failure"
+        : runnerFailed
+          ? "runner_failure"
+          : check.signal
+            ? "signal"
+            : undefined;
   const exitCode = terminationReason ? null : check.code;
   writeJson(recordPath, {
     version: 1,
@@ -350,6 +376,7 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     exitCode,
     terminationReason,
     ...(check.signal ? { terminationSignal: check.signal } : {}),
+    ...(check.restorationFailure ? { artifactRestorationFailure: check.restorationFailure } : {}),
     timedOut: check.timedOut,
     timeoutMs,
     startedAt: new Date(startedAtMs).toISOString(),
