@@ -65,7 +65,7 @@ async function runWorkerProjectCheck(
     : undefined;
   return { check, restorationFailureRecordPath };
 }
-async function run(args: Args, signal?: AbortSignal) {
+async function run(args: Args, signal?: AbortSignal, verificationRunner: typeof runWorkerProjectCheck = runWorkerProjectCheck) {
   const location = canonicalAttemptLocation(args);
   const runDir = location.runDir;
   const attempt = readAttemptRecord(runDir);
@@ -82,18 +82,45 @@ async function run(args: Args, signal?: AbortSignal) {
   const recordFile = workerRequiredVerificationPath(args.attemptRecord);
   const logPath = path.join(runDir, "required-verification.log");
   const started = Date.now();
-  const { check, restorationFailureRecordPath } = await runWorkerProjectCheck(
-    { cwd: args.worktree, command: contract.command, quarantineRoot: args.quarantineRoot, timeoutMs: 10 * 60_000 },
-    signal,
-  );
-  const outcome = check.timedOut ? "timed_out" : check.interrupted ? "interrupted" : check.code === 0 && !check.restorationFailure ? "passed" : "failed";
-  fs.writeFileSync(logPath, `${check.stdout}${check.stderr}`, { encoding: "utf8", mode: 0o600 });
-  assertCleanOutput(args.worktree, outputRevision);
+  let check;
+  let restorationFailureRecordPath: string | undefined;
+  let runnerFailure: unknown;
+  try {
+    ({ check, restorationFailureRecordPath } = await verificationRunner(
+      { cwd: args.worktree, command: contract.command, quarantineRoot: args.quarantineRoot, timeoutMs: 10 * 60_000 },
+      signal,
+    ));
+  } catch (error) {
+    runnerFailure = error;
+    check = {
+      code: null,
+      stdout: "",
+      stderr: `required verification runner failed: ${error instanceof Error ? error.stack || error.message : String(error)}\n`,
+      timedOut: false,
+      interrupted: false,
+      signal: null,
+      ...(projectCheckRestorationFailureFrom(error) ? { restorationFailure: projectCheckRestorationFailureFrom(error) } : {}),
+    };
+  }
+  let outputFailure: unknown;
+  try { assertCleanOutput(args.worktree, outputRevision); }
+  catch (error) { outputFailure = error; }
+  const outcome = check.timedOut ? "timed_out" : check.interrupted ? "interrupted" : check.code === 0 && !check.restorationFailure && !outputFailure ? "passed" : "failed";
+  const terminationReason = check.timedOut ? "timeout"
+    : check.interrupted ? "interrupted"
+      : runnerFailure ? "runner_failure"
+        : outputFailure ? "output_not_clean"
+          : check.restorationFailure ? "artifact_restoration_failure"
+            : check.signal ? "signal" : undefined;
+  const outputEvidence = outputFailure ? `required verification post-check binding failed: ${outputFailure instanceof Error ? outputFailure.message : String(outputFailure)}\n` : "";
+  fs.writeFileSync(logPath, `${check.stdout}${check.stderr}${outputEvidence}`, { encoding: "utf8", mode: 0o600 });
   const record = {
     version: 1 as const,
     binding: requiredVerificationBinding(contract, outputRevision),
     outcome,
-    exitCode: check.timedOut || check.interrupted ? null : check.code,
+    exitCode: check.timedOut || check.interrupted || runnerFailure ? null : check.code,
+    ...(terminationReason ? { terminationReason } : {}),
+    ...(check.signal ? { terminationSignal: check.signal } : {}),
     startedAt: new Date(started).toISOString(),
     durationMs: Math.max(0, Date.now() - started),
     logPath,

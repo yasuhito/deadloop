@@ -136,6 +136,7 @@ Report only the resulting action and evidence.`;
 }
 
 function renderBranchUpdateMonitorPrompt(input: BranchUpdateMonitorPromptInput): string {
+  const guardedBlock = `node ${shellQuotePrompt(`${input.automationDir}/guarded-branch-update-block.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-label ${shellQuotePrompt(input.reviewLabel)} --reviewing-label ${shellQuotePrompt(input.reviewingLabel)} --blocked-label ${shellQuotePrompt(input.blockedLabel)}`;
   return `Deterministic driver launched one branch-update worker for PR #${input.prNumber}. Monitor only this attempt; never launch or select an agent, push a branch, review the PR, or merge it.
 
 Attempt binding:
@@ -149,8 +150,8 @@ ${renderPromisePollingRules(input)}
 Terminal handling:
 - status=complete, reason=branch_update_pushed: re-read the PR and confirm its head changed, run \`${renderAttemptPersistence(input)}\`, then run \`${renderWorkspaceCompletion(input)}\` only after result_persisted. Do not change labels; normal PR review resumes on the next automation cycle.
 - status=complete, reason=stale_head: run \`${renderWorkspaceCompletion(input)}\`; it closes only after confirming the PR head changed and makes no comment or label change. Keep both review labels so the next cycle re-evaluates the new head.
-- status=blocked: write a concise failure comment, remove ${input.reviewingLabel}, and add ${input.blockedLabel}. This is the only terminal path that may add the blocked label; keep ${input.reviewLabel}.
-- Any malformed completion or unsafe/inconclusive update result is a failed update: report it and add ${input.blockedLabel}; never guess success.
+- status=blocked: write a concise failure comment, then run exactly \`${guardedBlock}\`. This is the only terminal path that may add the blocked label; it revalidates the exact PR head, keeps ${input.reviewLabel}, removes ${input.reviewingLabel}, and adds ${input.blockedLabel}.
+- Any malformed completion or unsafe/inconclusive update result is a failed update: report it, then run exactly \`${guardedBlock}\`; never guess success.
 
 Prohibited in every path: force-push, any monitor-side push, label changes on success/stale, PR creation, PR merge, issue close, branch deletion, or retrying this exact head/base pair.
 

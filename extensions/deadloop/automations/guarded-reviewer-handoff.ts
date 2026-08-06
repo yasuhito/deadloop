@@ -5,11 +5,11 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const {
   assertCurrentWorkerContract,
-  assertWorkerCompletionAuthorized,
+  requiredVerificationBinding,
   readRequiredVerificationRecord,
   workerRequiredVerificationPath,
 } = require("../../../src/worker-required-verification-runtime.cjs");
@@ -68,13 +68,15 @@ function assertCurrentHeadVerification(args: Args): void {
     const attemptRecord = path.join(runsDir, entry.name, "attempt.json");
     try {
       const attempt = readAttemptRecord(path.dirname(attemptRecord));
-      if (attempt.role !== "worker" || attempt.repository !== args.githubRepo) continue;
-      const report = JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8"));
-      validateCompletionReportBinding(attempt, report);
-      if (report.status !== "complete" || String(report.result?.outputRevision || "").toLowerCase() !== args.expectedHead.toLowerCase()) continue;
+      if (attempt.repository !== args.githubRepo || !attempt.requiredVerification) continue;
       const current = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"));
       const record = readRequiredVerificationRecord(workerRequiredVerificationPath(attemptRecord));
-      assertWorkerCompletionAuthorized(attempt, report, record, current);
+      if (!record || record.version !== 1 || record.outcome !== "passed" || record.exitCode !== 0) {
+        throw new Error("required verification record did not pass");
+      }
+      if (JSON.stringify(record.binding) !== JSON.stringify(requiredVerificationBinding(current, args.expectedHead))) {
+        throw new Error("required verification record does not match the current PR head and trusted contract");
+      }
       return;
     } catch (error) {
       failures.push(error instanceof Error ? error.message : String(error));

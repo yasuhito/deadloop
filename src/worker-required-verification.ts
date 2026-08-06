@@ -14,6 +14,8 @@ export type RequiredVerificationRecord = {
   binding: RequiredVerificationBinding;
   outcome: "passed" | "failed" | "timed_out" | "interrupted";
   exitCode: number | null;
+  terminationReason?: "timeout" | "interrupted" | "runner_failure" | "output_not_clean" | "artifact_restoration_failure" | "signal";
+  terminationSignal?: string;
   startedAt: string;
   durationMs: number;
   logPath: string;

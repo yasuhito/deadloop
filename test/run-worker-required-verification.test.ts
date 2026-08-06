@@ -4,9 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { assertCleanOutput, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
+const { assertCleanOutput, run, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
 const { inspectUnresolvedProjectCheckFailures } = require("../src/project-check.ts");
 const roots: string[] = [];
+function verificationAttempt() {
+  const fixture = repository();
+  const stateDir = `${fixture.root}-state`; roots.push(stateDir);
+  const runDir = path.join(stateDir, "runs", "attempt-1"); mkdirSync(runDir, { recursive: true });
+  const trusted = `${fixture.root}-trusted.git`; roots.push(trusted); execFileSync("git", ["init", "--bare", "--quiet", trusted]);
+  writeFileSync(path.join(fixture.root, "deadloop.json"), '{"checkCommand":"true"}\n'); execFileSync("git", ["-C", fixture.root, "add", "."]); execFileSync("git", ["-C", fixture.root, "commit", "--quiet", "-m", "policy"]);
+  execFileSync("git", ["-C", fixture.root, "remote", "add", "trusted", trusted]); execFileSync("git", ["-C", fixture.root, "push", "--quiet", "trusted", "HEAD:main"]);
+  const head = execFileSync("git", ["-C", fixture.root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const promiseFile = path.join(runDir, "promise.json");
+  writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({ attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command: "true", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head }, branch: "agent/issue-1", baseBranch: "trusted/main", worktreePath: fixture.root, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile, phase: "agent_started", lastSuccessfulPhase: "agent_started" }));
+  writeFileSync(promiseFile, JSON.stringify({ schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head }, status: "complete", summary: "done", result: { outputRevision: head }, evidence: { validations: ["additional check"] } }));
+  return { args: { attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: fixture.root, githubRepo: "owner/repo", stateDir, worktree: fixture.root, quarantineRoot: path.join(stateDir, "check-quarantine") }, record: path.join(runDir, "required-verification.json"), log: path.join(runDir, "required-verification.log"), root: fixture.root };
+}
 function repository() {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-verification-"));
   roots.push(root);
@@ -63,6 +76,26 @@ describe("Worker required-verification checkout binding", () => {
       async (input: { signal?: AbortSignal }) => ({ code: 130, stdout: "", stderr: "", timedOut: false, interrupted: input.signal?.aborted, signal: "SIGTERM" }),
     );
     expect(result.check.interrupted).toBe(true);
+  });
+
+  it("persists typed failed evidence when the check process cannot start", async () => {
+    const fixture = verificationAttempt(); let rejected = false;
+    try { await run(fixture.args, undefined, async () => { throw new Error("spawn rejected"); }); }
+    catch { rejected = true; }
+    const record = JSON.parse(require("node:fs").readFileSync(fixture.record, "utf8"));
+    expect({ rejected, outcome: record.outcome, exitCode: record.exitCode, reason: record.terminationReason }).toEqual({ rejected: true, outcome: "failed", exitCode: null, reason: "runner_failure" });
+  });
+
+  it("persists a failed record when the check creates output", async () => {
+    const fixture = verificationAttempt(); let rejected = false;
+    try {
+      await run(fixture.args, undefined, async () => {
+        writeFileSync(path.join(fixture.root, "generated.txt"), "output\n");
+        return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
+      });
+    } catch { rejected = true; }
+    const record = JSON.parse(require("node:fs").readFileSync(fixture.record, "utf8"));
+    expect({ rejected, outcome: record.outcome, reason: record.terminationReason }).toEqual({ rejected: true, outcome: "failed", reason: "output_not_clean" });
   });
 
   it("records a restoration conflict for doctor inspection", async () => {

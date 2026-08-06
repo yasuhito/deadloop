@@ -209,7 +209,7 @@ describe("monitor prompts", () => {
       repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("Never run those mutations directly");
+    expect(prompt.match(/guarded-branch-update-block\.ts --project-repo \/repo --github-repo owner\/repo --state-dir \/state --enabled-at '<enabledAt>' --pr 24 --expected-head a{40} --review-label agent:review --reviewing-label agent:reviewing --blocked-label agent:blocked/g)).toHaveLength(2);
   });
 
   it("routes repair blocked handling through the enablement guard", () => {

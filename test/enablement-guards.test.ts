@@ -15,6 +15,7 @@ const {
 } = require("../src/driver-enablement.cjs");
 const { acquireLockSync, reclaimStale } = require("../src/enablement-lock.cjs");
 const { GUARDED_OPERATION_TIMEOUT_MS, runGuarded } = require("../extensions/deadloop/automations/guarded-operation.ts");
+const { blockBranchUpdate } = require("../extensions/deadloop/automations/guarded-branch-update-block.ts");
 const { handoffReviewedPr } = require("../extensions/deadloop/automations/guarded-reviewer-handoff.ts");
 const { assertWorkerHead, assertWorkerPushBinding, parseArgs: parseGuardedPushArgs, runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.ts");
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
@@ -315,6 +316,24 @@ describe("enablement mutation guards", () => {
     expect(() => runGuarded(
       { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "pr", "edit", "1", "-R", project.githubRepo, "--add-label", "agent:review"] },
     )).toThrow("not approved");
+  });
+
+  it("applies the dedicated branch-update blocked transition at the revalidated head", () => {
+    const head = "a".repeat(40); let viewed = 0; const mutations: string[] = [];
+    const result = blockBranchUpdate(
+      { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked" },
+      {
+        withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
+        run: (args: string[]) => {
+          if (args[2] === "view") {
+            viewed += 1; const names = viewed <= 2 ? ["agent:review", "agent:reviewing"] : ["agent:review", "agent:blocked"];
+            return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: head, labels: names.map((name) => ({ name })) }), stderr: "" };
+          }
+          mutations.push(args.join(" ")); return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    expect({ result, mutation: mutations[0] }).toEqual({ result: 0, mutation: "gh pr edit 24 -R owner/repo --remove-label agent:reviewing --add-label agent:blocked" });
   });
 
   it("moves an approved reviewed head through the dedicated human-handoff guard", () => {
