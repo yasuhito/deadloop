@@ -134,6 +134,15 @@ describe("enablement required-verification records", () => {
     expect(inspectRetainedEnablementVerifications(scenario.stateDir, scenario.repoPath)[0]?.retentionReason).toContain("cleanup result is unknown");
   });
 
+  it("exposes cleanup-unknown journals even when the recorded path is missing", async () => {
+    const scenario = fixture();
+    const result = await scenario.run();
+    const journal = JSON.parse(fs.readFileSync(result.journalPath, "utf8"));
+    fs.writeFileSync(result.journalPath, `${JSON.stringify({ ...journal, state: "checked" })}\n`);
+
+    expect(inspectRetainedEnablementVerifications(scenario.stateDir, scenario.repoPath)[0]?.journalPath).toBe(result.journalPath);
+  });
+
   it("records every success binding explicitly", async () => {
     const scenario = fixture();
     const result = await scenario.run();

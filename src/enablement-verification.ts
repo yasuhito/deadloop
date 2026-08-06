@@ -161,7 +161,7 @@ export function inspectRetainedEnablementVerifications(
     const journal = readJson(journalPath);
     if (journal?.version !== 1 || !["prepared", "created", "checked", "retained"].includes(journal.state)) continue;
     if (typeof journal.primaryRepoPath !== "string" || (expectedPath && path.resolve(journal.primaryRepoPath) !== expectedPath)) continue;
-    if (typeof journal.worktreePath !== "string" || (!fs.existsSync(journal.worktreePath) && journal.state !== "retained")) continue;
+    if (typeof journal.worktreePath !== "string") continue;
     findings.push({
       attemptId: String(journal.attemptId || path.basename(directory)),
       repository: String(journal.repository || "unknown"),
