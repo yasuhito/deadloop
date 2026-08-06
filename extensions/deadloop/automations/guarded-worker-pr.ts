@@ -47,6 +47,18 @@ type WorkerPrOps = {
   gh: (args: string[], json?: boolean) => any;
   recheck: () => void;
 };
+function assertWorkerPrReadyForReview(
+  pr: Record<string, any>,
+  attempt: { branch: string; baseBranch?: string; target: { number: number } },
+  outputRevision: string,
+): void {
+  if (String(pr.headRefOid || "").toLowerCase() !== outputRevision.toLowerCase()) throw new Error("Worker PR head changed before the success label");
+  if (String(pr.headRefName || "") !== attempt.branch) throw new Error("Worker PR head branch does not match the verified Worker branch");
+  if (String(pr.baseRefName || "") !== String(attempt.baseBranch || "origin/main").replace(/^origin\//, "")) throw new Error("Worker PR base branch does not match the Worker target branch");
+  if (!Array.isArray(pr.closingIssuesReferences) || !pr.closingIssuesReferences.some((issue: Record<string, any>) => Number(issue.number) === attempt.target.number)) {
+    throw new Error("Worker PR does not close the Worker Issue");
+  }
+}
 function ensureWorkerPr(
   attempt: { branch: string; baseBranch?: string; target: { number: number } },
   outputRevision: string,
@@ -102,11 +114,9 @@ function run(args: Args): number {
       );
       const remoteHead = () => command("git", ["ls-remote", "--heads", destination, `refs/heads/${attempt.branch}`]).split(/\s+/, 1)[0] || "";
       const number = ensureWorkerPr(attempt, report.result.outputRevision, args, { remoteHead, gh, recheck });
-      const observedBeforeLabel = gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefOid"], true);
-      if (String(observedBeforeLabel.headRefOid).toLowerCase() !== report.result.outputRevision.toLowerCase()) {
-        throw new Error("Worker PR head changed before the success label");
-      }
       recheck();
+      const observedBeforeLabel = gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences"], true);
+      assertWorkerPrReadyForReview(observedBeforeLabel, attempt, report.result.outputRevision);
       gh(["pr", "edit", String(number), "-R", args.githubRepo, "--add-label", args.reviewLabel]);
       const observedAfterLabel = gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefOid"], true);
       if (String(observedAfterLabel.headRefOid).toLowerCase() !== report.result.outputRevision.toLowerCase()) {
@@ -119,4 +129,4 @@ function run(args: Args): number {
 }
 function main() { try { process.exitCode = run(parseArgs(process.argv.slice(2))); } catch (error) { console.error(`guarded-worker-pr.ts: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 2; } }
 if (require.main === module) main();
-module.exports = { assertWorkerPrBinding, ensureWorkerPr, parseArgs, run, verified };
+module.exports = { assertWorkerPrBinding, assertWorkerPrReadyForReview, ensureWorkerPr, parseArgs, run, verified };

@@ -14,7 +14,7 @@ type Args = {
 type CommandResult = { status: number; stdout: string; stderr: string };
 type Ops = {
   run: (args: string[]) => CommandResult;
-  validateReviewPromise?: (file: string) => { status?: unknown; promise?: Record<string, any> };
+  validateReviewPromise?: (file: string) => { status?: unknown; promise?: Record<string, any>; evidenceStrength?: unknown };
   withLock?: (project: Pick<Args, "projectRepo" | "githubRepo" | "stateDir" | "enabledAt">, operation: (_enabled: unknown, recheck: () => void) => number) => number;
 };
 
@@ -41,6 +41,7 @@ function labelsOf(pr: Record<string, any>): Set<string> {
 function assertApprovedReview(args: Args, ops: Ops): void {
   const validation = ops.validateReviewPromise ? ops.validateReviewPromise(args.reviewPromise) : validatePromise(args.reviewPromise);
   const promise = validation.promise;
+  if (validation.evidenceStrength !== "strong") throw new Error("reviewer completion is not strongly bound to its attempt; human handoff stopped");
   if (validation.status !== "complete" || !promise || promise.status !== "complete") throw new Error("validated reviewer completion is missing; human handoff stopped");
   if (String(promise.outcome || "approved") !== "approved") throw new Error("review result is not approved; human handoff stopped");
   if (String(promise.reviewedHead || "").toLowerCase() !== args.expectedHead.toLowerCase()) throw new Error("reviewed head does not match the guarded handoff head");

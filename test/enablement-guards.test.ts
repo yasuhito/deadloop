@@ -322,7 +322,7 @@ describe("enablement mutation guards", () => {
     const result = handoffReviewedPr(
       { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "/promise", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
       {
-        validateReviewPromise: () => ({ status: "complete", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [] } }),
+        validateReviewPromise: () => ({ status: "complete", evidenceStrength: "strong", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [] } }),
         withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
         run: (args: string[]) => {
           calls.push(args.join(" "));
@@ -336,6 +336,21 @@ describe("enablement mutation guards", () => {
       },
     );
     expect({ result, mutation: calls[1] }).toEqual({ result: 0, mutation: "gh pr edit 24 -R owner/repo --remove-label agent:review --remove-label agent:reviewing --remove-label agent:blocked --add-label ready-for-human" });
+  });
+
+  it("rejects an unbound V1 reviewer report without changing labels", () => {
+    const head = "a".repeat(40); const calls: string[] = [];
+    try {
+      handoffReviewedPr(
+        { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "/promise", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" },
+        {
+          validateReviewPromise: () => ({ status: "complete", evidenceStrength: "unbound-v1", promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [] } }),
+          withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
+          run: (args: string[]) => { calls.push(args.join(" ")); return { status: 0, stdout: "", stderr: "" }; },
+        },
+      );
+    } catch {}
+    expect(calls).toEqual([]);
   });
 
   it("rejects a GitHub mutation targeting another repository", () => {

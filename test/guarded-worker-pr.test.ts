@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { assertWorkerPrBinding, ensureWorkerPr } = require("../extensions/deadloop/automations/guarded-worker-pr.ts");
+const { assertWorkerPrBinding, assertWorkerPrReadyForReview, ensureWorkerPr } = require("../extensions/deadloop/automations/guarded-worker-pr.ts");
 
 describe("guarded Worker PR binding", () => {
   it("rejects another GitHub repository before PR creation", () => {
@@ -15,6 +15,24 @@ describe("guarded Worker PR binding", () => {
       { project: "demo", repository: "owner/repo" },
       { projectId: "other", githubRepo: "owner/repo" },
     )).toThrow("project");
+  });
+
+  it("rejects a recovered Worker PR with the wrong base branch before review", () => {
+    const head = "a".repeat(40);
+    expect(() => assertWorkerPrReadyForReview(
+      { headRefName: "agent/issue-1", headRefOid: head, baseRefName: "wrong", closingIssuesReferences: [{ number: 1 }] },
+      { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
+      head,
+    )).toThrow("base branch");
+  });
+
+  it("rejects a recovered Worker PR without its Issue closing reference before review", () => {
+    const head = "a".repeat(40);
+    expect(() => assertWorkerPrReadyForReview(
+      { headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [] },
+      { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
+      head,
+    )).toThrow("does not close");
   });
 
   it("closes a newly created PR when its head races past the verified output", () => {
