@@ -20,7 +20,7 @@ Do not commit `projects.json`; it contains local paths and rollout choices.
 
 Runtime state and locks live under `~/.pi/agent/deadloop/`. Per-launch prompts, promise reports, and atomic attempt journals live under `~/.pi/agent/deadloop/runs/<uuid>/`, outside target worktrees. New writers emit only strongly bound V1 reports; legacy reports remain inspection-only evidence.
 
-Worker, reviewer, and monitor prompts run the configured project check through `run-project-check.ts`. The wrapper temporarily isolates untracked `.deadloop` and `.pi-subagents` from recursive project tooling, then restores them after success, failure, timeout, or interruption. Tracked project files are never hidden; if either runtime directory contains a tracked file, validation fails closed instead.
+Worker, reviewer, and monitor prompts run the configured project check through `run-project-check.ts`. The wrapper temporarily isolates untracked `.deadloop` and `.pi-subagents` from recursive project tooling, then attempts to restore them after success, failure, timeout, or interruption. If restoration fails, it retains the quarantine and temporary worktree, records both paths, and exposes them through `/deadloop-doctor`. Tracked project files are never hidden; if either runtime directory contains a tracked file, validation fails closed instead.
 
 ## Commands
 

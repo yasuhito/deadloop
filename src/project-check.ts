@@ -108,9 +108,27 @@ function hideRuntimeArtifacts(cwd: string, quarantineRoot: string): { restore: (
       hidden.push({ original, quarantined });
     }
   } catch (error) {
-    for (const artifact of hidden.reverse()) mergeRestoredPath(artifact.quarantined, artifact.original);
-    fs.rmSync(quarantineDir, { recursive: true, force: true });
-    throw error;
+    let rollbackError: unknown;
+    for (const artifact of hidden.reverse()) {
+      try {
+        mergeRestoredPath(artifact.quarantined, artifact.original);
+      } catch (candidate) {
+        rollbackError ||= candidate;
+      }
+    }
+    if (!rollbackError) {
+      fs.rmSync(quarantineDir, { recursive: true, force: true });
+      throw error;
+    }
+    throw Object.assign(
+      new Error(error instanceof Error ? error.message : String(error), { cause: error }),
+      {
+        restorationFailure: {
+          message: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+          quarantinePath: quarantineDir,
+        },
+      },
+    );
   }
 
   return {

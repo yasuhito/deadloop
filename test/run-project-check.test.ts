@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const helper = path.resolve("extensions/deadloop/automations/run-project-check.ts");
 const formatter = path.resolve("test/fixtures/project-check/recursive-json-formatter.cjs");
@@ -47,6 +47,26 @@ function runShared(project: string, command: string) {
   return spawnSync(process.execPath, [helper, "--cwd", project, "--command", command, "--quarantine-root", quarantineRoot], {
     encoding: "utf8",
   });
+}
+
+async function partialIsolationRollbackFailure() {
+  const project = temporaryProject();
+  writeEvidence(project);
+  spawnSync("git", ["-C", project, "init", "--quiet"]);
+  const quarantineRoot = temporaryProject();
+  const renameSync = fs.renameSync.bind(fs);
+  const rename = vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
+    const sourcePath = source.toString();
+    if (sourcePath === path.join(project, ".pi-subagents")) throw new Error("isolation failed");
+    if (sourcePath.startsWith(quarantineRoot) && sourcePath.endsWith(".deadloop")) throw new Error("rollback failed");
+    renameSync(source, target);
+  });
+  try {
+    const failure: any = await runProjectCheck({ cwd: project, command: "true", quarantineRoot }).catch((error) => error);
+    return { failure, quarantineRoot };
+  } finally {
+    rename.mockRestore();
+  }
 }
 
 async function waitForFile(file: string): Promise<void> {
@@ -144,6 +164,21 @@ describe("run-project-check", () => {
       },
       quarantineRetained: true,
     });
+  });
+
+  it("reports restoration evidence when partial isolation rollback fails", async () => {
+    const { failure, quarantineRoot } = await partialIsolationRollbackFailure();
+
+    expect(failure?.restorationFailure).toMatchObject({
+      message: "rollback failed",
+      quarantinePath: expect.stringContaining(quarantineRoot),
+    });
+  });
+
+  it("retains quarantine when partial isolation rollback fails", async () => {
+    const { failure } = await partialIsolationRollbackFailure();
+
+    expect(fs.existsSync(failure?.restorationFailure?.quarantinePath || "")).toBe(true);
   });
 
   it("returns 124 after a timeout", () => {
