@@ -12,7 +12,8 @@ const {
   decideRepairPushGuard,
   finalizeReviewRepair,
 } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
-const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
+const { readLivePr, repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
+const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
 
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const findings = [
@@ -163,6 +164,53 @@ describe("automatic PR review repair", () => {
     const comments = [{ body: renderRepairMarker(head, fingerprint) }];
 
     expect(selectRepairAttempt(comments, "b".repeat(40), findings).reason).toBe("repeated_findings");
+  });
+
+  it("launches the third cumulative repair attempt", () => {
+    expect(
+      selectRepairAttempt(
+        cumulativeRepairFixture.comments.slice(0, 2),
+        cumulativeRepairFixture.nextHead,
+        cumulativeRepairFixture.nextFindings,
+      ).action,
+    ).toBe("launch_repair");
+  });
+
+  it("requires a human after three cumulative repair attempts", () => {
+    expect(
+      selectRepairAttempt(
+        cumulativeRepairFixture.comments,
+        cumulativeRepairFixture.nextHead,
+        cumulativeRepairFixture.nextFindings,
+      ).reason,
+    ).toBe("cumulative_repair_limit");
+  });
+
+  it("flags duplicate recovery after the cumulative limit is exceeded", () => {
+    const fingerprint = reviewResultFingerprint(cumulativeRepairFixture.nextFindings);
+    const comments = [
+      ...cumulativeRepairFixture.comments,
+      { body: renderRepairMarker(cumulativeRepairFixture.nextHead, fingerprint) },
+    ];
+
+    expect(
+      selectRepairAttempt(comments, cumulativeRepairFixture.nextHead, cumulativeRepairFixture.nextFindings)
+        .cumulativeLimitExceeded,
+    ).toBe(true);
+  });
+
+  it("counts repair markers beyond the first GitHub comment page", () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({ body: `comment ${index}` }));
+    const runner = {
+      runJson: (args: string[]) => args[1] === "pr"
+        ? { comments: firstPage }
+        : [firstPage, cumulativeRepairFixture.comments],
+    };
+    const pr = readLivePr("owner/repo", "243", runner);
+
+    expect(
+      selectRepairAttempt(pr.comments, cumulativeRepairFixture.nextHead, cumulativeRepairFixture.nextFindings).reason,
+    ).toBe("cumulative_repair_limit");
   });
 
   it("retries the first technical reviewer failure without human blocking", () => {

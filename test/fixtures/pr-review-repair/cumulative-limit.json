@@ -1,0 +1,23 @@
+{
+  "comments": [
+    {
+      "body": "<!-- deadloop:review-repair-attempt key=11111111111111111111 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=11111111111111111111 -->"
+    },
+    {
+      "body": "<!-- deadloop:review-repair-attempt key=22222222222222222222 head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb review=22222222222222222222 -->"
+    },
+    {
+      "body": "<!-- deadloop:review-repair-attempt key=33333333333333333333 head=cccccccccccccccccccccccccccccccccccccccc review=33333333333333333333 -->"
+    }
+  ],
+  "nextHead": "dddddddddddddddddddddddddddddddddddddddd",
+  "nextFindings": [
+    {
+      "title": "Repair introduced a new blocker",
+      "body": "Restore the authorization check before returning the response",
+      "path": "src/authorization.ts",
+      "line": 42,
+      "severity": "blocker"
+    }
+  ]
+}

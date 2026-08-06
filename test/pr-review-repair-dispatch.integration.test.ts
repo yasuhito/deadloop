@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
+const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
 
 const tempDirs: string[] = [];
 
@@ -433,7 +434,12 @@ if (args.includes("get-url")) process.stdout.write("https://github.com/owner/rep
   return JSON.parse(fs.readFileSync(commentsFile, "utf8")).length;
 }
 
-function runV1ChangesRequestedTwice(options: { customConfiguration?: boolean; renderedCommand?: boolean; attempts?: number } = {}): {
+function runV1ChangesRequestedTwice(options: {
+  customConfiguration?: boolean;
+  renderedCommand?: boolean;
+  attempts?: number;
+  injectCumulativeLimitRace?: boolean;
+} = {}): {
   launches: number;
   actions: string[];
   reviewerPhase: string;
@@ -461,6 +467,7 @@ function runV1ChangesRequestedTwice(options: { customConfiguration?: boolean; re
   const promise = path.join(reviewerRun, "promise.json");
   const attempt = path.join(reviewerRun, "attempt.json");
   const comments = path.join(root, "comments.json");
+  const ghViewCount = path.join(root, "gh-view-count");
   const runtime = path.join(root, "runtime.json");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(reviewerRun, { recursive: true });
@@ -475,7 +482,10 @@ function runV1ChangesRequestedTwice(options: { customConfiguration?: boolean; re
   spawnSync("git", ["-C", repo, "worktree", "add", "--quiet", worktree, "agent/issue-243"]);
   spawnSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   const head = spawnSync("git", ["-C", worktree, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
-  fs.writeFileSync(comments, "[]");
+  fs.writeFileSync(
+    comments,
+    JSON.stringify(options.injectCumulativeLimitRace ? cumulativeRepairFixture.comments.slice(0, 2) : []),
+  );
   fs.writeFileSync(runtime, JSON.stringify({ workspace: "reviewer-workspace", agent: null, launches: 0 }));
   fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ projects: [{
     repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
@@ -499,7 +509,16 @@ function runV1ChangesRequestedTwice(options: { customConfiguration?: boolean; re
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const fs=require("node:fs");const a=process.argv.slice(2);
 if(a[0]==="repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
-else if(a[0]==="pr"&&a[1]==="view") process.stdout.write(JSON.stringify({number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:process.env.HEAD,isCrossRepository:false,labels:${JSON.stringify(liveLabels)},comments:JSON.parse(fs.readFileSync(process.env.COMMENTS,"utf8"))}));
+else if(a[0]==="pr"&&a[1]==="view") {
+  const count=fs.existsSync(process.env.GH_VIEW_COUNT)?Number(fs.readFileSync(process.env.GH_VIEW_COUNT,"utf8")):0;
+  fs.writeFileSync(process.env.GH_VIEW_COUNT,String(count+1));
+  const comments=JSON.parse(fs.readFileSync(process.env.COMMENTS,"utf8"));
+  if(process.env.INJECT_LIMIT_RACE==="1"&&count===2) {
+    comments.push(${JSON.stringify(cumulativeRepairFixture.comments[2])});
+    fs.writeFileSync(process.env.COMMENTS,JSON.stringify(comments));
+  }
+  process.stdout.write(JSON.stringify({number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:process.env.HEAD,isCrossRepository:false,labels:${JSON.stringify(liveLabels)},comments}));
+}
 else if(a[0]==="pr"&&a[1]==="comment"){const c=JSON.parse(fs.readFileSync(process.env.COMMENTS,"utf8"));c.push({body:a[a.indexOf("--body")+1]});fs.writeFileSync(process.env.COMMENTS,JSON.stringify(c));}
 `);
   executable(path.join(bin, "herdr"), `#!/usr/bin/env node
@@ -521,7 +540,8 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
     DEADLOOP_REVIEW_LABEL: labels.review, DEADLOOP_REVIEWING_LABEL: labels.reviewing,
     DEADLOOP_BLOCKED_LABEL: labels.blocked, DEADLOOP_HUMAN_LABEL: labels.human,
-    HEAD: head, COMMENTS: comments, RUNTIME: runtime, WORKTREE: worktree };
+    HEAD: head, COMMENTS: comments, GH_VIEW_COUNT: ghViewCount,
+    INJECT_LIMIT_RACE: options.injectCumulativeLimitRace ? "1" : "0", RUNTIME: runtime, WORKTREE: worktree };
   const dispatcherCommand = options.renderedCommand
     ? (() => {
         const prompt = renderReviewerMonitorPrompt({
@@ -576,6 +596,15 @@ describe("review repair dispatch integration", () => {
       launches: 1,
       actions: ["review_repair_monitor_request", "review_repair_monitor_recovered"],
       reviewerPhase: "workspace_closed",
+    });
+  });
+
+  it("human-blocks when a third attempt appears before a fourth launch", () => {
+    const result = runV1ChangesRequestedTwice({ attempts: 1, injectCumulativeLimitRace: true });
+
+    expect({ action: result.actions[0], launches: result.launches }).toEqual({
+      action: "review_repair_limit_reached",
+      launches: 0,
     });
   });
 

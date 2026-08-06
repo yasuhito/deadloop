@@ -85,8 +85,8 @@ function parseArgs(argv: string[]): JsonObject {
   return values;
 }
 
-function readLivePr(repo: string, prNumber: string): JsonObject {
-  return commandRunner.runJson([
+function readLivePr(repo: string, prNumber: string, runner = commandRunner): JsonObject {
+  const pr = runner.runJson([
     "gh",
     "pr",
     "view",
@@ -96,6 +96,18 @@ function readLivePr(repo: string, prNumber: string): JsonObject {
     "--json",
     "number,state,headRefName,headRefOid,isCrossRepository,labels,comments",
   ]);
+  if (!Array.isArray(pr.comments) || pr.comments.length < 100) return pr;
+  const pages = runner.runJson([
+    "gh",
+    "api",
+    "--paginate",
+    "--slurp",
+    `repos/${repo}/issues/${prNumber}/comments`,
+  ]);
+  if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
+    throw new Error(`PR #${prNumber} comments pagination returned an invalid response`);
+  }
+  return { ...pr, comments: pages.flat() };
 }
 
 type RepairWorktreeInspection =
@@ -575,32 +587,66 @@ function dispatch(args: JsonObject): DriverResult {
   }
 
   const selection = selectRepairAttempt(refreshedPr.comments || [], expectedHead, findings);
+  if (selection.cumulativeLimitExceeded) {
+    const comment = applyHumanBlock(
+      prNumber,
+      env,
+      refreshedPr,
+      "the PR exceeded the cumulative limit of three automatic repair attempts",
+      "Inspect the current head and correct the branch without rewriting history before removing the blocked label.",
+    );
+    return driverResult("done", `PR #${prNumber} exceeded the cumulative repair limit; marked blocked`, {
+      driverAction: "review_repair_limit_reached",
+      selection,
+      comment,
+    });
+  }
   if (selection.action === "already_attempted") {
     let recoveredLaunch = readLaunchEvidence(prNumber, branch, expectedHead, selection.key, env);
     const retained = findRunMetadata(expectedHead, selection.key, env);
     if (!recoveredLaunch && retained?.launchUuid && ["prepared", "github_claimed"].includes(String(retained.phase || ""))) {
       const resumeUuid = retained.launchUuid;
-      const resumed = withEnabledDriverLaunch(
-        env,
-        (recheck: () => void) => recheck(),
-        (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck, resumeUuid),
-        {
-          prepareAttempt: () => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, undefined, resumeUuid, true),
-          recordClaim: () => recordRepairLaunchGithubClaim(
-            prNumber, branch, expectedHead, findings, selection.key, env, resumeUuid,
-          ),
-          revalidate: () => {
-            const livePr = readLivePr(env.githubRepo, prNumber);
-            assertSameLaunchTarget(refreshedPr, livePr, "pr");
-            const labels = labelNames(livePr.labels);
-            const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings);
-            if (!labels.includes(env.reviewLabel) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)
-              || liveSelection.action !== "already_attempted" || liveSelection.key !== selection.key) {
-              throw new StaleLaunchError(`PR #${prNumber} interrupted repair is no longer resumable`);
-            }
+      let resumed: JsonObject;
+      try {
+        resumed = withEnabledDriverLaunch(
+          env,
+          (recheck: () => void) => recheck(),
+          (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck, resumeUuid),
+          {
+            prepareAttempt: () => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, undefined, resumeUuid, true),
+            recordClaim: () => recordRepairLaunchGithubClaim(
+              prNumber, branch, expectedHead, findings, selection.key, env, resumeUuid,
+            ),
+            revalidate: () => {
+              const livePr = readLivePr(env.githubRepo, prNumber);
+              assertSameLaunchTarget(refreshedPr, livePr, "pr");
+              const labels = labelNames(livePr.labels);
+              const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings);
+              if (liveSelection.cumulativeLimitExceeded) {
+                throw new Error("cumulative_repair_limit_exceeded_before_recovery");
+              }
+              if (!labels.includes(env.reviewLabel) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)
+                || liveSelection.action !== "already_attempted" || liveSelection.key !== selection.key) {
+                throw new StaleLaunchError(`PR #${prNumber} interrupted repair is no longer resumable`);
+              }
+            },
           },
-        },
-      );
+        );
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== "cumulative_repair_limit_exceeded_before_recovery") throw error;
+        const latestPr = readLivePr(env.githubRepo, prNumber);
+        const comment = applyHumanBlock(
+          prNumber,
+          env,
+          latestPr,
+          "the PR exceeded the cumulative limit of three automatic repair attempts before recovery",
+          "Inspect the current head and correct the branch without rewriting history before removing the blocked label.",
+        );
+        return driverResult("done", `PR #${prNumber} exceeded the cumulative repair limit; marked blocked`, {
+          driverAction: "review_repair_limit_reached",
+          comment,
+        });
+      }
       recoveredLaunch = { repairName: resumed.agentName, promiseFile: resumed.promiseFile, launchUuid: resumeUuid, phase: "agent_started" };
       recordLaunchEvidence(prNumber, branch, expectedHead, selection.key, recoveredLaunch, env);
     }
@@ -649,7 +695,12 @@ function dispatch(args: JsonObject): DriverResult {
     let comment = "Review result comment already exists.";
     withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
       if (!reviewCommentExists(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
-        comment = renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint, repairUnavailable: true });
+        comment = renderChangesRequestedComment({
+          ...commentInput,
+          reviewFingerprint: selection.reviewFingerprint,
+          repairUnavailable: true,
+          repairUnavailableReason: selection.reason,
+        });
         guardedGithub.commentPr(env.githubRepo, prNumber, comment);
       }
       const labels = labelNames(livePr.labels);
@@ -657,7 +708,18 @@ function dispatch(args: JsonObject): DriverResult {
         guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
       }
     });
-    return driverResult("done", `PR #${prNumber} repeated the same findings; marked blocked`, { driverAction: "review_repair_repeated", selection, comment });
+    const cumulativeLimitReached = selection.reason === "cumulative_repair_limit";
+    return driverResult(
+      "done",
+      cumulativeLimitReached
+        ? `PR #${prNumber} reached the cumulative repair limit; marked blocked`
+        : `PR #${prNumber} repeated the same findings; marked blocked`,
+      {
+        driverAction: cumulativeLimitReached ? "review_repair_limit_reached" : "review_repair_repeated",
+        selection,
+        comment,
+      },
+    );
   }
 
   const repairLaunchUuid = randomUUID();
@@ -729,6 +791,9 @@ function dispatch(args: JsonObject): DriverResult {
                 && preparedRecord.attemptId === selection.key
                 && ["prepared", "github_claimed"].includes(preparedRecord.phase);
             })();
+          if (liveSelection.cumulativeLimitExceeded) {
+            throw new Error("cumulative_repair_limit_exceeded_before_launch");
+          }
           if ((liveSelection.action !== "launch_repair" || liveSelection.key !== selection.key) && !markerOwnedByPreparedRepair) {
             throw new StaleLaunchError(`PR #${prNumber} repair attempt state changed before launch`);
           }
@@ -740,6 +805,20 @@ function dispatch(args: JsonObject): DriverResult {
       return driverResult("done", `PR #${prNumber} changed before repair launch; left workflow state untouched`, { driverAction: "review_repair_launch_stale" });
     }
     if (error instanceof Error && error.message.includes("deadloop is disabled")) throw error;
+    if (error instanceof Error && error.message === "cumulative_repair_limit_exceeded_before_launch") {
+      const latestPr = readLivePr(env.githubRepo, prNumber);
+      const comment = applyHumanBlock(
+        prNumber,
+        env,
+        latestPr,
+        "the PR exceeded the cumulative limit of three automatic repair attempts before launch",
+        "Inspect the current head and correct the branch without rewriting history before removing the blocked label.",
+      );
+      return driverResult("done", `PR #${prNumber} exceeded the cumulative repair limit; marked blocked`, {
+        driverAction: "review_repair_limit_reached",
+        comment,
+      });
+    }
     const failedLaunch = (error as Error & { launch?: JsonObject }).launch;
     let recovered = false;
     if (failedLaunch) {
@@ -796,4 +875,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { dispatch, envConfig, launchRepair, parseArgs, recordRepairLaunchGithubClaim, repairWorkerPrompt };
+module.exports = { dispatch, envConfig, launchRepair, parseArgs, readLivePr, recordRepairLaunchGithubClaim, repairWorkerPrompt };
