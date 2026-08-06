@@ -16,6 +16,7 @@ const {
 const { validatePromise } = require("./extract-worker-promise.ts");
 const { createCommandRunner } = require("../../../src/automation-driver-kit.ts");
 const { assertWorktreeBelongsToProject } = require("../../../src/attempt-project-confinement.cjs");
+const { assertCleanOutput } = require("./run-worker-required-verification.ts");
 
 type Args = {
   projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number;
@@ -87,13 +88,7 @@ function assertFreshTransformedHeadVerification(
       githubRepo: args.githubRepo,
       stateDir: args.stateDir,
     });
-    const assertCleanHead = () => {
-      const currentHead = runner.runText(["git", "-C", confinement.worktreePath, "rev-parse", "--verify", "HEAD^{commit}"]).trim();
-      if (currentHead.toLowerCase() !== head.toLowerCase()) throw new Error("transformed worktree HEAD differs from the handoff head");
-      if (runner.runText(["git", "-C", confinement.worktreePath, "status", "--porcelain", "--untracked-files=all"]).trim()) {
-        throw new Error("transformed worktree is not clean");
-      }
-    };
+    const assertCleanHead = () => assertCleanOutput(confinement.worktreePath, head);
     assertCleanHead();
     const check = spawnSync(process.execPath, [
       path.join(__dirname, "run-project-check.ts"),

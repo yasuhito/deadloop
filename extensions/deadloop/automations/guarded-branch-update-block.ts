@@ -54,11 +54,13 @@ function blockBranchUpdate(args: Args, ops: Ops = { run: defaultRun }): number {
     const headChanged = String(after.headRefOid || "").toLowerCase() !== args.expectedHead.toLowerCase();
     if (headChanged || !current.has(args.reviewLabel) || current.has(args.reviewingLabel) || !current.has(args.blockedLabel)) {
       const rollback = ["gh", "pr", "edit", args.pr, "-R", args.githubRepo];
+      const blockerAdded = !boundaryLabels.has(args.blockedLabel) && current.has(args.blockedLabel);
+      if (headChanged && blockerAdded) rollback.push("--remove-label", args.blockedLabel);
       for (const label of [args.reviewLabel, args.reviewingLabel]) {
         if (boundaryLabels.has(label) && !current.has(label)) rollback.push("--add-label", label);
       }
       if (rollback.length > 6) checked(ops, rollback);
-      if (headChanged) throw new Error("PR head changed during branch-update block; prior labels restored and blocker preserved");
+      if (headChanged) throw new Error(`PR head changed during branch-update block; prior labels restored and blocker ${blockerAdded ? "removed" : "preserved"}`);
       throw new Error("branch-update blocked-label transition was not persisted exactly; prior labels restored and blocker preserved");
     }
     return 0;

@@ -354,10 +354,10 @@ describe("enablement mutation guards", () => {
         },
       );
     } catch (caught) { error = String(caught); }
-    expect({ mutations, restored: error.includes("prior labels restored and blocker preserved") }).toEqual({
+    expect({ mutations, restored: error.includes("prior labels restored and blocker removed") }).toEqual({
       mutations: [
         "gh pr edit 24 -R owner/repo --remove-label agent:reviewing --add-label agent:blocked",
-        "gh pr edit 24 -R owner/repo --add-label agent:reviewing",
+        "gh pr edit 24 -R owner/repo --remove-label agent:blocked --add-label agent:reviewing",
       ],
       restored: true,
     });

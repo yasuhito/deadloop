@@ -65,6 +65,14 @@ describe("human-handoff verification provenance", () => {
     expect(() => assertCurrentHeadVerification(transformedEvidence(role))).not.toThrow();
   });
 
+  it("allows untracked runtime artifacts during transformed-head verification", () => {
+    const fixture = transformedEvidence("review-repair");
+    mkdirSync(path.join(path.dirname(fixture.stateDir), "review-repair-worktree", ".deadloop"));
+    writeFileSync(path.join(path.dirname(fixture.stateDir), "review-repair-worktree", ".deadloop", "runtime.json"), "{}\n");
+
+    expect(() => assertCurrentHeadVerification(fixture)).not.toThrow();
+  });
+
   it("does not promote repair checks reported only by the agent", () => {
     const fixture = transformedEvidence("review-repair");
     rmSync(path.join(fixture.stateDir, "runs", "review-repair", "finalizer-result.json"));

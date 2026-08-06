@@ -108,6 +108,9 @@ function addWorkerReviewLabel(
   const observedAfterLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
   try {
     assertWorkerPrReadyForReview(observedAfterLabel, attempt, outputRevision);
+    const reviewLabelPersisted = Array.isArray(observedAfterLabel.labels)
+      && observedAfterLabel.labels.some((label: any) => (typeof label === "string" ? label : label?.name) === args.reviewLabel);
+    if (!reviewLabelPersisted) throw new Error("Worker PR success label was not persisted");
   } catch (error) {
     if (!reviewLabelAlreadyPresent) ops.gh(["pr", "edit", String(number), "-R", args.githubRepo, "--remove-label", args.reviewLabel]);
     throw new Error(`Worker PR contract changed while adding the success label; ${reviewLabelAlreadyPresent ? "pre-existing label preserved" : "label removed"}: ${error instanceof Error ? error.message : String(error)}`);

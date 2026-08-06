@@ -119,6 +119,33 @@ describe("guarded Worker PR binding", () => {
     expect(edits).toEqual([]);
   });
 
+  it("fails safely when the review label is not persisted", () => {
+    const head = "a".repeat(40); const edits: string[] = []; let error = "";
+    try {
+      addWorkerReviewLabel(
+        17,
+        { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
+        head,
+        { githubRepo: "owner/repo", reviewLabel: "agent:review" },
+        {
+          recheck: () => {}, authorize: () => {},
+          gh: (args: string[]) => {
+            if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
+            return { headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [{ number: 1 }], labels: [] };
+          },
+        },
+      );
+    } catch (caught) { error = String(caught); }
+
+    expect({ edits, rejected: error.includes("success label") }).toEqual({
+      edits: [
+        "pr edit 17 -R owner/repo --add-label agent:review",
+        "pr edit 17 -R owner/repo --remove-label agent:review",
+      ],
+      rejected: true,
+    });
+  });
+
   it("preserves a review label that existed before a failed label boundary", () => {
     const head = "a".repeat(40); const edits: string[] = []; let viewed = 0;
     try {

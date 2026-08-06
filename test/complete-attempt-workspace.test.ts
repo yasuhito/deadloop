@@ -100,7 +100,7 @@ describe("selected attempt workspace completion", () => {
     expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
   });
 
-  it("does not authorize a synthetic local-source record without host execution", () => {
+  function syntheticLocalSourceAuthorization(repositoryId?: string) {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-complete-local-policy-")); roots.push(root);
     const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout");
     const stateDir = path.join(root, "state"); const runDir = path.join(stateDir, "runs", "attempt-1");
@@ -119,8 +119,15 @@ describe("selected attempt workspace completion", () => {
     const attemptRecord = path.join(runDir, "attempt.json");
     writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { ...contract, targetCommit: baseRevision }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "required-verification.log") }));
 
-    expect(() => assertWorkerPersistenceAuthorized(attempt, report, { attemptRecord, projectRepo: checkout, stateDir }, undefined, "R_owner_repo")).toThrow("stale_policy");
-    expect(() => assertWorkerPersistenceAuthorized(attempt, report, { attemptRecord, projectRepo: checkout, stateDir })).toThrow("host execution authenticity");
+    return () => assertWorkerPersistenceAuthorized(attempt, report, { attemptRecord, projectRepo: checkout, stateDir }, undefined, repositoryId);
+  }
+
+  it("does not authorize a synthetic local-source record with another repository identity", () => {
+    expect(syntheticLocalSourceAuthorization("R_owner_repo")).toThrow("stale_policy");
+  });
+
+  it("does not authorize a synthetic local-source record without host execution", () => {
+    expect(syntheticLocalSourceAuthorization()).toThrow("host execution authenticity");
   });
 
   it("retains a proven Worker workspace when verification evidence names another output", () => {
