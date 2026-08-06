@@ -24,7 +24,7 @@ const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src
 const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
+const { assertCurrentWorkerContract, requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -297,6 +297,16 @@ function assertWorkerLaunchBaseCurrent(
   }
 }
 
+function assertPreparedWorkerContractCurrent(planInput: Record<string, any>, env: ReturnType<typeof envConfig>): void {
+  const runDir = path.join(env.stateDir, "runs", path.basename(String(planInput.uuid)));
+  const attempt = readAttemptRecord(runDir);
+  try {
+    assertCurrentWorkerContract(attempt, env.repoPath, env.configPath || path.join(env.stateDir, "projects.json"));
+  } catch (error) {
+    throw new StaleLaunchError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function launchIssueWorkerFlow(
   issue: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -345,7 +355,10 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   const runner = herdrRunner();
   const launch = withEnabledDriverLaunch(
     env,
-    (recheck: () => void) => githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel }),
+    (recheck: () => void) => {
+      assertPreparedWorkerContractCurrent(plan.input, env);
+      githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel });
+    },
     (recheck: () => void) => launchAgentFlow(
       plan.input,
       { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
@@ -387,6 +400,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
       path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
     requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION || "",
+    configPath: source.DEADLOOP_CONFIG || "",
     fixtureMode: source.DEADLOOP_FIXTURE_MODE === "1",
     workerInstructions: source.DEADLOOP_WORKER_INSTRUCTIONS || "Read AGENTS.md and follow the issue contract.",
     workerAgent: source.DEADLOOP_WORKER_AGENT || "pi",
@@ -518,4 +532,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };
+module.exports = { assertPreparedWorkerContractCurrent, assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };

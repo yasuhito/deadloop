@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,6 +21,18 @@ function evidence(role: "worker" | "reviewer" | "review-repair" | "branch-update
   return { projectRepo: repo, githubRepo: "owner/repo", stateDir, enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "unused", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" };
 }
 
+function transformedEvidence(role: "review-repair" | "branch-update") {
+  const fixture = evidence("worker"); const inputHead = fixture.expectedHead; const outputHead = role === "review-repair" ? "b".repeat(40) : "c".repeat(40);
+  const runDir = path.join(fixture.stateDir, "runs", role); mkdirSync(runDir);
+  const attempt = JSON.parse(readFileSync(path.join(fixture.stateDir, "runs", "evidence", "attempt.json"), "utf8"));
+  Object.assign(attempt, { attemptId: role, launchUuid: role, role, target: { kind: "pull-request", number: 24 }, inputRevision: { head: inputHead, ...(role === "branch-update" ? { base: inputHead } : {}) }, agentName: `dl-${role}`, workspaceLabel: role, promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"), phase: "report_received", lastSuccessfulPhase: "report_received", outputRevision: outputHead });
+  delete attempt.requiredVerification; writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt));
+  const outcome = role === "review-repair" ? "repair_pushed" : "branch_update_pushed";
+  const finalizer = { action: "pushed", reason: outcome, originalHeadOid: inputHead, ...(role === "branch-update" ? { baseHeadOid: inputHead } : {}), headOid: outputHead, checks: [{ command: "npm run check", result: "passed" }] };
+  writeFileSync(attempt.promiseFile, JSON.stringify({ schemaVersion: 1, attemptId: role, role, target: { repository: "owner/repo", kind: "pull-request", number: 24 }, inputRevision: attempt.inputRevision, status: "complete", summary: "verified", result: { outcome, outputRevision: outputHead, ...(role === "review-repair" ? { repairs: [{ title: "finding", summary: "fixed", paths: ["src/a.ts"] }] } : {}) }, evidence: { finalizer, validations: finalizer.checks } }));
+  fixture.expectedHead = outputHead; return fixture;
+}
+
 describe("human-handoff verification provenance", () => {
   it("authorizes a Worker-produced head from its current-head verification record", () => {
     expect(() => assertCurrentHeadVerification(evidence("worker"))).not.toThrow();
@@ -33,14 +45,43 @@ describe("human-handoff verification provenance", () => {
     expect(() => assertCurrentHeadVerification(fixture)).toThrow("required verification record did not pass");
   });
 
+  it.each(["review-repair", "branch-update"] as const)("authorizes a %s head through its bound passed check and Worker provenance", (role) => {
+    expect(() => assertCurrentHeadVerification(transformedEvidence(role))).not.toThrow();
+  });
+
   it.each([
     ["a repaired head", "review-repair"],
     ["a branch-updated head", "branch-update"],
     ["a pre-existing PR head", "reviewer"],
-  ] as const)("does not require unsupported verification evidence for %s", (_name, role) => {
+  ] as const)("rejects %s without authoritative current-head evidence", (_name, role) => {
     const fixture = evidence(role);
     rmSync(path.join(fixture.stateDir, "runs", "evidence", "required-verification.json"));
 
-    expect(() => assertCurrentHeadVerification(fixture)).not.toThrow();
+    expect(() => assertCurrentHeadVerification(fixture)).toThrow("human handoff stopped");
+  });
+
+  it("fails closed when the evidence store is missing", () => {
+    const fixture = evidence("worker");
+    rmSync(path.join(fixture.stateDir, "runs"), { recursive: true });
+
+    expect(() => assertCurrentHeadVerification(fixture)).toThrow("evidence store is missing or unreadable");
+  });
+
+  it("fails closed when an attempt record is malformed", () => {
+    const fixture = evidence("worker");
+    const malformed = path.join(fixture.stateDir, "runs", "malformed");
+    mkdirSync(malformed); writeFileSync(path.join(malformed, "attempt.json"), "not-json\n");
+
+    expect(() => assertCurrentHeadVerification(fixture)).toThrow("contains a malformed attempt");
+  });
+
+  it("fails closed when current-head provenance is ambiguous", () => {
+    const fixture = evidence("worker");
+    const duplicate = path.join(fixture.stateDir, "runs", "duplicate");
+    cpSync(path.join(fixture.stateDir, "runs", "evidence"), duplicate, { recursive: true });
+    const file = path.join(duplicate, "attempt.json"); const attempt = JSON.parse(readFileSync(file, "utf8"));
+    attempt.attemptId = "duplicate"; attempt.launchUuid = "duplicate"; writeFileSync(file, JSON.stringify(attempt));
+
+    expect(() => assertCurrentHeadVerification(fixture)).toThrow("provenance is ambiguous");
   });
 });

@@ -1,11 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../src/agent-launch-flow.ts");
-const { assertWorkerLaunchBaseCurrent, issueWorkerLaunchPlan } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
+const { assertPreparedWorkerContractCurrent, assertWorkerLaunchBaseCurrent, issueWorkerLaunchPlan } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
 const { transitionPersistedAttempt } = require("../src/attempt-lifecycle-runtime.cjs");
 
 function input(root: string, role: "worker" | "reviewer" = "worker") {
@@ -108,6 +109,24 @@ describe("0.7.5 エージェント起動フロー", () => {
       "a".repeat(40),
       () => "b".repeat(40),
     )).toThrow("base commit changed");
+  });
+
+  it("準備中にローカル検証方針が変わった Worker 起動を要求状態の変更前に拒否する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-policy-"));
+    try {
+      const repo = path.join(root, "repo"); const remote = path.join(root, "remote.git"); const config = path.join(root, "projects.json");
+      execFileSync("git", ["init", "--bare", "--quiet", remote]); execFileSync("git", ["init", "--quiet", "-b", "main", repo]);
+      execFileSync("git", ["-C", repo, "config", "user.name", "Test"]); execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
+      writeFileSync(path.join(repo, "file.txt"), "base\n"); execFileSync("git", ["-C", repo, "add", "."]); execFileSync("git", ["-C", repo, "commit", "--quiet", "-m", "base"]);
+      execFileSync("git", ["-C", repo, "remote", "add", "origin", remote]); execFileSync("git", ["-C", repo, "push", "--quiet", "-u", "origin", "main"]);
+      const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      writeFileSync(config, JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm test" }] }));
+      const launchInput = { ...input(root), repoPath: repo, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "local", location: `${config}#project=demo` }, baseRevision: head } };
+      prepareAgentLaunchFlow(launchInput, operations(root, "worker", []));
+      writeFileSync(config, JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm run stricter-check" }] }));
+
+      expect(() => assertPreparedWorkerContractCurrent(launchInput, { stateDir: root, repoPath: repo, configPath: config })).toThrow("stale_policy");
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it("既存作業ツリーを開き直す Worker に設定済みの非 main ベースを記録する", () => {

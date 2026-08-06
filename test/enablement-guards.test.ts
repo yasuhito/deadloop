@@ -336,6 +336,33 @@ describe("enablement mutation guards", () => {
     expect({ result, mutation: mutations[0] }).toEqual({ result: 0, mutation: "gh pr edit 24 -R owner/repo --remove-label agent:reviewing --add-label agent:blocked" });
   });
 
+  it("restores branch-update labels when the PR head changes during the mutation", () => {
+    const head = "a".repeat(40); const newHead = "b".repeat(40); const mutations: string[] = []; let viewed = 0; let error = "";
+    try {
+      blockBranchUpdate(
+        { projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, pr: "24", expectedHead: head, reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked" },
+        {
+          withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => number) => operation({}, () => {}),
+          run: (args: string[]) => {
+            if (args[2] === "view") {
+              viewed += 1; const changed = viewed > 2;
+              const names = changed ? ["agent:review", "agent:blocked"] : ["agent:review", "agent:reviewing"];
+              return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: changed ? newHead : head, labels: names.map((name) => ({ name })) }), stderr: "" };
+            }
+            mutations.push(args.join(" ")); return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+      );
+    } catch (caught) { error = String(caught); }
+    expect({ mutations, restored: error.includes("prior labels restored and blocker preserved") }).toEqual({
+      mutations: [
+        "gh pr edit 24 -R owner/repo --remove-label agent:reviewing --add-label agent:blocked",
+        "gh pr edit 24 -R owner/repo --add-label agent:reviewing",
+      ],
+      restored: true,
+    });
+  });
+
   it("moves an approved reviewed head through the dedicated human-handoff guard", () => {
     const head = "a".repeat(40); const calls: string[] = []; let viewed = 0;
     const result = handoffReviewedPr(

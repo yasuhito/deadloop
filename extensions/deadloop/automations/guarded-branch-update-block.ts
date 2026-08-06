@@ -46,11 +46,20 @@ function blockBranchUpdate(args: Args, ops: Ops = { run: defaultRun }): number {
   const operation = (_enabled: unknown, recheck: () => void) => {
     assertEligible(args, livePr(args, ops));
     recheck();
-    assertEligible(args, livePr(args, ops));
+    const boundary = livePr(args, ops);
+    assertEligible(args, boundary);
+    const boundaryLabels = labels(boundary);
     checked(ops, ["gh", "pr", "edit", args.pr, "-R", args.githubRepo, "--remove-label", args.reviewingLabel, "--add-label", args.blockedLabel]);
     const after = livePr(args, ops); const current = labels(after);
-    if (String(after.headRefOid || "").toLowerCase() !== args.expectedHead.toLowerCase() || !current.has(args.reviewLabel) || current.has(args.reviewingLabel) || !current.has(args.blockedLabel)) {
-      throw new Error("branch-update blocked-label transition was not persisted exactly");
+    const headChanged = String(after.headRefOid || "").toLowerCase() !== args.expectedHead.toLowerCase();
+    if (headChanged || !current.has(args.reviewLabel) || current.has(args.reviewingLabel) || !current.has(args.blockedLabel)) {
+      const rollback = ["gh", "pr", "edit", args.pr, "-R", args.githubRepo];
+      for (const label of [args.reviewLabel, args.reviewingLabel]) {
+        if (boundaryLabels.has(label) && !current.has(label)) rollback.push("--add-label", label);
+      }
+      if (rollback.length > 6) checked(ops, rollback);
+      if (headChanged) throw new Error("PR head changed during branch-update block; prior labels restored and blocker preserved");
+      throw new Error("branch-update blocked-label transition was not persisted exactly; prior labels restored and blocker preserved");
     }
     return 0;
   };

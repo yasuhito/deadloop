@@ -5,7 +5,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const {
   assertCurrentWorkerContract,
@@ -60,36 +60,72 @@ function assertApprovedReview(args: Args, ops: Ops): void {
   if (String(promise.reviewedHead || "").toLowerCase() !== args.expectedHead.toLowerCase()) throw new Error("reviewed head does not match the guarded handoff head");
   if (Array.isArray(promise.findings) && promise.findings.length !== 0) throw new Error("approved review has findings; human handoff stopped");
 }
+function readJsonFile(file: string, description: string): Record<string, any> {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("root must be an object");
+    return value;
+  } catch (error) {
+    throw new Error(`${description} is missing, unreadable, or malformed`, { cause: error });
+  }
+}
 function assertCurrentHeadVerification(args: Args): void {
   const runsDir = path.join(args.stateDir, "runs");
   let entries: import("node:fs").Dirent[];
   try { entries = fs.readdirSync(runsDir, { withFileTypes: true }); }
-  catch { return; }
-  const failures: string[] = [];
-  let workerProducedHead = false;
+  catch (error) { throw new Error("required verification evidence store is missing or unreadable; human handoff stopped", { cause: error }); }
+
+  const attempts: Array<{ attempt: Record<string, any>; attemptRecord: string }> = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     const attemptRecord = path.join(runsDir, entry.name, "attempt.json");
-    try {
-      const attempt = readAttemptRecord(path.dirname(attemptRecord));
-      if (attempt.repository !== args.githubRepo || attempt.role !== "worker" || !attempt.requiredVerification
-        || String(attempt.outputRevision || "").toLowerCase() !== args.expectedHead.toLowerCase()) continue;
-      workerProducedHead = true;
+    if (!fs.existsSync(attemptRecord)) continue;
+    try { attempts.push({ attempt: readAttemptRecord(path.dirname(attemptRecord)), attemptRecord }); }
+    catch (error) { throw new Error("required verification evidence store contains a malformed attempt; human handoff stopped", { cause: error }); }
+  }
+
+  const authorize = (head: string, visited: Set<string>): Record<string, any> => {
+    const normalizedHead = head.toLowerCase();
+    if (visited.has(normalizedHead)) throw new Error("required verification provenance contains a cycle");
+    const candidates = attempts.filter(({ attempt }) => attempt.repository === args.githubRepo
+      && String(attempt.outputRevision || "").toLowerCase() === normalizedHead
+      && (attempt.role === "worker" || attempt.role === "review-repair" || attempt.role === "branch-update"));
+    if (candidates.length !== 1) {
+      throw new Error(candidates.length ? "required verification provenance is ambiguous" : "authoritative current-head verification is missing");
+    }
+    const { attempt, attemptRecord } = candidates[0];
+    if (attempt.role === "worker") {
       const current = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"));
       const record = readRequiredVerificationRecord(workerRequiredVerificationPath(attemptRecord));
       if (!record || record.version !== 1 || record.outcome !== "passed" || record.exitCode !== 0) {
         throw new Error("required verification record did not pass");
       }
-      if (JSON.stringify(record.binding) !== JSON.stringify(requiredVerificationBinding(current, args.expectedHead))) {
+      if (JSON.stringify(record.binding) !== JSON.stringify(requiredVerificationBinding(current, normalizedHead))) {
         throw new Error("required verification record does not match the current PR head and trusted contract");
       }
-      return;
-    } catch (error) {
-      failures.push(error instanceof Error ? error.message : String(error));
+      return current;
     }
-  }
-  if (!workerProducedHead) return;
-  throw new Error(`${failures.at(-1) || "required verification passed record is missing"}; human handoff stopped`);
+    if (attempt.target?.kind !== "pull-request" || String(attempt.target.number) !== args.pr) {
+      throw new Error("current-head verification provenance targets another pull request");
+    }
+    const nextVisited = new Set(visited); nextVisited.add(normalizedHead);
+    const current = authorize(String(attempt.inputRevision?.head || ""), nextVisited);
+    const report = readJsonFile(attempt.promiseFile, "current-head verification completion report");
+    validateCompletionReportBinding(attempt, report);
+    const expectedOutcome = attempt.role === "review-repair" ? "repair_pushed" : "branch_update_pushed";
+    if (report.status !== "complete" || report.result?.outcome !== expectedOutcome
+      || String(report.result?.outputRevision || "").toLowerCase() !== normalizedHead) {
+      throw new Error("current-head verification completion report is not a successful bound push");
+    }
+    const checks = report.evidence?.finalizer?.checks;
+    if (!Array.isArray(checks) || checks.length !== 1 || checks[0]?.result !== "passed" || checks[0]?.command !== current.command) {
+      throw new Error("current-head verification does not match the trusted contract");
+    }
+    return current;
+  };
+
+  try { authorize(args.expectedHead, new Set()); }
+  catch (error) { throw new Error(`${error instanceof Error ? error.message : String(error)}; human handoff stopped`, { cause: error }); }
 }
 function assertEligible(args: Args, pr: Record<string, any>): Set<string> {
   const labels = labelsOf(pr);
