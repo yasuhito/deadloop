@@ -36,7 +36,7 @@ describe("PR review public comments", () => {
 Exactly one bounded automatic repair will now start and will change only the findings listed above. The updated head will be reviewed again after a successful push.
 
 <!-- deadloop:review-result head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=1234567890abcdef1234 outcome=changes_requested -->
-<!-- deadloop:review-repair-attempt key=90e33b980e83cbff65a4 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=1234567890abcdef1234 -->`);
+<!-- deadloop:review-repair-attempt key=90e33b980e83cbff65a4 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=1234567890abcdef1234 findings=2 -->`);
   });
 
   it("explains that one bounded repair starts", () => {

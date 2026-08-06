@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const {
@@ -10,11 +12,15 @@ const {
 } = require("../extensions/deadloop/automations/pr-review-repair-state.ts");
 const {
   decideRepairPushGuard,
+  decideRepairSize,
   finalizeReviewRepair,
 } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
 const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const sizeLimitCases = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "fixtures/pr-review-repair/size-limit-cases.json"), "utf8"),
+);
 const findings = [
   {
     title: "Lint contract failure",
@@ -33,7 +39,7 @@ function finalizeWith(
   pushUrl = "https://github.com/owner/repo.git",
   repositoryIds: Record<string, string> = {},
   raceRemoteHead?: string | null,
-  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string } = {},
+  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; changedFileCount?: number; changedFiles?: string[] } = {},
 ) {
   let observedHead = actualHead;
   let localHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -53,6 +59,7 @@ function finalizeWith(
       resultFile: "/state/result.json",
     },
     {
+      readRepairFindingCount: () => findings.length,
       assertEnabled: () => {
         if (headAfterAuthorization) observedHead = headAfterAuthorization;
         return { githubRepo: "owner/repo", githubRepositoryId: "R_repo" };
@@ -90,6 +97,11 @@ function finalizeWith(
           };
         }
         if (args.includes("rev-parse")) return { status: 0, stdout: `${localHead}\n`, stderr: "" };
+        if (args.includes("diff")) {
+          const changedFiles = localHeadChanges.changedFiles
+            || Array.from({ length: localHeadChanges.changedFileCount || 0 }, (_value, index) => `file-${index}.ts`);
+          return { status: 0, stdout: `${changedFiles.join("\0")}${changedFiles.length ? "\0" : ""}`, stderr: "" };
+        }
         return { status: 0, stdout: "", stderr: "" };
       },
     },
@@ -108,6 +120,7 @@ function finalizeWhileDisabled() {
         resultFile: "/state/result.json",
       },
       {
+        readRepairFindingCount: () => findings.length,
         assertEnabled: () => { throw new Error("deadloop is disabled for this repository"); },
         run: (args: string[]) => {
           commands.push(args);
@@ -189,12 +202,38 @@ describe("automatic PR review repair", () => {
     expect(prompt()).toContain("Do not add features, reinterpret the issue, or widen scope");
   });
 
+  it("does not expose the safety-critical finding count as a worker CLI argument", () => {
+    expect(prompt()).not.toContain("--finding-count");
+  });
+
+  it("gives an oversized repair an exact blocked promise shape", () => {
+    expect(prompt()).toContain('result={reason:"repair_size_limit_exceeded",explanation:"the changed-file count and finalizer limit",recovery:"have a human inspect and complete the repair"}, and evidence={}');
+  });
+
   it("forbids direct pushes from the repair worker", () => {
     expect(prompt()).toContain("Do not run git push directly");
   });
 
   it("requires stale repair outputRevision from the finalizer receipt", () => {
     expect(prompt()).toContain('result={outcome:"stale_head",outputRevision:"<finalizer currentRemoteHeadOid>"}');
+  });
+
+  it.each(sizeLimitCases)("applies repair size policy: $name", (fixture: any) => {
+    expect(decideRepairSize(fixture.changedFileCount, fixture.findingCount).action).toBe(fixture.expectedAction);
+  });
+
+  it("does not push a repair that exceeds the size limit", () => {
+    const commands: string[][] = [];
+    const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { changedFileCount: 6 });
+
+    expect({ action: result.action, pushed: commands.some((command) => command.includes("push")) }).toEqual({ action: "blocked", pushed: false });
+  });
+
+  it("counts a whitespace-only filename without trimming NUL-delimited git output", () => {
+    const commands: string[][] = [];
+    const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { changedFiles: [" ", "a", "b", "c", "d", "e"] });
+
+    expect(result.action).toBe("blocked");
   });
 
   it("stops a stale repair without authorizing push", () => {

@@ -231,6 +231,7 @@ Safety contract:
   ${finalizer}
 - Never edit labels or PR metadata, create a PR, merge, close an issue, delete a branch, or invoke another agent.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state.
+- If the finalizer returns blocked with reason=repair_size_limit_exceeded, stop without pushing and write status="blocked", result={reason:"repair_size_limit_exceeded",explanation:"the changed-file count and finalizer limit",recovery:"have a human inspect and complete the repair"}, and evidence={}. Do not claim a push.
 
 Promise report:
 - Always write one V1 JSON object to ${promiseFile}. Its immutable identity is ${JSON.stringify({ schemaVersion: 1, attemptId: attemptKey, role: "review-repair", target: { repository: env.githubRepo, kind: "pull-request", number: Number(prNumber) }, inputRevision: { head: expectedHead } })}.
