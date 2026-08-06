@@ -114,7 +114,7 @@ describe("selected attempt workspace completion", () => {
     const configFile = path.join(stateDir, "projects.json");
     writeFileSync(configFile, JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "true" }] }));
     const contract = { repository: "owner/repo", command: "true", source: { kind: "local", location: `${configFile}#project=demo` }, baseRevision };
-    const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head: baseRevision }, baseBranch: "origin/main", requiredVerification: contract, promiseFile: path.join(runDir, "promise.json") };
+    const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head: baseRevision }, branch: "agent/issue-1", baseBranch: "origin/main", worktreePath: checkout, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "worker-prompt.md"), promiseFile: path.join(runDir, "promise.json"), requiredVerification: contract };
     require("../src/worker-required-verification-runtime.cjs").writeWorkerContractSnapshot(runDir, attempt);
     const report = { role: "worker", status: "complete", result: { outputRevision: baseRevision } };
     const attemptRecord = path.join(runDir, "attempt.json");
