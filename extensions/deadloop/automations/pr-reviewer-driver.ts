@@ -518,7 +518,7 @@ function launchPrReviewerFlow(
   prepareAgentLaunchFlow(plan.input, ops);
   recordAgentLaunchGithubClaimed(plan.input);
   const launch = launchAgentFlow(plan.input, ops);
-  return { reviewerName: plan.reviewerName, headRefName: plan.headRefName, ...launch };
+  return { reviewerName: plan.reviewerName, headRefName: plan.headRefName, reason, ...launch };
 }
 
 function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
@@ -541,7 +541,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
       }
     },
   );
-  return { reviewerName, headRefName, ...launch, ...(fixture ? { simulated: true } : {}) };
+  return { reviewerName, headRefName, reason, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
 function draftBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>): string {
@@ -776,12 +776,15 @@ function drive(fixturePath: string | undefined): DriverResult {
     const { applied, githubEffects } = applyExternalReviewRequest(plan.pr, env, fixture);
     if (!applied) {
       return driverResult("skip", `PR #${plan.decision.number} changed before external review request`, {
-        driverAction: "external_review_request_stale", prNumber: plan.decision.number,
+        driverAction: "external_review_request_stale",
+        prNumber: plan.decision.number,
+        decision: plan.decision,
       });
     }
     return driverResult("done", `Requested external review for PR #${plan.decision.number}`, {
       driverAction: "external_review_requested",
       prNumber: plan.decision.number,
+      decision: plan.decision,
       gate: plan.gate,
       ...(fixture ? { githubEffects, testAdapterEffects: fixtureEffects(fixture) } : {}),
     });
@@ -790,6 +793,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     return driverResult("skip", `Waiting for external review on PR #${plan.decision.number}`, {
       driverAction: "wait",
       prNumber: plan.decision.number,
+      decision: plan.decision,
       gate: plan.gate,
     });
   }
@@ -841,6 +845,7 @@ function drive(fixturePath: string | undefined): DriverResult {
   return driverResult("needs_llm", `Launched reviewer agent for PR #${decision.number}`, {
     driverAction: "reviewer_monitor_request",
     prNumber: decision.number,
+    decision,
     gate,
     launch,
     monitorHandoff: { kind: "reviewer", input: monitorInput },

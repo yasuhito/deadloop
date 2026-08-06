@@ -105,4 +105,28 @@ describe("PR reviewer deterministic driver", () => {
   it("reports the deterministic reviewer name", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).launch.reviewerName).toBe("demo-pr-24-reviewer");
   });
+
+  it("reports the selection decision when requesting external review", () => {
+    expect(runDriverFixture("external-review-request.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).decision.reason).toBe("selectable");
+  });
+
+  it("reports the selection decision while waiting for external review", () => {
+    expect(runDriverFixture("external-review-wait.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).decision.reason).toBe("selectable");
+  });
+
+  it("keeps the repair rereview launch reason separate from the fallback gate", () => {
+    expect(runDriverFixture("repair-rereview-fallback.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).launch.reason).toBe("repair_rereview");
+  });
+
+  it("reports the repair rereview selection decision after fallback", () => {
+    expect(runDriverFixture("repair-rereview-fallback.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).decision.reason).toBe("repair_rereview");
+  });
+
+  it("keeps the stale claim launch reason separate from the fallback gate", () => {
+    expect(runDriverFixture("stale-claim-fallback.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).launch.reason).toBe("stale_reclaim");
+  });
+
+  it("reports the stale claim selection decision after fallback", () => {
+    expect(runDriverFixture("stale-claim-fallback.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).decision.reason).toBe("stale_reclaim");
+  });
 });

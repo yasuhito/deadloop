@@ -105,7 +105,7 @@ function planPrReviewerAction(prs: JsonObject[], agents: JsonObject, env: PrRevi
     decision,
     pr,
     gate,
-    reason: String(gate.reason || decision.reason || "review_required"),
+    reason: String(decision.reason || "review_required"),
   };
 }
 
