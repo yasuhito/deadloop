@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { AttemptRecord, CompletionReportV1 } from "../src/attempt-lifecycle";
+import { readAttemptRecord, type AttemptRecord, type CompletionReportV1 } from "../src/attempt-lifecycle";
 import {
   assertWorkerCompletionAuthorized,
   type RequiredVerificationRecord,
@@ -56,6 +56,28 @@ function authenticatedAttempt<T extends AttemptRecord>(value: T, root: string): 
   const authenticated = { ...value, promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json") };
   runtime.writeWorkerContractSnapshot(runDir, authenticated);
   return authenticated;
+}
+function projectPolicyMatchObservation(duplicate: boolean): string {
+  const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-config-switch-"));
+  try {
+    const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout");
+    const activeConfig = path.join(root, "active-projects.json");
+    execFileSync("git", ["init", "--bare", "--quiet", remote]);
+    execFileSync("git", ["init", "--quiet", "-b", "main", seed]);
+    execFileSync("git", ["-C", seed, "config", "user.name", "Test"]); execFileSync("git", ["-C", seed, "config", "user.email", "test@example.com"]);
+    writeFileSync(path.join(seed, "file.txt"), "policy base\n");
+    execFileSync("git", ["-C", seed, "add", "file.txt"]); execFileSync("git", ["-C", seed, "commit", "--quiet", "-m", "base"]);
+    execFileSync("git", ["-C", seed, "remote", "add", "origin", remote]); execFileSync("git", ["-C", seed, "push", "--quiet", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", "--quiet", remote, checkout]);
+    const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
+    const exactProject = { id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run active-check" };
+    writeFileSync(activeConfig, JSON.stringify({ projects: duplicate
+      ? [exactProject, exactProject]
+      : [{ id: "alias", githubRepo: attempt.repository, checkCommand: "npm run stricter-check" }, exactProject] }));
+    const fixedAttempt = authenticatedAttempt({ ...attempt, requiredVerification: { repository: attempt.repository, command: "npm run active-check", source: { kind: "local", location: `${activeConfig}#project=${attempt.project}` }, baseRevision } }, root);
+    try { runtime.assertCurrentWorkerContract(fixedAttempt, checkout, activeConfig); return "matched"; }
+    catch (error) { return String(error); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
 const verification: RequiredVerificationRecord = {
@@ -108,6 +130,26 @@ describe("Worker required-verification completion gate", () => {
     expect(() => assertWorkerCompletionAuthorized(attempt, report, verification, { ...contract, command: "npm run stricter-check" })).toThrow("stale_policy");
   });
 
+  it("preserves the launch snapshot location through the typed attempt reader", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-typed-reader-"));
+    try {
+      const fixedAttempt = authenticatedAttempt(attempt, root);
+      const runDir = path.dirname(fixedAttempt.promiseFile);
+      writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(fixedAttempt));
+      expect(() => runtime.readWorkerContractSnapshot(readAttemptRecord(runDir))).not.toThrow();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("rejects direct replacement of the persisted base branch after launch", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-base-replacement-"));
+    try {
+      const fixedAttempt = authenticatedAttempt(attempt, root);
+      const runDir = path.dirname(fixedAttempt.promiseFile);
+      writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({ ...fixedAttempt, baseBranch: "main" }));
+      expect(() => runtime.readWorkerContractSnapshot(readAttemptRecord(runDir))).toThrow("host-persisted launch snapshot");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("enforces host authenticity in the direct Node runtime", () => {
     expect(() => runtime.assertWorkerCompletionAuthorized(attempt, report, verification, contract)).toThrow("host execution authenticity");
   });
@@ -136,35 +178,12 @@ describe("Worker required-verification completion gate", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("matches exact project/repository policy and rejects duplicate exact matches", () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-config-switch-"));
-    try {
-      const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout");
-      const oldConfig = path.join(root, "old-projects.json"); const activeConfig = path.join(root, "active-projects.json");
-      execFileSync("git", ["init", "--bare", "--quiet", remote]);
-      execFileSync("git", ["init", "--quiet", "-b", "main", seed]);
-      execFileSync("git", ["-C", seed, "config", "user.name", "Test"]); execFileSync("git", ["-C", seed, "config", "user.email", "test@example.com"]);
-      writeFileSync(path.join(seed, "file.txt"), "policy base\n");
-      execFileSync("git", ["-C", seed, "add", "file.txt"]); execFileSync("git", ["-C", seed, "commit", "--quiet", "-m", "base"]);
-      execFileSync("git", ["-C", seed, "remote", "add", "origin", remote]); execFileSync("git", ["-C", seed, "push", "--quiet", "-u", "origin", "main"]);
-      execFileSync("git", ["clone", "--quiet", remote, checkout]);
-      const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
-      writeFileSync(oldConfig, JSON.stringify({ projects: [{ id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run old-check" }] }));
-      writeFileSync(activeConfig, JSON.stringify({ projects: [
-        { id: "alias", githubRepo: attempt.repository, checkCommand: "npm run stricter-check" },
-        { id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run active-check" },
-      ] }));
-      const fixedAttempt = authenticatedAttempt({ ...attempt, requiredVerification: { repository: attempt.repository, command: "npm run active-check", source: { kind: "local", location: `${activeConfig}#project=${attempt.project}` }, baseRevision } }, root);
-      let exactMatched = true; let ambiguousRejected = false;
-      try { runtime.assertCurrentWorkerContract(fixedAttempt, checkout, activeConfig); } catch { exactMatched = false; }
-      writeFileSync(activeConfig, JSON.stringify({ projects: [
-        { id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run active-check" },
-        { id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run active-check" },
-      ] }));
-      try { runtime.assertCurrentWorkerContract(fixedAttempt, checkout, activeConfig); }
-      catch (error) { ambiguousRejected = String(error).includes("ambiguous"); }
-      expect({ exactMatched, ambiguousRejected }).toEqual({ exactMatched: true, ambiguousRejected: true });
-    } finally { rmSync(root, { recursive: true, force: true }); }
+  it("matches exact project and repository policy", () => {
+    expect(projectPolicyMatchObservation(false)).toBe("matched");
+  });
+
+  it("rejects duplicate exact project and repository policy matches", () => {
+    expect(projectPolicyMatchObservation(true)).toContain("ambiguous");
   });
 
   it("re-reads local policy for a project whose ID was inferred from its GitHub repository", () => {

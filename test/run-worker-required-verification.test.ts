@@ -109,7 +109,7 @@ describe("Worker required-verification checkout binding", () => {
     writeFileSync(attemptFile, JSON.stringify(replaced));
 
     await expect(run(fixture.args, undefined, async () => ({ check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } }), () => ({})))
-      .rejects.toThrow("authenticated launch snapshot");
+      .rejects.toThrow("host-persisted launch snapshot");
   });
 
   it("rejects policy changes made while required verification is running", async () => {

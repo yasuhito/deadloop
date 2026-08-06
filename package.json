@@ -19,6 +19,7 @@
     "LICENSE",
     "README.md",
     "docs/*.md",
+    "docs/adr/*.md",
     "docs/assets/*.webp",
     "cucumber.cjs",
     "acceptance/**/*.feature.md",

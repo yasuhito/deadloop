@@ -4,6 +4,7 @@ import path from "node:path";
 import type { RequiredVerificationContract } from "./required-verification";
 
 export const ATTEMPT_RECORD_FILE = "attempt.json";
+const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
 
 export type AttemptRole = "worker" | "reviewer" | "review-repair" | "branch-update";
 export type AttemptTargetKind = "issue" | "pull-request";
@@ -312,7 +313,9 @@ function parseRecordFile(file: string): AttemptRecord {
 export function readAttemptRecord(runDir: string): AttemptRecord {
   const file = attemptRecordPath(runDir);
   if (!fs.existsSync(file)) throw new Error(`Attempt record is missing: ${file}`);
-  return parseRecordFile(file);
+  const record = parseRecordFile(file);
+  Object.defineProperty(record, ATTEMPT_RUN_DIR, { value: path.resolve(runDir), enumerable: false });
+  return record;
 }
 
 /** Atomically replaces a valid record and refuses to overwrite malformed state. */

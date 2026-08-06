@@ -41,6 +41,14 @@ function workerContractSnapshot(attempt) {
       role: attempt.role,
       target: attempt.target,
       inputRevision: attempt.inputRevision,
+      branch: attempt.branch,
+      ...(attempt.baseBranch === undefined ? {} : { baseBranch: attempt.baseBranch }),
+      worktreePath: attempt.worktreePath,
+      agentName: attempt.agentName,
+      workspaceLabel: attempt.workspaceLabel,
+      promptFile: attempt.promptFile,
+      promiseFile: attempt.promiseFile,
+      ...(attempt.autoMergePolicy === undefined ? {} : { autoMergePolicy: attempt.autoMergePolicy }),
     },
     contract: attempt.requiredVerification,
   };
@@ -73,7 +81,7 @@ function readWorkerContractSnapshot(attempt) {
   catch { throw new Error("required verification launch contract snapshot is missing or invalid"); }
   const expected = workerContractSnapshot(attempt);
   if (!stat.isFile() || stat.isSymbolicLink() || !isDeepStrictEqual(snapshot, expected)) {
-    throw new Error("required verification blocked: stale_policy; attempt contract differs from the authenticated launch snapshot");
+    throw new Error("required verification blocked: stale_policy; attempt contract differs from the host-persisted launch snapshot");
   }
   return snapshot.contract;
 }
