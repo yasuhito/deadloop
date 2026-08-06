@@ -79,6 +79,11 @@ describe("Worker required-verification completion gate", () => {
     expect(() => assertWorkerCompletionAuthorized({ ...attempt, requiredVerification: { ...contract, command: "" } }, report, verification, contract)).toThrow("zero_targets");
   });
 
+  it("rejects an otherwise matching record with incomplete required evidence", () => {
+    const { startedAt: _startedAt, durationMs: _durationMs, logPath: _logPath, ...incomplete } = verification;
+    expect(() => assertWorkerCompletionAuthorized(attempt, report, incomplete as RequiredVerificationRecord, contract)).toThrow("record is invalid");
+  });
+
   it("rejects a failed record for the exact output commit", () => {
     expect(() => assertWorkerCompletionAuthorized(attempt, report, { ...verification, outcome: "failed", exitCode: 1 }, contract)).toThrow("did not pass");
   });

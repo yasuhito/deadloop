@@ -78,7 +78,8 @@ function assertWorkerCompletionAuthorized(attempt, report, record, currentContra
   assertContract(attempt.requiredVerification); assertContract(currentContract);
   if (!isDeepStrictEqual(attempt.requiredVerification, currentContract)) throw new Error("required verification blocked: stale_policy; start a new attempt");
   if (attempt.requiredVerification.repository !== attempt.repository) throw new Error("required verification persisted contract repository does not match attempt");
-  if (!record || record.version !== 1) throw new Error("required verification passed record is missing");
+  if (!record || typeof record !== "object" || Array.isArray(record) || record.version !== 1) throw new Error("required verification passed record is missing");
+  if (!nonEmpty(record.startedAt) || !Number.isFinite(record.durationMs) || record.durationMs < 0 || !nonEmpty(record.logPath)) throw new Error("required verification record is invalid");
   if (record.outcome !== "passed" || record.exitCode !== 0) throw new Error("required verification record did not pass");
   if (!isDeepStrictEqual(record.binding, requiredVerificationBinding(attempt.requiredVerification, report.result.outputRevision))) throw new Error("required verification record does not match the Worker output commit and fixed contract");
   return { outputRevision: report.result.outputRevision, record };
