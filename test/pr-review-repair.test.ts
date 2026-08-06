@@ -1,4 +1,6 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -108,6 +110,64 @@ function finalizeWith(
   );
 }
 
+function finalizeWithLowAmbientRenameLimit() {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-repair-renames-"));
+  const branch = "agent/issue-243";
+  const git = (args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+  try {
+    git(["init", "--quiet"]);
+    git(["checkout", "--quiet", "-b", branch]);
+    git(["config", "user.email", "test@example.com"]);
+    git(["config", "user.name", "Test"]);
+    for (let index = 1; index <= 3; index += 1) {
+      fs.writeFileSync(path.join(repo, `old-${index}.txt`), "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n");
+    }
+    git(["add", "."]);
+    git(["commit", "--quiet", "-m", "base"]);
+    const expectedHead = git(["rev-parse", "HEAD"]);
+    for (let index = 1; index <= 3; index += 1) {
+      git(["mv", `old-${index}.txt`, `new-${index}.txt`]);
+      fs.appendFileSync(path.join(repo, `new-${index}.txt`), `changed-${index}\n`);
+    }
+    git(["commit", "--quiet", "-am", "candidate"]);
+    git(["config", "diff.renameLimit", "1"]);
+
+    return finalizeReviewRepair(
+      {
+        repo,
+        projectRepo: repo,
+        githubRepo: "owner/repo",
+        pr: "243",
+        branch,
+        expectedHead,
+        remote: "origin",
+        automationDir: "/automation",
+        stateDir: "/state",
+        enabledAt: 1,
+        checkCommand: "true",
+        resultFile: "/state/result.json",
+      },
+      {
+        readRepairFindingCount: () => 1,
+        assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
+        run: (args: string[]) => {
+          if (args[0] === "node" || args.includes("push")) return { status: 0, stdout: "", stderr: "" };
+          if (args.includes("ls-remote")) return { status: 0, stdout: `${expectedHead}\trefs/heads/${branch}\n`, stderr: "" };
+          if (args.includes("get-url")) return { status: 0, stdout: "https://github.com/owner/repo.git\n", stderr: "" };
+          if (args[0] === "gh" && args[1] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
+          if (args[0] === "gh") {
+            return { status: 0, stdout: JSON.stringify({ state: "OPEN", isCrossRepository: false, headRefName: branch, headRefOid: expectedHead }), stderr: "" };
+          }
+          const result = spawnSync(args[0], args.slice(1), { encoding: "utf8" });
+          return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
+        },
+      },
+    );
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+}
+
 function finalizeWhileDisabled() {
   const commands: string[][] = [];
   let error = "";
@@ -206,6 +266,10 @@ describe("automatic PR review repair", () => {
     expect(prompt()).not.toContain("--finding-count");
   });
 
+  it("qualifies configured checks as limited to repairs within the size limit", () => {
+    expect(prompt()).toContain("for repairs within the size limit, it runs configured checks");
+  });
+
   it("gives an oversized repair an exact blocked promise shape", () => {
     expect(prompt()).toContain('result={reason:"repair_size_limit_exceeded",explanation:"the changed-file count and finalizer limit",recovery:"have a human inspect and complete the repair"}, and evidence={}');
   });
@@ -234,6 +298,10 @@ describe("automatic PR review repair", () => {
     const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { changedFiles: [" ", "a", "b", "c", "d", "e"] });
 
     expect(result.action).toBe("blocked");
+  });
+
+  it("overrides a low ambient rename limit when counting changed files", () => {
+    expect(finalizeWithLowAmbientRenameLimit().size.changedFileCount).toBe(3);
   });
 
   it("stops a stale repair without authorizing push", () => {

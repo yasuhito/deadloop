@@ -140,7 +140,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   if (checked(ops, ["git", "-C", args.repo, "status", "--porcelain"])) throw new Error("repair worktree is dirty before checks");
 
   const changedFilesOutput = checkedRaw(ops, [
-    "git", "-C", args.repo, "diff", "--name-only", "-z", "--find-renames", args.expectedHead, candidateOid, "--",
+    "git", "-C", args.repo, "-c", "diff.renameLimit=0", "diff", "--name-only", "-z", "--find-renames", args.expectedHead, candidateOid, "--",
   ], MAX_GUARDED_OPERATION_MS);
   const changedFileCount = changedFilesOutput ? changedFilesOutput.split("\0").filter(Boolean).length : 0;
   const findingCount = repairFindingCount(args, ops);
