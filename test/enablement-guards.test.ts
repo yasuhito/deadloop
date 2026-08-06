@@ -15,7 +15,7 @@ const {
 } = require("../src/driver-enablement.cjs");
 const { acquireLockSync, reclaimStale } = require("../src/enablement-lock.cjs");
 const { GUARDED_OPERATION_TIMEOUT_MS, runGuarded } = require("../extensions/deadloop/automations/guarded-operation.ts");
-const { runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.ts");
+const { assertWorkerHead, runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.ts");
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
 const sandboxes: string[] = [];
@@ -300,6 +300,22 @@ describe("enablement mutation guards", () => {
     )).toThrow("not approved");
   });
 
+  it("rejects Worker PR creation through the generic guarded operation", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    expect(() => runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "pr", "create", "-R", project.githubRepo, "--head", "agent/issue-1"] },
+    )).toThrow("not approved");
+  });
+
+  it("rejects success-label additions through the generic guarded operation", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    expect(() => runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "pr", "edit", "1", "-R", project.githubRepo, "--add-label", "agent:review"] },
+    )).toThrow("not approved");
+  });
+
   it("rejects a GitHub mutation targeting another repository", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
@@ -314,6 +330,15 @@ describe("enablement mutation guards", () => {
     expect(() => runGuarded(
       { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["git", "branch", "-D", "agent/issue-1"] },
     )).toThrow("only approved gh mutations");
+  });
+
+  it("rejects a Worker HEAD that changed after required verification", () => {
+    expect(() => assertWorkerHead(
+      { worktree: "/worktree" },
+      { run: () => ({ status: 0, stdout: `${"b".repeat(40)}\n`, stderr: "" }) },
+      "a".repeat(40),
+      "Worker HEAD changed after verification",
+    )).toThrow("Worker HEAD changed after verification");
   });
 
   it("pushes to the verified URL even if origin changes after authorization", () => {

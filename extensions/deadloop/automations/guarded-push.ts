@@ -87,13 +87,19 @@ function assertAuthorizedSource(args: Args, enabled: EnabledProject, ops: Comman
   if (checkedOutBranch !== args.branch) throw new Error("source worktree branch does not match the requested branch");
 }
 
-function assertVerifiedWorkerOutput(args: Args & { attemptRecord: string }): void {
+function assertVerifiedWorkerOutput(args: Args & { attemptRecord: string }): string {
   const attempt = readAttemptRecord(path.dirname(args.attemptRecord));
   const report = JSON.parse(require("node:fs").readFileSync(attempt.promiseFile, "utf8"));
   validateCompletionReportBinding(attempt, report);
   const current = assertCurrentWorkerContract(attempt, args.projectRepo);
   const verification = readRequiredVerificationRecord(workerRequiredVerificationPath(args.attemptRecord));
-  assertWorkerCompletionAuthorized(attempt, report, verification, current);
+  return assertWorkerCompletionAuthorized(attempt, report, verification, current).outputRevision;
+}
+
+function assertWorkerHead(args: Pick<Args, "worktree">, ops: CommandOps, outputRevision: string, message: string): void {
+  if (gitOutput(ops, ["git", "-C", args.worktree, "rev-parse", "--verify", "HEAD^{commit}"], "Worker HEAD could not be resolved").toLowerCase() !== outputRevision.toLowerCase()) {
+    throw new Error(message);
+  }
 }
 
 function runGuardedPush(args: Args, ops: CommandOps = defaultOps()): number {
@@ -101,8 +107,11 @@ function runGuardedPush(args: Args, ops: CommandOps = defaultOps()): number {
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
     (enabled: EnabledProject, recheck: () => void) => {
-      if (args.attemptRecord) assertVerifiedWorkerOutput(args as Args & { attemptRecord: string });
+      const outputRevision = args.attemptRecord
+        ? assertVerifiedWorkerOutput(args as Args & { attemptRecord: string })
+        : undefined;
       assertAuthorizedSource(args, enabled, ops);
+      if (outputRevision) assertWorkerHead(args, ops, outputRevision, "Worker HEAD is not the verified output commit");
       const destination = resolveVerifiedPushDestination(
         ops,
         args.projectRepo,
@@ -113,6 +122,7 @@ function runGuardedPush(args: Args, ops: CommandOps = defaultOps()): number {
       );
       const ref = `refs/heads/${args.branch}`;
       recheck();
+      if (outputRevision) assertWorkerHead(args, ops, outputRevision, "Worker HEAD changed after verification");
       const result = ops.run(["git", "-C", args.worktree, "push", "--porcelain", destination, `HEAD:${ref}`], MAX_GUARDED_OPERATION_MS);
       if (result.status !== 0) throw new Error((result.stderr || result.stdout || "push failed").trim());
       return 0;
@@ -130,4 +140,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { assertAuthorizedSource, assertVerifiedWorkerOutput, parseArgs, runGuardedPush };
+module.exports = { assertAuthorizedSource, assertVerifiedWorkerOutput, assertWorkerHead, parseArgs, runGuardedPush };

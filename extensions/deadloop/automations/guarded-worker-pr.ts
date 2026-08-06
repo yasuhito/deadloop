@@ -2,11 +2,12 @@
 // Create the Worker PR only after authoritative output-commit verification.
 
 const fs = require("node:fs") as typeof import("node:fs");
-const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { withEnabledProjectLock, MAX_GUARDED_OPERATION_MS } = require("../../../src/enabled-operation.cjs");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { createCommandRunner } = require("../../../src/automation-driver-kit.ts");
+const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
   assertCurrentWorkerContract,
   assertWorkerCompletionAuthorized,
@@ -14,7 +15,7 @@ const {
   workerRequiredVerificationPath,
 } = require("../../../src/worker-required-verification-runtime.cjs");
 
-type Args = { attemptRecord: string; projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; title: string; reviewLabel: string };
+type Args = { attemptRecord: string; projectId: string; projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; title: string; reviewLabel: string };
 function parseArgs(argv: string[]): Args {
   const values: Record<string, string> = {};
   for (let index = 0; index < argv.length; index += 2) {
@@ -23,7 +24,7 @@ function parseArgs(argv: string[]): Args {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  for (const field of ["attemptRecord", "projectRepo", "githubRepo", "stateDir", "title", "reviewLabel"]) if (!values[field]) throw new Error(`--${field} is required`);
+  for (const field of ["attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "title", "reviewLabel"]) if (!values[field]) throw new Error(`--${field} is required`);
   if (!Number.isFinite(enabledAt)) throw new Error("--enabled-at is required");
   return { ...values, enabledAt } as Args;
 }
@@ -37,8 +38,16 @@ function gh(args: string[], json = false): any {
   if (result.status !== 0) throw new Error(String(result.stderr || result.stdout || "GitHub operation failed").trim());
   return json ? JSON.parse(String(result.stdout || "null")) : String(result.stdout || "").trim();
 }
+function assertWorkerPrBinding(attempt: { project: string; repository: string }, args: Pick<Args, "projectId" | "githubRepo">): void {
+  if (attempt.project !== args.projectId) throw new Error("attempt project does not match Worker PR project");
+  if (attempt.repository !== args.githubRepo) throw new Error("attempt repository does not match Worker PR repository");
+}
 function verified(args: Args) {
-  const attempt = readAttemptRecord(path.dirname(args.attemptRecord));
+  const location = canonicalAttemptLocation(args);
+  const attempt = readAttemptRecord(location.runDir);
+  assertWorkerPrBinding(attempt, args);
+  assertAttemptProjectBinding(attempt, args);
+  assertWorktreeBelongsToProject(createCommandRunner(), attempt, args);
   const report = JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8"));
   validateCompletionReportBinding(attempt, report);
   const current = assertCurrentWorkerContract(attempt, args.projectRepo);
@@ -83,4 +92,4 @@ function run(args: Args): number {
 }
 function main() { try { process.exitCode = run(parseArgs(process.argv.slice(2))); } catch (error) { console.error(`guarded-worker-pr.ts: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 2; } }
 if (require.main === module) main();
-module.exports = { parseArgs, run, verified };
+module.exports = { assertWorkerPrBinding, parseArgs, run, verified };

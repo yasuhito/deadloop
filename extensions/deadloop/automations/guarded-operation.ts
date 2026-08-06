@@ -14,8 +14,7 @@ type ApprovedOperation = { positional: number; valueFlags: Set<string> };
 const APPROVED_GH_OPERATIONS = new Map<string, ApprovedOperation>([
   ["issue edit", { positional: 1, valueFlags: new Set(["--add-label", "--remove-label"]) }],
   ["issue comment", { positional: 1, valueFlags: new Set(["--body", "--body-file"]) }],
-  ["pr create", { positional: 0, valueFlags: new Set(["--base", "--head", "--title", "--body", "--body-file"]) }],
-  ["pr edit", { positional: 1, valueFlags: new Set(["--add-label", "--remove-label"]) }],
+  ["pr edit", { positional: 1, valueFlags: new Set(["--remove-label"]) }],
   ["pr comment", { positional: 1, valueFlags: new Set(["--body", "--body-file"]) }],
 ]);
 
