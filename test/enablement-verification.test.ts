@@ -76,6 +76,19 @@ describe("enablement required-verification records", () => {
     expect((await scenario.run({ ...scenario.contract, source: { kind: "local", location: "projects.json" } })).reused).toBe(false);
   });
 
+  it("reuses verification when only override metadata changes", async () => {
+    const scenario = fixture();
+    await scenario.run({
+      ...scenario.contract,
+      override: { source: { kind: "repo_policy", location: "old-policy.json" }, command: "npm run old-check" },
+    });
+
+    expect((await scenario.run({
+      ...scenario.contract,
+      override: { source: { kind: "repo_policy", location: "new-policy.json" }, command: "npm run new-check" },
+    })).reused).toBe(true);
+  });
+
   it("reruns verification when the repository binding changes", async () => {
     const scenario = fixture();
     await scenario.run();
@@ -167,6 +180,25 @@ describe("enablement required-verification records", () => {
       journalPath: result.journalPath,
       recordPath: result.recordPath,
       logPath: result.logPath,
+    });
+  });
+
+  it("reports a worktree retained by a failed post-checkout hook", async () => {
+    const scenario = fixture();
+    const hookPath = path.join(scenario.repoPath, ".git", "hooks", "post-checkout");
+    fs.writeFileSync(hookPath, "#!/bin/sh\nexit 7\n", { mode: 0o755 });
+    try {
+      await scenario.run();
+    } catch {
+      // The retained-resource finding below is the observable failure contract.
+    }
+
+    expect(inspectRetainedEnablementVerifications(scenario.stateDir, scenario.repoPath)[0]).toMatchObject({
+      worktreePath: expect.stringContaining("required-verification/worktrees"),
+      targetRevision: scenario.contract.baseRevision,
+      journalPath: expect.stringContaining("journal.json"),
+      logPath: expect.stringContaining("check.log"),
+      retentionReason: expect.stringContaining("git worktree add failed after retaining"),
     });
   });
 });

@@ -103,7 +103,6 @@ function bindingFor(contract: RequiredVerificationContract) {
     command: contract.command,
     source: contract.source,
     baseRevision: contract.baseRevision,
-    ...(contract.override ? { override: contract.override } : {}),
   };
 }
 
@@ -118,13 +117,13 @@ function reusableSuccess(
     .sort((left, right) => String(right.record.startedAt || "").localeCompare(String(left.record.startedAt || "")));
 
   for (const { directory, record } of candidates) {
-    const actual = record.binding || {
-      repository: record.repository,
-      targetCommit: record.targetCommit,
-      command: record.contract?.command,
-      source: record.contract?.source,
-      baseRevision: record.contract?.baseRevision,
-      ...(record.contract?.override ? { override: record.contract.override } : {}),
+    const recordedBinding = record.binding;
+    const actual = {
+      repository: recordedBinding?.repository ?? record.repository,
+      targetCommit: recordedBinding?.targetCommit ?? record.targetCommit,
+      command: recordedBinding?.command ?? record.contract?.command,
+      source: recordedBinding?.source ?? record.contract?.source,
+      baseRevision: recordedBinding?.baseRevision ?? record.contract?.baseRevision,
     };
     if (!isDeepStrictEqual(actual, expected)) continue;
     if (
@@ -268,7 +267,21 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
   const added = git(input.primaryRepoPath, ["worktree", "add", "--detach", worktreePath, contract.baseRevision]);
   if (added.status !== 0) {
-    journal = { ...journal, state: "creation_failed", logPath };
+    const pathRemains = fs.existsSync(worktreePath);
+    const registration = git(input.primaryRepoPath, ["worktree", "list", "--porcelain"]);
+    const registrationRemains = registration.status === 0 && Boolean(registration.stdout
+      .split(/\n\n+/)
+      .map((entry) => entry.match(/^worktree (.+)$/m)?.[1])
+      .filter(Boolean)
+      .some((entry) => path.resolve(entry!) === path.resolve(worktreePath)));
+    const inspectionAmbiguous = registration.status !== 0;
+    const retained = pathRemains || registrationRemains || inspectionAmbiguous;
+    const retentionReason = inspectionAmbiguous
+      ? `git worktree add failed and cleanup is ambiguous because worktree registration inspection failed: ${(registration.stderr || registration.stdout || "unknown error").trim()}`
+      : `git worktree add failed after retaining ${pathRemains && registrationRemains ? "the worktree path and registration" : pathRemains ? "the worktree path" : "the worktree registration"}`;
+    journal = retained
+      ? { ...journal, state: "retained", logPath, retentionReason }
+      : { ...journal, state: "creation_failed", logPath };
     fs.writeFileSync(logPath, `${added.stdout}${added.stderr}`, { encoding: "utf8", mode: 0o600 });
     writeJson(journalPath, journal);
     throw new Error(`required verification worktree creation failed; log: ${logPath}`);
