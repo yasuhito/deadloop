@@ -169,9 +169,10 @@ function assertWorkerPersistenceAuthorized(
   repositoryId: string | undefined = args.githubRepositoryId,
 ): void {
   const localConfigPath = process.env.DEADLOOP_CONFIG || path.join(String(args.stateDir), "projects.json");
-  const current = currentContract(record, String(args.projectRepo), localConfigPath, repositoryId);
+  currentContract(record, String(args.projectRepo), localConfigPath, repositoryId);
   const verification = readRequiredVerificationRecord(workerRequiredVerificationPath(String(args.attemptRecord)));
-  assertWorkerCompletionAuthorized(record, report, verification, current);
+  const currentAfterVerification = currentContract(record, String(args.projectRepo), localConfigPath, repositoryId);
+  assertWorkerCompletionAuthorized(record, report, verification, currentAfterVerification);
 }
 
 function cleanupPending(message: string, detail?: string) {

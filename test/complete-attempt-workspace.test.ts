@@ -130,6 +130,17 @@ describe("selected attempt workspace completion", () => {
     expect(syntheticLocalSourceAuthorization()).toThrow("host execution authenticity");
   });
 
+  it("re-resolves current policy after reading completion-time verification", () => {
+    const data = fixture(true); const record = readAttemptRecord(data.runDir); let resolutions = 0;
+    try {
+      assertWorkerPersistenceAuthorized(record, JSON.parse(readFileSync(record.promiseFile, "utf8")), data.args, () => {
+        resolutions += 1;
+        return record.requiredVerification;
+      });
+    } catch {}
+    expect(resolutions).toBe(2);
+  });
+
   it("retains a proven Worker workspace when verification evidence names another output", () => {
     const data = fixture(true); const record = readAttemptRecord(data.runDir);
     writeFileSync(path.join(data.runDir, "required-verification.json"), JSON.stringify({

@@ -20,7 +20,7 @@ describe("guarded Worker PR binding", () => {
   it("rejects a recovered Worker PR with the wrong base branch before review", () => {
     const head = "a".repeat(40);
     expect(() => assertWorkerPrReadyForReview(
-      { headRefName: "agent/issue-1", headRefOid: head, baseRefName: "wrong", closingIssuesReferences: [{ number: 1 }] },
+      { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "wrong", closingIssuesReferences: [{ number: 1 }] },
       { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
       head,
     )).toThrow("base branch");
@@ -29,7 +29,7 @@ describe("guarded Worker PR binding", () => {
   it("rejects a recovered Worker PR without its Issue closing reference before review", () => {
     const head = "a".repeat(40);
     expect(() => assertWorkerPrReadyForReview(
-      { headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [] },
+      { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [] },
       { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
       head,
     )).toThrow("does not close");
@@ -67,13 +67,36 @@ describe("guarded Worker PR binding", () => {
         {
           recheck: () => {}, authorize: () => { throw new Error("stale_policy"); },
           gh: (args: string[]) => {
-            if (args[1] === "view") return { headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [{ number: 1 }] };
+            if (args[1] === "view") return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [{ number: 1 }] };
             if (args[1] === "edit") labeled = true;
           },
         },
       );
     } catch (caught) { error = String(caught); }
     expect({ labeled, stale: error.includes("stale_policy") }).toEqual({ labeled: false, stale: true });
+  });
+
+  it.each([
+    ["closed", { state: "CLOSED", isDraft: false }],
+    ["draft", { state: "OPEN", isDraft: true }],
+  ] as const)("does not add the review label to a %s PR", (_name, eligibility) => {
+    const head = "a".repeat(40); let labeled = false;
+    try {
+      addWorkerReviewLabel(
+        17,
+        { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
+        head,
+        { githubRepo: "owner/repo", reviewLabel: "agent:review" },
+        {
+          recheck: () => {}, authorize: () => {},
+          gh: (args: string[]) => {
+            if (args[1] === "view") return { ...eligibility, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [{ number: 1 }] };
+            if (args[1] === "edit") labeled = true;
+          },
+        },
+      );
+    } catch {}
+    expect(labeled).toBe(false);
   });
 
   it("does not add the review label when the base branch changes before labeling", () => {
@@ -90,7 +113,7 @@ describe("guarded Worker PR binding", () => {
           gh: (args: string[]) => {
             if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
             viewed += 1;
-            return { headRefName: "agent/issue-1", headRefOid: head, baseRefName: viewed === 1 ? "main" : "release", closingIssuesReferences: [{ number: 1 }] };
+            return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: viewed === 1 ? "main" : "release", closingIssuesReferences: [{ number: 1 }] };
           },
         },
       );
@@ -111,7 +134,7 @@ describe("guarded Worker PR binding", () => {
           gh: (args: string[]) => {
             if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
             viewed += 1;
-            return { headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: viewed === 1 ? [{ number: 1 }] : [{ number: 2 }] };
+            return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: viewed === 1 ? [{ number: 1 }] : [{ number: 2 }] };
           },
         },
       );
@@ -131,7 +154,7 @@ describe("guarded Worker PR binding", () => {
           recheck: () => {}, authorize: () => {},
           gh: (args: string[]) => {
             if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
-            return { headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [{ number: 1 }], labels: [] };
+            return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [{ number: 1 }], labels: [] };
           },
         },
       );
@@ -159,7 +182,7 @@ describe("guarded Worker PR binding", () => {
           gh: (args: string[]) => {
             if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
             viewed += 1;
-            return { headRefName: "agent/issue-1", headRefOid: viewed < 3 ? head : "b".repeat(40), baseRefName: "main", closingIssuesReferences: [{ number: 1 }], labels: [{ name: "agent:review" }] };
+            return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: viewed < 3 ? head : "b".repeat(40), baseRefName: "main", closingIssuesReferences: [{ number: 1 }], labels: [{ name: "agent:review" }] };
           },
         },
       );
@@ -199,7 +222,7 @@ describe("guarded Worker PR binding", () => {
         {
           recheck: () => {}, authorize: () => { current = raced; },
           gh: (args: string[]) => {
-            if (args[1] === "view") return { headRefName: "agent/issue-1", headRefOid: current, baseRefName: "main", closingIssuesReferences: [{ number: 1 }] };
+            if (args[1] === "view") return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: current, baseRefName: "main", closingIssuesReferences: [{ number: 1 }] };
             if (args[1] === "edit") labeled = true;
           },
         },

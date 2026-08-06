@@ -65,6 +65,18 @@ describe("human-handoff verification provenance", () => {
     expect(() => assertCurrentHeadVerification(transformedEvidence(role))).not.toThrow();
   });
 
+  it("persists output-bound verification for a transformed head", () => {
+    const fixture = transformedEvidence("review-repair");
+    assertCurrentHeadVerification(fixture);
+    const record = JSON.parse(readFileSync(path.join(fixture.stateDir, "runs", "review-repair", "required-verification.json"), "utf8"));
+    expect(record.binding.targetCommit).toBe(fixture.expectedHead);
+  });
+
+  it("rejects policy changed by transformed-head verification", () => {
+    const command = `node -e "const fs=require('fs');if(fs.existsSync('review-repair.txt'))fs.writeFileSync('../state/projects.json',JSON.stringify({projects:[{id:'demo',githubRepo:'owner/repo',checkCommand:'stricter'}]}))"`;
+    expect(() => assertCurrentHeadVerification(transformedEvidence("review-repair", command))).toThrow("stale_policy");
+  });
+
   it("allows untracked runtime artifacts during transformed-head verification", () => {
     const fixture = transformedEvidence("review-repair");
     mkdirSync(path.join(path.dirname(fixture.stateDir), "review-repair-worktree", ".deadloop"));

@@ -130,7 +130,10 @@ function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repo
     if (!config || typeof config !== "object" || Array.isArray(config) || (config.projects !== undefined && !Array.isArray(config.projects))) {
       throw new Error("required verification blocked: stale_policy; local policy is malformed");
     }
-    const selected = (config.projects || []).find((project) => project && typeof project === "object" && (project.id === attempt.project || project.githubRepo === attempt.repository));
+    const matches = (config.projects || []).filter((project) => project && typeof project === "object"
+      && project.id === attempt.project && project.githubRepo === attempt.repository);
+    if (matches.length > 1) throw new Error("required verification blocked: stale_policy; local policy project identity is ambiguous");
+    const selected = matches[0];
     if (selected && Object.prototype.hasOwnProperty.call(selected, "checkCommand")) {
       localSources.push({ kind: "local", location: `${configFile}#project=${attempt.project}`, command: selected.checkCommand });
     }
@@ -192,4 +195,4 @@ function assertWorkerCompletionAuthorized(attempt, report, record, currentContra
   }
   return { outputRevision: report.result.outputRevision, record };
 }
-module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertWorkerCompletionAuthorized, readRequiredVerificationRecord, requiredVerificationBinding, workerRequiredVerificationPath, writeRequiredVerificationRecord };
+module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertWorkerCompletionAuthorized, executeAndRecordGateVerification, readRequiredVerificationRecord, requiredVerificationBinding, workerRequiredVerificationPath, writeRequiredVerificationRecord };

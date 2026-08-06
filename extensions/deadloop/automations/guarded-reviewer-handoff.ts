@@ -5,12 +5,15 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const { isDeepStrictEqual } = require("node:util") as typeof import("node:util");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const {
   assertCurrentWorkerContract,
   assertWorkerCompletionAuthorized,
+  executeAndRecordGateVerification,
   readRequiredVerificationRecord,
+  requiredVerificationBinding,
   workerRequiredVerificationPath,
 } = require("../../../src/worker-required-verification-runtime.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
@@ -77,8 +80,8 @@ function assertFreshTransformedHeadVerification(
   attempt: Record<string, any>,
   attemptRecord: string,
   head: string,
-  command: string,
-): void {
+  contract: Record<string, any>,
+): Record<string, any> {
   try {
     const runner = createCommandRunner();
     const confinement = assertWorktreeBelongsToProject(runner, attempt, {
@@ -88,17 +91,12 @@ function assertFreshTransformedHeadVerification(
       githubRepo: args.githubRepo,
       stateDir: args.stateDir,
     });
-    const assertCleanHead = () => assertCleanOutput(confinement.worktreePath, head);
-    assertCleanHead();
-    const check = spawnSync(process.execPath, [
-      path.join(__dirname, "run-project-check.ts"),
-      "--cwd", confinement.worktreePath,
-      "--timeout-ms", String(10 * 60_000),
-      "--command", command,
-      "--quarantine-root", path.join(args.stateDir, "check-quarantine"),
-    ], { encoding: "utf8", timeout: 11 * 60_000, killSignal: "SIGKILL" });
-    if (check.status !== 0) throw new Error(String(check.stderr || check.stdout || "project check failed").trim());
-    assertCleanHead();
+    assertCleanOutput(confinement.worktreePath, head);
+    return executeAndRecordGateVerification(
+      workerRequiredVerificationPath(attemptRecord),
+      { ...attempt, worktreePath: confinement.worktreePath, requiredVerification: contract },
+      head,
+    );
   } catch (error) {
     throw new Error(`fresh host verification failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
@@ -118,7 +116,8 @@ function assertCurrentHeadVerification(args: Args, repositoryId?: string): void 
     catch (error) { throw new Error("required verification evidence store contains a malformed attempt; human handoff stopped", { cause: error }); }
   }
 
-  const authorize = (head: string, visited: Set<string>): Record<string, any> => {
+  const configFile = process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json");
+  const authorize = (head: string, visited: Set<string>): { contract: Record<string, any>; workerAttempt: Record<string, any> } => {
     const normalizedHead = head.toLowerCase();
     if (visited.has(normalizedHead)) throw new Error("required verification provenance contains a cycle");
     const candidates = attempts.filter(({ attempt }) => attempt.repository === args.githubRepo
@@ -129,20 +128,19 @@ function assertCurrentHeadVerification(args: Args, repositoryId?: string): void 
     }
     const { attempt, attemptRecord } = candidates[0];
     if (attempt.role === "worker") {
-      const configFile = process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json");
       assertCurrentWorkerContract(attempt, args.projectRepo, configFile, repositoryId);
       const report = readJsonFile(attempt.promiseFile, "Worker completion report");
       validateCompletionReportBinding(attempt, report);
       const record = readRequiredVerificationRecord(workerRequiredVerificationPath(attemptRecord));
       const current = assertCurrentWorkerContract(attempt, args.projectRepo, configFile, repositoryId);
       assertWorkerCompletionAuthorized(attempt, report, record, current);
-      return current;
+      return { contract: current, workerAttempt: attempt };
     }
     if (attempt.target?.kind !== "pull-request" || String(attempt.target.number) !== args.pr) {
       throw new Error("current-head verification provenance targets another pull request");
     }
     const nextVisited = new Set(visited); nextVisited.add(normalizedHead);
-    const current = authorize(String(attempt.inputRevision?.head || ""), nextVisited);
+    const authority = authorize(String(attempt.inputRevision?.head || ""), nextVisited);
     const report = readJsonFile(attempt.promiseFile, "current-head verification completion report");
     validateCompletionReportBinding(attempt, report);
     const expectedOutcome = attempt.role === "review-repair" ? "repair_pushed" : "branch_update_pushed";
@@ -155,11 +153,20 @@ function assertCurrentHeadVerification(args: Args, repositoryId?: string): void 
     if (receipt.action !== "pushed" || receipt.reason !== expectedOutcome
       || String(receipt.originalHeadOid || "").toLowerCase() !== String(attempt.inputRevision?.head || "").toLowerCase()
       || String(receipt.headOid || "").toLowerCase() !== normalizedHead
-      || !Array.isArray(checks) || checks.length !== 1 || checks[0]?.result !== "passed" || checks[0]?.command !== current.command) {
+      || !Array.isArray(checks) || checks.length !== 1 || checks[0]?.result !== "passed" || checks[0]?.command !== authority.contract.command) {
       throw new Error("finalizer receipt does not match the trusted contract and current head");
     }
-    assertFreshTransformedHeadVerification(args, attempt, attemptRecord, normalizedHead, current.command);
-    return current;
+    const verification = assertFreshTransformedHeadVerification(args, attempt, attemptRecord, normalizedHead, authority.contract);
+    const currentAfterVerification = assertCurrentWorkerContract(authority.workerAttempt, args.projectRepo, configFile, repositoryId);
+    if (!isDeepStrictEqual(currentAfterVerification, authority.contract)) {
+      throw new Error("required verification blocked: stale_policy; policy changed during transformed-head verification");
+    }
+    const persisted = readJsonFile(workerRequiredVerificationPath(attemptRecord), "transformed-head verification record");
+    if (!isDeepStrictEqual(persisted, verification)
+      || !isDeepStrictEqual(verification.binding, requiredVerificationBinding(currentAfterVerification, normalizedHead))) {
+      throw new Error("transformed-head verification record does not match the current head and fixed contract");
+    }
+    return { contract: currentAfterVerification, workerAttempt: authority.workerAttempt };
   };
 
   try { authorize(args.expectedHead, new Set()); }

@@ -128,7 +128,7 @@ describe("Worker required-verification completion gate", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("uses the currently selected configuration instead of the fixed contract's old local path", () => {
+  it("matches exact project/repository policy and rejects duplicate exact matches", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-config-switch-"));
     try {
       const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout");
@@ -142,9 +142,20 @@ describe("Worker required-verification completion gate", () => {
       execFileSync("git", ["clone", "--quiet", remote, checkout]);
       const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
       writeFileSync(oldConfig, JSON.stringify({ projects: [{ id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run old-check" }] }));
-      writeFileSync(activeConfig, JSON.stringify({ projects: [{ id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run active-check" }] }));
-      const fixedAttempt = { ...attempt, requiredVerification: { repository: attempt.repository, command: "npm run old-check", source: { kind: "local", location: `${oldConfig}#project=${attempt.project}` }, baseRevision } };
-      expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout, activeConfig)).toThrow("stale_policy");
+      writeFileSync(activeConfig, JSON.stringify({ projects: [
+        { id: "alias", githubRepo: attempt.repository, checkCommand: "npm run stricter-check" },
+        { id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run active-check" },
+      ] }));
+      const fixedAttempt = { ...attempt, requiredVerification: { repository: attempt.repository, command: "npm run active-check", source: { kind: "local", location: `${activeConfig}#project=${attempt.project}` }, baseRevision } };
+      let exactMatched = true; let ambiguousRejected = false;
+      try { runtime.assertCurrentWorkerContract(fixedAttempt, checkout, activeConfig); } catch { exactMatched = false; }
+      writeFileSync(activeConfig, JSON.stringify({ projects: [
+        { id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run active-check" },
+        { id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run active-check" },
+      ] }));
+      try { runtime.assertCurrentWorkerContract(fixedAttempt, checkout, activeConfig); }
+      catch (error) { ambiguousRejected = String(error).includes("ambiguous"); }
+      expect({ exactMatched, ambiguousRejected }).toEqual({ exactMatched: true, ambiguousRejected: true });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

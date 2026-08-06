@@ -54,6 +54,7 @@ function assertWorkerPrReadyForReview(
   attempt: { branch: string; baseBranch?: string; target: { number: number } },
   outputRevision: string,
 ): void {
+  if (pr.state !== "OPEN" || pr.isDraft !== false) throw new Error("Worker PR must be open and non-draft before the success label");
   if (String(pr.headRefOid || "").toLowerCase() !== outputRevision.toLowerCase()) throw new Error("Worker PR head changed before the success label");
   if (String(pr.headRefName || "") !== attempt.branch) throw new Error("Worker PR head branch does not match the verified Worker branch");
   if (String(pr.baseRefName || "") !== String(attempt.baseBranch || "origin/main").replace(/^origin\//, "")) throw new Error("Worker PR base branch does not match the Worker target branch");
@@ -97,15 +98,15 @@ function addWorkerReviewLabel(
   ops: Pick<WorkerPrOps, "gh" | "recheck" | "authorize">,
 ): void {
   ops.recheck();
-  const observedBeforeLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
+  const observedBeforeLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "state,isDraft,headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
   assertWorkerPrReadyForReview(observedBeforeLabel, attempt, outputRevision);
   ops.authorize();
-  const observedAfterAuthorization = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
+  const observedAfterAuthorization = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "state,isDraft,headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
   assertWorkerPrReadyForReview(observedAfterAuthorization, attempt, outputRevision);
   const reviewLabelAlreadyPresent = Array.isArray(observedAfterAuthorization.labels)
     && observedAfterAuthorization.labels.some((label: any) => (typeof label === "string" ? label : label?.name) === args.reviewLabel);
   ops.gh(["pr", "edit", String(number), "-R", args.githubRepo, "--add-label", args.reviewLabel]);
-  const observedAfterLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
+  const observedAfterLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "state,isDraft,headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
   try {
     assertWorkerPrReadyForReview(observedAfterLabel, attempt, outputRevision);
     const reviewLabelPersisted = Array.isArray(observedAfterLabel.labels)
