@@ -66,12 +66,32 @@ export type RetainedEnablementVerification = {
   retentionReason: string;
 };
 
+type ProjectCheckResult = {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  interrupted: boolean;
+  signal: NodeJS.Signals | null;
+  restorationFailure?: {
+    message: string;
+    quarantinePath: string;
+  };
+};
+
 export type EnablementVerificationInput = {
   stateDir: string;
   primaryRepoPath: string;
   repository: string;
   resolution: RequiredVerificationResolution;
   beforeWorktreeCreate?: (journalPath: string) => Promise<void> | void;
+  projectCheckRunner?: (input: {
+    cwd: string;
+    command: string;
+    quarantineRoot: string;
+    timeoutMs: number;
+    signal?: AbortSignal;
+  }) => Promise<ProjectCheckResult>;
   now?: () => number;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -126,7 +146,8 @@ function reusableSuccess(
     if (record.repository !== expected.repository || record.targetCommit !== expected.targetCommit) continue;
     if (
       record.attemptId !== path.basename(directory) || record.exitCode !== 0 || record.timedOut !== false
-      || record.terminationReason !== undefined || record.terminationSignal !== undefined || typeof record.startedAt !== "string"
+      || record.terminationReason !== undefined || record.terminationSignal !== undefined
+      || record.artifactRestorationFailure !== undefined || typeof record.startedAt !== "string"
       || !Number.isFinite(record.durationMs) || record.durationMs < 0
     ) continue;
     const logPath = record.logPath;
@@ -308,22 +329,11 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     throw new Error(`required verification worktree revision mismatch; log: ${logPath}; retained worktree journal: ${journalPath}`);
   }
 
-  let check: {
-    code: number | null;
-    stdout: string;
-    stderr: string;
-    timedOut: boolean;
-    interrupted: boolean;
-    signal: NodeJS.Signals | null;
-    restorationFailure?: {
-      message: string;
-      quarantinePath: string;
-    };
-  };
+  let check: ProjectCheckResult;
   let runnerFailed = false;
   try {
     const remainingMs = Math.max(1, timeoutMs - Math.max(0, now() - startedAtMs));
-    check = await runProjectCheck({
+    check = await (input.projectCheckRunner ?? runProjectCheck)({
       cwd: worktreePath,
       command: contract.command,
       quarantineRoot: path.join(input.stateDir, "check-quarantine"),
@@ -386,7 +396,12 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   journal = { ...journal, state: "checked", recordPath, logPath };
   writeJson(journalPath, journal);
 
-  const cleanup = cleanupOwnedWorktree(journal);
+  const cleanup = check.restorationFailure
+    ? {
+        cleanup: "retained" as const,
+        reason: `artifact restoration failed; quarantine retained at ${check.restorationFailure.quarantinePath}`,
+      }
+    : cleanupOwnedWorktree(journal);
   journal = cleanup.cleanup === "removed"
     ? { ...journal, state: "cleaned" }
     : { ...journal, state: "retained", retentionReason: cleanup.reason || "cleanup was not proven safe" };
