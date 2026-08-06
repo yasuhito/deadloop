@@ -67,8 +67,8 @@ const verification: RequiredVerificationRecord = {
 };
 
 describe("Worker required-verification completion gate", () => {
-  it("accepts an exact passed record for the Worker output commit", () => {
-    expect(assertWorkerCompletionAuthorized(attempt, report, verification, contract).outputRevision).toBe(outputHead);
+  it("rejects an exact synthesized record without host execution", () => {
+    expect(() => assertWorkerCompletionAuthorized(attempt, report, verification, contract)).toThrow("host execution authenticity");
   });
 
   it("rejects a missing persisted contract even when verification exited zero", () => {
@@ -100,16 +100,14 @@ describe("Worker required-verification completion gate", () => {
     expect(() => assertWorkerCompletionAuthorized(attempt, report, verification, { ...contract, command: "npm run stricter-check" })).toThrow("stale_policy");
   });
 
-  it("accepts the same fixed contract in TypeScript and the direct Node runtime", () => {
-    expect(runtime.assertWorkerCompletionAuthorized(attempt, report, verification, contract)).toEqual(
-      assertWorkerCompletionAuthorized(attempt, report, verification, contract),
-    );
+  it("enforces host authenticity in the direct Node runtime", () => {
+    expect(() => runtime.assertWorkerCompletionAuthorized(attempt, report, verification, contract)).toThrow("host execution authenticity");
   });
 
-  it("trusts a non-empty explicit command without interpreting output counts", () => {
+  it("does not let an explicit command bypass host execution", () => {
     const explicit = { ...contract, command: "printf '0 tests\\n'" };
     const exact = { ...verification, binding: { ...verification.binding, command: explicit.command } };
-    expect(assertWorkerCompletionAuthorized({ ...attempt, requiredVerification: explicit }, report, exact, explicit).outputRevision).toBe(outputHead);
+    expect(() => assertWorkerCompletionAuthorized({ ...attempt, requiredVerification: explicit }, report, exact, explicit)).toThrow("host execution authenticity");
   });
 
   it("stops when a local override is added after a repo-policy-backed attempt starts", () => {

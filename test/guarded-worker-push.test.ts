@@ -8,7 +8,7 @@ const { runGuardedPush } = require("../extensions/deadloop/automations/guarded-p
 const roots: string[] = [];
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
-function fixture() {
+function fixture(checkCommand = "true") {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-push-")); roots.push(root);
   const repo = path.join(root, "repo"); const stateDir = path.join(root, "deadloop");
   process.env.PI_CODING_AGENT_DIR = root; const runDir = path.join(stateDir, "runs", "attempt-1");
@@ -18,7 +18,7 @@ function fixture() {
   mkdirSync(repo); mkdirSync(runDir, { recursive: true });
   execFileSync("git", ["init", "--quiet", repo]);
   execFileSync("git", ["-C", repo, "config", "user.name", "Test"]); execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
-  writeFileSync(path.join(repo, "deadloop.json"), '{"checkCommand":"npm test"}\n');
+  writeFileSync(path.join(repo, "deadloop.json"), `${JSON.stringify({ checkCommand })}\n`);
   execFileSync("git", ["-C", repo, "add", "."]); execFileSync("git", ["-C", repo, "commit", "--quiet", "-m", "base"]);
   const base = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const trustedRemote = path.join(root, "trusted.git"); execFileSync("git", ["init", "--bare", "--quiet", trustedRemote]);
@@ -27,11 +27,11 @@ function fixture() {
   writeFileSync(path.join(repo, "change.txt"), "done\n"); execFileSync("git", ["-C", repo, "add", "."]); execFileSync("git", ["-C", repo, "commit", "--quiet", "-m", "feat: change"]);
   const output = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   execFileSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
-  const contract = { repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: base };
+  const contract = { repository: "owner/repo", command: checkCommand, source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: base };
   const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head: base }, requiredVerification: contract, branch: "agent/issue-1", baseBranch: "trusted/main", worktreePath: repo, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"), phase: "agent_started", lastSuccessfulPhase: "agent_started" };
   const report = { schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head: base }, status: "complete", summary: "Implemented and validated.", result: { outputRevision: output }, evidence: { validations: ["extra check passed"] } };
   writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt)); writeFileSync(path.join(runDir, "promise.json"), JSON.stringify(report));
-  writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { repository: "owner/repo", targetCommit: output, command: "npm test", source: contract.source, baseRevision: base }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "check.log") }));
+  writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { repository: "owner/repo", targetCommit: output, command: checkCommand, source: contract.source, baseRevision: base }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "check.log") }));
   writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{ repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1, firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }] }));
   let pushedRef = "";
   const common = path.join(repo, ".git");
@@ -60,6 +60,7 @@ afterEach(() => {
 describe("verified Worker push boundary", () => {
   it("pushes the immutable verified revision", () => { const f = fixture(); runGuardedPush(f.args, f.ops); expect(f.pushedRef()).toBe(`${f.output}:refs/heads/agent/issue-1`); });
   it("rejects a missing passed record before push", () => { const f = fixture(); rmSync(f.verification); expect(() => runGuardedPush(f.args, f.ops)).toThrow("record is missing"); });
+  it("rejects a forged passed record when the fixed command fails", () => { const f = fixture("false"); expect(() => runGuardedPush(f.args, f.ops)).toThrow("fresh required verification failed"); });
   it("rejects another project before push", () => { const f = fixture(); expect(() => runGuardedPush({ ...f.args, projectId: "other" }, f.ops)).toThrow("project"); });
   it("rejects another repository before push", () => { const f = fixture(); expect(() => runGuardedPush({ ...f.args, githubRepo: "other/repo" }, f.ops)).toThrow("repository"); });
   it("rejects another branch before push", () => { const f = fixture(); expect(() => runGuardedPush({ ...f.args, branch: "agent/issue-2" }, f.ops)).toThrow("branch"); });

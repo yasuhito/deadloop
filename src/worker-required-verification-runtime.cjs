@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { isDeepStrictEqual } = require("node:util");
 const WORKER_REQUIRED_VERIFICATION_FILE = "required-verification.json";
+const authenticatedRecords = new WeakSet();
 function nonEmpty(value) { return typeof value === "string" && Boolean(value.trim()); }
 function validSha(value) { return nonEmpty(value) && /^[0-9a-f]{40}$/i.test(value); }
 function assertContract(value) {
@@ -16,7 +17,46 @@ function requiredVerificationBinding(contract, targetCommit) {
   return { repository: contract.repository, targetCommit, command: contract.command, source: contract.source, baseRevision: contract.baseRevision };
 }
 function workerRequiredVerificationPath(attemptRecordFile) { return path.join(path.dirname(attemptRecordFile), WORKER_REQUIRED_VERIFICATION_FILE); }
-function readRequiredVerificationRecord(file) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return undefined; } }
+function cleanWorkerOutput(worktree, outputRevision) {
+  if (git(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]).toLowerCase() !== outputRevision.toLowerCase()) return false;
+  return !git(worktree, ["status", "--porcelain", "--untracked-files=all", "--", ".",
+    ":(exclude).deadloop", ":(exclude).deadloop/**", ":(exclude).pi-subagents", ":(exclude).pi-subagents/**"]);
+}
+function readRequiredVerificationRecord(file) {
+  let persisted;
+  try { persisted = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return undefined; }
+  if (!persisted || typeof persisted !== "object" || Array.isArray(persisted) || persisted.version !== 1
+    || !nonEmpty(persisted.startedAt) || !Number.isFinite(persisted.durationMs) || persisted.durationMs < 0 || !nonEmpty(persisted.logPath)
+    || persisted.outcome !== "passed" || persisted.exitCode !== 0) return persisted;
+  const runDir = path.dirname(file);
+  let attempt; let report;
+  try {
+    attempt = JSON.parse(fs.readFileSync(path.join(runDir, "attempt.json"), "utf8"));
+    report = JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8"));
+  } catch { return persisted; }
+  const outputRevision = report?.result?.outputRevision;
+  if (!validSha(outputRevision) || !attempt?.requiredVerification || !cleanWorkerOutput(attempt.worktreePath, outputRevision)) {
+    throw new Error("fresh required verification output binding failed");
+  }
+  const stateDir = path.dirname(path.dirname(runDir));
+  const script = path.join(__dirname, "../extensions/deadloop/automations/run-project-check.ts");
+  const started = Date.now();
+  const result = childProcess.spawnSync(process.execPath, [script,
+    "--cwd", attempt.worktreePath, "--timeout-ms", String(10 * 60_000),
+    "--command", attempt.requiredVerification.command,
+    "--quarantine-root", path.join(stateDir, "check-quarantine"),
+  ], { encoding: "utf8", timeout: 11 * 60_000, killSignal: "SIGKILL" });
+  if (result.status !== 0 || !cleanWorkerOutput(attempt.worktreePath, outputRevision)) {
+    throw new Error(String(result.stderr || result.stdout || "fresh required verification failed").trim());
+  }
+  const record = {
+    version: 1, binding: requiredVerificationBinding(attempt.requiredVerification, outputRevision),
+    outcome: "passed", exitCode: 0, startedAt: new Date(started).toISOString(),
+    durationMs: Math.max(0, Date.now() - started), logPath: persisted.logPath,
+  };
+  authenticatedRecords.add(record);
+  return record;
+}
 function writeRequiredVerificationRecord(file, record) { fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); const temporary = `${file}.${process.pid}.tmp`; fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 }); fs.renameSync(temporary, file); }
 function git(repoPath, args) { const result = childProcess.spawnSync("git", ["-C", repoPath, ...args], { encoding: "utf8", timeout: 30000 }); if (result.status !== 0) throw new Error(String(result.stderr || result.stdout || "git command failed").trim()); return String(result.stdout || "").trim(); }
 function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath) {
@@ -82,6 +122,7 @@ function assertWorkerCompletionAuthorized(attempt, report, record, currentContra
   if (!nonEmpty(record.startedAt) || !Number.isFinite(record.durationMs) || record.durationMs < 0 || !nonEmpty(record.logPath)) throw new Error("required verification record is invalid");
   if (record.outcome !== "passed" || record.exitCode !== 0) throw new Error("required verification record did not pass");
   if (!isDeepStrictEqual(record.binding, requiredVerificationBinding(attempt.requiredVerification, report.result.outputRevision))) throw new Error("required verification record does not match the Worker output commit and fixed contract");
+  if (!authenticatedRecords.has(record)) throw new Error("required verification host execution authenticity is missing");
   return { outputRevision: report.result.outputRevision, record };
 }
 module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertWorkerCompletionAuthorized, readRequiredVerificationRecord, requiredVerificationBinding, workerRequiredVerificationPath, writeRequiredVerificationRecord };

@@ -100,7 +100,7 @@ describe("selected attempt workspace completion", () => {
     expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
   });
 
-  it("authorizes persistence from the active state configuration for a local-source contract", () => {
+  it("does not authorize a synthetic local-source record without host execution", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-complete-local-policy-")); roots.push(root);
     const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout");
     const stateDir = path.join(root, "state"); const runDir = path.join(stateDir, "runs", "attempt-1");
@@ -112,14 +112,14 @@ describe("selected attempt workspace completion", () => {
     execFileSync("git", ["clone", "--quiet", "-b", "main", remote, checkout]); mkdirSync(runDir, { recursive: true });
     const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
     const configFile = path.join(stateDir, "projects.json");
-    writeFileSync(configFile, JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm test" }] }));
-    const contract = { repository: "owner/repo", command: "npm test", source: { kind: "local", location: `${configFile}#project=demo` }, baseRevision };
+    writeFileSync(configFile, JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "true" }] }));
+    const contract = { repository: "owner/repo", command: "true", source: { kind: "local", location: `${configFile}#project=demo` }, baseRevision };
     const attempt = { project: "demo", repository: "owner/repo", role: "worker", baseBranch: "origin/main", requiredVerification: contract };
     const report = { role: "worker", status: "complete", result: { outputRevision: baseRevision } };
     const attemptRecord = path.join(runDir, "attempt.json");
     writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { ...contract, targetCommit: baseRevision }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "required-verification.log") }));
 
-    expect(() => assertWorkerPersistenceAuthorized(attempt, report, { attemptRecord, projectRepo: checkout, stateDir })).not.toThrow();
+    expect(() => assertWorkerPersistenceAuthorized(attempt, report, { attemptRecord, projectRepo: checkout, stateDir })).toThrow("host execution authenticity");
   });
 
   it("retains a proven Worker workspace when verification evidence names another output", () => {
