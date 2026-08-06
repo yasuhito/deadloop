@@ -158,6 +158,7 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   }
 
   let check: { code: number; stdout: string; stderr: string; timedOut: boolean; interrupted: boolean };
+  let runnerFailed = false;
   try {
     const remainingMs = Math.max(1, timeoutMs - Math.max(0, now() - startedAtMs));
     check = await runProjectCheck({
@@ -168,6 +169,7 @@ export async function runEnablementVerification(input: EnablementVerificationInp
       signal: input.signal,
     });
   } catch (error) {
+    runnerFailed = true;
     const message = error instanceof Error ? (error.stack || error.message) : String(error);
     check = { code: 1, stdout: "", stderr: `required verification runner failed: ${message}\n`, timedOut: false, interrupted: false };
   }
@@ -179,7 +181,9 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   const outcome: EnablementVerificationResult["outcome"] = check.timedOut
     ? "timed_out"
     : check.interrupted ? "interrupted" : check.code === 0 ? "passed" : "failed";
-  const terminationReason = check.timedOut ? "timeout" : check.interrupted ? "interrupted" : undefined;
+  const terminationReason = check.timedOut
+    ? "timeout"
+    : check.interrupted ? "interrupted" : runnerFailed ? "runner_failure" : undefined;
   const exitCode = terminationReason ? null : check.code;
   writeJson(recordPath, {
     version: 1,

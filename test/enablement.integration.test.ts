@@ -402,6 +402,8 @@ async function dirtyFailureObservation(): Promise<{ messageIncludesLogPath: bool
 async function verifierExceptionObservation(): Promise<{
   journal: string;
   record: string;
+  exitCode: number | null;
+  terminationReason?: string;
   log: string;
   worktreeExists: boolean;
   message: string | undefined;
@@ -423,9 +425,12 @@ async function verifierExceptionObservation(): Promise<{
   await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
   const logPath = path.join(attemptDir, "check.log");
+  const record = JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8"));
   return {
     journal: JSON.parse(readFileSync(path.join(attemptDir, "journal.json"), "utf8")).state,
-    record: JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome,
+    record: record.outcome,
+    exitCode: record.exitCode,
+    terminationReason: record.terminationReason,
     log: readFileSync(logPath, "utf8"),
     worktreeExists: existsSync(worktreePath),
     message: extension.messages.at(-1),
@@ -530,24 +535,71 @@ else process.exit(1);
   return { extension, repoPath, runDir, targetState };
 }
 
+async function ownedWorktreeIntentObservation(): Promise<{
+  state?: string;
+  repository?: string;
+  primaryRepoPath?: string;
+  repoPath: string;
+}> {
+  const { root, repoPath } = fixtureRepository();
+  let preparedJournal: unknown;
+  const extension = await loadExtension(root, {
+    beforeEnablementWorktreeCreate: async (journalPath) => {
+      preparedJournal = JSON.parse(readFileSync(journalPath, "utf8"));
+    },
+  });
+
+  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+  return { ...(preparedJournal as { state?: string; repository?: string; primaryRepoPath?: string }), repoPath };
+}
+
+async function dependencySetupObservation(): Promise<{
+  enabled: boolean;
+  retentionReported: boolean;
+  cleanup: string;
+}> {
+  const { root, repoPath } = fixtureRepository();
+  mkdirSync(path.join(repoPath, "vendor", "fixture-dependency"), { recursive: true });
+  writeFileSync(path.join(repoPath, "vendor", "fixture-dependency", "package.json"), JSON.stringify({ name: "fixture-dependency", version: "1.0.0" }));
+  writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({ dependencies: { "fixture-dependency": "file:vendor/fixture-dependency" } }));
+  writeFileSync(path.join(repoPath, ".gitignore"), "node_modules/\n");
+  execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: repoPath, stdio: "ignore" });
+  rmSync(path.join(repoPath, "node_modules"), { recursive: true, force: true });
+  writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({
+    checkCommand: "npm ci --ignore-scripts --no-audit --no-fund && test -f node_modules/fixture-dependency/package.json",
+  }));
+  git(repoPath, ["add", ".gitignore", "package.json", "package-lock.json", "vendor", "deadloop.json"]);
+  git(repoPath, ["commit", "--quiet", "-m", "add dependency verification fixture"]);
+  git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+  let journalPath = "";
+  const extension = await loadExtension(root, {
+    beforeEnablementWorktreeCreate: async (path) => {
+      journalPath = path;
+    },
+  });
+
+  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+  return {
+    enabled: extension.messages.at(-1)?.includes("deadloop enabled") || false,
+    retentionReported: extension.messages.at(-1)?.includes(journalPath) || false,
+    cleanup: JSON.parse(readFileSync(journalPath, "utf8")).state,
+  };
+}
+
 describe("enablement command integration", () => {
-  it("records owned verification worktree intent before creation", async () => {
-    const { root, repoPath } = fixtureRepository();
-    let preparedJournal: unknown;
-    const extension = await loadExtension(root, {
-      beforeEnablementWorktreeCreate: async (journalPath) => {
-        preparedJournal = JSON.parse(readFileSync(journalPath, "utf8"));
-      },
-    });
+  it("records prepared verification worktree intent before creation", async () => {
+    expect((await ownedWorktreeIntentObservation()).state).toBe("prepared");
+  });
 
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+  it("binds verification worktree intent to the repository identity", async () => {
+    expect((await ownedWorktreeIntentObservation()).repository).toBe("owner/demo");
+  });
 
-    const prepared = preparedJournal as { state?: string; repository?: string; primaryRepoPath?: string };
-    expect({
-      state: prepared.state,
-      repository: prepared.repository,
-      primaryRepoPath: prepared.primaryRepoPath,
-    }).toEqual({ state: "prepared", repository: "owner/demo", primaryRepoPath: repoPath });
+  it("binds verification worktree intent to the primary repository path", async () => {
+    const observation = await ownedWorktreeIntentObservation();
+    expect(observation.primaryRepoPath).toBe(observation.repoPath);
   });
 
   it("records the trusted target revision before worktree creation", async () => {
@@ -586,33 +638,15 @@ describe("enablement command integration", () => {
   });
 
   it("enables after an aggregate command installs dependencies in the verification worktree", async () => {
-    const { root, repoPath } = fixtureRepository();
-    mkdirSync(path.join(repoPath, "vendor", "fixture-dependency"), { recursive: true });
-    writeFileSync(path.join(repoPath, "vendor", "fixture-dependency", "package.json"), JSON.stringify({ name: "fixture-dependency", version: "1.0.0" }));
-    writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({ dependencies: { "fixture-dependency": "file:vendor/fixture-dependency" } }));
-    writeFileSync(path.join(repoPath, ".gitignore"), "node_modules/\n");
-    execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: repoPath, stdio: "ignore" });
-    rmSync(path.join(repoPath, "node_modules"), { recursive: true, force: true });
-    writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({
-      checkCommand: "npm ci --ignore-scripts --no-audit --no-fund && test -f node_modules/fixture-dependency/package.json",
-    }));
-    git(repoPath, ["add", ".gitignore", "package.json", "package-lock.json", "vendor", "deadloop.json"]);
-    git(repoPath, ["commit", "--quiet", "-m", "add dependency verification fixture"]);
-    git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
-    let journalPath = "";
-    const extension = await loadExtension(root, {
-      beforeEnablementWorktreeCreate: async (path) => {
-        journalPath = path;
-      },
-    });
+    expect((await dependencySetupObservation()).enabled).toBe(true);
+  });
 
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+  it("reports retained verification setup after dependency installation", async () => {
+    expect((await dependencySetupObservation()).retentionReported).toBe(true);
+  });
 
-    expect({
-      enabled: extension.messages.at(-1)?.includes("deadloop enabled"),
-      retentionReported: extension.messages.at(-1)?.includes(journalPath),
-      cleanup: JSON.parse(readFileSync(journalPath, "utf8")).state,
-    }).toEqual({ enabled: true, retentionReported: true, cleanup: "retained" });
+  it("retains verification setup after dependency installation", async () => {
+    expect((await dependencySetupObservation()).cleanup).toBe("retained");
   });
 
   it.skipIf(process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK === "1")(
@@ -748,6 +782,14 @@ describe("enablement command integration", () => {
 
   it("records failure after a verifier exception", async () => {
     expect((await verifierExceptionObservation()).record).toBe("failed");
+  });
+
+  it("records no exit code after a verifier exception", async () => {
+    expect((await verifierExceptionObservation()).exitCode).toBeNull();
+  });
+
+  it("records a typed termination reason after a verifier exception", async () => {
+    expect((await verifierExceptionObservation()).terminationReason).toBe("runner_failure");
   });
 
   it("logs a verifier exception", async () => {
