@@ -76,7 +76,7 @@ describe("guarded Worker PR binding", () => {
     expect({ labeled, stale: error.includes("stale_policy") }).toEqual({ labeled: false, stale: true });
   });
 
-  it("removes the review label when the base branch changes during labeling", () => {
+  it("does not add the review label when the base branch changes before labeling", () => {
     const head = "a".repeat(40); const edits: string[] = []; let viewed = 0;
     let error = "";
     try {
@@ -95,10 +95,10 @@ describe("guarded Worker PR binding", () => {
         },
       );
     } catch (caught) { error = String(caught); }
-    expect({ removed: edits.at(-1)?.includes("--remove-label agent:review"), rejected: error.includes("base branch") }).toEqual({ removed: true, rejected: true });
+    expect({ edits, rejected: error.includes("base branch") }).toEqual({ edits: [], rejected: true });
   });
 
-  it("removes the review label when the closing Issue changes during labeling", () => {
+  it("does not add the review label when the closing Issue changes before labeling", () => {
     const head = "a".repeat(40); const edits: string[] = []; let viewed = 0;
     try {
       addWorkerReviewLabel(
@@ -116,7 +116,47 @@ describe("guarded Worker PR binding", () => {
         },
       );
     } catch {}
-    expect(edits.at(-1)).toContain("--remove-label agent:review");
+    expect(edits).toEqual([]);
+  });
+
+  it("does not create a PR when authorization races the remote head", () => {
+    const head = "a".repeat(40); const raced = "b".repeat(40); let remote = head; let created = false;
+    let error = "";
+    try {
+      ensureWorkerPr(
+        { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
+        head,
+        { githubRepo: "owner/repo", title: "Task" },
+        {
+          remoteHead: () => remote,
+          recheck: () => {},
+          authorize: () => { remote = raced; },
+          gh: (args: string[]) => { if (args[1] === "list") return []; if (args[1] === "create") created = true; return ""; },
+        },
+      );
+    } catch (caught) { error = String(caught); }
+    expect({ created, raced: error.includes("during PR creation authorization") }).toEqual({ created: false, raced: true });
+  });
+
+  it("does not label a PR when authorization races its head", () => {
+    const head = "a".repeat(40); const raced = "b".repeat(40); let current = head; let labeled = false;
+    let error = "";
+    try {
+      addWorkerReviewLabel(
+        17,
+        { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
+        head,
+        { githubRepo: "owner/repo", reviewLabel: "agent:review" },
+        {
+          recheck: () => {}, authorize: () => { current = raced; },
+          gh: (args: string[]) => {
+            if (args[1] === "view") return { headRefName: "agent/issue-1", headRefOid: current, baseRefName: "main", closingIssuesReferences: [{ number: 1 }] };
+            if (args[1] === "edit") labeled = true;
+          },
+        },
+      );
+    } catch (caught) { error = String(caught); }
+    expect({ labeled, raced: error.includes("head changed") }).toEqual({ labeled: false, raced: true });
   });
 
   it("reauthorizes after the final PR creation recheck", () => {

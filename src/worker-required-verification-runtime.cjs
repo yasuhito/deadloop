@@ -29,7 +29,7 @@ function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath) {
   if (currentBase.toLowerCase() !== contract.baseRevision.toLowerCase()) throw new Error("required verification blocked: stale_policy; trusted base revision changed");
 
   const persistedLocalSource = contract.source.kind === "local" ? contract.source : contract.override?.source?.kind === "local" ? contract.override.source : undefined;
-  const configFile = persistedLocalSource?.location.split("#", 1)[0] || localConfigPath;
+  const configFile = localConfigPath;
   const localSources = [];
   if (configFile && fs.existsSync(configFile)) {
     let config; try { config = JSON.parse(fs.readFileSync(configFile, "utf8")); } catch { throw new Error("required verification blocked: stale_policy; local policy is malformed"); }

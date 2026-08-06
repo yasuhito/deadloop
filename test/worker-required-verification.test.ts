@@ -79,6 +79,10 @@ describe("Worker required-verification completion gate", () => {
     expect(() => assertWorkerCompletionAuthorized({ ...attempt, requiredVerification: { ...contract, command: "" } }, report, verification, contract)).toThrow("zero_targets");
   });
 
+  it("rejects a failed record for the exact output commit", () => {
+    expect(() => assertWorkerCompletionAuthorized(attempt, report, { ...verification, outcome: "failed", exitCode: 1 }, contract)).toThrow("did not pass");
+  });
+
   it("rejects a passed record for another output commit", () => {
     expect(() => assertWorkerCompletionAuthorized(attempt, report, { ...verification, binding: { ...verification.binding, targetCommit: "c".repeat(40) } }, contract)).toThrow("output commit");
   });
@@ -118,6 +122,26 @@ describe("Worker required-verification completion gate", () => {
       writeFileSync(configFile, JSON.stringify({ projects: [{ id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run local-check" }] }));
       const fixedAttempt = { ...attempt, requiredVerification: { ...contract, baseRevision } };
       expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout, configFile)).toThrow("stale_policy");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("uses the currently selected configuration instead of the fixed contract's old local path", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-config-switch-"));
+    try {
+      const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout");
+      const oldConfig = path.join(root, "old-projects.json"); const activeConfig = path.join(root, "active-projects.json");
+      execFileSync("git", ["init", "--bare", "--quiet", remote]);
+      execFileSync("git", ["init", "--quiet", "-b", "main", seed]);
+      execFileSync("git", ["-C", seed, "config", "user.name", "Test"]); execFileSync("git", ["-C", seed, "config", "user.email", "test@example.com"]);
+      writeFileSync(path.join(seed, "file.txt"), "policy base\n");
+      execFileSync("git", ["-C", seed, "add", "file.txt"]); execFileSync("git", ["-C", seed, "commit", "--quiet", "-m", "base"]);
+      execFileSync("git", ["-C", seed, "remote", "add", "origin", remote]); execFileSync("git", ["-C", seed, "push", "--quiet", "-u", "origin", "main"]);
+      execFileSync("git", ["clone", "--quiet", remote, checkout]);
+      const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
+      writeFileSync(oldConfig, JSON.stringify({ projects: [{ id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run old-check" }] }));
+      writeFileSync(activeConfig, JSON.stringify({ projects: [{ id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run active-check" }] }));
+      const fixedAttempt = { ...attempt, requiredVerification: { repository: attempt.repository, command: "npm run old-check", source: { kind: "local", location: `${oldConfig}#project=${attempt.project}` }, baseRevision } };
+      expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout, activeConfig)).toThrow("stale_policy");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

@@ -12,7 +12,11 @@ const {
   workerRequiredVerificationPath,
   writeRequiredVerificationRecord,
 } = require("../../../src/worker-required-verification-runtime.cjs");
-const { runProjectCheck } = require("../../../src/project-check.ts");
+const {
+  projectCheckRestorationFailureFrom,
+  recordProjectCheckRestorationFailure,
+  runProjectCheck,
+} = require("../../../src/project-check.ts");
 
 type Args = { attemptRecord: string; projectId: string; projectRepo: string; githubRepo: string; stateDir: string; worktree: string; quarantineRoot: string };
 function parseArgs(argv: string[]): Args {
@@ -34,11 +38,34 @@ function assertCleanOutput(worktree: string, outputRevision: string): void {
   if (gitText(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]).toLowerCase() !== outputRevision.toLowerCase()) {
     throw new Error("Worker outputRevision does not match worktree HEAD");
   }
-  if (gitText(worktree, ["status", "--porcelain", "--untracked-files=all"])) {
+  if (gitText(worktree, [
+    "status", "--porcelain", "--untracked-files=all", "--", ".",
+    ":(exclude).deadloop", ":(exclude).deadloop/**",
+    ":(exclude).pi-subagents", ":(exclude).pi-subagents/**",
+  ])) {
     throw new Error("Worker output checkout must be clean before required verification");
   }
 }
-async function run(args: Args) {
+async function runWorkerProjectCheck(
+  input: { cwd: string; command: string; quarantineRoot: string; timeoutMs: number },
+  signal: AbortSignal | undefined,
+  runner: typeof runProjectCheck = runProjectCheck,
+) {
+  const checkInput = { ...input, signal };
+  let check;
+  try {
+    check = await runner(checkInput);
+  } catch (error) {
+    const failure = projectCheckRestorationFailureFrom(error);
+    if (failure) recordProjectCheckRestorationFailure(checkInput, failure);
+    throw error;
+  }
+  const restorationFailureRecordPath = check.restorationFailure
+    ? recordProjectCheckRestorationFailure(checkInput, check.restorationFailure)
+    : undefined;
+  return { check, restorationFailureRecordPath };
+}
+async function run(args: Args, signal?: AbortSignal) {
   const location = canonicalAttemptLocation(args);
   const runDir = location.runDir;
   const attempt = readAttemptRecord(runDir);
@@ -55,7 +82,10 @@ async function run(args: Args) {
   const recordFile = workerRequiredVerificationPath(args.attemptRecord);
   const logPath = path.join(runDir, "required-verification.log");
   const started = Date.now();
-  const check = await runProjectCheck({ cwd: args.worktree, command: contract.command, quarantineRoot: args.quarantineRoot, timeoutMs: 10 * 60_000 });
+  const { check, restorationFailureRecordPath } = await runWorkerProjectCheck(
+    { cwd: args.worktree, command: contract.command, quarantineRoot: args.quarantineRoot, timeoutMs: 10 * 60_000 },
+    signal,
+  );
   const outcome = check.timedOut ? "timed_out" : check.interrupted ? "interrupted" : check.code === 0 && !check.restorationFailure ? "passed" : "failed";
   fs.writeFileSync(logPath, `${check.stdout}${check.stderr}`, { encoding: "utf8", mode: 0o600 });
   assertCleanOutput(args.worktree, outputRevision);
@@ -67,14 +97,23 @@ async function run(args: Args) {
     startedAt: new Date(started).toISOString(),
     durationMs: Math.max(0, Date.now() - started),
     logPath,
+    ...(check.restorationFailure ? { artifactRestorationFailure: check.restorationFailure, restorationFailureRecordPath } : {}),
   };
   writeRequiredVerificationRecord(recordFile, record);
   if (outcome !== "passed") throw new Error(`required verification ${outcome}; log: ${logPath}`);
   return { status: "passed", outputRevision, recordFile, logPath };
 }
 async function main() {
-  try { process.stdout.write(`${JSON.stringify(await run(parseArgs(process.argv.slice(2))))}\n`); }
+  const controller = new AbortController();
+  const interrupt = () => controller.abort();
+  process.once("SIGINT", interrupt);
+  process.once("SIGTERM", interrupt);
+  try { process.stdout.write(`${JSON.stringify(await run(parseArgs(process.argv.slice(2)), controller.signal))}\n`); }
   catch (error) { console.error(`run-worker-required-verification.ts: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 2; }
+  finally {
+    process.removeListener("SIGINT", interrupt);
+    process.removeListener("SIGTERM", interrupt);
+  }
 }
 if (require.main === module) void main();
-module.exports = { assertCleanOutput, parseArgs, run };
+module.exports = { assertCleanOutput, parseArgs, run, runWorkerProjectCheck };

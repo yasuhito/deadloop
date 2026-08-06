@@ -17,6 +17,8 @@ export type RequiredVerificationRecord = {
   startedAt: string;
   durationMs: number;
   logPath: string;
+  artifactRestorationFailure?: { message: string; quarantinePath: string };
+  restorationFailureRecordPath?: string;
 };
 
 type Runtime = {

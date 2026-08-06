@@ -284,7 +284,7 @@ async function runProjectCheck(input: ProjectCheckInput): Promise<ProjectCheckRe
   return restorationFailure ? { ...result, restorationFailure } : result;
 }
 
-function restorationFailureFrom(error: unknown): ArtifactRestorationFailure | undefined {
+function projectCheckRestorationFailureFrom(error: unknown): ArtifactRestorationFailure | undefined {
   const candidate = (error as { restorationFailure?: unknown } | null)?.restorationFailure;
   if (!candidate || typeof candidate !== "object") return undefined;
   const value = candidate as Record<string, unknown>;
@@ -337,7 +337,7 @@ function matchingAttempt(stateDir: string, worktreePath: string): {
   };
 }
 
-function recordRestorationFailure(input: ProjectCheckInput, failure: ArtifactRestorationFailure): string {
+function recordProjectCheckRestorationFailure(input: ProjectCheckInput, failure: ArtifactRestorationFailure): string {
   const stateDir = path.dirname(path.resolve(input.quarantineRoot));
   const worktreePath = path.resolve(input.cwd);
   const directory = path.join(stateDir, "project-check-restoration-failures");
@@ -422,14 +422,14 @@ async function projectCheckMain(
     try {
       result = await runner({ ...input, signal: controller.signal });
     } catch (error) {
-      const failure = restorationFailureFrom(error);
-      if (failure) recordRestorationFailure(input, failure);
+      const failure = projectCheckRestorationFailureFrom(error);
+      if (failure) recordProjectCheckRestorationFailure(input, failure);
       throw error;
     }
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.restorationFailure) {
-      const recordPath = recordRestorationFailure(input, result.restorationFailure);
+      const recordPath = recordProjectCheckRestorationFailure(input, result.restorationFailure);
       process.stderr.write(`project-check could not restore runtime artifacts; retained quarantine: ${result.restorationFailure.quarantinePath}; record: ${recordPath}; ${result.restorationFailure.message}\n`);
     }
     process.exitCode = result.restorationFailure && result.code === 0 ? 1 : result.code ?? 1;
@@ -441,6 +441,8 @@ async function projectCheckMain(
 
 module.exports = {
   inspectRetainedProjectCheckFailures,
+  projectCheckRestorationFailureFrom,
+  recordProjectCheckRestorationFailure,
   inspectUnresolvedProjectCheckFailures,
   projectCheckMain,
   renderProjectCheckCommand,

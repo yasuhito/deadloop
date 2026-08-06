@@ -77,6 +77,7 @@ function ensureWorkerPr(
   ops.recheck();
   if (ops.remoteHead().toLowerCase() !== outputRevision.toLowerCase()) throw new Error("remote Worker branch changed at the PR creation boundary");
   ops.authorize();
+  if (ops.remoteHead().toLowerCase() !== outputRevision.toLowerCase()) throw new Error("remote Worker branch changed during PR creation authorization");
   const url = ops.gh(["pr", "create", "-R", args.githubRepo, "--base", String(attempt.baseBranch || "origin/main").replace(/^origin\//, ""), "--head", attempt.branch, "--title", args.title, "--body", `Closes #${attempt.target.number}`]);
   const match = String(url).match(/\/(\d+)\/?$/);
   if (!match) throw new Error("created Worker PR number was not returned");
@@ -99,6 +100,8 @@ function addWorkerReviewLabel(
   const observedBeforeLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences"], true);
   assertWorkerPrReadyForReview(observedBeforeLabel, attempt, outputRevision);
   ops.authorize();
+  const observedAfterAuthorization = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences"], true);
+  assertWorkerPrReadyForReview(observedAfterAuthorization, attempt, outputRevision);
   ops.gh(["pr", "edit", String(number), "-R", args.githubRepo, "--add-label", args.reviewLabel]);
   const observedAfterLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefName,headRefOid,baseRefName,closingIssuesReferences"], true);
   try {

@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { assertCleanOutput } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
+const { assertCleanOutput, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
+const { inspectUnresolvedProjectCheckFailures } = require("../src/project-check.ts");
 const roots: string[] = [];
 function repository() {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-verification-"));
@@ -32,8 +33,49 @@ describe("Worker required-verification checkout binding", () => {
     expect(() => assertCleanOutput(fixture.root, fixture.head)).toThrow("must be clean");
   });
 
+  it("allows only quarantinable runtime artifacts in an otherwise clean checkout", () => {
+    const fixture = repository();
+    mkdirSync(path.join(fixture.root, ".deadloop"));
+    writeFileSync(path.join(fixture.root, ".deadloop", "state.json"), "{}\n");
+    mkdirSync(path.join(fixture.root, ".pi-subagents"));
+    writeFileSync(path.join(fixture.root, ".pi-subagents", "log"), "runtime\n");
+    expect(() => assertCleanOutput(fixture.root, fixture.head)).not.toThrow();
+  });
+
+  it("rejects a normal untracked file", () => {
+    const fixture = repository();
+    writeFileSync(path.join(fixture.root, "unexpected.txt"), "output\n");
+    expect(() => assertCleanOutput(fixture.root, fixture.head)).toThrow("must be clean");
+  });
+
   it("rejects a checkout at another commit", () => {
     const fixture = repository();
     expect(() => assertCleanOutput(fixture.root, "a".repeat(40))).toThrow("does not match");
+  });
+
+  it("passes the shared interruption signal to the detached check runner", async () => {
+    const fixture = repository();
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runWorkerProjectCheck(
+      { cwd: fixture.root, command: "sleep 30", quarantineRoot: path.join(path.dirname(fixture.root), "quarantine"), timeoutMs: 1000 },
+      controller.signal,
+      async (input: { signal?: AbortSignal }) => ({ code: 130, stdout: "", stderr: "", timedOut: false, interrupted: input.signal?.aborted, signal: "SIGTERM" }),
+    );
+    expect(result.check.interrupted).toBe(true);
+  });
+
+  it("records a restoration conflict for doctor inspection", async () => {
+    const fixture = repository();
+    const stateDir = `${fixture.root}-state`;
+    roots.push(stateDir);
+    const quarantinePath = path.join(stateDir, "check-quarantine", "retained");
+    mkdirSync(quarantinePath, { recursive: true });
+    await runWorkerProjectCheck(
+      { cwd: fixture.root, command: "true", quarantineRoot: path.join(stateDir, "check-quarantine"), timeoutMs: 1000 },
+      undefined,
+      async () => ({ code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null, restorationFailure: { message: "restore conflict", quarantinePath } }),
+    );
+    expect(inspectUnresolvedProjectCheckFailures(stateDir)).toHaveLength(1);
   });
 });
