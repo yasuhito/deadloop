@@ -55,6 +55,7 @@ function reviewerDriver(fixture: string): Record<string, unknown> {
       env: {
         ...process.env,
         DEADLOOP_PROJECT_ID: "demo",
+        DEADLOOP_STATE_DIR: path.join(process.cwd(), "test/fixtures/pr-reviewer-driver/state"),
         DEADLOOP_REPO_PATH: "/repo",
         DEADLOOP_GITHUB_REPO: "owner/repo",
         DEADLOOP_REVIEWER_AGENT: "pi",

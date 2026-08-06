@@ -77,6 +77,7 @@ function runPrecheck(
         ...process.env,
         PATH: `${tempRoot}:${process.env.PATH || ""}`,
         DEADLOOP_REPO_PATH: process.cwd(),
+        DEADLOOP_STATE_DIR: path.join(tempRoot, "state"),
         DEADLOOP_GITHUB_REPO: "owner/repo",
         DEADLOOP_PROJECT_ID: options.projectId || "demo",
         DEADLOOP_AUTO_MERGE: options.autoMerge ? "1" : "0",
