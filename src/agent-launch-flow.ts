@@ -11,6 +11,7 @@ const { deriveHerdr075AgentName } = require("./herdr-agent-name.cjs");
 const { createHerdrRunner } = require("./herdr-runner.ts");
 
 import type { AttemptRecord, AttemptRole, AttemptTarget, InputRevision, PreparedAttemptInput } from "./attempt-lifecycle";
+import type { RequiredVerificationContract } from "./required-verification";
 import type { RunnerAdapter } from "./runner";
 
 type WorktreeRequest =
@@ -37,6 +38,7 @@ type AgentLaunchFlowInput = {
   intendedWorktreePath: string;
   resolveWorktreeHead?: boolean;
   autoMergePolicy?: boolean;
+  requiredVerification?: RequiredVerificationContract;
   renderPrompt: (input: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => string;
 };
 
@@ -97,6 +99,7 @@ function preparedRecordInput(input: AgentLaunchFlowInput, prepared: PreparedLaun
     promptFile: prepared.promptFile,
     promiseFile: prepared.promiseFile,
     ...(input.autoMergePolicy === undefined ? {} : { autoMergePolicy: input.autoMergePolicy }),
+    ...(input.requiredVerification === undefined ? {} : { requiredVerification: input.requiredVerification }),
   };
 }
 
@@ -143,11 +146,15 @@ function samePreparedIdentity(record: AttemptRecord, expected: PreparedAttemptIn
     && record.agentName === expected.agentName && record.workspaceLabel === expected.workspaceLabel
     && path.resolve(record.promptFile) === path.resolve(expected.promptFile)
     && path.resolve(record.promiseFile) === path.resolve(expected.promiseFile)
-    && record.autoMergePolicy === expected.autoMergePolicy;
+    && record.autoMergePolicy === expected.autoMergePolicy
+    && JSON.stringify(record.requiredVerification) === JSON.stringify(expected.requiredVerification);
 }
 
 /** Persist the launch intent before a GitHub claim, label, comment, or runner mutation. */
 function prepareAgentLaunchFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): PreparedLaunch {
+  if (input.role === "worker" && !input.requiredVerification) {
+    throw new Error("Worker launch requires a resolved required verification contract");
+  }
   const prepared = launchPaths(input);
   const expected = preparedRecordInput(input, prepared);
   ops.mkdirSync(prepared.runDir, { recursive: true, mode: 0o700 });

@@ -10,6 +10,22 @@ function attemptRecordPath(runDir) { return path.join(runDir, ATTEMPT_RECORD_FIL
 function releasesAttemptOwnership(phase) { return phase === "workspace_closed" || phase === "abandoned"; }
 function nonEmpty(value, field) { if (typeof value !== "string" || !value.trim()) throw new Error(`Invalid attempt record: ${field} must be a non-empty string`); return value; }
 function sha(value, field) { const text = nonEmpty(value, field); if (!/^[0-9a-f]{40}$/i.test(text)) throw new Error(`Invalid attempt record: ${field} must be a full 40-hex commit SHA`); return text; }
+function requiredVerification(value, required) {
+  if (value === undefined && !required) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid attempt record: requiredVerification must be an object");
+  if (!value.source || typeof value.source !== "object" || Array.isArray(value.source) || !["local", "repo_policy"].includes(value.source.kind)) throw new Error("Invalid attempt record: requiredVerification.source is invalid");
+  const contract = {
+    repository: nonEmpty(value.repository, "requiredVerification.repository"),
+    command: nonEmpty(value.command, "requiredVerification.command"),
+    source: { kind: value.source.kind, location: nonEmpty(value.source.location, "requiredVerification.source.location") },
+    baseRevision: sha(value.baseRevision, "requiredVerification.baseRevision"),
+  };
+  if (value.override !== undefined) {
+    if (!value.override || typeof value.override !== "object" || Array.isArray(value.override) || !value.override.source || typeof value.override.source !== "object" || !["local", "repo_policy"].includes(value.override.source.kind)) throw new Error("Invalid attempt record: requiredVerification.override is invalid");
+    contract.override = { source: { kind: value.override.source.kind, location: nonEmpty(value.override.source.location, "requiredVerification.override.source.location") }, command: nonEmpty(value.override.command, "requiredVerification.override.command") };
+  }
+  return contract;
+}
 function parseAttemptRecord(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid attempt record: record must be an object");
   if (!ROLES.has(value.role)) throw new Error("Invalid attempt record: role is invalid");
@@ -61,6 +77,7 @@ function parseAttemptRecord(value) {
     ...(value.rootPaneId === undefined ? {} : { rootPaneId: nonEmpty(value.rootPaneId, "rootPaneId") }),
     ...(value.outputRevision === undefined ? {} : { outputRevision: sha(value.outputRevision, "outputRevision") }),
     ...(value.autoMergePolicy === undefined ? {} : { autoMergePolicy: value.autoMergePolicy }),
+    ...(requiredVerification(value.requiredVerification, false) ? { requiredVerification: requiredVerification(value.requiredVerification, true) } : {}),
     ...(abandonment ? { abandonment } : {}),
   };
 }
@@ -142,6 +159,7 @@ function validateCompletionReportBinding(record, value) {
 function assertAdvance(current, next) {
   if (!sameIdentity(current, next)) throw new Error("Attempt record identity cannot change");
   for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy"]) if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
+  if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"]) if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (current.abandonment !== undefined && JSON.stringify(current.abandonment) !== JSON.stringify(next.abandonment)) throw new Error("Attempt record abandonment evidence cannot change");
   if (current.phase === "launch_failed" && next.phase === "abandoned") { if (!next.abandonment) throw new Error("abandoned requires abandonment evidence"); if (current.lastSuccessfulPhase !== next.lastSuccessfulPhase) throw new Error("Attempt record lastSuccessfulPhase cannot change"); if (current.launchError !== next.launchError) throw new Error("Attempt record launchError cannot change"); return; }

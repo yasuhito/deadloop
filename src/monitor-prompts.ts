@@ -13,6 +13,7 @@ type MonitorPromptBaseInput = {
 
 export type IssueMonitorPromptInput = MonitorPromptBaseInput & {
   issueNumber: number;
+  issueTitle?: string;
   worktreePath: string;
   branch: string;
   checkCommand: string;
@@ -111,15 +112,19 @@ function renderWorkspaceCompletion(input: MonitorPromptBaseInput, expectedLabels
 }
 
 function renderIssueMonitorPrompt(input: IssueMonitorPromptInput): string {
-  const guardedPush = `node ${shellQuotePrompt(`${input.automationDir}/guarded-push.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --worktree ${shellQuotePrompt(input.worktreePath)} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --remote origin --branch ${shellQuotePrompt(input.branch)}`;
+  const attemptRecord = input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`;
+  const verify = `node ${shellQuotePrompt(`${input.automationDir}/run-worker-required-verification.ts`)} --attempt-record ${shellQuotePrompt(attemptRecord)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --worktree ${shellQuotePrompt(input.worktreePath)} --quarantine-root ${shellQuotePrompt(`${input.stateDir || "<stateDir>"}/check-quarantine`)}`;
+  const guardedPush = `node ${shellQuotePrompt(`${input.automationDir}/guarded-push.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --worktree ${shellQuotePrompt(input.worktreePath)} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --remote origin --branch ${shellQuotePrompt(input.branch)} --attempt-record ${shellQuotePrompt(attemptRecord)}`;
+  const createPr = `node ${shellQuotePrompt(`${input.automationDir}/guarded-worker-pr.ts`)} --attempt-record ${shellQuotePrompt(attemptRecord)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --title ${shellQuotePrompt(input.issueTitle || `Issue #${input.issueNumber}`)} --review-label ${shellQuotePrompt(input.reviewLabel)}`;
   return `Deterministic driver launched Worker for Issue #${input.issueNumber}. Do not launch another agent and do not reselect another issue.
 
 ${renderPromisePollingRules(input)}
 
 After a \`complete\` promise:
 - Inspect \`${input.worktreePath}\` and confirm only Issue #${input.issueNumber} changes are present.
-- Run validation including \`${input.checkCommand}\` before creating any PR.
-- Push only the Worker branch \`${input.branch}\` without force-push by running exactly \`${guardedPush}\`. This resolves and verifies the repository, then pushes to that explicit destination rather than mutable remote configuration; create a reviewable PR whose body includes \`Closes #${input.issueNumber}\`, and add \`${input.reviewLabel}\`.
+- Run the fixed required-verification contract through run-project-check.ts isolation before creating any PR, and persist its output-commit-bound record by running exactly \`${verify}\`. Agent-reported additional validations never replace this record. If the contract is missing, empty, or differs from current trusted policy, stop without push, PR creation, or success labels; a new attempt must adopt the new policy.
+- Only after that command reports \`status=passed\`, push only the Worker branch \`${input.branch}\` without force-push by running exactly \`${guardedPush}\`. The guarded push independently requires the same passed record and current policy.
+- Only after that push succeeds, create a reviewable PR whose body includes \`Closes #${input.issueNumber}\`, or recover that exact PR, and add \`${input.reviewLabel}\` by running exactly \`${createPr}\`. This dedicated command independently requires the verified output commit; do not run \`gh pr create\` or success label mutations directly.
 - Do not manually close the issue with GitHub commands, and do not merge the PR.
 - After the PR, closing reference, exact pushed head, labels, and Issue state are persisted, run \`${renderAttemptPersistence(input)}\` to bind that existing result. Only after it reports result_persisted, run the deterministic workspace completion command exactly once: \`${renderWorkspaceCompletion(input)}\`. A pending cleanup result must not replay the push, PR creation, comment, or labels.
 

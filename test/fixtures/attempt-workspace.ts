@@ -55,6 +55,12 @@ export function attemptRecord(role: AttemptRecord["role"], outputRevision?: stri
       head: INPUT_HEAD,
       ...(role === "branch-update" ? { base: BASE_HEAD } : {}),
     },
+    ...(role === "worker" ? { requiredVerification: {
+      repository: REPOSITORY,
+      command: "npm test",
+      source: { kind: "repo_policy" as const, location: "deadloop.json" },
+      baseRevision: INPUT_HEAD,
+    } } : {}),
     branch: "agent/issue-42",
     baseBranch: "main",
     worktreePath: "/worktrees/issue-42",

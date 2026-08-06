@@ -16,7 +16,9 @@ function fixture(withMarker: boolean) {
   mkdirSync(worktree); mkdirSync(path.join(root, ".git"));
   createPreparedAttempt(runDir, {
     attemptId: "launch-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker",
-    target: { kind: "issue", number: 12 }, inputRevision: { head: inputHead }, branch: "agent/issue-12", baseBranch: "origin/main",
+    target: { kind: "issue", number: 12 }, inputRevision: { head: inputHead }, requiredVerification: {
+      repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: inputHead,
+    }, branch: "agent/issue-12", baseBranch: "origin/main",
     worktreePath: worktree, agentName: "dl-w-12-123456789abc", workspaceLabel: "Issue 12",
     promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
   });

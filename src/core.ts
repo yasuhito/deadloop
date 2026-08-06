@@ -785,6 +785,9 @@ export function automationEnvironment(
     DEADLOOP_BASE_BRANCH: envText(values.baseBranch),
     DEADLOOP_WORKTREE_ROOT: envText(values.worktreeRoot),
     DEADLOOP_CHECK_COMMAND: envText(values.checkCommand),
+    DEADLOOP_REQUIRED_VERIFICATION: project.requiredVerification.status === "resolved"
+      ? JSON.stringify(project.requiredVerification.contract)
+      : undefined,
     DEADLOOP_WORKER_AGENT: envText(values.workerAgent),
     DEADLOOP_WORKER_MODEL: envText(values.workerModel),
     DEADLOOP_WORKER_INSTRUCTIONS: envText(values.workerInstructions),

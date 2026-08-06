@@ -4,7 +4,15 @@
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const path = require("node:path") as typeof import("node:path");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
+const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const {
+  assertCurrentWorkerContract,
+  assertWorkerCompletionAuthorized,
+  readRequiredVerificationRecord,
+  workerRequiredVerificationPath,
+} = require("../../../src/worker-required-verification-runtime.cjs");
 
 type Args = {
   projectRepo: string;
@@ -14,6 +22,7 @@ type Args = {
   enabledAt: number;
   remote: string;
   branch: string;
+  attemptRecord?: string;
 };
 
 type CommandResult = { status: number; stdout: string; stderr: string };
@@ -29,8 +38,8 @@ function parseArgs(argv: string[]): Args {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  if (!values.projectRepo || !values.worktree || !values.githubRepo || !values.stateDir || !values.remote || !values.branch || !Number.isFinite(enabledAt)) {
-    throw new Error("--project-repo, --worktree, --github-repo, --state-dir, --enabled-at, --remote, and --branch are required");
+  if (!values.projectRepo || !values.worktree || !values.githubRepo || !values.stateDir || !values.remote || !values.branch || !values.attemptRecord || !Number.isFinite(enabledAt)) {
+    throw new Error("--project-repo, --worktree, --github-repo, --state-dir, --enabled-at, --remote, --branch, and --attempt-record are required");
   }
   return { ...values, enabledAt } as Args;
 }
@@ -78,10 +87,21 @@ function assertAuthorizedSource(args: Args, enabled: EnabledProject, ops: Comman
   if (checkedOutBranch !== args.branch) throw new Error("source worktree branch does not match the requested branch");
 }
 
+function assertVerifiedWorkerOutput(args: Args & { attemptRecord: string }): void {
+  const attempt = readAttemptRecord(path.dirname(args.attemptRecord));
+  const report = JSON.parse(require("node:fs").readFileSync(attempt.promiseFile, "utf8"));
+  validateCompletionReportBinding(attempt, report);
+  const current = assertCurrentWorkerContract(attempt, args.projectRepo);
+  const verification = readRequiredVerificationRecord(workerRequiredVerificationPath(args.attemptRecord));
+  assertWorkerCompletionAuthorized(attempt, report, verification, current);
+}
+
 function runGuardedPush(args: Args, ops: CommandOps = defaultOps()): number {
+  if (args.attemptRecord) assertVerifiedWorkerOutput(args as Args & { attemptRecord: string });
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
     (enabled: EnabledProject, recheck: () => void) => {
+      if (args.attemptRecord) assertVerifiedWorkerOutput(args as Args & { attemptRecord: string });
       assertAuthorizedSource(args, enabled, ops);
       const destination = resolveVerifiedPushDestination(
         ops,
@@ -110,4 +130,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { assertAuthorizedSource, parseArgs, runGuardedPush };
+module.exports = { assertAuthorizedSource, assertVerifiedWorkerOutput, parseArgs, runGuardedPush };

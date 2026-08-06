@@ -196,6 +196,29 @@ function assertRecoverableWorkerCheckout(
   }
 }
 
+function requiredVerificationContract(env: ReturnType<typeof envConfig>, baseHead: string) {
+  if (env.requiredVerification) {
+    let contract: JsonObject;
+    try { contract = JSON.parse(env.requiredVerification); }
+    catch { throw new Error("DEADLOOP_REQUIRED_VERIFICATION must be valid JSON"); }
+    if (!contract || typeof contract !== "object" || !String(contract.command || "").trim()) {
+      throw new Error("required verification contract is unresolved or empty");
+    }
+    return contract;
+  }
+  // Fixture and direct-flow adapters provide only the historical command environment.
+  // Production automationEnvironment always supplies the resolved contract.
+  if (process.env.NODE_ENV === "test" || env.fixtureMode) {
+    return {
+      repository: env.githubRepo,
+      command: env.checkCommand,
+      source: { kind: "local", location: "fixture" },
+      baseRevision: baseHead,
+    };
+  }
+  throw new Error("DEADLOOP_REQUIRED_VERIFICATION is required before Worker launch");
+}
+
 function issueWorkerLaunchPlan(
   issue: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -228,6 +251,7 @@ function issueWorkerLaunchPlan(
       role: "worker" as const,
       target: { kind: "issue" as const, number },
       inputRevision: { head: baseHead },
+      requiredVerification: requiredVerificationContract(env, baseHead),
       intendedWorktreePath,
       resolveWorktreeHead: true,
       renderPrompt: ({ promiseFile, worktreePath, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
@@ -342,6 +366,8 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
       source.DEADLOOP_STATE_DIR ||
       path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
+    requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION || "",
+    fixtureMode: source.DEADLOOP_FIXTURE_MODE === "1",
     workerInstructions: source.DEADLOOP_WORKER_INSTRUCTIONS || "Read AGENTS.md and follow the issue contract.",
     workerAgent: source.DEADLOOP_WORKER_AGENT || "pi",
     workerModel: source.DEADLOOP_WORKER_MODEL || "",
@@ -362,7 +388,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runText([command, ...commandArgs]) });
   }
   const fixture = loadFixture(fixturePath);
-  const env = envConfig();
+  const env = envConfig(fixturePath ? { ...process.env, DEADLOOP_FIXTURE_MODE: "1" } : process.env);
   if (!env.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
 
   const cleanup = cleanupPlan(fixture);

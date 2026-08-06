@@ -22,6 +22,8 @@ Runtime state and locks live under `~/.pi/agent/deadloop/`. Per-launch prompts, 
 
 Worker, reviewer, and monitor prompts run the configured project check through `run-project-check.ts`. The wrapper temporarily isolates untracked `.deadloop` and `.pi-subagents` from recursive project tooling, then attempts to restore them after success, failure, timeout, or interruption. If restoration fails, it retains the quarantine and temporary worktree, records both paths, and exposes them through `/deadloop-doctor`. Tracked project files are never hidden; if either runtime directory contains a tracked file, validation fails closed instead.
 
+A Worker attempt stores its resolved required-verification contract in `attempt.json` before the Issue claim. Completion runs that fixed contract against the reported output commit and writes an authoritative record outside the worktree; the guarded push, dedicated PR creator, and success persistence each reject missing, failed, mismatched, empty, or stale-policy evidence. Agent-reported additional validations remain non-authoritative evidence.
+
 ## Commands
 
 ```text

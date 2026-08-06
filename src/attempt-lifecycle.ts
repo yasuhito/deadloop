@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import type { RequiredVerificationContract } from "./required-verification";
+
 export const ATTEMPT_RECORD_FILE = "attempt.json";
 
 export type AttemptRole = "worker" | "reviewer" | "review-repair" | "branch-update";
@@ -130,6 +132,7 @@ export type AttemptRecord = AttemptIdentity & {
   rootPaneId?: string;
   outputRevision?: string;
   autoMergePolicy?: boolean;
+  requiredVerification?: RequiredVerificationContract;
   abandonment?: AttemptAbandonment;
 };
 
@@ -142,6 +145,7 @@ export type PreparedAttemptInput = AttemptIdentity & {
   promptFile: string;
   promiseFile: string;
   autoMergePolicy?: boolean;
+  requiredVerification?: RequiredVerificationContract;
 };
 
 const SUCCESSFUL_PHASES: Exclude<AttemptPhase, "launch_failed" | "abandoned">[] = [
@@ -183,6 +187,36 @@ function parseRevision(value: unknown, name: string): InputRevision {
   const result: InputRevision = { head: commitSha(revision.head, `${name}.head`) };
   if (revision.base !== undefined) result.base = commitSha(revision.base, `${name}.base`);
   return result;
+}
+
+function parseRequiredVerification(value: unknown, required: boolean): RequiredVerificationContract | undefined {
+  if (value === undefined && !required) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail("requiredVerification must be an object");
+  const contract = value as Record<string, unknown>;
+  const source = contract.source;
+  if (!source || typeof source !== "object" || Array.isArray(source)) fail("requiredVerification.source must be an object");
+  const sourceValue = source as Record<string, unknown>;
+  if (sourceValue.kind !== "local" && sourceValue.kind !== "repo_policy") fail("requiredVerification.source.kind is invalid");
+  const command = nonEmptyString(contract.command, "requiredVerification.command");
+  const parsed: RequiredVerificationContract = {
+    repository: nonEmptyString(contract.repository, "requiredVerification.repository"),
+    command,
+    source: { kind: sourceValue.kind, location: nonEmptyString(sourceValue.location, "requiredVerification.source.location") },
+    baseRevision: commitSha(contract.baseRevision, "requiredVerification.baseRevision"),
+  };
+  if (contract.override !== undefined) {
+    if (!contract.override || typeof contract.override !== "object" || Array.isArray(contract.override)) fail("requiredVerification.override must be an object");
+    const override = contract.override as Record<string, unknown>;
+    const overrideSource = override.source;
+    if (!overrideSource || typeof overrideSource !== "object" || Array.isArray(overrideSource)) fail("requiredVerification.override.source must be an object");
+    const sourceRecord = overrideSource as Record<string, unknown>;
+    if (sourceRecord.kind !== "local" && sourceRecord.kind !== "repo_policy") fail("requiredVerification.override.source.kind is invalid");
+    parsed.override = {
+      source: { kind: sourceRecord.kind, location: nonEmptyString(sourceRecord.location, "requiredVerification.override.source.location") },
+      command: nonEmptyString(override.command, "requiredVerification.override.command"),
+    };
+  }
+  return parsed;
 }
 
 function parseAttemptRecord(value: unknown): AttemptRecord {
@@ -250,6 +284,9 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(record.autoMergePolicy === undefined
       ? {}
       : typeof record.autoMergePolicy === "boolean" ? { autoMergePolicy: record.autoMergePolicy } : fail("autoMergePolicy must be boolean")),
+    ...(parseRequiredVerification(record.requiredVerification, false)
+      ? { requiredVerification: parseRequiredVerification(record.requiredVerification, true) }
+      : {}),
     ...(abandonment ? { abandonment } : {}),
   };
 }
@@ -297,6 +334,7 @@ function assertRecordAdvance(current: AttemptRecord, next: AttemptRecord): void 
   for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy"] as const) {
     if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }
+  if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"] as const) {
     if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }

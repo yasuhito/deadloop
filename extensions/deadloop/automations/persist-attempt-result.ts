@@ -9,6 +9,12 @@ const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cj
 const { validatePromise } = require("./extract-worker-promise.ts");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
+const {
+  assertCurrentWorkerContract,
+  assertWorkerCompletionAuthorized,
+  readRequiredVerificationRecord,
+  workerRequiredVerificationPath,
+} = require("../../../src/worker-required-verification-runtime.cjs");
 
 type JsonObject = Record<string, any>;
 function parseArgs(argv: string[]) {
@@ -32,6 +38,11 @@ function persist(args: JsonObject) {
   if (validation.evidenceStrength !== "strong") return driverResult("done", "strong report is required", { driverAction: "result_not_persisted" });
   const report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
   if (report.status !== "complete" || !["worker", "branch-update"].includes(record.role)) return driverResult("done", "role result is not marker-eligible", { driverAction: "result_not_persisted" });
+  if (record.role === "worker") {
+    const current = assertCurrentWorkerContract(record, String(args.projectRepo));
+    const verification = readRequiredVerificationRecord(workerRequiredVerificationPath(attemptRecord));
+    assertWorkerCompletionAuthorized(record, report, verification, current);
+  }
   const project = { id: String(args.projectId), repoPath: path.resolve(String(args.projectRepo)), githubRepo: String(args.githubRepo), stateDir: path.resolve(String(args.stateDir)), enabledAt: Number(args.enabledAt) };
   return withEnabledDriverLock(project, (_enabled: unknown, recheck: () => void) => {
     let pr: JsonObject;

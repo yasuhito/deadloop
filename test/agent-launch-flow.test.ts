@@ -27,6 +27,12 @@ function input(root: string, role: "worker" | "reviewer" = "worker") {
     role,
     target: { kind: role === "worker" ? "issue" as const : "pull-request" as const, number },
     inputRevision: { head: "a".repeat(40) },
+    ...(role === "worker" ? { requiredVerification: {
+      repository: "owner/repo",
+      command: "npm test",
+      source: { kind: "repo_policy" as const, location: "deadloop.json" },
+      baseRevision: "a".repeat(40),
+    } } : {}),
     intendedWorktreePath: role === "worker" ? "/wt/worker" : "/wt/review",
     resolveWorktreeHead: role === "worker",
     renderPrompt: ({ promiseFile, worktreeHead }: { promiseFile: string; worktreeHead?: string }) =>
@@ -68,6 +74,14 @@ describe("0.7.5 エージェント起動フロー", () => {
       const ops = operations(root, "worker", []);
       const prepared = prepareAgentLaunchFlow(input(root), ops);
       expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).phase).toBe("prepared");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("最初の外部副作用より前に Worker の必須検証契約を固定する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const prepared = prepareAgentLaunchFlow(input(root), operations(root, "worker", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).requiredVerification.command).toBe("npm test");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

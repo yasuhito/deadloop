@@ -47,6 +47,7 @@ function workerFixture(): { record: AttemptRecord; report: any; github: any } {
   const record: AttemptRecord = {
     attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo",
     role: "worker", target: { kind: "issue", number: 12 }, inputRevision: { head: inputHead },
+    requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: inputHead },
     branch: "agent/issue-12", baseBranch: "origin/main", worktreePath: "/worktrees/issue-12",
     agentName: "dl-w-12-123456789abc", workspaceLabel: "Issue 12", promptFile: "/runs/1/prompt.md",
     promiseFile: "/runs/1/promise.json", phase: "agent_started", lastSuccessfulPhase: "agent_started",
@@ -79,7 +80,8 @@ function persistFixtureJournal(world: World, phase: "report_received" | "github_
   const source = world.record!;
   createPreparedAttempt(runDir, {
     attemptId: source.attemptId, launchUuid: source.launchUuid, project: source.project, repository: source.repository,
-    role: source.role, target: source.target, inputRevision: source.inputRevision, branch: source.branch,
+    role: source.role, target: source.target, inputRevision: source.inputRevision,
+    ...(source.requiredVerification ? { requiredVerification: source.requiredVerification } : {}), branch: source.branch,
     ...(source.baseBranch ? { baseBranch: source.baseBranch } : {}), worktreePath: source.worktreePath,
     agentName: source.agentName, workspaceLabel: source.workspaceLabel, promptFile: source.promptFile,
     promiseFile: source.promiseFile,
@@ -124,6 +126,7 @@ When("deadloop starts the agent", function (this: World) {
   const env = workerEnvironment({
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo",
     DEADLOOP_BASE_BRANCH: "origin/main", DEADLOOP_WORKTREE_ROOT: root, DEADLOOP_STATE_DIR: root,
+    DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: inputHead }),
   });
   this.result = launchIssueWorkerFlow({ number: 12, title: "one workspace" }, env, {
     mkdirSync: fs.mkdirSync,
@@ -146,6 +149,7 @@ Given("A Worker's worktree remains after its launch failure was abandoned with e
   createPreparedAttempt(runDir, {
     attemptId: "old-attempt", launchUuid: "old-launch", project: "demo", repository: "owner/repo",
     role: "worker", target: { kind: "issue", number: 12 }, inputRevision: { head: inputHead },
+    requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: inputHead },
     branch: "agent/issue-12-retry", baseBranch: "origin/main", worktreePath,
     agentName: "dl-w-12-old000000000", workspaceLabel: "old worker", promptFile: path.join(runDir, "prompt.md"),
     promiseFile: path.join(runDir, "promise.json"),
@@ -184,6 +188,7 @@ When("deadloop starts the requeued Worker", function (this: World) {
   const env = workerEnvironment({
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo",
     DEADLOOP_BASE_BRANCH: "origin/main", DEADLOOP_WORKTREE_ROOT: root, DEADLOOP_STATE_DIR: root,
+    DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: inputHead }),
   });
   this.result = launchIssueWorkerFlow({ number: 12, title: "renamed issue" }, env, {
     mkdirSync: fs.mkdirSync,
