@@ -69,6 +69,19 @@ describe("enablement required-verification records", () => {
     expect((await scenario.run({ ...scenario.contract, command: `${scenario.contract.command}; true` })).reused).toBe(false);
   });
 
+  it("reruns verification when the binding contradicts the persisted contract", async () => {
+    const scenario = fixture();
+    const result = await scenario.run();
+    const record = JSON.parse(fs.readFileSync(result.recordPath, "utf8"));
+    const contradictoryCommand = `${scenario.contract.command}; true`;
+    fs.writeFileSync(result.recordPath, `${JSON.stringify({
+      ...record,
+      binding: { ...record.binding, command: contradictoryCommand },
+    })}\n`);
+
+    expect((await scenario.run({ ...scenario.contract, command: contradictoryCommand })).reused).toBe(false);
+  });
+
   it("reruns verification when the source identity changes", async () => {
     const scenario = fixture();
     await scenario.run();

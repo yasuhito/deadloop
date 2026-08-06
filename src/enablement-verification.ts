@@ -117,15 +117,9 @@ function reusableSuccess(
     .sort((left, right) => String(right.record.startedAt || "").localeCompare(String(left.record.startedAt || "")));
 
   for (const { directory, record } of candidates) {
-    const recordedBinding = record.binding;
-    const actual = {
-      repository: recordedBinding?.repository ?? record.repository,
-      targetCommit: recordedBinding?.targetCommit ?? record.targetCommit,
-      command: recordedBinding?.command ?? record.contract?.command,
-      source: recordedBinding?.source ?? record.contract?.source,
-      baseRevision: recordedBinding?.baseRevision ?? record.contract?.baseRevision,
-    };
-    if (!isDeepStrictEqual(actual, expected)) continue;
+    if (!isDeepStrictEqual(record.binding, expected)) continue;
+    if (!isDeepStrictEqual(bindingFor(record.contract || {}), expected)) continue;
+    if (record.repository !== expected.repository || record.targetCommit !== expected.targetCommit) continue;
     if (
       record.attemptId !== path.basename(directory) || record.exitCode !== 0 || record.timedOut !== false
       || record.terminationReason !== undefined || typeof record.startedAt !== "string"

@@ -554,6 +554,29 @@ async function ownedWorktreeIntentObservation(): Promise<{
   return { ...(preparedJournal as { state?: string; repository?: string; primaryRepoPath?: string }), repoPath };
 }
 
+async function retainedVerificationDoctorObservation(): Promise<{
+  report: string;
+  journal: Record<string, string>;
+  journalPath: string;
+}> {
+  const { root, repoPath } = fixtureRepository();
+  writeConfig(root, repoPath);
+  const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.projects[0].checkCommand = "touch retained-by-verification";
+  writeFileSync(configPath, JSON.stringify(config));
+  let journalPath = "";
+  const extension = await loadExtension(root, {
+    beforeEnablementWorktreeCreate: async (value) => { journalPath = value; },
+  });
+  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+  const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+
+  await invoke(extension.commands.get("deadloop-doctor")!, repoPath);
+
+  return { report: extension.messages.at(-1) || "", journal, journalPath };
+}
+
 async function dependencySetupObservation(): Promise<{
   enabled: boolean;
   retentionReported: boolean;
@@ -875,32 +898,18 @@ describe("enablement command integration", () => {
     expect(JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome).toBe("passed");
   });
 
-  it("shows retained verification evidence and a confirmation command in doctor", async () => {
-    const { root, repoPath } = fixtureRepository();
-    writeConfig(root, repoPath);
-    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
-    config.projects[0].checkCommand = "touch retained-by-verification";
-    writeFileSync(configPath, JSON.stringify(config));
-    let journalPath = "";
-    const extension = await loadExtension(root, {
-      beforeEnablementWorktreeCreate: async (value) => { journalPath = value; },
-    });
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+  it.each([
+    ["temporary worktree path", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journal.worktreePath],
+    ["target revision", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journal.targetRevision],
+    ["journal path", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journalPath],
+    ["record path", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journal.recordPath],
+    ["log path", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journal.logPath],
+    ["confirmation command Git prefix", () => "git -C"],
+    ["confirmation command status arguments", () => "status --short --untracked-files=all"],
+  ] as const)("shows retained verification %s in doctor", async (_name, expectedValue) => {
+    const observation = await retainedVerificationDoctorObservation();
 
-    await invoke(extension.commands.get("deadloop-doctor")!, repoPath);
-
-    const report = extension.messages.at(-1) || "";
-    expect([
-      journal.worktreePath,
-      journal.targetRevision,
-      journalPath,
-      journal.recordPath,
-      journal.logPath,
-      "git -C",
-      "status --short --untracked-files=all",
-    ].every((value) => report.includes(value))).toBe(true);
+    expect(observation.report).toContain(expectedValue(observation));
   });
 
   it("registers the explicit launch-failed attempt abandonment command", async () => {
