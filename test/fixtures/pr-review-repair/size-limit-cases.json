@@ -1,0 +1,32 @@
+[
+  {
+    "name": "qorraq regression exceeds the per-finding and absolute limits",
+    "changedFileCount": 29,
+    "findingCount": 4,
+    "expectedAction": "human_required"
+  },
+  {
+    "name": "absolute limit blocks a repair that is proportionate to many findings",
+    "changedFileCount": 21,
+    "findingCount": 5,
+    "expectedAction": "human_required"
+  },
+  {
+    "name": "absolute boundary remains automatic",
+    "changedFileCount": 20,
+    "findingCount": 5,
+    "expectedAction": "push"
+  },
+  {
+    "name": "per-finding limit blocks a small but disproportionate repair",
+    "changedFileCount": 6,
+    "findingCount": 1,
+    "expectedAction": "human_required"
+  },
+  {
+    "name": "per-finding boundary remains automatic",
+    "changedFileCount": 5,
+    "findingCount": 1,
+    "expectedAction": "push"
+  }
+]

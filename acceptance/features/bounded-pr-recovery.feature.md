@@ -128,6 +128,24 @@ Handle review findings and conflicts safely without repeating the same change or
 * When The pull request head changes immediately before push
 * Then deadloop does not push to the branch
 
+## Scenario: Do not push a repair that changes too many files for its findings
+
+* Given A repair changes six files for one finding
+* When deadloop completes the repair
+* Then deadloop does not push to the branch
+
+## Scenario: Hand a repair that changes too many files to a human
+
+* Given A repair changes six files for one finding
+* When deadloop completes the repair
+* Then deadloop requires human review for the repair
+
+## Scenario: Push a repair whose changed-file count is within the limit
+
+* Given A repair changes five files for one finding
+* When deadloop completes the repair
+* Then deadloop pushes non-forcibly to the verified branch
+
 ## Scenario: Push a repair non-forcibly to only the verified existing branch
 
 * Given The pull request head selected for repair has been verified

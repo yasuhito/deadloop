@@ -222,8 +222,9 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
   }
 }
 
-function finalizerOps(commands: string[][], actualHead = head, isCrossRepository = false) {
+function finalizerOps(commands: string[][], actualHead = head, isCrossRepository = false, changedFileCount = 0) {
   return {
+    readRepairFindingCount: () => findings.length,
     assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
     run: (args: string[]) => {
       commands.push(args);
@@ -240,12 +241,16 @@ function finalizerOps(commands: string[][], actualHead = head, isCrossRepository
         };
       }
       if (args.includes("rev-parse")) return { status: 0, stdout: `${repairedHead}\n`, stderr: "" };
+      if (args.includes("diff")) {
+        const changedFiles = Array.from({ length: changedFileCount }, (_value, index) => `file-${index}.ts`);
+        return { status: 0, stdout: `${changedFiles.join("\0")}${changedFiles.length ? "\0" : ""}`, stderr: "" };
+      }
       return { status: 0, stdout: "", stderr: "" };
     },
   };
 }
 
-function repairFinalizer(commands: string[][], actualHead = head) {
+function repairFinalizer(commands: string[][], actualHead = head, changedFileCount = 0) {
   return finalizeReviewRepair(
     {
       repo: "/worktree",
@@ -260,7 +265,7 @@ function repairFinalizer(commands: string[][], actualHead = head) {
       enabledAt: 1,
       checkCommand: "npm test",
     },
-    finalizerOps(commands, actualHead),
+    finalizerOps(commands, actualHead, false, changedFileCount),
   );
 }
 
@@ -324,6 +329,14 @@ Given("The pull request head selected for repair has been verified", function (t
   this.case = "repair-finalize";
 });
 
+Given("A repair changes six files for one finding", function (this: RecoveryWorld) {
+  this.case = "oversized-repair";
+});
+
+Given("A repair changes five files for one finding", function (this: RecoveryWorld) {
+  this.case = "bounded-repair";
+});
+
 Given("The pull request head selected for conflict recovery has been verified", function (this: RecoveryWorld) {
   this.case = "branch-update-finalize";
 });
@@ -357,7 +370,8 @@ When("The pull request head changes immediately before push", function (this: Re
 
 When("deadloop completes the repair", function (this: RecoveryWorld) {
   this.commands = [];
-  this.result = repairFinalizer(this.commands);
+  const changedFileCount = this.case === "oversized-repair" ? 6 : this.case === "bounded-repair" ? 5 : 0;
+  this.result = repairFinalizer(this.commands, head, changedFileCount);
 });
 
 When("deadloop completes conflict recovery", function (this: RecoveryWorld) {
@@ -421,6 +435,10 @@ Then("deadloop does not start normal review", function (this: RecoveryWorld) {
 
 Then("deadloop does not push to the branch", function (this: RecoveryWorld) {
   assert.equal(this.commands?.some((command) => command.includes("push")), false);
+});
+
+Then("deadloop requires human review for the repair", function (this: RecoveryWorld) {
+  assert.equal(this.result?.reason, "repair_size_limit_exceeded");
 });
 
 Then("deadloop pushes non-forcibly to the verified branch", function (this: RecoveryWorld) {
