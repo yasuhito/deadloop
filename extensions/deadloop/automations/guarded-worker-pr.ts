@@ -84,8 +84,17 @@ function run(args: Args): number {
         if (!match) throw new Error("created Worker PR number was not returned");
         number = Number(match[1]);
       } else throw new Error("Worker branch must have zero or one open PR");
+      const observedBeforeLabel = gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefOid"], true);
+      if (String(observedBeforeLabel.headRefOid).toLowerCase() !== report.result.outputRevision.toLowerCase()) {
+        throw new Error("Worker PR head changed before the success label");
+      }
       recheck();
       gh(["pr", "edit", String(number), "-R", args.githubRepo, "--add-label", args.reviewLabel]);
+      const observedAfterLabel = gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "headRefOid"], true);
+      if (String(observedAfterLabel.headRefOid).toLowerCase() !== report.result.outputRevision.toLowerCase()) {
+        gh(["pr", "edit", String(number), "-R", args.githubRepo, "--remove-label", args.reviewLabel]);
+        throw new Error("Worker PR head changed while adding the success label; label removed");
+      }
       return 0;
     },
   );
