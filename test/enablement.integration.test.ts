@@ -626,7 +626,12 @@ describe("enablement command integration", () => {
       const aggregateCommand = JSON.parse(readFileSync(path.join(repoPath, "deadloop.json"), "utf8")).checkCommand;
       const command = `npm ci --ignore-scripts --no-audit --no-fund && ${aggregateCommand}`;
       const previousNestedCheck = process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK;
+      const previousMaxForks = process.env.VITEST_MAX_FORKS;
+      const previousMaxThreads = process.env.VITEST_MAX_THREADS;
       process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK = "1";
+      // Keep the nested full suite from starting a second process fleet alongside the outer suite in constrained CI runners.
+      process.env.VITEST_MAX_FORKS = "1";
+      process.env.VITEST_MAX_THREADS = "1";
       try {
         const result = await runEnablementVerification({
           stateDir: path.join(root, "state"),
@@ -646,6 +651,10 @@ describe("enablement command integration", () => {
       } finally {
         if (previousNestedCheck === undefined) delete process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK;
         else process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK = previousNestedCheck;
+        if (previousMaxForks === undefined) delete process.env.VITEST_MAX_FORKS;
+        else process.env.VITEST_MAX_FORKS = previousMaxForks;
+        if (previousMaxThreads === undefined) delete process.env.VITEST_MAX_THREADS;
+        else process.env.VITEST_MAX_THREADS = previousMaxThreads;
       }
     },
     10 * 60_000,
