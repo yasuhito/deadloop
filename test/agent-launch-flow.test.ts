@@ -111,6 +111,23 @@ describe("0.7.5 エージェント起動フロー", () => {
     )).toThrow("base commit changed");
   });
 
+  it("リダイレクトされたリモートでは Worker の要求状態を変更しない", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-redirected-remote-"));
+    try {
+      const repo = path.join(root, "repo"); const remote = path.join(root, "redirected.git");
+      execFileSync("git", ["init", "--bare", "--quiet", remote]); execFileSync("git", ["init", "--quiet", "-b", "main", repo]);
+      execFileSync("git", ["-C", repo, "config", "user.name", "Test"]); execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
+      writeFileSync(path.join(repo, "deadloop.json"), JSON.stringify({ checkCommand: "npm test" }));
+      execFileSync("git", ["-C", repo, "add", "."]); execFileSync("git", ["-C", repo, "commit", "--quiet", "-m", "base"]);
+      execFileSync("git", ["-C", repo, "remote", "add", "origin", remote]); execFileSync("git", ["-C", repo, "push", "--quiet", "-u", "origin", "main"]);
+      const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      const launchInput = { ...input(root), repoPath: repo, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head } };
+      prepareAgentLaunchFlow(launchInput, operations(root, "worker", []));
+
+      expect(() => assertPreparedWorkerContractCurrent(launchInput, { stateDir: root, repoPath: repo, configPath: "" }, "R_owner_repo")).toThrow("stale_policy");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("準備中にローカル検証方針が変わった Worker 起動を要求状態の変更前に拒否する", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-policy-"));
     try {

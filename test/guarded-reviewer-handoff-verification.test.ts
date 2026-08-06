@@ -8,28 +8,33 @@ const { assertCurrentHeadVerification } = require("../extensions/deadloop/automa
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-function evidence(role: "worker" | "reviewer" | "review-repair" | "branch-update") {
+function evidence(role: "worker" | "reviewer" | "review-repair" | "branch-update", checkCommand = "true") {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-handoff-verification-")); roots.push(root);
   const repo = path.join(root, "repo"); const remote = path.join(root, "remote.git"); const stateDir = path.join(root, "state"); const runDir = path.join(stateDir, "runs", "evidence");
   mkdirSync(repo); mkdirSync(runDir, { recursive: true }); execFileSync("git", ["init", "--bare", "--quiet", remote]); execFileSync("git", ["init", "--quiet", "-b", "main", repo]);
   execFileSync("git", ["-C", repo, "config", "user.name", "Test"]); execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
-  writeFileSync(path.join(repo, "deadloop.json"), '{"checkCommand":"true"}\n'); execFileSync("git", ["-C", repo, "add", "."]); execFileSync("git", ["-C", repo, "commit", "--quiet", "-m", "base"]);
+  writeFileSync(path.join(repo, "deadloop.json"), `${JSON.stringify({ checkCommand })}\n`); execFileSync("git", ["-C", repo, "add", "."]); execFileSync("git", ["-C", repo, "commit", "--quiet", "-m", "base"]);
   execFileSync("git", ["-C", repo, "remote", "add", "origin", remote]); execFileSync("git", ["-C", repo, "push", "--quiet", "origin", "main"]); const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const contract = { repository: "owner/repo", command: "true", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head };
+  const contract = { repository: "owner/repo", command: checkCommand, source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head };
   writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({ attemptId: "evidence", launchUuid: "launch", project: "demo", repository: "owner/repo", role, target: { kind: "pull-request", number: 24 }, inputRevision: { head }, requiredVerification: contract, branch: "agent/issue-1", baseBranch: "origin/main", worktreePath: repo, agentName: "dl-r-24-abcdef123456", workspaceLabel: role, promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"), phase: "agent_started", lastSuccessfulPhase: "agent_started", outputRevision: head }));
   writeFileSync(path.join(runDir, "promise.json"), JSON.stringify({ schemaVersion: 1, attemptId: "evidence", role, target: { repository: "owner/repo", kind: "pull-request", number: 24 }, inputRevision: { head }, status: "complete", summary: "done", result: { outputRevision: head }, evidence: { validations: ["check"] } }));
   writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { repository: "owner/repo", targetCommit: head, command: contract.command, source: contract.source, baseRevision: head }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "check.log") }));
   return { projectRepo: repo, githubRepo: "owner/repo", stateDir, enabledAt: 1, pr: "24", expectedHead: head, reviewPromise: "unused", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human" };
 }
 
-function transformedEvidence(role: "review-repair" | "branch-update") {
-  const fixture = evidence("worker"); const inputHead = fixture.expectedHead; const outputHead = role === "review-repair" ? "b".repeat(40) : "c".repeat(40);
+function transformedEvidence(role: "review-repair" | "branch-update", checkCommand = "true") {
+  const fixture = evidence("worker", checkCommand); const inputHead = fixture.expectedHead;
+  const transformedRepo = path.join(path.dirname(fixture.stateDir), `${role}-worktree`);
+  execFileSync("git", ["-C", fixture.projectRepo, "worktree", "add", "--quiet", "-b", `test-${role}`, transformedRepo, inputHead]);
+  writeFileSync(path.join(transformedRepo, `${role}.txt`), "transformed\n");
+  execFileSync("git", ["-C", transformedRepo, "add", "."]); execFileSync("git", ["-C", transformedRepo, "commit", "--quiet", "-m", role]);
+  const outputHead = execFileSync("git", ["-C", transformedRepo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const runDir = path.join(fixture.stateDir, "runs", role); mkdirSync(runDir);
   const attempt = JSON.parse(readFileSync(path.join(fixture.stateDir, "runs", "evidence", "attempt.json"), "utf8"));
-  Object.assign(attempt, { attemptId: role, launchUuid: role, role, target: { kind: "pull-request", number: 24 }, inputRevision: { head: inputHead, ...(role === "branch-update" ? { base: inputHead } : {}) }, agentName: `dl-${role}`, workspaceLabel: role, promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"), phase: "report_received", lastSuccessfulPhase: "report_received", outputRevision: outputHead });
+  Object.assign(attempt, { attemptId: role, launchUuid: role, role, target: { kind: "pull-request", number: 24 }, inputRevision: { head: inputHead, ...(role === "branch-update" ? { base: inputHead } : {}) }, worktreePath: transformedRepo, agentName: `dl-${role}`, workspaceLabel: role, promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"), phase: "report_received", lastSuccessfulPhase: "report_received", outputRevision: outputHead });
   delete attempt.requiredVerification; writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt));
   const outcome = role === "review-repair" ? "repair_pushed" : "branch_update_pushed";
-  const finalizer = { action: "pushed", reason: outcome, originalHeadOid: inputHead, ...(role === "branch-update" ? { baseHeadOid: inputHead } : {}), headOid: outputHead, checks: [{ command: "true", result: "passed" }] };
+  const finalizer = { action: "pushed", reason: outcome, originalHeadOid: inputHead, ...(role === "branch-update" ? { baseHeadOid: inputHead } : {}), headOid: outputHead, checks: [{ command: checkCommand, result: "passed" }] };
   writeFileSync(attempt.promiseFile, JSON.stringify({ schemaVersion: 1, attemptId: role, role, target: { repository: "owner/repo", kind: "pull-request", number: 24 }, inputRevision: attempt.inputRevision, status: "complete", summary: "verified", result: { outcome, outputRevision: outputHead, ...(role === "review-repair" ? { repairs: [{ title: "finding", summary: "fixed", paths: ["src/a.ts"] }] } : {}) }, evidence: { finalizer, validations: finalizer.checks } }));
   writeFileSync(path.join(runDir, "finalizer-result.json"), JSON.stringify(finalizer));
   fixture.expectedHead = outputHead; return fixture;
@@ -56,7 +61,7 @@ describe("human-handoff verification provenance", () => {
     expect(() => assertCurrentHeadVerification(fixture)).toThrow("required verification passed record is missing");
   });
 
-  it.each(["review-repair", "branch-update"] as const)("authorizes a %s head through its host finalizer record and Worker provenance", (role) => {
+  it.each(["review-repair", "branch-update"] as const)("authorizes a %s head through fresh host verification and Worker provenance", (role) => {
     expect(() => assertCurrentHeadVerification(transformedEvidence(role))).not.toThrow();
   });
 
@@ -64,7 +69,15 @@ describe("human-handoff verification provenance", () => {
     const fixture = transformedEvidence("review-repair");
     rmSync(path.join(fixture.stateDir, "runs", "review-repair", "finalizer-result.json"));
 
-    expect(() => assertCurrentHeadVerification(fixture)).toThrow("host finalizer verification record");
+    expect(() => assertCurrentHeadVerification(fixture)).toThrow("finalizer receipt");
+  });
+
+  it("rejects an agent-written finalizer receipt when fresh host verification fails", () => {
+    const fixture = transformedEvidence("review-repair");
+    const attempt = JSON.parse(readFileSync(path.join(fixture.stateDir, "runs", "review-repair", "attempt.json"), "utf8"));
+    writeFileSync(path.join(attempt.worktreePath, "agent-forged.txt"), "not verified\n");
+
+    expect(() => assertCurrentHeadVerification(fixture)).toThrow("fresh host verification failed");
   });
 
   it.each([

@@ -119,6 +119,7 @@ describe("selected attempt workspace completion", () => {
     const attemptRecord = path.join(runDir, "attempt.json");
     writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { ...contract, targetCommit: baseRevision }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "required-verification.log") }));
 
+    expect(() => assertWorkerPersistenceAuthorized(attempt, report, { attemptRecord, projectRepo: checkout, stateDir }, undefined, "R_owner_repo")).toThrow("stale_policy");
     expect(() => assertWorkerPersistenceAuthorized(attempt, report, { attemptRecord, projectRepo: checkout, stateDir })).toThrow("host execution authenticity");
   });
 

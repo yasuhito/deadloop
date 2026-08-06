@@ -297,11 +297,11 @@ function assertWorkerLaunchBaseCurrent(
   }
 }
 
-function assertPreparedWorkerContractCurrent(planInput: Record<string, any>, env: ReturnType<typeof envConfig>): void {
+function assertPreparedWorkerContractCurrent(planInput: Record<string, any>, env: ReturnType<typeof envConfig>, repositoryId?: string): void {
   const runDir = path.join(env.stateDir, "runs", path.basename(String(planInput.uuid)));
   const attempt = readAttemptRecord(runDir);
   try {
-    assertCurrentWorkerContract(attempt, env.repoPath, env.configPath || path.join(env.stateDir, "projects.json"));
+    assertCurrentWorkerContract(attempt, env.repoPath, env.configPath || path.join(env.stateDir, "projects.json"), repositoryId);
   } catch (error) {
     throw new StaleLaunchError(error instanceof Error ? error.message : String(error));
   }
@@ -355,8 +355,8 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   const runner = herdrRunner();
   const launch = withEnabledDriverLaunch(
     env,
-    (recheck: () => void) => {
-      assertPreparedWorkerContractCurrent(plan.input, env);
+    (recheck: () => void, enabled: { githubRepositoryId?: string }) => {
+      assertPreparedWorkerContractCurrent(plan.input, env, enabled.githubRepositoryId);
       githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel });
     },
     (recheck: () => void) => launchAgentFlow(

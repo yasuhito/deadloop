@@ -14,6 +14,8 @@ const {
   workerRequiredVerificationPath,
 } = require("../../../src/worker-required-verification-runtime.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
+const { createCommandRunner } = require("../../../src/automation-driver-kit.ts");
+const { assertWorktreeBelongsToProject } = require("../../../src/attempt-project-confinement.cjs");
 
 type Args = {
   projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number;
@@ -69,6 +71,43 @@ function readJsonFile(file: string, description: string): Record<string, any> {
     throw new Error(`${description} is missing, unreadable, or malformed`, { cause: error });
   }
 }
+function assertFreshTransformedHeadVerification(
+  args: Args,
+  attempt: Record<string, any>,
+  attemptRecord: string,
+  head: string,
+  command: string,
+): void {
+  try {
+    const runner = createCommandRunner();
+    const confinement = assertWorktreeBelongsToProject(runner, attempt, {
+      attemptRecord,
+      projectId: attempt.project,
+      projectRepo: args.projectRepo,
+      githubRepo: args.githubRepo,
+      stateDir: args.stateDir,
+    });
+    const assertCleanHead = () => {
+      const currentHead = runner.runText(["git", "-C", confinement.worktreePath, "rev-parse", "--verify", "HEAD^{commit}"]).trim();
+      if (currentHead.toLowerCase() !== head.toLowerCase()) throw new Error("transformed worktree HEAD differs from the handoff head");
+      if (runner.runText(["git", "-C", confinement.worktreePath, "status", "--porcelain", "--untracked-files=all"]).trim()) {
+        throw new Error("transformed worktree is not clean");
+      }
+    };
+    assertCleanHead();
+    const check = spawnSync(process.execPath, [
+      path.join(__dirname, "run-project-check.ts"),
+      "--cwd", confinement.worktreePath,
+      "--timeout-ms", String(10 * 60_000),
+      "--command", command,
+      "--quarantine-root", path.join(args.stateDir, "check-quarantine"),
+    ], { encoding: "utf8", timeout: 11 * 60_000, killSignal: "SIGKILL" });
+    if (check.status !== 0) throw new Error(String(check.stderr || check.stdout || "project check failed").trim());
+    assertCleanHead();
+  } catch (error) {
+    throw new Error(`fresh host verification failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+}
 function assertCurrentHeadVerification(args: Args, repositoryId?: string): void {
   const runsDir = path.join(args.stateDir, "runs");
   let entries: import("node:fs").Dirent[];
@@ -116,14 +155,15 @@ function assertCurrentHeadVerification(args: Args, repositoryId?: string): void 
       || String(report.result?.outputRevision || "").toLowerCase() !== normalizedHead) {
       throw new Error("current-head verification completion report is not a successful bound push");
     }
-    const receipt = readJsonFile(path.join(path.dirname(attempt.promiseFile), "finalizer-result.json"), "host finalizer verification record");
+    const receipt = readJsonFile(path.join(path.dirname(attempt.promiseFile), "finalizer-result.json"), "finalizer receipt");
     const checks = receipt.checks;
     if (receipt.action !== "pushed" || receipt.reason !== expectedOutcome
       || String(receipt.originalHeadOid || "").toLowerCase() !== String(attempt.inputRevision?.head || "").toLowerCase()
       || String(receipt.headOid || "").toLowerCase() !== normalizedHead
       || !Array.isArray(checks) || checks.length !== 1 || checks[0]?.result !== "passed" || checks[0]?.command !== current.command) {
-      throw new Error("host finalizer verification record does not match the trusted contract and current head");
+      throw new Error("finalizer receipt does not match the trusted contract and current head");
     }
+    assertFreshTransformedHeadVerification(args, attempt, attemptRecord, normalizedHead, current.command);
     return current;
   };
 

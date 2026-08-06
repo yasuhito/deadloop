@@ -165,10 +165,11 @@ function assertWorkerPersistenceAuthorized(
   record: AttemptRecord,
   report: CompletionReportV1,
   args: JsonObject,
-  currentContract: (record: AttemptRecord, projectRepo: string, localConfigPath?: string) => unknown = assertCurrentWorkerContract,
+  currentContract: (record: AttemptRecord, projectRepo: string, localConfigPath?: string, repositoryId?: string) => unknown = assertCurrentWorkerContract,
+  repositoryId: string | undefined = args.githubRepositoryId,
 ): void {
   const localConfigPath = process.env.DEADLOOP_CONFIG || path.join(String(args.stateDir), "projects.json");
-  const current = currentContract(record, String(args.projectRepo), localConfigPath);
+  const current = currentContract(record, String(args.projectRepo), localConfigPath, repositoryId);
   const verification = readRequiredVerificationRecord(workerRequiredVerificationPath(String(args.attemptRecord)));
   assertWorkerCompletionAuthorized(record, report, verification, current);
 }
@@ -371,7 +372,8 @@ async function complete(args: JsonObject) {
     stateDir: path.resolve(String(args.stateDir)),
     enabledAt: Number(args.enabledAt),
   };
-  return withEnabledDriverLock(project, (_enabled: unknown, recheck: () => void) => completeLocked(args, commandRunner, recheck));
+  return withEnabledDriverLock(project, (enabled: { githubRepositoryId?: string }, recheck: () => void) =>
+    completeLocked({ ...args, githubRepositoryId: enabled.githubRepositoryId }, commandRunner, recheck));
 }
 
 function main(): void {
