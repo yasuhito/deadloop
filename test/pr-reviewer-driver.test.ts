@@ -78,6 +78,10 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("merge-conflict.json").driverAction).toBe("branch_update_monitor_request");
   });
 
+  it("does not launch a reviewer for a conflicting head", () => {
+    expect(runDriverFixture("merge-conflict.json").launch.reviewerName).toBeUndefined();
+  });
+
   it("persists branch-update monitor input as a generation-bound handoff", () => {
     expect(runDriverFixture("merge-conflict.json").monitorHandoff.kind).toBe("branch-update");
   });
