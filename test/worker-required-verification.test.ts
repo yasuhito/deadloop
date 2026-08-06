@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -50,6 +50,14 @@ const report: CompletionReportV1 = {
   result: { outputRevision: outputHead },
   evidence: { validations: ["npm run check passed"] },
 };
+function authenticatedAttempt<T extends AttemptRecord>(value: T, root: string): T {
+  const runDir = path.join(root, "state", "runs", value.attemptId);
+  mkdirSync(runDir, { recursive: true });
+  const authenticated = { ...value, promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json") };
+  runtime.writeWorkerContractSnapshot(runDir, authenticated);
+  return authenticated;
+}
+
 const verification: RequiredVerificationRecord = {
   version: 1,
   binding: {
@@ -123,7 +131,7 @@ describe("Worker required-verification completion gate", () => {
       execFileSync("git", ["clone", "--quiet", remote, checkout]);
       const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
       writeFileSync(configFile, JSON.stringify({ projects: [{ id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run local-check" }] }));
-      const fixedAttempt = { ...attempt, requiredVerification: { ...contract, baseRevision } };
+      const fixedAttempt = authenticatedAttempt({ ...attempt, requiredVerification: { ...contract, baseRevision } }, root);
       expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout, configFile)).toThrow("stale_policy");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
@@ -146,7 +154,7 @@ describe("Worker required-verification completion gate", () => {
         { id: "alias", githubRepo: attempt.repository, checkCommand: "npm run stricter-check" },
         { id: attempt.project, githubRepo: attempt.repository, checkCommand: "npm run active-check" },
       ] }));
-      const fixedAttempt = { ...attempt, requiredVerification: { repository: attempt.repository, command: "npm run active-check", source: { kind: "local", location: `${activeConfig}#project=${attempt.project}` }, baseRevision } };
+      const fixedAttempt = authenticatedAttempt({ ...attempt, requiredVerification: { repository: attempt.repository, command: "npm run active-check", source: { kind: "local", location: `${activeConfig}#project=${attempt.project}` }, baseRevision } }, root);
       let exactMatched = true; let ambiguousRejected = false;
       try { runtime.assertCurrentWorkerContract(fixedAttempt, checkout, activeConfig); } catch { exactMatched = false; }
       writeFileSync(activeConfig, JSON.stringify({ projects: [
@@ -173,8 +181,8 @@ describe("Worker required-verification completion gate", () => {
       const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
       writeFileSync(configFile, JSON.stringify({ projects: [{ githubRepo: attempt.repository, checkCommand: contract.command }] }));
       const project = "octo-demo";
-      const fixedContract = { repository: attempt.repository, command: contract.command, source: { kind: "local", location: `${configFile}#project=${project}` }, baseRevision };
-      const fixedAttempt = { ...attempt, project, requiredVerification: fixedContract };
+      const fixedContract = { repository: attempt.repository, command: contract.command, source: { kind: "local" as const, location: `${configFile}#project=${project}` }, baseRevision };
+      const fixedAttempt = authenticatedAttempt({ ...attempt, project, requiredVerification: fixedContract }, root);
 
       expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout, configFile)).not.toThrow();
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -194,8 +202,8 @@ describe("Worker required-verification completion gate", () => {
       const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
       writeFileSync(configFile, JSON.stringify({ projects: [{ id: "Demo Project", githubRepo: attempt.repository, checkCommand: contract.command }] }));
       const project = "demo-project";
-      const fixedContract = { repository: attempt.repository, command: contract.command, source: { kind: "local", location: `${configFile}#project=${project}` }, baseRevision };
-      const fixedAttempt = { ...attempt, project, requiredVerification: fixedContract };
+      const fixedContract = { repository: attempt.repository, command: contract.command, source: { kind: "local" as const, location: `${configFile}#project=${project}` }, baseRevision };
+      const fixedAttempt = authenticatedAttempt({ ...attempt, project, requiredVerification: fixedContract }, root);
 
       expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout, configFile)).not.toThrow();
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -213,7 +221,7 @@ describe("Worker required-verification completion gate", () => {
       execFileSync("git", ["-C", seed, "remote", "add", "origin", remote]); execFileSync("git", ["-C", seed, "push", "--quiet", "-u", "origin", "main"]);
       execFileSync("git", ["clone", "--quiet", "-b", "main", remote, checkout]);
       const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "main"], { encoding: "utf8" }).trim();
-      const fixedAttempt = { ...attempt, baseBranch: "main", requiredVerification: { ...contract, baseRevision } };
+      const fixedAttempt = authenticatedAttempt({ ...attempt, baseBranch: "main", requiredVerification: { ...contract, baseRevision } }, root);
 
       expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout)).not.toThrow();
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -226,7 +234,7 @@ describe("Worker required-verification completion gate", () => {
       execFileSync("git", ["init", "--bare", "--quiet", oldRemote]);
       execFileSync("git", ["clone", "--quiet", oldRemote, checkout]);
       execFileSync("git", ["-C", checkout, "remote", "set-url", "--push", "origin", "https://github.com/octo/demo.git"]);
-      const fixedAttempt = { ...attempt, baseBranch: "origin/main" };
+      const fixedAttempt = authenticatedAttempt({ ...attempt, baseBranch: "origin/main" }, root);
 
       expect(() => runtime.assertCurrentWorkerContract(fixedAttempt, checkout, undefined, "R_demo")).toThrow("trusted fetch source is not GitHub");
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -246,7 +254,7 @@ describe("Worker required-verification completion gate", () => {
       const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/release"], { encoding: "utf8" }).trim();
       writeFileSync(path.join(seed, "deadloop.json"), JSON.stringify({ checkCommand: "npm run stricter-check" }));
       execFileSync("git", ["-C", seed, "commit", "--quiet", "-am", "stricter policy"]); execFileSync("git", ["-C", seed, "push", "--quiet"]);
-      const staleAttempt = { ...attempt, baseBranch: "origin/release", requiredVerification: { ...contract, baseRevision } };
+      const staleAttempt = authenticatedAttempt({ ...attempt, baseBranch: "origin/release", requiredVerification: { ...contract, baseRevision } }, root);
       expect(() => runtime.assertCurrentWorkerContract(staleAttempt, checkout)).toThrow("stale_policy");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });

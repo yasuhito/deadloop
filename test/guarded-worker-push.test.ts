@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.ts");
+const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 const roots: string[] = [];
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
@@ -31,6 +32,7 @@ function fixture(checkCommand = "true") {
   const contract = { repository: "owner/repo", command: checkCommand, source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: base };
   const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head: base }, requiredVerification: contract, branch: "agent/issue-1", baseBranch: "origin/main", worktreePath: repo, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"), phase: "agent_started", lastSuccessfulPhase: "agent_started" };
   const report = { schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head: base }, status: "complete", summary: "Implemented and validated.", result: { outputRevision: output }, evidence: { validations: ["extra check passed"] } };
+  writeWorkerContractSnapshot(runDir, attempt);
   writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt)); writeFileSync(path.join(runDir, "promise.json"), JSON.stringify(report));
   writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { repository: "owner/repo", targetCommit: output, command: checkCommand, source: contract.source, baseRevision: base }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "check.log") }));
   writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{ repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1, firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }] }));
@@ -71,6 +73,14 @@ afterEach(() => {
 
 describe("verified Worker push boundary", () => {
   it("pushes the immutable verified revision", () => { const f = fixture(); runGuardedPush(f.args, f.ops); expect(f.pushedRef()).toBe(`${f.output}:refs/heads/agent/issue-1`); });
+  it("rejects direct replacement of the launched contract before push", () => {
+    const f = fixture();
+    const replaced = JSON.parse(readFileSync(f.attempt, "utf8"));
+    replaced.requiredVerification.command = "false";
+    writeFileSync(f.attempt, JSON.stringify(replaced));
+    try { runGuardedPush(f.args, f.ops); } catch {}
+    expect(f.pushedRef()).toBe("");
+  });
   it("rejects a missing passed record before push", () => { const f = fixture(); rmSync(f.verification); expect(() => runGuardedPush(f.args, f.ops)).toThrow("record is missing"); });
   it("rejects a forged passed record when the fixed command fails", () => { const f = fixture("false"); expect(() => runGuardedPush(f.args, f.ops)).toThrow("fresh required verification failed"); });
   it("persists a failed gate-time verification record", () => {

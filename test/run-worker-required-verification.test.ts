@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const { assertCleanOutput, run, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
 const { inspectUnresolvedProjectCheckFailures } = require("../src/project-check.ts");
+const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 const roots: string[] = [];
 function verificationAttempt() {
   const fixture = repository();
@@ -16,7 +17,9 @@ function verificationAttempt() {
   execFileSync("git", ["-C", fixture.root, "remote", "add", "trusted", trusted]); execFileSync("git", ["-C", fixture.root, "push", "--quiet", "trusted", "HEAD:main"]);
   const head = execFileSync("git", ["-C", fixture.root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const promiseFile = path.join(runDir, "promise.json");
-  writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({ attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command: "true", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head }, branch: "agent/issue-1", baseBranch: "trusted/main", worktreePath: fixture.root, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile, phase: "agent_started", lastSuccessfulPhase: "agent_started" }));
+  const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command: "true", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head }, branch: "agent/issue-1", baseBranch: "trusted/main", worktreePath: fixture.root, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile, phase: "agent_started", lastSuccessfulPhase: "agent_started" };
+  writeWorkerContractSnapshot(runDir, attempt);
+  writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt));
   writeFileSync(promiseFile, JSON.stringify({ schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head }, status: "complete", summary: "done", result: { outputRevision: head }, evidence: { validations: ["additional check"] } }));
   return { args: { attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: fixture.root, githubRepo: "owner/repo", stateDir, enabledAt: 1, worktree: fixture.root, quarantineRoot: path.join(stateDir, "check-quarantine") }, record: path.join(runDir, "required-verification.json"), log: path.join(runDir, "required-verification.log"), root: fixture.root, head };
 }
@@ -96,6 +99,17 @@ describe("Worker required-verification checkout binding", () => {
     }, () => ({}));
 
     expect(invocations).toBe(1);
+  });
+
+  it("rejects direct replacement of the attempt-local contract after launch", async () => {
+    const fixture = verificationAttempt();
+    const attemptFile = fixture.args.attemptRecord;
+    const replaced = JSON.parse(readFileSync(attemptFile, "utf8"));
+    replaced.requiredVerification.command = "false";
+    writeFileSync(attemptFile, JSON.stringify(replaced));
+
+    await expect(run(fixture.args, undefined, async () => ({ check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } }), () => ({})))
+      .rejects.toThrow("authenticated launch snapshot");
   });
 
   it("rejects policy changes made while required verification is running", async () => {

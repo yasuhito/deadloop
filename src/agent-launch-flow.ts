@@ -9,6 +9,7 @@ const {
 } = require("./attempt-lifecycle-runtime.cjs");
 const { deriveHerdr075AgentName } = require("./herdr-agent-name.cjs");
 const { createHerdrRunner } = require("./herdr-runner.ts");
+const { writeWorkerContractSnapshot } = require("./worker-required-verification-runtime.cjs");
 
 import type { AttemptRecord, AttemptRole, AttemptTarget, InputRevision, PreparedAttemptInput } from "./attempt-lifecycle";
 import type { RequiredVerificationContract } from "./required-verification";
@@ -179,10 +180,12 @@ function prepareAgentLaunchFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlo
     if (existing.phase !== "prepared" && existing.phase !== "github_claimed") {
       throw new Error(`attempt phase ${existing.phase} cannot resume launch preparation`);
     }
+    writeWorkerContractSnapshot(prepared.runDir, expected);
     return prepared;
   } catch (error) {
     if (error instanceof Error && !error.message.startsWith("Attempt record is missing:")) throw error;
   }
+  writeWorkerContractSnapshot(prepared.runDir, expected);
   createPreparedAttempt(prepared.runDir, expected);
   if (!file) throw new Error("attempt record path is unavailable");
   return prepared;

@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const ATTEMPT_RECORD_FILE = "attempt.json";
+const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
 const SUCCESSFUL_PHASES = ["prepared", "github_claimed", "workspace_opened", "agent_started", "report_received", "github_persisted", "workspace_closed"];
 const ROLES = new Set(["worker", "reviewer", "review-repair", "branch-update"]);
 const NEXT = { prepared: "github_claimed", github_claimed: "workspace_opened", workspace_opened: "agent_started", agent_started: "report_received", report_received: "github_persisted", github_persisted: "workspace_closed" };
@@ -84,7 +85,11 @@ function parseAttemptRecord(value) {
 function readAttemptRecord(runDir) {
   const file = attemptRecordPath(runDir);
   if (!fs.existsSync(file)) throw new Error(`Attempt record is missing: ${file}`);
-  try { return parseAttemptRecord(JSON.parse(fs.readFileSync(file, "utf8"))); }
+  try {
+    const record = parseAttemptRecord(JSON.parse(fs.readFileSync(file, "utf8")));
+    Object.defineProperty(record, ATTEMPT_RUN_DIR, { value: path.resolve(runDir), enumerable: false });
+    return record;
+  }
   catch (error) { if (String(error.message).startsWith("Invalid attempt record:")) throw error; throw new Error(`Invalid attempt record: malformed JSON at ${file}`, { cause: error }); }
 }
 function sameIdentity(left, right) {

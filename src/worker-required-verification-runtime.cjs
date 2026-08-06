@@ -6,6 +6,8 @@ const { isDeepStrictEqual } = require("node:util");
 const WORKER_REQUIRED_VERIFICATION_FILE = "required-verification.json";
 const authenticatedRecords = new WeakSet();
 const HOST_VERIFICATION_EVIDENCE_DIRECTORY = "required-verification-evidence";
+const HOST_WORKER_CONTRACT_DIRECTORY = "worker-contract-snapshots";
+const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
 function nonEmpty(value) { return typeof value === "string" && Boolean(value.trim()); }
 function validSha(value) { return nonEmpty(value) && /^[0-9a-f]{40}$/i.test(value); }
 function sanitizeId(value) {
@@ -22,6 +24,59 @@ function requiredVerificationBinding(contract, targetCommit) {
   return { repository: contract.repository, targetCommit, command: contract.command, source: contract.source, baseRevision: contract.baseRevision };
 }
 function workerRequiredVerificationPath(attemptRecordFile) { return path.join(path.dirname(attemptRecordFile), WORKER_REQUIRED_VERIFICATION_FILE); }
+function workerContractSnapshotPath(runDir) {
+  const stateDir = path.dirname(path.dirname(runDir));
+  const attemptKey = crypto.createHash("sha256").update(path.resolve(runDir)).digest("hex");
+  return path.join(stateDir, HOST_WORKER_CONTRACT_DIRECTORY, `${attemptKey}.json`);
+}
+function workerContractSnapshot(attempt) {
+  assertContract(attempt.requiredVerification);
+  return {
+    version: 1,
+    identity: {
+      attemptId: attempt.attemptId,
+      launchUuid: attempt.launchUuid,
+      project: attempt.project,
+      repository: attempt.repository,
+      role: attempt.role,
+      target: attempt.target,
+      inputRevision: attempt.inputRevision,
+    },
+    contract: attempt.requiredVerification,
+  };
+}
+function writeWorkerContractSnapshot(runDir, attempt) {
+  if (!attempt.requiredVerification) return;
+  const trustedRunDir = path.resolve(runDir);
+  if (attempt[ATTEMPT_RUN_DIR] === undefined) Object.defineProperty(attempt, ATTEMPT_RUN_DIR, { value: trustedRunDir, enumerable: false });
+  if (attempt[ATTEMPT_RUN_DIR] !== trustedRunDir) throw new Error("required verification launch contract snapshot attempt location is invalid");
+  const file = workerContractSnapshotPath(trustedRunDir); const snapshot = workerContractSnapshot(attempt);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  try {
+    const descriptor = fs.openSync(file, "wx", 0o600);
+    try { fs.writeFileSync(descriptor, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8"); fs.fsyncSync(descriptor); }
+    finally { fs.closeSync(descriptor); }
+    fsyncDirectory(path.dirname(file));
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    let existing; let stat;
+    try { stat = fs.lstatSync(file); existing = JSON.parse(fs.readFileSync(file, "utf8")); } catch { throw new Error("required verification launch contract snapshot is invalid"); }
+    if (!stat.isFile() || stat.isSymbolicLink() || !isDeepStrictEqual(existing, snapshot)) throw new Error("required verification launch contract snapshot does not match this attempt");
+  }
+}
+function readWorkerContractSnapshot(attempt) {
+  const runDir = attempt[ATTEMPT_RUN_DIR];
+  if (!nonEmpty(runDir) || path.dirname(attempt.promiseFile) !== runDir) throw new Error("required verification launch contract snapshot attempt location is invalid");
+  const file = workerContractSnapshotPath(runDir);
+  let snapshot; let stat;
+  try { stat = fs.lstatSync(file); snapshot = JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch { throw new Error("required verification launch contract snapshot is missing or invalid"); }
+  const expected = workerContractSnapshot(attempt);
+  if (!stat.isFile() || stat.isSymbolicLink() || !isDeepStrictEqual(snapshot, expected)) {
+    throw new Error("required verification blocked: stale_policy; attempt contract differs from the authenticated launch snapshot");
+  }
+  return snapshot.contract;
+}
 function cleanWorkerOutput(worktree, outputRevision) {
   if (git(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]).toLowerCase() !== outputRevision.toLowerCase()) return false;
   if (git(worktree, ["ls-files", "-v"]).split(/\r?\n/).some((line) => /^[a-zS]/.test(line))) return false;
@@ -116,7 +171,7 @@ function authenticatedFetchUrl(projectRepo, remote, repository, repositoryId) {
   return urls[0];
 }
 function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repositoryId) {
-  assertContract(attempt.requiredVerification); const contract = attempt.requiredVerification; const baseBranch = attempt.baseBranch || "origin/main";
+  const contract = readWorkerContractSnapshot(attempt); const baseBranch = attempt.baseBranch || "origin/main";
   const remoteRef = baseBranch.startsWith("refs/remotes/") ? baseBranch.slice("refs/remotes/".length) : baseBranch;
   const separator = remoteRef.indexOf("/");
   const remotes = new Set(git(projectRepo, ["remote"]).split(/\r?\n/).filter(Boolean));
@@ -203,4 +258,4 @@ function assertWorkerCompletionAuthorized(attempt, report, record, currentContra
   }
   return { outputRevision: report.result.outputRevision, record };
 }
-module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertWorkerCompletionAuthorized, executeAndRecordGateVerification, readRequiredVerificationRecord, requiredVerificationBinding, workerRequiredVerificationPath, writeRequiredVerificationRecord };
+module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertWorkerCompletionAuthorized, executeAndRecordGateVerification, readRequiredVerificationRecord, readWorkerContractSnapshot, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };
