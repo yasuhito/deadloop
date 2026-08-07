@@ -215,14 +215,15 @@ Review binding:
 ${renderPromisePollingRules(input)}
 
 Completion handling:
-- Read the validated promise payload. Only an explicit head-bound \`outcome=approved\` result may enter the automatic merge path; legacy complete promises may be handed to a human but cannot authorize a merge.
+- Read the validated promise payload. Only an explicit head-bound V1 \`outcome=approved\` result may enter approved handoff or automatic merge processing.
+- Legacy complete promises are inspection-only evidence: do not dispatch, comment, change labels, or report successful handoff for them.
 - A successful review with actionable defects is status=complete, outcome=changes_requested, never status=blocked.
 - For outcome=approved, first run the fixed, attempt-bound required verification exactly once: \`${verifyApproval}\`. A missing, failed, stale-head, or stale-policy record must not enter approved handoff or merge processing. Agent-reported \`evidence.validations\` remains display-only additional evidence.
-- For every validated completion, including approved and legacy complete promises, run the deterministic dispatcher so it can record the public review result exactly once:
+- For every validated V1 completion, run the deterministic dispatcher so it can record the public review result exactly once:
   \`${renderReviewerDispatcherCommand(input)}\`
 - Follow the dispatcher's returned repair or human-block action. When it returns driverAction=review_approved, continue the approved path below; do not stop merely because comment recording is done.
 - The dispatcher keeps ${input.reviewLabel} and ${input.reviewingLabel} during repair. It adds ${input.blockedLabel} only for human-required or bounded failure paths.
-- For outcome=approved or a legacy complete promise, re-check GitHub PR state, reviews, and checks before changing labels.
+- For outcome=approved, re-check GitHub PR state, reviews, and checks before changing labels.
 - Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork. A local fallback may support human handoff, but it does not authorize automatic merge while GitHub reports missing, pending, failed, or ambiguous checks.
 - The deterministic policy for this monitor is \`autoMerge=${input.autoMerge ? "true" : "false"}\`; do not infer or change it during monitoring or restart cleanup.
 - If autoMerge=false, never merge; hand off only by running exactly \`${guardedHandoff}\`. This operation revalidates the live head, current policy, and authenticated host verification while holding the mutation lock immediately before replacing review workflow labels with exactly \`${input.humanLabel}\`.

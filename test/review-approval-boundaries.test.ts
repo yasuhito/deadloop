@@ -18,39 +18,58 @@ const args = {
   humanLabel: "ready-for-human",
 };
 
-function handoffMutationCount(options: { verificationError?: string; policyChanges?: boolean; headChangesDuringAuthorization?: boolean }): number {
+function runHandoff(options: {
+  verificationError?: string;
+  policyChanges?: boolean;
+  headChangesDuringAuthorization?: boolean;
+  headChangesDuringLabelMutation?: boolean;
+  policyChangesDuringFinalPrRead?: boolean;
+}): { edits: number; labels: string[] } {
   let edits = 0;
   let policyReads = 0;
+  let verificationReads = 0;
+  let prReads = 0;
+  let requiredVerificationPolicyChanged = false;
   let liveHead = head;
+  let labels = ["agent:review", "agent:reviewing"];
   try {
     handoffReviewedPr(args, {
       withLock: (_project: unknown, operation: (enabled: object, recheck: () => void) => number) => operation({ githubRepositoryId: "R_repo" }, () => {}),
       isAutoMergeEnabled: () => options.policyChanges === true && ++policyReads > 1,
       assertReviewVerification: () => {
+        verificationReads += 1;
         if (options.verificationError) throw new Error(options.verificationError);
+        if (requiredVerificationPolicyChanged && verificationReads > 1) throw new Error("required verification policy changed");
         if (options.headChangesDuringAuthorization) liveHead = "b".repeat(40);
       },
       run: (command: string[]) => {
         if (command[2] === "view") {
+          prReads += 1;
+          if (options.policyChangesDuringFinalPrRead && prReads === 2) requiredVerificationPolicyChanged = true;
           return {
             status: 0,
-            stdout: JSON.stringify({
-              state: "OPEN",
-              isDraft: false,
-              headRefOid: liveHead,
-              labels: [{ name: "agent:review" }, { name: "agent:reviewing" }],
-            }),
+            stdout: JSON.stringify({ state: "OPEN", isDraft: false, headRefOid: liveHead, labels: labels.map((name) => ({ name })) }),
             stderr: "",
           };
         }
         edits += 1;
+        if (command.includes("--add-label") && command.at(-1) === "ready-for-human") {
+          if (options.headChangesDuringLabelMutation) liveHead = "b".repeat(40);
+          labels = ["ready-for-human"];
+        } else {
+          labels = ["agent:review", "agent:reviewing"];
+        }
         return { status: 0, stdout: "", stderr: "" };
       },
     });
   } catch {
     // A rejected boundary is the expected path for these fixtures.
   }
-  return edits;
+  return { edits, labels };
+}
+
+function handoffMutationCount(options: Parameters<typeof runHandoff>[0]): number {
+  return runHandoff(options).edits;
 }
 
 describe("review approval persistence boundary", () => {
@@ -94,5 +113,16 @@ describe("reviewed PR human-handoff boundary", () => {
 
   it("rejects a head change during authorization before changing labels", () => {
     expect(handoffMutationCount({ headChangesDuringAuthorization: true })).toBe(0);
+  });
+
+  it("restores review labels when the head changes during the handoff mutation", () => {
+    expect(runHandoff({ headChangesDuringLabelMutation: true })).toEqual({
+      edits: 2,
+      labels: ["agent:review", "agent:reviewing"],
+    });
+  });
+
+  it("rejects required-verification policy changes during the final PR read", () => {
+    expect(handoffMutationCount({ policyChangesDuringFinalPrRead: true })).toBe(0);
   });
 });

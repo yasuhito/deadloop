@@ -24,12 +24,16 @@ function runMerge(options: {
   pr?: Record<string, unknown>;
   review?: typeof approvedReview;
   verificationError?: string;
+  verificationChangesAfterPrRead?: boolean;
+  onMerge?: () => void;
 } = {}) {
   const commands: string[][] = [];
   let lockHeld = false;
   let configObservedInsideLock = false;
   let mutationObservedInsideLock = false;
   let autoMergeChecks = 0;
+  let verificationChecks = 0;
+  let prRead = false;
   const action = mergeReviewedPr(
     {
       projectRepo: "/repo",
@@ -65,13 +69,19 @@ function runMerge(options: {
       },
       validateReviewPromise: () => options.review || approvedReview,
       assertReviewVerification: () => {
+        verificationChecks += 1;
         if (options.verificationError) throw new Error(options.verificationError);
+        if (options.verificationChangesAfterPrRead && prRead && verificationChecks > 1) {
+          throw new Error("required verification policy changed");
+        }
       },
       run: (args: string[]) => {
         commands.push(args);
         if (args[2] === "view") {
+          prRead = true;
           return { status: 0, stdout: JSON.stringify(options.pr || eligiblePr), stderr: "" };
         }
+        options.onMerge?.();
         mutationObservedInsideLock = lockHeld;
         const status = options.mergeStatus ?? 0;
         return { status, stdout: "", stderr: status ? "head commit changed" : "" };
@@ -103,6 +113,16 @@ describe("reviewed PR merge", () => {
 
   it("rechecks auto-merge intent immediately before the merge mutation", () => {
     expect(() => runMerge({ autoMergeEnabled: [true, false] })).toThrow("autoMerge is not currently enabled");
+  });
+
+  it("does not merge when required-verification policy changes during the final PR read", () => {
+    let merges = 0;
+    try {
+      runMerge({ verificationChangesAfterPrRead: true, onMerge: () => { merges += 1; } });
+    } catch {
+      // The changed policy must stop the guarded merge.
+    }
+    expect(merges).toBe(0);
   });
 
   it("rejects auto-merge during the first safe start", () => {

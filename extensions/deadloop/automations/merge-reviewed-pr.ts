@@ -214,11 +214,13 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     if (!autoMergeEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
     assertMergeAuthorized(enabled);
     assertReviewApproved(args, ops);
-    (ops.assertReviewVerification || assertRequiredVerificationApproved)(args, enabled);
+    const assertVerification = ops.assertReviewVerification || assertRequiredVerificationApproved;
+    assertVerification(args, enabled);
     assertCurrentPrEligible(args, ops);
     recheck();
     const autoMergeStillEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
     if (!autoMergeStillEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
+    assertVerification(args, enabled);
     const result = ops.run([
       "gh", "pr", "merge", args.pr, "-R", args.githubRepo,
       "--squash", "--delete-branch", "--match-head-commit", args.expectedHead,

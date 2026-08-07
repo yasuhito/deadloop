@@ -70,29 +70,61 @@ function assertRequiredVerificationApproved(args: HandoffArgs, enabled: EnabledP
   }
 }
 
-function assertCurrentPrEligible(args: HandoffArgs, ops: HandoffOps): void {
+type CurrentPr = { state?: unknown; isDraft?: unknown; headRefOid?: unknown; labels: Set<string> };
+
+function readCurrentPr(args: HandoffArgs, ops: HandoffOps): CurrentPr {
   const result = ops.run([
     "gh", "pr", "view", args.pr, "-R", args.githubRepo,
     "--json", "state,isDraft,headRefOid,labels",
   ], MAX_GUARDED_OPERATION_MS);
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || "PR state could not be revalidated").trim());
-  let pr: { state?: unknown; isDraft?: unknown; headRefOid?: unknown; labels?: unknown };
+  let value: { state?: unknown; isDraft?: unknown; headRefOid?: unknown; labels?: unknown };
   try {
-    pr = JSON.parse(result.stdout || "{}");
+    value = JSON.parse(result.stdout || "{}");
   } catch {
     throw new Error("PR state response was invalid; human handoff stopped");
   }
-  const labels = new Set(Array.isArray(pr.labels)
-    ? pr.labels.map((label: unknown) => label && typeof label === "object" ? (label as { name?: unknown }).name : undefined)
+  const labels = new Set(Array.isArray(value.labels)
+    ? value.labels.map((label: unknown) => label && typeof label === "object" ? (label as { name?: unknown }).name : undefined)
       .filter((name): name is string => typeof name === "string")
     : []);
+  return { ...value, labels };
+}
+
+function assertCurrentPrEligible(args: HandoffArgs, ops: HandoffOps): void {
+  const pr = readCurrentPr(args, ops);
   if (pr.state !== "OPEN") throw new Error("PR is no longer open; human handoff stopped");
   if (pr.isDraft !== false) throw new Error("PR is draft or its draft state is unknown; human handoff stopped");
   if (pr.headRefOid !== args.expectedHead) throw new Error("PR head changed; human handoff stopped");
-  if (!labels.has(args.reviewLabel) || !labels.has(args.reviewingLabel)) {
+  if (!pr.labels.has(args.reviewLabel) || !pr.labels.has(args.reviewingLabel)) {
     throw new Error("required review labels are no longer present; human handoff stopped");
   }
-  if (labels.has(args.blockedLabel)) throw new Error("PR is blocked; human handoff stopped");
+  if (pr.labels.has(args.blockedLabel)) throw new Error("PR is blocked; human handoff stopped");
+}
+
+function assertHandoffApplied(args: HandoffArgs, ops: HandoffOps): void {
+  const pr = readCurrentPr(args, ops);
+  if (pr.headRefOid !== args.expectedHead
+    || !pr.labels.has(args.humanLabel)
+    || pr.labels.has(args.reviewLabel)
+    || pr.labels.has(args.reviewingLabel)
+    || pr.labels.has(args.blockedLabel)) {
+    throw new Error("human handoff postcondition changed");
+  }
+}
+
+function restoreReviewState(args: HandoffArgs, ops: HandoffOps): void {
+  const result = ops.run([
+    "gh", "pr", "edit", args.pr, "-R", args.githubRepo,
+    "--remove-label", args.humanLabel,
+    "--add-label", args.reviewLabel,
+    "--add-label", args.reviewingLabel,
+  ], MAX_GUARDED_OPERATION_MS);
+  if (result.status !== 0) throw new Error((result.stderr || result.stdout || "review-state restoration failed").trim());
+  const pr = readCurrentPr(args, ops);
+  if (pr.labels.has(args.humanLabel) || !pr.labels.has(args.reviewLabel) || !pr.labels.has(args.reviewingLabel)) {
+    throw new Error("review-state restoration could not be confirmed");
+  }
 }
 
 function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRun }): number {
@@ -103,8 +135,10 @@ function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRu
     assertCurrentPrEligible(args, ops);
     recheck();
     if (autoMergeEnabled(args)) throw new Error("autoMerge is currently enabled; human handoff stopped");
-    (ops.assertReviewVerification || assertRequiredVerificationApproved)(args, enabled);
+    const assertVerification = ops.assertReviewVerification || assertRequiredVerificationApproved;
+    assertVerification(args, enabled);
     assertCurrentPrEligible(args, ops);
+    assertVerification(args, enabled);
     if (autoMergeEnabled(args)) throw new Error("autoMerge is currently enabled; human handoff stopped");
     const result = ops.run([
       "gh", "pr", "edit", args.pr, "-R", args.githubRepo,
@@ -113,6 +147,12 @@ function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRu
       "--add-label", args.humanLabel,
     ], MAX_GUARDED_OPERATION_MS);
     if (result.status !== 0) throw new Error((result.stderr || result.stdout || "guarded human handoff failed").trim());
+    try {
+      assertHandoffApplied(args, ops);
+    } catch (error) {
+      restoreReviewState(args, ops);
+      throw new Error(`human handoff stopped and review state restored: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return 0;
   };
   return ops.withLock ? ops.withLock(project, operation) : withEnabledProjectLock(project, operation);
