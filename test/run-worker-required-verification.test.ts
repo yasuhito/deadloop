@@ -101,6 +101,14 @@ describe("Worker required-verification checkout binding", () => {
     expect(invocations).toBe(1);
   });
 
+  it("persists evidence that a later host process can authorize", async () => {
+    const fixture = verificationAttempt();
+    await run(fixture.args, undefined, async () => ({ check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } }), () => ({}));
+    const script = `const fs=require("node:fs");const runtime=require(${JSON.stringify(path.resolve("src/worker-required-verification-runtime.cjs"))});const attempt=JSON.parse(fs.readFileSync(${JSON.stringify(fixture.args.attemptRecord)},"utf8"));const report=JSON.parse(fs.readFileSync(attempt.promiseFile,"utf8"));const record=runtime.readRequiredVerificationRecord(${JSON.stringify(fixture.record)});runtime.assertWorkerCompletionAuthorized(attempt,report,record,attempt.requiredVerification);`;
+
+    expect(() => execFileSync(process.execPath, ["-e", script])).not.toThrow();
+  });
+
   it("rejects direct replacement of the attempt-local contract after launch", async () => {
     const fixture = verificationAttempt();
     const attemptFile = fixture.args.attemptRecord;

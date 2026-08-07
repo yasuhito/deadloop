@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -34,7 +35,13 @@ function fixture(checkCommand = "true") {
   const report = { schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head: base }, status: "complete", summary: "Implemented and validated.", result: { outputRevision: output }, evidence: { validations: ["extra check passed"] } };
   writeWorkerContractSnapshot(runDir, attempt);
   writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt)); writeFileSync(path.join(runDir, "promise.json"), JSON.stringify(report));
-  writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { repository: "owner/repo", targetCommit: output, command: checkCommand, source: contract.source, baseRevision: base }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "check.log") }));
+  const attemptKey = createHash("sha256").update(path.resolve(runDir)).digest("hex");
+  const evidenceDir = path.join(stateDir, "required-verification-evidence", attemptKey);
+  const evidencePath = path.join(evidenceDir, "verification.json");
+  const verificationRecord = { version: 1, binding: { repository: "owner/repo", targetCommit: output, command: checkCommand, source: contract.source, baseRevision: base }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "check.log"), provenance: { kind: "host_gate_execution", recordPath: evidencePath } };
+  mkdirSync(evidenceDir, { recursive: true });
+  writeFileSync(evidencePath, JSON.stringify(verificationRecord));
+  writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify(verificationRecord));
   writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{ repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1, firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }] }));
   let pushedRef = "";
   const common = path.join(repo, ".git");
@@ -61,6 +68,7 @@ function fixture(checkCommand = "true") {
     attempt: path.join(runDir, "attempt.json"),
     promise: path.join(runDir, "promise.json"),
     verification: path.join(runDir, "required-verification.json"),
+    evidenceDir,
   };
 }
 afterEach(() => {
@@ -82,23 +90,17 @@ describe("verified Worker push boundary", () => {
     expect(f.pushedRef()).toBe("");
   });
   it("rejects a missing passed record before push", () => { const f = fixture(); rmSync(f.verification); expect(() => runGuardedPush(f.args, f.ops)).toThrow("record is missing"); });
-  it("rejects a forged passed record when the fixed command fails", () => { const f = fixture("false"); expect(() => runGuardedPush(f.args, f.ops)).toThrow("fresh required verification failed"); });
-  it("persists a failed gate-time verification record", () => {
-    const f = fixture("false");
-    try { runGuardedPush(f.args, f.ops); } catch {}
-    expect(JSON.parse(readFileSync(f.verification, "utf8")).outcome).toBe("failed");
+  it("rejects a forged passed record", () => {
+    const f = fixture();
+    const forged = JSON.parse(readFileSync(f.verification, "utf8"));
+    forged.startedAt = "2026-08-06T00:00:01.000Z";
+    writeFileSync(f.verification, JSON.stringify(forged));
+    expect(() => runGuardedPush(f.args, f.ops)).toThrow("authenticity is missing");
   });
-  it("persists every gate-time verification execution", () => {
+  it("reuses authenticated required verification evidence without rerunning the command", () => {
     const f = fixture();
     runGuardedPush(f.args, f.ops);
-    const record = JSON.parse(readFileSync(f.verification, "utf8"));
-    expect(readdirSync(path.dirname(record.provenance.recordPath)).filter((entry) => entry.endsWith(".json"))).toHaveLength(3);
-  });
-  it("stores the output from the gate-time execution in its own log", () => {
-    const f = fixture("printf gate-output");
-    runGuardedPush(f.args, f.ops);
-    const record = JSON.parse(readFileSync(f.verification, "utf8"));
-    expect(readFileSync(record.logPath, "utf8")).toBe("gate-output");
+    expect(readdirSync(f.evidenceDir).filter((entry) => entry.endsWith(".json"))).toHaveLength(1);
   });
   it("authenticates persisted gate evidence in a later host process", () => {
     const f = fixture();

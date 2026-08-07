@@ -85,12 +85,6 @@ function readWorkerContractSnapshot(attempt) {
   }
   return snapshot.contract;
 }
-function cleanWorkerOutput(worktree, outputRevision) {
-  if (git(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]).toLowerCase() !== outputRevision.toLowerCase()) return false;
-  if (git(worktree, ["ls-files", "-v"]).split(/\r?\n/).some((line) => /^[a-zS]/.test(line))) return false;
-  return !git(worktree, ["status", "--porcelain", "--untracked-files=all", "--", ".",
-    ":(exclude).deadloop", ":(exclude).deadloop/**", ":(exclude).pi-subagents", ":(exclude).pi-subagents/**"]);
-}
 function fsyncDirectory(directory) { const descriptor = fs.openSync(directory, "r"); try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); } }
 function durableWriteJson(file, value) {
   const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
@@ -99,64 +93,24 @@ function durableWriteJson(file, value) {
   finally { fs.closeSync(descriptor); }
   fs.renameSync(temporary, file); fsyncDirectory(path.dirname(file));
 }
-function durableWriteLog(file, contents) {
-  const descriptor = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-  try { fs.writeFileSync(descriptor, contents, "utf8"); fs.fsyncSync(descriptor); }
-  finally { fs.closeSync(descriptor); }
-  fsyncDirectory(path.dirname(file));
-}
 function hostEvidenceDirectory(runDir) {
   const stateDir = path.dirname(path.dirname(runDir));
   const attemptKey = crypto.createHash("sha256").update(path.resolve(runDir)).digest("hex");
   return path.join(stateDir, HOST_VERIFICATION_EVIDENCE_DIRECTORY, attemptKey);
 }
-function executeAndRecordGateVerification(file, attempt, outputRevision) {
-  const runDir = path.dirname(file); const stateDir = path.dirname(path.dirname(runDir));
-  const evidenceDir = hostEvidenceDirectory(runDir); fs.mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
-  const executionId = crypto.randomUUID(); const logPath = path.join(evidenceDir, `${executionId}.log`); const recordPath = path.join(evidenceDir, `${executionId}.json`);
-  const script = path.join(__dirname, "../extensions/deadloop/automations/run-project-check.ts"); const started = Date.now();
-  const result = childProcess.spawnSync(process.execPath, [script,
-    "--cwd", attempt.worktreePath, "--timeout-ms", String(10 * 60_000),
-    "--command", attempt.requiredVerification.command,
-    "--quarantine-root", path.join(stateDir, "check-quarantine"),
-  ], { encoding: "utf8", timeout: 11 * 60_000, killSignal: "SIGKILL" });
-  let outputFailure;
-  try { if (!cleanWorkerOutput(attempt.worktreePath, outputRevision)) throw new Error("fresh required verification output binding failed"); }
-  catch (error) { outputFailure = error; }
-  const timedOut = result.status === 124 || (result.error && "code" in result.error && result.error.code === "ETIMEDOUT");
-  const outcome = timedOut ? "timed_out" : result.status === 0 && !result.error && !outputFailure ? "passed" : "failed";
-  const terminationReason = timedOut ? "timeout" : result.error ? "runner_failure" : outputFailure ? "output_not_clean" : result.signal ? "signal" : undefined;
-  const runnerEvidence = result.error ? `required verification runner failed: ${result.error.message}\n` : "";
-  const outputEvidence = outputFailure ? `required verification post-check binding failed: ${outputFailure.message}\n` : "";
-  durableWriteLog(logPath, `${result.stdout || ""}${result.stderr || ""}${runnerEvidence}${outputEvidence}`);
-  const record = {
-    version: 1, binding: requiredVerificationBinding(attempt.requiredVerification, outputRevision), outcome,
-    exitCode: timedOut || result.error ? null : result.status, ...(terminationReason ? { terminationReason } : {}),
-    ...(result.signal ? { terminationSignal: result.signal } : {}), startedAt: new Date(started).toISOString(),
-    durationMs: Math.max(0, Date.now() - started), logPath,
-    provenance: { kind: "host_gate_execution", recordPath },
-  };
-  durableWriteJson(recordPath, record); writeRequiredVerificationRecord(file, record); authenticatedRecords.add(record);
-  if (outcome !== "passed") throw new Error(String(result.stderr || result.stdout || result.error?.message || outputFailure?.message || "fresh required verification failed").trim());
-  return record;
+function persistHostVerificationEvidence(file, record) {
+  const evidenceDir = hostEvidenceDirectory(path.dirname(file));
+  fs.mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
+  const recordPath = path.join(evidenceDir, `${crypto.randomUUID()}.json`);
+  const authenticated = { ...record, provenance: { kind: "host_gate_execution", recordPath } };
+  durableWriteJson(recordPath, authenticated);
+  writeRequiredVerificationRecord(file, authenticated);
+  authenticatedRecords.add(authenticated);
+  return authenticated;
 }
 function readRequiredVerificationRecord(file) {
-  let persisted;
-  try { persisted = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return undefined; }
-  if (!persisted || typeof persisted !== "object" || Array.isArray(persisted) || persisted.version !== 1
-    || !nonEmpty(persisted.startedAt) || !Number.isFinite(persisted.durationMs) || persisted.durationMs < 0 || !nonEmpty(persisted.logPath)
-    || persisted.outcome !== "passed" || persisted.exitCode !== 0) return persisted;
-  const runDir = path.dirname(file);
-  let attempt; let report;
-  try {
-    attempt = JSON.parse(fs.readFileSync(path.join(runDir, "attempt.json"), "utf8"));
-    report = JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8"));
-  } catch { return persisted; }
-  const outputRevision = report?.result?.outputRevision;
-  if (!validSha(outputRevision) || !attempt?.requiredVerification || !cleanWorkerOutput(attempt.worktreePath, outputRevision)) {
-    throw new Error("fresh required verification output binding failed");
-  }
-  return executeAndRecordGateVerification(file, attempt, outputRevision);
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch { return undefined; }
 }
 function writeRequiredVerificationRecord(file, record) { fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); const temporary = `${file}.${process.pid}.tmp`; fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 }); fs.renameSync(temporary, file); }
 function git(repoPath, args) { const result = childProcess.spawnSync("git", ["-C", repoPath, ...args], { encoding: "utf8", timeout: 30000 }); if (result.status !== 0) throw new Error(String(result.stderr || result.stdout || "git command failed").trim()); return String(result.stdout || "").trim(); }
@@ -266,4 +220,4 @@ function assertWorkerCompletionAuthorized(attempt, report, record, currentContra
   }
   return { outputRevision: report.result.outputRevision, record };
 }
-module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertWorkerCompletionAuthorized, executeAndRecordGateVerification, readRequiredVerificationRecord, readWorkerContractSnapshot, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };
+module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertWorkerCompletionAuthorized, persistHostVerificationEvidence, readRequiredVerificationRecord, readWorkerContractSnapshot, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };

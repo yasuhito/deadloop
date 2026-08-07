@@ -8,9 +8,9 @@ const { createCommandRunner } = require("../../../src/automation-driver-kit.ts")
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
   assertCurrentWorkerContract,
+  persistHostVerificationEvidence,
   requiredVerificationBinding,
   workerRequiredVerificationPath,
-  writeRequiredVerificationRecord,
 } = require("../../../src/worker-required-verification-runtime.cjs");
 const {
   projectCheckRestorationFailureFrom,
@@ -158,7 +158,7 @@ async function run(
     logPath,
     ...(check.restorationFailure ? { artifactRestorationFailure: check.restorationFailure, restorationFailureRecordPath } : {}),
   };
-  writeRequiredVerificationRecord(recordFile, record);
+  persistHostVerificationEvidence(recordFile, record);
   if (outcome !== "passed") throw new Error(`required verification ${outcome}; log: ${logPath}`);
   return { status: "passed", outputRevision, recordFile, logPath };
 }

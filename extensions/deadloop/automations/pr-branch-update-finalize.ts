@@ -4,7 +4,6 @@
 // then performs a normal fast-forward push of the immutable candidate.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
@@ -24,7 +23,6 @@ type FinalizeArgs = {
   stateDir: string;
   enabledAt: number;
   checkCommand: string;
-  resultFile: string;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
 type EnabledProject = { githubRepo: string; githubRepositoryId: string };
@@ -197,32 +195,16 @@ function parseArgs(argv: string[]): FinalizeArgs {
     stateDir: required(values, "stateDir"),
     enabledAt: Number(required(values, "enabledAt")),
     checkCommand: required(values, "checkCommand"),
-    resultFile: required(values, "resultFile"),
   };
 }
 
-function writeResult(file: string, result: JsonObject): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(result)}\n`, { encoding: "utf8", mode: 0o600 });
-  fs.renameSync(temporary, file);
-}
-
 function main(): void {
-  const argv = process.argv.slice(2);
-  const resultIndex = argv.indexOf("--result-file");
-  let args: FinalizeArgs | undefined;
   try {
-    args = parseArgs(argv);
-    const result = finalizeBranchUpdate(args);
-    writeResult(args.resultFile, result);
+    const result = finalizeBranchUpdate(parseArgs(process.argv.slice(2)));
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (result.action === "blocked") process.exitCode = 3;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const resultFile = args?.resultFile || (resultIndex >= 0 ? argv[resultIndex + 1] : "");
-    if (resultFile) writeResult(resultFile, { action: "blocked", reason: "finalizer_error", summary: message });
-    console.error(`pr-branch-update-finalize.ts: ${message}`);
+    console.error(`pr-branch-update-finalize.ts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }
