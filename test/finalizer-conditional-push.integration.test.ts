@@ -88,6 +88,7 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
   };
   const ops = {
     run,
+    readRepairFindingCount: () => 1,
     assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
   };
   const result = finalizer === "repair"
@@ -143,12 +144,12 @@ process.exit(result.status ?? 1);
     writeFileSync(gh, `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
-else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isCrossRepository:false,headRefName:"${branch}",headRefOid:"${expectedHead}"}));
+else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isCrossRepository:false,headRefName:"${branch}",headRefOid:"${expectedHead}",comments:[{body:"<!-- deadloop:review-repair-attempt key=11111111111111111111 head=${expectedHead} review=22222222222222222222 findings=1 -->"}]}));
 `);
     chmodSync(gh, 0o755);
     const promiseFile = path.join(runDir, "promise.json");
     const automationDir = path.resolve("extensions/deadloop/automations");
-    const rendered = repairWorkerPrompt("1", branch, expectedHead, [], "attempt", promiseFile, repo, {
+    const rendered = repairWorkerPrompt("1", branch, expectedHead, [{ title: "repair", body: "repair the file" }], "attempt", promiseFile, repo, {
       projectId: "demo", repoPath: repo, githubRepo: "owner/repo", stateDir, checkCommand: "true",
       workerAgent: "pi", workerModel: "", remote: "origin", reviewLabel: "agent:review",
       reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", automationDir, enabledAt: 1,

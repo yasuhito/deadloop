@@ -1,36 +1,36 @@
-# 機能: pull request の現在状態に応じてレビュー処理を進める
+# Feature: Advance pull request review according to its current state
 
-deadloop の利用者に対し、pull request の現在の head、CI、外部レビュー、競合の状態だけを使って、安全な次の処理へ進むことを保証する。
-これにより、古い結果の承認への流用、CI 完了前のレビュー、承認済み安全設定の消失を防ぐ。
+Use only the pull request's current head, CI, external review, and conflict state to advance safely.
+This prevents approval based on stale results, review before CI completes, and loss of approved safety configuration.
 
-## シナリオ: レビュー対象がなければレビュー処理を開始しない
+## Scenario: Do not start review processing when no pull request is reviewable
 
-* 前提 現在レビューできる pull request がない
-* もし deadloop が pull request の次の処理を決める
-* ならば レビュー処理は開始されない
+* Given No pull request is currently reviewable
+* When deadloop decides the pull request's next action
+* Then Review processing does not start
 
-## シナリオ: CI 実行中は完了を待つ
+## Scenario: Wait while CI is running
 
-* 前提 pull request の CI が実行中である
-* もし deadloop が pull request の次の処理を決める
-* ならば CI の完了待ちになる
+* Given The pull request CI is running
+* When deadloop decides the pull request's next action
+* Then deadloop waits for CI to complete
 
-## シナリオ: 外部レビューが無効なら通常レビューを開始する
+## Scenario: Start normal review when external review is disabled
 
-* 前提 CI が完了したレビュー待ちの pull request がある
-* かつ 外部レビューが無効に設定されている
-* もし deadloop が pull request の次の処理を決める
-* ならば 通常レビューを開始する
+* Given A pull request is waiting for review after CI completes
+* And External review is configured as disabled
+* When deadloop decides the pull request's next action
+* Then deadloop starts normal review
 
-## シナリオ: 古い head の外部レビュー依頼を現在の依頼として使わない
+## Scenario: Do not treat an external review request for an old head as current
 
-* 前提 以前の pull request head にだけ外部レビューを依頼している
-* かつ 外部レビューが有効に設定されている
-* もし deadloop が pull request の次の処理を決める
-* ならば 現在の head の外部レビューを依頼する
+* Given External review was requested only for a previous pull request head
+* And External review is configured as enabled
+* When deadloop decides the pull request's next action
+* Then deadloop requests external review for the current head
 
-## シナリオ: 以前の head の承認結果では現在の pull request をマージしない
+## Scenario: Do not merge the current pull request using approval for a previous head
 
-* 前提 以前の pull request head に対する承認結果がある
-* もし deadloop が現在の pull request の承認処理を完了する
-* ならば 現在の pull request はマージされない
+* Given An approval result exists for a previous pull request head
+* When deadloop completes approval processing for the current pull request
+* Then The current pull request is not merged

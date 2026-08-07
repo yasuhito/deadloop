@@ -1,64 +1,64 @@
-# 機能: 作業エージェントを重複なく起動して完了まで監視する
+# Feature: Start a work agent once and monitor it to completion
 
-Issue ごとの作業エージェントは専用の作業場所で一度だけ起動し、完了ファイルが確定するまで安全に監視する。
-これにより、稼働中や別作業場所の担当を壊さず、活動中の作業を早く終了しない。
+Start each Issue's work agent exactly once in a dedicated worktree and monitor it safely until its promise file is complete.
+This avoids disrupting an active agent or an agent on another worktree and avoids terminating active work prematurely.
 
-## シナリオ: 準備済み Issue の担当には基準ブランチから専用の作業場所を作る
+## Scenario: Create a dedicated worktree from the base branch for a prepared Issue
 
-* 前提 作業を開始できる Issue がある
-* もし deadloop がその Issue の担当を起動する
-* ならば 担当には基準ブランチから Issue 専用の作業場所を作る
+* Given An Issue is ready for work
+* When deadloop starts the Issue's agent
+* Then The agent receives a dedicated Issue worktree from the base branch
 
-## シナリオ: 準備済み Issue の担当は一度だけ起動する
+## Scenario: Start the agent for a prepared Issue exactly once
 
-* 前提 作業を開始できる Issue がある
-* もし deadloop がその Issue の担当を起動する
-* ならば 新しい担当を一人だけ起動する
+* Given An Issue is ready for work
+* When deadloop starts the Issue's agent
+* Then deadloop starts exactly one new agent
 
-## シナリオ: 起動した担当を完了ファイルの監視へ引き渡す
+## Scenario: Hand the started agent off to promise-file monitoring
 
-* 前提 作業を開始できる Issue が選ばれている
-* もし deadloop が選ばれた Issue の作業を開始する
-* ならば その Issue は完了ファイルの監視対象になる
+* Given An Issue ready for work has been selected
+* When deadloop starts work on the selected Issue
+* Then The Issue enters promise-file monitoring
 
-## シナリオ: 報告要求後に最近活動した担当は監視を続ける
+## Scenario: Continue monitoring an agent with recent activity after a report request
 
-* 前提 完了ファイルを求めた後に担当の最近の活動がある
-* もし deadloop が担当の監視状態を判断する
-* ならば 担当の監視を続ける
+* Given The agent has recent activity after being asked for a promise file
+* When deadloop evaluates the agent's monitoring state
+* Then deadloop continues monitoring the agent
 
-## シナリオ: 完了ファイルを求めた後の猶予中は監視を続ける
+## Scenario: Continue monitoring during the grace period after requesting a promise file
 
-* 前提 完了ファイルを求めてから猶予時間内である
-* もし deadloop が担当の監視状態を判断する
-* ならば 担当の監視を続ける
+* Given The promise-file request is still within its grace period
+* When deadloop evaluates the agent's monitoring state
+* Then deadloop continues monitoring the agent
 
-## シナリオ: 完了ファイルがない担当には終了前に報告を求める
+## Scenario: Request a promise file before terminating an agent that has finished activity
 
-* 前提 活動を終えた担当の完了ファイルがない
-* もし deadloop が担当の監視状態を判断する
-* ならば 担当に完了ファイルを書くよう求める
+* Given An agent has finished activity without writing a promise file
+* When deadloop evaluates the agent's monitoring state
+* Then deadloop asks the agent to write the promise file
 
-## シナリオ: 活動停止と猶予経過を確認した後だけ終了を許す
+## Scenario: Permit termination only after confirming inactivity and expiry of the grace period
 
-* 前提 担当の活動停止と報告要求後の猶予経過を確認できる
-* もし deadloop が担当の監視状態を判断する
-* ならば 担当画面の終了を許す
+* Given Agent inactivity and expiry of the post-request grace period are confirmed
+* When deadloop evaluates the agent's monitoring state
+* Then deadloop permits the agent pane to close
 
-## シナリオ: 終了判断に必要な観測がなければ追加確認する
+## Scenario: Collect missing observations before deciding to terminate
 
-* 前提 報告要求後の猶予は過ぎたが担当画面の観測がない
-* もし deadloop が担当の監視状態を判断する
-* ならば 終了前に不足した観測を集める
+* Given The post-request grace period expired without an observation of the agent pane
+* When deadloop evaluates the agent's monitoring state
+* Then deadloop collects the missing observation before termination
 
-## シナリオアウトライン: 完了ファイルが完成したら担当の状態にかかわらず監視を終える
+## Scenario Outline: End monitoring when the promise file is complete regardless of agent state
 
-* 前提 <状態>の担当が完了ファイルを書き終えている
-* もし deadloop が担当の監視状態を判断する
-* ならば 完了ファイルに従って監視を終える
+* Given The <status> agent has finished writing the promise file
+* When deadloop evaluates the agent's monitoring state
+* Then deadloop ends monitoring according to the promise file
 
-### 例:
+### Examples:
 
-  | 状態 |
-  | 稼働中 |
-  | 活動終了 |
+  | status |
+  | working |
+  | done |

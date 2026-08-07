@@ -2,6 +2,7 @@ import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import type { RequiredVerificationContract, RequiredVerificationResolution } from "./required-verification";
 
@@ -14,7 +15,18 @@ const { runProjectCheck } = require("./project-check.ts") as {
     quarantineRoot: string;
     timeoutMs: number;
     signal?: AbortSignal;
-  }) => Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean; interrupted: boolean }>;
+  }) => Promise<{
+    code: number | null;
+    stdout: string;
+    stderr: string;
+    timedOut: boolean;
+    interrupted: boolean;
+    signal: NodeJS.Signals | null;
+    restorationFailure?: {
+      message: string;
+      quarantinePath: string;
+    };
+  }>;
 };
 
 type EnablementVerificationJournal = {
@@ -39,6 +51,32 @@ export type EnablementVerificationResult = {
   logPath: string;
   recordPath: string;
   cleanup: "removed" | "retained";
+  reused: boolean;
+};
+
+export type RetainedEnablementVerification = {
+  attemptId: string;
+  repository: string;
+  primaryRepoPath?: string;
+  worktreePath: string;
+  targetRevision: string;
+  journalPath: string;
+  recordPath?: string;
+  logPath?: string;
+  retentionReason: string;
+};
+
+type ProjectCheckResult = {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  interrupted: boolean;
+  signal: NodeJS.Signals | null;
+  restorationFailure?: {
+    message: string;
+    quarantinePath: string;
+  };
 };
 
 export type EnablementVerificationInput = {
@@ -47,10 +85,164 @@ export type EnablementVerificationInput = {
   repository: string;
   resolution: RequiredVerificationResolution;
   beforeWorktreeCreate?: (journalPath: string) => Promise<void> | void;
+  beforeProjectCheck?: (worktreePath: string) => Promise<void> | void;
+  projectCheckRunner?: (input: {
+    cwd: string;
+    command: string;
+    quarantineRoot: string;
+    timeoutMs: number;
+    signal?: AbortSignal;
+  }) => Promise<ProjectCheckResult>;
   now?: () => number;
   timeoutMs?: number;
   signal?: AbortSignal;
 };
+
+function verificationRoot(stateDir: string): string {
+  return path.join(stateDir, "required-verification", "enablement");
+}
+
+function readJson(file: string): any | undefined {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRequiredVerificationContract(value: unknown): value is RequiredVerificationContract {
+  if (!isRecord(value) || typeof value.repository !== "string" || typeof value.command !== "string"
+    || typeof value.baseRevision !== "string" || !isRecord(value.source)
+    || !["local", "repo_policy"].includes(String(value.source.kind)) || typeof value.source.location !== "string") return false;
+  if (value.override === undefined) return true;
+  return isRecord(value.override) && typeof value.override.command === "string" && isRecord(value.override.source)
+    && ["local", "repo_policy"].includes(String(value.override.source.kind))
+    && typeof value.override.source.location === "string";
+}
+
+function isEnablementVerificationJournal(value: unknown): value is EnablementVerificationJournal {
+  if (!isRecord(value) || value.version !== 1
+    || !["prepared", "created", "checked", "cleaned", "retained", "creation_failed"].includes(String(value.state))
+    || typeof value.attemptId !== "string" || typeof value.repository !== "string"
+    || typeof value.primaryRepoPath !== "string" || typeof value.worktreePath !== "string"
+    || typeof value.targetRevision !== "string" || typeof value.createdAt !== "string"
+    || !isRequiredVerificationContract(value.contract)) return false;
+  return (value.recordPath === undefined || typeof value.recordPath === "string")
+    && (value.logPath === undefined || typeof value.logPath === "string")
+    && (value.retentionReason === undefined || typeof value.retentionReason === "string");
+}
+
+function restorationFailureFrom(error: unknown): ProjectCheckResult["restorationFailure"] {
+  if (!isRecord(error) || !isRecord(error.restorationFailure)
+    || typeof error.restorationFailure.message !== "string"
+    || typeof error.restorationFailure.quarantinePath !== "string") return undefined;
+  return {
+    message: error.restorationFailure.message,
+    quarantinePath: error.restorationFailure.quarantinePath,
+  };
+}
+
+function attemptDirectories(stateDir: string): string[] {
+  const root = verificationRoot(stateDir);
+  try {
+    return fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .map((entry) => path.join(root, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+function bindingFor(contract: RequiredVerificationContract) {
+  return {
+    repository: contract.repository,
+    targetCommit: contract.baseRevision,
+    command: contract.command,
+    source: contract.source,
+    baseRevision: contract.baseRevision,
+  };
+}
+
+function reusableSuccess(
+  stateDir: string,
+  contract: RequiredVerificationContract,
+): EnablementVerificationResult | undefined {
+  const expected = bindingFor(contract);
+  const candidates = attemptDirectories(stateDir)
+    .map((directory) => ({ directory, record: readJson(path.join(directory, "record.json")) }))
+    .filter(({ record }) => record?.version === 1 && record.outcome === "passed")
+    .sort((left, right) => String(right.record.startedAt || "").localeCompare(String(left.record.startedAt || "")));
+
+  for (const { directory, record } of candidates) {
+    if (!isDeepStrictEqual(record.binding, expected)) continue;
+    if (!isDeepStrictEqual(bindingFor(record.contract || {}), expected)) continue;
+    if (record.repository !== expected.repository || record.targetCommit !== expected.targetCommit) continue;
+    if (
+      record.attemptId !== path.basename(directory) || record.exitCode !== 0 || record.timedOut !== false
+      || record.terminationReason !== undefined || record.terminationSignal !== undefined
+      || record.artifactRestorationFailure !== undefined || typeof record.startedAt !== "string"
+      || !Number.isFinite(record.durationMs) || record.durationMs < 0
+    ) continue;
+    const logPath = record.logPath;
+    if (logPath !== path.join(directory, "check.log") || !fs.existsSync(logPath)) continue;
+    const journalPath = path.join(directory, "journal.json");
+    const journal = readJson(journalPath);
+    if (!journal || !["cleaned", "retained"].includes(journal.state)) continue;
+    return {
+      outcome: "passed",
+      exitCode: 0,
+      journalPath,
+      logPath,
+      recordPath: path.join(directory, "record.json"),
+      cleanup: journal?.state === "cleaned" ? "removed" : "retained",
+      reused: true,
+    };
+  }
+  return undefined;
+}
+
+export function inspectRetainedEnablementVerifications(
+  stateDir: string,
+  primaryRepoPath?: string,
+): RetainedEnablementVerification[] {
+  const expectedPath = primaryRepoPath ? path.resolve(primaryRepoPath) : undefined;
+  const findings: RetainedEnablementVerification[] = [];
+  for (const directory of attemptDirectories(stateDir)) {
+    const journalPath = path.join(directory, "journal.json");
+    const journal = readJson(journalPath);
+    if (!isEnablementVerificationJournal(journal)) {
+      const worktreePath = path.join(stateDir, "required-verification", "worktrees", path.basename(directory));
+      if (!fs.existsSync(worktreePath)) continue;
+      findings.push({
+        attemptId: path.basename(directory),
+        repository: "unknown",
+        worktreePath,
+        targetRevision: "unknown",
+        journalPath,
+        retentionReason: "verification journal is missing or malformed; worktree ownership and cleanup state are unknown",
+      });
+      continue;
+    }
+    if (!["prepared", "created", "checked", "retained"].includes(journal.state)) continue;
+    if (expectedPath && path.resolve(journal.primaryRepoPath) !== expectedPath) continue;
+    findings.push({
+      attemptId: String(journal.attemptId || path.basename(directory)),
+      repository: String(journal.repository || "unknown"),
+      primaryRepoPath: journal.primaryRepoPath,
+      worktreePath: journal.worktreePath,
+      targetRevision: String(journal.targetRevision || "unknown"),
+      journalPath,
+      ...(typeof journal.recordPath === "string" ? { recordPath: journal.recordPath } : {}),
+      ...(typeof journal.logPath === "string" ? { logPath: journal.logPath } : {}),
+      retentionReason: String(journal.retentionReason || `cleanup result is unknown after journal state ${journal.state}`),
+    });
+  }
+  return findings.sort((left, right) => left.attemptId.localeCompare(right.attemptId));
+}
 
 function writeJson(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -113,9 +305,11 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   }
   const contract = input.resolution.contract;
   if (contract.repository !== input.repository) throw new Error("required verification repository binding does not match enablement identity");
+  const reused = reusableSuccess(input.stateDir, contract);
+  if (reused) return reused;
 
   const attemptId = crypto.randomUUID();
-  const attemptDir = path.join(input.stateDir, "required-verification", "enablement", attemptId);
+  const attemptDir = path.join(verificationRoot(input.stateDir), attemptId);
   const worktreePath = path.join(input.stateDir, "required-verification", "worktrees", attemptId);
   const journalPath = path.join(attemptDir, "journal.json");
   const logPath = path.join(attemptDir, "check.log");
@@ -141,7 +335,21 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
   const added = git(input.primaryRepoPath, ["worktree", "add", "--detach", worktreePath, contract.baseRevision]);
   if (added.status !== 0) {
-    journal = { ...journal, state: "creation_failed", logPath };
+    const pathRemains = fs.existsSync(worktreePath);
+    const registration = git(input.primaryRepoPath, ["worktree", "list", "--porcelain"]);
+    const registrationRemains = registration.status === 0 && Boolean(registration.stdout
+      .split(/\n\n+/)
+      .map((entry) => entry.match(/^worktree (.+)$/m)?.[1])
+      .filter(Boolean)
+      .some((entry) => path.resolve(entry!) === path.resolve(worktreePath)));
+    const inspectionAmbiguous = registration.status !== 0;
+    const retained = pathRemains || registrationRemains || inspectionAmbiguous;
+    const retentionReason = inspectionAmbiguous
+      ? `git worktree add failed and cleanup is ambiguous because worktree registration inspection failed: ${(registration.stderr || registration.stdout || "unknown error").trim()}`
+      : `git worktree add failed after retaining ${pathRemains && registrationRemains ? "the worktree path and registration" : pathRemains ? "the worktree path" : "the worktree registration"}`;
+    journal = retained
+      ? { ...journal, state: "retained", logPath, retentionReason }
+      : { ...journal, state: "creation_failed", logPath };
     fs.writeFileSync(logPath, `${added.stdout}${added.stderr}`, { encoding: "utf8", mode: 0o600 });
     writeJson(journalPath, journal);
     throw new Error(`required verification worktree creation failed; log: ${logPath}`);
@@ -157,11 +365,12 @@ export async function runEnablementVerification(input: EnablementVerificationInp
     throw new Error(`required verification worktree revision mismatch; log: ${logPath}; retained worktree journal: ${journalPath}`);
   }
 
-  let check: { code: number; stdout: string; stderr: string; timedOut: boolean; interrupted: boolean };
+  await input.beforeProjectCheck?.(worktreePath);
+  let check: ProjectCheckResult;
   let runnerFailed = false;
   try {
     const remainingMs = Math.max(1, timeoutMs - Math.max(0, now() - startedAtMs));
-    check = await runProjectCheck({
+    check = await (input.projectCheckRunner ?? runProjectCheck)({
       cwd: worktreePath,
       command: contract.command,
       quarantineRoot: path.join(input.stateDir, "check-quarantine"),
@@ -171,29 +380,54 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   } catch (error) {
     runnerFailed = true;
     const message = error instanceof Error ? (error.stack || error.message) : String(error);
-    check = { code: 1, stdout: "", stderr: `required verification runner failed: ${message}\n`, timedOut: false, interrupted: false };
+    const restorationFailure = restorationFailureFrom(error);
+    check = {
+      code: null,
+      stdout: "",
+      stderr: `required verification runner failed: ${message}\n`,
+      timedOut: false,
+      interrupted: false,
+      signal: null,
+      ...(restorationFailure ? { restorationFailure } : {}),
+    };
   }
   const finishedAtMs = now();
   const terminationEvidence = check.timedOut
     ? `required verification timed out after ${timeoutMs}ms\n`
     : check.interrupted ? "required verification was interrupted\n" : "";
-  fs.writeFileSync(logPath, `${check.stdout}${check.stderr}${terminationEvidence}`, { encoding: "utf8", mode: 0o600 });
+  const restorationEvidence = check.restorationFailure
+    ? `required verification could not restore runtime artifacts; retained quarantine: ${check.restorationFailure.quarantinePath}; ${check.restorationFailure.message}\n`
+    : "";
+  fs.writeFileSync(logPath, `${check.stdout}${check.stderr}${terminationEvidence}${restorationEvidence}`, { encoding: "utf8", mode: 0o600 });
   const outcome: EnablementVerificationResult["outcome"] = check.timedOut
     ? "timed_out"
-    : check.interrupted ? "interrupted" : check.code === 0 ? "passed" : "failed";
+    : check.interrupted ? "interrupted" : check.code === 0 && !check.restorationFailure ? "passed" : "failed";
   const terminationReason = check.timedOut
     ? "timeout"
-    : check.interrupted ? "interrupted" : runnerFailed ? "runner_failure" : undefined;
-  const exitCode = terminationReason ? null : check.code;
+    : check.interrupted
+      ? "interrupted"
+      : check.code === null
+        ? check.restorationFailure
+          ? "artifact_restoration_failure"
+          : runnerFailed
+            ? "runner_failure"
+            : check.signal
+              ? "signal"
+              : undefined
+        : undefined;
+  const exitCode = check.timedOut || check.interrupted ? null : check.code;
   writeJson(recordPath, {
     version: 1,
     attemptId,
+    binding: bindingFor(contract),
     repository: input.repository,
     targetCommit: contract.baseRevision,
     contract,
     outcome,
     exitCode,
     terminationReason,
+    ...(check.signal ? { terminationSignal: check.signal } : {}),
+    ...(check.restorationFailure ? { artifactRestorationFailure: check.restorationFailure } : {}),
     timedOut: check.timedOut,
     timeoutMs,
     startedAt: new Date(startedAtMs).toISOString(),
@@ -203,11 +437,16 @@ export async function runEnablementVerification(input: EnablementVerificationInp
   journal = { ...journal, state: "checked", recordPath, logPath };
   writeJson(journalPath, journal);
 
-  const cleanup = cleanupOwnedWorktree(journal);
+  const cleanup = check.restorationFailure
+    ? {
+        cleanup: "retained" as const,
+        reason: `artifact restoration failed; quarantine retained at ${check.restorationFailure.quarantinePath}`,
+      }
+    : cleanupOwnedWorktree(journal);
   journal = cleanup.cleanup === "removed"
     ? { ...journal, state: "cleaned" }
     : { ...journal, state: "retained", retentionReason: cleanup.reason || "cleanup was not proven safe" };
   writeJson(journalPath, journal);
 
-  return { outcome, exitCode, journalPath, logPath, recordPath, cleanup: cleanup.cleanup };
+  return { outcome, exitCode, journalPath, logPath, recordPath, cleanup: cleanup.cleanup, reused: false };
 }

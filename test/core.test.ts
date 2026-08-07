@@ -94,7 +94,6 @@ describe("deterministic extension core", () => {
       ciFallback: {
         enabled: false,
         mode: "billing-only",
-        allowAutoMerge: false,
         localCommands: "",
       },
       externalReview: {
@@ -251,6 +250,14 @@ describe("deterministic extension core", () => {
     });
   });
 
+  it("does not expose the retired CI fallback auto-merge environment variable", () => {
+    const project = normalizeProject({ automations: [{}] });
+
+    expect(automationEnvironment(project, project.automations[0])).not.toHaveProperty(
+      "DEADLOOP_CI_FALLBACK_ALLOW_AUTO_MERGE",
+    );
+  });
+
   it("builds worker instructions from custom instruction files", () => {
     const project = normalizeProject({ workerInstructionFiles: ["docs/agents.md", "docs/testing.md"] });
 
@@ -400,7 +407,6 @@ describe("deterministic extension core", () => {
     expect(normalizeProject({}).ciFallback).toEqual({
       enabled: false,
       mode: "billing-only",
-      allowAutoMerge: false,
       localCommands: "",
     });
   });
@@ -413,7 +419,6 @@ describe("deterministic extension core", () => {
     const project = normalizeProject({
       ciFallback: {
         enabled: true,
-        allowAutoMerge: true,
         localCommands: ["git diff --check", "npm test"],
       },
       automations: [{}],
@@ -421,10 +426,10 @@ describe("deterministic extension core", () => {
 
     expect(
       renderTemplate(
-        "{{ciFallbackEnabled}}|{{ciFallbackAllowAutoMerge}}|{{ciFallbackLocalCommands}}",
+        "{{ciFallbackEnabled}}|{{ciFallbackLocalCommands}}",
         templateValues(project, project.automations[0], "/auto"),
       ),
-    ).toBe("true|true|git diff --check\nnpm test");
+    ).toBe("true|git diff --check\nnpm test");
   });
 
   it("exposes auto merge state to prompt templates", () => {

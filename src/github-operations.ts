@@ -65,14 +65,14 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
         "--limit",
         "100",
         "--json",
-        "number,title,url,state,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,mergeStateStatus,labels,statusCheckRollup,comments,reviewRequests",
+        "number,title,url,state,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,labels,statusCheckRollup,comments,reviewRequests",
       ]);
     },
 
     getPr(repo: string, prNumber: string | number): JsonObject {
       return commandRunner.runJson([
         "gh", "pr", "view", String(prNumber), "-R", repo,
-        "--json", "number,title,url,state,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,mergeStateStatus,labels,statusCheckRollup,comments,reviewRequests",
+        "--json", "number,title,url,state,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,labels,statusCheckRollup,comments,reviewRequests",
       ]);
     },
 

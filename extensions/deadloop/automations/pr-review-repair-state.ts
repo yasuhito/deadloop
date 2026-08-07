@@ -2,7 +2,7 @@ const { createHash } = require("node:crypto") as typeof import("node:crypto");
 
 type JsonObject = Record<string, any>;
 
-const REPAIR_MARKER_RE = /<!--\s*deadloop:review-repair-attempt\s+key=([0-9a-f]+)\s+head=([0-9a-f]+)\s+review=([0-9a-f]+)\s*-->/gi;
+const REPAIR_MARKER_RE = /<!--\s*deadloop:review-repair-attempt\s+key=([0-9a-f]+)\s+head=([0-9a-f]+)\s+review=([0-9a-f]+)(?:\s+findings=([1-9][0-9]*))?\s*-->/gi;
 const MAX_CUMULATIVE_REPAIR_ATTEMPTS = 3;
 const TECHNICAL_MARKER_RE = /<!--\s*deadloop:review-technical-failure\s+head=([0-9a-f]+)\s*-->/gi;
 
@@ -39,18 +39,24 @@ function repairAttemptKey(headOid: string, reviewFingerprint: string): string {
     .slice(0, 20);
 }
 
-function renderRepairMarker(headOid: string, reviewFingerprint: string): string {
-  return `<!-- deadloop:review-repair-attempt key=${repairAttemptKey(headOid, reviewFingerprint)} head=${headOid.toLowerCase()} review=${reviewFingerprint.toLowerCase()} -->`;
+function renderRepairMarker(headOid: string, reviewFingerprint: string, findingCount?: number): string {
+  const count = findingCount === undefined ? "" : ` findings=${findingCount}`;
+  return `<!-- deadloop:review-repair-attempt key=${repairAttemptKey(headOid, reviewFingerprint)} head=${headOid.toLowerCase()} review=${reviewFingerprint.toLowerCase()}${count} -->`;
 }
 
-function repairAttempts(comments: JsonObject[], authorLogin: string): JsonObject[] {
+function repairAttempts(comments: JsonObject[], authorLogin?: string): JsonObject[] {
   const attempts: JsonObject[] = [];
   for (const comment of comments || []) {
-    if (String(comment?.author?.login || "").toLowerCase() !== authorLogin.toLowerCase()) continue;
+    if (authorLogin && String(comment?.author?.login || "").toLowerCase() !== authorLogin.toLowerCase()) continue;
     const body = String(comment?.body || "");
     REPAIR_MARKER_RE.lastIndex = 0;
     for (let match = REPAIR_MARKER_RE.exec(body); match; match = REPAIR_MARKER_RE.exec(body)) {
-      attempts.push({ key: match[1].toLowerCase(), headOid: match[2].toLowerCase(), reviewFingerprint: match[3].toLowerCase() });
+      attempts.push({
+        key: match[1].toLowerCase(),
+        headOid: match[2].toLowerCase(),
+        reviewFingerprint: match[3].toLowerCase(),
+        ...(match[4] === undefined ? {} : { findingCount: Number(match[4]) }),
+      });
     }
   }
   return attempts;

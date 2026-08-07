@@ -36,7 +36,7 @@ describe("PR review public comments", () => {
 Exactly one bounded automatic repair will now start and will change only the findings listed above. The updated head will be reviewed again after a successful push.
 
 <!-- deadloop:review-result head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=1234567890abcdef1234 outcome=changes_requested -->
-<!-- deadloop:review-repair-attempt key=90e33b980e83cbff65a4 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=1234567890abcdef1234 -->`);
+<!-- deadloop:review-repair-attempt key=90e33b980e83cbff65a4 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=1234567890abcdef1234 findings=2 -->`);
   });
 
   it("explains that one bounded repair starts", () => {
@@ -91,7 +91,7 @@ Exactly one bounded automatic repair will now start and will change only the fin
 - \`npm run typecheck\`: passed
 
 ## Next step
-The new head will be reviewed again. Review labels remain in place.
+The new head will be reviewed again. The review queue label remains in place while the active-review claim is released.
 
 <!-- deadloop:review-repair-result key=abcdef1234567890abcd head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->`);
   });

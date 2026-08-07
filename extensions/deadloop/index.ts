@@ -4,13 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { reconcileAndSelectDueAutomation } from "../../src/automation-scheduler";
 import {
   DEFAULT_TIMEZONE,
   REPO_POLICY_FILE,
   automationEnvironment,
   automationStateKey,
   codeFreshnessWarning,
-  getDueSlot,
   isLinkedGitWorktree,
   nextSlotAfter,
   parseProjectsConfig,
@@ -23,6 +23,7 @@ import {
 import { buildDoctorSnapshot, formatDoctorReport, herdr075DoctorFinding } from "../../src/doctor";
 import { compatibilityDiagnosticData } from "../../src/herdr-075-compat";
 import { runHerdrCompatibilityPreflight } from "../../src/herdr-preflight";
+import { discoverVerificationCandidates } from "../../src/required-verification";
 import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } from "../../src/status";
 import { readClaudeConfig } from "../../src/agent-trust.cjs";
 import {
@@ -60,7 +61,22 @@ const {
   releaseSchedulerLock: releaseSchedulerFileLock,
 } = require("../../src/scheduler-lock.cjs");
 import { inferredProjectId, schedulerLockName } from "../../src/project-identity";
-import { runEnablementVerification } from "../../src/enablement-verification";
+import {
+  inspectRetainedEnablementVerifications,
+  runEnablementVerification,
+} from "../../src/enablement-verification";
+type RetainedProjectCheckFailure = {
+  attemptId?: string;
+  worktreePath: string;
+  quarantinePath: string;
+  message: string;
+  recordPath: string;
+  attemptRecordPath?: string;
+};
+const { inspectRetainedProjectCheckFailures, inspectUnresolvedProjectCheckFailures } = require("../../src/project-check.ts") as {
+  inspectRetainedProjectCheckFailures: (stateDir: string, project?: { id: string; githubRepo: string }) => RetainedProjectCheckFailure[];
+  inspectUnresolvedProjectCheckFailures: (stateDir: string) => RetainedProjectCheckFailure[];
+};
 import {
   findEnabledProject,
   normalizeEnablementState,
@@ -1004,6 +1020,65 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
   return findings;
 }
 
+function shellCommandArgument(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function retainedVerificationReport(repositoryRoot: string | undefined): string {
+  const retained = inspectRetainedEnablementVerifications(STATE_DIR, repositoryRoot);
+  if (!retained.length) return "";
+  const lines = ["", `Retained required-verification worktrees: ${retained.length}`];
+  for (const item of retained) {
+    const worktree = shellCommandArgument(item.worktreePath);
+    const confirmation = item.primaryRepoPath
+      ? `git -C ${shellCommandArgument(item.primaryRepoPath)} worktree list --porcelain && git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all --ignored`
+      : `git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all --ignored`;
+    lines.push(
+      `- ${item.worktreePath}`,
+      `  repository: ${item.repository}`,
+      `  revision: ${item.targetRevision}`,
+      `  reason: ${item.retentionReason}`,
+      `  journal: ${item.journalPath}`,
+      `  record: ${item.recordPath || "not written"}`,
+      `  log: ${item.logPath || "not written"}`,
+      `  confirm: ${confirmation}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function renderRetainedProjectCheckReport(title: string, retained: RetainedProjectCheckFailure[]): string {
+  if (!retained.length) return "";
+  const lines = ["", `${title}: ${retained.length}`];
+  for (const item of retained) {
+    lines.push(
+      `- attempt: ${item.attemptId || "unresolved"}`,
+      `  worktree: ${item.worktreePath}`,
+      `  quarantine: ${item.quarantinePath}`,
+      `  reason: ${item.message}`,
+      `  record: ${item.recordPath}`,
+      `  attempt journal: ${item.attemptRecordPath || "not resolved"}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function retainedProjectCheckReport(project): string {
+  if (!project) return "";
+  return renderRetainedProjectCheckReport(
+    "Retained project-check artifacts",
+    inspectRetainedProjectCheckFailures(STATE_DIR, project),
+  );
+}
+
+function unresolvedProjectCheckReport(): string {
+  return renderRetainedProjectCheckReport(
+    "Unresolved retained project-check artifacts",
+    inspectUnresolvedProjectCheckFailures(STATE_DIR),
+  );
+}
+
 async function buildLiveDoctorReport(pi, cwd) {
   const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true, includeAgents: true });
   const retained = retainedAttemptClaimSnapshot(data.selectedProject);
@@ -1011,6 +1086,9 @@ async function buildLiveDoctorReport(pi, cwd) {
     ...data,
     retainedClaims: retained.claims,
     retainedClaimOwnershipAmbiguous: retained.ownershipAmbiguous,
+    ...(data.selectedProject?.repoPath && data.selectedProject.requiredVerification.status === "blocked"
+      ? { verificationCandidates: discoverVerificationCandidates({ repositoryRoot: data.selectedProject.repoPath }) }
+      : {}),
   });
   snapshot.findings.unshift(...retainedAttemptDoctorFindings(
     data.selectedProject,
@@ -1026,7 +1104,8 @@ async function buildLiveDoctorReport(pi, cwd) {
       compatibilityDiagnosticData({ probeFailure: error instanceof Error ? error.message : String(error) }),
     ));
   }
-  return formatDoctorReport(snapshot);
+  const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
+  return `${formatDoctorReport(snapshot)}${retainedVerificationReport(repositoryRoot)}${retainedProjectCheckReport(data.selectedProject)}${unresolvedProjectCheckReport()}`;
 }
 
 const STANDARD_LABELS = [
@@ -1497,6 +1576,30 @@ export default function (pi) {
   let stopRequested = false;
   let pendingStart = null;
   let activeTickPromise = null;
+  const activeEnablementVerifications = new Map();
+
+  function registerEnablementVerification(repoPath, controller, settled) {
+    const key = path.resolve(repoPath);
+    const runs = activeEnablementVerifications.get(key) || new Set();
+    runs.add({ controller, settled });
+    activeEnablementVerifications.set(key, runs);
+  }
+
+  function unregisterEnablementVerification(repoPath, controller) {
+    const key = path.resolve(repoPath);
+    const runs = activeEnablementVerifications.get(key);
+    if (!runs) return;
+    for (const run of runs) if (run.controller === controller) runs.delete(run);
+    if (!runs.size) activeEnablementVerifications.delete(key);
+  }
+
+  async function interruptEnablementVerifications(repoPath?) {
+    const runs = repoPath
+      ? [...(activeEnablementVerifications.get(path.resolve(repoPath)) || [])]
+      : [...activeEnablementVerifications.values()].flatMap((entries) => [...entries]);
+    for (const run of runs) run.controller.abort();
+    await Promise.allSettled(runs.map((run) => run.settled));
+  }
 
   async function tick(ctx) {
     if (!active) return;
@@ -1566,17 +1669,10 @@ export default function (pi) {
         }
       }
 
-      const now = Date.now();
-      for (const automation of project.automations) {
-        const key = automationStateKey(project, automation);
-        const entry = state.automations[key] || {};
-        state.automations[key] = entry;
-        const dueSlot = getDueSlot(automation, entry, now);
-        if (!dueSlot) continue;
-
-        await runAutomation(pi, ctx, project, automation, dueSlot, state, deps);
+      const selected = reconcileAndSelectDueAutomation(project, state.automations, Date.now());
+      if (selected) {
+        await runAutomation(pi, ctx, project, selected.automation, selected.dueSlot, state, deps);
         if (active === schedulerRun && ownsLock && !stopRequested) updateStatus(ctx, project, state);
-        break;
       }
 
       if (active === schedulerRun && ownsLock && !stopRequested) deps.saveState(state);
@@ -1736,13 +1832,25 @@ export default function (pi) {
         identity = await detectProjectIdentity(pi, primaryRepoPath);
         previousEnabledAt = await withEnablementStateLock(async () => findEnabledProject(loadEnablementState(), identity)?.enabledAt);
         const preflightProject = resolveEnableProject(ctx.cwd, identity);
-        const verification = await runEnablementVerification({
-          stateDir: STATE_DIR,
-          primaryRepoPath,
-          repository: identity.githubRepo,
-          resolution: preflightProject.requiredVerification,
-          beforeWorktreeCreate: pi.testing?.beforeEnablementWorktreeCreate,
-        });
+        const verificationController = new AbortController();
+        let settleVerification;
+        const verificationSettled = new Promise<void>((resolve) => { settleVerification = resolve; });
+        registerEnablementVerification(primaryRepoPath, verificationController, verificationSettled);
+        let verification;
+        try {
+          verification = await runEnablementVerification({
+            stateDir: STATE_DIR,
+            primaryRepoPath,
+            repository: identity.githubRepo,
+            resolution: preflightProject.requiredVerification,
+            beforeWorktreeCreate: pi.testing?.beforeEnablementWorktreeCreate,
+            beforeProjectCheck: pi.testing?.beforeEnablementProjectCheck,
+            signal: verificationController.signal,
+          });
+        } finally {
+          unregisterEnablementVerification(primaryRepoPath, verificationController);
+          settleVerification();
+        }
         if (verification.outcome !== "passed") {
           const retained = verification.cleanup === "retained" ? `; retained worktree journal: ${verification.journalPath}` : "";
           throw new Error(`required verification failed (exit ${verification.exitCode}); log: ${verification.logPath}${retained}`);
@@ -1820,6 +1928,7 @@ export default function (pi) {
         let message;
         const repoPath = await detectPrimaryCheckout(pi, ctx.cwd, true);
         advanceDisableGeneration(STATE_DIR, repoPath, writeJsonFile);
+        await interruptEnablementVerifications(repoPath);
         await pi.testing?.beforeDisableLock?.();
         await withEnablementStateLock(async () => {
           const attempt = readJsonFile(enableAttemptPath(repoPath), null);
@@ -1858,6 +1967,7 @@ export default function (pi) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    await interruptEnablementVerifications();
     await stopScheduler(ctx);
   });
 }

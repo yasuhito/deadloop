@@ -1,46 +1,46 @@
-# 機能: ブランチ更新と push を安全に制限する
+# Feature: Constrain branch updates and pushes safely
 
-pull request に変更を送った開発者の変更を守るため、更新中に対象が変わったり安全な作業場所でなくなったりした場合は更新を止める。
+To protect a pull request author's changes, stop an update if the target changes during processing or the worktree is no longer safe.
 
-## シナリオ: push 直前に pull request head が変わった場合は branch を更新しない
+## Scenario: Do not update the branch when the pull request head changes immediately before push
 
-* 前提 更新前に確認した pull request head がある
-* もし 自動チェック後に pull request head が変わる
-* ならば branch への push は行われない
+* Given The pull request head was verified before the update
+* When The pull request head changes after the project check
+* Then The branch is not pushed
 
-## シナリオ: push 直前に変わった pull request head は古い head として報告する
+## Scenario: Report a pull request head changed immediately before push as stale
 
-* 前提 更新前に確認した pull request head がある
-* もし 自動チェック後に pull request head が変わる
-* ならば 完了結果は古い head として観測される
+* Given The pull request head was verified before the update
+* When The pull request head changes after the project check
+* Then The completion result reports a stale head
 
-## シナリオ: 別リポジトリの pull request は branch を更新しない
+## Scenario: Do not update the branch of a pull request from another repository
 
-* 前提 更新前に確認した pull request head がある
-* かつ pull request が別リポジトリから作られている
-* もし deadloop が branch 更新を完了しようとする
-* ならば branch への push は行われない
+* Given The pull request head was verified before the update
+* And The pull request comes from another repository
+* When deadloop attempts to complete the branch update
+* Then The branch is not pushed
 
-## シナリオ: 自動チェック後に追跡中の変更がある場合は branch を更新しない
+## Scenario: Do not update the branch when tracked changes appear after the project check
 
-* 前提 更新前に確認した pull request head がある
-* もし 自動チェック後に作業場所へ追跡中の変更が生じる
-* ならば branch への push は行われない
+* Given The pull request head was verified before the update
+* When Tracked changes appear in the worktree after the project check
+* Then The branch is not pushed
 
-## シナリオ: 信頼されていない作業場所では作業エージェントを起動しない
+## Scenario: Do not start a work agent in an untrusted worktree
 
-* 前提 作業場所の信頼が承認されていない
-* もし deadloop が Claude の作業エージェントを起動しようとする
-* ならば 作業エージェントは起動されない
+* Given The worktree has not been trusted
+* When deadloop attempts to start a Claude work agent
+* Then The work agent is not started
 
-## シナリオ: 更新できる pull request は選択された branch だけへ push する
+## Scenario: Push an updatable pull request to only the selected branch
 
-* 前提 更新前に確認した pull request head がある
-* もし deadloop が branch 更新を完了しようとする
-* ならば 選択された branch だけが push の対象になる
+* Given The pull request head was verified before the update
+* When deadloop attempts to complete the branch update
+* Then Only the selected branch is pushed
 
-## シナリオ: 更新できる pull request は強制せずに push する
+## Scenario: Push an updatable pull request without force
 
-* 前提 更新前に確認した pull request head がある
-* もし deadloop が branch 更新を完了しようとする
-* ならば branch は強制せずに push される
+* Given The pull request head was verified before the update
+* When deadloop attempts to complete the branch update
+* Then The branch is pushed without force

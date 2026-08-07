@@ -17,6 +17,8 @@ function runSelect(
     path.join("test/fixtures/pr-reviewer", prsFixture),
     "--project-id",
     options.projectId ?? "demo",
+    "--automation-login",
+    "deadloop-bot",
     "--now",
     options.now ?? "2026-07-04T00:30:00Z",
   ];
@@ -35,6 +37,48 @@ describe("PR reviewer stale reviewing reclaim", () => {
 
   it("marks the reclaimed reviewing PR as a stale reclaim", () => {
     expect(runSelect("precheck-reviewing.json", { agents: "agents-empty.json" }).staleReclaim).toBe(true);
+  });
+
+  it("identifies a repaired head as a repair re-review", () => {
+    expect(runSelect("precheck-repair-rereview.json", { agents: "agents-empty.json" }).reason).toBe("repair_rereview");
+  });
+
+  it("does not classify a repaired head as a stale reclaim", () => {
+    expect(runSelect("precheck-repair-rereview.json", { agents: "agents-empty.json" }).staleReclaim).toBe(false);
+  });
+
+  it("does not preserve repair re-review provenance from a failed branch-update attempt", () => {
+    expect(runSelect("precheck-failed-branch-update-unrelated-head.json", { agents: "agents-empty.json" }).reason).toBe("stale_reclaim");
+  });
+
+  it("preserves repair re-review provenance for a successful branch-update output", () => {
+    expect(runSelect("precheck-successful-branch-update-output.json", { agents: "agents-empty.json" }).reason).toBe("repair_rereview");
+  });
+
+  it("does not preserve repair re-review provenance after another head is pushed", () => {
+    expect(runSelect("precheck-head-after-successful-branch-update.json", { agents: "agents-empty.json" }).reason).toBe("stale_reclaim");
+  });
+
+  it("does not trust a copied repair result marker", () => {
+    const { defaultDecisionConfig, selectPrForReview } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const prs = structuredClone(require("./fixtures/pr-reviewer/precheck-repair-rereview.json"));
+    prs[0].comments[0].author.login = "attacker";
+    expect(selectPrForReview(prs, defaultDecisionConfig({ automationLogin: "deadloop-bot" })).reason).toBe("selectable");
+  });
+
+  it("reclaims a reviewer claim after preserved repair re-review provenance is consumed", () => {
+    const { claimedReviewerHeads, defaultDecisionConfig, selectPrForReview } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const prs = require("./fixtures/pr-reviewer-driver/repaired-merge-conflict-updated.json").prs;
+    const attempts = [{
+      project: "demo", repository: "owner/repo", role: "reviewer",
+      target: { kind: "pull-request", number: 31 }, inputRevision: { head: prs[0].headRefOid },
+    }];
+    expect(selectPrForReview(
+      prs,
+      defaultDecisionConfig({ automationLogin: "deadloop-bot" }),
+      new Set(),
+      claimedReviewerHeads("demo", attempts, "owner/repo"),
+    ).reason).toBe("stale_reclaim");
   });
 
   it("does not infer ownership from a legacy reviewer agent name", () => {

@@ -1,6 +1,6 @@
 # 実行成果物をプロジェクト検証から隔離する
 
-deadloop のプロンプトと promise は `~/.pi/agent/deadloop/runs/<uuid>/` に置き、対象worktree内へ作らない。プロジェクトの検証コマンドは deadloop の検証ラッパーを通し、既存の未追跡 `.deadloop` と `.pi-subagents` をworktree外へ一時隔離してから実行し、成功・失敗・タイムアウト・中断のすべてで復元する。どちらかに追跡対象ファイルがあれば隠さず、検証を安全側に失敗させる。これにより、再帰的なJSON整形検査へ実行成果物が混入する問題を、各利用リポジトリのignore設定に依存せず防ぐ。
+deadloop のプロンプトと promise は `~/.pi/agent/deadloop/runs/<uuid>/` に置き、対象worktree内へ作らない。プロジェクトの検証コマンドは deadloop の検証ラッパーを通し、既存の未追跡 `.deadloop` と `.pi-subagents` をworktree外へ一時隔離してから実行し、成功・失敗・タイムアウト・中断のすべてで復元を試みる。復元に失敗した場合は、隔離先と一時worktreeを保全して両方の場所を記録し、`/deadloop-doctor` で表示する。どちらかに追跡対象ファイルがあれば隠さず、検証を安全側に失敗させる。これにより、再帰的なJSON整形検査へ実行成果物が混入する問題を、各利用リポジトリのignore設定に依存せず防ぐ。
 
 ## Status
 

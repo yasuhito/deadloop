@@ -50,7 +50,7 @@ function runCheck(world: SafetyWorld, command: string, options: { timeoutMs?: nu
   });
 }
 
-Given("deadloop が自動チェックするプロジェクトがある", function (this: SafetyWorld) {
+Given("A project is configured for deadloop project checks", function (this: SafetyWorld) {
   this.projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-acceptance-"));
   fs.writeFileSync(path.join(this.projectRoot, "package.json"), '{"name":"acceptance-fixture"}\n');
   fs.writeFileSync(
@@ -72,43 +72,43 @@ visit(process.cwd());
   execFileSync("git", ["-C", this.projectRoot, "add", "package.json", "check-json.cjs"]);
 });
 
-Given("プロジェクトに未追跡の実行時成果物がある", function (this: SafetyWorld) {
+Given("The project contains untracked runtime artifacts", function (this: SafetyWorld) {
   writeRuntimeArtifacts(projectRoot(this));
 });
 
-Given("プロジェクトに不正な Git 管理ファイルがある", function (this: SafetyWorld) {
+Given("The project contains an invalid tracked file", function (this: SafetyWorld) {
   const root = projectRoot(this);
   fs.writeFileSync(path.join(root, "package.json"), "broken product JSON\n");
 });
 
-Given("`.deadloop` ディレクトリに Git 管理ファイルがある", function (this: SafetyWorld) {
+Given("The `.deadloop` directory contains a tracked file", function (this: SafetyWorld) {
   const root = projectRoot(this);
   fs.mkdirSync(path.join(root, ".deadloop"));
   fs.writeFileSync(path.join(root, ".deadloop", "product.json"), "tracked product data\n");
   execFileSync("git", ["-C", root, "add", ".deadloop/product.json"]);
 });
 
-When("deadloop が再帰的な検証を実行する", function (this: SafetyWorld) {
+When("deadloop runs recursive verification", function (this: SafetyWorld) {
   return runCheck(this, "node check-json.cjs");
 });
 
-When("deadloop が成功する自動チェックを実行する", function (this: SafetyWorld) {
+When("deadloop runs a successful project check", function (this: SafetyWorld) {
   return runCheck(this, "true");
 });
 
-When("deadloop が自動チェックを開始しようとする", function (this: SafetyWorld) {
+When("deadloop attempts to start a project check", function (this: SafetyWorld) {
   return runCheck(this, `node -e "require('node:fs').writeFileSync('${checkMarker}', 'ran')"`);
 });
 
-When("deadloop が失敗する自動チェックを実行する", function (this: SafetyWorld) {
+When("deadloop runs a failing project check", function (this: SafetyWorld) {
   return runCheck(this, "exit 7");
 });
 
-When("deadloop が時間切れになる自動チェックを実行する", function (this: SafetyWorld) {
+When("deadloop runs a project check that times out", function (this: SafetyWorld) {
   return runCheck(this, "sleep 1", { timeoutMs: 20 });
 });
 
-When("deadloop が終了要求を無視する自動チェックを時間切れにする", async function (this: SafetyWorld) {
+When("deadloop times out a project check that ignores termination requests", async function (this: SafetyWorld) {
   const startedAt = Date.now();
   await runCheck(this, `node -e 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'`, {
     timeoutMs: 20,
@@ -117,7 +117,7 @@ When("deadloop が終了要求を無視する自動チェックを時間切れ�
   this.elapsedMs = Date.now() - startedAt;
 });
 
-When("deadloop の自動チェック CLI を中断する", async function (this: SafetyWorld) {
+When("The deadloop project-check CLI is interrupted", async function (this: SafetyWorld) {
   const root = projectRoot(this);
   const child = spawn(
     "node",
@@ -139,7 +139,7 @@ When("deadloop の自動チェック CLI を中断する", async function (this:
   await new Promise((resolve) => child.once("close", resolve));
 });
 
-When("deadloop が自動チェックを中断する", async function (this: SafetyWorld) {
+When("deadloop interrupts the project check", async function (this: SafetyWorld) {
   const controller = new AbortController();
   setTimeout(() => controller.abort(), 20);
   const result = await runProjectCheck({
@@ -151,35 +151,35 @@ When("deadloop が自動チェックを中断する", async function (this: Safe
   this.result = result;
 });
 
-Then("再帰的な検証は成功する", function (this: SafetyWorld) {
+Then("Recursive verification succeeds", function (this: SafetyWorld) {
   assert.equal(this.result?.code, 0);
 });
 
-Then("完了報告は元の内容で復元される", function (this: SafetyWorld) {
+Then("The completion report is restored with its original contents", function (this: SafetyWorld) {
   assert.equal(fs.readFileSync(runtimePath(projectRoot(this), ".deadloop", "promise.json"), "utf8"), completionReport);
 });
 
-Then("再帰的な検証は失敗する", function (this: SafetyWorld) {
+Then("Recursive verification fails", function (this: SafetyWorld) {
   assert.equal(this.result?.code, 1);
 });
 
-Then("deadloop は自動チェックを実行しない", function (this: SafetyWorld) {
+Then("deadloop does not run the project check", function (this: SafetyWorld) {
   assert.equal(fs.existsSync(path.join(projectRoot(this), checkMarker)), false);
 });
 
-Then("自動チェックは失敗結果を返す", function (this: SafetyWorld) {
+Then("The project check returns a failure result", function (this: SafetyWorld) {
   assert.equal(this.result?.code, 1);
 });
 
-Then("診断情報は元の内容で復元される", function (this: SafetyWorld) {
+Then("The diagnostic information is restored with its original contents", function (this: SafetyWorld) {
   assert.equal(fs.readFileSync(runtimePath(projectRoot(this), ".pi-subagents", "metadata.json"), "utf8"), diagnosticReport);
 });
 
-Then("時間切れの自動チェックはすぐに終了する", function (this: SafetyWorld) {
+Then("The timed-out project check terminates promptly", function (this: SafetyWorld) {
   assert.ok((this.elapsedMs ?? Infinity) < 500);
 });
 
-Then("自動チェックは中断として報告される", function (this: SafetyWorld) {
+Then("The project check is reported as interrupted", function (this: SafetyWorld) {
   assert.equal(this.result?.code, 130);
 });
 

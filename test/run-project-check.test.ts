@@ -3,10 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const helper = path.resolve("extensions/deadloop/automations/run-project-check.ts");
 const formatter = path.resolve("test/fixtures/project-check/recursive-json-formatter.cjs");
+const { runProjectCheck } = require("../src/project-check.ts") as {
+  runProjectCheck: (input: { cwd: string; command: string; quarantineRoot: string }) => Promise<unknown>;
+};
 const temporaryDirectories: string[] = [];
 
 function temporaryProject(): string {
@@ -36,6 +39,34 @@ function run(project: string, command: string, timeoutMs = 10_000) {
   return spawnSync(process.execPath, [helper, "--cwd", project, "--timeout-ms", String(timeoutMs), "--command", command], {
     encoding: "utf8",
   });
+}
+
+function runShared(project: string, command: string) {
+  const quarantineRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-project-check-quarantine-"));
+  temporaryDirectories.push(quarantineRoot);
+  return spawnSync(process.execPath, [helper, "--cwd", project, "--command", command, "--quarantine-root", quarantineRoot], {
+    encoding: "utf8",
+  });
+}
+
+async function partialIsolationRollbackFailure() {
+  const project = temporaryProject();
+  writeEvidence(project);
+  spawnSync("git", ["-C", project, "init", "--quiet"]);
+  const quarantineRoot = temporaryProject();
+  const renameSync = fs.renameSync.bind(fs);
+  const rename = vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
+    const sourcePath = source.toString();
+    if (sourcePath === path.join(project, ".pi-subagents")) throw new Error("isolation failed");
+    if (sourcePath.startsWith(quarantineRoot) && sourcePath.endsWith(".deadloop")) throw new Error("rollback failed");
+    renameSync(source, target);
+  });
+  try {
+    const failure: any = await runProjectCheck({ cwd: project, command: "true", quarantineRoot }).catch((error) => error);
+    return { failure, quarantineRoot };
+  } finally {
+    rename.mockRestore();
+  }
 }
 
 async function waitForFile(file: string): Promise<void> {
@@ -101,12 +132,53 @@ describe("run-project-check", () => {
     expectEvidence(project, evidence);
   });
 
-  it("restores generated evidence after a spawn failure", () => {
+  it("preserves restoration failure evidence when the checker cannot spawn", async () => {
     const project = temporaryProject();
-    const evidence = writeEvidence(project);
-    spawnSync(process.execPath, [helper, "--cwd", project, "--", path.join(project, "missing-executable")]);
+    writeEvidence(project);
+    spawnSync("git", ["-C", project, "init", "--quiet"]);
+    const quarantineRoot = temporaryProject();
+    const bin = temporaryProject();
+    fs.symlinkSync(spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim(), path.join(bin, "git"));
+    const originalPath = process.env.PATH;
+    let failure: any;
+    try {
+      process.env.PATH = bin;
+      const running = runProjectCheck({ cwd: project, command: "true", quarantineRoot });
+      fs.mkdirSync(path.join(project, ".deadloop"), { recursive: true });
+      fs.chmodSync(path.join(project, ".deadloop"), 0o500);
+      failure = await running.catch((error) => error);
+    } finally {
+      process.env.PATH = originalPath;
+      fs.chmodSync(path.join(project, ".deadloop"), 0o700);
+    }
 
-    expectEvidence(project, evidence);
+    expect({
+      message: failure?.message,
+      restorationFailure: failure?.restorationFailure,
+      quarantineRetained: fs.existsSync(failure?.restorationFailure?.quarantinePath || ""),
+    }).toMatchObject({
+      message: expect.stringContaining("spawn bash ENOENT"),
+      restorationFailure: {
+        message: expect.any(String),
+        quarantinePath: expect.stringContaining(quarantineRoot),
+      },
+      quarantineRetained: true,
+    });
+  });
+
+  it("reports restoration evidence when partial isolation rollback fails", async () => {
+    const { failure, quarantineRoot } = await partialIsolationRollbackFailure();
+
+    expect(failure?.restorationFailure).toMatchObject({
+      message: "rollback failed",
+      quarantinePath: expect.stringContaining(quarantineRoot),
+    });
+  });
+
+  it("retains quarantine when partial isolation rollback fails", async () => {
+    const { failure } = await partialIsolationRollbackFailure();
+
+    expect(fs.existsSync(failure?.restorationFailure?.quarantinePath || "")).toBe(true);
   });
 
   it("returns 124 after a timeout", () => {
@@ -163,5 +235,19 @@ describe("run-project-check", () => {
     writeEvidence(project);
 
     expect(run(project, "mkdir .deadloop").status).toBe(1);
+  });
+
+  it("preserves both old and new conflicting artifacts in the shared checker", () => {
+    const project = temporaryProject();
+    spawnSync("git", ["-C", project, "init", "--quiet"]);
+    fs.mkdirSync(path.join(project, ".deadloop"));
+    fs.writeFileSync(path.join(project, ".deadloop", "promise.json"), "old\n");
+
+    const result = runShared(project, "mkdir .deadloop && printf 'new\\n' > .deadloop/promise.json");
+    const contents = fs.readdirSync(path.join(project, ".deadloop"))
+      .map((name) => fs.readFileSync(path.join(project, ".deadloop", name), "utf8"))
+      .sort();
+
+    expect({ status: result.status, contents }).toEqual({ status: 0, contents: ["new\n", "old\n"] });
   });
 });

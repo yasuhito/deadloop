@@ -18,7 +18,7 @@ function assertSameLaunchTarget(selected: JsonObject, live: JsonObject | undefin
   if (!live || Number(live.number || 0) !== number) throw new StaleLaunchError(`${kind} #${number} is no longer selected`);
   const fields = kind === "issue"
     ? ["title", "body", "url"]
-    : ["state", "headRefName", "headRefOid", "isCrossRepository", "isDraft", "mergeStateStatus"];
+    : ["state", "headRefName", "headRefOid", "isCrossRepository", "isDraft", "mergeable", "mergeStateStatus"];
   for (const field of fields) {
     if (String(live[field] ?? "") !== String(selected[field] ?? "")) {
       throw new StaleLaunchError(`${kind} #${number} ${field} changed before launch`);

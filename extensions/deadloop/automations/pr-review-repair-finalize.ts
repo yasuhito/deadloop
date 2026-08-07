@@ -10,6 +10,7 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { assertAuthorizedSource } = require("./guarded-push.ts");
+const { repairAttempts } = require("./pr-review-repair-state.ts");
 
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
@@ -31,6 +32,7 @@ type EnabledProject = { githubRepo: string; githubRepositoryId: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => EnabledProject;
+  readRepairFindingCount?: (args: FinalizeArgs) => number;
 };
 
 function defaultRun(args: string[], timeoutMs?: number): CommandResult {
@@ -42,10 +44,14 @@ function defaultRun(args: string[], timeoutMs?: number): CommandResult {
   return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
 }
 
-function checked(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
+function checkedRaw(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
   const result = ops.run(args, timeoutMs);
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || `command failed: ${args.join(" ")}`).trim());
-  return result.stdout.trim();
+  return result.stdout;
+}
+
+function checked(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
+  return checkedRaw(ops, args, timeoutMs).trim();
 }
 
 function pushConditionally(
@@ -78,6 +84,42 @@ function pushConditionally(
   throw new Error((push.stderr || push.stdout || "conditional push failed").trim());
 }
 
+const MAX_CHANGED_FILES_PER_FINDING = 5;
+const MAX_CHANGED_FILES_ABSOLUTE = 20;
+
+function decideRepairSize(changedFileCount: number, findingCount: number): JsonObject {
+  if (!Number.isSafeInteger(changedFileCount) || changedFileCount < 0) throw new Error("changed file count must be a non-negative integer");
+  if (!Number.isSafeInteger(findingCount) || findingCount < 1) throw new Error("finding count must be a positive integer");
+  const perFindingLimit = findingCount * MAX_CHANGED_FILES_PER_FINDING;
+  const effectiveLimit = Math.min(perFindingLimit, MAX_CHANGED_FILES_ABSOLUTE);
+  const policy = {
+    changedFileCount,
+    findingCount,
+    maxChangedFilesPerFinding: MAX_CHANGED_FILES_PER_FINDING,
+    maxChangedFilesAbsolute: MAX_CHANGED_FILES_ABSOLUTE,
+    effectiveLimit,
+    rationale: "Automatic repair is limited to five changed files per finding and twenty changed files overall; larger repairs require human review because broad edits increase regression risk.",
+  };
+  return changedFileCount > effectiveLimit
+    ? { action: "human_required", reason: "repair_size_limit_exceeded", ...policy }
+    : { action: "push", reason: "repair_size_within_limit", ...policy };
+}
+
+function repairFindingCount(args: FinalizeArgs, ops: FinalizeOps): number {
+  if (ops.readRepairFindingCount) return ops.readRepairFindingCount(args);
+  const pr = JSON.parse(checked(ops, [
+    "gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "comments",
+  ], MAX_GUARDED_OPERATION_MS));
+  const matching = repairAttempts(pr.comments || []).filter(
+    (attempt: JsonObject) => attempt.headOid === args.expectedHead.toLowerCase() && Number.isSafeInteger(attempt.findingCount),
+  );
+  const counts = [...new Set<number>(matching.map((attempt: JsonObject) => Number(attempt.findingCount)))];
+  if (counts.length !== 1 || counts[0] < 1) {
+    throw new Error("persisted review repair marker does not provide one finding count for the expected PR head");
+  }
+  return counts[0];
+}
+
 function decideRepairPushGuard(pr: JsonObject, expectedBranch: string, expectedHead: string): JsonObject {
   if (String(pr.state || "").toUpperCase() !== "OPEN") return { action: "blocked", reason: "pr_not_open" };
   if (Boolean(pr.isCrossRepository)) return { action: "blocked", reason: "cross_repository_pr" };
@@ -96,6 +138,22 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     throw new Error("repair did not create a new commit");
   }
   if (checked(ops, ["git", "-C", args.repo, "status", "--porcelain"])) throw new Error("repair worktree is dirty before checks");
+
+  const changedFilesOutput = checkedRaw(ops, [
+    "git", "-C", args.repo, "-c", "diff.renameLimit=0", "diff", "--name-only", "-z", "--find-renames", args.expectedHead, candidateOid, "--",
+  ], MAX_GUARDED_OPERATION_MS);
+  const changedFileCount = changedFilesOutput ? changedFilesOutput.split("\0").filter(Boolean).length : 0;
+  const findingCount = repairFindingCount(args, ops);
+  const size = decideRepairSize(changedFileCount, findingCount);
+  if (size.action === "human_required") {
+    return {
+      action: "blocked",
+      reason: size.reason,
+      summary: `Repair changes ${changedFileCount} files; the automatic limit for ${findingCount} findings is ${size.effectiveLimit}.`,
+      originalHeadOid: args.expectedHead.toLowerCase(),
+      size,
+    };
+  }
 
   checked(ops, [
     "node",
@@ -160,6 +218,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       originalHeadOid: args.expectedHead.toLowerCase(),
       headOid: candidateOid.toLowerCase(),
       checks: [{ command: args.checkCommand, result: "passed" }],
+      size,
     };
   };
   if (ops.assertEnabled) {
@@ -245,4 +304,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { decideRepairPushGuard, finalizeReviewRepair, parseArgs };
+module.exports = { decideRepairPushGuard, decideRepairSize, finalizeReviewRepair, parseArgs };
