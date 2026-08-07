@@ -108,7 +108,7 @@ function repairDispatch(testCase: string): Record<string, unknown> {
         : { status: "complete", outcome: "changes_requested", reason: "", summary: "Repair required.", findings }),
     );
     const comments = testCase === "repeated-repair"
-      ? [{ body: renderRepairMarker(head, reviewResultFingerprint(findings)) }]
+      ? [{ body: renderRepairMarker(head, reviewResultFingerprint(findings)), author: { login: "deadloop-bot" } }]
       : testCase === "repeated-technical-failure"
         ? [{ body: renderTechnicalFailureMarker(head) }]
         : [];
@@ -123,7 +123,8 @@ function repairDispatch(testCase: string): Record<string, unknown> {
       `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
+if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number: 31, state: "OPEN", headRefName: "${branch}", headRefOid: "${currentHead}", isCrossRepository: false,
   labels: JSON.parse(fs.readFileSync(process.env.TEST_LABELS_FILE, "utf8")).map(name => ({name})),
   comments: JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"))
@@ -140,7 +141,7 @@ else {
   }
   if (args[0] === "pr" && args[1] === "comment") {
     const comments = JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"));
-    comments.push({body: args[args.indexOf("--body") + 1]});
+    comments.push({body: args[args.indexOf("--body") + 1], author: {login: "deadloop-bot"}});
     fs.writeFileSync(process.env.TEST_COMMENTS_FILE, JSON.stringify(comments));
   }
   fs.appendFileSync(process.env.TEST_GITHUB_LOG, args.join(" ") + "\\n");
