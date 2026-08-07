@@ -53,6 +53,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     projectId: source.DEADLOOP_PROJECT_ID || "project",
     repoPath: source.DEADLOOP_REPO_PATH || ".",
     githubRepo: source.DEADLOOP_GITHUB_REPO || "",
+    automationLogin: source.DEADLOOP_AUTOMATION_LOGIN || "",
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
@@ -538,7 +539,7 @@ function launchPrReviewerFlow(
   prepareAgentLaunchFlow(plan.input, ops);
   recordAgentLaunchGithubClaimed(plan.input);
   const launch = launchAgentFlow(plan.input, ops);
-  return { reviewerName: plan.reviewerName, headRefName: plan.headRefName, ...launch };
+  return { reviewerName: plan.reviewerName, headRefName: plan.headRefName, reason, ...launch };
 }
 
 function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
@@ -561,7 +562,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
       }
     },
   );
-  return { reviewerName, headRefName, ...launch, ...(fixture ? { simulated: true } : {}) };
+  return { reviewerName, headRefName, reason, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
 function draftBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>): string {
@@ -632,10 +633,19 @@ function drive(fixturePath: string | undefined): DriverResult {
     runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   }
   const fixture = loadFixture(fixturePath);
-  const env = envConfig();
-  if (!env.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
-
-  const prs = fixture ? fixture.prs || [] : livePrs(env.githubRepo);
+  const configuredEnv = envConfig();
+  if (!configuredEnv.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
+  const prs = fixture ? fixture.prs || [] : livePrs(configuredEnv.githubRepo);
+  const hasRepairResultMarker = prs.some((pr: JsonObject) =>
+    (pr.comments || []).some((comment: JsonObject) => String(comment.body || "").includes("<!-- deadloop:review-repair-result ")),
+  );
+  const automationLogin = fixture
+    ? String(fixture.automationLogin || "deadloop-bot")
+    : configuredEnv.automationLogin || (hasRepairResultMarker ? runText(["gh", "api", "user", "--jq", ".login"]).trim() : "");
+  if (hasRepairResultMarker && !automationLogin) {
+    return driverResult("error", "authenticated GitHub identity is unavailable", { driverAction: "configuration_error" });
+  }
+  const env = { ...configuredEnv, automationLogin };
   const agents = fixture ? fixture.agents || { result: { agents: [] } } : liveAgents();
   const plan = planPrReviewerAction(prs, agents, env);
 
@@ -787,12 +797,15 @@ function drive(fixturePath: string | undefined): DriverResult {
     const { applied, githubEffects } = applyExternalReviewRequest(plan.pr, env, fixture);
     if (!applied) {
       return driverResult("skip", `PR #${plan.decision.number} changed before external review request`, {
-        driverAction: "external_review_request_stale", prNumber: plan.decision.number,
+        driverAction: "external_review_request_stale",
+        prNumber: plan.decision.number,
+        decision: plan.decision,
       });
     }
     return driverResult("done", `Requested external review for PR #${plan.decision.number}`, {
       driverAction: "external_review_requested",
       prNumber: plan.decision.number,
+      decision: plan.decision,
       gate: plan.gate,
       ...(fixture ? { githubEffects, testAdapterEffects: fixtureEffects(fixture) } : {}),
     });
@@ -801,6 +814,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     return driverResult("skip", `Waiting for external review on PR #${plan.decision.number}`, {
       driverAction: "wait",
       prNumber: plan.decision.number,
+      decision: plan.decision,
       gate: plan.gate,
     });
   }
@@ -852,6 +866,7 @@ function drive(fixturePath: string | undefined): DriverResult {
   return driverResult("needs_llm", `Launched reviewer agent for PR #${decision.number}`, {
     driverAction: "reviewer_monitor_request",
     prNumber: decision.number,
+    decision,
     gate,
     launch,
     monitorHandoff: { kind: "reviewer", input: monitorInput },

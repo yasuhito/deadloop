@@ -4,6 +4,7 @@ const {
   selectPrForReview,
   attemptJournalsForPrReviewer,
   workingReviewerPrNumbers,
+  claimedReviewerHeads,
 } = require("./pr-reviewer-decisions.ts");
 
 type JsonObject = Record<string, any>;
@@ -11,6 +12,7 @@ type JsonObject = Record<string, any>;
 type PrReviewerFlowEnv = {
   projectId: string;
   githubRepo: string;
+  automationLogin: string;
   stateDir: string;
   reviewLabel: string;
   reviewingLabel: string;
@@ -47,6 +49,7 @@ function decisionConfig(env: PrReviewerFlowEnv): JsonObject {
     externalReviewEnabled: env.externalReviewEnabled,
     externalReviewWaitSeconds,
     projectId: env.projectId,
+    automationLogin: env.automationLogin,
     now,
   });
 }
@@ -62,12 +65,13 @@ function selectedPr(prs: JsonObject[], number: number): JsonObject {
 
 function planPrReviewerAction(prs: JsonObject[], agents: JsonObject, env: PrReviewerFlowEnv): PrReviewerPlan {
   const config = decisionConfig(env);
-  const decision = selectPrForReview(prs, config, workingReviewerPrNumbers(
-    agents,
-    env.projectId,
-    env.stateDir ? attemptJournalsForPrReviewer(env.stateDir) : [],
-    env.githubRepo || "",
-  ));
+  const attempts = env.stateDir ? attemptJournalsForPrReviewer(env.stateDir) : [];
+  const decision = selectPrForReview(
+    prs,
+    config,
+    workingReviewerPrNumbers(agents, env.projectId, attempts, env.githubRepo || ""),
+    claimedReviewerHeads(env.projectId, attempts, env.githubRepo || ""),
+  );
 
   if (!decision.selected) {
     if (hasSkippedReason(decision, ["pending_checks", "external_review_wait"])) {
@@ -103,7 +107,7 @@ function planPrReviewerAction(prs: JsonObject[], agents: JsonObject, env: PrRevi
     decision,
     pr,
     gate,
-    reason: String(gate.reason || decision.reason || "review_required"),
+    reason: String(decision.reason || "review_required"),
   };
 }
 

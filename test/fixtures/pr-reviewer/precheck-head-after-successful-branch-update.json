@@ -1,0 +1,29 @@
+[
+  {
+    "number": 31,
+    "title": "Later head after successful branch-update output",
+    "url": "https://github.com/owner/repo/pull/31",
+    "updatedAt": "2026-07-08T00:00:00Z",
+    "headRefName": "agent/issue-31",
+    "headRefOid": "dddddddddddddddddddddddddddddddddddddddd",
+    "isCrossRepository": false,
+    "isDraft": false,
+    "labels": [
+      { "name": "agent:review" },
+      { "name": "agent:reviewing" }
+    ],
+    "statusCheckRollup": [],
+    "comments": [
+      {
+        "author": { "login": "deadloop-bot" },
+        "body": "<!-- deadloop:review-repair-result key=c4ddc9641edec4e267b2 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->"
+      },
+      {
+        "author": { "login": "deadloop-bot" },
+        "body": "<!-- deadloop:attempt-result-v1 data=eyJhdHRlbXB0SWQiOiJicmFuY2gtdXBkYXRlLXN1Y2Nlc3MiLCJyb2xlIjoiYnJhbmNoLXVwZGF0ZSIsInJlcG9zaXRvcnkiOiJvd25lci9yZXBvIiwidGFyZ2V0Ijp7ImtpbmQiOiJwdWxsLXJlcXVlc3QiLCJudW1iZXIiOjMxfSwiaW5wdXRSZXZpc2lvbiI6eyJoZWFkIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsImJhc2UiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIn0sIm91dGNvbWUiOiJicmFuY2hfdXBkYXRlX3B1c2hlZCIsIm91dHB1dFJldmlzaW9uIjoiY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYyIsInB1c2hSZWNvcmRlZCI6dHJ1ZSwic3VjY2Vzc0NsYWltUmVjb3JkZWQiOnRydWUsInZhbGlkYXRpb25QYXNzZWQiOnRydWV9 -->"
+      }
+    ],
+    "reviewRequests": [],
+    "mergeStateStatus": "CLEAN"
+  }
+]

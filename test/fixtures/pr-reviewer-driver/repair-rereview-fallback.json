@@ -1,0 +1,29 @@
+{
+  "prs": [
+    {
+      "number": 32,
+      "title": "Repaired PR awaiting fallback review",
+      "url": "https://github.com/owner/repo/pull/32",
+      "headRefName": "agent/issue-32",
+      "headRefOid": "dddddddddddddddddddddddddddddddddddddddd",
+      "updatedAt": "2026-07-07T23:00:00Z",
+      "isDraft": false,
+      "labels": [{ "name": "agent:review" }],
+      "statusCheckRollup": [],
+      "comments": [
+        {
+          "createdAt": "2026-07-07T22:30:00Z",
+          "author": { "login": "deadloop-bot" },
+          "body": "<!-- deadloop:review-repair-result key=c4ddc9641edec4e267b2 head=dddddddddddddddddddddddddddddddddddddddd -->"
+        },
+        {
+          "createdAt": "2026-07-07T23:00:00Z",
+          "author": { "login": "deadloop-bot" },
+          "body": "@coderabbitai review\n\n<!-- deadloop:external-review-request head=dddddddddddddddddddddddddddddddddddddddd -->"
+        }
+      ],
+      "reviewRequests": []
+    }
+  ],
+  "agents": { "result": { "agents": [] } }
+}

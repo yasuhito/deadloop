@@ -102,6 +102,18 @@ This prevents duplicate and early reviews of pull requests that are being prepar
 * When deadloop searches for review target
 * Then deadloop selects pull request #13 for review
 
+## Scenario: Record stale review claim recovery as the selection reason
+
+* Given There is a pull request under review with no active agents.
+* When deadloop searches for review target
+* Then The selection reason is stale review claim recovery
+
+## Scenario: Record repair re-review as the selection reason
+
+* Given There is a pull request waiting for re-review after repair
+* When deadloop searches for review target
+* Then The selection reason is repair re-review
+
 ## Scenario: Do not treat an attempt abandoned with evidence as owning the pull request
 
 * Given There is a pull request waiting for review with an abandoned attempt with evidence.

@@ -108,7 +108,7 @@ function repairDispatch(testCase: string): Record<string, unknown> {
         : { status: "complete", outcome: "changes_requested", reason: "", summary: "Repair required.", findings }),
     );
     const comments = testCase === "repeated-repair"
-      ? [{ body: renderRepairMarker(head, reviewResultFingerprint(findings)) }]
+      ? [{ body: renderRepairMarker(head, reviewResultFingerprint(findings)), author: { login: "deadloop-bot" } }]
       : testCase === "repeated-technical-failure"
         ? [{ body: renderTechnicalFailureMarker(head) }]
         : [];
@@ -123,7 +123,8 @@ function repairDispatch(testCase: string): Record<string, unknown> {
       `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
+if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number: 31, state: "OPEN", headRefName: "${branch}", headRefOid: "${currentHead}", isCrossRepository: false,
   labels: JSON.parse(fs.readFileSync(process.env.TEST_LABELS_FILE, "utf8")).map(name => ({name})),
   comments: JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"))
@@ -140,7 +141,7 @@ else {
   }
   if (args[0] === "pr" && args[1] === "comment") {
     const comments = JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"));
-    comments.push({body: args[args.indexOf("--body") + 1]});
+    comments.push({body: args[args.indexOf("--body") + 1], author: {login: "deadloop-bot"}});
     fs.writeFileSync(process.env.TEST_COMMENTS_FILE, JSON.stringify(comments));
   }
   fs.appendFileSync(process.env.TEST_GITHUB_LOG, args.join(" ") + "\\n");
@@ -301,6 +302,10 @@ Given("Conflict recovery changed the pull request head", function (this: Recover
   this.case = "resolved-conflict";
 });
 
+Given("Conflict recovery changed a repaired pull request head", function (this: RecoveryWorld) {
+  this.case = "resolved-repaired-conflict";
+});
+
 Given("A pull request has actionable review findings for the first time", function (this: RecoveryWorld) {
   this.case = "first-repair";
 });
@@ -349,6 +354,7 @@ When("deadloop checks the pull request", function (this: RecoveryWorld) {
   if (this.case === "conflict") this.result = reviewerDriver("merge-conflict.json");
   if (this.case === "repeated-conflict") this.result = reviewerDriver("merge-conflict-double-attempt.json");
   if (this.case === "resolved-conflict") this.result = reviewerDriver("merge-conflict-updated.json");
+  if (this.case === "resolved-repaired-conflict") this.result = reviewerDriver("repaired-merge-conflict-updated.json");
   if (this.case === "repaired-head") this.result = reviewerDriver("review-repair-pushed.json");
 });
 
@@ -392,6 +398,10 @@ Then("deadloop does not start another dedicated conflict-recovery attempt", func
 Then("deadloop returns the pull request to normal review", function (this: RecoveryWorld) {
   const starts = adapterEffects(this.result)?.herdrStarts?.filter((start: any) => start.name.endsWith("-reviewer")) ?? [];
   assert.equal(starts.length, 1);
+});
+
+Then("The selection reason after conflict recovery is repair re-review", function (this: RecoveryWorld) {
+  assert.equal((this.result?.decision as { reason?: string } | undefined)?.reason, "repair_rereview");
 });
 
 Then("deadloop preserves the review state", function (this: RecoveryWorld) {

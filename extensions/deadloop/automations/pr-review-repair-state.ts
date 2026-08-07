@@ -3,6 +3,7 @@ const { createHash } = require("node:crypto") as typeof import("node:crypto");
 type JsonObject = Record<string, any>;
 
 const REPAIR_MARKER_RE = /<!--\s*deadloop:review-repair-attempt\s+key=([0-9a-f]+)\s+head=([0-9a-f]+)\s+review=([0-9a-f]+)(?:\s+findings=([1-9][0-9]*))?\s*-->/gi;
+const MAX_CUMULATIVE_REPAIR_ATTEMPTS = 3;
 const TECHNICAL_MARKER_RE = /<!--\s*deadloop:review-technical-failure\s+head=([0-9a-f]+)\s*-->/gi;
 
 function normalizedFinding(finding: JsonObject): JsonObject {
@@ -43,9 +44,10 @@ function renderRepairMarker(headOid: string, reviewFingerprint: string, findingC
   return `<!-- deadloop:review-repair-attempt key=${repairAttemptKey(headOid, reviewFingerprint)} head=${headOid.toLowerCase()} review=${reviewFingerprint.toLowerCase()}${count} -->`;
 }
 
-function repairAttempts(comments: JsonObject[]): JsonObject[] {
+function repairAttempts(comments: JsonObject[], authorLogin?: string): JsonObject[] {
   const attempts: JsonObject[] = [];
   for (const comment of comments || []) {
+    if (authorLogin && String(comment?.author?.login || "").toLowerCase() !== authorLogin.toLowerCase()) continue;
     const body = String(comment?.body || "");
     REPAIR_MARKER_RE.lastIndex = 0;
     for (let match = REPAIR_MARKER_RE.exec(body); match; match = REPAIR_MARKER_RE.exec(body)) {
@@ -60,15 +62,33 @@ function repairAttempts(comments: JsonObject[]): JsonObject[] {
   return attempts;
 }
 
-function selectRepairAttempt(comments: JsonObject[], headOid: string, findings: JsonObject[]): JsonObject {
+function selectRepairAttempt(comments: JsonObject[], headOid: string, findings: JsonObject[], authorLogin: string): JsonObject {
   const reviewFingerprint = reviewResultFingerprint(findings);
   const key = repairAttemptKey(headOid, reviewFingerprint);
-  const attempts = repairAttempts(comments);
+  const attempts = repairAttempts(comments, authorLogin);
   if (attempts.some((attempt) => attempt.key === key)) {
-    return { action: "already_attempted", reason: "duplicate_dispatch", key, reviewFingerprint };
+    return {
+      action: "already_attempted",
+      reason: "duplicate_dispatch",
+      key,
+      reviewFingerprint,
+      attempts: attempts.length,
+      limit: MAX_CUMULATIVE_REPAIR_ATTEMPTS,
+      cumulativeLimitExceeded: attempts.length > MAX_CUMULATIVE_REPAIR_ATTEMPTS,
+    };
   }
   if (attempts.some((attempt) => attempt.reviewFingerprint === reviewFingerprint)) {
     return { action: "human_required", reason: "repeated_findings", key, reviewFingerprint };
+  }
+  if (attempts.length >= MAX_CUMULATIVE_REPAIR_ATTEMPTS) {
+    return {
+      action: "human_required",
+      reason: "cumulative_repair_limit",
+      key,
+      reviewFingerprint,
+      attempts: attempts.length,
+      limit: MAX_CUMULATIVE_REPAIR_ATTEMPTS,
+    };
   }
   return { action: "launch_repair", reason: "actionable_findings", key, reviewFingerprint };
 }

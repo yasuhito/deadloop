@@ -12,15 +12,15 @@
       "labels": [
         {
           "name": "agent:review"
-        },
-        {
-          "name": "agent:reviewing"
         }
       ],
       "statusCheckRollup": [],
       "comments": [
         {
-          "body": "<!-- deadloop:review-repair-attempt key=c4ddc9641edec4e267b2 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=0621b60e5337fe8290d8 -->"
+          "author": {
+            "login": "deadloop-bot"
+          },
+          "body": "<!-- deadloop:review-repair-result key=c4ddc9641edec4e267b2 head=cccccccccccccccccccccccccccccccccccccccc -->"
         }
       ],
       "reviewRequests": [],
