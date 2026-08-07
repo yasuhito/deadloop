@@ -59,6 +59,10 @@ describe("package manifest files", () => {
     expect(packageJson.files).toContain("docs/*.md");
   });
 
+  it("includes architecture decision records", () => {
+    expect(packageJson.files).toContain("docs/adr/*.md");
+  });
+
   it("includes README image assets", () => {
     expect(packageJson.files).toContain("docs/assets/*.webp");
   });

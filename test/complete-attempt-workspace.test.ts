@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createPreparedAttempt, readAttemptRecord, transitionPersistedAttempt } from "../src/attempt-lifecycle";
 
-const { completeLocked } = require("../extensions/deadloop/automations/complete-attempt-workspace.ts");
+const { assertWorkerPersistenceAuthorized, completeLocked: completeLockedRaw } = require("../extensions/deadloop/automations/complete-attempt-workspace.ts");
+const completeLocked = (args: any, runner: any, recheck: () => void, authorizeWorker?: (...values: any[]) => void) =>
+  completeLockedRaw(args, runner, recheck, authorizeWorker || (() => {}));
 const { renderAttemptPersistenceMarker } = require("../src/attempt-persistence-marker.cjs");
 
 const roots: string[] = [];
@@ -16,7 +19,9 @@ function fixture(withMarker: boolean) {
   mkdirSync(worktree); mkdirSync(path.join(root, ".git"));
   createPreparedAttempt(runDir, {
     attemptId: "launch-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker",
-    target: { kind: "issue", number: 12 }, inputRevision: { head: inputHead }, branch: "agent/issue-12", baseBranch: "origin/main",
+    target: { kind: "issue", number: 12 }, inputRevision: { head: inputHead }, requiredVerification: {
+      repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: inputHead,
+    }, branch: "agent/issue-12", baseBranch: "origin/main",
     worktreePath: worktree, agentName: "dl-w-12-123456789abc", workspaceLabel: "Issue 12",
     promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
   });
@@ -85,6 +90,66 @@ describe("selected attempt workspace completion", () => {
     const data = fixture(true);
     data.setWorkspaceOpen(false);
     const result = completeLocked(data.args, data.runner, () => undefined);
+    expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
+  });
+
+  it("retains a proven Worker workspace when authoritative verification evidence is missing", () => {
+    const data = fixture(true);
+    const result = completeLocked(data.args, data.runner, () => undefined, (record: any, report: any, args: any) =>
+      assertWorkerPersistenceAuthorized(record, report, args, () => record.requiredVerification));
+    expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
+  });
+
+  function syntheticLocalSourceAuthorization(repositoryId?: string) {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-complete-local-policy-")); roots.push(root);
+    const remote = path.join(root, "remote.git"); const seed = path.join(root, "seed"); const checkout = path.join(root, "checkout");
+    const stateDir = path.join(root, "state"); const runDir = path.join(stateDir, "runs", "attempt-1");
+    execFileSync("git", ["init", "--bare", "--quiet", remote]);
+    execFileSync("git", ["init", "--quiet", "-b", "main", seed]);
+    execFileSync("git", ["-C", seed, "config", "user.name", "Test"]); execFileSync("git", ["-C", seed, "config", "user.email", "test@example.com"]);
+    writeFileSync(path.join(seed, "file.txt"), "base\n"); execFileSync("git", ["-C", seed, "add", "file.txt"]); execFileSync("git", ["-C", seed, "commit", "--quiet", "-m", "base"]);
+    execFileSync("git", ["-C", seed, "remote", "add", "origin", remote]); execFileSync("git", ["-C", seed, "push", "--quiet", "-u", "origin", "main"]);
+    execFileSync("git", ["clone", "--quiet", "-b", "main", remote, checkout]); mkdirSync(runDir, { recursive: true });
+    const baseRevision = execFileSync("git", ["-C", checkout, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
+    const configFile = path.join(stateDir, "projects.json");
+    writeFileSync(configFile, JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "true" }] }));
+    const contract = { repository: "owner/repo", command: "true", source: { kind: "local", location: `${configFile}#project=demo` }, baseRevision };
+    const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head: baseRevision }, branch: "agent/issue-1", baseBranch: "origin/main", worktreePath: checkout, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "worker-prompt.md"), promiseFile: path.join(runDir, "promise.json"), requiredVerification: contract };
+    require("../src/worker-required-verification-runtime.cjs").writeWorkerContractSnapshot(runDir, attempt);
+    const report = { role: "worker", status: "complete", result: { outputRevision: baseRevision } };
+    const attemptRecord = path.join(runDir, "attempt.json");
+    writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify({ version: 1, binding: { ...contract, targetCommit: baseRevision }, outcome: "passed", exitCode: 0, startedAt: "2026-08-06T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "required-verification.log") }));
+
+    return () => assertWorkerPersistenceAuthorized(attempt, report, { attemptRecord, projectRepo: checkout, stateDir }, undefined, repositoryId);
+  }
+
+  it("does not authorize a synthetic local-source record with another repository identity", () => {
+    expect(syntheticLocalSourceAuthorization("R_owner_repo")).toThrow("stale_policy");
+  });
+
+  it("does not authorize a synthetic local-source record without host execution", () => {
+    expect(syntheticLocalSourceAuthorization()).toThrow("host execution authenticity");
+  });
+
+  it("re-resolves current policy after reading completion-time verification", () => {
+    const data = fixture(true); const record = readAttemptRecord(data.runDir); let resolutions = 0;
+    try {
+      assertWorkerPersistenceAuthorized(record, JSON.parse(readFileSync(record.promiseFile, "utf8")), data.args, () => {
+        resolutions += 1;
+        return record.requiredVerification;
+      });
+    } catch {}
+    expect(resolutions).toBe(2);
+  });
+
+  it("retains a proven Worker workspace when verification evidence names another output", () => {
+    const data = fixture(true); const record = readAttemptRecord(data.runDir);
+    writeFileSync(path.join(data.runDir, "required-verification.json"), JSON.stringify({
+      version: 1, binding: { ...record.requiredVerification, targetCommit: "c".repeat(40) },
+      outcome: "passed", exitCode: 0,
+    }));
+    const result = completeLocked(data.args, data.runner, () => undefined, (attempt: any, report: any, args: any) =>
+      assertWorkerPersistenceAuthorized(attempt, report, args, () => attempt.requiredVerification));
     expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
   });
 

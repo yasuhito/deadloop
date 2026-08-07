@@ -70,6 +70,9 @@ function launchWorker(world: WorkerWorld): void {
         role: "worker",
         target: { kind: "issue", number: 12 },
         inputRevision: { head: "f".repeat(40) },
+        requiredVerification: {
+          repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "f".repeat(40),
+        },
         intendedWorktreePath: worktreePath,
         resolveWorktreeHead: true,
         renderPrompt: ({ promiseFile }: { promiseFile: string }) => `promise: ${promiseFile}`,

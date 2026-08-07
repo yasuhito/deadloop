@@ -35,7 +35,7 @@ function withEnabledDriverLaunch(project, mutateWorkflowState, launchAgent, opti
     // The launch journal must be durable before the first external workflow mutation.
     options.prepareAttempt?.();
     recheck();
-    mutateWorkflowState(recheck);
+    mutateWorkflowState(recheck, _enabled);
     // The guarded claim is durable before any runner/workspace operation.
     options.recordClaim?.();
     recheck();

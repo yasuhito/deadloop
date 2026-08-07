@@ -250,6 +250,16 @@ describe("deterministic extension core", () => {
     });
   });
 
+  it("passes the selected projects.json path to completion automations", () => {
+    const project = projectsFromConfig(
+      { projects: [{ id: "demo", automations: [{}] }] },
+      undefined,
+      { configPath: "/extension/projects.json" },
+    )[0];
+
+    expect(automationEnvironment(project, project.automations[0]).DEADLOOP_CONFIG).toBe("/extension/projects.json");
+  });
+
   it("does not expose the retired CI fallback auto-merge environment variable", () => {
     const project = normalizeProject({ automations: [{}] });
 

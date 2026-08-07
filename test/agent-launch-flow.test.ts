@@ -1,10 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../src/agent-launch-flow.ts");
+const { assertPreparedWorkerContractCurrent, assertWorkerLaunchBaseCurrent, issueWorkerLaunchPlan } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
 const { transitionPersistedAttempt } = require("../src/attempt-lifecycle-runtime.cjs");
 
 function input(root: string, role: "worker" | "reviewer" = "worker") {
@@ -27,6 +29,12 @@ function input(root: string, role: "worker" | "reviewer" = "worker") {
     role,
     target: { kind: role === "worker" ? "issue" as const : "pull-request" as const, number },
     inputRevision: { head: "a".repeat(40) },
+    ...(role === "worker" ? { requiredVerification: {
+      repository: "owner/repo",
+      command: "npm test",
+      source: { kind: "repo_policy" as const, location: "deadloop.json" },
+      baseRevision: "a".repeat(40),
+    } } : {}),
     intendedWorktreePath: role === "worker" ? "/wt/worker" : "/wt/review",
     resolveWorktreeHead: role === "worker",
     renderPrompt: ({ promiseFile, worktreeHead }: { promiseFile: string; worktreeHead?: string }) =>
@@ -68,6 +76,88 @@ describe("0.7.5 エージェント起動フロー", () => {
       const ops = operations(root, "worker", []);
       const prepared = prepareAgentLaunchFlow(input(root), ops);
       expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).phase).toBe("prepared");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("最初の外部副作用より前に Worker の必須検証契約を固定する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const prepared = prepareAgentLaunchFlow(input(root), operations(root, "worker", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).requiredVerification.command).toBe("npm test");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("起動リポジトリと異なる必須検証契約を拒否する", () => {
+    expect(() => issueWorkerLaunchPlan(
+      { number: 1, title: "Task" },
+      { projectId: "demo", githubRepo: "owner/repo", baseBranch: "origin/main", checkCommand: "npm test", requiredVerification: JSON.stringify({ repository: "other/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "a".repeat(40) }), fixtureMode: false, worktreeRoot: "/wt", automationDir: "/automation", stateDir: "/state", workerAgent: "pi", workerModel: "", workerInstructions: "" },
+      "launch", "a".repeat(40),
+    )).toThrow("repository");
+  });
+
+  it("選択したベースと異なる必須検証契約を拒否する", () => {
+    expect(() => issueWorkerLaunchPlan(
+      { number: 1, title: "Task" },
+      { projectId: "demo", githubRepo: "owner/repo", baseBranch: "origin/main", checkCommand: "npm test", requiredVerification: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "b".repeat(40) }), fixtureMode: false, worktreeRoot: "/wt", automationDir: "/automation", stateDir: "/state", workerAgent: "pi", workerModel: "", workerInstructions: "" },
+      "launch", "a".repeat(40),
+    )).toThrow("base revision");
+  });
+
+  it("選択後にベースが進んだ Worker 起動を拒否する", () => {
+    expect(() => assertWorkerLaunchBaseCurrent(
+      { repoPath: "/repo", baseBranch: "origin/main" },
+      "a".repeat(40),
+      () => "b".repeat(40),
+    )).toThrow("base commit changed");
+  });
+
+  it("リダイレクトされたリモートでは Worker の要求状態を変更しない", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-redirected-remote-"));
+    try {
+      const repo = path.join(root, "repo"); const remote = path.join(root, "redirected.git");
+      execFileSync("git", ["init", "--bare", "--quiet", remote]); execFileSync("git", ["init", "--quiet", "-b", "main", repo]);
+      execFileSync("git", ["-C", repo, "config", "user.name", "Test"]); execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
+      writeFileSync(path.join(repo, "deadloop.json"), JSON.stringify({ checkCommand: "npm test" }));
+      execFileSync("git", ["-C", repo, "add", "."]); execFileSync("git", ["-C", repo, "commit", "--quiet", "-m", "base"]);
+      execFileSync("git", ["-C", repo, "remote", "add", "origin", remote]); execFileSync("git", ["-C", repo, "push", "--quiet", "-u", "origin", "main"]);
+      const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      const launchInput = { ...input(root), repoPath: repo, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head } };
+      prepareAgentLaunchFlow(launchInput, operations(root, "worker", []));
+
+      expect(() => assertPreparedWorkerContractCurrent(launchInput, { stateDir: root, repoPath: repo, configPath: "" }, "R_owner_repo")).toThrow("stale_policy");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("準備中にローカル検証方針が変わった Worker 起動を要求状態の変更前に拒否する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-policy-"));
+    try {
+      const repo = path.join(root, "repo"); const remote = path.join(root, "remote.git"); const config = path.join(root, "projects.json");
+      execFileSync("git", ["init", "--bare", "--quiet", remote]); execFileSync("git", ["init", "--quiet", "-b", "main", repo]);
+      execFileSync("git", ["-C", repo, "config", "user.name", "Test"]); execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
+      writeFileSync(path.join(repo, "file.txt"), "base\n"); execFileSync("git", ["-C", repo, "add", "."]); execFileSync("git", ["-C", repo, "commit", "--quiet", "-m", "base"]);
+      execFileSync("git", ["-C", repo, "remote", "add", "origin", remote]); execFileSync("git", ["-C", repo, "push", "--quiet", "-u", "origin", "main"]);
+      const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      writeFileSync(config, JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm test" }] }));
+      const launchInput = { ...input(root), repoPath: repo, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "local", location: `${config}#project=demo` }, baseRevision: head } };
+      prepareAgentLaunchFlow(launchInput, operations(root, "worker", []));
+      writeFileSync(config, JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm run stricter-check" }] }));
+
+      expect(() => assertPreparedWorkerContractCurrent(launchInput, { stateDir: root, repoPath: repo, configPath: config })).toThrow("stale_policy");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("既存作業ツリーを開き直す Worker に設定済みの非 main ベースを記録する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const plan = issueWorkerLaunchPlan(
+        { number: 1, title: "Task" },
+        { projectId: "demo", githubRepo: "owner/repo", baseBranch: "origin/release", checkCommand: "npm test", fixtureMode: true, worktreeRoot: "/wt", automationDir: "/automation", stateDir: root, workerAgent: "pi", workerModel: "", workerInstructions: "" },
+        "requeue-launch",
+        "a".repeat(40),
+        { branch: "agent/issue-1", worktreePath: "/wt/agent-issue-1", inputHead: "a".repeat(40), abandonedAt: "now", workspaceId: "old", agentName: "old" },
+      );
+      const prepared = prepareAgentLaunchFlow(plan.input, operations(root, "worker", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).baseBranch).toBe("origin/release");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

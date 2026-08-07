@@ -9,13 +9,15 @@ const {
 } = require("./attempt-lifecycle-runtime.cjs");
 const { deriveHerdr075AgentName } = require("./herdr-agent-name.cjs");
 const { createHerdrRunner } = require("./herdr-runner.ts");
+const { writeWorkerContractSnapshot } = require("./worker-required-verification-runtime.cjs");
 
 import type { AttemptRecord, AttemptRole, AttemptTarget, InputRevision, PreparedAttemptInput } from "./attempt-lifecycle";
+import type { RequiredVerificationContract } from "./required-verification";
 import type { RunnerAdapter } from "./runner";
 
 type WorktreeRequest =
   | { mode: "create"; branch: string; baseBranch: string }
-  | { mode: "open"; branch: string };
+  | { mode: "open"; branch: string; baseBranch?: string };
 
 type AgentLaunchFlowInput = {
   worktree: WorktreeRequest;
@@ -37,6 +39,7 @@ type AgentLaunchFlowInput = {
   intendedWorktreePath: string;
   resolveWorktreeHead?: boolean;
   autoMergePolicy?: boolean;
+  requiredVerification?: RequiredVerificationContract;
   renderPrompt: (input: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => string;
 };
 
@@ -90,13 +93,14 @@ function preparedRecordInput(input: AgentLaunchFlowInput, prepared: PreparedLaun
     target: input.target,
     inputRevision: input.inputRevision,
     branch: input.worktree.branch,
-    ...(input.worktree.mode === "create" ? { baseBranch: input.worktree.baseBranch } : {}),
+    ...(input.worktree.baseBranch === undefined ? {} : { baseBranch: input.worktree.baseBranch }),
     worktreePath: input.intendedWorktreePath,
     agentName: prepared.agentName,
     workspaceLabel: input.workspaceLabel,
     promptFile: prepared.promptFile,
     promiseFile: prepared.promiseFile,
     ...(input.autoMergePolicy === undefined ? {} : { autoMergePolicy: input.autoMergePolicy }),
+    ...(input.requiredVerification === undefined ? {} : { requiredVerification: input.requiredVerification }),
   };
 }
 
@@ -143,11 +147,15 @@ function samePreparedIdentity(record: AttemptRecord, expected: PreparedAttemptIn
     && record.agentName === expected.agentName && record.workspaceLabel === expected.workspaceLabel
     && path.resolve(record.promptFile) === path.resolve(expected.promptFile)
     && path.resolve(record.promiseFile) === path.resolve(expected.promiseFile)
-    && record.autoMergePolicy === expected.autoMergePolicy;
+    && record.autoMergePolicy === expected.autoMergePolicy
+    && JSON.stringify(record.requiredVerification) === JSON.stringify(expected.requiredVerification);
 }
 
 /** Persist the launch intent before a GitHub claim, label, comment, or runner mutation. */
 function prepareAgentLaunchFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): PreparedLaunch {
+  if (input.role === "worker" && !input.requiredVerification) {
+    throw new Error("Worker launch requires a resolved required verification contract");
+  }
   const prepared = launchPaths(input);
   const expected = preparedRecordInput(input, prepared);
   ops.mkdirSync(prepared.runDir, { recursive: true, mode: 0o700 });
@@ -172,10 +180,12 @@ function prepareAgentLaunchFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlo
     if (existing.phase !== "prepared" && existing.phase !== "github_claimed") {
       throw new Error(`attempt phase ${existing.phase} cannot resume launch preparation`);
     }
+    writeWorkerContractSnapshot(prepared.runDir, expected);
     return prepared;
   } catch (error) {
     if (error instanceof Error && !error.message.startsWith("Attempt record is missing:")) throw error;
   }
+  writeWorkerContractSnapshot(prepared.runDir, expected);
   createPreparedAttempt(prepared.runDir, expected);
   if (!file) throw new Error("attempt record path is unavailable");
   return prepared;

@@ -780,11 +780,15 @@ export function automationEnvironment(
   const values = automationRuntimeValues(project, automation, "");
   return {
     DEADLOOP_PROJECT_ID: envText(values.projectId),
+    DEADLOOP_CONFIG: envText(project.configSource.localPath),
     DEADLOOP_REPO_PATH: envText(values.repoPath),
     DEADLOOP_GITHUB_REPO: envText(values.githubRepo),
     DEADLOOP_BASE_BRANCH: envText(values.baseBranch),
     DEADLOOP_WORKTREE_ROOT: envText(values.worktreeRoot),
     DEADLOOP_CHECK_COMMAND: envText(values.checkCommand),
+    DEADLOOP_REQUIRED_VERIFICATION: project.requiredVerification.status === "resolved"
+      ? JSON.stringify(project.requiredVerification.contract)
+      : undefined,
     DEADLOOP_WORKER_AGENT: envText(values.workerAgent),
     DEADLOOP_WORKER_MODEL: envText(values.workerModel),
     DEADLOOP_WORKER_INSTRUCTIONS: envText(values.workerInstructions),

@@ -24,6 +24,7 @@ const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src
 const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { assertCurrentWorkerContract, requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -196,12 +197,41 @@ function assertRecoverableWorkerCheckout(
   }
 }
 
+function requiredVerificationContract(env: ReturnType<typeof envConfig>, baseHead: string) {
+  if (env.requiredVerification) {
+    let contract: JsonObject;
+    try { contract = JSON.parse(env.requiredVerification); }
+    catch { throw new Error("DEADLOOP_REQUIRED_VERIFICATION must be valid JSON"); }
+    // Validate every persisted contract field, then bind it to this exact launch.
+    requiredVerificationBinding(contract, baseHead);
+    if (contract.repository !== env.githubRepo) {
+      throw new Error("required verification contract repository does not match the launch repository");
+    }
+    if (String(contract.baseRevision).toLowerCase() !== baseHead.toLowerCase()) {
+      throw new Error("required verification contract base revision does not match the selected base commit");
+    }
+    return contract;
+  }
+  // Fixture and direct-flow adapters provide only the historical command environment.
+  // Production automationEnvironment always supplies the resolved contract.
+  if (process.env.NODE_ENV === "test" || env.fixtureMode) {
+    return {
+      repository: env.githubRepo,
+      command: env.checkCommand,
+      source: { kind: "local", location: "fixture" },
+      baseRevision: baseHead,
+    };
+  }
+  throw new Error("DEADLOOP_REQUIRED_VERIFICATION is required before Worker launch");
+}
+
 function issueWorkerLaunchPlan(
   issue: JsonObject,
   env: ReturnType<typeof envConfig>,
   uuid: string,
   baseHead: string,
   recovery: AbandonedWorkerCheckout | null = null,
+  verificationBaseHead: string = baseHead,
 ) {
   const number = Number(issue.number || 0);
   const workerName = `${env.projectId}-issue-${number}-worker`;
@@ -212,7 +242,7 @@ function issueWorkerLaunchPlan(
     branch,
     input: {
       worktree: recovery
-        ? { mode: "open" as const, branch }
+        ? { mode: "open" as const, branch, baseBranch: env.baseBranch }
         : { mode: "create" as const, branch, baseBranch: env.baseBranch },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
@@ -228,6 +258,7 @@ function issueWorkerLaunchPlan(
       role: "worker" as const,
       target: { kind: "issue" as const, number },
       inputRevision: { head: baseHead },
+      requiredVerification: requiredVerificationContract(env, verificationBaseHead),
       intendedWorktreePath,
       resolveWorktreeHead: true,
       renderPrompt: ({ promiseFile, worktreePath, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
@@ -255,15 +286,36 @@ function issueWorkerLaunchPlan(
   };
 }
 
+function assertWorkerLaunchBaseCurrent(
+  env: Pick<ReturnType<typeof envConfig>, "repoPath" | "baseBranch">,
+  baseHead: string,
+  run: (args: string[]) => string,
+): void {
+  const current = run(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  if (current.toLowerCase() !== baseHead.toLowerCase()) {
+    throw new StaleLaunchError("selected Worker base commit changed before launch");
+  }
+}
+
+function assertPreparedWorkerContractCurrent(planInput: Record<string, any>, env: ReturnType<typeof envConfig>, repositoryId?: string): void {
+  const runDir = path.join(env.stateDir, "runs", path.basename(String(planInput.uuid)));
+  const attempt = readAttemptRecord(runDir);
+  try {
+    assertCurrentWorkerContract(attempt, env.repoPath, env.configPath || path.join(env.stateDir, "projects.json"), repositoryId);
+  } catch (error) {
+    throw new StaleLaunchError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function launchIssueWorkerFlow(
   issue: JsonObject,
   env: ReturnType<typeof envConfig>,
   ops: { runText: (args: string[]) => string; [key: string]: any },
 ): JsonObject {
   const recovery = abandonedWorkerCheckout(Number(issue.number || 0), env);
-  const baseHead = recovery?.inputHead
-    || ops.runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
-  const plan = issueWorkerLaunchPlan(issue, env, randomUUID(), baseHead, recovery);
+  const currentBaseHead = ops.runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  const baseHead = recovery?.inputHead || currentBaseHead;
+  const plan = issueWorkerLaunchPlan(issue, env, randomUUID(), baseHead, recovery, currentBaseHead);
   if (recovery) assertRecoverableWorkerCheckout(recovery, env, ops as { runner: ReturnType<typeof herdrRunner>; runText: (args: string[]) => string });
   prepareAgentLaunchFlow(plan.input, ops);
   recordAgentLaunchGithubClaimed(plan.input);
@@ -275,10 +327,11 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   const number = Number(issue.number || 0);
   const uuid = shouldSimulateLaunch(fixture) ? "fixture-worker-uuid" : randomUUID();
   const recovery = shouldSimulateLaunch(fixture) ? null : abandonedWorkerCheckout(number, env);
-  const baseHead = shouldSimulateLaunch(fixture)
+  const currentBaseHead = shouldSimulateLaunch(fixture)
     ? "f".repeat(40)
-    : recovery?.inputHead || runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
-  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery);
+    : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  const baseHead = recovery?.inputHead || currentBaseHead;
+  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery, currentBaseHead);
   const { workerName, branch } = plan;
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
 
@@ -302,7 +355,10 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   const runner = herdrRunner();
   const launch = withEnabledDriverLaunch(
     env,
-    (recheck: () => void) => githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel }),
+    (recheck: () => void, enabled: { githubRepositoryId?: string }) => {
+      assertPreparedWorkerContractCurrent(plan.input, env, enabled.githubRepositoryId);
+      githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel });
+    },
     (recheck: () => void) => launchAgentFlow(
       plan.input,
       { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
@@ -322,6 +378,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         );
         if (livePlan.kind !== "worker_required") throw new StaleLaunchError("selected issue is no longer eligible");
         assertSameLaunchTarget(issue, livePlan.issue, "issue");
+        assertWorkerLaunchBaseCurrent(env, currentBaseHead, runText);
         if (recovery) assertRecoverableWorkerCheckout(recovery, env, { runner, runText });
       },
     },
@@ -342,6 +399,9 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
       source.DEADLOOP_STATE_DIR ||
       path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
+    requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION || "",
+    configPath: source.DEADLOOP_CONFIG || "",
+    fixtureMode: source.DEADLOOP_FIXTURE_MODE === "1",
     workerInstructions: source.DEADLOOP_WORKER_INSTRUCTIONS || "Read AGENTS.md and follow the issue contract.",
     workerAgent: source.DEADLOOP_WORKER_AGENT || "pi",
     workerModel: source.DEADLOOP_WORKER_MODEL || "",
@@ -362,7 +422,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runText([command, ...commandArgs]) });
   }
   const fixture = loadFixture(fixturePath);
-  const env = envConfig();
+  const env = envConfig(fixturePath ? { ...process.env, DEADLOOP_FIXTURE_MODE: "1" } : process.env);
   if (!env.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
 
   const cleanup = cleanupPlan(fixture);
@@ -472,4 +532,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { envConfig, launchIssueWorkerFlow };
+module.exports = { assertPreparedWorkerContractCurrent, assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };

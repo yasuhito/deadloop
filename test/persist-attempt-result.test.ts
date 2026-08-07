@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-const { canonicalAttemptRunDir } = require("../extensions/deadloop/automations/persist-attempt-result.ts");
+const { canonicalAttemptRunDir, runMarkerMutationBoundary } = require("../extensions/deadloop/automations/persist-attempt-result.ts");
 
 const roots: string[] = [];
 function fixture() {
@@ -32,5 +32,18 @@ describe("attempt result persistence path boundary", () => {
   it("rejects another filename within a canonical run directory", () => {
     const data = fixture(); const other = path.join(data.runDir, "other.json"); writeFileSync(other, "{}");
     expect(() => canonicalAttemptRunDir({ ...data, attemptRecord: other })).toThrow(/canonical runs/);
+  });
+
+  it("does not post a Worker marker when policy changes after the lock recheck", () => {
+    let confirmed = false; let mutated = false;
+    try {
+      runMarkerMutationBoundary(
+        () => {},
+        () => { throw new Error("required verification blocked: stale_policy"); },
+        () => { confirmed = true; },
+        () => { mutated = true; },
+      );
+    } catch {}
+    expect({ confirmed, mutated }).toEqual({ confirmed: false, mutated: false });
   });
 });
