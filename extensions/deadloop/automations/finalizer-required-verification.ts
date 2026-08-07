@@ -81,15 +81,15 @@ type FinalizerArgs = {
   stateDir: string;
   automationDir: string;
 };
+type FinalizerIdentityArgs = Omit<FinalizerArgs, "automationDir">;
 type CommandResult = { status: number; stdout: string; stderr: string };
 
-function ensureFinalizerRequiredVerification(
-  args: FinalizerArgs,
+function finalizerVerificationInput(
+  args: FinalizerIdentityArgs,
   role: "review-repair" | "branch-update",
   targetCommit: string,
   repositoryId: string,
-  run: (args: string[], timeoutMs?: number) => CommandResult,
-): JsonObject {
+): { input: Input; recordFile: string } {
   const location = canonicalAttemptLocation({ attemptRecord: args.attemptRecord, stateDir: args.stateDir });
   const attempt = readAttemptRecord(location.runDir);
   if (attempt.role !== role || attempt.project !== args.projectId || attempt.repository !== args.githubRepo) {
@@ -101,14 +101,31 @@ function ensureFinalizerRequiredVerification(
   const configFile = process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json");
   const currentContract = assertCurrentWorkerContract(attempt, args.projectRepo, configFile, repositoryId);
   const recordFile = workerRequiredVerificationPath(args.attemptRecord);
-  const input = {
-    attempt,
-    currentContract,
-    targetCommit,
-    record: readRequiredVerificationRecord(recordFile),
-  };
+  return { input: { attempt, currentContract, targetCommit, record: readRequiredVerificationRecord(recordFile) }, recordFile };
+}
+
+function authorizeFinalizerRequiredVerification(
+  args: FinalizerIdentityArgs,
+  role: "review-repair" | "branch-update",
+  targetCommit: string,
+  repositoryId: string,
+): JsonObject {
+  const { input } = finalizerVerificationInput(args, role, targetCommit, repositoryId);
+  assertFixedContract(input);
+  return assertRequiredVerificationAuthorized(input.attempt, targetCommit, input.record, input.currentContract, [role]);
+}
+
+function ensureFinalizerRequiredVerification(
+  args: FinalizerArgs,
+  role: "review-repair" | "branch-update",
+  targetCommit: string,
+  repositoryId: string,
+  run: (args: string[], timeoutMs?: number) => CommandResult,
+): JsonObject {
+  const location = canonicalAttemptLocation({ attemptRecord: args.attemptRecord, stateDir: args.stateDir });
+  const { input, recordFile } = finalizerVerificationInput(args, role, targetCommit, repositoryId);
   const authenticate = (record: JsonObject) => {
-    assertRequiredVerificationAuthorized(attempt, targetCommit, record, currentContract, [role]);
+    assertRequiredVerificationAuthorized(input.attempt, targetCommit, record, input.currentContract, [role]);
   };
   return ensureRequiredVerificationRecord(input, {
     authenticate,
@@ -120,7 +137,7 @@ function ensureFinalizerRequiredVerification(
         "--cwd",
         args.repo,
         "--command",
-        currentContract.command,
+        input.currentContract.command,
         "--quarantine-root",
         path.join(args.stateDir, "check-quarantine"),
       ]);
@@ -128,7 +145,7 @@ function ensureFinalizerRequiredVerification(
       writeVerificationLog(logPath, `${result.stdout || ""}${result.stderr || ""}`);
       const record = {
         version: 1,
-        binding: requiredVerificationBinding(currentContract, targetCommit),
+        binding: requiredVerificationBinding(input.currentContract, targetCommit),
         outcome: result.status === 0 ? "passed" : "failed",
         exitCode: result.status,
         startedAt: new Date(started).toISOString(),
@@ -145,4 +162,4 @@ function ensureFinalizerRequiredVerification(
   });
 }
 
-module.exports = { ensureFinalizerRequiredVerification, ensureRequiredVerificationRecord, isExactPassedRecord };
+module.exports = { authorizeFinalizerRequiredVerification, ensureFinalizerRequiredVerification, ensureRequiredVerificationRecord, isExactPassedRecord };

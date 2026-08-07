@@ -5,6 +5,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { validatePromise } = require("./extract-worker-promise.ts");
+const { authorizeFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
 const { publicText, renderRepairSuccessComment, repairResultCommentExists } = require("./pr-review-comments.ts");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
@@ -105,7 +106,7 @@ function completion(args: JsonObject): DriverResult {
     enabledAt: Number(args.enabledAt),
   };
 
-  return withEnabledDriverLock(project, (_enabled: unknown, recheck: () => void) => {
+  return withEnabledDriverLock(project, (enabled: JsonObject, recheck: () => void) => {
     const automationLogin = successfulReceipt ? runner.runText(["gh", "api", "user", "--jq", ".login"]).trim() : "";
     if (successfulReceipt && !automationLogin) throw new Error("authenticated GitHub identity is unavailable");
     const pr = runner.runJson([
@@ -148,6 +149,21 @@ function completion(args: JsonObject): DriverResult {
     const github = createGithubOperations(runner, recheck);
 
     if (successfulReceipt) {
+      recheck();
+      authorizeFinalizerRequiredVerification(
+        {
+          attemptRecord: location.attemptRecord,
+          projectId: String(args.projectId),
+          projectRepo: String(args.projectRepo),
+          githubRepo: String(args.githubRepo),
+          repo: String(record.worktreePath),
+          branch: String(record.branch),
+          stateDir: String(args.stateDir),
+        },
+        "review-repair",
+        receiptHead,
+        String(enabled.githubRepositoryId),
+      );
       if (repairResultCommentExists(comments, String(args.attemptKey), receiptHead, automationLogin)) {
         github.movePrLabels(String(args.githubRepo), String(args.pr), { remove: String(args.reviewingLabel) });
         return driverResult("done", `PR #${args.pr} repair result was already posted; re-review is pending`, { driverAction: "repair_result_duplicate" });

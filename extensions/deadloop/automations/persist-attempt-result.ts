@@ -8,6 +8,7 @@ const { assertLocallyEnabled } = require("../../../src/enabled-operation.cjs");
 const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
+const { authorizeFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
@@ -64,7 +65,21 @@ function persist(args: JsonObject) {
   };
   if (record.role === "worker") authorizeWorker();
   const project = { id: String(args.projectId), repoPath: path.resolve(String(args.projectRepo)), githubRepo: String(args.githubRepo), stateDir: path.resolve(String(args.stateDir)), enabledAt: Number(args.enabledAt) };
-  return withEnabledDriverLock(project, (_enabled: unknown, recheck: () => void) => {
+  return withEnabledDriverLock(project, (enabled: JsonObject, recheck: () => void) => {
+    const authorizeSuccess = record.role === "worker" ? authorizeWorker : () => authorizeFinalizerRequiredVerification(
+      {
+        attemptRecord,
+        projectId: String(args.projectId),
+        projectRepo: String(args.projectRepo),
+        githubRepo: String(args.githubRepo),
+        repo: String(record.worktreePath),
+        branch: String(record.branch),
+        stateDir: String(args.stateDir),
+      },
+      "branch-update",
+      String(report.result.outputRevision),
+      String(enabled.githubRepositoryId),
+    );
     let pr: JsonObject;
     if (record.role === "worker") {
       const prs = runner.runJson(["gh", "pr", "list", "-R", record.repository, "--state", "open", "--head", record.branch,
@@ -88,7 +103,7 @@ function persist(args: JsonObject) {
     let alreadyPersisted = false;
     runMarkerMutationBoundary(
       recheck,
-      record.role === "worker" ? authorizeWorker : () => {},
+      authorizeSuccess,
       () => {
         if (record.role === "worker") {
           const current = runner.runJson(["gh", "pr", "view", String(pr.number), "-R", record.repository,

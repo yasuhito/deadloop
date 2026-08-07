@@ -5,6 +5,13 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+const {
+  persistHostVerificationEvidence,
+  requiredVerificationBinding,
+  workerRequiredVerificationPath,
+  writeWorkerContractSnapshot,
+} = require("../src/worker-required-verification-runtime.cjs");
+
 const roots: string[] = [];
 const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
@@ -23,6 +30,7 @@ function runCompletion(options: {
   liveHead?: string;
   state?: string;
   labels?: { name: string }[];
+  verificationRecord?: "authenticated" | "legacy" | "missing";
 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-repair-complete-"));
   roots.push(root);
@@ -41,6 +49,12 @@ function runCompletion(options: {
   fs.mkdirSync(projectRepo);
   writeCompatibleHerdr(bin);
   spawnSync("git", ["-C", projectRepo, "init", "--quiet"]);
+  spawnSync("git", ["-C", projectRepo, "config", "user.email", "test@example.com"]);
+  spawnSync("git", ["-C", projectRepo, "config", "user.name", "Test"]);
+  fs.writeFileSync(path.join(projectRepo, "base.txt"), "base\n");
+  spawnSync("git", ["-C", projectRepo, "add", "base.txt"]);
+  spawnSync("git", ["-C", projectRepo, "commit", "--quiet", "-m", "base"]);
+  const baseRevision = spawnSync("git", ["-C", projectRepo, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
     repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
@@ -61,13 +75,26 @@ function runCompletion(options: {
       : outcome === "stale_head" ? { finalizer: options.receipt } : options.promise.evidence || {},
   };
   fs.writeFileSync(promiseFile, JSON.stringify(strongPromise));
-  fs.writeFileSync(attemptFile, JSON.stringify({
+  const requiredVerification = {
+    repository: "owner/repo", command: "npm test",
+    source: { kind: "local", location: `${path.join(stateDir, "projects.json")}#project=demo` }, baseRevision,
+  };
+  fs.writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm test" }] }));
+  const attempt = {
     schemaVersion: 1, attemptId: key, launchUuid: "repair-run", project: "demo", repository: "owner/repo",
     role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
-    branch: "agent/issue-24", worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
-    workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
+    branch: "agent/issue-24", baseBranch: baseRevision, worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
+    workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile, requiredVerification,
     phase: "agent_started", lastSuccessfulPhase: "agent_started",
-  }));
+  };
+  fs.writeFileSync(attemptFile, JSON.stringify(attempt));
+  writeWorkerContractSnapshot(runDir, attempt);
+  const verificationRecord = {
+    version: 1, binding: requiredVerificationBinding(requiredVerification, newHead), outcome: "passed", exitCode: 0,
+    startedAt: "2026-01-01T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "required-verification.log"),
+  };
+  if (options.verificationRecord === "legacy") fs.writeFileSync(workerRequiredVerificationPath(attemptFile), JSON.stringify({ command: "npm test", result: "passed" }));
+  else if (options.verificationRecord !== "missing") persistHostVerificationEvidence(workerRequiredVerificationPath(attemptFile), verificationRecord);
   fs.writeFileSync(
     contractFile,
     JSON.stringify({ attemptKey: key, expectedHead: oldHead, findingTitles: ["Unsafe fallback"] }),
@@ -154,6 +181,12 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   fs.mkdirSync(projectRepo);
   writeCompatibleHerdr(bin);
   spawnSync("git", ["-C", projectRepo, "init", "--quiet"]);
+  spawnSync("git", ["-C", projectRepo, "config", "user.email", "test@example.com"]);
+  spawnSync("git", ["-C", projectRepo, "config", "user.name", "Test"]);
+  fs.writeFileSync(path.join(projectRepo, "base.txt"), "base\n");
+  spawnSync("git", ["-C", projectRepo, "add", "base.txt"]);
+  spawnSync("git", ["-C", projectRepo, "commit", "--quiet", "-m", "base"]);
+  const baseRevision = spawnSync("git", ["-C", projectRepo, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
     repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
@@ -170,13 +203,24 @@ async function runConcurrentSuccessRetries(): Promise<number> {
     evidence: { finalizer: receipt, validations: checks },
   }));
   fs.writeFileSync(resultFile, JSON.stringify(receipt));
-  fs.writeFileSync(attemptFile, JSON.stringify({
+  const requiredVerification = {
+    repository: "owner/repo", command: "npm test",
+    source: { kind: "local", location: `${path.join(stateDir, "projects.json")}#project=demo` }, baseRevision,
+  };
+  fs.writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm test" }] }));
+  const attempt = {
     schemaVersion: 1, attemptId: key, launchUuid: "repair-run", project: "demo", repository: "owner/repo",
     role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
-    branch: "agent/issue-24", worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
-    workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
+    branch: "agent/issue-24", baseBranch: baseRevision, worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
+    workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile, requiredVerification,
     phase: "agent_started", lastSuccessfulPhase: "agent_started",
-  }));
+  };
+  fs.writeFileSync(attemptFile, JSON.stringify(attempt));
+  writeWorkerContractSnapshot(runDir, attempt);
+  persistHostVerificationEvidence(workerRequiredVerificationPath(attemptFile), {
+    version: 1, binding: requiredVerificationBinding(requiredVerification, newHead), outcome: "passed", exitCode: 0,
+    startedAt: "2026-01-01T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "required-verification.log"),
+  });
   fs.writeFileSync(contractFile, JSON.stringify({ attemptKey: key, expectedHead: oldHead, findingTitles: ["Unsafe fallback"] }));
   fs.writeFileSync(commentsFile, "[]");
   const gh = path.join(bin, "gh");
@@ -245,6 +289,28 @@ describe("review repair deterministic completion", () => {
     });
 
     expect(result.posted).toContain(`New commit: \`${newHead}\``);
+  });
+
+  it("rejects repair success when the authenticated verification record is missing", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      verificationRecord: "missing",
+    });
+
+    expect(result.posted).toBe("");
+  });
+
+  it("rejects repair success when only legacy verification evidence exists", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      verificationRecord: "legacy",
+    });
+
+    expect(result.posted).toBe("");
   });
 
   it("releases the active review claim after recording successful repair", () => {

@@ -409,7 +409,7 @@ describe("automatic PR review repair", () => {
     expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 25_000]);
   });
 
-  it("pushes the exact branch without forcing", () => {
+  it("pushes the exact branch with an exact-head lease", () => {
     const commands: string[][] = [];
     finalizeWith(commands);
 
@@ -419,6 +419,7 @@ describe("automatic PR review repair", () => {
       "/worktree",
       "push",
       "--porcelain",
+      `--force-with-lease=refs/heads/agent/issue-243:${head}`,
       "https://github.com/owner/repo.git",
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/agent/issue-243",
     ]);

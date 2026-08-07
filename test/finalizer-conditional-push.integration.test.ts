@@ -38,19 +38,24 @@ function fixture() {
   execFileSync("git", ["init", "--quiet", "--bare", remote]);
   git(repo, ["remote", "add", "origin", "https://github.com/owner/repo.git"]);
   execFileSync("git", ["-C", repo, "push", "--quiet", remote, `${expectedHead}:${ref}`]);
+  writeFileSync(path.join(repo, "file.txt"), "advanced\n");
+  git(repo, ["commit", "--quiet", "-am", "advanced ancestor"]);
+  const advancedOid = git(repo, ["rev-parse", "HEAD"]);
   writeFileSync(path.join(repo, "file.txt"), "candidate\n");
   git(repo, ["commit", "--quiet", "-am", "candidate"]);
   const configPath = path.join(root, ".gitconfig");
   writeFileSync(configPath, `[url "file://${remote}"]\n\tinsteadOf = https://github.com/owner/repo.git\n`);
-  return { repo, remote, rootOid, expectedHead, configPath };
+  return { repo, remote, rootOid, expectedHead, advancedOid, configPath };
 }
 
-function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind") {
-  const { repo, remote, rootOid, expectedHead, configPath } = fixture();
+function runRace(finalizer: "repair" | "branch-update", race: "advance" | "delete" | "rewind") {
+  const { repo, remote, rootOid, expectedHead, advancedOid, configPath } = fixture();
   const hookPath = path.join(repo, ".git", "hooks", "pre-push");
   const updateRef = race === "delete"
     ? `git --git-dir='${remote}' update-ref -d '${ref}'`
-    : `git --git-dir='${remote}' update-ref '${ref}' '${rootOid}'`;
+    : race === "advance"
+      ? `git --git-dir='${remote}' fetch --quiet '${repo}' '${advancedOid}' && git --git-dir='${remote}' update-ref '${ref}' '${advancedOid}'`
+      : `git --git-dir='${remote}' update-ref '${ref}' '${rootOid}'`;
   writeFileSync(hookPath, `#!/bin/sh\n${updateRef}\n`);
   chmodSync(hookPath, 0o755);
   const run = (args: string[]) => {
@@ -103,7 +108,7 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
   try {
     remoteHead = execFileSync("git", ["--git-dir", remote, "rev-parse", "--verify", ref], { encoding: "utf8" }).trim();
   } catch {}
-  return { action: result.action, remoteHead, rootOid };
+  return { action: result.action, remoteHead, rootOid, advancedOid };
 }
 
 afterEach(() => {
@@ -194,6 +199,17 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
   it("writes the pushed receipt for the rendered repair finalizer command", () => {
     const { result, receipt } = runRenderedRepairFinalizer();
     expect({ status: result.status, receipt: receipt.action }).toEqual({ status: 0, receipt: "pushed" });
+  });
+
+  it.each([
+    ["review repair", "repair"],
+    ["branch update", "branch-update"],
+  ] as const)("rejects an advancing-ancestor race during %s finalization", (_name, finalizer) => {
+    const result = runRace(finalizer, "advance");
+    expect({ action: result.action, advancedHeadRetained: result.remoteHead === result.advancedOid }).toEqual({
+      action: "stale_head",
+      advancedHeadRetained: true,
+    });
   });
 
   it.each([
