@@ -104,6 +104,8 @@ function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRu
     recheck();
     if (autoMergeEnabled(args)) throw new Error("autoMerge is currently enabled; human handoff stopped");
     (ops.assertReviewVerification || assertRequiredVerificationApproved)(args, enabled);
+    assertCurrentPrEligible(args, ops);
+    if (autoMergeEnabled(args)) throw new Error("autoMerge is currently enabled; human handoff stopped");
     const result = ops.run([
       "gh", "pr", "edit", args.pr, "-R", args.githubRepo,
       "--remove-label", args.reviewLabel,

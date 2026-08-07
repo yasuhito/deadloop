@@ -18,15 +18,17 @@ const args = {
   humanLabel: "ready-for-human",
 };
 
-function handoffMutationCount(options: { verificationError?: string; policyChanges?: boolean }): number {
+function handoffMutationCount(options: { verificationError?: string; policyChanges?: boolean; headChangesDuringAuthorization?: boolean }): number {
   let edits = 0;
   let policyReads = 0;
+  let liveHead = head;
   try {
     handoffReviewedPr(args, {
       withLock: (_project: unknown, operation: (enabled: object, recheck: () => void) => number) => operation({ githubRepositoryId: "R_repo" }, () => {}),
       isAutoMergeEnabled: () => options.policyChanges === true && ++policyReads > 1,
       assertReviewVerification: () => {
         if (options.verificationError) throw new Error(options.verificationError);
+        if (options.headChangesDuringAuthorization) liveHead = "b".repeat(40);
       },
       run: (command: string[]) => {
         if (command[2] === "view") {
@@ -35,7 +37,7 @@ function handoffMutationCount(options: { verificationError?: string; policyChang
             stdout: JSON.stringify({
               state: "OPEN",
               isDraft: false,
-              headRefOid: head,
+              headRefOid: liveHead,
               labels: [{ name: "agent:review" }, { name: "agent:reviewing" }],
             }),
             stderr: "",
@@ -88,5 +90,9 @@ describe("reviewed PR human-handoff boundary", () => {
 
   it("rejects a policy change before changing labels", () => {
     expect(handoffMutationCount({ policyChanges: true })).toBe(0);
+  });
+
+  it("rejects a head change during authorization before changing labels", () => {
+    expect(handoffMutationCount({ headChangesDuringAuthorization: true })).toBe(0);
   });
 });
