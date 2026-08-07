@@ -19,6 +19,10 @@ function issue(comments: Array<{ body: string }> = []) {
   return { number: 42, labels: [{ name: "ready-for-agent" }, { name: "agent:implement" }], comments };
 }
 
+function stopComment() {
+  return planIssueRequiredVerificationStop({ issue: issue(), resolution, phase: "before_launch", labels }).comment || "";
+}
+
 describe("implementation Issue required-verification stop", () => {
   it("keeps the ready label while removing implementation ownership", () => {
     expect(planIssueRequiredVerificationStop({ issue: issue(), resolution, phase: "before_launch", labels }).removeLabels).toEqual(["agent:implement"]);
@@ -38,9 +42,24 @@ describe("implementation Issue required-verification stop", () => {
     expect(planIssueRequiredVerificationStop({ issue: issue(), resolution, phase: "before_launch", labels }).addLabels).toEqual(["agent:blocked"]);
   });
 
-  it("documents reason, inspected sources, skipped operations, retry behavior, and recovery", () => {
-    const comment = planIssueRequiredVerificationStop({ issue: issue(), resolution, phase: "before_launch", labels }).comment || "";
-    expect(["reason: no_source", "Inspected sources:\n- none", "No Worker, branch, push, or pull request was created.", "did not consume an implementation retry allowance.", "Run `/deadloop-doctor`"].every((text) => comment.includes(text))).toBe(true);
+  it("documents the stop reason", () => {
+    expect(stopComment()).toContain("reason: no_source");
+  });
+
+  it("documents the inspected sources", () => {
+    expect(stopComment()).toContain("Inspected sources:\n- none");
+  });
+
+  it("documents the skipped operations", () => {
+    expect(stopComment()).toContain("No Worker, branch, push, or pull request was created.");
+  });
+
+  it("documents that the stop does not consume a retry", () => {
+    expect(stopComment()).toContain("did not consume an implementation retry allowance.");
+  });
+
+  it("documents recovery guidance", () => {
+    expect(stopComment()).toContain("Run `/deadloop-doctor`");
   });
 
   it("suppresses an identical stop comment", () => {

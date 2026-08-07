@@ -160,6 +160,12 @@ exit 2
     expect(runDriverFixture("driver-ready-worker.json", { DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution })).not.toHaveProperty("launch");
   });
 
+  it("resumes a fingerprinted partial stop after required verification resolves", () => {
+    expect(runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify({ status: "resolved" }),
+    }).driverAction).toBe("required_verification_blocked");
+  });
+
   it("binds the Worker V1 identity to an exact commit SHA", () => {
     const instructions = runDriverFixture("driver-ready-worker.json").launch.instructions;
 

@@ -11,8 +11,6 @@ const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
 const { renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const {
   applyIssueRequiredVerificationStop,
-  hasRequiredVerificationStopMarker,
-  isExactRequiredVerificationStop,
   planIssueRequiredVerificationStop,
 } = require("../../../src/issue-required-verification-stop.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
@@ -169,25 +167,48 @@ function applyRequiredVerificationStop(
   return applied ? result : { applied: false };
 }
 
+function requiredVerificationStopFingerprint(issue: JsonObject): string | undefined {
+  const issueNumber = Number(issue.number);
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) return undefined;
+  const marker = new RegExp(`<!-- deadloop:required-verification-blocked:v1 target=issue-${issueNumber} fingerprint=([0-9a-f]{64}) -->`);
+  for (const comment of issue.comments || []) {
+    const match = marker.exec(String(comment?.body || ""));
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+function isExactDurableRequiredVerificationStop(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+): boolean {
+  const names = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label?.name || "")));
+  return String(issue.state || "").toUpperCase() === "OPEN"
+    && names.has(env.readyLabel)
+    && names.has(env.blockedLabel)
+    && !names.has(env.implementLabel)
+    && !names.has(env.inProgressLabel)
+    && requiredVerificationStopFingerprint(issue) !== undefined;
+}
+
 function resumeRequiredVerificationStop(
   issue: JsonObject,
   env: ReturnType<typeof envConfig>,
-  resolution: JsonObject,
-): { comment?: string; fingerprint: string } {
+  fingerprint: string,
+): { fingerprint: string } {
   return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
     const github = githubOperations(recheck);
     const live = github.getIssue(env.githubRepo, issue.number);
-    if (String(live.state || "").toUpperCase() !== "OPEN" || !hasRequiredVerificationStopMarker(live, resolution)) {
+    if (String(live.state || "").toUpperCase() !== "OPEN" || requiredVerificationStopFingerprint(live) !== fingerprint) {
       throw new StaleLaunchError(`Issue #${issue.number} required-verification stop changed`);
     }
-    const plan = planIssueRequiredVerificationStop({
-      issue: live,
-      resolution,
-      phase: "before_launch",
-      labels: { implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel },
+    const names = new Set((live.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label?.name || "")));
+    applyIssueRequiredVerificationStop(github, env.githubRepo, live.number, {
+      removeLabels: [env.implementLabel, env.inProgressLabel].filter((label) => names.has(label)),
+      addLabels: names.has(env.blockedLabel) ? [] : [env.blockedLabel],
+      fingerprint,
     });
-    applyIssueRequiredVerificationStop(github, env.githubRepo, live.number, plan);
-    return { ...(plan.comment ? { comment: plan.comment } : {}), fingerprint: plan.fingerprint };
+    return { fingerprint };
   });
 }
 
@@ -506,16 +527,14 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   const issues = issueList(fixture, env.githubRepo);
   const verificationResolution = parsedRequiredVerificationResolution(env);
-  const stopLabels = { ready: env.readyLabel, implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel };
-  const resumableStop = verificationResolution?.status === "blocked"
-    ? issues.find((candidate) => hasRequiredVerificationStopMarker(candidate, verificationResolution)
-      && !isExactRequiredVerificationStop(candidate, verificationResolution, stopLabels))
-    : undefined;
-  if (resumableStop && !fixture) {
-    const stopped = resumeRequiredVerificationStop(resumableStop, env, verificationResolution as JsonObject);
+  const resumableStop = issues.find((candidate) => requiredVerificationStopFingerprint(candidate)
+    && !isExactDurableRequiredVerificationStop(candidate, env));
+  if (resumableStop) {
+    const fingerprint = requiredVerificationStopFingerprint(resumableStop) as string;
+    const stopped = fixture ? { fingerprint } : resumeRequiredVerificationStop(resumableStop, env, fingerprint);
     return driverResult("done", `Issue #${resumableStop.number} required-verification stop was resumed`, {
       driverAction: "required_verification_blocked", issueNumber: resumableStop.number,
-      reason: verificationResolution?.reason, ...(stopped.comment ? { comment: stopped.comment } : {}), fingerprint: stopped.fingerprint,
+      ...(verificationResolution?.reason ? { reason: verificationResolution.reason } : {}), fingerprint: stopped.fingerprint,
     });
   }
   const decision = decisionForIssues(fixturePath, issues, env.githubRepo, env);
