@@ -181,6 +181,17 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("Never pass merge, push, branch deletion, `gh api`, or arbitrary commands through `guarded-operation.ts`");
   });
 
+  it("binds human handoff to the reviewed PR head and approval evidence", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
+      promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
+      enabledAt: 123, autoMerge: false, checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review",
+      reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("handoff-reviewed-pr.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --review-label agent:review --reviewing-label agent:reviewing --blocked-label agent:blocked --human-label ready-for-human");
+  });
+
   it("binds auto-merge to the reviewed PR head", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
