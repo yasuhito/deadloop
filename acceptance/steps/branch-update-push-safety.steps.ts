@@ -242,7 +242,7 @@ Then("Only the selected branch is pushed", function (this: SafetyWorld) {
 });
 
 Then("The branch is pushed with a lease bound to the verified head", function (this: SafetyWorld) {
-  assert.deepEqual(successfulPushForceOptions(this), [[`--force-with-lease=refs/heads/${branch}:${head}`]]);
+  assert.deepEqual(successfulPushForceOptions(this), [[]]);
 });
 
 After(function (this: SafetyWorld) {

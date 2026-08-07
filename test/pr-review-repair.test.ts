@@ -409,7 +409,7 @@ describe("automatic PR review repair", () => {
     expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 25_000]);
   });
 
-  it("pushes the exact branch with an exact-head lease", () => {
+  it("pushes the exact branch without forcing", () => {
     const commands: string[][] = [];
     finalizeWith(commands);
 
@@ -419,7 +419,6 @@ describe("automatic PR review repair", () => {
       "/worktree",
       "push",
       "--porcelain",
-      `--force-with-lease=refs/heads/agent/issue-243:${head}`,
       "https://github.com/owner/repo.git",
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/agent/issue-243",
     ]);
@@ -488,7 +487,7 @@ describe("automatic PR review repair", () => {
     expect(result.currentRemoteHeadOid).toBe("c".repeat(40));
   });
 
-  it("rejects a concurrent rewind to an ancestor with an exact-head lease", () => {
+  it("rejects a concurrent rewind found by the remote-head guard", () => {
     const result = finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, "0".repeat(40));
 
     expect(result.action).toBe("stale_head");

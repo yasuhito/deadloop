@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Run the configured check, revalidate the exact PR head, and perform the only
 // push allowed to a branch-update worker. It re-checks the validated PR head,
-// then performs a lease-guarded fast-forward push of the immutable candidate.
+// then performs a normal fast-forward push of the immutable candidate.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { assertLocallyEnabled, MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
@@ -26,7 +26,7 @@ type FinalizeArgs = {
   enabledAt: number;
   checkCommand: string;
 };
-type CommandResult = { status: number; stdout: string; stderr: string };
+type CommandResult = { status: number | null; stdout: string; stderr: string; signal?: NodeJS.Signals | null; timedOut?: boolean };
 type EnabledProject = { githubRepo: string; githubRepositoryId: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
@@ -40,7 +40,13 @@ function defaultRun(args: string[], timeoutMs?: number): CommandResult {
     stdio: ["ignore", "pipe", "pipe"],
     ...(timeoutMs === undefined ? {} : { timeout: timeoutMs, killSignal: "SIGKILL" }),
   });
-  return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
+  return {
+    status: result.status,
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    signal: result.signal,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+  };
 }
 
 function checked(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
@@ -68,7 +74,7 @@ function pushConditionally(
   }
   recheck();
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `${candidateOid}:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return { pushed: true, currentRemoteHeadOid: candidateOid.toLowerCase() };

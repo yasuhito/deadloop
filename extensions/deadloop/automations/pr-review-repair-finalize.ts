@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Validate and push a review repair. This is the repair worker's only push path.
-// It re-checks the open PR head, then performs a lease-guarded fast-forward
-// push of the immutable repair commit.
+// It re-checks the open PR head, then performs a normal fast-forward push of
+// the immutable repair commit.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const fs = require("node:fs") as typeof import("node:fs");
@@ -30,7 +30,7 @@ type FinalizeArgs = {
   checkCommand: string;
   resultFile: string;
 };
-type CommandResult = { status: number; stdout: string; stderr: string };
+type CommandResult = { status: number | null; stdout: string; stderr: string; signal?: NodeJS.Signals | null; timedOut?: boolean };
 type EnabledProject = { githubRepo: string; githubRepositoryId: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
@@ -45,7 +45,13 @@ function defaultRun(args: string[], timeoutMs?: number): CommandResult {
     stdio: ["ignore", "pipe", "pipe"],
     ...(timeoutMs === undefined ? {} : { timeout: timeoutMs, killSignal: "SIGKILL" }),
   });
-  return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
+  return {
+    status: result.status,
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    signal: result.signal,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+  };
 }
 
 function checkedRaw(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
@@ -77,7 +83,7 @@ function pushConditionally(
   }
   recheck();
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `${candidateOid}:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return { pushed: true, currentRemoteHeadOid: candidateOid.toLowerCase() };

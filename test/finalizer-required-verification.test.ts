@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 const {
   ensureRequiredVerificationRecord,
+  verificationRecordForResult,
 } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
 
 const contract = {
@@ -29,6 +30,30 @@ function passedRecord(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+it("records a bounded finalizer verification timeout with the canonical typed outcome", () => {
+  const record = verificationRecordForResult(
+    { attempt: attempt("review-repair"), currentContract: contract, targetCommit: candidate },
+    candidate,
+    { status: 124, stdout: "", stderr: "project check timed out" },
+    Date.now(),
+    "/state/check.log",
+  );
+
+  expect({ outcome: record.outcome, exitCode: record.exitCode, terminationReason: record.terminationReason }).toEqual({ outcome: "timed_out", exitCode: null, terminationReason: "timeout" });
+});
+
+it("records finalizer verification interruption with the canonical typed outcome", () => {
+  const record = verificationRecordForResult(
+    { attempt: attempt("branch-update"), currentContract: contract, targetCommit: candidate },
+    candidate,
+    { status: 130, stdout: "", stderr: "" },
+    Date.now(),
+    "/state/check.log",
+  );
+
+  expect({ outcome: record.outcome, exitCode: record.exitCode, terminationReason: record.terminationReason }).toEqual({ outcome: "interrupted", exitCode: null, terminationReason: "interrupted" });
+});
 
 for (const role of ["review-repair", "branch-update"] as const) {
   describe(`${role} required-verification conformance`, () => {

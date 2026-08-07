@@ -161,7 +161,7 @@ describe("PR branch-update safety", () => {
     expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 25_000]);
   });
 
-  it("pushes the selected branch with an exact-head lease", () => {
+  it("pushes the selected branch without forcing", () => {
     const commands: string[][] = [];
     finalizeWith(commands);
 
@@ -171,7 +171,6 @@ describe("PR branch-update safety", () => {
       "/worktree",
       "push",
       "--porcelain",
-      `--force-with-lease=refs/heads/agent/issue-31:${head}`,
       "https://github.com/owner/repo.git",
       "cccccccccccccccccccccccccccccccccccccccc:refs/heads/agent/issue-31",
     ]);
@@ -252,7 +251,7 @@ describe("PR branch-update safety", () => {
     expect(result.reason).toBe("branch_update_pushed");
   });
 
-  it("rejects a concurrent rewind to an ancestor with an exact-head lease", () => {
+  it("rejects a concurrent rewind found by the remote-head guard", () => {
     const result = finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, "0".repeat(40));
 
     expect(result.action).toBe("stale_head");

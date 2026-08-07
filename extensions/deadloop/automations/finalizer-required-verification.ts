@@ -91,7 +91,34 @@ type FinalizerArgs = {
   automationDir: string;
 };
 type FinalizerIdentityArgs = Omit<FinalizerArgs, "automationDir">;
-type CommandResult = { status: number; stdout: string; stderr: string };
+type CommandResult = { status: number | null; stdout: string; stderr: string; signal?: NodeJS.Signals | null; timedOut?: boolean };
+
+const FINALIZER_VERIFICATION_TIMEOUT_MS = 10 * 60_000;
+const FINALIZER_VERIFICATION_SUBPROCESS_TIMEOUT_MS = FINALIZER_VERIFICATION_TIMEOUT_MS + 25_000;
+
+function verificationRecordForResult(
+  input: Input,
+  targetCommit: string,
+  result: CommandResult,
+  started: number,
+  logPath: string,
+): JsonObject {
+  const timedOut = result.status === 124 || result.timedOut === true;
+  const interrupted = result.status === 130 || (result.status === null && (result.signal === "SIGINT" || result.signal === "SIGTERM"));
+  const outcome = timedOut ? "timed_out" : interrupted ? "interrupted" : result.status === 0 ? "passed" : "failed";
+  const terminationReason = timedOut ? "timeout" : interrupted ? "interrupted" : result.signal ? "signal" : undefined;
+  return {
+    version: 1,
+    binding: requiredVerificationBinding(input.currentContract, targetCommit),
+    outcome,
+    exitCode: timedOut || interrupted || result.status === null ? null : result.status,
+    ...(terminationReason ? { terminationReason } : {}),
+    ...(result.signal ? { terminationSignal: result.signal } : {}),
+    startedAt: new Date(started).toISOString(),
+    durationMs: Math.max(0, Date.now() - started),
+    logPath,
+  };
+}
 
 function finalizerVerificationInput(
   args: FinalizerIdentityArgs,
@@ -145,25 +172,19 @@ function ensureFinalizerRequiredVerification(
         path.join(args.automationDir, "run-project-check.ts"),
         "--cwd",
         args.repo,
+        "--timeout-ms",
+        String(FINALIZER_VERIFICATION_TIMEOUT_MS),
         "--command",
         input.currentContract.command,
         "--quarantine-root",
         path.join(args.stateDir, "check-quarantine"),
-      ]);
+      ], FINALIZER_VERIFICATION_SUBPROCESS_TIMEOUT_MS);
       const logPath = path.join(location.runDir, "required-verification.log");
       writeVerificationLog(logPath, `${result.stdout || ""}${result.stderr || ""}`);
-      const record = {
-        version: 1,
-        binding: requiredVerificationBinding(input.currentContract, targetCommit),
-        outcome: result.status === 0 ? "passed" : "failed",
-        exitCode: result.status,
-        startedAt: new Date(started).toISOString(),
-        durationMs: Math.max(0, Date.now() - started),
-        logPath,
-      };
-      if (result.status !== 0) {
+      const record = verificationRecordForResult(input, targetCommit, result, started, logPath);
+      if (record.outcome !== "passed") {
         persistHostVerificationEvidence(recordFile, record);
-        throw new Error(`required verification failed; log: ${logPath}`);
+        throw new Error(`required verification ${record.outcome}; log: ${logPath}`);
       }
       return record;
     },
@@ -184,4 +205,4 @@ function ensureFinalizerRequiredVerification(
   });
 }
 
-module.exports = { authorizeFinalizerRequiredVerification, ensureFinalizerRequiredVerification, ensureRequiredVerificationRecord, isExactPassedRecord };
+module.exports = { authorizeFinalizerRequiredVerification, ensureFinalizerRequiredVerification, ensureRequiredVerificationRecord, isExactPassedRecord, verificationRecordForResult };
