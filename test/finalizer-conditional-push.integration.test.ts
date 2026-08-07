@@ -180,7 +180,7 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
       workerAgent: "pi", workerModel: "", remote: "origin", reviewLabel: "agent:review",
       reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", automationDir, enabledAt: 1,
     });
-    const command = rendered.match(/permitted non-force push to the exact branch:\n  (.+)\n- Never edit labels/)?.[1];
+    const command = rendered.match(/permitted push to the exact branch with an exact-head force-with-lease:\n  (.+)\n- Never edit labels/)?.[1];
     if (!command) throw new Error("rendered finalizer command was not found");
     const result = spawnSync("bash", ["-c", command], {
       cwd: process.cwd(), encoding: "utf8",
