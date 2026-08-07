@@ -9,6 +9,7 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
 const { renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
+const { planIssueRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
@@ -70,7 +71,7 @@ function gateMissingContractComment(issue: JsonObject): string {
 
 function applyIssueTransition(
   issue: JsonObject,
-  expectedKind: "contract_missing" | "planning_blocked",
+  expectedKind: "contract_missing" | "planning_blocked" | "worker_required",
   env: ReturnType<typeof envConfig>,
   fixture: JsonObject | null,
   mutate: (github: ReturnType<typeof githubOperations>, live: JsonObject) => void,
@@ -121,6 +122,47 @@ function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comm
     github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.blockedLabel });
     github.commentIssue(env.githubRepo, number, comment);
   });
+}
+
+function parsedRequiredVerificationResolution(env: ReturnType<typeof envConfig>): JsonObject | null {
+  if (!env.requiredVerificationResolution) return null;
+  let resolution: JsonObject;
+  try { resolution = JSON.parse(env.requiredVerificationResolution); }
+  catch { throw new Error("DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION must be valid JSON"); }
+  if (resolution.status !== "resolved" && resolution.status !== "blocked") {
+    throw new Error("DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION has an invalid status");
+  }
+  return resolution;
+}
+
+function applyRequiredVerificationStop(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  resolution: JsonObject,
+  fixture: JsonObject | null,
+): { applied: boolean; comment?: string; fingerprint?: string } {
+  let result: { applied: boolean; comment?: string; fingerprint?: string } = { applied: false };
+  const applied = applyIssueTransition(issue, "worker_required", env, fixture, (github, live) => {
+    const plan = planIssueRequiredVerificationStop({
+      issue: live,
+      resolution,
+      phase: "before_launch",
+      labels: { implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel },
+    });
+    github.moveIssueLabels(env.githubRepo, live.number, { remove: plan.removeLabels, add: plan.addLabels });
+    if (plan.comment) github.commentIssue(env.githubRepo, live.number, plan.comment);
+    result = { applied: true, ...(plan.comment ? { comment: plan.comment } : {}), fingerprint: plan.fingerprint };
+  });
+  if (fixture && applied) {
+    const plan = planIssueRequiredVerificationStop({
+      issue,
+      resolution,
+      phase: "before_launch",
+      labels: { implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel },
+    });
+    result = { applied: true, ...(plan.comment ? { comment: plan.comment } : {}), fingerprint: plan.fingerprint };
+  }
+  return applied ? result : { applied: false };
 }
 
 function slugForBranch(value: unknown): string {
@@ -400,6 +442,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
       path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
     requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION || "",
+    requiredVerificationResolution: source.DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION || "",
     configPath: source.DEADLOOP_CONFIG || "",
     fixtureMode: source.DEADLOOP_FIXTURE_MODE === "1",
     workerInstructions: source.DEADLOOP_WORKER_INSTRUCTIONS || "Read AGENTS.md and follow the issue contract.",
@@ -465,6 +508,23 @@ function drive(fixturePath: string | undefined): DriverResult {
       driverAction: "blocked_comment",
       issueNumber: issue.number,
       comment,
+    });
+  }
+
+  const verificationResolution = parsedRequiredVerificationResolution(env);
+  if (verificationResolution?.status === "blocked") {
+    const stopped = applyRequiredVerificationStop(issue, env, verificationResolution, fixture);
+    if (!stopped.applied) {
+      return driverResult("skip", `Issue #${issue.number} changed before the required-verification stop; no workflow state was mutated`, {
+        driverAction: "required_verification_blocked_stale", issueNumber: issue.number,
+      });
+    }
+    return driverResult("done", `Issue #${issue.number} was stopped before Worker launch because required verification is blocked`, {
+      driverAction: "required_verification_blocked",
+      issueNumber: issue.number,
+      reason: verificationResolution.reason,
+      ...(stopped.comment ? { comment: stopped.comment } : {}),
+      fingerprint: stopped.fingerprint,
     });
   }
 

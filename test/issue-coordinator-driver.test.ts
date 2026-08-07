@@ -144,6 +144,22 @@ exit 2
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });
 
+  const blockedVerificationResolution = JSON.stringify({
+    status: "blocked",
+    reason: "no_source",
+    repository: "owner/repo",
+    baseRevision: "f".repeat(40),
+    sources: [],
+  });
+
+  it("stops an eligible Issue before launch when required verification is unresolved", () => {
+    expect(runDriverFixture("driver-ready-worker.json", { DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution }).driverAction).toBe("required_verification_blocked");
+  });
+
+  it("does not create an attempt for a pre-launch required-verification stop", () => {
+    expect(runDriverFixture("driver-ready-worker.json", { DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution })).not.toHaveProperty("launch");
+  });
+
   it("binds the Worker V1 identity to an exact commit SHA", () => {
     const instructions = runDriverFixture("driver-ready-worker.json").launch.instructions;
 

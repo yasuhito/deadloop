@@ -64,6 +64,8 @@ Define the repository-owned aggregate verification command as shared policy when
 
 When required verification is blocked, `/deadloop-doctor` inspects the checkout without changing it. It reports `package.json` aggregate scripts (`check`, `verify`, `validate`, or `ci`), individual test/lint/type-check scripts, and each GitHub Actions `run` step as non-authoritative verification candidates. Every candidate retains its manifest or workflow location, declared working directory, and explicit execution context such as environment, shell, runner/container, matrix, services, and preceding setup actions. A no-candidate result is distinct from a typed manifest, workflow, or filesystem discovery error. Candidates do not resolve `no_source`, are never combined into a local command, and cannot make `/deadloop-enable` succeed; add an explicit repository-owned aggregate command to trusted `deadloop.json` instead.
 
+An implementation Issue stopped by required verification retains `ready-for-agent`, loses its implementation or in-progress claim, and gains `agent:blocked`. Its marked comment records the reason, inspected sources, operations not performed, unchanged retry count, and recovery steps. deadloop suppresses another comment when the target and recovery-relevant diagnosis are unchanged, even if only the trusted base revision advances. Fixing configuration does not requeue the Issue; after the contract resolves, `/deadloop-doctor` shows the target-specific command for the operator to run explicitly.
+
 If a project uses `workerAgent: "claude"` or `reviewerAgent: "claude"`, run `claude` interactively once from the target repository root and accept Claude Code workspace trust before enabling the automation.
 
 Key fields:

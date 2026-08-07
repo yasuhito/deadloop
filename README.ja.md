@@ -93,6 +93,8 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 doctor は、各候補の情報源、作業ディレクトリ、明示された実行コンテキストを保ちます。候補を必須検証へ昇格したり、複数の候補を一つのコマンドへ合成したりはしません。
 
+実装 Issue が必須検証停止になった場合、deadloop は `ready-for-agent` を残し、実装用の進行ラベルを外して、理由別の復旧案内とともに `agent:blocked` を付けます。同じ復旧内容の案内は重複させず、設定変更だけでは再投入しません。必須検証が解決した後に限り、`/deadloop-doctor` が対象 Issue の再投入コマンドを表示します。
+
 すべての設定項目は [設定ガイド](docs/public-package-setup.md) を参照してください。
 
 ## 安全装置

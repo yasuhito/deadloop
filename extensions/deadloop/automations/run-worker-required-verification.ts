@@ -5,6 +5,9 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { createCommandRunner } = require("../../../src/automation-driver-kit.ts");
+const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { isRequiredVerificationStopComment, planIssueRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.ts");
+const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
   assertCurrentWorkerContract,
@@ -86,11 +89,71 @@ function writeVerificationLog(logPath: string, contents: string): void {
     fs.closeSync(descriptor);
   }
 }
+function isRequiredVerificationPolicyBlock(error: unknown): boolean {
+  return error instanceof Error
+    && error.message.startsWith("required verification blocked:")
+    && !error.message.includes("host-persisted launch snapshot");
+}
+
+function completionStopDiagnosis(attempt: Record<string, any>, error: unknown) {
+  const contract = attempt.requiredVerification || {};
+  const inspectedSources = error instanceof Error
+    ? (error as Error & { requiredVerificationSources?: Array<Record<string, unknown>> }).requiredVerificationSources
+    : undefined;
+  const fixedSources = [
+    ...(contract.source ? [{ ...contract.source, command: String(contract.command || "") }] : []),
+    ...(contract.override?.source ? [{ ...contract.override.source, command: String(contract.override.command || "") }] : []),
+  ];
+  return {
+    status: "blocked" as const,
+    reason: "stale_policy" as const,
+    repository: attempt.repository,
+    baseRevision: String(contract.baseRevision || attempt.inputRevision?.head || "unknown"),
+    sources: inspectedSources || fixedSources,
+    sourceScope: inspectedSources ? "current" as const : "fixed" as const,
+    detail: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function applyCompletionRequiredVerificationStop(args: Args, attempt: Record<string, any>, error: unknown): void {
+  if (attempt.target?.kind !== "issue" || !Number.isInteger(attempt.target.number)) {
+    throw new Error("required-verification completion stop requires an Issue target");
+  }
+  withEnabledDriverLock(args, (_enabled: unknown, recheck: () => void) => {
+    const github = createGithubOperations(createCommandRunner(), recheck);
+    const issue = github.getIssue(args.githubRepo, attempt.target.number);
+    if (String(issue.state || "").toUpperCase() !== "OPEN") throw new Error("required-verification completion stop target is no longer open");
+    const labels = new Set((issue.labels || []).map((label: unknown) => typeof label === "string" ? label : String((label as { name?: string }).name || "")));
+    const inProgressLabel = process.env.DEADLOOP_IN_PROGRESS_LABEL || "agent:in-progress";
+    const blockedLabel = process.env.DEADLOOP_BLOCKED_LABEL || "agent:blocked";
+    const alreadyStopped = labels.has(blockedLabel)
+      && (issue.comments || []).some((comment: { body?: string }) => isRequiredVerificationStopComment(comment.body));
+    if (!labels.has(inProgressLabel) && !alreadyStopped) {
+      throw new Error("required-verification completion stop target no longer has the attempt claim");
+    }
+    const plan = planIssueRequiredVerificationStop({
+      issue,
+      resolution: completionStopDiagnosis(attempt, error),
+      phase: "completion",
+      labels: {
+        implement: process.env.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
+        inProgress: inProgressLabel,
+        blocked: blockedLabel,
+      },
+    });
+    if (plan.removeLabels.length || plan.addLabels.length) {
+      github.moveIssueLabels(args.githubRepo, attempt.target.number, { remove: plan.removeLabels, add: plan.addLabels });
+    }
+    if (plan.comment) github.commentIssue(args.githubRepo, attempt.target.number, plan.comment);
+  });
+}
+
 async function run(
   args: Args,
   signal?: AbortSignal,
   verificationRunner: typeof runWorkerProjectCheck = runWorkerProjectCheck,
   enabledResolver: (project: Record<string, unknown>) => { githubRepositoryId?: string } = require("../../../src/enabled-operation.cjs").assertLocallyEnabled,
+  completionBlocker: (args: Args, attempt: Record<string, any>, error: unknown) => void = applyCompletionRequiredVerificationStop,
 ) {
   const location = canonicalAttemptLocation(args);
   const runDir = location.runDir;
@@ -103,7 +166,14 @@ async function run(
   validateCompletionReportBinding(attempt, report);
   if (attempt.role !== "worker" || report.status !== "complete") throw new Error("complete Worker report is required");
   const enabled = enabledResolver({ repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt });
-  const contract = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"), enabled.githubRepositoryId);
+  let contract;
+  try {
+    contract = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"), enabled.githubRepositoryId);
+  } catch (error) {
+    if (!isRequiredVerificationPolicyBlock(error)) throw error;
+    completionBlocker(args, attempt, error);
+    return { status: "blocked", reason: "stale_policy", issueNumber: attempt.target.number };
+  }
   const outputRevision = report.result.outputRevision;
   assertCleanOutput(args.worktree, outputRevision);
   const recordFile = workerRequiredVerificationPath(args.attemptRecord);
@@ -132,11 +202,15 @@ async function run(
     };
   }
   let outputFailure: unknown;
+  let policyBlock: unknown;
   try {
     assertCleanOutput(args.worktree, outputRevision);
     const currentAfterCheck = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"), enabled.githubRepositoryId);
     if (JSON.stringify(currentAfterCheck) !== JSON.stringify(contract)) throw new Error("required verification blocked: stale_policy; policy changed during verification");
-  } catch (error) { outputFailure = error; }
+  } catch (error) {
+    outputFailure = error;
+    if (isRequiredVerificationPolicyBlock(error)) policyBlock = error;
+  }
   const outcome = check.timedOut ? "timed_out" : check.interrupted ? "interrupted" : check.code === 0 && !check.restorationFailure && !outputFailure ? "passed" : "failed";
   const terminationReason = check.timedOut ? "timeout"
     : check.interrupted ? "interrupted"
@@ -159,6 +233,10 @@ async function run(
     ...(check.restorationFailure ? { artifactRestorationFailure: check.restorationFailure, restorationFailureRecordPath } : {}),
   };
   persistHostVerificationEvidence(recordFile, record);
+  if (policyBlock) {
+    completionBlocker(args, attempt, policyBlock);
+    return { status: "blocked", reason: "stale_policy", issueNumber: attempt.target.number, recordFile, logPath };
+  }
   if (outcome !== "passed") throw new Error(`required verification ${outcome}; log: ${logPath}`);
   return { status: "passed", outputRevision, recordFile, logPath };
 }
@@ -175,4 +253,4 @@ async function main() {
   }
 }
 if (require.main === module) void main();
-module.exports = { assertCleanOutput, parseArgs, run, runWorkerProjectCheck, writeVerificationLog };
+module.exports = { applyCompletionRequiredVerificationStop, assertCleanOutput, completionStopDiagnosis, isRequiredVerificationPolicyBlock, parseArgs, run, runWorkerProjectCheck, writeVerificationLog };

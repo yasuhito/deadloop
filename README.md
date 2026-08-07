@@ -93,6 +93,8 @@ When deadloop cannot resolve required verification, doctor lists non-authoritati
 
 Doctor preserves each candidate's source, working directory, and explicit execution context. It never promotes a candidate or combines candidates into one command.
 
+If an implementation Issue reaches a required-verification block, deadloop keeps `ready-for-agent`, removes the implementation claim, and adds `agent:blocked` with reason-specific recovery guidance. It suppresses duplicate guidance for the same recovery, does not resume merely because configuration changes, and shows that Issue's requeue command in `/deadloop-doctor` only after required verification resolves.
+
 See the [setup guide](docs/public-package-setup.md) for every available setting.
 
 ## Safety controls
