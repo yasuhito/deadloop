@@ -32,7 +32,9 @@ function fixture(withMarker: boolean) {
   const report = { schemaVersion: 1, attemptId: "launch-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 12 }, inputRevision: { head: inputHead }, status: "complete", summary: "done", result: { outputRevision: outputHead }, evidence: { validations: ["npm test"] } };
   writeFileSync(path.join(runDir, "promise.json"), JSON.stringify(report));
   const marker = withMarker ? renderAttemptPersistenceMarker(readAttemptRecord(runDir), report) : "";
-  let workspaceOpen = true; const textCommands: string[][] = [];
+  let workspaceOpen = true;
+  let issueObservation: any = { number: 12, state: "OPEN", labels: [{ name: "agent:in-progress" }], comments: [] };
+  const textCommands: string[][] = [];
   const runner = {
     runText(args: string[]) {
       textCommands.push(args);
@@ -44,7 +46,7 @@ function fixture(withMarker: boolean) {
     },
     runJson(args: string[]) {
       if (args[0] === "gh" && args[1] === "pr" && args[2] === "list") return [{ number: 21, state: "OPEN", headRefName: "agent/issue-12", headRefOid: outputHead, baseRefName: "main", body: "Closes #12", labels: [{ name: "agent:review" }], closingIssuesReferences: [{ number: 12 }], comments: marker ? [{ body: marker }] : [] }];
-      if (args[0] === "gh" && args[1] === "issue") return { state: "OPEN", labels: [{ name: "agent:in-progress" }] };
+      if (args[0] === "gh" && args[1] === "issue") return issueObservation;
       if (args[0] === "herdr" && args[1] === "workspace") return { result: { workspaces: workspaceOpen ? [{ workspace_id: "workspace-1", pane_count: 1, tab_count: 1, worktree: { checkout_path: worktree } }] : [] } };
       if (args[0] === "herdr" && args[1] === "worktree") return { result: { worktrees: [{ path: worktree, branch: "agent/issue-12" }] } };
       if (args[0] === "herdr" && args[1] === "agent") return { result: { agents: [] } };
@@ -56,7 +58,14 @@ function fixture(withMarker: boolean) {
     enabledAt: "1", expectedLabel: [], workerReadyLabel: "ready-for-agent", workerImplementLabel: "agent:implement",
     workerReviewLabel: "agent:review",
   };
-  return { args, runDir, runner, textCommands, setWorkspaceOpen: (value: boolean) => { workspaceOpen = value; } };
+  return {
+    args,
+    runDir,
+    runner,
+    textCommands,
+    setIssueObservation: (value: any) => { issueObservation = value; },
+    setWorkspaceOpen: (value: boolean) => { workspaceOpen = value; },
+  };
 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -153,11 +162,42 @@ describe("selected attempt workspace completion", () => {
     expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
   });
 
+  const stopResolution = {
+    status: "blocked", reason: "stale_policy", repository: "owner/repo", baseRevision: "a".repeat(40), sources: [], sourceScope: "fixed",
+    detail: "required verification blocked: stale_policy",
+  };
+  const stopLabels = { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", blocked: "agent:blocked" };
+  function exactStoppedIssue() {
+    const { requiredVerificationStopMarker } = require("../src/issue-required-verification-stop.ts");
+    return {
+      number: 12,
+      state: "OPEN",
+      labels: [{ name: "ready-for-agent" }, { name: "agent:blocked" }],
+      comments: [{ body: requiredVerificationStopMarker(12, stopResolution) }],
+    };
+  }
+
   it("closes a completion-stopped Worker so an explicit doctor requeue can launch again", () => {
     const data = fixture(false);
-    const result = closeCompletionStoppedWorkerAttempt(data.args, data.runner, () => undefined);
+    data.setIssueObservation(exactStoppedIssue());
+    const result = closeCompletionStoppedWorkerAttempt(data.args, data.runner, () => undefined, { resolution: stopResolution, labels: stopLabels });
     const phase = readAttemptRecord(data.runDir).phase;
     expect({ action: result.driverAction, phase, released: releasesAttemptOwnership(phase) }).toEqual({ action: "workspace_closed", phase: "workspace_closed", released: true });
+  });
+
+  it("retains ownership when the fingerprinted completion-stop comment is concurrently replaced", () => {
+    const data = fixture(false);
+    data.setIssueObservation({ ...exactStoppedIssue(), comments: [{ body: "replacement" }] });
+    const result = closeCompletionStoppedWorkerAttempt(data.args, data.runner, () => undefined, { resolution: stopResolution, labels: stopLabels });
+    expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
+  });
+
+  it("reconciles a completion-stop crash after the owned workspace was already closed", () => {
+    const data = fixture(false);
+    data.setIssueObservation(exactStoppedIssue());
+    data.setWorkspaceOpen(false);
+    const result = closeCompletionStoppedWorkerAttempt(data.args, data.runner, () => undefined, { resolution: stopResolution, labels: stopLabels });
+    expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_closed", phase: "workspace_closed" });
   });
 
   it("durably records persistence before closing a proven Worker workspace", () => {

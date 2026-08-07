@@ -9,7 +9,12 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
 const { renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
-const { planIssueRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.ts");
+const {
+  applyIssueRequiredVerificationStop,
+  hasRequiredVerificationStopMarker,
+  isExactRequiredVerificationStop,
+  planIssueRequiredVerificationStop,
+} = require("../../../src/issue-required-verification-stop.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
@@ -149,8 +154,7 @@ function applyRequiredVerificationStop(
       phase: "before_launch",
       labels: { implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel },
     });
-    github.moveIssueLabels(env.githubRepo, live.number, { remove: plan.removeLabels, add: plan.addLabels });
-    if (plan.comment) github.commentIssue(env.githubRepo, live.number, plan.comment);
+    applyIssueRequiredVerificationStop(github, env.githubRepo, live.number, plan);
     result = { applied: true, ...(plan.comment ? { comment: plan.comment } : {}), fingerprint: plan.fingerprint };
   });
   if (fixture && applied) {
@@ -163,6 +167,28 @@ function applyRequiredVerificationStop(
     result = { applied: true, ...(plan.comment ? { comment: plan.comment } : {}), fingerprint: plan.fingerprint };
   }
   return applied ? result : { applied: false };
+}
+
+function resumeRequiredVerificationStop(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  resolution: JsonObject,
+): { comment?: string; fingerprint: string } {
+  return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+    const github = githubOperations(recheck);
+    const live = github.getIssue(env.githubRepo, issue.number);
+    if (String(live.state || "").toUpperCase() !== "OPEN" || !hasRequiredVerificationStopMarker(live, resolution)) {
+      throw new StaleLaunchError(`Issue #${issue.number} required-verification stop changed`);
+    }
+    const plan = planIssueRequiredVerificationStop({
+      issue: live,
+      resolution,
+      phase: "before_launch",
+      labels: { implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel },
+    });
+    applyIssueRequiredVerificationStop(github, env.githubRepo, live.number, plan);
+    return { ...(plan.comment ? { comment: plan.comment } : {}), fingerprint: plan.fingerprint };
+  });
 }
 
 function slugForBranch(value: unknown): string {
@@ -479,6 +505,19 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   const issues = issueList(fixture, env.githubRepo);
+  const verificationResolution = parsedRequiredVerificationResolution(env);
+  const stopLabels = { ready: env.readyLabel, implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel };
+  const resumableStop = verificationResolution?.status === "blocked"
+    ? issues.find((candidate) => hasRequiredVerificationStopMarker(candidate, verificationResolution)
+      && !isExactRequiredVerificationStop(candidate, verificationResolution, stopLabels))
+    : undefined;
+  if (resumableStop && !fixture) {
+    const stopped = resumeRequiredVerificationStop(resumableStop, env, verificationResolution as JsonObject);
+    return driverResult("done", `Issue #${resumableStop.number} required-verification stop was resumed`, {
+      driverAction: "required_verification_blocked", issueNumber: resumableStop.number,
+      reason: verificationResolution?.reason, ...(stopped.comment ? { comment: stopped.comment } : {}), fingerprint: stopped.fingerprint,
+    });
+  }
   const decision = decisionForIssues(fixturePath, issues, env.githubRepo, env);
   const issuePlan = planIssueCoordinatorAction(issues, decision);
   if (issuePlan.kind === "skip_no_candidate") return driverResult("skip", "No target issue", { driverAction: "no_candidate", decision });
@@ -511,7 +550,6 @@ function drive(fixturePath: string | undefined): DriverResult {
     });
   }
 
-  const verificationResolution = parsedRequiredVerificationResolution(env);
   if (verificationResolution?.status === "blocked") {
     const stopped = applyRequiredVerificationStop(issue, env, verificationResolution, fixture);
     if (!stopped.applied) {

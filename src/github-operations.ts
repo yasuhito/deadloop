@@ -32,7 +32,7 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
         "--limit",
         "200",
         "--json",
-        "number,title,body,labels,updatedAt,url",
+        "number,title,body,labels,updatedAt,url,state,comments",
       ]);
     },
 

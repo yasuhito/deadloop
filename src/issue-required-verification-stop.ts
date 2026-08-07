@@ -59,6 +59,39 @@ function isRequiredVerificationStopComment(body: unknown): boolean {
   return /<!-- deadloop:required-verification-blocked:v1 target=issue-\d+ fingerprint=[0-9a-f]{64} -->/.test(String(body || ""));
 }
 
+function hasRequiredVerificationStopMarker(issue: GithubIssue, diagnosis: IssueRequiredVerificationStopDiagnosis): boolean {
+  const marker = requiredVerificationStopMarker(Number(issue.number || 0), diagnosis);
+  return (issue.comments || []).some((comment) => String(comment.body || "").includes(marker));
+}
+
+function isExactRequiredVerificationStop(
+  issue: GithubIssue & { state?: string },
+  diagnosis: IssueRequiredVerificationStopDiagnosis,
+  labels: StopLabels & { ready: string },
+): boolean {
+  const names = labelNames(issue);
+  return String(issue.state || "").toUpperCase() === "OPEN"
+    && names.has(labels.ready)
+    && names.has(labels.blocked)
+    && !names.has(labels.implement)
+    && !names.has(labels.inProgress)
+    && hasRequiredVerificationStopMarker(issue, diagnosis);
+}
+
+function applyIssueRequiredVerificationStop(
+  github: { commentIssue(repo: string, issueNumber: string | number, body: string): void; moveIssueLabels(repo: string, issueNumber: string | number, move: { remove: string[]; add: string[] }): void },
+  repository: string,
+  issueNumber: string | number,
+  plan: StopPlan,
+): void {
+  // Publish the durable fingerprint before releasing ownership. If either write fails,
+  // the next pass can safely resume from the marked, still-claimed Issue.
+  if (plan.comment) github.commentIssue(repository, issueNumber, plan.comment);
+  if (plan.removeLabels.length || plan.addLabels.length) {
+    github.moveIssueLabels(repository, issueNumber, { remove: plan.removeLabels, add: plan.addLabels });
+  }
+}
+
 function renderSources(diagnosis: IssueRequiredVerificationStopDiagnosis): string[] {
   if (!diagnosis.sources.length) return ["- none"];
   return diagnosis.sources.map((source) => `- \`${source.kind}:${source.location}\`: \`${source.command || "<empty>"}\``);
@@ -113,6 +146,9 @@ function planIssueRequiredVerificationStop(input: {
 }
 
 module.exports = {
+  applyIssueRequiredVerificationStop,
+  hasRequiredVerificationStopMarker,
+  isExactRequiredVerificationStop,
   isRequiredVerificationStopComment,
   planIssueRequiredVerificationStop,
   requiredVerificationStopFingerprint,

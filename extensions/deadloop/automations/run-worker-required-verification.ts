@@ -7,7 +7,7 @@ const { readAttemptRecord, validateCompletionReportBinding } = require("../../..
 const { createCommandRunner } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { closeCompletionStoppedWorkerAttempt } = require("./complete-attempt-workspace.ts");
-const { isRequiredVerificationStopComment, planIssueRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.ts");
+const { applyIssueRequiredVerificationStop, hasRequiredVerificationStopMarker, planIssueRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
@@ -127,27 +127,20 @@ function applyCompletionRequiredVerificationStop(args: Args, attempt: Record<str
     if (String(issue.state || "").toUpperCase() !== "OPEN") throw new Error("required-verification completion stop target is no longer open");
     const labels = new Set((issue.labels || []).map((label: unknown) => typeof label === "string" ? label : String((label as { name?: string }).name || "")));
     const inProgressLabel = process.env.DEADLOOP_IN_PROGRESS_LABEL || "agent:in-progress";
-    const blockedLabel = process.env.DEADLOOP_BLOCKED_LABEL || "agent:blocked";
-    const alreadyStopped = labels.has(blockedLabel)
-      && (issue.comments || []).some((comment: { body?: string }) => isRequiredVerificationStopComment(comment.body));
-    if (!labels.has(inProgressLabel) && !alreadyStopped) {
+    const stopLabels = {
+      ready: process.env.DEADLOOP_READY_LABEL || "ready-for-agent",
+      implement: process.env.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
+      inProgress: inProgressLabel,
+      blocked: process.env.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
+    };
+    const resolution = completionStopDiagnosis(attempt, error);
+    const resumableStop = hasRequiredVerificationStopMarker(issue, resolution);
+    if (!labels.has(inProgressLabel) && !resumableStop) {
       throw new Error("required-verification completion stop target no longer has the attempt claim");
     }
-    const plan = planIssueRequiredVerificationStop({
-      issue,
-      resolution: completionStopDiagnosis(attempt, error),
-      phase: "completion",
-      labels: {
-        implement: process.env.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
-        inProgress: inProgressLabel,
-        blocked: blockedLabel,
-      },
-    });
-    if (plan.removeLabels.length || plan.addLabels.length) {
-      github.moveIssueLabels(args.githubRepo, attempt.target.number, { remove: plan.removeLabels, add: plan.addLabels });
-    }
-    if (plan.comment) github.commentIssue(args.githubRepo, attempt.target.number, plan.comment);
-    const closed = closeCompletionStoppedWorkerAttempt(args, runner, recheck);
+    const plan = planIssueRequiredVerificationStop({ issue, resolution, phase: "completion", labels: stopLabels });
+    applyIssueRequiredVerificationStop(github, args.githubRepo, attempt.target.number, plan);
+    const closed = closeCompletionStoppedWorkerAttempt(args, runner, recheck, { resolution, labels: stopLabels });
     if (closed?.driverAction !== "workspace_closed") {
       throw new Error(`required-verification completion stop could not close the attempt workspace: ${String(closed?.driverAction || "unknown")}`);
     }

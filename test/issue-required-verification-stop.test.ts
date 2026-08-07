@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 const {
+  applyIssueRequiredVerificationStop,
   planIssueRequiredVerificationStop,
   requiredVerificationStopMarker,
 } = require("../src/issue-required-verification-stop.ts");
@@ -55,5 +56,27 @@ describe("implementation Issue required-verification stop", () => {
 
   it("uses a target-specific stable marker", () => {
     expect(requiredVerificationStopMarker(42, resolution)).toMatch(/^<!-- deadloop:required-verification-blocked:v1 target=issue-42 fingerprint=[0-9a-f]{64} -->$/);
+  });
+
+  it("does not release ownership when fingerprint comment creation fails", () => {
+    const moves: unknown[] = [];
+    const plan = planIssueRequiredVerificationStop({ issue: issue(), resolution, phase: "before_launch", labels });
+    let failure = "";
+    try {
+      applyIssueRequiredVerificationStop({
+        commentIssue: () => { throw new Error("comment failed"); },
+        moveIssueLabels: (...args: unknown[]) => { moves.push(args); },
+      }, "owner/repo", 42, plan);
+    } catch (error) { failure = error instanceof Error ? error.message : String(error); }
+    expect({ failure, moves: moves.length }).toEqual({ failure: "comment failed", moves: 0 });
+  });
+
+  it("resumes label release from a fingerprinted-comment partial state", () => {
+    const first = planIssueRequiredVerificationStop({ issue: issue(), resolution, phase: "before_launch", labels });
+    const partial = issue([{ body: first.comment || "" }]);
+    const resumed = planIssueRequiredVerificationStop({ issue: partial, resolution, phase: "before_launch", labels });
+    const moves: unknown[] = [];
+    applyIssueRequiredVerificationStop({ commentIssue: () => undefined, moveIssueLabels: (...args: unknown[]) => { moves.push(args); } }, "owner/repo", 42, resumed);
+    expect(moves).toHaveLength(1);
   });
 });
