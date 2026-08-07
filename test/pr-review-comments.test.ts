@@ -91,7 +91,7 @@ Exactly one bounded automatic repair will now start and will change only the fin
 - \`npm run typecheck\`: passed
 
 ## Next step
-The new head will be reviewed again. Review labels remain in place.
+The new head will be reviewed again. The review queue label remains in place while the active-review claim is released.
 
 <!-- deadloop:review-repair-result key=abcdef1234567890abcd head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->`);
   });

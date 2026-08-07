@@ -149,7 +149,8 @@ function completion(args: JsonObject): DriverResult {
 
     if (successfulReceipt) {
       if (repairResultCommentExists(comments, String(args.attemptKey), receiptHead, automationLogin)) {
-        return driverResult("done", `PR #${args.pr} repair result was already posted`, { driverAction: "repair_result_duplicate" });
+        github.movePrLabels(String(args.githubRepo), String(args.pr), { remove: String(args.reviewingLabel) });
+        return driverResult("done", `PR #${args.pr} repair result was already posted; re-review is pending`, { driverAction: "repair_result_duplicate" });
       }
       const marker = renderAttemptPersistenceMarker(
         record,
@@ -164,7 +165,8 @@ function completion(args: JsonObject): DriverResult {
         checks: receipt.checks,
       })}${marker ? `\n${marker}` : ""}`;
       github.commentPr(String(args.githubRepo), String(args.pr), comment);
-      return driverResult("done", `PR #${args.pr} repair result posted`, { driverAction: "repair_result_posted", comment });
+      github.movePrLabels(String(args.githubRepo), String(args.pr), { remove: String(args.reviewingLabel) });
+      return driverResult("done", `PR #${args.pr} repair result posted; re-review is pending`, { driverAction: "repair_result_posted", comment });
     }
 
     const stopMarker = `<!-- deadloop:review-repair-stop key=${String(args.attemptKey).toLowerCase()} -->`;

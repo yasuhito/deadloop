@@ -1,0 +1,24 @@
+{
+  "prs": [
+    {
+      "number": 33,
+      "title": "Stale claim awaiting fallback review",
+      "url": "https://github.com/owner/repo/pull/33",
+      "headRefName": "agent/issue-33",
+      "headRefOid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "updatedAt": "2026-07-07T23:00:00Z",
+      "isDraft": false,
+      "labels": [{ "name": "agent:review" }, { "name": "agent:reviewing" }],
+      "statusCheckRollup": [],
+      "comments": [
+        {
+          "createdAt": "2026-07-07T23:00:00Z",
+          "author": { "login": "deadloop-bot" },
+          "body": "@coderabbitai review\n\n<!-- deadloop:external-review-request head=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee -->"
+        }
+      ],
+      "reviewRequests": []
+    }
+  ],
+  "agents": { "result": { "agents": [] } }
+}

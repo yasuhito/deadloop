@@ -301,6 +301,10 @@ Given("Conflict recovery changed the pull request head", function (this: Recover
   this.case = "resolved-conflict";
 });
 
+Given("Conflict recovery changed a repaired pull request head", function (this: RecoveryWorld) {
+  this.case = "resolved-repaired-conflict";
+});
+
 Given("A pull request has actionable review findings for the first time", function (this: RecoveryWorld) {
   this.case = "first-repair";
 });
@@ -349,6 +353,7 @@ When("deadloop checks the pull request", function (this: RecoveryWorld) {
   if (this.case === "conflict") this.result = reviewerDriver("merge-conflict.json");
   if (this.case === "repeated-conflict") this.result = reviewerDriver("merge-conflict-double-attempt.json");
   if (this.case === "resolved-conflict") this.result = reviewerDriver("merge-conflict-updated.json");
+  if (this.case === "resolved-repaired-conflict") this.result = reviewerDriver("repaired-merge-conflict-updated.json");
   if (this.case === "repaired-head") this.result = reviewerDriver("review-repair-pushed.json");
 });
 
@@ -392,6 +397,10 @@ Then("deadloop does not start another dedicated conflict-recovery attempt", func
 Then("deadloop returns the pull request to normal review", function (this: RecoveryWorld) {
   const starts = adapterEffects(this.result)?.herdrStarts?.filter((start: any) => start.name.endsWith("-reviewer")) ?? [];
   assert.equal(starts.length, 1);
+});
+
+Then("The selection reason after conflict recovery is repair re-review", function (this: RecoveryWorld) {
+  assert.equal((this.result?.decision as { reason?: string } | undefined)?.reason, "repair_rereview");
 });
 
 Then("deadloop preserves the review state", function (this: RecoveryWorld) {

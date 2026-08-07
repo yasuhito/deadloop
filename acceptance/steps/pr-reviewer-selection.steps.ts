@@ -27,7 +27,7 @@ type SelectionWorld = {
   autoMerge?: boolean;
   externalReviewEnabled?: boolean;
   driverFixtureName?: string;
-  decision?: { selected?: boolean; number?: number };
+  decision?: { selected?: boolean; number?: number; reason?: string };
   driverResult?: DriverResult;
   prs?: PullRequest[];
   agents?: Record<string, unknown>;
@@ -90,6 +90,11 @@ Given("There is a pull request under review with no active agents.", function (t
   this.agentsFixtureName = "agents-empty.json";
 });
 
+Given("There is a pull request waiting for re-review after repair", function (this: SelectionWorld) {
+  setFixture(this, "precheck-repair-rereview.json");
+  this.agentsFixtureName = "agents-empty.json";
+});
+
 Given("There is a pull request waiting for review with an abandoned attempt with evidence.", function (this: SelectionWorld) {
   setFixture(this, "precheck-agent-review.json");
   this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: 7 }, phase: "abandoned" }];
@@ -137,6 +142,7 @@ When("deadloop searches for review target", function (this: SelectionWorld) {
     externalReviewEnabled: this.externalReviewEnabled ?? false,
     now: fixedNow,
     projectId: "demo",
+    automationLogin: "deadloop-bot",
   });
   this.decision = selectPrForReview(readFixture(this.fixtureName), config, workingReviewerPrNumbers(agents, config.projectId, this.attempts || [], "owner/repo"));
 });
@@ -174,7 +180,7 @@ When("deadloop selects and processes the review target", function (this: Selecti
 
 Given("Another agent has started the review after selection.", function (this: SelectionWorld) {
   if (!this.fixtureName) throw new Error("review state is missing");
-  const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo" });
+  const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo", automationLogin: "deadloop-bot" });
   this.prs = readFixture(this.fixtureName);
   const firstDecision = selectPrForReview(this.prs, config);
   const selected = this.prs.find((pr) => pr.number === firstDecision.number);
@@ -187,7 +193,7 @@ Given("Another agent has started the review after selection.", function (this: S
 
 When("The next selection cycle begins", function (this: SelectionWorld) {
   if (!this.prs || !this.agents) throw new Error("review state is missing");
-  const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo" });
+  const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo", automationLogin: "deadloop-bot" });
   this.decision = selectPrForReview(this.prs, config, workingReviewerPrNumbers(this.agents, config.projectId, this.attempts || [], "owner/repo"));
 });
 
@@ -197,6 +203,14 @@ Then("deadloop selects pull request #{int} for review", function (this: Selectio
 
 Then("No review target is selected", function (this: SelectionWorld) {
   assert.equal(this.decision?.selected, false);
+});
+
+Then("The selection reason is stale review claim recovery", function (this: SelectionWorld) {
+  assert.equal(this.decision?.reason, "stale_reclaim");
+});
+
+Then("The selection reason is repair re-review", function (this: SelectionWorld) {
+  assert.equal(this.decision?.reason, "repair_rereview");
 });
 
 Then("deadloop requests external review", function (this: SelectionWorld) {

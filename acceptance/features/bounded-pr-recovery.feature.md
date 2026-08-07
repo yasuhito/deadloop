@@ -38,6 +38,18 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop checks the pull request
 * Then deadloop returns the pull request to normal review
 
+## Scenario: Start re-review after conflict recovery changes a repaired pull request head
+
+* Given Conflict recovery changed a repaired pull request head
+* When deadloop checks the pull request
+* Then deadloop returns the pull request to normal review
+
+## Scenario: Preserve the selection reason after conflict recovery changes a repaired pull request head
+
+* Given Conflict recovery changed a repaired pull request head
+* When deadloop checks the pull request
+* Then The selection reason after conflict recovery is repair re-review
+
 ## Scenario: Preserve review state during conflict recovery
 
 * Given A pull request has a conflict that can be recovered

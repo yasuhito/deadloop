@@ -14,6 +14,7 @@ function fixture(name: string) {
 function env(overrides: Record<string, unknown> = {}) {
   return {
     projectId: "demo",
+    automationLogin: "deadloop-bot",
     reviewLabel: "agent:review",
     reviewingLabel: "agent:reviewing",
     humanLabel: "ready-for-human",
@@ -61,5 +62,17 @@ describe("PR reviewer use-case flow", () => {
     const data = fixture("fallback-review.json");
 
     expect(planPrReviewerAction(data.prs, data.agents, env({ externalReviewEnabled: true })).kind).toBe("review_required");
+  });
+
+  it("preserves the repair rereview reason through external review fallback", () => {
+    const data = fixture("repair-rereview-fallback.json");
+
+    expect(planPrReviewerAction(data.prs, data.agents, env({ externalReviewEnabled: true })).reason).toBe("repair_rereview");
+  });
+
+  it("preserves the stale claim reason through external review fallback", () => {
+    const data = fixture("stale-claim-fallback.json");
+
+    expect(planPrReviewerAction(data.prs, data.agents, env({ externalReviewEnabled: true })).reason).toBe("stale_reclaim");
   });
 });
