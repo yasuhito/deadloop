@@ -28,6 +28,7 @@ function runCompletion(options: {
   receipt?: Record<string, unknown> | string;
   comments?: { body: string; author?: { login: string } }[];
   liveHead?: string;
+  headAfterAuthorization?: string;
   state?: string;
   labels?: { name: string }[];
   verificationRecord?: "authenticated" | "legacy" | "missing";
@@ -44,6 +45,7 @@ function runCompletion(options: {
   const contractFile = path.join(runDir, "review-contract.json");
   const postedFile = path.join(root, "posted.txt");
   const actionsFile = path.join(root, "actions.txt");
+  const viewsFile = path.join(root, "views.txt");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(runDir, { recursive: true });
   fs.mkdirSync(projectRepo);
@@ -110,7 +112,13 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
 else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
-else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:review" }, { name: "agent:reviewing" }])},comments:${JSON.stringify(options.comments || [])}}));
+else if (args[0] === "pr" && args[1] === "view") {
+  const views = fs.existsSync(process.env.VIEWS_FILE) ? Number(fs.readFileSync(process.env.VIEWS_FILE, "utf8")) : 0;
+  fs.writeFileSync(process.env.VIEWS_FILE, String(views + 1));
+  const comments = ${JSON.stringify(options.comments || [])};
+  if (fs.existsSync(process.env.POSTED_FILE)) comments.push({body:fs.readFileSync(process.env.POSTED_FILE, "utf8"),author:{login:"deadloop-bot"}});
+  process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:views === 0 ? "${options.liveHead || newHead}" : "${options.headAfterAuthorization || options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:review" }, { name: "agent:reviewing" }])},comments}));
+}
 else if (args[0] === "pr" && args[1] === "comment") fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
 else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.ACTIONS_FILE, args.join(" ") + "\\n");
 `,
@@ -153,7 +161,7 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
       "--blocked-label",
       "agent:blocked",
     ],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"), POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile } },
+    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"), POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile, VIEWS_FILE: viewsFile } },
   );
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   return {
@@ -390,6 +398,20 @@ describe("review repair deterministic completion", () => {
     });
 
     expect(result.output.driverAction).toBe("repair_human_blocked");
+  });
+
+  it("does not post success when the PR head changes during authorization", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: {
+        status: "complete", reason: "repair_pushed", summary: "fixed",
+        repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }], checks,
+      },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      headAfterAuthorization: "c".repeat(40),
+    });
+
+    expect({ action: result.output.driverAction, posted: result.posted }).toEqual({ action: "repair_target_changed", posted: "" });
   });
 
   it("does not duplicate an existing repair result comment", () => {

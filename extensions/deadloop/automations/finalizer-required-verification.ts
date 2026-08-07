@@ -25,6 +25,7 @@ type Input = {
 };
 type Operations = {
   execute: () => JsonObject;
+  validate?: (record: JsonObject) => void;
   persist: (record: JsonObject) => JsonObject;
   authenticate: (record: JsonObject) => void;
 };
@@ -65,7 +66,15 @@ function ensureRequiredVerificationRecord(input: Input, operations: Operations):
       return { record: input.record, reused: true };
     } catch {}
   }
-  const persisted = operations.persist(operations.execute());
+  const executed = operations.execute();
+  try {
+    operations.validate?.(executed);
+  } catch (error) {
+    const failed = { ...executed, outcome: "failed", postCheckFailure: error instanceof Error ? error.message : String(error) };
+    operations.persist(failed);
+    throw error;
+  }
+  const persisted = operations.persist(executed);
   if (!isExactPassedRecord(input, persisted)) throw new Error("required verification execution did not produce a matching passed record");
   operations.authenticate(persisted);
   return { record: persisted, reused: false };
@@ -157,6 +166,19 @@ function ensureFinalizerRequiredVerification(
         throw new Error(`required verification failed; log: ${logPath}`);
       }
       return record;
+    },
+    validate: () => {
+      const status = run(["git", "-C", args.repo, "status", "--porcelain"]);
+      if (status.status !== 0 || status.stdout.trim()) throw new Error("required verification post-check failed: worktree is dirty after checks");
+      const head = run(["git", "-C", args.repo, "rev-parse", "HEAD"]);
+      if (head.status !== 0 || head.stdout.trim().toLowerCase() !== targetCommit.toLowerCase()) {
+        throw new Error("required verification post-check failed: HEAD changed during checks");
+      }
+      const current = finalizerVerificationInput(args, role, targetCommit, repositoryId).input;
+      assertFixedContract(current);
+      if (!isDeepStrictEqual(current.currentContract, input.currentContract)) {
+        throw new Error("required verification post-check failed: contract changed during checks");
+      }
     },
     persist: (record: JsonObject) => persistHostVerificationEvidence(recordFile, record),
   });

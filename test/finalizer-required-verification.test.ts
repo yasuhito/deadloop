@@ -89,6 +89,26 @@ for (const role of ["review-repair", "branch-update"] as const) {
       expect(executions).toBe(1);
     });
 
+    it("persists failed evidence when a successful command fails post-check binding", () => {
+      let persisted: Record<string, unknown> | undefined;
+      let message = "";
+      try {
+        ensureRequiredVerificationRecord(
+          { attempt: attempt(role), currentContract: contract, targetCommit: candidate, record: undefined },
+          {
+            execute: () => passedRecord(),
+            validate: () => { throw new Error("HEAD changed during checks"); },
+            persist: (record: Record<string, unknown>) => { persisted = record; return record; },
+            authenticate: () => {},
+          },
+        );
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect({ outcome: persisted?.outcome, message }).toEqual({ outcome: "failed", message: "HEAD changed during checks" });
+    });
+
     it("reruns verification when the target commit changes", () => {
       let executions = 0;
       ensureRequiredVerificationRecord(

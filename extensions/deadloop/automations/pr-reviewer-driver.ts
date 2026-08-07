@@ -124,7 +124,7 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
 }
 
 type DriverLaunchInput = {
-  worktree: { mode: "open"; branch: string };
+  worktree: { mode: "open"; branch: string; baseBranch?: string };
   repoPath: string;
   automationDir: string;
   stateDir: string;
@@ -304,9 +304,9 @@ Safety contract:
 - Merge ${baseOid} into the existing PR branch. Use git merge, never rebase, and never rewrite existing commits.
 - Resolve only conflicts caused by this merge. Do not widen the PR's scope.
 - Commit the merge resolution before finalization.
-- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted normal non-force push to the driver-selected branch:
+- Do not run git push directly, including any direct or unbounded force-push. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted push to the driver-selected branch with an exact-head force-with-lease:
   ${finalizeCommand}
-- Never force-push. Never push another ref. Never edit labels, create or edit a PR, merge a PR, close an issue, or delete a branch.
+- Never push another ref. Never edit labels, create or edit a PR, merge a PR, close an issue, or delete a branch.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state so the next cycle can re-evaluate.
 
 Promise report:
@@ -419,7 +419,7 @@ function branchUpdateLaunchPlan(
     retryKey: key,
     marker: renderBranchUpdateMarker(headOid, baseOid),
     input: {
-      worktree: { mode: "open", branch },
+      worktree: { mode: "open", branch, baseBranch: env.baseBranch },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
       stateDir: env.stateDir,
@@ -434,7 +434,6 @@ function branchUpdateLaunchPlan(
       role: "branch-update",
       target: { kind: "pull-request", number },
       inputRevision: { head: headOid, base: baseOid },
-      baseBranch: env.baseBranch,
       requiredVerification: env.requiredVerification,
       intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
@@ -878,4 +877,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { envConfig, launchBranchUpdate, launchPrReviewerFlow };
+module.exports = { branchUpdateLaunchPlan, envConfig, launchBranchUpdate, launchPrReviewerFlow };
