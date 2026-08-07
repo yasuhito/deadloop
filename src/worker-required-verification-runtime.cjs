@@ -195,15 +195,15 @@ function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repo
   if (!isDeepStrictEqual(current, contract)) throw new Error("required verification blocked: stale_policy; current policy differs from the fixed attempt contract");
   return current;
 }
-function assertWorkerCompletionAuthorized(attempt, report, record, currentContract) {
-  if (attempt.role !== "worker" || report.role !== "worker" || report.status !== "complete") throw new Error("Worker completion gate requires a complete Worker report");
+function assertRequiredVerificationAuthorized(attempt, targetCommit, record, currentContract, allowedRoles) {
+  if (!Array.isArray(allowedRoles) || !allowedRoles.includes(attempt.role)) throw new Error("required verification gate does not authorize this attempt role");
   assertContract(attempt.requiredVerification); assertContract(currentContract);
   if (!isDeepStrictEqual(attempt.requiredVerification, currentContract)) throw new Error("required verification blocked: stale_policy; start a new attempt");
   if (attempt.requiredVerification.repository !== attempt.repository) throw new Error("required verification persisted contract repository does not match attempt");
   if (!record || typeof record !== "object" || Array.isArray(record) || record.version !== 1) throw new Error("required verification passed record is missing");
   if (!nonEmpty(record.startedAt) || !Number.isFinite(record.durationMs) || record.durationMs < 0 || !nonEmpty(record.logPath)) throw new Error("required verification record is invalid");
   if (record.outcome !== "passed" || record.exitCode !== 0) throw new Error("required verification record did not pass");
-  if (!isDeepStrictEqual(record.binding, requiredVerificationBinding(attempt.requiredVerification, report.result.outputRevision))) throw new Error("required verification record does not match the Worker output commit and fixed contract");
+  if (!isDeepStrictEqual(record.binding, requiredVerificationBinding(attempt.requiredVerification, targetCommit))) throw new Error("required verification record does not match the output commit and fixed contract");
   if (!authenticatedRecords.has(record)) {
     const provenance = record.provenance;
     if (!provenance || provenance.kind !== "host_gate_execution" || !nonEmpty(provenance.recordPath) || !nonEmpty(attempt.promiseFile)) {
@@ -218,6 +218,10 @@ function assertWorkerCompletionAuthorized(attempt, report, record, currentContra
       throw new Error("required verification host execution authenticity is missing");
     }
   }
-  return { outputRevision: report.result.outputRevision, record };
+  return { outputRevision: targetCommit, record };
 }
-module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertWorkerCompletionAuthorized, persistHostVerificationEvidence, readRequiredVerificationRecord, readWorkerContractSnapshot, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };
+function assertWorkerCompletionAuthorized(attempt, report, record, currentContract) {
+  if (attempt.role !== "worker" || report.role !== "worker" || report.status !== "complete") throw new Error("Worker completion gate requires a complete Worker report");
+  return assertRequiredVerificationAuthorized(attempt, report.result.outputRevision, record, currentContract, ["worker"]);
+}
+module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertRequiredVerificationAuthorized, assertWorkerCompletionAuthorized, persistHostVerificationEvidence, readRequiredVerificationRecord, readWorkerContractSnapshot, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };

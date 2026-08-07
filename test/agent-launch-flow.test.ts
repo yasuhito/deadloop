@@ -286,6 +286,7 @@ describe("0.7.5 エージェント起動フロー", () => {
           ...base, uuid: `chain-${roles[index]}`, role: roles[index], project: "demo", intendedWorktreePath: "/wt/shared",
           worktree: index === 0 ? { mode: "create", branch: "feature/shared", baseBranch: "origin/main" } : { mode: "open", branch: "feature/shared" },
           target: index === 0 ? { kind: "issue", number: 1 } : { kind: "pull-request", number: 44 }, resolveWorktreeHead: false,
+          ...(roles[index] === "review-repair" ? { requiredVerification: input(root, "worker").requiredVerification } : {}),
         };
         const ops: any = operations(root, roles[index] === "worker" ? "worker" : "reviewer", []);
         ops.runner.createWorktree = () => ({ workspaceId: identities[index][0], tabId: identities[index][1], rootPaneId: identities[index][2], worktreePath: "/wt/shared" });

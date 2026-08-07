@@ -52,6 +52,9 @@ function envConfig(args: JsonObject = {}) {
     repoPath: configValue(args, "repoPath", process.env.DEADLOOP_REPO_PATH, "."),
     worktreeRoot: configValue(args, "worktreeRoot", process.env.DEADLOOP_WORKTREE_ROOT, path.join(os.homedir(), ".herdr", "worktrees", configValue(args, "projectId", process.env.DEADLOOP_PROJECT_ID, "project"))),
     githubRepo: configValue(args, "githubRepo", process.env.DEADLOOP_GITHUB_REPO, ""),
+    baseBranch: configValue(args, "baseBranch", process.env.DEADLOOP_BASE_BRANCH, "origin/main"),
+    requiredVerification: args.requiredVerification
+      || (process.env.DEADLOOP_REQUIRED_VERIFICATION ? JSON.parse(process.env.DEADLOOP_REQUIRED_VERIFICATION) : undefined),
     enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
     stateDir: configValue(
       args,
@@ -202,6 +205,8 @@ function repairWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-review-repair-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-id",
+    shellQuote(env.projectId),
     "--project-repo",
     shellQuote(env.repoPath),
     "--github-repo",
@@ -224,6 +229,8 @@ function repairWorkerPrompt(
     shellQuote(env.checkCommand),
     "--result-file",
     shellQuote(path.join(path.dirname(promiseFile), "finalizer-result.json")),
+    "--attempt-record",
+    shellQuote(path.join(path.dirname(promiseFile), "attempt.json")),
   ].join(" ");
   return `Repair only the actionable review findings below on existing PR #${prNumber}.
 
@@ -382,6 +389,8 @@ function repairLaunchInput(
     role: "review-repair" as const,
     target: { kind: "pull-request" as const, number: Number(prNumber) },
     inputRevision: { head: expectedHead },
+    baseBranch: env.baseBranch,
+    requiredVerification: env.requiredVerification,
     intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
     renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
       repairWorkerPrompt(prNumber, branch, expectedHead, findings, key, promiseFile, worktreePath, env),

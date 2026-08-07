@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 const { finalizeReviewRepair } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
 const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 const { finalizeBranchUpdate } = require("../extensions/deadloop/automations/pr-branch-update-finalize.ts");
+const { createPreparedAttempt } = require("../src/attempt-lifecycle-runtime.cjs");
+const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 
 const sandboxes: string[] = [];
 const branch = "agent/issue-1";
@@ -74,8 +76,10 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
   };
   const common = {
     repo,
+    projectId: "demo",
     projectRepo: repo,
     githubRepo: "owner/repo",
+    attemptRecord: "/state/runs/attempt/attempt.json",
     pr: "1",
     branch,
     expectedHead,
@@ -88,6 +92,7 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
   };
   const ops = {
     run,
+    ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, execute: (args: string[]) => unknown) => execute(["node", "/automation/run-project-check.ts"]),
     readRepairFindingCount: () => 1,
     assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
   };
@@ -148,9 +153,25 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
 `);
     chmodSync(gh, 0o755);
     const promiseFile = path.join(runDir, "promise.json");
+    const contract = {
+      repository: "owner/repo",
+      command: "true",
+      source: { kind: "local", location: `${path.join(stateDir, "projects.json")}#project=demo` },
+      baseRevision: expectedHead,
+    };
+    writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "true" }] }));
+    const attempt = {
+      attemptId: "attempt", launchUuid: "rendered", project: "demo", repository: "owner/repo", role: "review-repair",
+      target: { kind: "pull-request", number: 1 }, inputRevision: { head: expectedHead }, branch, baseBranch: expectedHead,
+      worktreePath: repo, agentName: "dl-repair-test", workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
+      requiredVerification: contract,
+    };
+    writeWorkerContractSnapshot(runDir, attempt);
+    createPreparedAttempt(runDir, attempt);
     const automationDir = path.resolve("extensions/deadloop/automations");
     const rendered = repairWorkerPrompt("1", branch, expectedHead, [{ title: "repair", body: "repair the file" }], "attempt", promiseFile, repo, {
       projectId: "demo", repoPath: repo, githubRepo: "owner/repo", stateDir, checkCommand: "true",
+      baseBranch: expectedHead, requiredVerification: contract,
       workerAgent: "pi", workerModel: "", remote: "origin", reviewLabel: "agent:review",
       reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", automationDir, enabledAt: 1,
     });

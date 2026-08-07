@@ -31,8 +31,10 @@ function finalize(world: SafetyWorld): void {
   world.finalizeResult = finalizeBranchUpdate(
     {
       repo: "/worktree",
+      projectId: "demo",
       projectRepo: "/project",
       githubRepo: "owner/repo",
+      attemptRecord: "/state/runs/attempt/attempt.json",
       pr: "31",
       branch,
       expectedHead: head,
@@ -44,6 +46,7 @@ function finalize(world: SafetyWorld): void {
       checkCommand: "npm test",
     },
     {
+      ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, run: (args: string[]) => unknown) => run(["node", "/automation/run-project-check.ts"]),
       assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
       run: (args: string[]) => {
         commands.push(args);

@@ -25,8 +25,10 @@ function finalizeWith(
   return finalizeBranchUpdate(
     {
       repo: "/worktree",
+      projectId: "demo",
       projectRepo: "/repo",
       githubRepo: "owner/repo",
+      attemptRecord: "/state/runs/attempt/attempt.json",
       pr: "31",
       branch: "agent/issue-31",
       expectedHead: head,
@@ -38,6 +40,7 @@ function finalizeWith(
       checkCommand: "npm test",
     },
     {
+      ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, run: (args: string[]) => unknown) => run(["node", "/automation/run-project-check.ts"]),
       assertEnabled: () => {
         if (headAfterAuthorization) observedHead = headAfterAuthorization;
         return { githubRepo: "owner/repo", githubRepositoryId: "R_repo" };
@@ -89,7 +92,7 @@ function finalizeWhileDisabled() {
   try {
     finalizeBranchUpdate(
       {
-        repo: "/worktree", projectRepo: "/repo", githubRepo: "owner/repo", pr: "31",
+        repo: "/worktree", projectId: "demo", projectRepo: "/repo", githubRepo: "owner/repo", attemptRecord: "/state/runs/attempt/attempt.json", pr: "31",
         branch: "agent/issue-31", expectedHead: head, expectedBase: base, remote: "origin",
         automationDir: "/automation", stateDir: "/state", enabledAt: 1, checkCommand: "npm test",
       },

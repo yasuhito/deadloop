@@ -55,6 +55,9 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     automationLogin: source.DEADLOOP_AUTOMATION_LOGIN || "",
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
+    requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION
+      ? JSON.parse(source.DEADLOOP_REQUIRED_VERIFICATION)
+      : undefined,
     worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
     automationDir: SCRIPT_DIR,
     stateDir:
@@ -138,6 +141,8 @@ type DriverLaunchInput = {
   inputRevision: { head: string; base?: string };
   intendedWorktreePath: string;
   autoMergePolicy?: boolean;
+  baseBranch?: string;
+  requiredVerification?: import("../../../src/required-verification").RequiredVerificationContract;
   renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
 };
 
@@ -257,6 +262,8 @@ function branchUpdateWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-branch-update-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-id",
+    shellQuote(env.projectId),
     "--project-repo",
     shellQuote(env.repoPath),
     "--github-repo",
@@ -279,6 +286,8 @@ function branchUpdateWorkerPrompt(
     String(env.enabledAt),
     "--check-command",
     shellQuote(env.checkCommand),
+    "--attempt-record",
+    shellQuote(path.join(path.dirname(promiseFile), "attempt.json")),
   ].join(" ");
   return `Update the existing branch for PR #${number} by merging the selected base head and resolving its conflicts.
 
@@ -425,6 +434,8 @@ function branchUpdateLaunchPlan(
       role: "branch-update",
       target: { kind: "pull-request", number },
       inputRevision: { head: headOid, base: baseOid },
+      baseBranch: env.baseBranch,
+      requiredVerification: env.requiredVerification,
       intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid, uuid),

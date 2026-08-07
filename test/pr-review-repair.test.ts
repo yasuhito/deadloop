@@ -54,8 +54,10 @@ function finalizeWith(
   return finalizeReviewRepair(
     {
       repo: "/worktree",
+      projectId: "demo",
       projectRepo: "/repo",
       githubRepo: "owner/repo",
+      attemptRecord: "/state/runs/attempt/attempt.json",
       pr: "243",
       branch: "agent/issue-243",
       expectedHead: head,
@@ -67,6 +69,7 @@ function finalizeWith(
       resultFile: "/state/result.json",
     },
     {
+      ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, run: (args: string[]) => unknown) => run(["node", "/automation/run-project-check.ts"]),
       readRepairFindingCount: () => findings.length,
       assertEnabled: () => {
         if (headAfterAuthorization) observedHead = headAfterAuthorization;
@@ -141,8 +144,10 @@ function finalizeWithLowAmbientRenameLimit() {
     return finalizeReviewRepair(
       {
         repo,
+        projectId: "demo",
         projectRepo: repo,
         githubRepo: "owner/repo",
+        attemptRecord: "/state/runs/attempt/attempt.json",
         pr: "243",
         branch,
         expectedHead,
@@ -154,6 +159,7 @@ function finalizeWithLowAmbientRenameLimit() {
         resultFile: "/state/result.json",
       },
       {
+        ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, run: (args: string[]) => unknown) => run(["node", "/automation/run-project-check.ts"]),
         readRepairFindingCount: () => 1,
         assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
         run: (args: string[]) => {
@@ -180,7 +186,7 @@ function finalizeWhileDisabled() {
   try {
     finalizeReviewRepair(
       {
-        repo: "/worktree", projectRepo: "/repo", githubRepo: "owner/repo", pr: "243",
+        repo: "/worktree", projectId: "demo", projectRepo: "/repo", githubRepo: "owner/repo", attemptRecord: "/state/runs/attempt/attempt.json", pr: "243",
         branch: "agent/issue-243", expectedHead: head, remote: "origin",
         automationDir: "/automation", stateDir: "/state", enabledAt: 1, checkCommand: "npm test",
         resultFile: "/state/result.json",

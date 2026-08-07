@@ -5,6 +5,13 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+process.env.DEADLOOP_REQUIRED_VERIFICATION = JSON.stringify({
+  repository: "owner/repo",
+  command: "npm test",
+  source: { kind: "repo_policy", location: "deadloop.json" },
+  baseRevision: "a".repeat(40),
+});
+
 const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
 const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
 const trustedCumulativeComments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
@@ -675,7 +682,7 @@ process.stdout.write(JSON.stringify(args[0] === "repo"
     const result = spawnSync("bash", ["-lc", command], {
       cwd: process.cwd(),
       encoding: "utf8",
-      env: { PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.dirname(state) },
+      env: { PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.dirname(state), DEADLOOP_REQUIRED_VERIFICATION: process.env.DEADLOOP_REQUIRED_VERIFICATION },
     });
 
     expect(JSON.parse(result.stdout).action).toBe("done");
