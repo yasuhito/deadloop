@@ -5,7 +5,15 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+process.env.DEADLOOP_REQUIRED_VERIFICATION = JSON.stringify({
+  repository: "owner/repo",
+  command: "npm test",
+  source: { kind: "repo_policy", location: "deadloop.json" },
+  baseRevision: "a".repeat(40),
+});
+
 const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
+const { repairLaunchInput } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
 const trustedCumulativeComments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
   ...comment,
@@ -596,6 +604,16 @@ afterEach(() => {
 });
 
 describe("review repair dispatch integration", () => {
+  it("persists a custom base branch in the review-repair worktree request", () => {
+    const input = repairLaunchInput(
+      "243", "agent/issue-243", "a".repeat(40), [], "attempt-key",
+      { projectId: "demo", baseBranch: "origin/develop", repoPath: "/repo", automationDir: "/automation", stateDir: "/state", worktreeRoot: "/worktrees", githubRepo: "owner/repo", workerAgent: "pi", workerModel: "", requiredVerification: {} },
+      "launch-uuid",
+    );
+
+    expect(input.worktree.baseBranch).toBe("origin/develop");
+  });
+
   it("persists exact V1 findings, closes the reviewer workspace, and launches one repair without a duplicate", () => {
     const result = runV1ChangesRequestedTwice();
 
@@ -675,7 +693,7 @@ process.stdout.write(JSON.stringify(args[0] === "repo"
     const result = spawnSync("bash", ["-lc", command], {
       cwd: process.cwd(),
       encoding: "utf8",
-      env: { PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.dirname(state) },
+      env: { PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.dirname(state), DEADLOOP_REQUIRED_VERIFICATION: process.env.DEADLOOP_REQUIRED_VERIFICATION },
     });
 
     expect(JSON.parse(result.stdout).action).toBe("done");

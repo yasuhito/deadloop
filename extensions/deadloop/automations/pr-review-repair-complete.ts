@@ -5,6 +5,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { validatePromise } = require("./extract-worker-promise.ts");
+const { authorizeFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
 const { publicText, renderRepairSuccessComment, repairResultCommentExists } = require("./pr-review-comments.ts");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
@@ -105,7 +106,7 @@ function completion(args: JsonObject): DriverResult {
     enabledAt: Number(args.enabledAt),
   };
 
-  return withEnabledDriverLock(project, (_enabled: unknown, recheck: () => void) => {
+  return withEnabledDriverLock(project, (enabled: JsonObject, recheck: () => void) => {
     const automationLogin = successfulReceipt ? runner.runText(["gh", "api", "user", "--jq", ".login"]).trim() : "";
     if (successfulReceipt && !automationLogin) throw new Error("authenticated GitHub identity is unavailable");
     const pr = runner.runJson([
@@ -148,7 +149,41 @@ function completion(args: JsonObject): DriverResult {
     const github = createGithubOperations(runner, recheck);
 
     if (successfulReceipt) {
-      if (repairResultCommentExists(comments, String(args.attemptKey), receiptHead, automationLogin)) {
+      recheck();
+      authorizeFinalizerRequiredVerification(
+        {
+          attemptRecord: location.attemptRecord,
+          projectId: String(args.projectId),
+          projectRepo: String(args.projectRepo),
+          githubRepo: String(args.githubRepo),
+          repo: String(record.worktreePath),
+          branch: String(record.branch),
+          stateDir: String(args.stateDir),
+        },
+        "review-repair",
+        receiptHead,
+        String(enabled.githubRepositoryId),
+      );
+      const readAuthorizedTarget = () => runner.runJson([
+        "gh", "pr", "view", String(args.pr), "-R", String(args.githubRepo),
+        "--json", "state,headRefName,headRefOid,isCrossRepository,labels,comments",
+      ]);
+      const isAuthorizedTarget = (snapshot: JsonObject) => {
+        const currentLabels = (snapshot.labels || []).map((label: JsonObject) => String(label.name || label));
+        return String(snapshot.state || "").toUpperCase() === "OPEN"
+          && !Boolean(snapshot.isCrossRepository)
+          && String(snapshot.headRefName || "") === String(args.branch)
+          && String(snapshot.headRefOid || "").toLowerCase() === receiptHead
+          && currentLabels.includes(String(args.reviewLabel))
+          && currentLabels.includes(String(args.reviewingLabel))
+          && !currentLabels.includes(String(args.blockedLabel));
+      };
+      const authorizedTarget = readAuthorizedTarget();
+      if (!isAuthorizedTarget(authorizedTarget)) {
+        return driverResult("done", `PR #${args.pr} repair completion was superseded after authorization; left untouched`, { driverAction: "repair_target_changed" });
+      }
+      const authorizedComments = (authorizedTarget.comments || []) as JsonObject[];
+      if (repairResultCommentExists(authorizedComments, String(args.attemptKey), receiptHead, automationLogin)) {
         github.movePrLabels(String(args.githubRepo), String(args.pr), { remove: String(args.reviewingLabel) });
         return driverResult("done", `PR #${args.pr} repair result was already posted; re-review is pending`, { driverAction: "repair_result_duplicate" });
       }
@@ -165,6 +200,12 @@ function completion(args: JsonObject): DriverResult {
         checks: receipt.checks,
       })}${marker ? `\n${marker}` : ""}`;
       github.commentPr(String(args.githubRepo), String(args.pr), comment);
+      const postedTarget = readAuthorizedTarget();
+      const postedComments = (postedTarget.comments || []) as JsonObject[];
+      if (!isAuthorizedTarget(postedTarget)
+        || !repairResultCommentExists(postedComments, String(args.attemptKey), receiptHead, automationLogin)) {
+        return driverResult("done", `PR #${args.pr} repair result was posted but the review claim changed; left labels untouched`, { driverAction: "repair_target_changed", comment });
+      }
       github.movePrLabels(String(args.githubRepo), String(args.pr), { remove: String(args.reviewingLabel) });
       return driverResult("done", `PR #${args.pr} repair result posted; re-review is pending`, { driverAction: "repair_result_posted", comment });
     }

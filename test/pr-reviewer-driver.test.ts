@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const driverScript = "extensions/deadloop/automations/pr-reviewer-driver.ts";
+const { branchUpdateLaunchPlan } = require(`../${driverScript}`);
 
 function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> = {}) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/pr-reviewer-driver", fixtureName)], {
@@ -86,6 +87,17 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("merge-conflict.json").monitorHandoff.kind).toBe("branch-update");
   });
 
+  it("persists a custom base branch in the branch-update worktree request", () => {
+    const plan = branchUpdateLaunchPlan(
+      { number: 31, headRefName: "agent/issue-31", headRefOid: "a".repeat(40) },
+      { projectId: "demo", baseBranch: "origin/develop", repoPath: "/repo", automationDir: "/automation", stateDir: "/state", worktreeRoot: "/worktrees", githubRepo: "owner/repo", branchUpdateAgent: "pi", branchUpdateModel: "", requiredVerification: {} },
+      { headOid: "a".repeat(40), baseOid: "b".repeat(40) },
+      "launch-uuid",
+    );
+
+    expect(plan.input.worktree.baseBranch).toBe("origin/develop");
+  });
+
   it("uses a deterministic retry-key worker name for the exact head/base pair", () => {
     expect(runDriverFixture("merge-conflict.json").launch.updaterName).toBe("demo-pr-31-branch-update-63bdfe090637cf9ff5d4");
   });
@@ -96,6 +108,17 @@ describe("PR reviewer deterministic driver", () => {
 
   it("bounds branch update push through the deterministic finalizer", () => {
     expect(runDriverFixture("merge-conflict.json").prompt).toContain("never launch or select an agent, push a branch, review the PR, or merge it");
+  });
+
+  it("describes the finalizer exact-head lease without allowing direct force-push", () => {
+    const plan = branchUpdateLaunchPlan(
+      { number: 31, headRefName: "agent/issue-31", headRefOid: "a".repeat(40) },
+      { projectId: "demo", baseBranch: "origin/main", repoPath: "/repo", automationDir: "/automation", stateDir: "/state", worktreeRoot: "/worktrees", githubRepo: "owner/repo", branchUpdateAgent: "pi", branchUpdateModel: "", branchUpdateRemote: "origin", enabledAt: 1, checkCommand: "npm test", requiredVerification: {} },
+      { headOid: "a".repeat(40), baseOid: "b".repeat(40) },
+      "launch-uuid",
+    );
+
+    expect(plan.input.renderPrompt({ promiseFile: "/state/runs/x/promise.json", worktreePath: "/worktree" })).toContain("including any direct or unbounded force-push");
   });
 
   it("returns an updated conflict branch to normal review", () => {

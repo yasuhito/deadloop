@@ -7,7 +7,8 @@ const { spawnSync } = require("node:child_process") as typeof import("node:child
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
-const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { assertLocallyEnabled, MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { ensureFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { assertAuthorizedSource } = require("./guarded-push.ts");
 const { repairAttempts } = require("./pr-review-repair-state.ts");
@@ -15,8 +16,10 @@ const { repairAttempts } = require("./pr-review-repair-state.ts");
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
   repo: string;
+  projectId: string;
   projectRepo: string;
   githubRepo: string;
+  attemptRecord: string;
   pr: string;
   branch: string;
   expectedHead: string;
@@ -27,12 +30,13 @@ type FinalizeArgs = {
   checkCommand: string;
   resultFile: string;
 };
-type CommandResult = { status: number; stdout: string; stderr: string };
+type CommandResult = { status: number | null; stdout: string; stderr: string; signal?: NodeJS.Signals | null; timedOut?: boolean };
 type EnabledProject = { githubRepo: string; githubRepositoryId: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => EnabledProject;
   readRepairFindingCount?: (args: FinalizeArgs) => number;
+  ensureVerification?: (args: FinalizeArgs, candidateOid: string, repositoryId: string, run: FinalizeOps["run"]) => JsonObject;
 };
 
 function defaultRun(args: string[], timeoutMs?: number): CommandResult {
@@ -41,7 +45,13 @@ function defaultRun(args: string[], timeoutMs?: number): CommandResult {
     stdio: ["ignore", "pipe", "pipe"],
     ...(timeoutMs === undefined ? {} : { timeout: timeoutMs, killSignal: "SIGKILL" }),
   });
-  return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
+  return {
+    status: result.status,
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    signal: result.signal,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+  };
 }
 
 function checkedRaw(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
@@ -155,23 +165,18 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     };
   }
 
-  checked(ops, [
-    "node",
-    path.join(args.automationDir, "run-project-check.ts"),
-    "--cwd",
-    args.repo,
-    "--command",
-    args.checkCommand,
-    "--quarantine-root",
-    path.join(args.stateDir, "check-quarantine"),
-  ]);
+  const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
+  const initiallyEnabled = ops.assertEnabled ? ops.assertEnabled(project) : assertLocallyEnabled(project);
+  const verify = ops.ensureVerification
+    || ((input: FinalizeArgs, oid: string, repositoryId: string, run: FinalizeOps["run"]) => ensureFinalizerRequiredVerification(input, "review-repair", oid, repositoryId, run));
+  const verification = verify(args, candidateOid, initiallyEnabled.githubRepositoryId, ops.run);
   if (checked(ops, ["git", "-C", args.repo, "status", "--porcelain"])) throw new Error("repair worktree is dirty after checks");
   if (checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
     throw new Error("repair HEAD changed during checks");
   }
 
-  const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
   const guardAndPush = (enabled: EnabledProject, recheck: () => void = () => {}) => {
+    verify(args, candidateOid, enabled.githubRepositoryId, ops.run);
     assertAuthorizedSource(
       { projectRepo: args.projectRepo, worktree: args.repo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt, remote: args.remote, branch: args.branch },
       enabled,
@@ -217,7 +222,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       reason: "repair_pushed",
       originalHeadOid: args.expectedHead.toLowerCase(),
       headOid: candidateOid.toLowerCase(),
-      checks: [{ command: args.checkCommand, result: "passed" }],
+      checks: [{ command: verification.record?.binding?.command || args.checkCommand, result: "passed" }],
       size,
     };
   };
@@ -253,8 +258,10 @@ function parseArgs(argv: string[]): FinalizeArgs {
   }
   return {
     repo: required(values, "repo"),
+    projectId: required(values, "projectId"),
     projectRepo: required(values, "projectRepo"),
     githubRepo: required(values, "githubRepo"),
+    attemptRecord: required(values, "attemptRecord"),
     pr: required(values, "pr"),
     branch: required(values, "branch"),
     expectedHead: required(values, "expectedHead"),

@@ -25,8 +25,10 @@ function finalizeWith(
   return finalizeBranchUpdate(
     {
       repo: "/worktree",
+      projectId: "demo",
       projectRepo: "/repo",
       githubRepo: "owner/repo",
+      attemptRecord: "/state/runs/attempt/attempt.json",
       pr: "31",
       branch: "agent/issue-31",
       expectedHead: head,
@@ -38,6 +40,7 @@ function finalizeWith(
       checkCommand: "npm test",
     },
     {
+      ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, run: (args: string[]) => unknown) => run(["node", "/automation/run-project-check.ts"]),
       assertEnabled: () => {
         if (headAfterAuthorization) observedHead = headAfterAuthorization;
         return { githubRepo: "owner/repo", githubRepositoryId: "R_repo" };
@@ -89,7 +92,7 @@ function finalizeWhileDisabled() {
   try {
     finalizeBranchUpdate(
       {
-        repo: "/worktree", projectRepo: "/repo", githubRepo: "owner/repo", pr: "31",
+        repo: "/worktree", projectId: "demo", projectRepo: "/repo", githubRepo: "owner/repo", attemptRecord: "/state/runs/attempt/attempt.json", pr: "31",
         branch: "agent/issue-31", expectedHead: head, expectedBase: base, remote: "origin",
         automationDir: "/automation", stateDir: "/state", enabledAt: 1, checkCommand: "npm test",
       },
@@ -248,7 +251,7 @@ describe("PR branch-update safety", () => {
     expect(result.reason).toBe("branch_update_pushed");
   });
 
-  it("rejects a concurrent rewind to an ancestor with an exact-head lease", () => {
+  it("rejects a concurrent rewind found by the remote-head guard", () => {
     const result = finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, "0".repeat(40));
 
     expect(result.action).toBe("stale_head");

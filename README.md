@@ -129,7 +129,7 @@ When a selected same-repository PR conflicts with the configured base, deadloop 
 
 The worker merges the selected base commit into the existing PR branch. It never rebases.
 
-The worker runs the configured checks. It atomically updates the branch only if the PR head still equals the validated commit, then returns the PR to normal review.
+The worker must produce a passed record bound to its fixed required-verification contract and output commit. It atomically updates the branch only if the PR head still equals the validated commit, then returns the PR to normal review.
 
 Review labels remain in place during the update. No extra label is required.
 
@@ -149,9 +149,9 @@ Review labels remain in place during the repair. deadloop does not add a repair 
 
 The worker receives only the findings.
 
-The finalizer first measures the size of the repair. If the repair is too large, it skips the configured checks, does not push, and hands the PR to a human.
+The finalizer first measures the size of the repair. If the repair is too large, it skips required verification, does not push, and hands the PR to a human.
 
-If the repair is within the size limit, the finalizer runs the configured checks. It atomically updates the exact branch only if the branch head still equals the validated commit.
+If the repair is within the size limit, the finalizer requires a passed record bound to the attempt's fixed required-verification contract and repair commit. It reuses only a fully matching record and atomically updates the exact branch only if the branch head still equals the validated commit.
 
 The finalizer never replaces another head or changes GitHub workflow state.
 

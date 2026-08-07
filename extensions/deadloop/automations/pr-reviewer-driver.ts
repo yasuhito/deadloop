@@ -55,6 +55,9 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     automationLogin: source.DEADLOOP_AUTOMATION_LOGIN || "",
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
+    requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION
+      ? JSON.parse(source.DEADLOOP_REQUIRED_VERIFICATION)
+      : undefined,
     worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
     automationDir: SCRIPT_DIR,
     stateDir:
@@ -121,7 +124,7 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
 }
 
 type DriverLaunchInput = {
-  worktree: { mode: "open"; branch: string };
+  worktree: { mode: "open"; branch: string; baseBranch?: string };
   repoPath: string;
   automationDir: string;
   stateDir: string;
@@ -138,6 +141,8 @@ type DriverLaunchInput = {
   inputRevision: { head: string; base?: string };
   intendedWorktreePath: string;
   autoMergePolicy?: boolean;
+  baseBranch?: string;
+  requiredVerification?: import("../../../src/required-verification").RequiredVerificationContract;
   renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
 };
 
@@ -257,6 +262,8 @@ function branchUpdateWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-branch-update-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-id",
+    shellQuote(env.projectId),
     "--project-repo",
     shellQuote(env.repoPath),
     "--github-repo",
@@ -279,6 +286,8 @@ function branchUpdateWorkerPrompt(
     String(env.enabledAt),
     "--check-command",
     shellQuote(env.checkCommand),
+    "--attempt-record",
+    shellQuote(path.join(path.dirname(promiseFile), "attempt.json")),
   ].join(" ");
   return `Update the existing branch for PR #${number} by merging the selected base head and resolving its conflicts.
 
@@ -295,9 +304,9 @@ Safety contract:
 - Merge ${baseOid} into the existing PR branch. Use git merge, never rebase, and never rewrite existing commits.
 - Resolve only conflicts caused by this merge. Do not widen the PR's scope.
 - Commit the merge resolution before finalization.
-- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted normal non-force push to the driver-selected branch:
+- Do not run git push directly, including any direct or unbounded force-push. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted push to the driver-selected branch with an exact-head force-with-lease:
   ${finalizeCommand}
-- Never force-push. Never push another ref. Never edit labels, create or edit a PR, merge a PR, close an issue, or delete a branch.
+- Never push another ref. Never edit labels, create or edit a PR, merge a PR, close an issue, or delete a branch.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state so the next cycle can re-evaluate.
 
 Promise report:
@@ -410,7 +419,7 @@ function branchUpdateLaunchPlan(
     retryKey: key,
     marker: renderBranchUpdateMarker(headOid, baseOid),
     input: {
-      worktree: { mode: "open", branch },
+      worktree: { mode: "open", branch, baseBranch: env.baseBranch },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
       stateDir: env.stateDir,
@@ -425,6 +434,7 @@ function branchUpdateLaunchPlan(
       role: "branch-update",
       target: { kind: "pull-request", number },
       inputRevision: { head: headOid, base: baseOid },
+      requiredVerification: env.requiredVerification,
       intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid, uuid),
@@ -867,4 +877,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { envConfig, launchBranchUpdate, launchPrReviewerFlow };
+module.exports = { branchUpdateLaunchPlan, envConfig, launchBranchUpdate, launchPrReviewerFlow };

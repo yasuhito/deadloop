@@ -187,6 +187,7 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
           DEADLOOP_GITHUB_REPO: "owner/repo",
           DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
+          DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head }),
           TEST_COMMENTS_FILE: commentsFile,
           TEST_GITHUB_LOG: githubLog,
           TEST_HERDR_LOG: herdrLog,
@@ -225,6 +226,7 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
 
 function finalizerOps(commands: string[][], actualHead = head, isCrossRepository = false, changedFileCount = 0) {
   return {
+    ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, run: (args: string[]) => unknown) => run(["node", "/automation/run-project-check.ts"]),
     readRepairFindingCount: () => findings.length,
     assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
     run: (args: string[]) => {
@@ -255,8 +257,10 @@ function repairFinalizer(commands: string[][], actualHead = head, changedFileCou
   return finalizeReviewRepair(
     {
       repo: "/worktree",
+      projectId: "demo",
       projectRepo: "/repo",
       githubRepo: "owner/repo",
+      attemptRecord: "/state/runs/attempt/attempt.json",
       pr: "31",
       branch,
       expectedHead: head,
@@ -274,8 +278,10 @@ function branchUpdateFinalizer(commands: string[][], actualHead = head, isCrossR
   return finalizeBranchUpdate(
     {
       repo: "/worktree",
+      projectId: "demo",
       projectRepo: "/repo",
       githubRepo: "owner/repo",
+      attemptRecord: "/state/runs/attempt/attempt.json",
       pr: "31",
       branch,
       expectedHead: head,
@@ -451,7 +457,7 @@ Then("deadloop requires human review for the repair", function (this: RecoveryWo
   assert.equal(this.result?.reason, "repair_size_limit_exceeded");
 });
 
-Then("deadloop pushes non-forcibly to the verified branch", function (this: RecoveryWorld) {
+Then("deadloop pushes with an exact-head lease to the verified branch", function (this: RecoveryWorld) {
   assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
 });
 
@@ -461,7 +467,7 @@ Then("deadloop runs the configured checks before the final pull request head che
   assert.ok(checkIndex >= 0 && checkIndex < headCheckIndex);
 });
 
-Then("deadloop pushes non-forcibly to the conflict-recovery branch", function (this: RecoveryWorld) {
+Then("deadloop pushes with an exact-head lease to the conflict-recovery branch", function (this: RecoveryWorld) {
   assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
 });
 

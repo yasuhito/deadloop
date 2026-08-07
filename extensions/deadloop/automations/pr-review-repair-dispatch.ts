@@ -52,6 +52,9 @@ function envConfig(args: JsonObject = {}) {
     repoPath: configValue(args, "repoPath", process.env.DEADLOOP_REPO_PATH, "."),
     worktreeRoot: configValue(args, "worktreeRoot", process.env.DEADLOOP_WORKTREE_ROOT, path.join(os.homedir(), ".herdr", "worktrees", configValue(args, "projectId", process.env.DEADLOOP_PROJECT_ID, "project"))),
     githubRepo: configValue(args, "githubRepo", process.env.DEADLOOP_GITHUB_REPO, ""),
+    baseBranch: configValue(args, "baseBranch", process.env.DEADLOOP_BASE_BRANCH, "origin/main"),
+    requiredVerification: args.requiredVerification
+      || (process.env.DEADLOOP_REQUIRED_VERIFICATION ? JSON.parse(process.env.DEADLOOP_REQUIRED_VERIFICATION) : undefined),
     enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
     stateDir: configValue(
       args,
@@ -202,6 +205,8 @@ function repairWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-review-repair-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-id",
+    shellQuote(env.projectId),
     "--project-repo",
     shellQuote(env.repoPath),
     "--github-repo",
@@ -224,6 +229,8 @@ function repairWorkerPrompt(
     shellQuote(env.checkCommand),
     "--result-file",
     shellQuote(path.join(path.dirname(promiseFile), "finalizer-result.json")),
+    "--attempt-record",
+    shellQuote(path.join(path.dirname(promiseFile), "attempt.json")),
   ].join(" ");
   return `Repair only the actionable review findings below on existing PR #${prNumber}.
 
@@ -241,8 +248,8 @@ ${JSON.stringify(findings, null, 2)}
 Safety contract:
 - First require a clean worktree and HEAD exactly equal to ${expectedHead}.
 - Change only what is needed to resolve every listed finding. Do not add features, reinterpret the issue, or widen scope.
-- Run focused tests while editing, then commit the repair normally. Never amend, rebase, reset published history, or force-push.
-- Do not run git push directly. After committing, run exactly this finalizer; for repairs within the size limit, it runs configured checks, immediately re-checks the PR head, and performs the only permitted non-force push to the exact branch:
+- Run focused tests while editing, then commit the repair normally. Never amend, rebase, or reset published history.
+- Do not run git push directly, including any direct or unbounded force-push. After committing, run exactly this finalizer; for repairs within the size limit, it runs configured checks, immediately re-checks the PR head, and performs the only permitted push to the exact branch with an exact-head force-with-lease:
   ${finalizer}
 - Never edit labels or PR metadata, create a PR, merge, close an issue, delete a branch, or invoke another agent.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state.
@@ -366,7 +373,7 @@ function repairLaunchInput(
   uuid: string,
 ) {
   return {
-    worktree: { mode: "open" as const, branch },
+    worktree: { mode: "open" as const, branch, baseBranch: env.baseBranch },
     repoPath: env.repoPath,
     automationDir: env.automationDir,
     stateDir: env.stateDir,
@@ -382,6 +389,7 @@ function repairLaunchInput(
     role: "review-repair" as const,
     target: { kind: "pull-request" as const, number: Number(prNumber) },
     inputRevision: { head: expectedHead },
+    requiredVerification: env.requiredVerification,
     intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
     renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
       repairWorkerPrompt(prNumber, branch, expectedHead, findings, key, promiseFile, worktreePath, env),
@@ -881,4 +889,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { dispatch, envConfig, launchRepair, parseArgs, readLivePr, recordRepairLaunchGithubClaim, repairWorkerPrompt };
+module.exports = { dispatch, envConfig, launchRepair, parseArgs, readLivePr, recordRepairLaunchGithubClaim, repairLaunchInput, repairWorkerPrompt };
