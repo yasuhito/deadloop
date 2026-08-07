@@ -51,6 +51,15 @@ function reviewMarker(input: JsonObject): string {
   return `<!-- deadloop:review-result head=${String(input.headOid).toLowerCase()} review=${String(input.reviewFingerprint).toLowerCase()} outcome=${input.outcome} -->`;
 }
 
+function additionalValidationSection(input: JsonObject): string {
+  const validations = (input.additionalValidations || []).map(
+    (validation: unknown) => `- ${publicText(validation, "Additional validation result omitted.")}`,
+  );
+  return validations.length
+    ? `\n## Additional agent-reported validation\nThese results are informational and do not replace deadloop's required verification record.\n\n${validations.join("\n")}\n`
+    : "";
+}
+
 function renderChangesRequestedComment(input: JsonObject): string {
   const findings = (input.findings || []).map((finding: JsonObject) => {
     const path = publicRepoPath(finding.path);
@@ -75,7 +84,7 @@ ${findings.join("\n\n")}
 
 ## ${nextHeading}
 ${nextStep}
-
+${additionalValidationSection(input)}
 ${reviewMarker({ ...input, outcome: "changes_requested" })}${input.repairUnavailable ? "" : `\n${marker}`}`;
 }
 
@@ -84,7 +93,7 @@ function renderApprovedReviewComment(input: JsonObject): string {
 
 - Reviewed commit: ${code(input.headOid)}
 - Reason: ${publicText(input.summary || input.reason, "No actionable defects were found.")}
-
+${additionalValidationSection(input)}
 ## Next step
 The reviewed head is approved. The configured handoff or merge safety checks can continue.
 
@@ -97,7 +106,7 @@ function renderHumanRequiredComment(input: JsonObject): string {
 - Reviewed commit: ${code(input.headOid)}
 - Reason: ${publicText(input.reason, "The reviewer could not safely decide or repair this result.")}
 - Context: ${publicText(input.summary, "Review the findings and choose the safe next action.")}
-
+${additionalValidationSection(input)}
 ## Recovery steps
 Resolve the decision above, push a new commit if code changes are needed, then remove ${code(input.blockedLabel || "agent:blocked")} so the new head can be reviewed.
 

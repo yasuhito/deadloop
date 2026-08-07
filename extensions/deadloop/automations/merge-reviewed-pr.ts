@@ -7,6 +7,13 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const {
+  assertCurrentWorkerContract,
+  assertReviewApprovalAuthorized,
+  readRequiredVerificationRecord,
+  workerRequiredVerificationPath,
+} = require("../../../src/worker-required-verification-runtime.cjs");
 
 type MergeArgs = {
   projectRepo: string;
@@ -21,6 +28,7 @@ type MergeArgs = {
   blockedLabel: string;
 };
 type EnabledProject = {
+  githubRepositoryId?: string;
   firstEnableAutoMerge: boolean;
   firstStartPending: boolean;
   autoMergeAcknowledged: boolean;
@@ -31,6 +39,7 @@ type MergeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   isAutoMergeEnabled?: (args: MergeArgs) => boolean;
   validateReviewPromise?: (file: string) => PromiseValidation;
+  assertReviewVerification?: (args: MergeArgs, enabled: EnabledProject) => void;
   withLock?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }, operation: (enabled: EnabledProject, recheck: () => void) => number) => number;
 };
 
@@ -94,6 +103,25 @@ function assertMergeAuthorized(enabled: EnabledProject): void {
   if (enabled.firstEnableAutoMerge && !enabled.autoMergeAcknowledged) {
     throw new Error("autoMerge has not been acknowledged after enablement; automatic merge stopped");
   }
+}
+
+function assertRequiredVerificationApproved(args: MergeArgs, enabled: EnabledProject): void {
+  const attemptRecordFile = path.join(path.dirname(args.reviewPromise), "attempt.json");
+  const attempt = readAttemptRecord(path.dirname(attemptRecordFile));
+  const report = JSON.parse(fs.readFileSync(args.reviewPromise, "utf8"));
+  const contract = assertCurrentWorkerContract(
+    attempt,
+    args.projectRepo,
+    process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"),
+    enabled.githubRepositoryId,
+  );
+  assertReviewApprovalAuthorized(
+    attempt,
+    report,
+    readRequiredVerificationRecord(workerRequiredVerificationPath(attemptRecordFile)),
+    contract,
+  );
+  if (report.result.reviewedHead !== args.expectedHead) throw new Error("required verification reviewed head changed; automatic merge stopped");
 }
 
 function assertReviewApproved(args: MergeArgs, ops: MergeOps): void {
@@ -186,6 +214,7 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     if (!autoMergeEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
     assertMergeAuthorized(enabled);
     assertReviewApproved(args, ops);
+    (ops.assertReviewVerification || assertRequiredVerificationApproved)(args, enabled);
     assertCurrentPrEligible(args, ops);
     recheck();
     const autoMergeStillEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);

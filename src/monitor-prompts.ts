@@ -39,6 +39,7 @@ export type BranchUpdateMonitorPromptInput = MonitorPromptBaseInput & {
 
 export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   worktreeRoot: string;
+  worktreePath?: string;
   autoMerge?: boolean;
   prNumber: number;
   expectedHeadOid: string;
@@ -198,6 +199,8 @@ function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): str
 }
 
 function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string {
+  const attemptRecord = input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`;
+  const verifyApproval = `node ${shellQuotePrompt(`${input.automationDir}/run-worker-required-verification.ts`)} --attempt-record ${shellQuotePrompt(attemptRecord)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --worktree ${shellQuotePrompt(input.worktreePath || "<worktreePath>")} --quarantine-root ${shellQuotePrompt(`${input.stateDir || "<stateDir>"}/check-quarantine`)} --role reviewer`;
   const approvedLabels = input.autoMerge
     ? [input.reviewLabel, input.reviewingLabel]
     : [input.humanLabel];
@@ -213,6 +216,7 @@ ${renderPromisePollingRules(input)}
 Completion handling:
 - Read the validated promise payload. Only an explicit head-bound \`outcome=approved\` result may enter the automatic merge path; legacy complete promises may be handed to a human but cannot authorize a merge.
 - A successful review with actionable defects is status=complete, outcome=changes_requested, never status=blocked.
+- For outcome=approved, first run the fixed, attempt-bound required verification exactly once: \`${verifyApproval}\`. A missing, failed, stale-head, or stale-policy record must not enter approved handoff or merge processing. Agent-reported \`evidence.validations\` remains display-only additional evidence.
 - For every validated completion, including approved and legacy complete promises, run the deterministic dispatcher so it can record the public review result exactly once:
   \`${renderReviewerDispatcherCommand(input)}\`
 - Follow the dispatcher's returned repair or human-block action. When it returns driverAction=review_approved, continue the approved path below; do not stop merely because comment recording is done.

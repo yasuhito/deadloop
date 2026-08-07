@@ -23,6 +23,7 @@ function runMerge(options: {
   enabled?: { firstEnableAutoMerge: boolean; firstStartPending: boolean; autoMergeAcknowledged: boolean };
   pr?: Record<string, unknown>;
   review?: typeof approvedReview;
+  verificationError?: string;
 } = {}) {
   const commands: string[][] = [];
   let lockHeld = false;
@@ -63,6 +64,9 @@ function runMerge(options: {
           : configured;
       },
       validateReviewPromise: () => options.review || approvedReview,
+      assertReviewVerification: () => {
+        if (options.verificationError) throw new Error(options.verificationError);
+      },
       run: (args: string[]) => {
         commands.push(args);
         if (args[2] === "view") {
@@ -115,6 +119,10 @@ describe("reviewed PR merge", () => {
 
   it("fails closed without a validated reviewer approval", () => {
     expect(() => runMerge({ review: { status: "none" } as typeof approvedReview })).toThrow("reviewer approval");
+  });
+
+  it("fails closed when current-head required verification is missing", () => {
+    expect(() => runMerge({ verificationError: "required verification passed record is missing" })).toThrow("record is missing");
   });
 
   it("fails closed when reviewer approval targets another head", () => {
