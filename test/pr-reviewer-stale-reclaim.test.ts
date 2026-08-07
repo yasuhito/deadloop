@@ -47,6 +47,18 @@ describe("PR reviewer stale reviewing reclaim", () => {
     expect(runSelect("precheck-repair-rereview.json", { agents: "agents-empty.json" }).staleReclaim).toBe(false);
   });
 
+  it("does not preserve repair re-review provenance from a failed branch-update attempt", () => {
+    expect(runSelect("precheck-failed-branch-update-unrelated-head.json", { agents: "agents-empty.json" }).reason).toBe("stale_reclaim");
+  });
+
+  it("preserves repair re-review provenance for a successful branch-update output", () => {
+    expect(runSelect("precheck-successful-branch-update-output.json", { agents: "agents-empty.json" }).reason).toBe("repair_rereview");
+  });
+
+  it("does not preserve repair re-review provenance after another head is pushed", () => {
+    expect(runSelect("precheck-head-after-successful-branch-update.json", { agents: "agents-empty.json" }).reason).toBe("stale_reclaim");
+  });
+
   it("does not trust a copied repair result marker", () => {
     const { defaultDecisionConfig, selectPrForReview } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
     const prs = structuredClone(require("./fixtures/pr-reviewer/precheck-repair-rereview.json"));

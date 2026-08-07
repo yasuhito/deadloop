@@ -5,6 +5,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { readAttemptRecord, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { parseAttemptPersistenceMarkers } = require("../../../src/attempt-persistence-marker.cjs");
 
 type AnyRecord = Record<string, any>;
 
@@ -24,7 +25,6 @@ type ReviewDecisionConfig = {
 const PENDING_CHECK_STATES = new Set(["QUEUED", "IN_PROGRESS", "PENDING", "EXPECTED", "WAITING"]);
 const EXTERNAL_REVIEW_MARKER_RE = /<!--\s*deadloop:external-review-request\s+head=([0-9a-fA-F]+)\s*-->/g;
 const REPAIR_RESULT_MARKER_RE = /<!--\s*deadloop:review-repair-result\s+key=[0-9a-fA-F]+\s+head=([0-9a-fA-F]{40})\s*-->/g;
-const BRANCH_UPDATE_MARKER_RE = /<!--\s*deadloop:branch-update-attempt\s+key=[0-9a-fA-F]+\s+head=([0-9a-fA-F]{40})\s+base=[0-9a-fA-F]{40}\s*-->/g;
 
 function defaultDecisionConfig(overrides: Partial<ReviewDecisionConfig> = {}): ReviewDecisionConfig {
   return {
@@ -134,9 +134,14 @@ function hasRepairRereviewProvenance(pr: AnyRecord, automationLogin: string): bo
     if (!comment || typeof comment !== "object") return false;
     const record = comment as AnyRecord;
     if (String(record.author?.login || "").toLowerCase() !== expectedAuthor) return false;
-    BRANCH_UPDATE_MARKER_RE.lastIndex = 0;
-    return Array.from(String(record.body || "").matchAll(BRANCH_UPDATE_MARKER_RE))
-      .some((match) => repairedHeads.has(match[1].toLowerCase()));
+    return parseAttemptPersistenceMarkers([record]).some((marker: AnyRecord) =>
+      marker.role === "branch-update"
+      && marker.outcome === "branch_update_pushed"
+      && repairedHeads.has(String(marker.inputRevision?.head || "").toLowerCase())
+      && String(marker.outputRevision || "").toLowerCase() === currentHead
+      && marker.pushRecorded === true
+      && marker.successClaimRecorded === true
+      && marker.validationPassed === true);
   });
 }
 
