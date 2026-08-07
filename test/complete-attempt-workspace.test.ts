@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createPreparedAttempt, readAttemptRecord, transitionPersistedAttempt } from "../src/attempt-lifecycle";
+import { createPreparedAttempt, readAttemptRecord, releasesAttemptOwnership, transitionPersistedAttempt } from "../src/attempt-lifecycle";
 
-const { assertWorkerPersistenceAuthorized, completeLocked: completeLockedRaw } = require("../extensions/deadloop/automations/complete-attempt-workspace.ts");
+const { assertWorkerPersistenceAuthorized, closeCompletionStoppedWorkerAttempt, completeLocked: completeLockedRaw } = require("../extensions/deadloop/automations/complete-attempt-workspace.ts");
 const completeLocked = (args: any, runner: any, recheck: () => void, authorizeWorker?: (...values: any[]) => void) =>
   completeLockedRaw(args, runner, recheck, authorizeWorker || (() => {}));
 const { renderAttemptPersistenceMarker } = require("../src/attempt-persistence-marker.cjs");
@@ -151,6 +151,13 @@ describe("selected attempt workspace completion", () => {
     const result = completeLocked(data.args, data.runner, () => undefined, (attempt: any, report: any, args: any) =>
       assertWorkerPersistenceAuthorized(attempt, report, args, () => attempt.requiredVerification));
     expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
+  });
+
+  it("closes a completion-stopped Worker so an explicit doctor requeue can launch again", () => {
+    const data = fixture(false);
+    const result = closeCompletionStoppedWorkerAttempt(data.args, data.runner, () => undefined);
+    const phase = readAttemptRecord(data.runDir).phase;
+    expect({ action: result.driverAction, phase, released: releasesAttemptOwnership(phase) }).toEqual({ action: "workspace_closed", phase: "workspace_closed", released: true });
   });
 
   it("durably records persistence before closing a proven Worker workspace", () => {

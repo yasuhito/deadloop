@@ -6,6 +6,7 @@ const path = require("node:path") as typeof import("node:path");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { createCommandRunner } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { closeCompletionStoppedWorkerAttempt } = require("./complete-attempt-workspace.ts");
 const { isRequiredVerificationStopComment, planIssueRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
@@ -120,7 +121,8 @@ function applyCompletionRequiredVerificationStop(args: Args, attempt: Record<str
     throw new Error("required-verification completion stop requires an Issue target");
   }
   withEnabledDriverLock(args, (_enabled: unknown, recheck: () => void) => {
-    const github = createGithubOperations(createCommandRunner(), recheck);
+    const runner = createCommandRunner();
+    const github = createGithubOperations(runner, recheck);
     const issue = github.getIssue(args.githubRepo, attempt.target.number);
     if (String(issue.state || "").toUpperCase() !== "OPEN") throw new Error("required-verification completion stop target is no longer open");
     const labels = new Set((issue.labels || []).map((label: unknown) => typeof label === "string" ? label : String((label as { name?: string }).name || "")));
@@ -145,6 +147,10 @@ function applyCompletionRequiredVerificationStop(args: Args, attempt: Record<str
       github.moveIssueLabels(args.githubRepo, attempt.target.number, { remove: plan.removeLabels, add: plan.addLabels });
     }
     if (plan.comment) github.commentIssue(args.githubRepo, attempt.target.number, plan.comment);
+    const closed = closeCompletionStoppedWorkerAttempt(args, runner, recheck);
+    if (closed?.driverAction !== "workspace_closed") {
+      throw new Error(`required-verification completion stop could not close the attempt workspace: ${String(closed?.driverAction || "unknown")}`);
+    }
   });
 }
 

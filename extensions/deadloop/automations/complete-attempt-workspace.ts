@@ -192,6 +192,7 @@ function completeLocked(
   commandRunner: ReturnType<typeof createCommandRunner>,
   recheck: () => void,
   authorizeWorker?: (record: AttemptRecord, report: CompletionReportV1, args: JsonObject) => void,
+  completionStopConfirmed = false,
 ) {
   const authorizeWorkerCompletion = authorizeWorker || assertWorkerPersistenceAuthorized;
   const { attemptRecord, runDir, runsRoot } = canonicalAttemptLocation(args);
@@ -261,10 +262,10 @@ function completeLocked(
     if (record.role !== "worker" && (!same(pr?.headRefOid, outputRevision(report) || record.inputRevision.head))) {
       return driverResult("done", "attempt workspace retained because the live PR head differs", { driverAction: "workspace_retained" });
     }
-    if (record.role === "worker") github = workerObservation(commandRunner, record, report, {
+    if (record.role === "worker" && !completionStopConfirmed) github = workerObservation(commandRunner, record, report, {
       ready: String(args.workerReadyLabel || ""), implement: String(args.workerImplementLabel || ""),
     });
-    else github = record.role === "reviewer"
+    else if (record.role !== "worker") github = record.role === "reviewer"
       ? reviewerObservation(record, report, pr as JsonObject)
       : writerObservation(record, report, pr as JsonObject);
   }
@@ -309,7 +310,9 @@ function completeLocked(
   }
 
   if (record.phase !== "github_persisted") {
-    const decision = evaluateCompletionPersistence({
+    const decision = completionStopConfirmed
+      ? { action: "close" as const }
+      : evaluateCompletionPersistence({
       record,
       report: { kind: "v1", promisePath: record.promiseFile, report },
       github,
@@ -324,7 +327,7 @@ function completeLocked(
     if (decision.action !== "close") {
       return driverResult("done", "attempt workspace retained because GitHub persistence is not confirmed", { driverAction: "workspace_retained" });
     }
-    if (record.role === "worker") {
+    if (record.role === "worker" && !completionStopConfirmed) {
       try { authorizeWorkerCompletion(record, report as CompletionReportV1, { ...args, attemptRecord }); }
       catch (error) {
         return driverResult("done", "attempt workspace retained because required verification is not authoritative", {
@@ -363,6 +366,18 @@ function completeLocked(
   });
 }
 
+function closeCompletionStoppedWorkerAttempt(
+  args: JsonObject,
+  commandRunner: ReturnType<typeof createCommandRunner>,
+  recheck: () => void,
+) {
+  const record = readAttemptRecord(canonicalAttemptLocation(args).runDir) as AttemptRecord;
+  if (record.role !== "worker" || record.target.kind !== "issue") {
+    throw new Error("completion-stop workspace closure requires an Issue Worker attempt");
+  }
+  return completeLocked(args, commandRunner, recheck, undefined, true);
+}
+
 async function complete(args: JsonObject) {
   const commandRunner = createCommandRunner();
   runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
@@ -384,4 +399,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { assertWorkerPersistenceAuthorized, complete, completeLocked, parseArgs, persistedMarker, workerObservation, reviewerObservation, writerObservation };
+module.exports = { assertWorkerPersistenceAuthorized, closeCompletionStoppedWorkerAttempt, complete, completeLocked, parseArgs, persistedMarker, workerObservation, reviewerObservation, writerObservation };
