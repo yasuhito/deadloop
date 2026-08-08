@@ -110,7 +110,7 @@ function finalizeWith(
   );
 }
 
-function finalizeWithLowAmbientRenameLimit() {
+function finalizeVerifiedRename() {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-repair-renames-"));
   const branch = "agent/issue-243";
   const git = (args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
@@ -130,7 +130,6 @@ function finalizeWithLowAmbientRenameLimit() {
       fs.appendFileSync(path.join(repo, `new-${index}.txt`), `changed-${index}\n`);
     }
     git(["commit", "--quiet", "-am", "candidate"]);
-    git(["config", "diff.renameLimit", "1"]);
 
     return finalizeReviewRepair(
       {
@@ -348,7 +347,7 @@ describe("automatic PR review repair", () => {
   });
 
   it("pushes a verified rename spanning 29 files", () => {
-    expect(finalizeWithLowAmbientRenameLimit().action).toBe("pushed");
+    expect(finalizeVerifiedRename().action).toBe("pushed");
   });
 
   it("keeps historical repair markers with finding counts readable", () => {

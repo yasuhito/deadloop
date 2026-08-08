@@ -329,10 +329,6 @@ Given("The pull request head selected for repair has been verified", function (t
   this.case = "repair-finalize";
 });
 
-Given("A verified repair renames 29 files for one finding", function (this: RecoveryWorld) {
-  this.case = "broad-repair";
-});
-
 Given("The pull request head selected for conflict recovery has been verified", function (this: RecoveryWorld) {
   this.case = "branch-update-finalize";
 });

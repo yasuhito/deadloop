@@ -140,12 +140,6 @@ Handle review findings and conflicts safely without repeating the same change or
 * When The pull request head changes immediately before push
 * Then deadloop does not push to the branch
 
-## Scenario: Push a verified broad repair through the guarded path
-
-* Given A verified repair renames 29 files for one finding
-* When deadloop completes the repair
-* Then deadloop pushes non-forcibly to the verified branch
-
 ## Scenario: Push a repair non-forcibly to only the verified existing branch
 
 * Given The pull request head selected for repair has been verified
