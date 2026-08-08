@@ -178,6 +178,18 @@ function withRevalidatedPrMutation(
   });
 }
 
+function releaseObservedStaleReviewHistory(
+  prNumber: string,
+  env: ReturnType<typeof envConfig>,
+  comparison: JsonObject,
+): { stale: true; comparison: JsonObject } {
+  withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+    const guardedGithub = createGithubOperations(commandRunner, recheck);
+    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.reviewLabel });
+  });
+  return { stale: true, comparison };
+}
+
 function releaseStaleReviewHistory(
   prNumber: string,
   env: ReturnType<typeof envConfig>,
@@ -597,12 +609,15 @@ function dispatch(args: JsonObject): DriverResult {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
     let persistedBody = "";
+    let observedStaleComparison: JsonObject | undefined;
     try {
       withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
         if (historyFile && fs.existsSync(historyFile)) {
           const expectedHistory = readPrHistoryObservation(historyFile);
           const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
-          if (comparePrHistoryObservations(expectedHistory, currentHistory).kind !== "unchanged") {
+          const comparison = comparePrHistoryObservations(expectedHistory, currentHistory);
+          if (comparison.kind !== "unchanged") {
+            observedStaleComparison = comparison;
             throw new StaleLaunchError(`PR #${prNumber} review history changed before result persistence`);
           }
         }
@@ -612,7 +627,9 @@ function dispatch(args: JsonObject): DriverResult {
       });
     } catch (error) {
       if (!isStaleLaunchError(error)) throw error;
-      const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+      const freshness = observedStaleComparison
+        ? releaseObservedStaleReviewHistory(prNumber, env, observedStaleComparison)
+        : releaseStaleReviewHistory(prNumber, env, historyFile);
       return driverResult("done", `PR #${prNumber} review history changed before result persistence; released the active claim`, {
         driverAction: "review_stale_history", historyComparison: freshness.comparison,
       });
@@ -622,10 +639,10 @@ function dispatch(args: JsonObject): DriverResult {
       const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
       const advancement = advancePrHistoryAfterDeterministicComment(expectedHistory, afterPersistence, persistedBody);
       if (advancement.kind !== "accepted") {
-        const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+        const freshness = releaseObservedStaleReviewHistory(prNumber, env, advancement.comparison);
         return driverResult("done", `PR #${prNumber} review history changed during result persistence; released the active claim`, {
           driverAction: "review_stale_history",
-          historyComparison: freshness.comparison || advancement.comparison,
+          historyComparison: freshness.comparison,
         });
       }
       writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
@@ -645,18 +662,33 @@ function dispatch(args: JsonObject): DriverResult {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
     let comment = "Review result comment already exists.";
+    let observedStaleComparison: JsonObject | undefined;
     try {
       withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
+        let expectedHistory: ReturnType<typeof readPrHistoryObservation> | undefined;
         if (historyFile && fs.existsSync(historyFile)) {
-          const expectedHistory = readPrHistoryObservation(historyFile);
+          expectedHistory = readPrHistoryObservation(historyFile);
           const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
-          if (comparePrHistoryObservations(expectedHistory, currentHistory).kind !== "unchanged") {
+          const comparison = comparePrHistoryObservations(expectedHistory, currentHistory);
+          if (comparison.kind !== "unchanged") {
+            observedStaleComparison = comparison;
             throw new StaleLaunchError(`PR #${prNumber} review history changed before human handoff`);
           }
         }
+        let persistedBody = "";
         if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, outcome)) {
           comment = renderHumanRequiredComment(commentInput);
+          persistedBody = comment;
           guardedGithub.commentPr(env.githubRepo, prNumber, comment);
+        }
+        if (expectedHistory) {
+          const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+          const advancement = advancePrHistoryAfterDeterministicComment(expectedHistory, afterPersistence, persistedBody);
+          if (advancement.kind !== "accepted") {
+            observedStaleComparison = advancement.comparison;
+            throw new StaleLaunchError(`PR #${prNumber} review history changed during human handoff`);
+          }
+          writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
         }
         const labels = labelNames(livePr.labels);
         if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
@@ -665,7 +697,9 @@ function dispatch(args: JsonObject): DriverResult {
       });
     } catch (error) {
       if (!isStaleLaunchError(error)) throw error;
-      const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+      const freshness = observedStaleComparison
+        ? releaseObservedStaleReviewHistory(prNumber, env, observedStaleComparison)
+        : releaseStaleReviewHistory(prNumber, env, historyFile);
       return driverResult("done", `PR #${prNumber} review history changed before human handoff; released the active claim`, {
         driverAction: "review_stale_history", historyComparison: freshness.comparison,
       });
@@ -732,6 +766,7 @@ function dispatch(args: JsonObject): DriverResult {
     if (!recoveredLaunch && retained?.launchUuid && ["prepared", "github_claimed"].includes(String(retained.phase || ""))) {
       const resumeUuid = retained.launchUuid;
       let resumed: JsonObject;
+      let recoveryStaleComparison: JsonObject | undefined;
       try {
         resumed = withEnabledDriverLaunch(
           env,
@@ -751,7 +786,9 @@ function dispatch(args: JsonObject): DriverResult {
               if (recoveryHistoryFile) {
                 const recoveryHistory = readPrHistoryObservation(recoveryHistoryFile);
                 const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
-                if (comparePrHistoryObservations(recoveryHistory, currentHistory).kind !== "unchanged") {
+                const comparison = comparePrHistoryObservations(recoveryHistory, currentHistory);
+                if (comparison.kind !== "unchanged") {
+                  recoveryStaleComparison = comparison;
                   throw new StaleLaunchError(`PR #${prNumber} review history changed before repair recovery`);
                 }
               }
@@ -772,7 +809,9 @@ function dispatch(args: JsonObject): DriverResult {
           const recoveryHistoryFile = fs.existsSync(acceptedHistoryFile)
             ? acceptedHistoryFile
             : fs.existsSync(historyFile) ? historyFile : "";
-          const freshness = releaseStaleReviewHistory(prNumber, env, recoveryHistoryFile);
+          const freshness = recoveryStaleComparison
+            ? releaseObservedStaleReviewHistory(prNumber, env, recoveryStaleComparison)
+            : releaseStaleReviewHistory(prNumber, env, recoveryHistoryFile);
           return driverResult("done", `PR #${prNumber} review history changed before repair recovery; released the active claim`, {
             driverAction: "review_stale_history", historyComparison: freshness.comparison,
           });
@@ -868,12 +907,15 @@ function dispatch(args: JsonObject): DriverResult {
 
   if (hasAttemptRecord) {
     let persistedBody = "";
+    let observedStaleComparison: JsonObject | undefined;
     try {
       withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
         if (historyFile && fs.existsSync(historyFile)) {
           const expectedHistory = readPrHistoryObservation(historyFile);
           const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
-          if (comparePrHistoryObservations(expectedHistory, currentHistory).kind !== "unchanged") {
+          const comparison = comparePrHistoryObservations(expectedHistory, currentHistory);
+          if (comparison.kind !== "unchanged") {
+            observedStaleComparison = comparison;
             throw new StaleLaunchError(`PR #${prNumber} review history changed before repair result persistence`);
           }
         }
@@ -885,7 +927,9 @@ function dispatch(args: JsonObject): DriverResult {
       });
     } catch (error) {
       if (!isStaleLaunchError(error)) throw error;
-      const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+      const freshness = observedStaleComparison
+        ? releaseObservedStaleReviewHistory(prNumber, env, observedStaleComparison)
+        : releaseStaleReviewHistory(prNumber, env, historyFile);
       return driverResult("done", `PR #${prNumber} review history changed before repair result persistence; released the active claim`, {
         driverAction: "review_stale_history", historyComparison: freshness.comparison,
       });
@@ -895,9 +939,9 @@ function dispatch(args: JsonObject): DriverResult {
       const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
       const advancement = advancePrHistoryAfterDeterministicComment(expectedHistory, afterPersistence, persistedBody);
       if (advancement.kind !== "accepted") {
-        const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+        const freshness = releaseObservedStaleReviewHistory(prNumber, env, advancement.comparison);
         return driverResult("done", `PR #${prNumber} review history changed during repair dispatch; released the active claim`, {
-          driverAction: "review_stale_history", historyComparison: freshness.comparison || advancement.comparison,
+          driverAction: "review_stale_history", historyComparison: freshness.comparison,
         });
       }
       writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
@@ -933,6 +977,7 @@ function dispatch(args: JsonObject): DriverResult {
   );
 
   let launch: JsonObject;
+  let launchStaleComparison: JsonObject | undefined;
   try {
     launch = withEnabledDriverLaunch(
       env,
@@ -962,7 +1007,9 @@ function dispatch(args: JsonObject): DriverResult {
           if (acceptedHistoryFile && fs.existsSync(acceptedHistoryFile)) {
             const acceptedHistory = readPrHistoryObservation(acceptedHistoryFile);
             const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
-            if (comparePrHistoryObservations(acceptedHistory, currentHistory).kind !== "unchanged") {
+            const comparison = comparePrHistoryObservations(acceptedHistory, currentHistory);
+            if (comparison.kind !== "unchanged") {
+              launchStaleComparison = comparison;
               throw new StaleLaunchError(`PR #${prNumber} review history changed before repair launch`);
             }
           }
@@ -992,7 +1039,9 @@ function dispatch(args: JsonObject): DriverResult {
   } catch (error) {
     if (isStaleLaunchError(error)) {
       if (error instanceof Error && error.message.includes("review history") && acceptedHistoryFile) {
-        const freshness = releaseStaleReviewHistory(prNumber, env, acceptedHistoryFile);
+        const freshness = launchStaleComparison
+          ? releaseObservedStaleReviewHistory(prNumber, env, launchStaleComparison)
+          : releaseStaleReviewHistory(prNumber, env, acceptedHistoryFile);
         return driverResult("done", `PR #${prNumber} review history changed before repair launch; released the active claim`, {
           driverAction: "review_stale_history", historyComparison: freshness.comparison,
         });

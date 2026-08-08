@@ -15,7 +15,10 @@ const approvedReview = {
   promise: { status: "complete", outcome: "approved", reviewedHead: expectedHead, findings: [] },
 };
 
-function runHandoff(observations: Array<Record<string, unknown>>) {
+function runHandoff(
+  observations: Array<Record<string, unknown>>,
+  validation: Record<string, unknown> = approvedReview,
+) {
   const commands: string[][] = [];
   let observationIndex = 0;
   const result = handoffReviewedPr(
@@ -26,7 +29,7 @@ function runHandoff(observations: Array<Record<string, unknown>>) {
     },
     {
       withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => unknown) => operation({}, () => {}),
-      validateReviewPromise: () => approvedReview,
+      validateReviewPromise: () => validation,
       readHistory: () => acceptedHistory,
       observeHistory: () => observations[Math.min(observationIndex++, observations.length - 1)],
       run: (args: string[]) => {
@@ -57,5 +60,15 @@ describe("reviewed PR human handoff", () => {
       "gh", "pr", "edit", "24", "-R", "owner/repo",
       "--remove-label", "agent:review", "--remove-label", "agent:reviewing", "--add-label", "ready-for-human",
     ]);
+  });
+
+  it("preserves validated legacy complete promises for human handoff", () => {
+    const run = runHandoff([acceptedHistory, acceptedHistory], {
+      status: "complete",
+      evidenceStrength: "legacy-weak",
+      promise: { status: "complete", reason: "", summary: "Legacy approval" },
+    });
+
+    expect(run.result.action).toBe("handed_off");
   });
 });

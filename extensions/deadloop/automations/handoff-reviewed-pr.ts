@@ -56,10 +56,16 @@ function commandError(result: CommandResult, fallback: string): string {
 function assertApproved(args: HandoffArgs, ops: HandoffOps): void {
   const validation = ops.validateReviewPromise?.(args.reviewPromise) || validatePromise(args.reviewPromise);
   const promise = validation.promise;
-  if (validation.status !== "complete" || !promise || promise.status !== "complete" || promise.outcome !== "approved") {
+  const legacyApproval = validation.evidenceStrength === "legacy-weak"
+    && promise?.status === "complete"
+    && (promise.outcome === undefined || promise.outcome === "approved")
+    && (promise.findings === undefined || Array.isArray(promise.findings) && promise.findings.length === 0);
+  if (validation.status !== "complete" || !promise || promise.status !== "complete") {
     throw new Error("validated reviewer approval is missing; human handoff stopped");
   }
-  if (promise.reviewedHead !== args.expectedHead || !Array.isArray(promise.findings) || promise.findings.length !== 0) {
+  if (legacyApproval) return;
+  if (promise.outcome !== "approved" || promise.reviewedHead !== args.expectedHead
+    || !Array.isArray(promise.findings) || promise.findings.length !== 0) {
     throw new Error("reviewer approval is not bound to the expected head; human handoff stopped");
   }
 }
