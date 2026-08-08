@@ -7,6 +7,11 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
+const {
+  comparePrHistoryObservations,
+  observePrHistory,
+  readPrHistoryObservation,
+} = require("../../../src/pr-review-history.ts");
 
 type MergeArgs = {
   projectRepo: string;
@@ -19,6 +24,7 @@ type MergeArgs = {
   reviewLabel: string;
   reviewingLabel: string;
   blockedLabel: string;
+  historyObservation: string;
 };
 type EnabledProject = {
   firstEnableAutoMerge: boolean;
@@ -31,6 +37,7 @@ type MergeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   isAutoMergeEnabled?: (args: MergeArgs) => boolean;
   validateReviewPromise?: (file: string) => PromiseValidation;
+  assertReviewHistoryFresh?: (args: MergeArgs) => void;
   withLock?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }, operation: (enabled: EnabledProject, recheck: () => void) => number) => number;
 };
 
@@ -141,6 +148,36 @@ function assertChecksPassed(value: unknown): void {
   }
 }
 
+function assertReviewHistoryFresh(args: MergeArgs, ops: MergeOps): void {
+  if (ops.assertReviewHistoryFresh) {
+    ops.assertReviewHistoryFresh(args);
+    return;
+  }
+  if (!args.historyObservation) throw new Error("accepted PR history observation is missing; automatic merge stopped");
+  const runner = {
+    runText(command: string[]): string {
+      const result = ops.run(command, MAX_GUARDED_OPERATION_MS);
+      if (result.status !== 0) throw new Error((result.stderr || result.stdout || "PR history could not be observed").trim());
+      return result.stdout;
+    },
+    runJson(command: string[]): unknown {
+      return JSON.parse(this.runText(command));
+    },
+  };
+  const expected = readPrHistoryObservation(args.historyObservation);
+  const actual = observePrHistory(args.githubRepo, Number(args.pr), runner);
+  if (comparePrHistoryObservations(expected, actual).kind !== "unchanged") {
+    const released = ops.run([
+      "gh", "pr", "edit", args.pr, "-R", args.githubRepo,
+      "--remove-label", args.reviewingLabel, "--add-label", args.reviewLabel,
+    ], MAX_GUARDED_OPERATION_MS);
+    if (released.status !== 0) {
+      throw new Error("PR review history changed and the active review claim could not be released; automatic merge stopped");
+    }
+    throw new Error("PR review history changed; active review claim released and automatic merge stopped");
+  }
+}
+
 function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
   const result = ops.run([
     "gh", "pr", "view", args.pr, "-R", args.githubRepo,
@@ -186,10 +223,14 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     if (!autoMergeEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
     assertMergeAuthorized(enabled);
     assertReviewApproved(args, ops);
+    assertReviewHistoryFresh(args, ops);
     assertCurrentPrEligible(args, ops);
     recheck();
     const autoMergeStillEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
     if (!autoMergeStillEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
+    assertReviewHistoryFresh(args, ops);
+    assertCurrentPrEligible(args, ops);
+    recheck();
     const result = ops.run([
       "gh", "pr", "merge", args.pr, "-R", args.githubRepo,
       "--squash", "--delete-branch", "--match-head-commit", args.expectedHead,
@@ -209,8 +250,8 @@ function parseArgs(argv: string[]): MergeArgs {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  if (!values.projectRepo || !values.githubRepo || !values.stateDir || !values.pr || !values.expectedHead || !values.reviewPromise || !values.reviewLabel || !values.reviewingLabel || !values.blockedLabel || !Number.isFinite(enabledAt)) {
-    throw new Error("--project-repo, --github-repo, --state-dir, --enabled-at, --pr, --expected-head, --review-promise, --review-label, --reviewing-label, and --blocked-label are required");
+  if (!values.projectRepo || !values.githubRepo || !values.stateDir || !values.pr || !values.expectedHead || !values.reviewPromise || !values.historyObservation || !values.reviewLabel || !values.reviewingLabel || !values.blockedLabel || !Number.isFinite(enabledAt)) {
+    throw new Error("--project-repo, --github-repo, --state-dir, --enabled-at, --pr, --expected-head, --review-promise, --history-observation, --review-label, --reviewing-label, and --blocked-label are required");
   }
   return {
     projectRepo: values.projectRepo,
@@ -223,6 +264,7 @@ function parseArgs(argv: string[]): MergeArgs {
     reviewLabel: values.reviewLabel,
     reviewingLabel: values.reviewingLabel,
     blockedLabel: values.blockedLabel,
+    historyObservation: values.historyObservation,
   };
 }
 

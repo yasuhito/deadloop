@@ -133,6 +133,7 @@ export type AttemptRecord = AttemptIdentity & {
   rootPaneId?: string;
   outputRevision?: string;
   autoMergePolicy?: boolean;
+  reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
   abandonment?: AttemptAbandonment;
 };
@@ -146,6 +147,7 @@ export type PreparedAttemptInput = AttemptIdentity & {
   promptFile: string;
   promiseFile: string;
   autoMergePolicy?: boolean;
+  reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
 };
 
@@ -285,6 +287,9 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(record.autoMergePolicy === undefined
       ? {}
       : typeof record.autoMergePolicy === "boolean" ? { autoMergePolicy: record.autoMergePolicy } : fail("autoMergePolicy must be boolean")),
+    ...(record.reviewHistoryRequired === undefined
+      ? {}
+      : typeof record.reviewHistoryRequired === "boolean" ? { reviewHistoryRequired: record.reviewHistoryRequired } : fail("reviewHistoryRequired must be boolean")),
     ...(parseRequiredVerification(record.requiredVerification, false)
       ? { requiredVerification: parseRequiredVerification(record.requiredVerification, true) }
       : {}),
@@ -334,7 +339,7 @@ function sameAttemptIdentity(left: AttemptRecord, right: AttemptRecord): boolean
 
 function assertRecordAdvance(current: AttemptRecord, next: AttemptRecord): void {
   if (!sameAttemptIdentity(current, next)) throw new Error("Attempt record identity cannot change");
-  for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy"] as const) {
+  for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy", "reviewHistoryRequired"] as const) {
     if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");

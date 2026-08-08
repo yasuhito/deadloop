@@ -102,6 +102,16 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("If autoMerge=false, never merge");
   });
 
+  it("routes human handoff through accepted-history revalidation", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
+      promiseFile: "/state/runs/one/promise.json", actorName: "reviewer", projectId: "demo", repoPath: "/repo",
+      githubRepo: "owner/repo", stateDir: "/state", enabledAt: 123, autoMerge: false, checkCommand: "npm test",
+      humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+    });
+    expect(prompt).toContain("handoff-reviewed-pr.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/runs/one/promise.json --history-observation /state/runs/one/pr-review-history-accepted.json");
+  });
+
   it("renders human-handoff completion labels when automatic merge is disabled", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",

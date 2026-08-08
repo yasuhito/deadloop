@@ -21,14 +21,17 @@ function runMerge(options: {
   mergeStatus?: number;
   autoMergeEnabled?: boolean | boolean[];
   enabled?: { firstEnableAutoMerge: boolean; firstStartPending: boolean; autoMergeAcknowledged: boolean };
-  pr?: Record<string, unknown>;
+  pr?: Record<string, unknown> | Record<string, unknown>[];
   review?: typeof approvedReview;
+  onHistoryCheck?: (count: number) => void;
 } = {}) {
   const commands: string[][] = [];
   let lockHeld = false;
   let configObservedInsideLock = false;
   let mutationObservedInsideLock = false;
   let autoMergeChecks = 0;
+  let prChecks = 0;
+  let historyChecks = 0;
   const action = mergeReviewedPr(
     {
       projectRepo: "/repo",
@@ -63,10 +66,13 @@ function runMerge(options: {
           : configured;
       },
       validateReviewPromise: () => options.review || approvedReview,
+      assertReviewHistoryFresh: () => options.onHistoryCheck?.(++historyChecks),
       run: (args: string[]) => {
         commands.push(args);
         if (args[2] === "view") {
-          return { status: 0, stdout: JSON.stringify(options.pr || eligiblePr), stderr: "" };
+          const configured = options.pr || eligiblePr;
+          const pr = Array.isArray(configured) ? (configured[prChecks++] || configured.at(-1)) : configured;
+          return { status: 0, stdout: JSON.stringify(pr), stderr: "" };
         }
         mutationObservedInsideLock = lockHeld;
         const status = options.mergeStatus ?? 0;
@@ -79,7 +85,7 @@ function runMerge(options: {
 
 describe("reviewed PR merge", () => {
   it("passes the reviewed head to GitHub's atomic merge guard", () => {
-    expect(runMerge().commands[1]).toEqual([
+    expect(runMerge().commands.find((command) => command[2] === "merge")).toEqual([
       "gh", "pr", "merge", "24", "-R", "owner/repo",
       "--squash", "--delete-branch", "--match-head-commit", expectedHead,
     ]);
@@ -127,6 +133,12 @@ describe("reviewed PR merge", () => {
 
   it("fails closed when the PR head changes during final revalidation", () => {
     expect(() => runMerge({ pr: { ...eligiblePr, headRefOid: "b".repeat(40) } })).toThrow("PR head changed");
+  });
+
+  it("rechecks mutable eligibility after the final history observation", () => {
+    expect(() => runMerge({
+      pr: [eligiblePr, { ...eligiblePr, labels: [{ name: "agent:review" }] }],
+    })).toThrow("required review labels");
   });
 
   it("fails closed when the PR is no longer open", () => {
