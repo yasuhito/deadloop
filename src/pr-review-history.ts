@@ -209,7 +209,7 @@ function comparePrHistoryObservations(expected: PrHistoryObservation, actual: Pr
 function advancePrHistoryAfterDeterministicComment(
   expected: PrHistoryObservation,
   actual: PrHistoryObservation,
-  body: string,
+  createdComment?: { id: string; author: string; body: string },
 ) {
   const comparison = comparePrHistoryObservations(expected, actual);
   if (comparison.kind === "unchanged") return { kind: "accepted" as const, observation: actual };
@@ -221,9 +221,17 @@ function advancePrHistoryAfterDeterministicComment(
   const retained = actual.history.conversationComments.filter((comment) => previous.has(String(comment.id)));
   const retainedUnchanged = retained.length === previous.size
     && retained.every((comment) => previous.get(String(comment.id)) === JSON.stringify(comment));
-  if (!retainedUnchanged || added.length !== 1 || added[0].body !== body) {
+  if (!retainedUnchanged || added.length !== 1) {
     return { kind: "stale" as const, comparison };
   }
+  if (createdComment && (
+    added[0].id !== createdComment.id
+    || added[0].author !== createdComment.author
+    || added[0].body !== createdComment.body
+  )) {
+    return { kind: "stale" as const, comparison };
+  }
+  if (!createdComment) return { kind: "stale" as const, comparison };
   return { kind: "accepted" as const, observation: actual };
 }
 

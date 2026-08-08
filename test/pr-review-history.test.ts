@@ -88,7 +88,9 @@ describe("PR review history observation", () => {
       { id: 1, body: "comment", user: { login: "alice" }, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" },
       { id: 4, body: "persisted result", user: { login: "bot" }, created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z" },
     ]) }));
-    expect(advancePrHistoryAfterDeterministicComment(first, second, "persisted result").kind).toBe("accepted");
+    expect(advancePrHistoryAfterDeterministicComment(first, second, {
+      id: "4", author: "bot", body: "persisted result",
+    }).kind).toBe("accepted");
   });
 
   it("rejects an unrelated comment while advancing a revision", () => {
@@ -98,7 +100,21 @@ describe("PR review history observation", () => {
       { id: 4, body: "persisted result", user: { login: "bot" }, created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z" },
       { id: 5, body: "race", user: { login: "mallory" }, created_at: "2026-01-02T00:00:01Z", updated_at: "2026-01-02T00:00:01Z" },
     ]) }));
-    expect(advancePrHistoryAfterDeterministicComment(first, second, "persisted result").kind).toBe("stale");
+    expect(advancePrHistoryAfterDeterministicComment(first, second, {
+      id: "4", author: "bot", body: "persisted result",
+    }).kind).toBe("stale");
+  });
+
+  it("rejects a same-body replacement with a foreign identity", () => {
+    const first = observePrHistory("owner/repo", 12, fixtureRunner());
+    const second = observePrHistory("owner/repo", 12, fixtureRunner({ comments: apiPages([
+      { id: 1, body: "comment", user: { login: "alice" }, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" },
+      { id: 9, body: "persisted result", user: { login: "mallory" }, created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z" },
+    ]) }));
+
+    expect(advancePrHistoryAfterDeterministicComment(first, second, {
+      id: "4", author: "bot", body: "persisted result",
+    }).kind).toBe("stale");
   });
 
   it("fails technically when a paginated collection is incomplete", () => {

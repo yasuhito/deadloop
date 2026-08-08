@@ -53,7 +53,7 @@ function commandError(result: CommandResult, fallback: string): string {
   return (result.stderr || result.stdout || fallback).trim();
 }
 
-function assertApproved(args: HandoffArgs, ops: HandoffOps): void {
+function assertApproved(args: HandoffArgs, ops: HandoffOps): { legacyApproval: boolean } {
   const validation = ops.validateReviewPromise?.(args.reviewPromise) || validatePromise(args.reviewPromise);
   const promise = validation.promise;
   const legacyApproval = validation.evidenceStrength === "legacy-weak"
@@ -63,11 +63,11 @@ function assertApproved(args: HandoffArgs, ops: HandoffOps): void {
   if (validation.status !== "complete" || !promise || promise.status !== "complete") {
     throw new Error("validated reviewer approval is missing; human handoff stopped");
   }
-  if (legacyApproval) return;
-  if (promise.outcome !== "approved" || promise.reviewedHead !== args.expectedHead
-    || !Array.isArray(promise.findings) || promise.findings.length !== 0) {
+  if (!legacyApproval && (promise.outcome !== "approved" || promise.reviewedHead !== args.expectedHead
+    || !Array.isArray(promise.findings) || promise.findings.length !== 0)) {
     throw new Error("reviewer approval is not bound to the expected head; human handoff stopped");
   }
+  return { legacyApproval };
 }
 
 function currentHistory(args: HandoffArgs, ops: HandoffOps): JsonObject {
@@ -116,15 +116,17 @@ function assertEligiblePr(args: HandoffArgs, ops: HandoffOps): void {
 function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRun }): HandoffResult {
   const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
   const operation = (_enabled: unknown, recheck: () => void): HandoffResult => {
-    assertApproved(args, ops);
-    const expected = ops.readHistory?.(args.historyObservation) || readPrHistoryObservation(args.historyObservation);
-    if (!compareAcceptedHistory(args, ops, expected)) {
+    const { legacyApproval } = assertApproved(args, ops);
+    const expected = legacyApproval
+      ? undefined
+      : ops.readHistory?.(args.historyObservation) || readPrHistoryObservation(args.historyObservation);
+    if (expected && !compareAcceptedHistory(args, ops, expected)) {
       recheck();
       return releaseStaleClaim(args, ops);
     }
     assertEligiblePr(args, ops);
     recheck();
-    if (!compareAcceptedHistory(args, ops, expected)) {
+    if (expected && !compareAcceptedHistory(args, ops, expected)) {
       recheck();
       return releaseStaleClaim(args, ops);
     }

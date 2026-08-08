@@ -62,13 +62,33 @@ describe("reviewed PR human handoff", () => {
     ]);
   });
 
-  it("preserves validated legacy complete promises for human handoff", () => {
-    const run = runHandoff([acceptedHistory, acceptedHistory], {
-      status: "complete",
-      evidenceStrength: "legacy-weak",
-      promise: { status: "complete", reason: "", summary: "Legacy approval" },
-    });
+  it("preserves validated legacy complete promises when accepted history is genuinely absent", () => {
+    const commands: string[][] = [];
+    const result = handoffReviewedPr(
+      {
+        projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1,
+        pr: "24", expectedHead, reviewPromise: "/state/promise.json", historyObservation: "/definitely/absent/history.json",
+        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", humanLabel: "ready-for-human",
+      },
+      {
+        withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => unknown) => operation({}, () => {}),
+        validateReviewPromise: () => ({
+          status: "complete",
+          evidenceStrength: "legacy-weak",
+          promise: { status: "complete", reason: "", summary: "Legacy approval" },
+        }),
+        run: (args: string[]) => {
+          commands.push(args);
+          return args[2] === "view"
+            ? { status: 0, stdout: JSON.stringify(livePr), stderr: "" }
+            : { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
 
-    expect(run.result.action).toBe("handed_off");
+    expect({ action: result.action, mutation: commands.at(-1)?.slice(0, 3) }).toEqual({
+      action: "handed_off",
+      mutation: ["gh", "pr", "edit"],
+    });
   });
 });

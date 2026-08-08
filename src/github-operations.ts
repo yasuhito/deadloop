@@ -81,9 +81,9 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
       commandRunner.runText(["gh", "pr", "edit", String(prNumber), "-R", repo, ...labelArgs(move)], { check: options.check });
     },
 
-    commentPr(repo: string, prNumber: string | number, body: string): void {
+    commentPr(repo: string, prNumber: string | number, body: string): string {
       beforeMutation();
-      commandRunner.runText(["gh", "pr", "comment", String(prNumber), "-R", repo, "--body", body]);
+      return commandRunner.runText(["gh", "pr", "comment", String(prNumber), "-R", repo, "--body", body]);
     },
 
     addPrReviewer(repo: string, prNumber: string | number, reviewer: string, options: { check?: boolean } = {}): void {
