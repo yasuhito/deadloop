@@ -9,6 +9,10 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
 const { renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
+const {
+  applyIssueRequiredVerificationStop,
+  planIssueRequiredVerificationStop,
+} = require("../../../src/issue-required-verification-stop.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
@@ -70,7 +74,7 @@ function gateMissingContractComment(issue: JsonObject): string {
 
 function applyIssueTransition(
   issue: JsonObject,
-  expectedKind: "contract_missing" | "planning_blocked",
+  expectedKind: "contract_missing" | "planning_blocked" | "worker_required",
   env: ReturnType<typeof envConfig>,
   fixture: JsonObject | null,
   mutate: (github: ReturnType<typeof githubOperations>, live: JsonObject) => void,
@@ -120,6 +124,91 @@ function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comm
     const number = String(live.number);
     github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.blockedLabel });
     github.commentIssue(env.githubRepo, number, comment);
+  });
+}
+
+function parsedRequiredVerificationResolution(env: ReturnType<typeof envConfig>): JsonObject | null {
+  if (!env.requiredVerificationResolution) return null;
+  let resolution: JsonObject;
+  try { resolution = JSON.parse(env.requiredVerificationResolution); }
+  catch { throw new Error("DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION must be valid JSON"); }
+  if (resolution.status !== "resolved" && resolution.status !== "blocked") {
+    throw new Error("DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION has an invalid status");
+  }
+  return resolution;
+}
+
+function applyRequiredVerificationStop(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  resolution: JsonObject,
+  fixture: JsonObject | null,
+): { applied: boolean; comment?: string; fingerprint?: string } {
+  let result: { applied: boolean; comment?: string; fingerprint?: string } = { applied: false };
+  const applied = applyIssueTransition(issue, "worker_required", env, fixture, (github, live) => {
+    const plan = planIssueRequiredVerificationStop({
+      issue: live,
+      resolution,
+      phase: "before_launch",
+      labels: { implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel },
+    });
+    applyIssueRequiredVerificationStop(github, env.githubRepo, live.number, plan);
+    result = { applied: true, ...(plan.comment ? { comment: plan.comment } : {}), fingerprint: plan.fingerprint };
+  });
+  if (fixture && applied) {
+    const plan = planIssueRequiredVerificationStop({
+      issue,
+      resolution,
+      phase: "before_launch",
+      labels: { implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel },
+    });
+    result = { applied: true, ...(plan.comment ? { comment: plan.comment } : {}), fingerprint: plan.fingerprint };
+  }
+  return applied ? result : { applied: false };
+}
+
+function requiredVerificationStopFingerprint(issue: JsonObject): string | undefined {
+  const issueNumber = Number(issue.number);
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) return undefined;
+  const marker = new RegExp(`<!-- deadloop:required-verification-blocked:v1 target=issue-${issueNumber} fingerprint=([0-9a-f]{64}) -->`);
+  for (const comment of issue.comments || []) {
+    const match = marker.exec(String(comment?.body || ""));
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+function isExactDurableRequiredVerificationStop(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+): boolean {
+  const names = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label?.name || "")));
+  return String(issue.state || "").toUpperCase() === "OPEN"
+    && names.has(env.readyLabel)
+    && names.has(env.blockedLabel)
+    && !names.has(env.implementLabel)
+    && !names.has(env.inProgressLabel)
+    && requiredVerificationStopFingerprint(issue) !== undefined;
+}
+
+function resumeRequiredVerificationStop(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fingerprint: string,
+): { fingerprint: string } {
+  return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+    const github = githubOperations(recheck);
+    const live = github.getIssue(env.githubRepo, issue.number);
+    if (String(live.state || "").toUpperCase() !== "OPEN" || requiredVerificationStopFingerprint(live) !== fingerprint) {
+      throw new StaleLaunchError(`Issue #${issue.number} required-verification stop changed`);
+    }
+    const names = new Set((live.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label?.name || "")));
+    applyIssueRequiredVerificationStop(github, env.githubRepo, live.number, {
+      removeLabels: [env.implementLabel, env.inProgressLabel].filter((label) => names.has(label)),
+      addLabels: names.has(env.blockedLabel) ? [] : [env.blockedLabel],
+      fingerprint,
+    });
+    return { fingerprint };
   });
 }
 
@@ -400,6 +489,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
       path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
     requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION || "",
+    requiredVerificationResolution: source.DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION || "",
     configPath: source.DEADLOOP_CONFIG || "",
     fixtureMode: source.DEADLOOP_FIXTURE_MODE === "1",
     workerInstructions: source.DEADLOOP_WORKER_INSTRUCTIONS || "Read AGENTS.md and follow the issue contract.",
@@ -436,6 +526,17 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   const issues = issueList(fixture, env.githubRepo);
+  const verificationResolution = parsedRequiredVerificationResolution(env);
+  const resumableStop = issues.find((candidate) => requiredVerificationStopFingerprint(candidate)
+    && !isExactDurableRequiredVerificationStop(candidate, env));
+  if (resumableStop) {
+    const fingerprint = requiredVerificationStopFingerprint(resumableStop) as string;
+    const stopped = fixture ? { fingerprint } : resumeRequiredVerificationStop(resumableStop, env, fingerprint);
+    return driverResult("done", `Issue #${resumableStop.number} required-verification stop was resumed`, {
+      driverAction: "required_verification_blocked", issueNumber: resumableStop.number,
+      ...(verificationResolution?.reason ? { reason: verificationResolution.reason } : {}), fingerprint: stopped.fingerprint,
+    });
+  }
   const decision = decisionForIssues(fixturePath, issues, env.githubRepo, env);
   const issuePlan = planIssueCoordinatorAction(issues, decision);
   if (issuePlan.kind === "skip_no_candidate") return driverResult("skip", "No target issue", { driverAction: "no_candidate", decision });
@@ -465,6 +566,22 @@ function drive(fixturePath: string | undefined): DriverResult {
       driverAction: "blocked_comment",
       issueNumber: issue.number,
       comment,
+    });
+  }
+
+  if (verificationResolution?.status === "blocked") {
+    const stopped = applyRequiredVerificationStop(issue, env, verificationResolution, fixture);
+    if (!stopped.applied) {
+      return driverResult("skip", `Issue #${issue.number} changed before the required-verification stop; no workflow state was mutated`, {
+        driverAction: "required_verification_blocked_stale", issueNumber: issue.number,
+      });
+    }
+    return driverResult("done", `Issue #${issue.number} was stopped before Worker launch because required verification is blocked`, {
+      driverAction: "required_verification_blocked",
+      issueNumber: issue.number,
+      reason: verificationResolution.reason,
+      ...(stopped.comment ? { comment: stopped.comment } : {}),
+      fingerprint: stopped.fingerprint,
     });
   }
 

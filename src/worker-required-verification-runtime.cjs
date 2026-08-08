@@ -132,6 +132,12 @@ function authenticatedFetchUrl(projectRepo, remote, repository, repositoryId) {
   }
   return urls[0];
 }
+function stalePolicyError(message, sources) {
+  return Object.assign(
+    new Error(`required verification blocked: stale_policy; ${message}`),
+    sources ? { requiredVerificationSources: sources } : {},
+  );
+}
 function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repositoryId) {
   const contract = readWorkerContractSnapshot(attempt); const baseBranch = attempt.baseBranch || "origin/main";
   const remoteRef = baseBranch.startsWith("refs/remotes/") ? baseBranch.slice("refs/remotes/".length) : baseBranch;
@@ -181,9 +187,10 @@ function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repo
     ? [{ kind: "repo_policy", location: "deadloop.json", command: policy.checkCommand }]
     : [];
   const sourcesConflict = (sources) => new Set(sources.map((source) => source.command)).size > 1;
-  if (sourcesConflict(localSources) || sourcesConflict(sharedSources)) throw new Error("required verification blocked: stale_policy; current policy is conflicted");
+  const currentSources = [...localSources, ...sharedSources];
+  if (sourcesConflict(localSources) || sourcesConflict(sharedSources)) throw stalePolicyError("current policy is conflicted", currentSources);
   const selected = localSources[0] || sharedSources[0];
-  if (!selected || typeof selected.command !== "string" || !selected.command.trim()) throw new Error("required verification blocked: stale_policy; current policy is unresolved");
+  if (!selected || typeof selected.command !== "string" || !selected.command.trim()) throw stalePolicyError("current policy is unresolved", currentSources);
   const replaced = localSources.length ? sharedSources[0] : undefined;
   const current = {
     repository: attempt.repository,
@@ -192,7 +199,7 @@ function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repo
     baseRevision: currentBase,
     ...(replaced && replaced.command !== selected.command ? { override: { source: { kind: replaced.kind, location: replaced.location }, command: replaced.command } } : {}),
   };
-  if (!isDeepStrictEqual(current, contract)) throw new Error("required verification blocked: stale_policy; current policy differs from the fixed attempt contract");
+  if (!isDeepStrictEqual(current, contract)) throw stalePolicyError("current policy differs from the fixed attempt contract", currentSources);
   return current;
 }
 function assertWorkerCompletionAuthorized(attempt, report, record, currentContract) {
