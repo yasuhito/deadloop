@@ -52,6 +52,7 @@ function parseAttemptRecord(value) {
   for (const field of ["baseBranch", "workspaceId", "tabId", "rootPaneId"]) if (value[field] !== undefined) nonEmpty(value[field], field);
   if (value.outputRevision !== undefined) sha(value.outputRevision, "outputRevision");
   if (value.autoMergePolicy !== undefined && typeof value.autoMergePolicy !== "boolean") throw new Error("Invalid attempt record: autoMergePolicy must be boolean");
+  if (value.reviewHistoryRequired !== undefined && typeof value.reviewHistoryRequired !== "boolean") throw new Error("Invalid attempt record: reviewHistoryRequired must be boolean");
   return {
     attemptId: nonEmpty(value.attemptId, "attemptId"),
     launchUuid: nonEmpty(value.launchUuid, "launchUuid"),
@@ -78,6 +79,7 @@ function parseAttemptRecord(value) {
     ...(value.rootPaneId === undefined ? {} : { rootPaneId: nonEmpty(value.rootPaneId, "rootPaneId") }),
     ...(value.outputRevision === undefined ? {} : { outputRevision: sha(value.outputRevision, "outputRevision") }),
     ...(value.autoMergePolicy === undefined ? {} : { autoMergePolicy: value.autoMergePolicy }),
+    ...(value.reviewHistoryRequired === undefined ? {} : { reviewHistoryRequired: value.reviewHistoryRequired }),
     ...(requiredVerification(value.requiredVerification, false) ? { requiredVerification: requiredVerification(value.requiredVerification, true) } : {}),
     ...(abandonment ? { abandonment } : {}),
   };
@@ -163,7 +165,7 @@ function validateCompletionReportBinding(record, value) {
 }
 function assertAdvance(current, next) {
   if (!sameIdentity(current, next)) throw new Error("Attempt record identity cannot change");
-  for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy"]) if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
+  for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy", "reviewHistoryRequired"]) if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"]) if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (current.abandonment !== undefined && JSON.stringify(current.abandonment) !== JSON.stringify(next.abandonment)) throw new Error("Attempt record abandonment evidence cannot change");

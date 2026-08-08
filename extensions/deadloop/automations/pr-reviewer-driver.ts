@@ -143,6 +143,7 @@ type DriverLaunchInput = {
   inputRevision: { head: string; base?: string };
   intendedWorktreePath: string;
   autoMergePolicy?: boolean;
+  reviewHistoryRequired?: boolean;
   renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
 };
 
@@ -511,6 +512,7 @@ function prReviewerLaunchPlan(
       repository: env.githubRepo,
       role: "reviewer",
       autoMergePolicy: env.autoMerge,
+      reviewHistoryRequired: true,
       target: { kind: "pull-request", number },
       inputRevision: { head: String(pr.headRefOid || "") },
       intendedWorktreePath: path.join(env.worktreeRoot, headRefName.replace(/\//g, "-")),

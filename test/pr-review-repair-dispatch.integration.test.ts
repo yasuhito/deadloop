@@ -446,6 +446,7 @@ function runV1ChangesRequestedTwice(options: {
   renderedCommand?: boolean;
   attempts?: number;
   injectCumulativeLimitRace?: boolean;
+  historyRequired?: boolean;
 } = {}): {
   launches: number;
   actions: string[];
@@ -512,6 +513,7 @@ function runV1ChangesRequestedTwice(options: {
     worktreePath: worktree, agentName: "dl-r-243-111111111111", workspaceLabel: "reviewer",
     promptFile: path.join(reviewerRun, "prompt.md"), promiseFile: promise, phase: "agent_started",
     lastSuccessfulPhase: "agent_started", workspaceId: "reviewer-workspace", tabId: "reviewer-tab", rootPaneId: "reviewer-pane",
+    ...(options.historyRequired ? { reviewHistoryRequired: true } : {}),
   }));
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const fs=require("node:fs");const a=process.argv.slice(2);
@@ -604,6 +606,10 @@ describe("review repair dispatch integration", () => {
       actions: ["review_repair_monitor_request", "review_repair_monitor_recovered"],
       reviewerPhase: "workspace_closed",
     });
+  });
+
+  it("fails closed when metadata requires history but the prompt and history artifacts are missing", () => {
+    expect(runV1ChangesRequestedTwice({ attempts: 1, historyRequired: true }).actions[0]).toBe("incomplete_review_history");
   });
 
   it("human-blocks when a third attempt appears before a fourth launch", () => {

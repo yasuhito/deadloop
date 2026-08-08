@@ -525,15 +525,22 @@ function dispatch(args: JsonObject): DriverResult {
     ? path.join(path.dirname(String(args.attemptRecord)), "pr-review-history.json")
     : "";
   const acceptedHistoryFile = historyFile ? path.join(path.dirname(historyFile), "pr-review-history-accepted.json") : "";
-  const historyRequired = Boolean(attemptRecord && (() => {
-    try { return fs.readFileSync(attemptRecord.promptFile, "utf8").includes("Complete PR history revision:"); }
-    catch { return false; }
-  })());
-  if (historyRequired && !fs.existsSync(historyFile)) {
-    return driverResult("error", `PR #${prNumber} attempt history observation is missing`, {
-      driverAction: "incomplete_review_history",
-      reason: "missing_attempt_history_observation",
-    });
+  const historyRequired = attemptRecord?.reviewHistoryRequired === true;
+  if (historyRequired) {
+    if (!fs.existsSync(historyFile)) {
+      return driverResult("error", `PR #${prNumber} attempt history observation is missing`, {
+        driverAction: "incomplete_review_history",
+        reason: "missing_attempt_history_observation",
+      });
+    }
+    try {
+      readPrHistoryObservation(historyFile);
+    } catch {
+      return driverResult("error", `PR #${prNumber} attempt history observation is invalid`, {
+        driverAction: "incomplete_review_history",
+        reason: "invalid_attempt_history_observation",
+      });
+    }
   }
   if (historyFile && fs.existsSync(historyFile)) {
     const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
