@@ -149,9 +149,7 @@ Review labels remain in place during the repair. deadloop does not add a repair 
 
 The worker receives only the findings.
 
-The finalizer first measures the size of the repair. If the repair is too large, it skips the configured checks, does not push, and hands the PR to a human.
-
-If the repair is within the size limit, the finalizer runs the configured checks. It atomically updates the exact branch only if the branch head still equals the validated commit.
+The finalizer runs the configured checks for every repair, regardless of how many files changed. It atomically updates the exact branch only if the branch head still equals the validated commit.
 
 The finalizer never replaces another head or changes GitHub workflow state.
 

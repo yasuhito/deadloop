@@ -8,13 +8,13 @@ const {
   decideTechnicalReviewFailure,
   renderRepairMarker,
   renderTechnicalFailureMarker,
+  repairAttempts,
   reviewResultFingerprint,
   selectRepairAttempt,
   technicalFailureCount,
 } = require("../extensions/deadloop/automations/pr-review-repair-state.ts");
 const {
   decideRepairPushGuard,
-  decideRepairSize,
   finalizeReviewRepair,
 } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
 const { readLivePr, repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
@@ -26,9 +26,6 @@ const cumulativeComments = cumulativeRepairFixture.comments.map((comment: Record
   author: { login: automationLogin },
 }));
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const sizeLimitCases = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "fixtures/pr-review-repair/size-limit-cases.json"), "utf8"),
-);
 const findings = [
   {
     title: "Lint contract failure",
@@ -47,7 +44,7 @@ function finalizeWith(
   pushUrl = "https://github.com/owner/repo.git",
   repositoryIds: Record<string, string> = {},
   raceRemoteHead?: string | null,
-  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; changedFileCount?: number; changedFiles?: string[] } = {},
+  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; dirty?: boolean; missingAncestor?: boolean; checkFailure?: boolean } = {},
 ) {
   let observedHead = actualHead;
   let localHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -67,7 +64,6 @@ function finalizeWith(
       resultFile: "/state/result.json",
     },
     {
-      readRepairFindingCount: () => findings.length,
       assertEnabled: () => {
         if (headAfterAuthorization) observedHead = headAfterAuthorization;
         return { githubRepo: "owner/repo", githubRepositoryId: "R_repo" };
@@ -76,6 +72,9 @@ function finalizeWith(
         commands.push(args);
         timeouts.push(timeoutMs);
         if (args[0] === "node" && localHeadChanges.afterChecks) localHead = localHeadChanges.afterChecks;
+        if (args[0] === "node" && localHeadChanges.checkFailure) return { status: 1, stdout: "", stderr: "checks failed" };
+        if (args.includes("merge-base") && localHeadChanges.missingAncestor) return { status: 1, stdout: "", stderr: "" };
+        if (args.includes("status") && localHeadChanges.dirty) return { status: 0, stdout: " M src/a.ts\n", stderr: "" };
         if (args.includes("get-url")) return { status: 0, stdout: `${pushUrl}\n`, stderr: "" };
         if (args.includes("push") && raceRemoteHead !== undefined && raceRemoteHead !== head) {
           return { status: 1, stdout: "", stderr: "rejected (non-fast-forward)" };
@@ -105,18 +104,13 @@ function finalizeWith(
           };
         }
         if (args.includes("rev-parse")) return { status: 0, stdout: `${localHead}\n`, stderr: "" };
-        if (args.includes("diff")) {
-          const changedFiles = localHeadChanges.changedFiles
-            || Array.from({ length: localHeadChanges.changedFileCount || 0 }, (_value, index) => `file-${index}.ts`);
-          return { status: 0, stdout: `${changedFiles.join("\0")}${changedFiles.length ? "\0" : ""}`, stderr: "" };
-        }
         return { status: 0, stdout: "", stderr: "" };
       },
     },
   );
 }
 
-function finalizeWithLowAmbientRenameLimit() {
+function finalizeVerifiedRename() {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-repair-renames-"));
   const branch = "agent/issue-243";
   const git = (args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
@@ -125,18 +119,17 @@ function finalizeWithLowAmbientRenameLimit() {
     git(["checkout", "--quiet", "-b", branch]);
     git(["config", "user.email", "test@example.com"]);
     git(["config", "user.name", "Test"]);
-    for (let index = 1; index <= 3; index += 1) {
+    for (let index = 1; index <= 29; index += 1) {
       fs.writeFileSync(path.join(repo, `old-${index}.txt`), "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n");
     }
     git(["add", "."]);
     git(["commit", "--quiet", "-m", "base"]);
     const expectedHead = git(["rev-parse", "HEAD"]);
-    for (let index = 1; index <= 3; index += 1) {
+    for (let index = 1; index <= 29; index += 1) {
       git(["mv", `old-${index}.txt`, `new-${index}.txt`]);
       fs.appendFileSync(path.join(repo, `new-${index}.txt`), `changed-${index}\n`);
     }
     git(["commit", "--quiet", "-am", "candidate"]);
-    git(["config", "diff.renameLimit", "1"]);
 
     return finalizeReviewRepair(
       {
@@ -154,7 +147,6 @@ function finalizeWithLowAmbientRenameLimit() {
         resultFile: "/state/result.json",
       },
       {
-        readRepairFindingCount: () => 1,
         assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
         run: (args: string[]) => {
           if (args[0] === "node" || args.includes("push")) return { status: 0, stdout: "", stderr: "" };
@@ -186,7 +178,6 @@ function finalizeWhileDisabled() {
         resultFile: "/state/result.json",
       },
       {
-        readRepairFindingCount: () => findings.length,
         assertEnabled: () => { throw new Error("deadloop is disabled for this repository"); },
         run: (args: string[]) => {
           commands.push(args);
@@ -339,12 +330,12 @@ describe("automatic PR review repair", () => {
     expect(prompt()).not.toContain("--finding-count");
   });
 
-  it("qualifies configured checks as limited to repairs within the size limit", () => {
-    expect(prompt()).toContain("for repairs within the size limit, it runs configured checks");
+  it("requires configured checks for every repair", () => {
+    expect(prompt()).toContain("it runs configured checks, immediately re-checks the PR head");
   });
 
-  it("gives an oversized repair an exact blocked promise shape", () => {
-    expect(prompt()).toContain('result={reason:"repair_size_limit_exceeded",explanation:"the changed-file count and finalizer limit",recovery:"have a human inspect and complete the repair"}, and evidence={}');
+  it("does not describe a quantitative repair-size limit", () => {
+    expect(prompt()).not.toMatch(/changed-file count|size limit|line-count limit/);
   });
 
   it("forbids direct pushes from the repair worker", () => {
@@ -355,26 +346,26 @@ describe("automatic PR review repair", () => {
     expect(prompt()).toContain('result={outcome:"stale_head",outputRevision:"<finalizer currentRemoteHeadOid>"}');
   });
 
-  it.each(sizeLimitCases)("applies repair size policy: $name", (fixture: any) => {
-    expect(decideRepairSize(fixture.changedFileCount, fixture.findingCount).action).toBe(fixture.expectedAction);
+  it("pushes a verified rename spanning 29 files", () => {
+    expect(finalizeVerifiedRename().action).toBe("pushed");
   });
 
-  it("does not push a repair that exceeds the size limit", () => {
-    const commands: string[][] = [];
-    const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { changedFileCount: 6 });
+  it("keeps historical repair markers with finding counts readable", () => {
+    const marker = renderRepairMarker(head, reviewResultFingerprint(findings)).replace(" -->", " findings=4 -->");
 
-    expect({ action: result.action, pushed: commands.some((command) => command.includes("push")) }).toEqual({ action: "blocked", pushed: false });
+    expect(repairAttempts([{ body: marker }])[0].findingCount).toBe(4);
   });
 
-  it("counts a whitespace-only filename without trimming NUL-delimited git output", () => {
-    const commands: string[][] = [];
-    const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { changedFiles: [" ", "a", "b", "c", "d", "e"] });
-
-    expect(result.action).toBe("blocked");
+  it("prevents push when required verification fails", () => {
+    expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { checkFailure: true })).toThrow("checks failed");
   });
 
-  it("overrides a low ambient rename limit when counting changed files", () => {
-    expect(finalizeWithLowAmbientRenameLimit().size.changedFileCount).toBe(3);
+  it("prevents push from a dirty repair worktree", () => {
+    expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { dirty: true })).toThrow("repair worktree is dirty before checks");
+  });
+
+  it("prevents push when the candidate does not contain the selected head", () => {
+    expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { missingAncestor: true })).toThrow("repair branch does not contain the expected PR head");
   });
 
   it("stops a stale repair without authorizing push", () => {

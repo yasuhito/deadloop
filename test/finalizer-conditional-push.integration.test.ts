@@ -88,7 +88,6 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
   };
   const ops = {
     run,
-    readRepairFindingCount: () => 1,
     assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
   };
   const result = finalizer === "repair"

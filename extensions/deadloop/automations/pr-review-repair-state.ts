@@ -39,9 +39,8 @@ function repairAttemptKey(headOid: string, reviewFingerprint: string): string {
     .slice(0, 20);
 }
 
-function renderRepairMarker(headOid: string, reviewFingerprint: string, findingCount?: number): string {
-  const count = findingCount === undefined ? "" : ` findings=${findingCount}`;
-  return `<!-- deadloop:review-repair-attempt key=${repairAttemptKey(headOid, reviewFingerprint)} head=${headOid.toLowerCase()} review=${reviewFingerprint.toLowerCase()}${count} -->`;
+function renderRepairMarker(headOid: string, reviewFingerprint: string): string {
+  return `<!-- deadloop:review-repair-attempt key=${repairAttemptKey(headOid, reviewFingerprint)} head=${headOid.toLowerCase()} review=${reviewFingerprint.toLowerCase()} -->`;
 }
 
 function repairAttempts(comments: JsonObject[], authorLogin?: string): JsonObject[] {
