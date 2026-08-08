@@ -102,6 +102,37 @@ function paginated(runner: CommandRunner, repository: string, endpoint: string, 
   return values as JsonObject[];
 }
 
+function paginatedCommits(runner: CommandRunner, repository: string, pullRequestNumber: number): JsonObject[] {
+  const [owner, name, extra] = repository.split("/");
+  if (!owner || !name || extra) throw new IncompletePrHistoryObservationError("commits", "repository must be owner/name");
+  const query = `query($owner:String!,$name:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){commits(first:100,after:$endCursor){nodes{commit{oid}}pageInfo{hasNextPage endCursor}}}}}`;
+  let pages: unknown;
+  try {
+    pages = runner.runJson([
+      "gh", "api", "graphql", "--paginate", "--slurp",
+      "-f", `query=${query}`, "-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `number=${pullRequestNumber}`,
+    ]);
+  } catch (error) {
+    throw new IncompletePrHistoryObservationError("commits", error instanceof Error ? error.message : String(error));
+  }
+  if (!Array.isArray(pages) || pages.length === 0) {
+    throw new IncompletePrHistoryObservationError("commits", "GraphQL pagination returned no pages");
+  }
+  const commits: JsonObject[] = [];
+  for (const page of pages as JsonObject[]) {
+    const connection = page?.data?.repository?.pullRequest?.commits;
+    if (!connection || !Array.isArray(connection.nodes) || !connection.pageInfo) {
+      throw new IncompletePrHistoryObservationError("commits", "GraphQL page is missing its commits connection");
+    }
+    for (const node of connection.nodes) commits.push({ sha: text(node?.commit?.oid) });
+  }
+  const last = (pages as JsonObject[]).at(-1)?.data?.repository?.pullRequest?.commits?.pageInfo;
+  if (last?.hasNextPage !== false) {
+    throw new IncompletePrHistoryObservationError("commits", "GraphQL pagination ended before the final page");
+  }
+  return commits;
+}
+
 function sorted(values: JsonObject[]): JsonObject[] {
   return [...values].sort((left, right) => identity(left).localeCompare(identity(right), "en", { numeric: true }));
 }
@@ -126,7 +157,7 @@ function observePrHistory(repository: string, pullRequestNumber: number, runner:
   const base = text(pull?.base?.sha);
   if (!head || !base) throw new IncompletePrHistoryObservationError("pullRequest", "head or base revision is missing");
 
-  const commits = paginated(runner, repository, `pulls/${pullRequestNumber}/commits`, "commits").map((commit) => {
+  const commits = paginatedCommits(runner, repository, pullRequestNumber).map((commit) => {
     const sha = text(commit.sha);
     if (!sha) throw new IncompletePrHistoryObservationError("commits", "a commit SHA is missing");
     return { sha };

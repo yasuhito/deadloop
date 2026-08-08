@@ -19,16 +19,16 @@ function fixtureRunner(overrides: Record<string, unknown> = {}) {
     base: { ref: "main", sha: "b".repeat(40) },
   };
   const collections: Record<string, unknown> = {
-    commits: apiPages([{ sha: "a".repeat(40) }]),
+    commits: [{ data: { repository: { pullRequest: { commits: { nodes: [{ commit: { oid: "a".repeat(40) } }], pageInfo: { hasNextPage: false, endCursor: null } } } } } }],
     "issues-comments": apiPages([{ id: 1, body: "comment", user: { login: "alice" }, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }]),
     reviews: apiPages([{ id: 2, body: "review", user: { login: "bob" }, state: "COMMENTED", commit_id: "a".repeat(40), submitted_at: "2026-01-01T00:00:00Z" }]),
     "review-comments": apiPages([{ id: 3, body: "inline", user: { login: "carol" }, commit_id: "a".repeat(40), path: "src/a.ts", line: 4, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }]),
   };
   return {
     runJson(args: string[]) {
-      const endpoint = args.at(-1) || "";
+      const endpoint = args.find((argument) => argument.startsWith("repos/")) || "";
+      if (args.includes("graphql")) return overrides.commits ?? collections.commits;
       if (endpoint === "repos/owner/repo/pulls/12") return { ...pull, ...overrides.pull as object };
-      if (endpoint.includes("/commits")) return overrides.commits ?? collections.commits;
       if (endpoint.includes("/issues/12/comments")) return overrides.comments ?? collections["issues-comments"];
       if (endpoint.includes("/reviews")) return overrides.reviews ?? collections.reviews;
       if (endpoint.includes("/comments")) return overrides.inlineComments ?? collections["review-comments"];

@@ -524,6 +524,17 @@ function dispatch(args: JsonObject): DriverResult {
   const historyFile = hasAttemptRecord
     ? path.join(path.dirname(String(args.attemptRecord)), "pr-review-history.json")
     : "";
+  const acceptedHistoryFile = historyFile ? path.join(path.dirname(historyFile), "pr-review-history-accepted.json") : "";
+  const historyRequired = Boolean(attemptRecord && (() => {
+    try { return fs.readFileSync(attemptRecord.promptFile, "utf8").includes("Complete PR history revision:"); }
+    catch { return false; }
+  })());
+  if (historyRequired && !fs.existsSync(historyFile)) {
+    return driverResult("error", `PR #${prNumber} attempt history observation is missing`, {
+      driverAction: "incomplete_review_history",
+      reason: "missing_attempt_history_observation",
+    });
+  }
   if (historyFile && fs.existsSync(historyFile)) {
     const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
     if (freshness.stale) {
@@ -584,7 +595,7 @@ function dispatch(args: JsonObject): DriverResult {
         renderApprovedReviewComment(commentInput), persistenceMarker, attemptRecord?.attemptId);
       if (persistedBody) guardedGithub.commentPr(env.githubRepo, prNumber, persistedBody);
     });
-    if (historyFile) {
+    if (historyFile && fs.existsSync(historyFile)) {
       const expectedHistory = readPrHistoryObservation(historyFile);
       const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
       const advancement = advancePrHistoryAfterDeterministicComment(expectedHistory, afterPersistence, persistedBody);
@@ -595,11 +606,19 @@ function dispatch(args: JsonObject): DriverResult {
           historyComparison: freshness.comparison || advancement.comparison,
         });
       }
-      writePrHistoryObservation(path.join(path.dirname(historyFile), "pr-review-history-accepted.json"), advancement.observation);
+      writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
     }
     return driverResult("done", `PR #${prNumber} review completed without actionable findings`, { driverAction: "review_approved" });
   }
   if (outcome === "human_required") {
+    if (historyFile && fs.existsSync(historyFile)) {
+      const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+      if (freshness.stale) {
+        return driverResult("done", `PR #${prNumber} review history changed; released the active claim for a fresh review`, {
+          driverAction: "review_stale_history", historyComparison: freshness.comparison,
+        });
+      }
+    }
     if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
@@ -644,6 +663,15 @@ function dispatch(args: JsonObject): DriverResult {
     return driverResult("done", `PR #${prNumber} repair worktree does not match its current head; marked blocked`, { driverAction: "review_repair_worktree_mismatch", comment });
   }
 
+  if (historyFile && fs.existsSync(historyFile)) {
+    const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+    if (freshness.stale) {
+      return driverResult("done", `PR #${prNumber} review history changed before repair selection; released the active claim`, {
+        driverAction: "review_stale_history", historyComparison: freshness.comparison,
+      });
+    }
+  }
+
   const automationLogin = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim();
   if (!automationLogin) throw new Error("authenticated GitHub identity is unavailable");
   const selection = selectRepairAttempt(refreshedPr.comments || [], expectedHead, findings, automationLogin);
@@ -680,6 +708,16 @@ function dispatch(args: JsonObject): DriverResult {
             revalidate: () => {
               const livePr = readLivePr(env.githubRepo, prNumber);
               assertSameLaunchTarget(refreshedPr, livePr, "pr");
+              const recoveryHistoryFile = fs.existsSync(acceptedHistoryFile)
+                ? acceptedHistoryFile
+                : fs.existsSync(historyFile) ? historyFile : "";
+              if (recoveryHistoryFile) {
+                const recoveryHistory = readPrHistoryObservation(recoveryHistoryFile);
+                const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+                if (comparePrHistoryObservations(recoveryHistory, currentHistory).kind !== "unchanged") {
+                  throw new StaleLaunchError(`PR #${prNumber} review history changed before repair recovery`);
+                }
+              }
               const labels = labelNames(livePr.labels);
               const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
               if (liveSelection.cumulativeLimitExceeded) {
@@ -693,6 +731,15 @@ function dispatch(args: JsonObject): DriverResult {
           },
         );
       } catch (error) {
+        if (isStaleLaunchError(error) && error instanceof Error && error.message.includes("review history")) {
+          const recoveryHistoryFile = fs.existsSync(acceptedHistoryFile)
+            ? acceptedHistoryFile
+            : fs.existsSync(historyFile) ? historyFile : "";
+          const freshness = releaseStaleReviewHistory(prNumber, env, recoveryHistoryFile);
+          return driverResult("done", `PR #${prNumber} review history changed before repair recovery; released the active claim`, {
+            driverAction: "review_stale_history", historyComparison: freshness.comparison,
+          });
+        }
         if (!(error instanceof Error) || error.message !== "cumulative_repair_limit_exceeded_before_recovery") throw error;
         const latestPr = readLivePr(env.githubRepo, prNumber);
         const comment = applyHumanBlock(
@@ -788,13 +835,26 @@ function dispatch(args: JsonObject): DriverResult {
   );
 
   if (hasAttemptRecord) {
+    let persistedBody = "";
     withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
-      const body = persistedReviewBody(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome,
+      persistedBody = persistedReviewBody(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome,
         renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }),
         persistenceMarker, attemptRecord?.attemptId);
-      if (body) guardedGithub.commentPr(env.githubRepo, prNumber, body);
+      if (persistedBody) guardedGithub.commentPr(env.githubRepo, prNumber, persistedBody);
       guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
     });
+    if (historyFile && fs.existsSync(historyFile)) {
+      const expectedHistory = readPrHistoryObservation(historyFile);
+      const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+      const advancement = advancePrHistoryAfterDeterministicComment(expectedHistory, afterPersistence, persistedBody);
+      if (advancement.kind !== "accepted") {
+        const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+        return driverResult("done", `PR #${prNumber} review history changed during repair dispatch; released the active claim`, {
+          driverAction: "review_stale_history", historyComparison: freshness.comparison || advancement.comparison,
+        });
+      }
+      writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
+    }
     const closed = commandRunner.runJson([
       "node", path.join(env.automationDir, "complete-attempt-workspace.ts"),
       "--attempt-record", String(args.attemptRecord),
@@ -837,6 +897,13 @@ function dispatch(args: JsonObject): DriverResult {
         revalidate: () => {
           const livePr = readLivePr(env.githubRepo, prNumber);
           assertSameLaunchTarget(refreshedPr, livePr, "pr");
+          if (acceptedHistoryFile && fs.existsSync(acceptedHistoryFile)) {
+            const acceptedHistory = readPrHistoryObservation(acceptedHistoryFile);
+            const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+            if (comparePrHistoryObservations(acceptedHistory, currentHistory).kind !== "unchanged") {
+              throw new StaleLaunchError(`PR #${prNumber} review history changed before repair launch`);
+            }
+          }
           const labels = labelNames(livePr.labels);
           if (!labels.includes(env.reviewLabel) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)) {
             throw new StaleLaunchError(`PR #${prNumber} is no longer eligible for repair`);
@@ -862,6 +929,12 @@ function dispatch(args: JsonObject): DriverResult {
     );
   } catch (error) {
     if (isStaleLaunchError(error)) {
+      if (error instanceof Error && error.message.includes("review history") && acceptedHistoryFile) {
+        const freshness = releaseStaleReviewHistory(prNumber, env, acceptedHistoryFile);
+        return driverResult("done", `PR #${prNumber} review history changed before repair launch; released the active claim`, {
+          driverAction: "review_stale_history", historyComparison: freshness.comparison,
+        });
+      }
       return driverResult("done", `PR #${prNumber} changed before repair launch; left workflow state untouched`, { driverAction: "review_repair_launch_stale" });
     }
     if (error instanceof Error && error.message.includes("deadloop is disabled")) throw error;

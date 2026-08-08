@@ -120,12 +120,12 @@ if (args[0] === "pr" && args[1] === "list") {
 } else if (args[0] === "api") {
   const endpoint = args.find((arg) => arg.startsWith("repos/"));
   const pr = JSON.parse(fs.readFileSync(process.env.GH_TEST_PR_STATE, "utf8"))[0];
-  if (args.includes("Accept: application/vnd.github.diff")) {
+  if (args.includes("graphql")) {
+    process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:pr.headRefOid}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
+  } else if (args.includes("Accept: application/vnd.github.diff")) {
     process.stdout.write("diff --git a/file b/file\\n");
   } else if (endpoint === "repos/owner/repo/pulls/44") {
     process.stdout.write(JSON.stringify({number:44,state:"open",head:{ref:pr.headRefName,sha:pr.headRefOid},base:{ref:"main",sha:"b".repeat(40)}}));
-  } else if (endpoint.includes("/commits")) {
-    process.stdout.write(JSON.stringify([[{sha:pr.headRefOid}]]));
   } else {
     process.stdout.write(JSON.stringify([[]]));
   }

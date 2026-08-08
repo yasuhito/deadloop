@@ -63,6 +63,7 @@ function runMerge(options: {
           : configured;
       },
       validateReviewPromise: () => options.review || approvedReview,
+      assertReviewHistoryFresh: () => {},
       run: (args: string[]) => {
         commands.push(args);
         if (args[2] === "view") {
