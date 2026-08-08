@@ -23,12 +23,17 @@ function runMerge(options: {
   enabled?: { firstEnableAutoMerge: boolean; firstStartPending: boolean; autoMergeAcknowledged: boolean };
   pr?: Record<string, unknown>;
   review?: typeof approvedReview;
+  verificationError?: string;
+  verificationChangesAfterPrRead?: boolean;
+  onMerge?: () => void;
 } = {}) {
   const commands: string[][] = [];
   let lockHeld = false;
   let configObservedInsideLock = false;
   let mutationObservedInsideLock = false;
   let autoMergeChecks = 0;
+  let verificationChecks = 0;
+  let prRead = false;
   const action = mergeReviewedPr(
     {
       projectRepo: "/repo",
@@ -63,11 +68,20 @@ function runMerge(options: {
           : configured;
       },
       validateReviewPromise: () => options.review || approvedReview,
+      assertReviewVerification: () => {
+        verificationChecks += 1;
+        if (options.verificationError) throw new Error(options.verificationError);
+        if (options.verificationChangesAfterPrRead && prRead && verificationChecks > 1) {
+          throw new Error("required verification policy changed");
+        }
+      },
       run: (args: string[]) => {
         commands.push(args);
         if (args[2] === "view") {
+          prRead = true;
           return { status: 0, stdout: JSON.stringify(options.pr || eligiblePr), stderr: "" };
         }
+        options.onMerge?.();
         mutationObservedInsideLock = lockHeld;
         const status = options.mergeStatus ?? 0;
         return { status, stdout: "", stderr: status ? "head commit changed" : "" };
@@ -101,6 +115,16 @@ describe("reviewed PR merge", () => {
     expect(() => runMerge({ autoMergeEnabled: [true, false] })).toThrow("autoMerge is not currently enabled");
   });
 
+  it("does not merge when required-verification policy changes during the final PR read", () => {
+    let merges = 0;
+    try {
+      runMerge({ verificationChangesAfterPrRead: true, onMerge: () => { merges += 1; } });
+    } catch {
+      // The changed policy must stop the guarded merge.
+    }
+    expect(merges).toBe(0);
+  });
+
   it("rejects auto-merge during the first safe start", () => {
     expect(() => runMerge({ enabled: { firstEnableAutoMerge: true, firstStartPending: true, autoMergeAcknowledged: false } })).toThrow("first safe start");
   });
@@ -115,6 +139,10 @@ describe("reviewed PR merge", () => {
 
   it("fails closed without a validated reviewer approval", () => {
     expect(() => runMerge({ review: { status: "none" } as typeof approvedReview })).toThrow("reviewer approval");
+  });
+
+  it("fails closed when current-head required verification is missing", () => {
+    expect(() => runMerge({ verificationError: "required verification passed record is missing" })).toThrow("record is missing");
   });
 
   it("fails closed when reviewer approval targets another head", () => {

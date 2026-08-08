@@ -18,7 +18,7 @@ const {
   runProjectCheck,
 } = require("../../../src/project-check.ts");
 
-type Args = { attemptRecord: string; projectId: string; projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; worktree: string; quarantineRoot: string };
+type Args = { attemptRecord: string; projectId: string; projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; worktree: string; quarantineRoot: string; role: "worker" | "reviewer" };
 function parseArgs(argv: string[]): Args {
   const values: Record<string, string> = {};
   for (let index = 0; index < argv.length; index += 2) {
@@ -29,7 +29,9 @@ function parseArgs(argv: string[]): Args {
   for (const field of ["attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "enabledAt", "worktree", "quarantineRoot"])  if (!values[field]) throw new Error(`--${field} is required`);
   const enabledAt = Number(values.enabledAt);
   if (!Number.isFinite(enabledAt)) throw new Error("--enabled-at is required");
-  return { ...values, enabledAt } as Args;
+  const role = values.role || "worker";
+  if (role !== "worker" && role !== "reviewer") throw new Error("--role must be worker or reviewer");
+  return { ...values, enabledAt, role } as Args;
 }
 function gitText(worktree: string, args: string[]): string {
   const result = require("node:child_process").spawnSync("git", ["-C", worktree, ...args], { encoding: "utf8" });
@@ -101,10 +103,12 @@ async function run(
   if (path.resolve(args.worktree) !== confinement.worktreePath) throw new Error("--worktree does not match the attempt worktree");
   const report = JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8"));
   validateCompletionReportBinding(attempt, report);
-  if (attempt.role !== "worker" || report.status !== "complete") throw new Error("complete Worker report is required");
+  const role = args.role || "worker";
+  if (attempt.role !== role || report.role !== role || report.status !== "complete") throw new Error(`complete ${role} report is required`);
   const enabled = enabledResolver({ repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt });
   const contract = assertCurrentWorkerContract(attempt, args.projectRepo, process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"), enabled.githubRepositoryId);
-  const outputRevision = report.result.outputRevision;
+  const outputRevision = role === "worker" ? report.result.outputRevision : report.result.reviewedHead;
+  if (role === "reviewer" && report.result.outcome !== "approved") throw new Error("required verification runs only for reviewer approval");
   assertCleanOutput(args.worktree, outputRevision);
   const recordFile = workerRequiredVerificationPath(args.attemptRecord);
   // Attempt-local files are Worker-writable, so they cannot authenticate host execution.

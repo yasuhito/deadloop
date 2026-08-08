@@ -34,6 +34,13 @@ const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
+const {
+  assertCurrentWorkerContract,
+  assertReviewApprovalAuthorized,
+  readRequiredVerificationRecord,
+  workerRequiredVerificationPath,
+} = require("../../../src/worker-required-verification-runtime.cjs");
+const { assertLocallyEnabled } = require("../../../src/enabled-operation.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 import type { RunnerAdapter } from "../../../src/runner";
@@ -457,6 +464,24 @@ function launchRepair(
   }
 }
 
+function persistAuthorizedApproval<T extends unknown[]>(
+  withMutation: (callback: (...args: T) => void) => void,
+  authorize: () => void,
+  persist: (...args: T) => void,
+): unknown {
+  let authorizationError: unknown;
+  withMutation((...callbackArgs) => {
+    try {
+      authorize();
+    } catch (error) {
+      authorizationError = error;
+      return;
+    }
+    persist(...callbackArgs);
+  });
+  return authorizationError;
+}
+
 function persistedReviewBody(
   comments: JsonObject[],
   head: string,
@@ -529,6 +554,7 @@ function dispatch(args: JsonObject): DriverResult {
     reason: promise.reason || "",
     summary: promise.summary || "",
     findings,
+    additionalValidations: Array.isArray(promise.checks) ? promise.checks : [],
     reviewFingerprint,
     blockedLabel: env.blockedLabel,
   };
@@ -537,11 +563,50 @@ function dispatch(args: JsonObject): DriverResult {
     if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
-    withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
-      const body = persistedReviewBody(livePr.comments || [], expectedHead, reviewFingerprint, outcome,
-        renderApprovedReviewComment(commentInput), persistenceMarker, attemptRecord?.attemptId);
-      if (body) guardedGithub.commentPr(env.githubRepo, prNumber, body);
-    });
+    const authorizationError = persistAuthorizedApproval(
+      (callback: (guardedGithub: ReturnType<typeof createGithubOperations>, livePr: JsonObject) => void) =>
+        withRevalidatedPrMutation(prNumber, env, pr, callback),
+      () => {
+        if (!attemptRecord || !rawReport) throw new Error("bound reviewer attempt is missing");
+        const enabled = assertLocallyEnabled({ repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt });
+        const contract = assertCurrentWorkerContract(
+          attemptRecord,
+          env.repoPath,
+          process.env.DEADLOOP_CONFIG || path.join(env.stateDir, "projects.json"),
+          enabled.githubRepositoryId,
+        );
+        assertReviewApprovalAuthorized(
+          attemptRecord,
+          rawReport,
+          readRequiredVerificationRecord(workerRequiredVerificationPath(String(args.attemptRecord))),
+          contract,
+        );
+      },
+      (guardedGithub: ReturnType<typeof createGithubOperations>, livePr: JsonObject) => {
+        const body = persistedReviewBody(livePr.comments || [], expectedHead, reviewFingerprint, outcome,
+          renderApprovedReviewComment(commentInput), persistenceMarker, attemptRecord?.attemptId);
+        if (body) guardedGithub.commentPr(env.githubRepo, prNumber, body);
+      },
+    );
+    if (authorizationError) {
+      const explanation = publicText(authorizationError instanceof Error ? authorizationError.message : String(authorizationError), "required verification evidence is missing or invalid");
+      const marker = `<!-- deadloop:review-verification-blocked head=${expectedHead} -->`;
+      let comment = "Required-verification stop comment already exists.";
+      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
+        if (!(livePr.comments || []).some((item: JsonObject) => String(item.body || "").includes(marker))) {
+          comment = `## Review approval stopped\n\n- Reviewed commit: \`${expectedHead}\`\n- Required verification: ${explanation}\n- The review result was retained, but this head was not approved for handoff or merge.\n\n## Recovery steps\nRun the fixed required verification for this exact head and retry approval processing.\n\n${marker}`;
+          guardedGithub.commentPr(env.githubRepo, prNumber, comment);
+        }
+        const labels = labelNames(livePr.labels);
+        if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
+          guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+        }
+      });
+      return driverResult("done", `PR #${prNumber} approval stopped by required verification`, {
+        driverAction: "review_verification_blocked",
+        comment,
+      });
+    }
     return driverResult("done", `PR #${prNumber} review completed without actionable findings`, { driverAction: "review_approved" });
   }
   if (outcome === "human_required") {
@@ -880,4 +945,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { dispatch, envConfig, launchRepair, parseArgs, readLivePr, recordRepairLaunchGithubClaim, repairWorkerPrompt };
+module.exports = { dispatch, envConfig, launchRepair, parseArgs, persistAuthorizedApproval, readLivePr, recordRepairLaunchGithubClaim, repairWorkerPrompt };

@@ -26,6 +26,7 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
+const { requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 import type { RunnerAdapter } from "../../../src/runner";
@@ -61,6 +62,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
       source.DEADLOOP_STATE_DIR ||
       path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
+    requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION || "",
     reviewerAgent: source.DEADLOOP_REVIEWER_AGENT || "pi",
     reviewerModel: source.DEADLOOP_REVIEWER_MODEL || "",
     branchUpdateAgent: source.DEADLOOP_WORKER_AGENT || "pi",
@@ -121,7 +123,7 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
 }
 
 type DriverLaunchInput = {
-  worktree: { mode: "open"; branch: string };
+  worktree: { mode: "open"; branch: string; baseBranch?: string };
   repoPath: string;
   automationDir: string;
   stateDir: string;
@@ -138,6 +140,7 @@ type DriverLaunchInput = {
   inputRevision: { head: string; base?: string };
   intendedWorktreePath: string;
   autoMergePolicy?: boolean;
+  requiredVerification?: JsonObject;
   renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
 };
 
@@ -231,7 +234,7 @@ Promise report:
 - Before stopping, write JSON to the promise file: \`${promiseFile.replace(/`/g, "\\`")}\`.
 - Every report must include this exact V1 identity: ${reportBase}.
 - Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
-- If no actionable defect remains, write a V1 report with a three-sentence summary, status="complete", result={outcome:"approved",reviewedHead:"${String(pr.headRefOid || "")}",findings:[]}, and evidence={reviewed:["diff and configured checks"]}.
+- If no actionable defect remains, write a V1 report with a three-sentence summary, status="complete", result={outcome:"approved",reviewedHead:"${String(pr.headRefOid || "")}",findings:[]}, and evidence={reviewed:["diff and configured checks"],validations:["optional additional validation and result"]}. The host independently runs required verification; validations are display-only additional evidence.
 - If actionable defects exist, include a three-sentence summary and use result={outcome:"changes_requested",reviewedHead:"${String(pr.headRefOid || "")}",findings:[{title:"concise defect",body:"bounded required correction and evidence",path:"optional/repo/path",line:1,severity:"blocker|major|minor"}]} with non-empty evidence.reviewed.
 - Use outcome=human_required only when a product/spec/safety decision cannot be repaired within the PR. Include a three-sentence summary and write result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:[]}, and evidence={reviewed:["decision boundary and supporting evidence"]}.
 - For blocked reports include a three-sentence summary, result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
@@ -472,6 +475,21 @@ function launchBranchUpdate(
   return { updaterName: plan.updaterName, headRefName: branch, retryKey: key, ...launch, ...(fixture && !operations?.agentLaunchOps ? { simulated: true } : {}) };
 }
 
+function reviewerRequiredVerificationContract(env: ReturnType<typeof envConfig>, targetHead: string) {
+  if (env.requiredVerification) {
+    let contract: JsonObject;
+    try { contract = JSON.parse(env.requiredVerification); }
+    catch { throw new Error("DEADLOOP_REQUIRED_VERIFICATION must be valid JSON"); }
+    requiredVerificationBinding(contract, targetHead);
+    if (contract.repository !== env.githubRepo) throw new Error("required verification contract repository does not match the review repository");
+    return contract;
+  }
+  if (process.env.NODE_ENV === "test" || process.env.DEADLOOP_TEST_ADAPTER === "1") {
+    return { repository: env.githubRepo, command: env.checkCommand, source: { kind: "local", location: "fixture" }, baseRevision: targetHead };
+  }
+  throw new Error("DEADLOOP_REQUIRED_VERIFICATION is required before reviewer launch");
+}
+
 function prReviewerLaunchPlan(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -485,7 +503,7 @@ function prReviewerLaunchPlan(
     reviewerName,
     headRefName,
     input: {
-      worktree: { mode: "open", branch: headRefName },
+      worktree: { mode: "open", branch: headRefName, baseBranch: env.baseBranch },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
       stateDir: env.stateDir,
@@ -501,6 +519,7 @@ function prReviewerLaunchPlan(
       autoMergePolicy: env.autoMerge,
       target: { kind: "pull-request", number },
       inputRevision: { head: String(pr.headRefOid || "") },
+      requiredVerification: reviewerRequiredVerificationContract(env, String(pr.headRefOid || "")),
       intendedWorktreePath: path.join(env.worktreeRoot, headRefName.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath, uuid),
@@ -823,6 +842,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     projectId: env.projectId,
     repoPath: env.repoPath,
     worktreeRoot: env.worktreeRoot,
+    worktreePath: String(launch.worktreePath || ""),
     githubRepo: env.githubRepo,
     stateDir: env.stateDir,
     enabledAt: env.enabledAt,

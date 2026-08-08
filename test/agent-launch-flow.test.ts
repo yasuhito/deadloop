@@ -14,7 +14,7 @@ function input(root: string, role: "worker" | "reviewer" = "worker") {
   return {
     worktree: role === "worker"
       ? { mode: "create" as const, branch: "agent/issue-1", baseBranch: "origin/main" }
-      : { mode: "open" as const, branch: "feature/review" },
+      : { mode: "open" as const, branch: "feature/review", baseBranch: "origin/release" },
     repoPath: "/repo",
     automationDir: "/automation",
     stateDir: root,
@@ -29,12 +29,12 @@ function input(root: string, role: "worker" | "reviewer" = "worker") {
     role,
     target: { kind: role === "worker" ? "issue" as const : "pull-request" as const, number },
     inputRevision: { head: "a".repeat(40) },
-    ...(role === "worker" ? { requiredVerification: {
+    requiredVerification: {
       repository: "owner/repo",
       command: "npm test",
       source: { kind: "repo_policy" as const, location: "deadloop.json" },
       baseRevision: "a".repeat(40),
-    } } : {}),
+    },
     intendedWorktreePath: role === "worker" ? "/wt/worker" : "/wt/review",
     resolveWorktreeHead: role === "worker",
     renderPrompt: ({ promiseFile, worktreeHead }: { promiseFile: string; worktreeHead?: string }) =>
@@ -84,6 +84,22 @@ describe("0.7.5 エージェント起動フロー", () => {
     try {
       const prepared = prepareAgentLaunchFlow(input(root), operations(root, "worker", []));
       expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).requiredVerification.command).toBe("npm test");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("最初の外部副作用より前に Reviewer の必須検証契約を固定する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const prepared = prepareAgentLaunchFlow(input(root, "reviewer"), operations(root, "reviewer", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).requiredVerification.command).toBe("npm test");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("Reviewer の必須検証契約に設定済み基準ブランチを固定する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const prepared = prepareAgentLaunchFlow(input(root, "reviewer"), operations(root, "reviewer", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).baseBranch).toBe("origin/release");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

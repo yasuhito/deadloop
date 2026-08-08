@@ -138,7 +138,9 @@ function validV1Report(promise: PromiseValidation): string | undefined {
     if (promise.result.outcome === "changes_requested" && promise.result.findings.some((finding: PromiseValidation) => !VALID_FINDING_SEVERITIES.has(finding.severity))) {
       return "changes_requested_requires_finding_severity";
     }
-    return validStringList(promise.evidence.reviewed) ? undefined : "reviewer_requires_evidence";
+    if (!validStringList(promise.evidence.reviewed)) return "reviewer_requires_evidence";
+    return promise.evidence.validations === undefined || validStringList(promise.evidence.validations)
+      ? undefined : "reviewer_validations_must_be_a_string_list";
   }
   if (promise.role === "review-repair") {
     if (!["repair_pushed", "stale_head"].includes(promise.result.outcome)) return "invalid_review_repair_outcome";

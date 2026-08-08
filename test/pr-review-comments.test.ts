@@ -61,6 +61,15 @@ Exactly one bounded automatic repair will now start and will change only the fin
     ).toContain("The reviewed head is approved. The configured handoff or merge safety checks can continue.");
   });
 
+  it("labels agent validations as additional non-authoritative evidence", () => {
+    expect(renderApprovedReviewComment({
+      headOid: "a".repeat(40),
+      summary: "No actionable defects were found.",
+      reviewFingerprint: "1".repeat(20),
+      additionalValidations: ["npm run extra passed"],
+    })).toContain("informational and do not replace deadloop's required verification record");
+  });
+
   it("renders human-required recovery guidance", () => {
     expect(
       renderHumanRequiredComment({

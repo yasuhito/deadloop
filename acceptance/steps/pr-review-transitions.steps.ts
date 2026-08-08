@@ -110,6 +110,7 @@ When("deadloop completes approval processing for the current pull request", func
             findings: [],
           },
         }),
+        assertReviewVerification: () => {},
         run: (args: string[]) => {
           commands.push(args);
           if (args[0] === "gh" && args[1] === "pr" && args[2] === "view") {
