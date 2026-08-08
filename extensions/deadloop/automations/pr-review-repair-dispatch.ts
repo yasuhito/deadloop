@@ -34,6 +34,13 @@ const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
+const {
+  advancePrHistoryAfterDeterministicComment,
+  comparePrHistoryObservations,
+  observePrHistory,
+  readPrHistoryObservation,
+  writePrHistoryObservation,
+} = require("../../../src/pr-review-history.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 import type { RunnerAdapter } from "../../../src/runner";
@@ -169,6 +176,25 @@ function withRevalidatedPrMutation(
     assertSameLaunchTarget(expectedPr, livePr, "pr");
     mutation(createGithubOperations(commandRunner, recheck), livePr);
   });
+}
+
+function releaseStaleReviewHistory(
+  prNumber: string,
+  env: ReturnType<typeof envConfig>,
+  historyFile: string,
+): { stale: boolean; comparison?: JsonObject } {
+  const expected = readPrHistoryObservation(historyFile);
+  let comparison: JsonObject | undefined;
+  let stale = false;
+  withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+    const current = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+    comparison = comparePrHistoryObservations(expected, current);
+    if (comparison.kind !== "stale") return;
+    const guardedGithub = createGithubOperations(commandRunner, recheck);
+    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.reviewLabel });
+    stale = true;
+  });
+  return { stale, comparison };
 }
 
 function applyHumanBlock(
@@ -495,6 +521,20 @@ function dispatch(args: JsonObject): DriverResult {
   const expectedHead = String(args.expectedHead).toLowerCase();
   const branch = String(args.branch);
   const pr = readLivePr(env.githubRepo, prNumber);
+  const historyFile = hasAttemptRecord
+    ? path.join(path.dirname(String(args.attemptRecord)), "pr-review-history.json")
+    : "";
+  if (historyFile && fs.existsSync(historyFile)) {
+    const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+    if (freshness.stale) {
+      return driverResult("done", `PR #${prNumber} review history changed; released the active claim for a fresh review`, {
+        driverAction: "review_stale_history",
+        historyComparison: freshness.comparison,
+        labelsPreserved: [env.reviewLabel],
+        labelsRemoved: [env.reviewingLabel],
+      });
+    }
+  }
 
   if (String(pr.state || "").toUpperCase() !== "OPEN" || Boolean(pr.isCrossRepository) || String(pr.headRefName || "") !== branch) {
     const comment = applyHumanBlock(prNumber, env, pr, "the selected PR is no longer a safe same-repository branch target", promise.summary);
@@ -538,11 +578,25 @@ function dispatch(args: JsonObject): DriverResult {
     if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
+    let persistedBody = "";
     withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
-      const body = persistedReviewBody(livePr.comments || [], expectedHead, reviewFingerprint, outcome,
+      persistedBody = persistedReviewBody(livePr.comments || [], expectedHead, reviewFingerprint, outcome,
         renderApprovedReviewComment(commentInput), persistenceMarker, attemptRecord?.attemptId);
-      if (body) guardedGithub.commentPr(env.githubRepo, prNumber, body);
+      if (persistedBody) guardedGithub.commentPr(env.githubRepo, prNumber, persistedBody);
     });
+    if (historyFile) {
+      const expectedHistory = readPrHistoryObservation(historyFile);
+      const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+      const advancement = advancePrHistoryAfterDeterministicComment(expectedHistory, afterPersistence, persistedBody);
+      if (advancement.kind !== "accepted") {
+        const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+        return driverResult("done", `PR #${prNumber} review history changed during result persistence; released the active claim`, {
+          driverAction: "review_stale_history",
+          historyComparison: freshness.comparison || advancement.comparison,
+        });
+      }
+      writePrHistoryObservation(path.join(path.dirname(historyFile), "pr-review-history-accepted.json"), advancement.observation);
+    }
     return driverResult("done", `PR #${prNumber} review completed without actionable findings`, { driverAction: "review_approved" });
   }
   if (outcome === "human_required") {
