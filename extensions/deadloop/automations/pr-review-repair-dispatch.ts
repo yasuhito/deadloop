@@ -590,11 +590,26 @@ function dispatch(args: JsonObject): DriverResult {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
     let persistedBody = "";
-    withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
-      persistedBody = persistedReviewBody(livePr.comments || [], expectedHead, reviewFingerprint, outcome,
-        renderApprovedReviewComment(commentInput), persistenceMarker, attemptRecord?.attemptId);
-      if (persistedBody) guardedGithub.commentPr(env.githubRepo, prNumber, persistedBody);
-    });
+    try {
+      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
+        if (historyFile && fs.existsSync(historyFile)) {
+          const expectedHistory = readPrHistoryObservation(historyFile);
+          const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+          if (comparePrHistoryObservations(expectedHistory, currentHistory).kind !== "unchanged") {
+            throw new StaleLaunchError(`PR #${prNumber} review history changed before result persistence`);
+          }
+        }
+        persistedBody = persistedReviewBody(livePr.comments || [], expectedHead, reviewFingerprint, outcome,
+          renderApprovedReviewComment(commentInput), persistenceMarker, attemptRecord?.attemptId);
+        if (persistedBody) guardedGithub.commentPr(env.githubRepo, prNumber, persistedBody);
+      });
+    } catch (error) {
+      if (!isStaleLaunchError(error)) throw error;
+      const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+      return driverResult("done", `PR #${prNumber} review history changed before result persistence; released the active claim`, {
+        driverAction: "review_stale_history", historyComparison: freshness.comparison,
+      });
+    }
     if (historyFile && fs.existsSync(historyFile)) {
       const expectedHistory = readPrHistoryObservation(historyFile);
       const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
@@ -623,16 +638,31 @@ function dispatch(args: JsonObject): DriverResult {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
     let comment = "Review result comment already exists.";
-    withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
-      if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, outcome)) {
-        comment = renderHumanRequiredComment(commentInput);
-        guardedGithub.commentPr(env.githubRepo, prNumber, comment);
-      }
-      const labels = labelNames(livePr.labels);
-      if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
-        guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
-      }
-    });
+    try {
+      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
+        if (historyFile && fs.existsSync(historyFile)) {
+          const expectedHistory = readPrHistoryObservation(historyFile);
+          const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+          if (comparePrHistoryObservations(expectedHistory, currentHistory).kind !== "unchanged") {
+            throw new StaleLaunchError(`PR #${prNumber} review history changed before human handoff`);
+          }
+        }
+        if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, outcome)) {
+          comment = renderHumanRequiredComment(commentInput);
+          guardedGithub.commentPr(env.githubRepo, prNumber, comment);
+        }
+        const labels = labelNames(livePr.labels);
+        if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
+          guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+        }
+      });
+    } catch (error) {
+      if (!isStaleLaunchError(error)) throw error;
+      const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+      return driverResult("done", `PR #${prNumber} review history changed before human handoff; released the active claim`, {
+        driverAction: "review_stale_history", historyComparison: freshness.comparison,
+      });
+    }
     return driverResult("done", `PR #${prNumber} review requires a human`, { driverAction: "review_human_blocked", comment });
   }
 
@@ -829,20 +859,30 @@ function dispatch(args: JsonObject): DriverResult {
     );
   }
 
-  const repairLaunchUuid = randomUUID();
-  const preparedRepair = launchRepair(
-    prNumber, branch, expectedHead, findings, selection.key, env, undefined, repairLaunchUuid, true,
-  );
-
   if (hasAttemptRecord) {
     let persistedBody = "";
-    withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
-      persistedBody = persistedReviewBody(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome,
-        renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }),
-        persistenceMarker, attemptRecord?.attemptId);
-      if (persistedBody) guardedGithub.commentPr(env.githubRepo, prNumber, persistedBody);
-      guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
-    });
+    try {
+      withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
+        if (historyFile && fs.existsSync(historyFile)) {
+          const expectedHistory = readPrHistoryObservation(historyFile);
+          const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+          if (comparePrHistoryObservations(expectedHistory, currentHistory).kind !== "unchanged") {
+            throw new StaleLaunchError(`PR #${prNumber} review history changed before repair result persistence`);
+          }
+        }
+        persistedBody = persistedReviewBody(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome,
+          renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }),
+          persistenceMarker, attemptRecord?.attemptId);
+        if (persistedBody) guardedGithub.commentPr(env.githubRepo, prNumber, persistedBody);
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
+      });
+    } catch (error) {
+      if (!isStaleLaunchError(error)) throw error;
+      const freshness = releaseStaleReviewHistory(prNumber, env, historyFile);
+      return driverResult("done", `PR #${prNumber} review history changed before repair result persistence; released the active claim`, {
+        driverAction: "review_stale_history", historyComparison: freshness.comparison,
+      });
+    }
     if (historyFile && fs.existsSync(historyFile)) {
       const expectedHistory = readPrHistoryObservation(historyFile);
       const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
@@ -873,6 +913,18 @@ function dispatch(args: JsonObject): DriverResult {
     if (closed?.driverAction !== "workspace_closed") throw new Error("reviewer workspace was not closed before repair launch");
   }
 
+  if (historyRequired && !fs.existsSync(acceptedHistoryFile)) {
+    return driverResult("error", `PR #${prNumber} accepted history observation is missing before repair launch`, {
+      driverAction: "incomplete_review_history",
+      reason: "missing_accepted_history_observation",
+    });
+  }
+
+  const repairLaunchUuid = randomUUID();
+  const preparedRepair = launchRepair(
+    prNumber, branch, expectedHead, findings, selection.key, env, undefined, repairLaunchUuid, true,
+  );
+
   let launch: JsonObject;
   try {
     launch = withEnabledDriverLaunch(
@@ -897,6 +949,9 @@ function dispatch(args: JsonObject): DriverResult {
         revalidate: () => {
           const livePr = readLivePr(env.githubRepo, prNumber);
           assertSameLaunchTarget(refreshedPr, livePr, "pr");
+          if (historyRequired && !fs.existsSync(acceptedHistoryFile)) {
+            throw new Error(`PR #${prNumber} accepted history observation is missing before repair launch`);
+          }
           if (acceptedHistoryFile && fs.existsSync(acceptedHistoryFile)) {
             const acceptedHistory = readPrHistoryObservation(acceptedHistoryFile);
             const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
