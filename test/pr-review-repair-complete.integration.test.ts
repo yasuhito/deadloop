@@ -275,6 +275,16 @@ describe("review repair deterministic completion", () => {
     expect(result.output.driverAction).toBe("repair_human_blocked");
   });
 
+  it("requeues the review request when bounded repair requires human recovery", () => {
+    const result = runCompletion({
+      promise: { status: "blocked", reason: "check_failed", summary: "checks stopped" },
+      receipt: "{",
+      liveHead: oldHead,
+    });
+
+    expect(result.actions).toContain("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review --add-label agent:blocked");
+  });
+
   it("does not post repair success for stale_head", () => {
     const result = runCompletion({
       promise: { status: "complete", reason: "stale_head", summary: "head changed" },

@@ -20,6 +20,7 @@ function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> 
       DEADLOOP_REVIEWER_AGENT: "pi",
       DEADLOOP_REVIEWER_MODEL: "",
       DEADLOOP_AUTO_MERGE: "0",
+      DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
       DEADLOOP_NOW: "2026-07-08T00:00:00Z",
       ...extraEnv,
     },
@@ -31,8 +32,14 @@ function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> 
 }
 
 describe("PR reviewer deterministic driver", () => {
-  it("authorizes the authenticated login when no automationLogins override is configured", () => {
-    expect(resolveAuthorizedAutomationLogins([], "Deadloop-Bot")).toEqual(["deadloop-bot"]);
+  it("authorizes no login when automationLogins is not configured", () => {
+    expect(resolveAuthorizedAutomationLogins([])).toEqual([]);
+  });
+
+  it("fails closed when automationLogins is not configured", () => {
+    expect(runDriverFixture("external-review-request.json", {
+      DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "",
+    }).driverAction).toBe("configuration_error");
   });
 
   it("persists reviewer monitor input as a generation-bound handoff", () => {

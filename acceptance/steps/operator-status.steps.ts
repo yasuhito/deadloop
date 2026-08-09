@@ -57,6 +57,7 @@ function runDriverFixture(target: StoppedTarget): string {
       DEADLOOP_REVIEWER_AGENT: "pi",
       DEADLOOP_REVIEWER_MODEL: "",
       DEADLOOP_AUTO_MERGE: "0",
+      DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
       DEADLOOP_NOW: "2026-07-08T00:00:00Z",
     },
   });

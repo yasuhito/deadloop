@@ -61,8 +61,8 @@ function githubOperations(beforeMutation?: () => void) {
   return createGithubOperations(commandRunner, beforeMutation);
 }
 
-function resolveAuthorizedAutomationLogins(configured: string[], authenticatedLogin: string): string[] {
-  return configured.length === 0 ? [authenticatedLogin.toLowerCase()] : configured;
+function resolveAuthorizedAutomationLogins(configured: string[]): string[] {
+  return configured;
 }
 
 function envConfig(source: NodeJS.ProcessEnv = process.env) {
@@ -903,7 +903,7 @@ function drive(fixturePath: string | undefined): DriverResult {
   if (!githubRepositoryId) {
     return driverResult("error", "immutable GitHub repository identity is unavailable", { driverAction: "configuration_error" });
   }
-  const authorizedAutomationLogins = resolveAuthorizedAutomationLogins(configuredEnv.authorizedAutomationLogins, automationLogin);
+  const authorizedAutomationLogins = resolveAuthorizedAutomationLogins(configuredEnv.authorizedAutomationLogins);
   if (!authorizedAutomationLogins.includes(automationLogin.toLowerCase())) {
     return driverResult("error", "authenticated GitHub identity is not listed in automationLogins", { driverAction: "configuration_error" });
   }

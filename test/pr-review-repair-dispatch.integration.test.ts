@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
+const { blockedClaimMove } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
 const trustedCumulativeComments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
   ...comment,
@@ -802,6 +803,18 @@ process.stdout.write(JSON.stringify(args[0] === "repo"
     );
 
     expect(result.output.driverAction).toBe("review_repair_ambiguous_worktree");
+  });
+
+  it("requeues the active claim when review requires a human", () => {
+    expect(blockedClaimMove({
+      inProgressLabel: "agent:in-progress",
+      reviewingLabel: "agent:reviewing",
+      reviewLabel: "agent:review",
+      blockedLabel: "agent:blocked",
+    })).toEqual({
+      remove: ["agent:in-progress", "agent:reviewing"],
+      add: ["agent:review", "agent:blocked"],
+    });
   });
 
   it("stops the remaining human-block mutation when disable begins after the comment", () => {

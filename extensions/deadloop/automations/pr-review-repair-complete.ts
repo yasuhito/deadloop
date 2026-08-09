@@ -194,7 +194,8 @@ function completion(args: JsonObject): DriverResult {
     const stopMarker = `<!-- deadloop:review-repair-stop key=${String(args.attemptKey).toLowerCase()} -->`;
     if (comments.some((comment) => String(comment?.body || "").includes(stopMarker))) {
       github.movePrLabels(String(args.githubRepo), String(args.pr), {
-        remove: String(args.reviewingLabel), add: String(args.blockedLabel),
+        remove: [String(args.inProgressLabel), String(args.reviewingLabel)],
+        add: [String(args.reviewLabel), String(args.blockedLabel)],
       });
       return driverResult("done", `PR #${args.pr} repair stop was already posted`, { driverAction: "repair_stop_duplicate" });
     }
@@ -203,7 +204,8 @@ function completion(args: JsonObject): DriverResult {
     const comment = recoveryComment(args, reason, summary);
     github.commentPr(String(args.githubRepo), String(args.pr), comment);
     github.movePrLabels(String(args.githubRepo), String(args.pr), {
-      remove: String(args.reviewingLabel), add: String(args.blockedLabel),
+      remove: [String(args.inProgressLabel), String(args.reviewingLabel)],
+      add: [String(args.reviewLabel), String(args.blockedLabel)],
     });
     return driverResult("done", `PR #${args.pr} repair requires human recovery`, { driverAction: "repair_human_blocked", comment });
   });

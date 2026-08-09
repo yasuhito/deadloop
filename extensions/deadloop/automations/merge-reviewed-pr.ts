@@ -17,8 +17,7 @@ type MergeArgs = {
   pr: string;
   expectedHead: string;
   reviewPromise: string;
-  reviewLabel: string;
-  reviewingLabel: string;
+  inProgressLabel: string;
   blockedLabel: string;
   reviewClaim?: Record<string, unknown>;
 };
@@ -175,8 +174,8 @@ function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
   if (pr.mergeable !== "MERGEABLE") throw new Error("PR mergeability is not confirmed; automatic merge stopped");
   if (pr.mergeStateStatus !== "CLEAN") throw new Error("PR merge state is not clean; automatic merge stopped");
   assertChecksPassed(pr.statusCheckRollup);
-  if (!labels.has(args.reviewLabel) || !labels.has(args.reviewingLabel)) {
-    throw new Error("required review labels are no longer present; automatic merge stopped");
+  if (!labels.has(args.inProgressLabel)) {
+    throw new Error("required in-progress claim label is no longer present; automatic merge stopped");
   }
   if (labels.has(args.blockedLabel)) throw new Error("PR is blocked; automatic merge stopped");
 }
@@ -221,8 +220,8 @@ function parseArgs(argv: string[]): MergeArgs {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  if (!values.projectRepo || !values.githubRepo || !values.stateDir || !values.pr || !values.expectedHead || !values.reviewPromise || !values.reviewLabel || !values.reviewingLabel || !values.blockedLabel || !Number.isFinite(enabledAt)) {
-    throw new Error("--project-repo, --github-repo, --state-dir, --enabled-at, --pr, --expected-head, --review-promise, --review-label, --reviewing-label, and --blocked-label are required");
+  if (!values.projectRepo || !values.githubRepo || !values.stateDir || !values.pr || !values.expectedHead || !values.reviewPromise || !values.inProgressLabel || !values.blockedLabel || !Number.isFinite(enabledAt)) {
+    throw new Error("--project-repo, --github-repo, --state-dir, --enabled-at, --pr, --expected-head, --review-promise, --in-progress-label, and --blocked-label are required");
   }
   return {
     projectRepo: values.projectRepo,
@@ -232,8 +231,7 @@ function parseArgs(argv: string[]): MergeArgs {
     pr: values.pr,
     expectedHead: values.expectedHead,
     reviewPromise: values.reviewPromise,
-    reviewLabel: values.reviewLabel,
-    reviewingLabel: values.reviewingLabel,
+    inProgressLabel: values.inProgressLabel,
     blockedLabel: values.blockedLabel,
     ...(values.reviewClaim ? { reviewClaim: JSON.parse(values.reviewClaim) } : {}),
   };

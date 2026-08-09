@@ -11,7 +11,7 @@ const eligiblePr = {
   mergeable: "MERGEABLE",
   mergeStateStatus: "CLEAN",
   statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
-  labels: [{ name: "agent:review" }, { name: "agent:reviewing" }],
+  labels: [{ name: "agent:in-progress" }],
 };
 const approvedReview = {
   status: "complete",
@@ -40,8 +40,7 @@ function runMerge(options: {
       pr: "24",
       expectedHead,
       reviewPromise: "/state/reviewer-promise.json",
-      reviewLabel: "agent:review",
-      reviewingLabel: "agent:reviewing",
+      inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked",
       ...(options.reviewClaim ? { reviewClaim: {
         binding: { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" },
@@ -180,8 +179,8 @@ describe("reviewed PR merge", () => {
     expect(() => runMerge({ pr: { ...eligiblePr, statusCheckRollup: [{}] } })).toThrow("CI check state is unknown");
   });
 
-  it("fails closed when a required review label is removed", () => {
-    expect(() => runMerge({ pr: { ...eligiblePr, labels: [{ name: "agent:review" }] } })).toThrow("required review labels");
+  it("fails closed when the active in-progress claim is removed", () => {
+    expect(() => runMerge({ pr: { ...eligiblePr, labels: [] } })).toThrow("required in-progress claim label");
   });
 
   it("fails closed when the blocked label is added", () => {

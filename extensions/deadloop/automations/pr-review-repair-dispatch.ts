@@ -189,6 +189,13 @@ function withRevalidatedPrMutation(
   });
 }
 
+function blockedClaimMove(env: ReturnType<typeof envConfig>) {
+  return {
+    remove: [env.inProgressLabel, env.reviewingLabel],
+    add: [env.reviewLabel, env.blockedLabel],
+  };
+}
+
 function applyHumanBlock(
   prNumber: string,
   env: ReturnType<typeof envConfig>,
@@ -200,7 +207,7 @@ function applyHumanBlock(
   const comment = recoveryComment(prNumber, env, reason, summary, marker);
   withRevalidatedPrMutation(prNumber, env, expectedPr, (guardedGithub) => {
     guardedGithub.commentPr(env.githubRepo, prNumber, comment);
-    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+    guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
   });
   return comment;
 }
@@ -574,8 +581,9 @@ function dispatch(args: JsonObject): DriverResult {
         guardedGithub.commentPr(env.githubRepo, prNumber, comment);
       }
       const labels = labelNames(livePr.labels);
-      if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
-        guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+      if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
+        || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
       }
     });
     return driverResult("done", `PR #${prNumber} review requires a human`, { driverAction: "review_human_blocked", comment });
@@ -710,8 +718,9 @@ function dispatch(args: JsonObject): DriverResult {
       comment = applyHumanBlock(prNumber, env, refreshedPr, "the repair attempt was recorded but no confirmed worker launch exists", promise.summary, interruptionMarker);
     } else {
       const labels = labelNames(refreshedPr.labels);
-      if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
-        withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel }));
+      if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
+        || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
+        withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env)));
       }
     }
     return driverResult("done", `PR #${prNumber} repair dispatch was interrupted; marked blocked`, { driverAction: "review_repair_dispatch_interrupted", selection, comment });
@@ -729,8 +738,9 @@ function dispatch(args: JsonObject): DriverResult {
         guardedGithub.commentPr(env.githubRepo, prNumber, comment);
       }
       const labels = labelNames(livePr.labels);
-      if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
-        guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+      if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
+        || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
       }
     });
     const cumulativeLimitReached = selection.reason === "cumulative_repair_limit";
@@ -903,4 +913,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { dispatch, envConfig, launchRepair, parseArgs, readLivePr, recordRepairLaunchGithubClaim, repairWorkerPrompt };
+module.exports = { blockedClaimMove, dispatch, envConfig, launchRepair, parseArgs, readLivePr, recordRepairLaunchGithubClaim, repairWorkerPrompt };
