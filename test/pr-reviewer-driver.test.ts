@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const driverScript = "extensions/deadloop/automations/pr-reviewer-driver.ts";
+const { resolveAuthorizedAutomationLogins } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
 
 function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> = {}) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/pr-reviewer-driver", fixtureName)], {
@@ -30,6 +31,10 @@ function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> 
 }
 
 describe("PR reviewer deterministic driver", () => {
+  it("authorizes the authenticated login when no automationLogins override is configured", () => {
+    expect(resolveAuthorizedAutomationLogins([], "Deadloop-Bot")).toEqual(["deadloop-bot"]);
+  });
+
   it("persists reviewer monitor input as a generation-bound handoff", () => {
     expect(runDriverFixture("external-review-request.json").monitorHandoff.kind).toBe("reviewer");
   });

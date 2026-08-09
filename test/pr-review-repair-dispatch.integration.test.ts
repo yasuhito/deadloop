@@ -627,7 +627,7 @@ describe("review repair dispatch integration", () => {
     }).toEqual({
       action: "review_repair_monitor_request",
       dispatcherArgsForwarded: true,
-      labelsPreserved: ["custom:review", "custom:reviewing"],
+      labelsPreserved: ["agent:in-progress", "custom:reviewing"],
       managedDefaultHumanLabelWasIgnored: "workspace_closed",
       repairCheckout: true,
     });

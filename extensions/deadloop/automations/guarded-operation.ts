@@ -4,7 +4,7 @@
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
-const { validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const { parsePaginatedGithubJson, validateActiveReviewClaim } = require("./pr-review-claim.ts");
 
 const GUARDED_OPERATION_TIMEOUT_MS = MAX_GUARDED_OPERATION_MS;
 
@@ -93,13 +93,13 @@ function runGuarded(args: Args, spawn = spawnSync): number {
     (_enabled: unknown, recheck: () => void) => {
       if (args.reviewClaim) {
         const number = String((args.reviewClaim.binding as { targetNumber?: unknown })?.targetNumber || "");
-        const query = (queryArgs: string[]) => spawnSync("gh", queryArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GUARDED_OPERATION_TIMEOUT_MS });
+        const query = (queryArgs: string[]) => spawn("gh", queryArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GUARDED_OPERATION_TIMEOUT_MS });
         const pr = query(["pr", "view", number, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
-        const events = query(["api", `repos/${args.githubRepo}/issues/${number}/events`]);
-        const comments = query(["api", `repos/${args.githubRepo}/issues/${number}/comments`]);
+        const events = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${number}/events`]);
+        const comments = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${number}/comments`]);
         const headers = query(["api", "--include", `repos/${args.githubRepo}`]);
         if ([pr, events, comments, headers].some((result) => result.status !== 0)
-          || !validateActiveReviewClaim(JSON.parse(pr.stdout || "{}"), JSON.parse(events.stdout || "[]"), JSON.parse(comments.stdout || "[]"), headers.stdout, args.reviewClaim)) {
+          || !validateActiveReviewClaim(JSON.parse(pr.stdout || "{}"), parsePaginatedGithubJson(events.stdout), parsePaginatedGithubJson(comments.stdout), headers.stdout, args.reviewClaim)) {
           throw new Error("active review claim could not be reauthorized before GitHub mutation");
         }
       }

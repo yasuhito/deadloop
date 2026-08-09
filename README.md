@@ -150,7 +150,7 @@ See [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) for the safety contr
 
 When the built-in reviewer reports structured actionable findings, deadloop can start one bounded repair worker on the existing PR branch.
 
-Review labels remain in place during the repair. deadloop does not add a repair label.
+During repair, deadloop preserves the active `agent:in-progress` claim and adds only the compatibility `agent:reviewing` label. It does not create a new `agent:review` request generation until repair completion, and it does not add a repair-specific label.
 
 The worker receives only the findings.
 

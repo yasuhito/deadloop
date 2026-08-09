@@ -135,11 +135,60 @@ function validateActiveReviewClaim(
     serverNow,
     Number(contract.authoritySeconds),
   );
+  const winnerMarker = parseReviewClaim(winner?.body);
   const labels = new Set((pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
   const managed = labels.has(String(contract.inProgressLabel || "agent:in-progress"))
     || (labels.has(String(contract.reviewLabel || "agent:review")) && labels.has(String(contract.reviewingLabel || "agent:reviewing")));
   return managed && !labels.has(String(contract.blockedLabel || "agent:blocked"))
-    && serverCommentId(winner || {}) === String(contract.commentId || "");
+    && serverCommentId(winner || {}) === String(contract.commentId || "")
+    && winnerMarker?.owner === contract.binding?.owner;
+}
+
+function validateRepairAuthorityTransition(
+  pr: JsonObject,
+  events: JsonObject[],
+  comments: JsonObject[],
+  restHeaders: unknown,
+  contract: JsonObject,
+  transition: { originalHeadOid?: unknown; headOid?: unknown },
+): boolean {
+  const originalHead = String(transition.originalHeadOid || "").toLowerCase();
+  const repairedHead = String(transition.headOid || "").toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(originalHead) || !/^[0-9a-f]{40}$/.test(repairedHead)
+    || originalHead === repairedHead
+    || originalHead !== String(contract.binding?.revision || "").toLowerCase()
+    || repairedHead !== String(pr.headRefOid || "").toLowerCase()) return false;
+
+  const request = activeReviewRequest(events, String(contract.reviewLabel || "agent:review"));
+  const claimComment = comments.find((comment) => serverCommentId(comment) === String(contract.commentId || ""));
+  if (!request || !claimComment
+    || String(pr.state || "").toUpperCase() !== "OPEN"
+    || String(request.id || request.node_id || "") !== String(contract.binding?.requestEventId || "")) return false;
+  const serverNow = parseGithubRestDate(restHeaders, new Date(Math.max(eventTime(request), commentTime(claimComment))));
+  if (!serverNow) return false;
+  const winner = selectReviewClaimWinner(
+    comments,
+    contract.binding as ReviewClaimBinding,
+    Array.isArray(contract.authorizedLogins) ? contract.authorizedLogins : [],
+    serverNow,
+    Number(contract.authoritySeconds),
+  );
+  const marker = parseReviewClaim(winner?.body);
+  const labels = new Set((pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
+  return serverCommentId(winner || {}) === String(contract.commentId || "")
+    && marker?.owner === contract.binding?.owner
+    && labels.has(String(contract.inProgressLabel || "agent:in-progress"))
+    && labels.has(String(contract.reviewingLabel || "agent:reviewing"))
+    && !labels.has(String(contract.blockedLabel || "agent:blocked"));
+}
+
+function parsePaginatedGithubJson(stdout: unknown): JsonObject[] {
+  try {
+    const pages = JSON.parse(String(stdout || "[]"));
+    return Array.isArray(pages) ? pages.flat().filter((value) => value && typeof value === "object" && !Array.isArray(value)) : [];
+  } catch {
+    return [];
+  }
 }
 
 function selectReviewClaimWinner(
@@ -172,8 +221,10 @@ module.exports = {
   activeReviewRequest,
   parseGithubRestDate,
   parseReviewClaim,
+  parsePaginatedGithubJson,
   readGithubRestResponseHeaders,
   renderReviewClaimComment,
   selectReviewClaimWinner,
   validateActiveReviewClaim,
+  validateRepairAuthorityTransition,
 };

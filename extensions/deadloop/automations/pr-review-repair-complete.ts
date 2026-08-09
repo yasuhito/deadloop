@@ -13,7 +13,7 @@ const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
-const { readGithubRestResponseHeaders, validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const { readGithubRestResponseHeaders, validateActiveReviewClaim, validateRepairAuthorityTransition } = require("./pr-review-claim.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -25,7 +25,7 @@ function parseArgs(argv: string[]): JsonObject {
     if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs");
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
-  for (const name of ["promise", "attemptRecord", "projectId", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "reviewingLabel", "blockedLabel"]) {
+  for (const name of ["promise", "attemptRecord", "projectId", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "reviewingLabel", "inProgressLabel", "blockedLabel"]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
   return values;
@@ -138,7 +138,7 @@ function completion(args: JsonObject): DriverResult {
 
     const expectedLiveHead = receipt?.action === "pushed" ? receiptHead : expectedHead;
     const workflowActive =
-      labels.includes(String(args.reviewLabel))
+      labels.includes(String(args.inProgressLabel))
       && labels.includes(String(args.reviewingLabel))
       && !labels.includes(String(args.blockedLabel));
     if (!workflowActive || !expectedLiveHead || liveHead !== expectedLiveHead) {
@@ -151,21 +151,25 @@ function completion(args: JsonObject): DriverResult {
     const reauthorize = () => {
       if (!reviewClaim) return;
       const current = observation.getPr(String(args.githubRepo), String(args.pr));
-      if (String(current.headRefOid || "").toLowerCase() !== liveHead
-        || !validateActiveReviewClaim(
-          { ...current, headRefOid: reviewClaim.binding?.revision },
-          observation.listPrTimelineEvents(String(args.githubRepo), String(args.pr)),
-          observation.listPrComments(String(args.githubRepo), String(args.pr)),
-          readGithubRestResponseHeaders(runner, String(args.githubRepo)),
-          reviewClaim,
-        )) throw new Error("active review claim could not be reauthorized before repair completion mutation");
+      if (String(current.headRefOid || "").toLowerCase() !== liveHead) {
+        throw new Error("active review claim could not be reauthorized before repair completion mutation");
+      }
+      const events = observation.listPrTimelineEvents(String(args.githubRepo), String(args.pr));
+      const currentComments = observation.listPrComments(String(args.githubRepo), String(args.pr));
+      const headers = readGithubRestResponseHeaders(runner, String(args.githubRepo));
+      const authorized = liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
+        ? validateActiveReviewClaim(current, events, currentComments, headers, reviewClaim)
+        : successfulReceipt && validateRepairAuthorityTransition(current, events, currentComments, headers, reviewClaim, receipt || {});
+      if (!authorized) throw new Error("active review claim could not be reauthorized before repair completion mutation");
     };
     reauthorize();
     const github = createGithubOperations(runner, () => { recheck(); reauthorize(); });
 
     if (successfulReceipt) {
       if (repairResultCommentExists(comments, String(args.attemptKey), receiptHead, automationLogin)) {
-        github.movePrLabels(String(args.githubRepo), String(args.pr), { remove: String(args.reviewingLabel) });
+        github.movePrLabels(String(args.githubRepo), String(args.pr), {
+          remove: [String(args.inProgressLabel), String(args.reviewingLabel)], add: String(args.reviewLabel),
+        });
         return driverResult("done", `PR #${args.pr} repair result was already posted; re-review is pending`, { driverAction: "repair_result_duplicate" });
       }
       const marker = renderAttemptPersistenceMarker(
@@ -181,7 +185,9 @@ function completion(args: JsonObject): DriverResult {
         checks: receipt.checks,
       })}${marker ? `\n${marker}` : ""}`;
       github.commentPr(String(args.githubRepo), String(args.pr), comment);
-      github.movePrLabels(String(args.githubRepo), String(args.pr), { remove: String(args.reviewingLabel) });
+      github.movePrLabels(String(args.githubRepo), String(args.pr), {
+        remove: [String(args.inProgressLabel), String(args.reviewingLabel)], add: String(args.reviewLabel),
+      });
       return driverResult("done", `PR #${args.pr} repair result posted; re-review is pending`, { driverAction: "repair_result_posted", comment });
     }
 

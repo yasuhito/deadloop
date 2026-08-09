@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 const {
   activeReviewRequest,
   parseGithubRestDate,
+  parsePaginatedGithubJson,
   renderReviewClaimComment,
   selectReviewClaimWinner,
   validateActiveReviewClaim,
+  validateRepairAuthorityTransition,
 } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 
 const head = "a".repeat(40);
@@ -57,6 +59,10 @@ describe("PR review GitHub claim", () => {
     expect(selectReviewClaimWinner([claim({ body: renderReviewClaimComment(old) })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
   });
 
+  it("combines every GitHub REST page before claim authorization", () => {
+    expect(parsePaginatedGithubJson(JSON.stringify([[{ id: 1 }], [{ id: 2 }]]))).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
   it("uses the authenticated REST Date header as server time", () => {
     expect(parseGithubRestDate("HTTP/2 200\r\ndate: Mon, 20 Jul 2026 10:03:00 GMT\r\n", new Date("2026-07-20T10:02:00Z"))?.toISOString()).toBe("2026-07-20T10:03:00.000Z");
   });
@@ -91,6 +97,41 @@ describe("PR review GitHub claim", () => {
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:blocked" }] };
     const headers = "date: Mon, 20 Jul 2026 10:03:00 GMT";
     expect(validateActiveReviewClaim(pr, [request], [claim()], headers, contract)).toBe(false);
+  });
+
+  it("rejects an edited winning marker whose owner no longer matches the persisted claim", () => {
+    const editedBinding = { ...binding, owner: "host-b" };
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
+    const edited = claim({ body: renderReviewClaimComment(editedBinding) });
+
+    expect(validateActiveReviewClaim(pr, [request], [edited], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract)).toBe(false);
+  });
+
+  it("requires an explicit repair transition before an old-head claim can authorize a repaired head", () => {
+    const repairedHead = "b".repeat(40);
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }, { name: "agent:reviewing" }] };
+
+    expect(validateRepairAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
+      originalHeadOid: head, headOid: repairedHead,
+    })).toBe(true);
+  });
+
+  it("rejects an old-head claim as ordinary authority for a repaired head", () => {
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: "b".repeat(40), labels: [{ name: "agent:in-progress" }, { name: "agent:reviewing" }] };
+
+    expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract)).toBe(false);
   });
 
   it("does not let marker expiry extend authority", () => {

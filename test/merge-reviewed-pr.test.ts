@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 const { mergeReviewedPr } = require("../extensions/deadloop/automations/merge-reviewed-pr.ts");
+const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 
 const expectedHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const eligiblePr = {
@@ -23,6 +24,7 @@ function runMerge(options: {
   enabled?: { firstEnableAutoMerge: boolean; firstStartPending: boolean; autoMergeAcknowledged: boolean };
   pr?: Record<string, unknown>;
   review?: typeof approvedReview;
+  reviewClaim?: boolean;
 } = {}) {
   const commands: string[][] = [];
   let lockHeld = false;
@@ -41,6 +43,11 @@ function runMerge(options: {
       reviewLabel: "agent:review",
       reviewingLabel: "agent:reviewing",
       blockedLabel: "agent:blocked",
+      ...(options.reviewClaim ? { reviewClaim: {
+        binding: { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" },
+        commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      } } : {}),
     },
     {
       withLock: (_project: unknown, operation: (enabled: unknown) => number) => {
@@ -68,6 +75,14 @@ function runMerge(options: {
         if (args[2] === "view") {
           return { status: 0, stdout: JSON.stringify(options.pr || eligiblePr), stderr: "" };
         }
+        if (args.some((arg) => arg.endsWith("/events"))) {
+          return { status: 0, stdout: JSON.stringify([[], [{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
+        }
+        if (args.some((arg) => arg.endsWith("/comments"))) {
+          const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" };
+          return { status: 0, stdout: JSON.stringify([[], [{ id: 101, created_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }]]), stderr: "" };
+        }
+        if (args[1] === "api") return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
         mutationObservedInsideLock = lockHeld;
         const status = options.mergeStatus ?? 0;
         return { status, stdout: "", stderr: status ? "head commit changed" : "" };
@@ -83,6 +98,10 @@ describe("reviewed PR merge", () => {
       "gh", "pr", "merge", "24", "-R", "owner/repo",
       "--squash", "--delete-branch", "--match-head-commit", expectedHead,
     ]);
+  });
+
+  it("authorizes merge when the active claim is on a later REST page", () => {
+    expect(runMerge({ reviewClaim: true }).action).toBe(0);
   });
 
   it("revalidates current auto-merge configuration while holding the enablement lock", () => {

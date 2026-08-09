@@ -83,7 +83,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
 else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
-else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:review" }, { name: "agent:reviewing" }])},comments:${JSON.stringify(options.comments || [])}}));
+else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:in-progress" }, { name: "agent:reviewing" }])},comments:${JSON.stringify(options.comments || [])}}));
 else if (args[0] === "pr" && args[1] === "comment") fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
 else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.ACTIONS_FILE, args.join(" ") + "\\n");
 `,
@@ -123,6 +123,8 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
       "agent:review",
       "--reviewing-label",
       "agent:reviewing",
+      "--in-progress-label",
+      "agent:in-progress",
       "--blocked-label",
       "agent:blocked",
     ],
@@ -185,7 +187,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
 else if (args[0] === "api") process.stdout.write("deadloop-bot\\n");
-else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:"OPEN",headRefName:"agent/issue-24",headRefOid:"${newHead}",isCrossRepository:false,labels:[{name:"agent:review"},{name:"agent:reviewing"}],comments:JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"))}));
+else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:"OPEN",headRefName:"agent/issue-24",headRefOid:"${newHead}",isCrossRepository:false,labels:[{name:"agent:in-progress"},{name:"agent:reviewing"}],comments:JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"))}));
 else if (args[0] === "pr" && args[1] === "comment") {
   const comments = JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"));
   comments.push({body:args[args.indexOf("--body")+1],author:{login:"deadloop-bot"}});
@@ -199,7 +201,7 @@ else if (args[0] === "pr" && args[1] === "comment") {
     "--result", resultFile, "--contract", contractFile, "--project-repo", projectRepo, "--github-repo", "owner/repo", "--state-dir", stateDir,
     "--enabled-at", "1", "--pr", "24", "--branch", "agent/issue-24", "--expected-head", oldHead,
     "--attempt-key", key, "--review-label", "agent:review", "--reviewing-label", "agent:reviewing",
-    "--blocked-label", "agent:blocked",
+    "--in-progress-label", "agent:in-progress", "--blocked-label", "agent:blocked",
   ];
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir, COMMENTS_FILE: commentsFile };
   await Promise.all([0, 1].map(() => new Promise<void>((resolve, reject) => {
@@ -222,7 +224,7 @@ describe("review repair deterministic completion", () => {
       result: "/state/runs/one/finalizer-result.json", contract: "/state/runs/one/review-contract.json",
       projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: "1", pr: "24",
       branch: "agent/issue-24", expectedHead: oldHead, attemptKey: key, reviewLabel: "review",
-      reviewingLabel: "reviewing", blockedLabel: "blocked",
+      reviewingLabel: "reviewing", inProgressLabel: "in-progress", blockedLabel: "blocked",
     };
     const args = Object.entries(values).flatMap(([name, value]) => {
       const flag = `--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)}`;
@@ -260,7 +262,7 @@ describe("review repair deterministic completion", () => {
       receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
     });
 
-    expect(result.actions).toContain("--remove-label agent:reviewing");
+    expect(result.actions).toContain("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review");
   });
 
   it("turns a malformed finalizer receipt into recovery instead of an exception", () => {
@@ -357,7 +359,7 @@ describe("review repair deterministic completion", () => {
       comments: [{ body: `<!-- deadloop:review-repair-result key=${key} head=${newHead} -->`, author: { login: "deadloop-bot" } }],
     });
 
-    expect(result.actions).toContain("--remove-label agent:reviewing");
+    expect(result.actions).toContain("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review");
   });
 
   it("serializes concurrent completion retries to one success comment", async () => {

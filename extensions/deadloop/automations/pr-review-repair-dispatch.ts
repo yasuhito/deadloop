@@ -649,7 +649,7 @@ function dispatch(args: JsonObject): DriverResult {
               if (liveSelection.cumulativeLimitExceeded) {
                 throw new Error("cumulative_repair_limit_exceeded_before_recovery");
               }
-              if (!labels.includes(env.reviewLabel) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)
+              if ((!labels.includes(env.inProgressLabel) && !labels.includes(env.reviewLabel)) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)
                 || liveSelection.action !== "already_attempted" || liveSelection.key !== selection.key) {
                 throw new StaleLaunchError(`PR #${prNumber} interrupted repair is no longer resumable`);
               }
@@ -693,7 +693,7 @@ function dispatch(args: JsonObject): DriverResult {
         prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
         promiseFile: recoveredLaunch.promiseFile, attemptRecordFile: path.join(path.dirname(recoveredLaunch.promiseFile), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
         repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
-        reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, blockedLabel: env.blockedLabel,
+        reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
         reviewClaim: env.reviewClaim,
         attemptKey: selection.key,
       };
@@ -753,12 +753,13 @@ function dispatch(args: JsonObject): DriverResult {
   );
 
   if (hasAttemptRecord) {
+    const activeWorkflowLabel = labelNames(refreshedPr.labels).includes(env.inProgressLabel) ? env.inProgressLabel : env.reviewLabel;
     withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
       const body = persistedReviewBody(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome,
         renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }),
         persistenceMarker, attemptRecord?.attemptId);
       if (body) guardedGithub.commentPr(env.githubRepo, prNumber, body);
-      guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
+      guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: env.reviewingLabel });
     });
     const closed = commandRunner.runJson([
       "node", path.join(env.automationDir, "complete-attempt-workspace.ts"),
@@ -768,8 +769,9 @@ function dispatch(args: JsonObject): DriverResult {
       "--github-repo", env.githubRepo,
       "--state-dir", env.stateDir,
       "--enabled-at", String(env.enabledAt),
-      "--expected-label", env.reviewLabel,
+      "--expected-label", activeWorkflowLabel,
       "--expected-label", env.reviewingLabel,
+      "--managed-label", env.inProgressLabel,
       "--managed-label", env.reviewLabel,
       "--managed-label", env.reviewingLabel,
       "--managed-label", env.blockedLabel,
@@ -789,7 +791,7 @@ function dispatch(args: JsonObject): DriverResult {
         }
         const guardedGithub = createGithubOperations(commandRunner, recheck);
         guardedGithub.commentPr(env.githubRepo, prNumber, renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }));
-        guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: env.reviewingLabel });
       },
       (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck, repairLaunchUuid),
       {
@@ -803,7 +805,7 @@ function dispatch(args: JsonObject): DriverResult {
           const livePr = readLivePr(env.githubRepo, prNumber);
           assertSameLaunchTarget(refreshedPr, livePr, "pr");
           const labels = labelNames(livePr.labels);
-          if (!labels.includes(env.reviewLabel) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)) {
+          if ((!labels.includes(env.inProgressLabel) && !labels.includes(env.reviewLabel)) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)) {
             throw new StaleLaunchError(`PR #${prNumber} is no longer eligible for repair`);
           }
           const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
@@ -878,12 +880,12 @@ function dispatch(args: JsonObject): DriverResult {
     prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
     promiseFile: launch.promiseFile, attemptRecordFile: launch.attemptRecordFile || path.join(path.dirname(String(launch.promiseFile)), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
     repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
-    reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, blockedLabel: env.blockedLabel,
+    reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
     reviewClaim: env.reviewClaim,
     attemptKey: selection.key,
   };
   return driverResult("needs_llm", `Launched review-repair worker for PR #${prNumber}`, {
-    driverAction: "review_repair_monitor_request", selection, labelsPreserved: [env.reviewLabel, env.reviewingLabel], launch,
+    driverAction: "review_repair_monitor_request", selection, labelsPreserved: [env.inProgressLabel, env.reviewingLabel], launch,
     ...(launchEvidenceError ? { launchEvidenceError } : {}),
     monitorHandoff: { kind: "repair", input: monitorInput },
     prompt: renderRepairMonitorPrompt(monitorInput),

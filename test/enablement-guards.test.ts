@@ -15,6 +15,7 @@ const {
 } = require("../src/driver-enablement.cjs");
 const { acquireLockSync, reclaimStale } = require("../src/enablement-lock.cjs");
 const { GUARDED_OPERATION_TIMEOUT_MS, runGuarded } = require("../extensions/deadloop/automations/guarded-operation.ts");
+const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 const { assertWorkerHead, assertWorkerPushBinding, parseArgs: parseGuardedPushArgs, runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.ts");
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
@@ -290,6 +291,32 @@ describe("enablement mutation guards", () => {
     );
 
     expect(timeout).toBe(GUARDED_OPERATION_TIMEOUT_MS);
+  });
+
+  it("authorizes a guarded mutation when the active claim is on a later REST page", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const head = "a".repeat(40);
+    const binding = { repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a" };
+    const claim = { id: 101, created_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
+    const reviewClaim = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    let mutated = false;
+    runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, reviewClaim, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
+      (_command: string, args: string[]) => {
+        if (args[0] === "pr" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] }), stderr: "" };
+        if (args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[], [{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
+        if (args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[], [claim]]), stderr: "" };
+        if (args[0] === "api") return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
+        mutated = true;
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    );
+
+    expect(mutated).toBe(true);
   });
 
   it("rejects merge through the generic guarded operation", () => {

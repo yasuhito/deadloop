@@ -61,6 +61,10 @@ function githubOperations(beforeMutation?: () => void) {
   return createGithubOperations(commandRunner, beforeMutation);
 }
 
+function resolveAuthorizedAutomationLogins(configured: string[], authenticatedLogin: string): string[] {
+  return configured.length === 0 ? [authenticatedLogin.toLowerCase()] : configured;
+}
+
 function envConfig(source: NodeJS.ProcessEnv = process.env) {
   return {
     projectId: source.DEADLOOP_PROJECT_ID || "project",
@@ -899,9 +903,7 @@ function drive(fixturePath: string | undefined): DriverResult {
   if (!githubRepositoryId) {
     return driverResult("error", "immutable GitHub repository identity is unavailable", { driverAction: "configuration_error" });
   }
-  const authorizedAutomationLogins = fixture && configuredEnv.authorizedAutomationLogins.length === 0
-    ? [automationLogin.toLowerCase()]
-    : configuredEnv.authorizedAutomationLogins;
+  const authorizedAutomationLogins = resolveAuthorizedAutomationLogins(configuredEnv.authorizedAutomationLogins, automationLogin);
   if (!authorizedAutomationLogins.includes(automationLogin.toLowerCase())) {
     return driverResult("error", "authenticated GitHub identity is not listed in automationLogins", { driverAction: "configuration_error" });
   }
@@ -1150,4 +1152,5 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { claimReviewRequest, envConfig, launchBranchUpdate, launchPrReviewerFlow };
+module.exports = {
+  resolveAuthorizedAutomationLogins, claimReviewRequest, envConfig, launchBranchUpdate, launchPrReviewerFlow };
