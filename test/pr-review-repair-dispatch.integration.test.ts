@@ -15,9 +15,17 @@ const trustedCumulativeComments = cumulativeRepairFixture.comments.map((comment:
 }));
 
 const tempDirs: string[] = [];
+const activeReviewState = {
+  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  requestLabel: "agent:review",
+  requiredLabels: ["agent:in-progress"],
+};
 
 function reviewClaimEnvironment(head: string, targetNumber = 243, repository = "owner/repo") {
-  const binding = { repositoryId: "R_repo", repository, targetNumber, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a" };
+  const binding = {
+    repositoryId: "R_repo", repository, targetNumber, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
+    authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+  };
   return {
     DEADLOOP_REVIEW_CLAIM: JSON.stringify({
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
@@ -564,8 +572,17 @@ function runV1ChangesRequestedTwice(options: {
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
   }] }));
+  const baseReviewClaim = JSON.parse(reviewClaimEnvironment(head).DEADLOOP_REVIEW_CLAIM);
   const savedReviewClaim = {
-    ...JSON.parse(reviewClaimEnvironment(head).DEADLOOP_REVIEW_CLAIM),
+    ...baseReviewClaim,
+    binding: {
+      ...baseReviewClaim.binding,
+      activeState: {
+        managedLabels: [labels.review, labels.reviewing, "agent:implement", "agent:update-branch", "agent:in-progress", labels.blocked],
+        requestLabel: labels.review,
+        requiredLabels: ["agent:in-progress"],
+      },
+    },
     reviewLabel: labels.review,
     reviewingLabel: labels.reviewing,
     blockedLabel: labels.blocked,
@@ -614,7 +631,15 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
 `);
   const argv = ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attempt,
     "--pr", "243", "--expected-head", head, "--branch", "agent/issue-243"];
-  const env = { ...process.env, ...reviewClaimEnvironment(head), DEADLOOP_REVIEW_CLAIM: JSON.stringify(savedReviewClaim), PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
+  const env = {
+    ...process.env,
+    ...reviewClaimEnvironment(head),
+    DEADLOOP_REVIEW_CLAIM: JSON.stringify(savedReviewClaim),
+    TEST_REVIEW_CLAIM_COMMENT: JSON.stringify({
+      id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z",
+      user: { login: "deadloop-bot" }, body: renderReviewClaimComment(savedReviewClaim.binding),
+    }),
+    PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: repo, DEADLOOP_WORKTREE_ROOT: worktreeRoot,
     DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
     DEADLOOP_REVIEW_LABEL: labels.review, DEADLOOP_REVIEWING_LABEL: labels.reviewing,

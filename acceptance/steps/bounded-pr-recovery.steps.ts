@@ -16,7 +16,15 @@ const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const repairedHead = "cccccccccccccccccccccccccccccccccccccccc";
 const branch = "agent/issue-31";
 const findings = [{ title: "Lint contract failure", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
-const reviewClaimBinding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 31, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a" };
+const activeReviewState = {
+  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  requestLabel: "agent:review",
+  requiredLabels: ["agent:in-progress"],
+};
+const reviewClaimBinding = {
+  repositoryId: "R_repo", repository: "owner/repo", targetNumber: 31, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
+  authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+};
 const reviewClaim = {
   binding: reviewClaimBinding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
   reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",

@@ -12,6 +12,15 @@ describe("GitHub operations", () => {
     ]);
   });
 
+  it("observes immutable repository identity", () => {
+    const commands: string[][] = [];
+    const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), {}) });
+
+    github.getRepositoryIdentity("owner/repo");
+
+    expect(commands[0]).toEqual(["gh", "repo", "view", "owner/repo", "--json", "id,nameWithOwner"]);
+  });
+
   it("lists open issues", () => {
     const commands: string[][] = [];
     const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), []) });

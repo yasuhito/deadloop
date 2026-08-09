@@ -5,7 +5,13 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const driverScript = "extensions/deadloop/automations/pr-reviewer-driver.ts";
-const { assertTrustedReviewIdentity, blockUnverifiableClaim, claimReviewRequest, resolveAuthorizedAutomationLogins } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
+const {
+  assertTrustedReviewIdentity,
+  blockUnverifiableClaim,
+  claimReviewRequest,
+  reauthorizeClaimedReview,
+  resolveAuthorizedAutomationLogins,
+} = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
 
 function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> = {}) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/pr-reviewer-driver", fixtureName)], {
@@ -55,6 +61,7 @@ describe("PR reviewer deterministic driver", () => {
     const comments: Record<string, unknown>[] = [];
     let labelMutations = 0;
     const github = {
+      getRepositoryIdentity: () => ({ id: "R_repo", nameWithOwner: "owner/repo" }),
       listPrTimelineEvents: () => [request],
       createPrComment: (_repo: string, _number: number, body: string) => {
         const comment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body };
@@ -78,24 +85,172 @@ describe("PR reviewer deterministic driver", () => {
     expect(labelMutations).toBe(0);
   });
 
+  function missingRefetchedClaimEffects() {
+    const head = "a".repeat(40);
+    const pr = { number: 24, state: "OPEN", headRefName: "feature", headRefOid: head, labels: [{ name: "agent:review" }] };
+    let blockComments = 0;
+    let labelMutations = 0;
+    const github = {
+      getRepositoryIdentity: () => ({ id: "R_repo", nameWithOwner: "owner/repo" }),
+      getPr: () => pr,
+      listPrTimelineEvents: () => [{ id: "22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }],
+      createPrComment: (_repo: string, _number: number, body: string) => ({
+        id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body,
+      }),
+      listPrComments: () => [],
+      readRestResponseHeaders: () => "",
+      commentPr: () => { blockComments += 1; },
+      replacePrLabels: () => { labelMutations += 1; },
+    };
+    try {
+      claimReviewRequest(github, pr, {
+        githubRepositoryId: "R_repo", githubRepo: "owner/repo", claimOwner: "host-a",
+        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", implementLabel: "agent:implement",
+        inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", automationLogin: "deadloop-bot",
+        authorizedAutomationLogins: ["deadloop-bot"], reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
+      }, () => "deadloop-bot");
+    } catch {}
+    return { blockComments, labelMutations };
+  }
+
+  it("does not visibly block server time when the posted claim is absent from the refetch", () => {
+    expect(missingRefetchedClaimEffects().blockComments).toBe(0);
+  });
+
+  it("does not change labels when the posted claim is absent from the refetch", () => {
+    expect(missingRefetchedClaimEffects().labelMutations).toBe(0);
+  });
+
   it("does not consume a newer review generation added after the server-time block comment", () => {
     const head = "a".repeat(40);
     const pr = { number: 24, state: "OPEN", headRefName: "feature", headRefOid: head, labels: [{ name: "agent:review" }, { name: "customer:keep" }] };
     let commented = false;
     let labelMutations = 0;
+    const managedLabels = ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"];
+    const binding = {
+      repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "old",
+      role: "reviewer", revision: head, owner: "host-a", authority: { durationSeconds: 3600 },
+      activeState: { managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"] },
+    };
+    const claim = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress",
+      blockedLabel: "agent:blocked", managedLabels,
+    };
+    const comments = [{
+      id: 101, created_at: "2026-01-01T00:00:30Z", updated_at: "2026-01-01T00:00:30Z",
+      user: { login: "deadloop-bot" },
+      body: require("../extensions/deadloop/automations/pr-review-claim.ts").renderReviewClaimComment(binding),
+    }];
     const github = {
+      getRepositoryIdentity: () => ({ id: "R_repo", nameWithOwner: "owner/repo" }),
       getPr: () => pr,
       listPrTimelineEvents: () => [{ id: commented ? "new" : "old", event: "labeled", created_at: commented ? "2026-01-01T00:01:00Z" : "2026-01-01T00:00:00Z", label: { name: "agent:review" } }],
+      listPrComments: () => comments,
       commentPr: () => { commented = true; },
       replacePrLabels: () => { labelMutations += 1; },
     };
 
     blockUnverifiableClaim(github, pr, {
-      githubRepo: "owner/repo", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing",
+      githubRepo: "owner/repo", githubRepositoryId: "R_repo", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing",
       implementLabel: "agent:implement", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-    }, "server time unavailable", "old");
+    }, "server time unavailable", "old", claim);
 
     expect(labelMutations).toBe(0);
+  });
+
+  type ClaimMutation = (comments: Record<string, any>[], binding: Record<string, any>) => void;
+  const invalidClaimCases: Array<[string, ClaimMutation]> = [
+    ["deleted", (comments) => { comments.splice(0); }],
+    ["edited", (comments) => { comments[0].updated_at = "2026-07-20T10:02:00Z"; }],
+    ["schema invalid", (comments) => { comments[0].body = "<!-- deadloop:review-claim v1=e30 -->"; }],
+    ["binding mismatch", (comments, binding) => {
+      comments[0].body = require("../extensions/deadloop/automations/pr-review-claim.ts")
+        .renderReviewClaimComment({ ...binding, revision: "b".repeat(40) });
+    }],
+  ];
+
+  function reauthorizationScenario(mutate?: ClaimMutation, observedRepositoryId = "R_repo") {
+    const head = "a".repeat(40);
+    const managedLabels = ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"];
+    const binding = {
+      repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "event-22",
+      role: "reviewer", revision: head, owner: "host-a", authority: { durationSeconds: 3600 },
+      activeState: { managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"] },
+    };
+    const render = require("../extensions/deadloop/automations/pr-review-claim.ts").renderReviewClaimComment;
+    const comments: Record<string, any>[] = [{
+      id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z",
+      user: { login: "deadloop-bot" }, body: render(binding),
+    }];
+    const pr = { number: 24, state: "OPEN", headRefName: "feature", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
+    let reviewRequestMutations = 0;
+    const github = {
+      getRepositoryIdentity: () => ({ id: observedRepositoryId, nameWithOwner: "owner/repo" }),
+      getPr: () => pr,
+      listPrTimelineEvents: () => [{ id: "event-22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }],
+      listPrComments: () => comments,
+      readRestResponseHeaders: () => "",
+      commentPr: (_repo: string, _number: number, body: string) => comments.push({ body }),
+      replacePrLabels: (_repo: string, _number: number, labels: string[]) => { pr.labels = labels.map((name) => ({ name })); },
+      addPrReviewer: () => { reviewRequestMutations += 1; },
+    };
+    const claim = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress",
+      blockedLabel: "agent:blocked", managedLabels, labels: ["agent:in-progress"],
+    };
+    mutate?.(comments, binding);
+    const before = { comments: comments.length, labels: pr.labels.map(({ name }) => name), reviewRequests: reviewRequestMutations };
+    let error = "";
+    try {
+      reauthorizeClaimedReview(github, pr, {
+        githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot",
+        authorizedAutomationLogins: ["deadloop-bot"], reviewLabel: "agent:review", reviewingLabel: "agent:reviewing",
+        implementLabel: "agent:implement", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+        reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
+      }, claim, () => "deadloop-bot", { githubRepositoryId: "R_repo", githubRepo: "owner/repo" });
+    } catch (caught) { error = caught instanceof Error ? caught.message : String(caught); }
+    return {
+      before,
+      after: { comments: comments.length, labels: pr.labels.map(({ name }) => name), reviewRequests: reviewRequestMutations },
+      error,
+    };
+  }
+
+  it("rejects a claim when the fresh repository ID differs from enablement and configuration", () => {
+    expect(reauthorizationScenario(undefined, "R_other").error).toContain("repository identities do not match");
+  });
+
+  it.each(invalidClaimCases)("classifies a %s claim as immutable-claim loss", (_case, mutate) => {
+    expect(reauthorizationScenario(mutate).error).toBe("PR #24 no longer has the bound immutable review claim comment");
+  });
+
+  it.each(invalidClaimCases)("does not add a comment when the claim is %s", (_case, mutate) => {
+    const result = reauthorizationScenario(mutate);
+    expect(result.after.comments).toBe(result.before.comments);
+  });
+
+  it.each(invalidClaimCases)("does not change labels when the claim is %s", (_case, mutate) => {
+    const result = reauthorizationScenario(mutate);
+    expect(result.after.labels).toEqual(result.before.labels);
+  });
+
+  it.each(invalidClaimCases)("does not add review requests when the claim is %s", (_case, mutate) => {
+    const result = reauthorizationScenario(mutate);
+    expect(result.after.reviewRequests).toBe(result.before.reviewRequests);
+  });
+
+  it("adds one visible block comment when only server time is missing", () => {
+    expect(reauthorizationScenario().after.comments).toBe(2);
+  });
+
+  it("moves the fully matched claim to blocked when only server time is missing", () => {
+    expect(reauthorizationScenario().after.labels).toEqual(["agent:blocked"]);
+  });
+
+  it("does not add a review request while blocking missing server time", () => {
+    expect(reauthorizationScenario().after.reviewRequests).toBe(0);
   });
 
   it("persists reviewer monitor input as a generation-bound handoff", () => {

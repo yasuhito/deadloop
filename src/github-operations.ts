@@ -20,6 +20,10 @@ function labelArgs(move: LabelMove): string[] {
 
 function createGithubOperations(commandRunner: CommandRunner, beforeMutation: () => void = () => {}) {
   return {
+    getRepositoryIdentity(repo: string): JsonObject {
+      return commandRunner.runJson(["gh", "repo", "view", repo, "--json", "id,nameWithOwner"]);
+    },
+
     listOpenIssues(repo: string): JsonObject[] {
       return commandRunner.runJson([
         "gh",

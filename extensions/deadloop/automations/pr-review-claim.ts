@@ -4,6 +4,8 @@ const { canonicalAttemptLocation } = require("../../../src/attempt-project-confi
 const CLAIM_MARKER_RE = /<!--\s*deadloop:review-claim\s+v1=([A-Za-z0-9_-]+)\s*-->/g;
 
 const CLAIM_KEYS = [
+  "activeState",
+  "authority",
   "owner",
   "repository",
   "repositoryId",
@@ -14,8 +16,16 @@ const CLAIM_KEYS = [
   "targetKind",
   "targetNumber",
 ].sort();
+const AUTHORITY_KEYS = ["durationSeconds"];
+const ACTIVE_STATE_KEYS = ["managedLabels", "requestLabel", "requiredLabels"];
 
 type JsonObject = Record<string, any>;
+
+type ReviewClaimActiveState = {
+  managedLabels: string[];
+  requestLabel: string;
+  requiredLabels: string[];
+};
 
 type ReviewClaimBinding = {
   repositoryId: string;
@@ -25,6 +35,8 @@ type ReviewClaimBinding = {
   role: "reviewer";
   revision: string;
   owner: string;
+  authority: { durationSeconds: number };
+  activeState: ReviewClaimActiveState;
 };
 
 type LiveReviewTarget = {
@@ -32,15 +44,6 @@ type LiveReviewTarget = {
   repository: string;
   targetNumber: number;
 };
-
-const CANONICAL_PR_MANAGED_LABELS = [
-  "agent:review",
-  "agent:reviewing",
-  "agent:implement",
-  "agent:update-branch",
-  "agent:in-progress",
-  "agent:blocked",
-];
 
 function eventTime(event: JsonObject): number {
   return Date.parse(String(event.created_at || event.createdAt || ""));
@@ -59,7 +62,41 @@ function activeReviewRequest(events: JsonObject[], reviewLabel = "agent:review")
   return matching.at(-1) || null;
 }
 
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0
+    && value.every((item) => typeof item === "string" && item.length > 0)
+    && new Set(value).size === value.length;
+}
+
+function normalizedClaimAuthority(binding: ReviewClaimBinding): { durationSeconds: number } | null {
+  return binding.authority && typeof binding.authority === "object" && !Array.isArray(binding.authority)
+    && JSON.stringify(Object.keys(binding.authority).sort()) === JSON.stringify(AUTHORITY_KEYS)
+    && Number.isFinite(binding.authority.durationSeconds) && binding.authority.durationSeconds > 0
+    ? { durationSeconds: binding.authority.durationSeconds }
+    : null;
+}
+
+function normalizedActiveState(binding: ReviewClaimBinding): ReviewClaimActiveState | null {
+  if (binding.activeState && typeof binding.activeState === "object" && !Array.isArray(binding.activeState)
+    && JSON.stringify(Object.keys(binding.activeState).sort()) === JSON.stringify(ACTIVE_STATE_KEYS)
+    && stringArray(binding.activeState.managedLabels) && binding.activeState.managedLabels.length === 6
+    && typeof binding.activeState.requestLabel === "string" && binding.activeState.requestLabel.length > 0
+    && binding.activeState.managedLabels.includes(binding.activeState.requestLabel)
+    && stringArray(binding.activeState.requiredLabels) && binding.activeState.requiredLabels.length === 1
+    && binding.activeState.requiredLabels.every((label) => binding.activeState.managedLabels.includes(label))) {
+    return {
+      managedLabels: [...binding.activeState.managedLabels],
+      requestLabel: binding.activeState.requestLabel,
+      requiredLabels: [...binding.activeState.requiredLabels],
+    };
+  }
+  return null;
+}
+
 function claimPayload(binding: ReviewClaimBinding): JsonObject {
+  const authority = normalizedClaimAuthority(binding);
+  const activeState = normalizedActiveState(binding);
+  if (!authority || !activeState) throw new Error("review claim duration and active-state contracts must be explicit and valid");
   return {
     schemaVersion: 1,
     repositoryId: binding.repositoryId,
@@ -70,6 +107,8 @@ function claimPayload(binding: ReviewClaimBinding): JsonObject {
     role: binding.role,
     revision: binding.revision.toLowerCase(),
     owner: binding.owner,
+    authority,
+    activeState,
   };
 }
 
@@ -85,7 +124,16 @@ function parseReviewClaim(body: unknown): JsonObject | null {
   try {
     const value = JSON.parse(Buffer.from(matches[0][1], "base64url").toString("utf8"));
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(CLAIM_KEYS)) return null;
+    if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(CLAIM_KEYS)
+      || !value.authority || typeof value.authority !== "object" || Array.isArray(value.authority)
+      || JSON.stringify(Object.keys(value.authority).sort()) !== JSON.stringify(AUTHORITY_KEYS)
+      || !Number.isFinite(value.authority.durationSeconds) || value.authority.durationSeconds <= 0
+      || !value.activeState || typeof value.activeState !== "object" || Array.isArray(value.activeState)
+      || JSON.stringify(Object.keys(value.activeState).sort()) !== JSON.stringify(ACTIVE_STATE_KEYS)
+      || !stringArray(value.activeState.managedLabels) || value.activeState.managedLabels.length !== 6
+      || typeof value.activeState.requestLabel !== "string" || !value.activeState.managedLabels.includes(value.activeState.requestLabel)
+      || !stringArray(value.activeState.requiredLabels) || value.activeState.requiredLabels.length !== 1
+      || !value.activeState.requiredLabels.every((label: string) => value.activeState.managedLabels.includes(label))) return null;
     return value;
   } catch {
     return null;
@@ -114,7 +162,10 @@ function serverCommentId(comment: JsonObject): string {
 }
 
 function sameBinding(marker: JsonObject, expected: ReviewClaimBinding): boolean {
-  return marker.schemaVersion === 1
+  const authority = normalizedClaimAuthority(expected);
+  const activeState = normalizedActiveState(expected);
+  return authority !== null && activeState !== null
+    && marker.schemaVersion === 1
     && marker.repositoryId === expected.repositoryId
     && marker.repository === expected.repository
     && marker.targetKind === "pull-request"
@@ -123,7 +174,54 @@ function sameBinding(marker: JsonObject, expected: ReviewClaimBinding): boolean 
     && marker.role === expected.role
     && String(marker.revision || "").toLowerCase() === expected.revision.toLowerCase()
     && typeof marker.owner === "string"
-    && marker.owner.length > 0;
+    && marker.owner.length > 0
+    && stableJson(marker.authority) === stableJson(authority)
+    && stableJson(marker.activeState) === stableJson(activeState);
+}
+
+function consistentSavedClaimContract(contract: JsonObject): boolean {
+  if (!contract?.binding || typeof contract.binding !== "object" || Array.isArray(contract.binding)) return false;
+  const binding = contract.binding as ReviewClaimBinding;
+  const authority = normalizedClaimAuthority(binding);
+  const activeState = normalizedActiveState(binding);
+  if (!authority || !activeState) return false;
+  const [requestLabel, reviewingLabel, , , inProgressLabel, blockedLabel] = activeState.managedLabels;
+  return typeof contract.authoritySeconds === "number"
+    && contract.authoritySeconds === authority.durationSeconds
+    && contract.reviewLabel === activeState.requestLabel
+    && contract.reviewLabel === requestLabel
+    && contract.reviewingLabel === reviewingLabel
+    && contract.inProgressLabel === inProgressLabel
+    && contract.blockedLabel === blockedLabel
+    && stableJson(activeState.requiredLabels) === stableJson([contract.inProgressLabel])
+    && (contract.managedLabels === undefined
+      || stableJson(contract.managedLabels) === stableJson(activeState.managedLabels));
+}
+
+function claimContractMatchesConfiguration(
+  contract: JsonObject,
+  configuration: { authoritySeconds: number; managedLabels: string[]; requestLabel: string; requiredLabels: string[] },
+): boolean {
+  if (!consistentSavedClaimContract(contract)) return false;
+  const activeState = normalizedActiveState(contract.binding as ReviewClaimBinding);
+  if (!activeState) return false;
+  return configuration.authoritySeconds === contract.authoritySeconds
+    && stableJson(configuration.managedLabels) === stableJson(activeState.managedLabels)
+    && configuration.requestLabel === activeState.requestLabel
+    && stableJson(configuration.requiredLabels) === stableJson(activeState.requiredLabels);
+}
+
+function reviewClaimCommentMatchesContract(comment: JsonObject, contract: JsonObject): boolean {
+  if (!consistentSavedClaimContract(contract)
+    || serverCommentId(comment) !== String(contract.commentId || "")
+    || !hasUneditedCommentEvidence(comment)) return false;
+  const authorized = new Set((Array.isArray(contract.authorizedLogins) ? contract.authorizedLogins : [])
+    .map((login: unknown) => String(login).toLowerCase()).filter(Boolean));
+  const marker = parseReviewClaim(comment.body);
+  return authorized.has(commentIdentity(comment))
+    && marker !== null
+    && sameBinding(marker, contract.binding as ReviewClaimBinding)
+    && marker.owner === contract.binding?.owner;
 }
 
 function readGithubRestResponseHeaders(commandRunner: { runText(args: string[]): string }, repo: string): string {
@@ -159,10 +257,12 @@ function validateActiveReviewClaim(
   contract: JsonObject,
   liveTarget: LiveReviewTarget,
 ): boolean {
-  if (!matchesLiveReviewTarget(contract, liveTarget)) return false;
-  const request = activeReviewRequest(events, String(contract.reviewLabel || "agent:review"));
+  if (!matchesLiveReviewTarget(contract, liveTarget) || !consistentSavedClaimContract(contract)) return false;
+  const configuredState = normalizedActiveState(contract.binding as ReviewClaimBinding);
+  if (!configuredState) return false;
+  const request = activeReviewRequest(events, configuredState.requestLabel);
   const claimComment = comments.find((comment) => serverCommentId(comment) === String(contract.commentId || ""));
-  if (!request || !claimComment
+  if (!request || !claimComment || !reviewClaimCommentMatchesContract(claimComment, contract)
     || String(pr.state || "").toUpperCase() !== "OPEN"
     || String(pr.headRefOid || "").toLowerCase() !== String(contract.binding?.revision || "").toLowerCase()
     || String(request.id || request.node_id || "") !== String(contract.binding?.requestEventId || "")) return false;
@@ -176,17 +276,14 @@ function validateActiveReviewClaim(
     serverNow,
     Number(contract.authoritySeconds),
   );
-  const winnerMarker = parseReviewClaim(winner?.body);
+  const marker = parseReviewClaim(winner?.body);
   const labels = new Set((pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
-  const inProgress = String(contract.inProgressLabel || "agent:in-progress");
-  const managedLabels = [...new Set([
-    ...CANONICAL_PR_MANAGED_LABELS,
-    ...(Array.isArray(contract.managedLabels) ? contract.managedLabels.map(String) : []),
-  ])];
-  const exactManagedState = managedLabels.filter((label: string) => labels.has(label));
-  return exactManagedState.length === 1 && exactManagedState[0] === inProgress
+  const activeState = normalizedActiveState(contract.binding as ReviewClaimBinding);
+  if (!activeState) return false;
+  const exactManagedState = activeState.managedLabels.filter((label: string) => labels.has(label));
+  return stableJson(exactManagedState) === stableJson(activeState.requiredLabels)
     && serverCommentId(winner || {}) === String(contract.commentId || "")
-    && winnerMarker?.owner === contract.binding?.owner;
+    && marker?.owner === contract.binding?.owner;
 }
 
 function validateRepairAuthorityTransition(
@@ -198,7 +295,7 @@ function validateRepairAuthorityTransition(
   liveTarget: LiveReviewTarget,
   transition: { originalHeadOid?: unknown; headOid?: unknown },
 ): boolean {
-  if (!matchesLiveReviewTarget(contract, liveTarget)) return false;
+  if (!matchesLiveReviewTarget(contract, liveTarget) || !consistentSavedClaimContract(contract)) return false;
   const originalHead = String(transition.originalHeadOid || "").toLowerCase();
   const repairedHead = String(transition.headOid || "").toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(originalHead) || !/^[0-9a-f]{40}$/.test(repairedHead)
@@ -206,9 +303,11 @@ function validateRepairAuthorityTransition(
     || originalHead !== String(contract.binding?.revision || "").toLowerCase()
     || repairedHead !== String(pr.headRefOid || "").toLowerCase()) return false;
 
-  const request = activeReviewRequest(events, String(contract.reviewLabel || "agent:review"));
+  const configuredState = normalizedActiveState(contract.binding as ReviewClaimBinding);
+  if (!configuredState) return false;
+  const request = activeReviewRequest(events, configuredState.requestLabel);
   const claimComment = comments.find((comment) => serverCommentId(comment) === String(contract.commentId || ""));
-  if (!request || !claimComment
+  if (!request || !claimComment || !reviewClaimCommentMatchesContract(claimComment, contract)
     || String(pr.state || "").toUpperCase() !== "OPEN"
     || String(request.id || request.node_id || "") !== String(contract.binding?.requestEventId || "")) return false;
   const serverNow = parseGithubRestDate(restHeaders, new Date(Math.max(eventTime(request), commentTime(claimComment))));
@@ -222,16 +321,12 @@ function validateRepairAuthorityTransition(
   );
   const marker = parseReviewClaim(winner?.body);
   const labels = new Set((pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
-  const inProgress = String(contract.inProgressLabel || "agent:in-progress");
-  const managedLabels = [...new Set([
-    ...CANONICAL_PR_MANAGED_LABELS,
-    ...(Array.isArray(contract.managedLabels) ? contract.managedLabels.map(String) : []),
-  ])];
-  const exactManagedState = managedLabels.filter((label: string) => labels.has(label));
+  const activeState = normalizedActiveState(contract.binding as ReviewClaimBinding);
+  if (!activeState) return false;
+  const exactManagedState = activeState.managedLabels.filter((label: string) => labels.has(label));
   return serverCommentId(winner || {}) === String(contract.commentId || "")
     && marker?.owner === contract.binding?.owner
-    && exactManagedState.length === 1
-    && exactManagedState[0] === inProgress;
+    && stableJson(exactManagedState) === stableJson(activeState.requiredLabels);
 }
 
 function stableJson(value: unknown): string {
@@ -258,6 +353,9 @@ function savedReviewClaimContract(attemptRecordFile: string, supplied: unknown, 
     throw new Error("saved active review claim is missing from the PR attempt record");
   }
   const contract = record.reviewClaim as JsonObject;
+  if (!consistentSavedClaimContract(contract)) {
+    throw new Error("saved active review claim contract is internally inconsistent");
+  }
   if (supplied !== undefined && stableJson(supplied) !== stableJson(contract)) {
     throw new Error("supplied review claim does not exactly match the saved attempt contract");
   }
@@ -288,7 +386,8 @@ function selectReviewClaimWinner(
   now: Date,
   authoritySeconds: number,
 ): JsonObject | null {
-  if (!Number.isFinite(authoritySeconds) || authoritySeconds <= 0 || Number.isNaN(now.getTime())) return null;
+  if (!Number.isFinite(authoritySeconds) || authoritySeconds <= 0 || Number.isNaN(now.getTime())
+    || authoritySeconds !== normalizedClaimAuthority(expected)?.durationSeconds) return null;
   const authorized = new Set(authorizedLogins.map((login) => login.toLowerCase()).filter(Boolean));
   const valid = comments.filter((comment) => {
     const id = serverCommentId(comment);
@@ -310,11 +409,13 @@ function selectReviewClaimWinner(
 
 module.exports = {
   activeReviewRequest,
+  claimContractMatchesConfiguration,
   parseGithubRestDate,
   parseReviewClaim,
   parsePaginatedGithubJson,
   readGithubRestResponseHeaders,
   renderReviewClaimComment,
+  reviewClaimCommentMatchesContract,
   savedReviewClaimContract,
   selectReviewClaimWinner,
   validateActiveReviewClaim,

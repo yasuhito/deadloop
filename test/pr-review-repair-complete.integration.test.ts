@@ -11,6 +11,11 @@ const roots: string[] = [];
 const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
 const key = "abcdef1234567890abcd";
+const activeReviewState = {
+  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  requestLabel: "agent:review",
+  requiredLabels: ["agent:in-progress"],
+};
 
 function writeCompatibleHerdr(bin: string): void {
   const herdr = path.join(bin, "herdr");
@@ -49,7 +54,10 @@ function runCompletion(options: {
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
   }] }));
-  const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a" };
+  const binding = {
+    repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a",
+    authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+  };
   const reviewClaim = {
     binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
     reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
@@ -175,7 +183,10 @@ async function runConcurrentSuccessRetries(): Promise<number> {
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
   }] }));
-  const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a" };
+  const binding = {
+    repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a",
+    authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+  };
   const reviewClaim = {
     binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
     reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",

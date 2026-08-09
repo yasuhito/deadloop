@@ -20,6 +20,11 @@ const { assertWorkerHead, assertWorkerPushBinding, parseArgs: parseGuardedPushAr
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
 const sandboxes: string[] = [];
+const activeReviewState = {
+  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  requestLabel: "agent:review",
+  requiredLabels: ["agent:in-progress"],
+};
 
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-guard-"));
@@ -377,7 +382,10 @@ describe("enablement mutation guards", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     const head = "a".repeat(40);
-    const binding = { repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a" };
+    const binding = {
+      repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
+      authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+    };
     const claim = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
@@ -406,7 +414,10 @@ describe("enablement mutation guards", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     const head = "a".repeat(40);
-    const binding = { repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a" };
+    const binding = {
+      repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
+      authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+    };
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
       reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",

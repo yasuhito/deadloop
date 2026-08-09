@@ -4,6 +4,11 @@ const { mergeReviewedPr } = require("../extensions/deadloop/automations/merge-re
 const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 
 const expectedHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const activeReviewState = {
+  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  requestLabel: "agent:review",
+  requiredLabels: ["agent:in-progress"],
+};
 const eligiblePr = {
   state: "OPEN",
   isDraft: false,
@@ -39,7 +44,11 @@ function runMerge(options: {
   let commentReads = 0;
   let dateReads = 0;
   const authoritativeReviewClaim = {
-    binding: { repositoryId: "R_repo", repository: "owner/repo", targetNumber: options.claimTargetNumber ?? 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" },
+    binding: {
+      repositoryId: "R_repo", repository: "owner/repo", targetNumber: options.claimTargetNumber ?? 24,
+      requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a",
+      authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+    },
     commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
     reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
@@ -107,7 +116,11 @@ function runMerge(options: {
         }
         if (args.some((arg) => arg.endsWith("/comments"))) {
           commentReads += 1;
-          const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" };
+          const binding = {
+            repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22",
+            role: "reviewer", revision: expectedHead, owner: "host-a",
+            authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+          };
           const comments = commentReads >= 2 && options.finalRace === "comment" ? [] : [{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }];
           return { status: 0, stdout: JSON.stringify([[], comments]), stderr: "" };
         }

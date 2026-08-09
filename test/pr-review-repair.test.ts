@@ -27,7 +27,15 @@ const cumulativeComments = cumulativeRepairFixture.comments.map((comment: Record
   author: { login: automationLogin },
 }));
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const reviewClaimBinding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 243, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a" };
+const activeReviewState = {
+  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  requestLabel: "agent:review",
+  requiredLabels: ["agent:in-progress"],
+};
+const reviewClaimBinding = {
+  repositoryId: "R_repo", repository: "owner/repo", targetNumber: 243, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
+  authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+};
 const reviewClaim = {
   binding: reviewClaimBinding, commentId: "101", authorizedLogins: [automationLogin], authoritySeconds: 3600,
   reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",

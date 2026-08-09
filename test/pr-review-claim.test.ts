@@ -5,8 +5,10 @@ import { describe, expect, it } from "vitest";
 
 const {
   activeReviewRequest,
+  claimContractMatchesConfiguration,
   parseGithubRestDate,
   parsePaginatedGithubJson,
+  parseReviewClaim,
   renderReviewClaimComment,
   savedReviewClaimContract,
   selectReviewClaimWinner,
@@ -16,6 +18,15 @@ const {
 
 const head = "a".repeat(40);
 const request = { id: "event-22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } };
+const managedLabels = [
+  "agent:review",
+  "agent:reviewing",
+  "agent:implement",
+  "agent:update-branch",
+  "agent:in-progress",
+  "agent:blocked",
+];
+const activeState = { managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"] };
 const binding = {
   repositoryId: "R_123",
   repository: "owner/repo",
@@ -24,6 +35,8 @@ const binding = {
   role: "reviewer",
   revision: head,
   owner: "host-a",
+  authority: { durationSeconds: 3600 },
+  activeState,
 };
 const liveTarget = { repositoryId: "R_123", repository: "owner/repo", targetNumber: 24 };
 
@@ -51,6 +64,24 @@ describe("PR review GitHub claim", () => {
     expect(selectReviewClaimWinner([claim({ body: "<!-- deadloop:review-claim nope -->" })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
   });
 
+  it("declares the configured authority duration in the marker", () => {
+    expect(parseReviewClaim(renderReviewClaimComment(binding))?.authority).toEqual({ durationSeconds: 3600 });
+  });
+
+  it("declares the canonical active-review state contract in the marker", () => {
+    expect(parseReviewClaim(renderReviewClaimComment(binding))?.activeState).toEqual(activeState);
+  });
+
+  it("rejects a marker whose authority duration differs from the configured contract", () => {
+    const tampered = { ...binding, authority: { durationSeconds: 7200 } };
+    expect(selectReviewClaimWinner([claim({ body: renderReviewClaimComment(tampered) })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
+  });
+
+  it("rejects a marker whose expected active state differs from the configured contract", () => {
+    const tampered = { ...binding, activeState: { ...activeState, requiredLabels: ["agent:reviewing"] } };
+    expect(selectReviewClaimWinner([claim({ body: renderReviewClaimComment(tampered) })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
+  });
+
   it("rejects a claim from an unauthorized identity", () => {
     expect(selectReviewClaimWinner([claim({ author: { login: "stranger" } })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
   });
@@ -67,23 +98,23 @@ describe("PR review GitHub claim", () => {
 
   it("rejects an old comment edited to another request generation", () => {
     const edited = { ...binding, requestEventId: "event-23" };
-    expect(selectReviewClaimWinner([claim({ createdAt: "2026-07-20T09:00:00Z", body: renderReviewClaimComment(edited) })], edited, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 7200)).toBeNull();
+    expect(selectReviewClaimWinner([claim({ createdAt: "2026-07-20T09:00:00Z", body: renderReviewClaimComment(edited) })], edited, ["deadloop-a"], new Date("2026-07-20T09:30:00Z"), 3600)).toBeNull();
   });
 
   it("rejects an old comment edited to another head", () => {
     const edited = { ...binding, revision: "b".repeat(40) };
-    expect(selectReviewClaimWinner([claim({ createdAt: "2026-07-20T09:00:00Z", body: renderReviewClaimComment(edited) })], edited, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 7200)).toBeNull();
+    expect(selectReviewClaimWinner([claim({ createdAt: "2026-07-20T09:00:00Z", body: renderReviewClaimComment(edited) })], edited, ["deadloop-a"], new Date("2026-07-20T09:30:00Z"), 3600)).toBeNull();
   });
 
   it("rejects an old comment edited to another owner", () => {
     const edited = { ...binding, owner: "host-b" };
-    expect(selectReviewClaimWinner([claim({ createdAt: "2026-07-20T09:00:00Z", body: renderReviewClaimComment(edited) })], edited, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 7200)).toBeNull();
+    expect(selectReviewClaimWinner([claim({ createdAt: "2026-07-20T09:00:00Z", body: renderReviewClaimComment(edited) })], edited, ["deadloop-a"], new Date("2026-07-20T09:30:00Z"), 3600)).toBeNull();
   });
 
   it("selects an unedited claim observed on a later page", () => {
     const editedOldClaim = claim({ id: 100, createdAt: "2026-07-20T09:00:00Z" });
     const comments = parsePaginatedGithubJson(JSON.stringify([[editedOldClaim], [claim()]]));
-    expect(selectReviewClaimWinner(comments, binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 7200)?.id).toBe(101);
+    expect(selectReviewClaimWinner(comments, binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)?.id).toBe(101);
   });
 
   it("rejects a claim for another revision", () => {
@@ -217,7 +248,7 @@ describe("PR review GitHub claim", () => {
       reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
-    const edited = claim({ body: renderReviewClaimComment(editedBinding) });
+    const edited = claim({ body: renderReviewClaimComment(editedBinding), updatedAt: "2026-07-20T10:02:00Z" });
 
     expect(validateActiveReviewClaim(pr, [request], [edited], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget)).toBe(false);
   });
@@ -322,6 +353,47 @@ describe("PR review GitHub claim", () => {
       expect(() => savedReviewClaimContract(arbitrary, {}, {
         stateDir: root, githubRepo: binding.repository, projectId: "demo", targetNumber: 24,
       })).toThrow("canonical runs directory");
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("rejects a saved claim when the current authority duration differs", () => {
+    const contract = {
+      binding, authoritySeconds: 3600, inProgressLabel: "agent:in-progress", managedLabels,
+    };
+    expect(claimContractMatchesConfiguration(contract, {
+      authoritySeconds: 7200, managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
+    })).toBe(false);
+  });
+
+  it("rejects a saved claim when the current active-state contract differs", () => {
+    const contract = {
+      binding, authoritySeconds: 3600, inProgressLabel: "agent:in-progress", managedLabels,
+    };
+    expect(claimContractMatchesConfiguration(contract, {
+      authoritySeconds: 3600, managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:reviewing"],
+    })).toBe(false);
+  });
+
+  it("rejects a saved contract whose authority duration disagrees with its marker binding", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-claim-contract-"));
+    const runDir = path.join(root, "runs", "attempt");
+    fs.mkdirSync(runDir, { recursive: true });
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 7200,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      managedLabels,
+    };
+    fs.writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+      attemptId: "attempt", launchUuid: "launch", project: "demo", repository: binding.repository,
+      role: "reviewer", target: { kind: "pull-request", number: 24 }, inputRevision: { head },
+      branch: "feature", worktreePath: "/worktree", agentName: "reviewer", workspaceLabel: "reviewer",
+      promptFile: "/prompt", promiseFile: "/promise", phase: "agent_started", lastSuccessfulPhase: "agent_started",
+      reviewClaim: contract,
+    }));
+    try {
+      expect(() => savedReviewClaimContract(path.join(runDir, "attempt.json"), contract, {
+        stateDir: root, githubRepo: binding.repository, projectId: "demo", targetNumber: 24,
+      })).toThrow("internally inconsistent");
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 

@@ -12,6 +12,11 @@ const { finalizeBranchUpdate } = require("../extensions/deadloop/automations/pr-
 const sandboxes: string[] = [];
 const branch = "agent/issue-1";
 const ref = `refs/heads/${branch}`;
+const activeReviewState = {
+  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  requestLabel: "agent:review",
+  requiredLabels: ["agent:in-progress"],
+};
 
 function git(repo: string, args: string[]): string {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
@@ -52,7 +57,10 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
     : `git --git-dir='${remote}' update-ref '${ref}' '${rootOid}'`;
   writeFileSync(hookPath, `#!/bin/sh\n${updateRef}\n`);
   chmodSync(hookPath, 0o755);
-  const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 1, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" };
+  const binding = {
+    repositoryId: "R_repo", repository: "owner/repo", targetNumber: 1, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a",
+    authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+  };
   const run = (args: string[]) => {
     if (args[0] === "node") return { status: 0, stdout: "", stderr: "" };
     if (args[0] === "gh" && args[1] === "api" && args[2] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
@@ -153,7 +161,10 @@ const result = spawnSync("/usr/bin/git", args, {stdio:"inherit"});
 process.exit(result.status ?? 1);
 `);
     chmodSync(gitCommand, 0o755);
-    const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 1, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" };
+    const binding = {
+      repositoryId: "R_repo", repository: "owner/repo", targetNumber: 1, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a",
+      authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+    };
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
       reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
