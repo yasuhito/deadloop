@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,19 +27,27 @@ describe("scheduler lock", () => {
       beforePublish: () => { contender = acquireSchedulerLock(lockPath, {}); },
     });
 
+    const winner = [creator, contender].find((result) => result?.acquired)!;
+    releaseSchedulerLock(lockPath, winner.token);
     expect([creator, contender].filter((result) => result?.acquired)).toHaveLength(1);
   });
 
-  it("does not delete a replacement lock installed by another contender during stale reclamation", () => {
+  it("lets a child host acquire the OS lock", () => {
     const lockPath = lockFixture();
-    writeFileSync(lockPath, JSON.stringify({ pid: 999_999_999, token: "stale" }));
+    const script = `const lock=require(${JSON.stringify(path.resolve("src/scheduler-lock.cjs"))}); const result=lock.acquireSchedulerLock(process.argv[1],{}); if(!result.acquired) process.exit(2);`;
 
-    acquireSchedulerLock(lockPath, {}, { beforeStaleUnlink: () => {
-      rmSync(lockPath);
-      writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: "contender-a" }));
-    } });
+    expect(spawnSync(process.execPath, ["-e", script, lockPath]).status).toBe(0);
+  });
 
-    expect(JSON.parse(readFileSync(lockPath, "utf8")).token).toBe("contender-a");
+  it("lets another host acquire after process exit releases the OS lock", () => {
+    const lockPath = lockFixture();
+    const script = `const lock=require(${JSON.stringify(path.resolve("src/scheduler-lock.cjs"))}); const result=lock.acquireSchedulerLock(process.argv[1],{}); if(!result.acquired) process.exit(2);`;
+    spawnSync(process.execPath, ["-e", script, lockPath]);
+
+    const acquired = acquireSchedulerLock(lockPath, {});
+    releaseSchedulerLock(lockPath, acquired.token);
+
+    expect(acquired.acquired).toBe(true);
   });
 
   it("does not release a lock now owned by a different token", () => {

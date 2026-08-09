@@ -58,6 +58,9 @@ function runReviewDriver(world: RequeuedReviewWorld): void {
       DEADLOOP_REPO_PATH: world.root,
       DEADLOOP_WORKTREE_ROOT: path.join(world.root, "worktrees"),
       DEADLOOP_GITHUB_REPO: "owner/repo",
+      DEADLOOP_GITHUB_REPOSITORY_ID: "R_repo",
+      DEADLOOP_AUTOMATION_LOGIN: "deadloop-bot",
+      DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
       DEADLOOP_ENABLED_AT: "1",
       DEADLOOP_STATE_DIR: path.join(world.configDir, "deadloop"),
       GH_TEST_PR_STATE: world.prState,
@@ -115,10 +118,27 @@ Given("A blocked pull request has a completed Reviewer and its head changed afte
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
+const prs = () => JSON.parse(fs.readFileSync(process.env.GH_TEST_PR_STATE, "utf8"));
+const save = (value) => fs.writeFileSync(process.env.GH_TEST_PR_STATE, JSON.stringify(value));
 if (args[0] === "pr" && args[1] === "list") {
-  process.stdout.write(fs.readFileSync(process.env.GH_TEST_PR_STATE, "utf8"));
+  process.stdout.write(JSON.stringify(prs()));
+} else if (args[0] === "pr" && args[1] === "view") {
+  process.stdout.write(JSON.stringify(prs()[0]));
 } else if (args[0] === "repo" && args[1] === "view") {
   process.stdout.write(JSON.stringify({id:"R_repo"}));
+} else if (args[0] === "api" && args.some((arg) => arg.endsWith("/events"))) {
+  process.stdout.write(JSON.stringify([[{id:4401,event:"labeled",created_at:"2026-07-13T00:00:00Z",label:{name:"agent:review"}}]]));
+} else if (args[0] === "api" && args.includes("POST")) {
+  const state = prs();
+  const bodyArg = args.find((arg) => arg.startsWith("body=")) || "body=";
+  const comment = {id:9901,created_at:"2026-07-13T00:01:00Z",user:{login:"deadloop-bot"},body:bodyArg.slice(5)};
+  state[0].comments.push(comment); save(state); process.stdout.write(JSON.stringify(comment));
+} else if (args[0] === "api" && args.includes("PUT")) {
+  let input = ""; process.stdin.on("data", (chunk) => input += chunk); process.stdin.on("end", () => {
+    const state = prs(); state[0].labels = JSON.parse(input).labels.map((name) => ({name})); save(state); process.stdout.write(JSON.stringify(state[0].labels));
+  });
+} else if (args[0] === "api" && args.some((arg) => arg.endsWith("/comments"))) {
+  process.stdout.write(JSON.stringify([prs()[0].comments]));
 }
 `);
   executable(path.join(bin, "git"), `#!/usr/bin/env node

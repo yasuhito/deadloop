@@ -26,6 +26,12 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
+const {
+  activeReviewRequest,
+  parseReviewClaim,
+  renderReviewClaimComment,
+  selectReviewClaimWinner,
+} = require("./pr-review-claim.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 import type { RunnerAdapter } from "../../../src/runner";
@@ -36,6 +42,9 @@ type GithubEffect =
   | { operation: "comment_pr"; repo: string; prNumber: string; body: string }
   | { operation: "move_pr_labels"; repo: string; prNumber: string; move: LabelMove };
 const SCRIPT_DIR = __dirname;
+class ReviewClaimLostError extends StaleLaunchError {
+  constructor(message: string) { super(message); }
+}
 const commandRunner = createCommandRunner();
 const { runText } = commandRunner;
 
@@ -52,7 +61,12 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     projectId: source.DEADLOOP_PROJECT_ID || "project",
     repoPath: source.DEADLOOP_REPO_PATH || ".",
     githubRepo: source.DEADLOOP_GITHUB_REPO || "",
+    githubRepositoryId: source.DEADLOOP_GITHUB_REPOSITORY_ID || "",
     automationLogin: source.DEADLOOP_AUTOMATION_LOGIN || "",
+    authorizedAutomationLogins: String(source.DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS || "").split(",").map((value) => value.trim()).filter(Boolean),
+    claimOwner: source.DEADLOOP_CLAIM_OWNER || `${os.hostname()}:${process.pid}`,
+    reviewerMaxRuntimeSeconds: Number(source.DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS || 86_400),
+    claimCleanupGraceSeconds: Number(source.DEADLOOP_CLAIM_CLEANUP_GRACE_SECONDS || 300),
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
@@ -69,6 +83,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     reviewRepairRemote: source.DEADLOOP_REVIEW_REPAIR_REMOTE || "origin",
     reviewLabel: source.DEADLOOP_REVIEW_LABEL || "agent:review",
     reviewingLabel: source.DEADLOOP_REVIEWING_LABEL || "agent:reviewing",
+    inProgressLabel: source.DEADLOOP_IN_PROGRESS_LABEL || "agent:in-progress",
     humanLabel: source.DEADLOOP_HUMAN_LABEL || "ready-for-human",
     blockedLabel: source.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
     implementLabel: source.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
@@ -99,6 +114,7 @@ function fixtureEffects(fixture: JsonObject): JsonObject {
 function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffect[]) {
   const effects = fixtureEffects(fixture);
   return {
+    getPr: (_repo: string, number: string | number) => (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number)) || { number },
     commentPr: (repo: string, number: string | number, body: string) => {
       effects.githubComments.push({ number: Number(number), body });
       githubEffects?.push({ operation: "comment_pr", repo, prNumber: String(number), body });
@@ -111,6 +127,42 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
       if (pr) pr.labels = [...labels].map((name) => ({ name }));
       effects.labels[String(number)] = [...labels];
       githubEffects?.push({ operation: "move_pr_labels", repo, prNumber: String(number), move });
+    },
+    replacePrLabels: (_repo: string, number: string | number, labels: string[]) => {
+      effects.labelReplacements ||= [];
+      effects.labelReplacements.push({ number: Number(number), labels: [...labels] });
+      const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
+      if (pr && !fixture.postMutationMismatch) pr.labels = labels.map((name) => ({ name }));
+      effects.labels[String(number)] = [...labels];
+      return { names: labels };
+    },
+    listPrTimelineEvents: (_repo: string, number: string | number) => {
+      const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
+      return pr?.timelineEvents || [{ id: `fixture-review-${number}`, event: "labeled", created_at: "2026-07-07T23:59:00Z", label: { name: "agent:review" } }];
+    },
+    listPrComments: (_repo: string, number: string | number) => {
+      const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
+      return pr?.comments || [];
+    },
+    createPrComment: (_repo: string, number: string | number, body: string) => {
+      const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
+      const comment = { id: Number(pr?.comments?.length || 0) + 10_000, createdAt: "2026-07-08T00:00:00Z", author: { login: String(fixture.automationLogin || "deadloop-bot") }, body };
+      if (pr && fixture.winningForeignClaimOwner) {
+        const own = parseReviewClaim(body);
+        const foreignBinding = {
+          repositoryId: own.repositoryId,
+          repository: own.repository,
+          targetNumber: own.targetNumber,
+          requestEventId: own.requestEventId,
+          role: own.role,
+          revision: own.revision,
+          owner: String(fixture.winningForeignClaimOwner),
+        };
+        (pr.comments ||= []).push({ ...comment, id: 9_999, createdAt: "2026-07-07T23:59:59Z", body: renderReviewClaimComment(foreignBinding) });
+      }
+      if (pr) (pr.comments ||= []).push(comment);
+      effects.githubComments.push({ number: Number(number), body });
+      return comment;
     },
     addPrReviewer: (repo: string, number: string | number, reviewer: string) => {
       effects.githubReviewers ||= [];
@@ -521,27 +573,157 @@ function launchPrReviewerFlow(
   return { reviewerName: plan.reviewerName, headRefName: plan.headRefName, reason, ...launch };
 }
 
+function labelNames(pr: JsonObject): string[] {
+  return (pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")).filter(Boolean);
+}
+
+function assertSamePrRevision(selected: JsonObject, live: JsonObject): void {
+  if (Number(live.number || 0) !== Number(selected.number || 0)
+    || String(live.state || "") !== String(selected.state || "")
+    || String(live.headRefName || "") !== String(selected.headRefName || "")
+    || String(live.headRefOid || "") !== String(selected.headRefOid || "")) {
+    throw new StaleLaunchError(`PR #${Number(selected.number || 0)} revision changed before launch`);
+  }
+}
+
+function reviewClaimAuthoritySeconds(env: ReturnType<typeof envConfig>): number {
+  const seconds = env.reviewerMaxRuntimeSeconds + env.claimCleanupGraceSeconds;
+  if (!Number.isFinite(env.reviewerMaxRuntimeSeconds) || env.reviewerMaxRuntimeSeconds <= 0
+    || !Number.isFinite(env.claimCleanupGraceSeconds) || env.claimCleanupGraceSeconds < 0) {
+    throw new Error("review claim runtime and cleanup grace must be finite positive durations");
+  }
+  return seconds;
+}
+
+function currentReviewRequest(github: ReturnType<typeof githubOperations>, env: ReturnType<typeof envConfig>, number: number): JsonObject {
+  const request = activeReviewRequest(github.listPrTimelineEvents(env.githubRepo, number), env.reviewLabel);
+  if (!request) throw new StaleLaunchError(`PR #${number} has no review request event`);
+  return request;
+}
+
+function claimReviewRequest(
+  github: ReturnType<typeof githubOperations>,
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+): JsonObject {
+  const number = Number(pr.number || 0);
+  const request = currentReviewRequest(github, env, number);
+  const requestEventId = String(request.id || request.node_id || "");
+  const binding = {
+    repositoryId: env.githubRepositoryId,
+    repository: env.githubRepo,
+    targetNumber: number,
+    requestEventId,
+    role: "reviewer" as const,
+    revision: String(pr.headRefOid || ""),
+    owner: env.claimOwner,
+  };
+  if (!binding.repositoryId || !binding.revision || !binding.owner) throw new Error("review claim identity is incomplete");
+  const posted = github.createPrComment(env.githubRepo, number, renderReviewClaimComment(binding));
+  const live = github.getPr(env.githubRepo, number);
+  assertSameLaunchTarget(pr, live, "pr");
+  const refreshedRequest = currentReviewRequest(github, env, number);
+  if (String(refreshedRequest.id || refreshedRequest.node_id || "") !== requestEventId) {
+    throw new StaleLaunchError(`PR #${number} received a newer review request`);
+  }
+  const authorized = [...new Set(env.authorizedAutomationLogins.map((login) => login.toLowerCase()).filter(Boolean))];
+  const now = new Date(String(posted.createdAt || posted.created_at || ""));
+  if (Number.isNaN(now.getTime())) throw new Error("GitHub claim comment has no authoritative server createdAt");
+  const comments = github.listPrComments(env.githubRepo, number);
+  const winner = selectReviewClaimWinner(comments, binding, authorized, now, reviewClaimAuthoritySeconds(env));
+  const winnerMarker = winner && parseReviewClaim(winner.body);
+  if (!winner || winnerMarker?.owner !== env.claimOwner || String(winner.id || winner.databaseId) !== String(posted.id || posted.databaseId)) {
+    throw new ReviewClaimLostError(`PR #${number} review request was claimed by another Automation host`);
+  }
+
+  // Re-fetch immediately before the one full-label mutation so unrelated
+  // labels and the latest request generation come from the freshest snapshot.
+  const beforeTransition = github.getPr(env.githubRepo, number);
+  assertSameLaunchTarget(live, beforeTransition, "pr");
+  const beforeTransitionRequest = currentReviewRequest(github, env, number);
+  if (String(beforeTransitionRequest.id || beforeTransitionRequest.node_id || "") !== requestEventId) {
+    throw new StaleLaunchError(`PR #${number} review request changed before label transition`);
+  }
+  const beforeTransitionWinner = selectReviewClaimWinner(
+    github.listPrComments(env.githubRepo, number), binding, authorized, now, reviewClaimAuthoritySeconds(env),
+  );
+  if (String(beforeTransitionWinner?.id || beforeTransitionWinner?.databaseId || "") !== String(posted.id || posted.databaseId)) {
+    throw new ReviewClaimLostError(`PR #${number} review request was claimed before label transition`);
+  }
+  const managed = new Set([env.reviewLabel, env.reviewingLabel, env.inProgressLabel, env.blockedLabel]);
+  const nextLabels = labelNames(beforeTransition).filter((label) => !managed.has(label));
+  nextLabels.push(env.inProgressLabel);
+  github.replacePrLabels(env.githubRepo, number, nextLabels);
+
+  const transitioned = github.getPr(env.githubRepo, number);
+  assertSamePrRevision(pr, transitioned);
+  const transitionedLabels = new Set(labelNames(transitioned));
+  const expectedLabels = [...new Set(nextLabels)].sort();
+  if (JSON.stringify([...transitionedLabels].sort()) !== JSON.stringify(expectedLabels)
+    || !transitionedLabels.has(env.inProgressLabel)
+    || transitionedLabels.has(env.reviewLabel)
+    || transitionedLabels.has(env.reviewingLabel)
+    || transitionedLabels.has(env.blockedLabel)) {
+    throw new StaleLaunchError(`PR #${number} review claim label transition did not persist`);
+  }
+  const finalRequest = currentReviewRequest(github, env, number);
+  if (String(finalRequest.id || finalRequest.node_id || "") !== requestEventId) {
+    throw new StaleLaunchError(`PR #${number} review request changed after label transition`);
+  }
+  const finalWinner = selectReviewClaimWinner(
+    github.listPrComments(env.githubRepo, number), binding, authorized, now, reviewClaimAuthoritySeconds(env),
+  );
+  if (String(finalWinner?.id || finalWinner?.databaseId || "") !== String(posted.id || posted.databaseId)) {
+    throw new StaleLaunchError(`PR #${number} review claim changed after label transition`);
+  }
+  return { binding, commentId: String(posted.id || posted.databaseId), labels: nextLabels };
+}
+
 function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
   const number = Number(pr.number || 0);
   const uuid = fixture ? "fixture-reviewer-uuid" : randomUUID();
   const plan = prReviewerLaunchPlan(pr, env, reason, uuid);
   const { reviewerName, headRefName } = plan;
-  const launch = launchWithAdapters(
-    env,
-    fixture,
-    plan.input,
-    (github) => github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel }),
-    () => {
-      if (fixture) return;
-      const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
-      if (livePlan.kind !== "review_required") throw new StaleLaunchError(`PR #${number} is no longer eligible for reviewer launch`);
-      assertSameLaunchTarget(pr, livePlan.pr, "pr");
-      if (branchUpdateDecision(livePlan.pr, env, null).action !== "no_update") {
-        throw new StaleLaunchError(`PR #${number} branch-update state changed before reviewer launch`);
-      }
-    },
-  );
-  return { reviewerName, headRefName, reason, ...launch, ...(fixture ? { simulated: true } : {}) };
+  let claim: JsonObject | null = null;
+  let launch: JsonObject;
+  try {
+    launch = launchWithAdapters(
+      env,
+      fixture,
+      plan.input,
+      (github) => { claim = claimReviewRequest(github, pr, env); },
+      () => {
+        if (fixture) return;
+        if (claim) {
+          const github = githubOperations();
+          const live = github.getPr(env.githubRepo, number);
+          assertSamePrRevision(pr, live);
+          const labels = new Set(labelNames(live));
+          if (!labels.has(env.inProgressLabel) || labels.has(env.reviewLabel)
+            || labels.has(env.reviewingLabel) || labels.has(env.blockedLabel)) {
+            throw new StaleLaunchError(`PR #${number} no longer has the claimed review state`);
+          }
+          const request = currentReviewRequest(github, env, number);
+          if (String(request.id || request.node_id || "") !== claim.binding.requestEventId) {
+            throw new StaleLaunchError(`PR #${number} review request changed before reviewer launch`);
+          }
+          return;
+        }
+        const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
+        if (livePlan.kind !== "review_required") throw new StaleLaunchError(`PR #${number} is no longer eligible for reviewer launch`);
+        assertSameLaunchTarget(pr, livePlan.pr, "pr");
+        if (branchUpdateDecision(livePlan.pr, env, null).action !== "no_update") {
+          throw new StaleLaunchError(`PR #${number} branch-update state changed before reviewer launch`);
+        }
+      },
+    );
+  } catch (error) {
+    if (error instanceof ReviewClaimLostError) {
+      fs.rmSync(path.join(env.stateDir, "runs", uuid), { recursive: true, force: true });
+    }
+    throw error;
+  }
+  return { reviewerName, headRefName, reason, claim, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
 function draftBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>): string {
@@ -615,16 +797,25 @@ function drive(fixturePath: string | undefined): DriverResult {
   const configuredEnv = envConfig();
   if (!configuredEnv.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
   const prs = fixture ? fixture.prs || [] : livePrs(configuredEnv.githubRepo);
-  const hasRepairResultMarker = prs.some((pr: JsonObject) =>
-    (pr.comments || []).some((comment: JsonObject) => String(comment.body || "").includes("<!-- deadloop:review-repair-result ")),
-  );
   const automationLogin = fixture
     ? String(fixture.automationLogin || "deadloop-bot")
-    : configuredEnv.automationLogin || (hasRepairResultMarker ? runText(["gh", "api", "user", "--jq", ".login"]).trim() : "");
-  if (hasRepairResultMarker && !automationLogin) {
+    : configuredEnv.automationLogin || runText(["gh", "api", "user", "--jq", ".login"]).trim();
+  if (!automationLogin) {
     return driverResult("error", "authenticated GitHub identity is unavailable", { driverAction: "configuration_error" });
   }
-  const env = { ...configuredEnv, automationLogin };
+  const githubRepositoryId = fixture
+    ? String(fixture.githubRepositoryId || "fixture-repository-id")
+    : configuredEnv.githubRepositoryId || runText(["gh", "repo", "view", configuredEnv.githubRepo, "--json", "id", "--jq", ".id"]).trim();
+  if (!githubRepositoryId) {
+    return driverResult("error", "immutable GitHub repository identity is unavailable", { driverAction: "configuration_error" });
+  }
+  const authorizedAutomationLogins = fixture && configuredEnv.authorizedAutomationLogins.length === 0
+    ? [automationLogin.toLowerCase()]
+    : configuredEnv.authorizedAutomationLogins;
+  if (!authorizedAutomationLogins.includes(automationLogin.toLowerCase())) {
+    return driverResult("error", "authenticated GitHub identity is not listed in automationLogins", { driverAction: "configuration_error" });
+  }
+  const env = { ...configuredEnv, automationLogin, authorizedAutomationLogins, githubRepositoryId };
   const agents = fixture ? fixture.agents || { result: { agents: [] } } : liveAgents();
   const plan = planPrReviewerAction(prs, agents, env);
 
@@ -867,4 +1058,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { envConfig, launchBranchUpdate, launchPrReviewerFlow };
+module.exports = { claimReviewRequest, envConfig, launchBranchUpdate, launchPrReviewerFlow };

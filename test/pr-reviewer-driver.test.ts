@@ -34,6 +34,30 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("external-review-request.json").monitorHandoff.kind).toBe("reviewer");
   });
 
+  it("consumes the review request and enters in-progress in one label replacement", () => {
+    expect(runDriverFixture("external-review-request.json").testAdapterEffects.labelReplacements).toHaveLength(1);
+  });
+
+  it("preserves labels outside the managed workflow set", () => {
+    expect(runDriverFixture("external-review-request.json").launch.claim.labels).toContain("documentation");
+  });
+
+  it("removes the one-shot review request when the claim wins", () => {
+    expect(runDriverFixture("external-review-request.json").launch.claim.labels).not.toContain("agent:review");
+  });
+
+  it("does not write the retired reviewing label", () => {
+    expect(runDriverFixture("external-review-request.json").launch.claim.labels).not.toContain("agent:reviewing");
+  });
+
+  it("launches no reviewer when another host has the earlier valid claim", () => {
+    expect(runDriverFixture("review-claim-loser.json").driverAction).toBe("reviewer_launch_stale");
+  });
+
+  it("launches no reviewer after the atomic label result mismatches", () => {
+    expect(runDriverFixture("review-claim-post-mismatch.json").driverAction).toBe("reviewer_launch_stale");
+  });
+
   it("reports the deterministic reviewer promise path outside the worktree", () => {
     expect(
       runDriverFixture("fallback-review.json", {

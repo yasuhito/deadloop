@@ -108,6 +108,7 @@ describe("deterministic extension core", () => {
       workerModel: "",
       reviewerAgent: "pi",
       reviewerModel: "",
+      automationLogins: [],
       labels: {
         ready: "agent-ready",
         implement: "agent:implement",

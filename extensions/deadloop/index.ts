@@ -1111,13 +1111,15 @@ async function buildLiveDoctorReport(pi, cwd) {
 const STANDARD_LABELS = [
   ["ready-for-agent", "0e8a16"],
   ["agent:implement", "1d76db"],
-  ["agent:in-progress", "fbca04"],
-  ["agent:review", "5319e7"],
-  ["agent:reviewing", "c2e0c6"],
-  ["agent:blocked", "b60205"],
   ["ready-for-human", "d93f0b"],
+  ["wontfix", "ffffff"],
   ["needs-info", "fef2c0"],
   ["needs-triage", "f9d0c4"],
+  ["agent:explore", "0052cc"],
+  ["agent:review", "5319e7"],
+  ["agent:update-branch", "006b75"],
+  ["agent:in-progress", "fbca04"],
+  ["agent:blocked", "b60205"],
 ];
 
 async function commandExec(pi, command, args, timeout = 15_000) {

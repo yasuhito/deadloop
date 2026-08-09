@@ -112,14 +112,14 @@ describe("PR reviewer stale reviewing reclaim", () => {
     expect(selectPrForReview(prs, defaultDecisionConfig(), owners).selected).toBe(false);
   });
 
-  it("suppresses an ordinary review candidate when an exact retained journal owns it", () => {
+  it("does not suppress an ordinary GitHub request from a retained journal alone", () => {
     const { defaultDecisionConfig, selectPrForReview, workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
     const owners = workingReviewerPrNumbers({}, "demo", [{
       project: "demo", repository: "owner/repo", role: "review-repair",
       target: { kind: "pull-request", number: 7 }, phase: "report_received", agentName: "dl-x-7-222222222222",
     }], "owner/repo");
     const prs = require("./fixtures/pr-reviewer/precheck-agent-review.json");
-    expect(selectPrForReview(prs, defaultDecisionConfig(), owners).selected).toBe(false);
+    expect(selectPrForReview(prs, defaultDecisionConfig(), owners).selected).toBe(true);
   });
 
   it("allows reselection only after the project-bound attempt journal reaches workspace_closed", () => {

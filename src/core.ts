@@ -25,6 +25,20 @@ export const DEFAULT_WORKER_INSTRUCTIONS =
 export const DEFAULT_WORKER_LAUNCH_POLICY =
   "Choose the Worker level from issue difficulty: low for simple docs, small test fixes, and local code changes; medium for ordinary implementation; high for cross-component work, design judgment, migrations, or difficult bugs. Add one line to the Worker prompt explaining the choice.";
 
+export const CANONICAL_GITHUB_LABELS = [
+  "needs-triage",
+  "needs-info",
+  "ready-for-agent",
+  "ready-for-human",
+  "wontfix",
+  "agent:explore",
+  "agent:implement",
+  "agent:review",
+  "agent:update-branch",
+  "agent:in-progress",
+  "agent:blocked",
+] as const;
+
 export type LabelConfig = {
   ready?: string;
   implement?: string;
@@ -112,6 +126,7 @@ export type RawProject = {
   workerModel?: string;
   reviewerAgent?: string;
   reviewerModel?: string;
+  automationLogins?: string[];
   labels?: LabelConfig;
   automations?: RawAutomation[];
 };
@@ -154,6 +169,7 @@ export type NormalizedProject = {
   workerModel: string;
   reviewerAgent: ReviewerAgent;
   reviewerModel: string;
+  automationLogins: string[];
   labels: NormalizedLabels;
   automations: NormalizedAutomation[];
   configSource: ProjectConfigSource;
@@ -513,6 +529,14 @@ function normalizeExternalReview(value: RawExternalReviewConfig | undefined): No
   };
 }
 
+function normalizeAutomationLogins(value: string[] | undefined): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((login) => typeof login !== "string" || !login.trim())) {
+    throw new Error("automationLogins must be an array of non-empty GitHub login strings");
+  }
+  return [...new Set(value.map((login) => login.trim().toLowerCase()))];
+}
+
 function normalizeWorkerInstructions(raw: Pick<RawProject, "workerInstructions" | "workerInstructionFiles">): string {
   if (raw.workerInstructions && raw.workerInstructions.trim()) return raw.workerInstructions;
   const files = raw.workerInstructionFiles === undefined ? [...DEFAULT_WORKER_INSTRUCTION_FILES] : raw.workerInstructionFiles;
@@ -581,6 +605,7 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
     workerModel: raw.workerModel || "",
     reviewerAgent: normalizeAgentKind(raw.reviewerAgent, "reviewerAgent"),
     reviewerModel: raw.reviewerModel || "",
+    automationLogins: normalizeAutomationLogins(raw.automationLogins),
     labels: normalizeLabels(raw.labels || {}),
     automations: [],
     configSource: source,
@@ -783,6 +808,7 @@ export function automationEnvironment(
     DEADLOOP_CONFIG: envText(project.configSource.localPath),
     DEADLOOP_REPO_PATH: envText(values.repoPath),
     DEADLOOP_GITHUB_REPO: envText(values.githubRepo),
+    DEADLOOP_GITHUB_REPOSITORY_ID: envText(project.githubRepositoryId),
     DEADLOOP_BASE_BRANCH: envText(values.baseBranch),
     DEADLOOP_WORKTREE_ROOT: envText(values.worktreeRoot),
     DEADLOOP_CHECK_COMMAND: envText(values.checkCommand),
@@ -795,6 +821,7 @@ export function automationEnvironment(
     DEADLOOP_WORKER_LAUNCH_POLICY: envText(values.workerLaunchPolicy),
     DEADLOOP_REVIEWER_AGENT: envText(values.reviewerAgent),
     DEADLOOP_REVIEWER_MODEL: envText(values.reviewerModel),
+    DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: envText(project.automationLogins.join(",")),
     DEADLOOP_AUTO_MERGE: envText(values.autoMerge),
     DEADLOOP_CI_FALLBACK_ENABLED: envText(values.ciFallbackEnabled),
     DEADLOOP_CI_FALLBACK_MODE: envText(values.ciFallbackMode),
