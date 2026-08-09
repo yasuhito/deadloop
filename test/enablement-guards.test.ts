@@ -293,12 +293,42 @@ describe("enablement mutation guards", () => {
     expect(timeout).toBe(GUARDED_OPERATION_TIMEOUT_MS);
   });
 
+  it("rejects a guarded PR mutation without an active claim", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+
+    expect(() => runGuarded({
+      projectRepo: project.repoPath,
+      githubRepo: project.githubRepo,
+      stateDir: project.stateDir,
+      enabledAt: 1,
+      command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"],
+    })).toThrow("active review claim is required");
+  });
+
+  it("rejects a guarded PR mutation for another claim target", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const reviewClaim = {
+      binding: { targetNumber: 24 },
+    };
+
+    expect(() => runGuarded({
+      projectRepo: project.repoPath,
+      githubRepo: project.githubRepo,
+      stateDir: project.stateDir,
+      enabledAt: 1,
+      reviewClaim,
+      command: ["gh", "pr", "comment", "25", "-R", project.githubRepo, "--body", "done"],
+    }, () => { throw new Error("unexpected command"); })).toThrow("claim target does not match");
+  });
+
   it("authorizes a guarded mutation when the active claim is on a later REST page", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     const head = "a".repeat(40);
     const binding = { repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a" };
-    const claim = { id: 101, created_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
+    const claim = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
       reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",

@@ -19,7 +19,7 @@ type MergeArgs = {
   reviewPromise: string;
   inProgressLabel: string;
   blockedLabel: string;
-  reviewClaim?: Record<string, unknown>;
+  reviewClaim: Record<string, unknown>;
 };
 type EnabledProject = {
   firstEnableAutoMerge: boolean;
@@ -181,6 +181,9 @@ function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
 }
 
 function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): number {
+  if (!args.reviewClaim || typeof args.reviewClaim !== "object" || Array.isArray(args.reviewClaim)) {
+    throw new Error("active review claim is required before automatic merge");
+  }
   const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
   const operation = (enabled: EnabledProject, recheck: () => void = () => {}) => {
     const autoMergeEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
@@ -188,15 +191,13 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     assertMergeAuthorized(enabled);
     assertReviewApproved(args, ops);
     assertCurrentPrEligible(args, ops);
-    if (args.reviewClaim) {
-      const prResult = ops.run(["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefOid,labels"], MAX_GUARDED_OPERATION_MS);
-      const eventsResult = ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS);
-      const commentsResult = ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS);
-      const dateResult = ops.run(["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
-      if ([prResult, eventsResult, commentsResult, dateResult].some((result) => result.status !== 0)
-        || !validateActiveReviewClaim(JSON.parse(prResult.stdout), parsePaginatedGithubJson(eventsResult.stdout), parsePaginatedGithubJson(commentsResult.stdout), dateResult.stdout, args.reviewClaim)) {
-        throw new Error("active review claim could not be reauthorized; automatic merge stopped");
-      }
+    const prResult = ops.run(["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefOid,labels"], MAX_GUARDED_OPERATION_MS);
+    const eventsResult = ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS);
+    const commentsResult = ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS);
+    const dateResult = ops.run(["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
+    if ([prResult, eventsResult, commentsResult, dateResult].some((result) => result.status !== 0)
+      || !validateActiveReviewClaim(JSON.parse(prResult.stdout), parsePaginatedGithubJson(eventsResult.stdout), parsePaginatedGithubJson(commentsResult.stdout), dateResult.stdout, args.reviewClaim)) {
+      throw new Error("active review claim could not be reauthorized; automatic merge stopped");
     }
     recheck();
     const autoMergeStillEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
@@ -220,8 +221,8 @@ function parseArgs(argv: string[]): MergeArgs {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  if (!values.projectRepo || !values.githubRepo || !values.stateDir || !values.pr || !values.expectedHead || !values.reviewPromise || !values.inProgressLabel || !values.blockedLabel || !Number.isFinite(enabledAt)) {
-    throw new Error("--project-repo, --github-repo, --state-dir, --enabled-at, --pr, --expected-head, --review-promise, --in-progress-label, and --blocked-label are required");
+  if (!values.projectRepo || !values.githubRepo || !values.stateDir || !values.pr || !values.expectedHead || !values.reviewPromise || !values.inProgressLabel || !values.blockedLabel || !values.reviewClaim || !Number.isFinite(enabledAt)) {
+    throw new Error("--project-repo, --github-repo, --state-dir, --enabled-at, --pr, --expected-head, --review-promise, --in-progress-label, --blocked-label, and --review-claim are required");
   }
   return {
     projectRepo: values.projectRepo,
@@ -233,7 +234,7 @@ function parseArgs(argv: string[]): MergeArgs {
     reviewPromise: values.reviewPromise,
     inProgressLabel: values.inProgressLabel,
     blockedLabel: values.blockedLabel,
-    ...(values.reviewClaim ? { reviewClaim: JSON.parse(values.reviewClaim) } : {}),
+    reviewClaim: JSON.parse(values.reviewClaim),
   };
 }
 

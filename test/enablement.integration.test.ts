@@ -2045,39 +2045,36 @@ describe("enablement command integration", () => {
     const schedulerLocks = readdirSync(stateDir).filter((name) => name.startsWith("scheduler."));
     expect({ locks: schedulerLocks.length, message: secondExtension.messages.at(-1) }).toEqual({
       locks: 1,
-      message: expect.stringContaining(`another session (pid ${process.pid})`),
+      message: expect.stringContaining(`repository is already served by Automation host pid ${process.pid}`),
     });
   });
 
-  it("reports another live lock owner as standby", async () => {
+  it("fails fast when another Automation host owns the repository lock", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
-    const stateDir = path.join(root, ".pi", "agent", "deadloop");
-    const lockPath = path.join(stateDir, schedulerLockName({ githubRepositoryId: "R_demo" }));
-    const { processStartIdentity } = require("../src/enablement-lock.cjs");
-    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startIdentity: processStartIdentity(process.pid), token: "owner" }));
-    const extension = await loadExtension(root);
+    const firstExtension = await loadExtension(root);
+    await invoke(firstExtension.commands.get("deadloop-enable")!, repoPath);
+    const secondExtension = await loadExtension(root);
 
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    await invoke(secondExtension.commands.get("deadloop-enable")!, repoPath);
 
-    expect(extension.messages.at(-1)).toContain(`another session (pid ${process.pid})`);
+    expect(secondExtension.messages.at(-1)).toContain(`repository is already served by Automation host pid ${process.pid}`);
   });
 
-  it("takes scheduler ownership after the original owner releases its lock", async () => {
+  it("does not retry repository lock acquisition after a second Automation host is rejected", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
-    const stateDir = path.join(root, ".pi", "agent", "deadloop");
-    const lockPath = path.join(stateDir, schedulerLockName({ githubRepositoryId: "R_demo" }));
-    const { processStartIdentity } = require("../src/enablement-lock.cjs");
-    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startIdentity: processStartIdentity(process.pid), token: "owner" }));
-    const extension = await loadExtension(root);
     vi.useFakeTimers();
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath, { isIdle: () => false });
-    rmSync(lockPath);
+    const firstExtension = await loadExtension(root);
+    await invoke(firstExtension.commands.get("deadloop-enable")!, repoPath);
+    const secondExtension = await loadExtension(root);
+    await invoke(secondExtension.commands.get("deadloop-enable")!, repoPath);
+    const lockPath = path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ githubRepositoryId: "R_demo" }));
+    await firstExtension.events.get("session_shutdown")!({}, { cwd: repoPath, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined } });
 
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(JSON.parse(readFileSync(lockPath, "utf8")).pid).toBe(process.pid);
+    expect(existsSync(lockPath)).toBe(false);
   });
 
   it("stops scheduler liveness when an origin push URL targets another repository", async () => {

@@ -133,7 +133,7 @@ if (args[0] === "pr" && args[1] === "list") {
 } else if (args[0] === "api" && args.includes("POST")) {
   const state = prs();
   const bodyArg = args.find((arg) => arg.startsWith("body=")) || "body=";
-  const comment = {id:9901,created_at:"2026-07-13T00:01:00Z",user:{login:"deadloop-bot"},body:bodyArg.slice(5)};
+  const comment = {id:9901,created_at:"2026-07-13T00:01:00Z",updated_at:"2026-07-13T00:01:00Z",user:{login:"deadloop-bot"},body:bodyArg.slice(5)};
   state[0].comments.push(comment); save(state); process.stdout.write(JSON.stringify(comment));
 } else if (args[0] === "api" && args.includes("PUT")) {
   let input = ""; process.stdin.on("data", (chunk) => input += chunk); process.stdin.on("end", () => {

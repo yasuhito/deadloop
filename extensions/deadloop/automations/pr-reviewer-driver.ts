@@ -158,7 +158,7 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
     },
     createPrComment: (_repo: string, number: string | number, body: string) => {
       const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
-      const comment = { id: Number(pr?.comments?.length || 0) + 10_000, createdAt: "2026-07-08T00:00:00Z", author: { login: String(fixture.automationLogin || "deadloop-bot") }, body };
+      const comment = { id: Number(pr?.comments?.length || 0) + 10_000, createdAt: "2026-07-08T00:00:00Z", updatedAt: "2026-07-08T00:00:00Z", author: { login: String(fixture.automationLogin || "deadloop-bot") }, body };
       if (pr && fixture.winningForeignClaimOwner) {
         const own = parseReviewClaim(body);
         const foreignBinding = {
@@ -170,7 +170,7 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
           revision: own.revision,
           owner: String(fixture.winningForeignClaimOwner),
         };
-        (pr.comments ||= []).push({ ...comment, id: 9_999, createdAt: "2026-07-07T23:59:59Z", body: renderReviewClaimComment(foreignBinding) });
+        (pr.comments ||= []).push({ ...comment, id: 9_999, createdAt: "2026-07-07T23:59:59Z", updatedAt: "2026-07-07T23:59:59Z", body: renderReviewClaimComment(foreignBinding) });
       }
       if (pr) (pr.comments ||= []).push(comment);
       effects.githubComments.push({ number: Number(number), body });

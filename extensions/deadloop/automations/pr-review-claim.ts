@@ -82,6 +82,15 @@ function commentTime(comment: JsonObject): number {
   return Date.parse(String(comment.createdAt || comment.created_at || ""));
 }
 
+function hasUneditedCommentEvidence(comment: JsonObject): boolean {
+  const createdAt = String(comment.createdAt || comment.created_at || "");
+  const updatedAt = String(comment.updatedAt || comment.updated_at || "");
+  return Boolean(createdAt)
+    && createdAt === updatedAt
+    && Number.isFinite(Date.parse(createdAt))
+    && Number.isFinite(Date.parse(updatedAt));
+}
+
 function serverCommentId(comment: JsonObject): string {
   return String(comment.databaseId || comment.id || "");
 }
@@ -205,6 +214,7 @@ function selectReviewClaimWinner(
     const createdAt = commentTime(comment);
     const marker = parseReviewClaim(comment.body);
     return Boolean(id)
+      && hasUneditedCommentEvidence(comment)
       && Number.isFinite(createdAt)
       && createdAt <= now.getTime()
       && now.getTime() < createdAt + authoritySeconds * 1000

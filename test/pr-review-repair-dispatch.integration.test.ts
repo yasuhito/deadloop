@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
-const { blockedClaimMove } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
+const { blockedClaimMove, requireReviewClaimForManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
 const trustedCumulativeComments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
   ...comment,
@@ -597,6 +597,13 @@ afterEach(() => {
 });
 
 describe("review repair dispatch integration", () => {
+  it("requires an active claim before mutating an in-progress review", () => {
+    expect(() => requireReviewClaimForManagedPr(
+      { labels: [{ name: "agent:in-progress" }] },
+      { inProgressLabel: "agent:in-progress", reviewClaim: null },
+    )).toThrow("active review claim is required");
+  });
+
   it("persists exact V1 findings, closes the reviewer workspace, and launches one repair without a duplicate", () => {
     const result = runV1ChangesRequestedTwice();
 

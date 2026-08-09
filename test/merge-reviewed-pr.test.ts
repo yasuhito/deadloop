@@ -42,7 +42,7 @@ function runMerge(options: {
       reviewPromise: "/state/reviewer-promise.json",
       inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked",
-      ...(options.reviewClaim ? { reviewClaim: {
+      ...(options.reviewClaim !== false ? { reviewClaim: {
         binding: { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" },
         commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
         reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
@@ -79,7 +79,7 @@ function runMerge(options: {
         }
         if (args.some((arg) => arg.endsWith("/comments"))) {
           const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" };
-          return { status: 0, stdout: JSON.stringify([[], [{ id: 101, created_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }]]), stderr: "" };
+          return { status: 0, stdout: JSON.stringify([[], [{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }]]), stderr: "" };
         }
         if (args[1] === "api") return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
         mutationObservedInsideLock = lockHeld;
@@ -92,8 +92,12 @@ function runMerge(options: {
 }
 
 describe("reviewed PR merge", () => {
+  it("fails closed when the active review claim is omitted", () => {
+    expect(() => runMerge({ reviewClaim: false })).toThrow("active review claim is required");
+  });
+
   it("passes the reviewed head to GitHub's atomic merge guard", () => {
-    expect(runMerge().commands[1]).toEqual([
+    expect(runMerge().commands.at(-1)).toEqual([
       "gh", "pr", "merge", "24", "-R", "owner/repo",
       "--squash", "--delete-branch", "--match-head-commit", expectedHead,
     ]);

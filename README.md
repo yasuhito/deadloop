@@ -71,7 +71,7 @@ Re-enable each repository after upgrading from an older release.
 
 ### Add local overrides only when needed
 
-Copy the example into Pi's local state only when you need overrides such as `autoMerge`, a custom `worktreeRoot`, or additional `automationLogins` for other Automation hosts in the same trusted fleet:
+Copy the example into Pi's local state only when you need overrides such as `autoMerge`, a custom `worktreeRoot`, or additional `automationLogins` for other Automation hosts in the same trusted fleet. Add only GitHub logins whose identity and control you have verified; the example intentionally authorizes none:
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop

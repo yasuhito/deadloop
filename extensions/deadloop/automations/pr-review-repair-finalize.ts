@@ -26,7 +26,7 @@ type FinalizeArgs = {
   enabledAt: number;
   checkCommand: string;
   resultFile: string;
-  reviewClaim?: JsonObject;
+  reviewClaim: JsonObject;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
 type EnabledProject = { githubRepo: string; githubRepositoryId: string };
@@ -93,6 +93,9 @@ function decideRepairPushGuard(pr: JsonObject, expectedBranch: string, expectedH
 }
 
 function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): JsonObject {
+  if (!args.reviewClaim || typeof args.reviewClaim !== "object" || Array.isArray(args.reviewClaim)) {
+    throw new Error("active review claim is required before repair push");
+  }
   checked(ops, ["git", "check-ref-format", "--branch", args.branch]);
   const candidateOid = checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS);
   if (ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedHead, candidateOid]).status !== 0) {
@@ -143,13 +146,11 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       originalHeadOid: args.expectedHead.toLowerCase(),
       currentRemoteHeadOid: String(pr.headRefOid || "").toLowerCase(),
     };
-    if (args.reviewClaim) {
-      const events = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS));
-      const comments = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS));
-      const headers = checkedRaw(ops, ["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
-      if (!validateActiveReviewClaim(pr, events, comments, headers, args.reviewClaim)) {
-        throw new Error("active review claim could not be reauthorized before repair push");
-      }
+    const events = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS));
+    const comments = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS));
+    const headers = checkedRaw(ops, ["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
+    if (!validateActiveReviewClaim(pr, events, comments, headers, args.reviewClaim)) {
+      throw new Error("active review claim could not be reauthorized before repair push");
     }
     const pushDestination = resolveVerifiedPushDestination(
       ops,
@@ -219,7 +220,7 @@ function parseArgs(argv: string[]): FinalizeArgs {
     enabledAt: Number(required(values, "enabledAt")),
     checkCommand: required(values, "checkCommand"),
     resultFile: required(values, "resultFile"),
-    ...(values.reviewClaim ? { reviewClaim: JSON.parse(values.reviewClaim) } : {}),
+    reviewClaim: JSON.parse(required(values, "reviewClaim")),
   };
 }
 

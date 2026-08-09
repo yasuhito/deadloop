@@ -5,6 +5,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
+const { completion } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
 const roots: string[] = [];
 const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
@@ -47,6 +49,12 @@ function runCompletion(options: {
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
   }] }));
+  const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a" };
+  const reviewClaim = {
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  };
+  const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
   const outcome = String(options.promise.reason || "");
   const strongPromise = {
     schemaVersion: 1, attemptId: key, role: "review-repair",
@@ -83,6 +91,9 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
 else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
+else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))});
+else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:in-progress" }, { name: "agent:reviewing" }])},comments:${JSON.stringify(options.comments || [])}}));
 else if (args[0] === "pr" && args[1] === "comment") fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
 else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.ACTIONS_FILE, args.join(" ") + "\\n");
@@ -127,6 +138,8 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
       "agent:in-progress",
       "--blocked-label",
       "agent:blocked",
+      "--review-claim",
+      JSON.stringify(reviewClaim),
     ],
     { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"), POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile } },
   );
@@ -181,12 +194,21 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   }));
   fs.writeFileSync(contractFile, JSON.stringify({ attemptKey: key, expectedHead: oldHead, findingTitles: ["Unsafe fallback"] }));
   fs.writeFileSync(commentsFile, "[]");
+  const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a" };
+  const reviewClaim = {
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  };
+  const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
   const gh = path.join(bin, "gh");
   fs.writeFileSync(gh, `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
-else if (args[0] === "api") process.stdout.write("deadloop-bot\\n");
+else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
+else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))});
+else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:"OPEN",headRefName:"agent/issue-24",headRefOid:"${newHead}",isCrossRepository:false,labels:[{name:"agent:in-progress"},{name:"agent:reviewing"}],comments:JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"))}));
 else if (args[0] === "pr" && args[1] === "comment") {
   const comments = JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"));
@@ -202,6 +224,7 @@ else if (args[0] === "pr" && args[1] === "comment") {
     "--enabled-at", "1", "--pr", "24", "--branch", "agent/issue-24", "--expected-head", oldHead,
     "--attempt-key", key, "--review-label", "agent:review", "--reviewing-label", "agent:reviewing",
     "--in-progress-label", "agent:in-progress", "--blocked-label", "agent:blocked",
+    "--review-claim", JSON.stringify(reviewClaim),
   ];
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir, COMMENTS_FILE: commentsFile };
   await Promise.all([0, 1].map(() => new Promise<void>((resolve, reject) => {
@@ -217,14 +240,18 @@ afterEach(() => {
 });
 
 describe("review repair deterministic completion", () => {
-  it.each(["--attempt-record", "--project-id"])("requires canonical identity argument %s", (missingFlag) => {
+  it("fails before repair completion effects when the active review claim is omitted", () => {
+    expect(() => completion({})).toThrow("active review claim is required");
+  });
+
+  it.each(["--attempt-record", "--project-id", "--review-claim"])("requires mutation authority argument %s", (missingFlag) => {
     const { parseArgs } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
     const values = {
       promise: "/state/runs/one/promise.json", attemptRecord: "/state/runs/one/attempt.json", projectId: "demo",
       result: "/state/runs/one/finalizer-result.json", contract: "/state/runs/one/review-contract.json",
       projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: "1", pr: "24",
       branch: "agent/issue-24", expectedHead: oldHead, attemptKey: key, reviewLabel: "review",
-      reviewingLabel: "reviewing", inProgressLabel: "in-progress", blockedLabel: "blocked",
+      reviewingLabel: "reviewing", inProgressLabel: "in-progress", blockedLabel: "blocked", reviewClaim: "{}",
     };
     const args = Object.entries(values).flatMap(([name, value]) => {
       const flag = `--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)}`;

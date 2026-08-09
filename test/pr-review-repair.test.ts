@@ -18,6 +18,7 @@ const {
   finalizeReviewRepair,
 } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
 const { readLivePr, repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
+const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
 
 const automationLogin = "deadloop-bot";
@@ -26,6 +27,11 @@ const cumulativeComments = cumulativeRepairFixture.comments.map((comment: Record
   author: { login: automationLogin },
 }));
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const reviewClaimBinding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 243, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a" };
+const reviewClaim = {
+  binding: reviewClaimBinding, commentId: "101", authorizedLogins: [automationLogin], authoritySeconds: 3600,
+  reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+};
 const findings = [
   {
     title: "Lint contract failure",
@@ -62,6 +68,7 @@ function finalizeWith(
       enabledAt: 1,
       checkCommand: "npm test",
       resultFile: "/state/result.json",
+      reviewClaim,
     },
     {
       assertEnabled: () => {
@@ -91,6 +98,13 @@ function finalizeWith(
           if (localHeadChanges.beforePush) localHead = localHeadChanges.beforePush;
           return { status: 0, stdout: JSON.stringify({ id: repositoryIds[args[3]] || (args[3] === "other/repo" ? "R_other" : "R_repo") }), stderr: "" };
         }
+        if (args[0] === "gh" && args.some((arg) => arg.endsWith("/events"))) {
+          return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
+        }
+        if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) {
+          return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: automationLogin }, body: renderReviewClaimComment(reviewClaimBinding) }]]), stderr: "" };
+        }
+        if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
         if (args[0] === "gh") {
           return {
             status: 0,
@@ -99,6 +113,7 @@ function finalizeWith(
               isCrossRepository: false,
               headRefName: "agent/issue-243",
               headRefOid: observedHead,
+              labels: [{ name: "agent:in-progress" }],
             }),
             stderr: "",
           };
@@ -125,6 +140,8 @@ function finalizeVerifiedRename() {
     git(["add", "."]);
     git(["commit", "--quiet", "-m", "base"]);
     const expectedHead = git(["rev-parse", "HEAD"]);
+    const renameBinding = { ...reviewClaimBinding, revision: expectedHead };
+    const renameReviewClaim = { ...reviewClaim, binding: renameBinding };
     for (let index = 1; index <= 29; index += 1) {
       git(["mv", `old-${index}.txt`, `new-${index}.txt`]);
       fs.appendFileSync(path.join(repo, `new-${index}.txt`), `changed-${index}\n`);
@@ -145,6 +162,7 @@ function finalizeVerifiedRename() {
         enabledAt: 1,
         checkCommand: "true",
         resultFile: "/state/result.json",
+        reviewClaim: renameReviewClaim,
       },
       {
         assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
@@ -153,8 +171,11 @@ function finalizeVerifiedRename() {
           if (args.includes("ls-remote")) return { status: 0, stdout: `${expectedHead}\trefs/heads/${branch}\n`, stderr: "" };
           if (args.includes("get-url")) return { status: 0, stdout: "https://github.com/owner/repo.git\n", stderr: "" };
           if (args[0] === "gh" && args[1] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
+          if (args[0] === "gh" && args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
+          if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: automationLogin }, body: renderReviewClaimComment(renameBinding) }]]), stderr: "" };
+          if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
           if (args[0] === "gh") {
-            return { status: 0, stdout: JSON.stringify({ state: "OPEN", isCrossRepository: false, headRefName: branch, headRefOid: expectedHead }), stderr: "" };
+            return { status: 0, stdout: JSON.stringify({ state: "OPEN", isCrossRepository: false, headRefName: branch, headRefOid: expectedHead, labels: [{ name: "agent:in-progress" }] }), stderr: "" };
           }
           const result = spawnSync(args[0], args.slice(1), { encoding: "utf8" });
           return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
@@ -176,6 +197,7 @@ function finalizeWhileDisabled() {
         branch: "agent/issue-243", expectedHead: head, remote: "origin",
         automationDir: "/automation", stateDir: "/state", enabledAt: 1, checkCommand: "npm test",
         resultFile: "/state/result.json",
+        reviewClaim,
       },
       {
         assertEnabled: () => { throw new Error("deadloop is disabled for this repository"); },
@@ -211,6 +233,14 @@ function prompt() {
 }
 
 describe("automatic PR review repair", () => {
+  it("fails before repair work when the active review claim is omitted", () => {
+    expect(() => finalizeReviewRepair({
+      repo: "/worktree", projectRepo: "/repo", githubRepo: "owner/repo", pr: "243", branch: "agent/issue-243",
+      expectedHead: head, remote: "origin", automationDir: "/automation", stateDir: "/state", enabledAt: 1,
+      checkCommand: "npm test", resultFile: "/state/result.json",
+    }, { run: () => { throw new Error("unexpected command"); } })).toThrow("active review claim is required");
+  });
+
   it("selects a first repair for an exact head and review result", () => {
     expect(selectRepairAttempt([], head, findings, automationLogin).action).toBe("launch_repair");
   });
@@ -391,7 +421,7 @@ describe("automatic PR review repair", () => {
     finalizeWith(commands, head, undefined, timeouts);
     const firstGuardedCommand = commands.findIndex((command) => command[0] === "gh");
 
-    expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 25_000]);
+    expect(timeouts.slice(firstGuardedCommand).every((timeout) => timeout === 25_000)).toBe(true);
   });
 
   it("pushes the exact branch without forcing", () => {

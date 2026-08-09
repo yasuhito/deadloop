@@ -88,9 +88,9 @@ When("deadloop completes approval processing for the current pull request", func
         pr: "25",
         expectedHead: currentHead,
         reviewPromise: "/state/reviewer-promise.json",
-        reviewLabel: "agent:review",
-        reviewingLabel: "agent:reviewing",
+        inProgressLabel: "agent:in-progress",
         blockedLabel: "agent:blocked",
+        reviewClaim: {},
       },
       {
         withLock: (_project: unknown, operation: (enabled: unknown) => number) => operation({

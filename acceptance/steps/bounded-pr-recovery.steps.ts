@@ -9,12 +9,18 @@ import { Given, Then, When } from "@cucumber/cucumber";
 const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
 const { renderRepairMarker, renderTechnicalFailureMarker, reviewResultFingerprint } = require("../../extensions/deadloop/automations/pr-review-repair-state.ts");
 const { finalizeReviewRepair } = require("../../extensions/deadloop/automations/pr-review-repair-finalize.ts");
+const { renderReviewClaimComment } = require("../../extensions/deadloop/automations/pr-review-claim.ts");
 
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const repairedHead = "cccccccccccccccccccccccccccccccccccccccc";
 const branch = "agent/issue-31";
 const findings = [{ title: "Lint contract failure", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
+const reviewClaimBinding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 31, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a" };
+const reviewClaim = {
+  binding: reviewClaimBinding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+  reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+};
 
 type RecoveryWorld = {
   case?: string;
@@ -234,10 +240,13 @@ function finalizerOps(commands: string[][], actualHead = head, isCrossRepository
       if (args.includes("--git-common-dir")) return { status: 0, stdout: "/common\n", stderr: "" };
       if (args.includes("symbolic-ref")) return { status: 0, stdout: `${branch}\n`, stderr: "" };
       if (args[0] === "gh" && args[1] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
+      if (args[0] === "gh" && args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
+      if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(reviewClaimBinding) }]]), stderr: "" };
+      if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
       if (args[0] === "gh") {
         return {
           status: 0,
-          stdout: JSON.stringify({ state: "OPEN", isCrossRepository, headRefName: branch, headRefOid: actualHead }),
+          stdout: JSON.stringify({ state: "OPEN", isCrossRepository, headRefName: branch, headRefOid: actualHead, labels: [{ name: "agent:in-progress" }] }),
           stderr: "",
         };
       }
@@ -261,6 +270,7 @@ function repairFinalizer(commands: string[][], actualHead = head) {
       stateDir: "/state",
       enabledAt: 1,
       checkCommand: "npm test",
+      reviewClaim,
     },
     finalizerOps(commands, actualHead, false),
   );

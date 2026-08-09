@@ -25,7 +25,7 @@ function parseArgs(argv: string[]): JsonObject {
     if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs");
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
-  for (const name of ["promise", "attemptRecord", "projectId", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "reviewingLabel", "inProgressLabel", "blockedLabel"]) {
+  for (const name of ["promise", "attemptRecord", "projectId", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "reviewingLabel", "inProgressLabel", "blockedLabel", "reviewClaim"]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
   return values;
@@ -61,6 +61,15 @@ function sameFindingTitles(repairs: JsonObject[], findingTitles: unknown): boole
 }
 
 function completion(args: JsonObject): DriverResult {
+  let reviewClaim: JsonObject;
+  try {
+    reviewClaim = typeof args.reviewClaim === "string" ? JSON.parse(args.reviewClaim) : args.reviewClaim;
+  } catch {
+    throw new Error("active review claim must be valid JSON before repair completion");
+  }
+  if (!reviewClaim || typeof reviewClaim !== "object" || Array.isArray(reviewClaim)) {
+    throw new Error("active review claim is required before repair completion");
+  }
   const runner = createCommandRunner();
   runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
   const location = canonicalAttemptLocation(args);
@@ -146,10 +155,8 @@ function completion(args: JsonObject): DriverResult {
     }
 
     const comments = (pr.comments || []) as JsonObject[];
-    const reviewClaim = args.reviewClaim ? JSON.parse(String(args.reviewClaim)) : null;
     const observation = createGithubOperations(runner);
     const reauthorize = () => {
-      if (!reviewClaim) return;
       const current = observation.getPr(String(args.githubRepo), String(args.pr));
       if (String(current.headRefOid || "").toLowerCase() !== liveHead) {
         throw new Error("active review claim could not be reauthorized before repair completion mutation");

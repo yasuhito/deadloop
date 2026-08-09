@@ -26,6 +26,7 @@ function claim(overrides: Record<string, unknown> = {}) {
   return {
     id: 101,
     createdAt: "2026-07-20T10:01:00Z",
+    updatedAt: "2026-07-20T10:01:00Z",
     author: { login: "deadloop-a" },
     body: renderReviewClaimComment(binding),
     ...overrides,
@@ -38,7 +39,7 @@ describe("PR review GitHub claim", () => {
   });
 
   it("chooses the earliest valid GitHub claim", () => {
-    expect(selectReviewClaimWinner([claim({ id: 102, createdAt: "2026-07-20T10:02:00Z" }), claim()], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)?.id).toBe(101);
+    expect(selectReviewClaimWinner([claim({ id: 102, createdAt: "2026-07-20T10:02:00Z", updatedAt: "2026-07-20T10:02:00Z" }), claim()], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)?.id).toBe(101);
   });
 
   it("rejects a malformed claim", () => {
@@ -47,6 +48,37 @@ describe("PR review GitHub claim", () => {
 
   it("rejects a claim from an unauthorized identity", () => {
     expect(selectReviewClaimWinner([claim({ author: { login: "stranger" } })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
+  });
+
+  it("rejects a claim without GitHub edit evidence", () => {
+    const missing = claim();
+    delete missing.updatedAt;
+    expect(selectReviewClaimWinner([missing], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
+  });
+
+  it("rejects a claim with malformed GitHub edit evidence", () => {
+    expect(selectReviewClaimWinner([claim({ updatedAt: "not-a-time" })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
+  });
+
+  it("rejects an old comment edited to another request generation", () => {
+    const edited = { ...binding, requestEventId: "event-23" };
+    expect(selectReviewClaimWinner([claim({ createdAt: "2026-07-20T09:00:00Z", body: renderReviewClaimComment(edited) })], edited, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 7200)).toBeNull();
+  });
+
+  it("rejects an old comment edited to another head", () => {
+    const edited = { ...binding, revision: "b".repeat(40) };
+    expect(selectReviewClaimWinner([claim({ createdAt: "2026-07-20T09:00:00Z", body: renderReviewClaimComment(edited) })], edited, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 7200)).toBeNull();
+  });
+
+  it("rejects an old comment edited to another owner", () => {
+    const edited = { ...binding, owner: "host-b" };
+    expect(selectReviewClaimWinner([claim({ createdAt: "2026-07-20T09:00:00Z", body: renderReviewClaimComment(edited) })], edited, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 7200)).toBeNull();
+  });
+
+  it("selects an unedited claim observed on a later page", () => {
+    const editedOldClaim = claim({ id: 100, createdAt: "2026-07-20T09:00:00Z" });
+    const comments = parsePaginatedGithubJson(JSON.stringify([[editedOldClaim], [claim()]]));
+    expect(selectReviewClaimWinner(comments, binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 7200)?.id).toBe(101);
   });
 
   it("rejects a claim for another revision", () => {
@@ -140,6 +172,6 @@ describe("PR review GitHub claim", () => {
     const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
     const extended = Buffer.from(JSON.stringify({ ...payload, expiresAt: "2099-01-01T00:00:00Z" })).toString("base64url");
     const body = original.replace(encoded, extended);
-    expect(selectReviewClaimWinner([claim({ body, createdAt: "2026-07-20T08:00:00Z" })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
+    expect(selectReviewClaimWinner([claim({ body, createdAt: "2026-07-20T08:00:00Z", updatedAt: "2026-07-20T08:00:00Z" })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
   });
 });

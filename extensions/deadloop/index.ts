@@ -1802,14 +1802,15 @@ export default function (pi) {
       return { started: true };
     }
     const lock = acquireSchedulerLock(project);
-    ownsLock = lock.acquired;
-    active = { project, lockPath: lock.lockPath, lockToken: lock.token };
-    if (!ownsLock) {
-      setLooperStatus(ctx, `${project.id} standby: owner pid ${lock.owner ?? "unknown"}`);
-      timer = setInterval(() => startScheduler(ctx, project), TICK_MS);
-      timer.unref?.();
-      return { started: true };
+    if (!lock.acquired) {
+      ownsLock = false;
+      active = null;
+      const reason = `repository is already served by Automation host pid ${lock.owner ?? "unknown"}`;
+      setLooperStatus(ctx, `skipped: ${reason}`);
+      return { started: false, reason };
     }
+    ownsLock = true;
+    active = { project, lockPath: lock.lockPath, lockToken: lock.token };
     updateStatus(ctx, project, loadState());
     timer = setInterval(() => pollScheduler(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] tick failed:`, error?.message || error)), TICK_MS);
     timer.unref?.();

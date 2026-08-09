@@ -19,7 +19,7 @@ const APPROVED_GH_OPERATIONS = new Map<string, ApprovedOperation>([
   ["pr comment", { positional: 1, valueFlags: new Set(["--body", "--body-file"]) }],
 ]);
 
-function assertApprovedCommand(command: string[], githubRepo: string): void {
+function assertApprovedCommand(command: string[], githubRepo: string): string {
   if (!/(^|[/\\])gh(?:\.exe)?$/.test(command[0] || "")) {
     throw new Error("guarded-operation.ts accepts only approved gh mutations; use dedicated helpers for push or branch operations");
   }
@@ -60,6 +60,7 @@ function assertApprovedCommand(command: string[], githubRepo: string): void {
   if (positional.length !== approved.positional || positional.some((value) => !/^\d+$/.test(value))) {
     throw new Error("guarded GitHub mutation has an invalid target");
   }
+  return positional[0];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -87,12 +88,19 @@ function parseArgs(argv: string[]): Args {
 }
 
 function runGuarded(args: Args, spawn = spawnSync): number {
-  assertApprovedCommand(args.command, args.githubRepo);
+  const commandTarget = assertApprovedCommand(args.command, args.githubRepo);
+  if (args.command[1] === "pr"
+    && (!args.reviewClaim || typeof args.reviewClaim !== "object" || Array.isArray(args.reviewClaim))) {
+    throw new Error("active review claim is required before guarded PR mutation");
+  }
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
     (_enabled: unknown, recheck: () => void) => {
       if (args.reviewClaim) {
         const number = String((args.reviewClaim.binding as { targetNumber?: unknown })?.targetNumber || "");
+        if (args.command[1] === "pr" && commandTarget !== number) {
+          throw new Error("active review claim target does not match guarded PR mutation target");
+        }
         const query = (queryArgs: string[]) => spawn("gh", queryArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GUARDED_OPERATION_TIMEOUT_MS });
         const pr = query(["pr", "view", number, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
         const events = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${number}/events`]);

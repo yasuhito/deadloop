@@ -165,6 +165,25 @@ gh pr view ${prNumber} -R ${shellQuote(env.githubRepo)} --comments --json number
 3. Push a new commit, then remove ${env.blockedLabel}; the changed head can start a new review cycle.${marker ? `\n\n${marker}` : ""}`;
 }
 
+function requireReviewClaimForManagedPr(pr: JsonObject, env: ReturnType<typeof envConfig>): void {
+  if (labelNames(pr.labels).includes(env.inProgressLabel)
+    && (!env.reviewClaim || typeof env.reviewClaim !== "object" || Array.isArray(env.reviewClaim))) {
+    throw new Error("active review claim is required before review repair mutation");
+  }
+}
+
+function reauthorizeReviewClaim(prNumber: string, env: ReturnType<typeof envConfig>): void {
+  if (!env.reviewClaim) return;
+  const observation = createGithubOperations(commandRunner);
+  if (!validateActiveReviewClaim(
+    observation.getPr(env.githubRepo, prNumber),
+    observation.listPrTimelineEvents(env.githubRepo, prNumber),
+    observation.listPrComments(env.githubRepo, prNumber),
+    readGithubRestResponseHeaders(commandRunner, env.githubRepo),
+    env.reviewClaim,
+  )) throw new StaleLaunchError(`PR #${prNumber} active review claim could not be reauthorized`);
+}
+
 function withRevalidatedPrMutation(
   prNumber: string,
   env: ReturnType<typeof envConfig>,
@@ -174,16 +193,8 @@ function withRevalidatedPrMutation(
   withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
     const livePr = readLivePr(env.githubRepo, prNumber);
     assertSameLaunchTarget(expectedPr, livePr, "pr");
-    const observation = createGithubOperations(commandRunner);
-    const reauthorize = () => {
-      if (env.reviewClaim && !validateActiveReviewClaim(
-        observation.getPr(env.githubRepo, prNumber),
-        observation.listPrTimelineEvents(env.githubRepo, prNumber),
-        observation.listPrComments(env.githubRepo, prNumber),
-        readGithubRestResponseHeaders(commandRunner, env.githubRepo),
-        env.reviewClaim,
-      )) throw new StaleLaunchError(`PR #${prNumber} active review claim could not be reauthorized`);
-    };
+    requireReviewClaimForManagedPr(livePr, env);
+    const reauthorize = () => reauthorizeReviewClaim(prNumber, env);
     reauthorize();
     mutation(createGithubOperations(commandRunner, () => { recheck(); reauthorize(); }), livePr);
   });
@@ -520,6 +531,7 @@ function dispatch(args: JsonObject): DriverResult {
   const expectedHead = String(args.expectedHead).toLowerCase();
   const branch = String(args.branch);
   const pr = readLivePr(env.githubRepo, prNumber);
+  requireReviewClaimForManagedPr(pr, env);
 
   if (String(pr.state || "").toUpperCase() !== "OPEN" || Boolean(pr.isCrossRepository) || String(pr.headRefName || "") !== branch) {
     const comment = applyHumanBlock(prNumber, env, pr, "the selected PR is no longer a safe same-repository branch target", promise.summary);
@@ -652,6 +664,8 @@ function dispatch(args: JsonObject): DriverResult {
             revalidate: () => {
               const livePr = readLivePr(env.githubRepo, prNumber);
               assertSameLaunchTarget(refreshedPr, livePr, "pr");
+              requireReviewClaimForManagedPr(livePr, env);
+              reauthorizeReviewClaim(prNumber, env);
               const labels = labelNames(livePr.labels);
               const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
               if (liveSelection.cumulativeLimitExceeded) {
@@ -799,7 +813,9 @@ function dispatch(args: JsonObject): DriverResult {
           recheck();
           return;
         }
-        const guardedGithub = createGithubOperations(commandRunner, recheck);
+        requireReviewClaimForManagedPr(refreshedPr, env);
+        reauthorizeReviewClaim(prNumber, env);
+        const guardedGithub = createGithubOperations(commandRunner, () => { recheck(); reauthorizeReviewClaim(prNumber, env); });
         guardedGithub.commentPr(env.githubRepo, prNumber, renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }));
         guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: env.reviewingLabel });
       },
@@ -814,6 +830,8 @@ function dispatch(args: JsonObject): DriverResult {
         revalidate: () => {
           const livePr = readLivePr(env.githubRepo, prNumber);
           assertSameLaunchTarget(refreshedPr, livePr, "pr");
+          requireReviewClaimForManagedPr(livePr, env);
+          reauthorizeReviewClaim(prNumber, env);
           const labels = labelNames(livePr.labels);
           if ((!labels.includes(env.inProgressLabel) && !labels.includes(env.reviewLabel)) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)) {
             throw new StaleLaunchError(`PR #${prNumber} is no longer eligible for repair`);
@@ -913,4 +931,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { blockedClaimMove, dispatch, envConfig, launchRepair, parseArgs, readLivePr, recordRepairLaunchGithubClaim, repairWorkerPrompt };
+module.exports = { blockedClaimMove, dispatch, envConfig, launchRepair, parseArgs, readLivePr, recordRepairLaunchGithubClaim, repairWorkerPrompt, requireReviewClaimForManagedPr };
