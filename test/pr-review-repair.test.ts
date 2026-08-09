@@ -96,7 +96,7 @@ function finalizeWith(
         if (args.includes("symbolic-ref")) return { status: 0, stdout: `${localHeadChanges.checkedOutBranch || "agent/issue-243"}\n`, stderr: "" };
         if (args[0] === "gh" && args[1] === "repo") {
           if (localHeadChanges.beforePush) localHead = localHeadChanges.beforePush;
-          return { status: 0, stdout: JSON.stringify({ id: repositoryIds[args[3]] || (args[3] === "other/repo" ? "R_other" : "R_repo") }), stderr: "" };
+          return { status: 0, stdout: JSON.stringify({ id: repositoryIds[args[3]] || (args[3] === "other/repo" ? "R_other" : "R_repo"), nameWithOwner: args[3] }), stderr: "" };
         }
         if (args[0] === "gh" && args.some((arg) => arg.endsWith("/events"))) {
           return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
@@ -170,7 +170,7 @@ function finalizeVerifiedRename() {
           if (args[0] === "node" || args.includes("push")) return { status: 0, stdout: "", stderr: "" };
           if (args.includes("ls-remote")) return { status: 0, stdout: `${expectedHead}\trefs/heads/${branch}\n`, stderr: "" };
           if (args.includes("get-url")) return { status: 0, stdout: "https://github.com/owner/repo.git\n", stderr: "" };
-          if (args[0] === "gh" && args[1] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
+          if (args[0] === "gh" && args[1] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
           if (args[0] === "gh" && args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
           if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: automationLogin }, body: renderReviewClaimComment(renameBinding) }]]), stderr: "" };
           if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };

@@ -22,6 +22,8 @@ type MergeArgs = {
   reviewClaim: Record<string, unknown>;
 };
 type EnabledProject = {
+  githubRepositoryId: string;
+  githubRepo: string;
   firstEnableAutoMerge: boolean;
   firstStartPending: boolean;
   autoMergeAcknowledged: boolean;
@@ -191,12 +193,23 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     assertMergeAuthorized(enabled);
     assertReviewApproved(args, ops);
     assertCurrentPrEligible(args, ops);
+    const repositoryResult = ops.run(["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS);
     const prResult = ops.run(["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefOid,labels"], MAX_GUARDED_OPERATION_MS);
     const eventsResult = ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS);
     const commentsResult = ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS);
     const dateResult = ops.run(["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
-    if ([prResult, eventsResult, commentsResult, dateResult].some((result) => result.status !== 0)
-      || !validateActiveReviewClaim(JSON.parse(prResult.stdout), parsePaginatedGithubJson(eventsResult.stdout), parsePaginatedGithubJson(commentsResult.stdout), dateResult.stdout, args.reviewClaim)) {
+    const repository = JSON.parse(repositoryResult.stdout || "{}");
+    if ([repositoryResult, prResult, eventsResult, commentsResult, dateResult].some((result) => result.status !== 0)
+      || String(enabled.githubRepositoryId || "") !== String(repository.id || "")
+      || String(enabled.githubRepo || "") !== String(repository.nameWithOwner || "")
+      || !validateActiveReviewClaim(
+        JSON.parse(prResult.stdout),
+        parsePaginatedGithubJson(eventsResult.stdout),
+        parsePaginatedGithubJson(commentsResult.stdout),
+        dateResult.stdout,
+        args.reviewClaim,
+        { repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr) },
+      )) {
       throw new Error("active review claim could not be reauthorized; automatic merge stopped");
     }
     recheck();

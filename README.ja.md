@@ -126,7 +126,7 @@ gh label create agent:blocked --repo owner/repo --color b60205 || true
 
 Issue は、`ready-for-agent` と `agent:implement` の両方が付いている場合に限り処理対象になります。
 
-`agent:reviewing` は、ブランチ更新、レビュー修復、マージ完了の既存経路向け互換ラベルとして残します。新しいレビュー要求の取得には代わりに `agent:in-progress` を使います。
+`agent:reviewing` は、古い作業状態とブランチ更新経路向けの互換ラベルとして残します。レビュー要求の取得と修正の認証には `agent:in-progress` が必要で、新しいレビュー処理は `agent:reviewing` を追加しません。
 
 ## マージ競合の自動修復
 
@@ -150,7 +150,7 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 
 組み込みのレビューエージェントが構造化された修正可能な指摘を返すと、deadloop は既存の PR ブランチで、一度だけ専用の修正用作業エージェントを起動できます。
 
-修正中は、有効な取得を示す `agent:in-progress` を維持し、互換用の `agent:reviewing` だけを追加します。修正完了までは新しい `agent:review` 要求を作らず、修正専用ラベルも追加しません。
+修正中は、有効な取得を示す `agent:in-progress` を維持し、別の作業状態ラベルは追加しません。修正完了までは新しい `agent:review` 要求を作らず、修正状態から移るときに古い `agent:reviewing` があれば除去します。
 
 作業エージェントには、指摘事項だけを渡します。
 

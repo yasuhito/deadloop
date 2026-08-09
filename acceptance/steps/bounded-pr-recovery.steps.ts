@@ -92,7 +92,7 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     fs.mkdirSync(bin);
     fs.mkdirSync(worktree, { recursive: true });
     fs.mkdirSync(state, { recursive: true });
-    fs.writeFileSync(labelsFile, JSON.stringify(["agent:review", "agent:reviewing"]));
+    fs.writeFileSync(labelsFile, JSON.stringify(["agent:in-progress"]));
     fs.writeFileSync(
       path.join(state, "enabled-projects.json"),
       JSON.stringify({ projects: [{
@@ -114,12 +114,18 @@ function repairDispatch(testCase: string): Record<string, unknown> {
         ? { status: "blocked", reason: "reviewer failed", summary: "Technical review failure." }
         : { status: "complete", outcome: "changes_requested", reason: "", summary: "Repair required.", findings }),
     );
+    const currentHead = testCase === "repeated-repair" ? repairedHead : head;
+    const activeReviewClaimBinding = { ...reviewClaimBinding, revision: currentHead };
+    const activeReviewClaim = { ...reviewClaim, binding: activeReviewClaimBinding };
+    const claimComment = {
+      id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z",
+      user: { login: "deadloop-bot" }, body: renderReviewClaimComment(activeReviewClaimBinding),
+    };
     const comments = testCase === "repeated-repair"
       ? [{ body: renderRepairMarker(head, reviewResultFingerprint(findings)), author: { login: "deadloop-bot" } }]
       : testCase === "repeated-technical-failure"
         ? [{ body: renderTechnicalFailureMarker(head) }]
         : [];
-    const currentHead = testCase === "repeated-repair" ? repairedHead : head;
     fs.writeFileSync(commentsFile, JSON.stringify(comments));
     const executable = (file: string, content: string) => {
       fs.writeFileSync(file, content);
@@ -131,12 +137,15 @@ function repairDispatch(testCase: string): Record<string, unknown> {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
+else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(JSON.stringify([[${JSON.stringify(claimComment)}]]));
+else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number: 31, state: "OPEN", headRefName: "${branch}", headRefOid: "${currentHead}", isCrossRepository: false,
   labels: JSON.parse(fs.readFileSync(process.env.TEST_LABELS_FILE, "utf8")).map(name => ({name})),
   comments: JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"))
 }));
-else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id: "R_repo"}));
+else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id: "R_repo", nameWithOwner: "owner/repo"}));
 else {
   if (args[0] === "pr" && args[1] === "edit") {
     const labels = new Set(JSON.parse(fs.readFileSync(process.env.TEST_LABELS_FILE, "utf8")));
@@ -194,6 +203,7 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
           DEADLOOP_GITHUB_REPO: "owner/repo",
           DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
+          DEADLOOP_REVIEW_CLAIM: JSON.stringify(activeReviewClaim),
           TEST_COMMENTS_FILE: commentsFile,
           TEST_GITHUB_LOG: githubLog,
           TEST_HERDR_LOG: herdrLog,
@@ -239,7 +249,7 @@ function finalizerOps(commands: string[][], actualHead = head, isCrossRepository
       if (args.includes("ls-remote")) return { status: 0, stdout: `${head}\trefs/heads/${branch}\n`, stderr: "" };
       if (args.includes("--git-common-dir")) return { status: 0, stdout: "/common\n", stderr: "" };
       if (args.includes("symbolic-ref")) return { status: 0, stdout: `${branch}\n`, stderr: "" };
-      if (args[0] === "gh" && args[1] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
+      if (args[0] === "gh" && args[1] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
       if (args[0] === "gh" && args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
       if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(reviewClaimBinding) }]]), stderr: "" };
       if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
@@ -403,7 +413,7 @@ Then("The selection reason after conflict recovery is repair re-review", functio
 
 Then("deadloop preserves the review state", function (this: RecoveryWorld) {
   const labels = adapterEffects(this.result)?.labels?.["31"] ?? this.result?.observedLabels;
-  assert.deepEqual(labels, ["agent:review", "agent:reviewing"]);
+  assert.deepEqual(labels, this.case === "conflict" ? ["agent:review", "agent:reviewing"] : ["agent:in-progress"]);
 });
 
 Then("deadloop starts a dedicated repair attempt", function (this: RecoveryWorld) {

@@ -146,10 +146,13 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       originalHeadOid: args.expectedHead.toLowerCase(),
       currentRemoteHeadOid: String(pr.headRefOid || "").toLowerCase(),
     };
+    const repository = JSON.parse(checked(ops, ["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS));
     const events = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS));
     const comments = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS));
     const headers = checkedRaw(ops, ["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
-    if (!validateActiveReviewClaim(pr, events, comments, headers, args.reviewClaim)) {
+    if (!validateActiveReviewClaim(pr, events, comments, headers, args.reviewClaim, {
+      repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr),
+    })) {
       throw new Error("active review claim could not be reauthorized before repair push");
     }
     const pushDestination = resolveVerifiedPushDestination(

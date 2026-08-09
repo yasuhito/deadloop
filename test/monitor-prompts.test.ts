@@ -193,14 +193,13 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("merge-reviewed-pr.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --in-progress-label agent:in-progress --blocked-label agent:blocked");
   });
 
-  it("routes branch-update blocked handling through the enablement guard", () => {
-    const prompt = renderBranchUpdateMonitorPrompt({
+  it("prohibits branch-update monitor mutations without an active review claim", () => {    const prompt = renderBranchUpdateMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), expectedBaseOid: "b".repeat(40), branch: "agent/issue-24",
       automationDir: "/automation", promiseFile: "/state/promise.json", actorName: "branch-update worker",
       repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("Never run those mutations directly");
+    expect(prompt).toContain("no active review-claim contract");
   });
 
   it("routes repair blocked handling through the enablement guard", () => {

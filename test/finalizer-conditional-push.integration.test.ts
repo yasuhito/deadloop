@@ -69,7 +69,7 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
       };
     }
     if (args[0] === "gh" && args[1] === "repo") {
-      return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
+      return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
     }
     const result = spawnSync(args[0], args.slice(1), {
       encoding: "utf8",
@@ -156,7 +156,7 @@ process.exit(result.status ?? 1);
     const gh = path.join(bin, "gh");
     writeFileSync(gh, `#!/usr/bin/env node
 const args = process.argv.slice(2);
-if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
+if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
 else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(JSON.stringify([[{id:101,created_at:"2026-07-20T10:01:00Z",updated_at:"2026-07-20T10:01:00Z",user:{login:"deadloop-bot"},body:${JSON.stringify(renderReviewClaimComment(binding))}}]]));
 else if (args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");

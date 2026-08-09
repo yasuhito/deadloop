@@ -110,7 +110,7 @@ gh label create agent:in-progress --repo owner/repo --color fbca04 || true
 gh label create agent:blocked --repo owner/repo --color b60205 || true
 ```
 
-`agent:reviewing` remains a compatibility label for the existing branch-update, repair, and merge completion paths. New review-request claims use `agent:in-progress`.
+`agent:reviewing` remains a compatibility label for older workflow state and branch-update paths. Review claims and repair authorization require `agent:in-progress`; new review flows never add `agent:reviewing`.
 
 An issue is eligible for the issue coordinator only when it has both:
 

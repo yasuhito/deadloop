@@ -89,7 +89,7 @@ function runCompletion(options: {
     `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
+if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
 else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
 else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))});
@@ -204,7 +204,7 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   fs.writeFileSync(gh, `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
+if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
 else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
 else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))});

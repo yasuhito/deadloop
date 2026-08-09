@@ -24,6 +24,12 @@ type ReviewClaimBinding = {
   owner: string;
 };
 
+type LiveReviewTarget = {
+  repositoryId: string;
+  repository: string;
+  targetNumber: number;
+};
+
 function eventTime(event: JsonObject): number {
   return Date.parse(String(event.created_at || event.createdAt || ""));
 }
@@ -121,13 +127,27 @@ function parseGithubRestDate(headers: unknown, notBefore: Date): Date | null {
   return serverNow;
 }
 
+function matchesLiveReviewTarget(contract: JsonObject, liveTarget: LiveReviewTarget): boolean {
+  return typeof liveTarget?.repositoryId === "string"
+    && liveTarget.repositoryId.length > 0
+    && typeof liveTarget.repository === "string"
+    && liveTarget.repository.length > 0
+    && Number.isInteger(liveTarget.targetNumber)
+    && liveTarget.targetNumber > 0
+    && contract.binding?.repositoryId === liveTarget.repositoryId
+    && contract.binding?.repository === liveTarget.repository
+    && contract.binding?.targetNumber === liveTarget.targetNumber;
+}
+
 function validateActiveReviewClaim(
   pr: JsonObject,
   events: JsonObject[],
   comments: JsonObject[],
   restHeaders: unknown,
   contract: JsonObject,
+  liveTarget: LiveReviewTarget,
 ): boolean {
+  if (!matchesLiveReviewTarget(contract, liveTarget)) return false;
   const request = activeReviewRequest(events, String(contract.reviewLabel || "agent:review"));
   const claimComment = comments.find((comment) => serverCommentId(comment) === String(contract.commentId || ""));
   if (!request || !claimComment
@@ -146,8 +166,7 @@ function validateActiveReviewClaim(
   );
   const winnerMarker = parseReviewClaim(winner?.body);
   const labels = new Set((pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
-  const managed = labels.has(String(contract.inProgressLabel || "agent:in-progress"))
-    || (labels.has(String(contract.reviewLabel || "agent:review")) && labels.has(String(contract.reviewingLabel || "agent:reviewing")));
+  const managed = labels.has(String(contract.inProgressLabel || "agent:in-progress"));
   return managed && !labels.has(String(contract.blockedLabel || "agent:blocked"))
     && serverCommentId(winner || {}) === String(contract.commentId || "")
     && winnerMarker?.owner === contract.binding?.owner;
@@ -159,8 +178,10 @@ function validateRepairAuthorityTransition(
   comments: JsonObject[],
   restHeaders: unknown,
   contract: JsonObject,
+  liveTarget: LiveReviewTarget,
   transition: { originalHeadOid?: unknown; headOid?: unknown },
 ): boolean {
+  if (!matchesLiveReviewTarget(contract, liveTarget)) return false;
   const originalHead = String(transition.originalHeadOid || "").toLowerCase();
   const repairedHead = String(transition.headOid || "").toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(originalHead) || !/^[0-9a-f]{40}$/.test(repairedHead)
@@ -187,7 +208,6 @@ function validateRepairAuthorityTransition(
   return serverCommentId(winner || {}) === String(contract.commentId || "")
     && marker?.owner === contract.binding?.owner
     && labels.has(String(contract.inProgressLabel || "agent:in-progress"))
-    && labels.has(String(contract.reviewingLabel || "agent:reviewing"))
     && !labels.has(String(contract.blockedLabel || "agent:blocked"));
 }
 

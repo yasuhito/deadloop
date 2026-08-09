@@ -21,6 +21,7 @@ const binding = {
   revision: head,
   owner: "host-a",
 };
+const liveTarget = { repositoryId: "R_123", repository: "owner/repo", targetNumber: 24 };
 
 function claim(overrides: Record<string, unknown> = {}) {
   return {
@@ -115,6 +116,52 @@ describe("PR review GitHub claim", () => {
     expect(selectReviewClaimWinner([claim()], binding, ["deadloop-a"], new Date("2026-07-20T11:01:00Z"), 3600)).toBeNull();
   });
 
+  it("rejects a claim when the live repository ID differs", () => {
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
+
+    expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
+      repositoryId: "R_other", repository: "owner/repo", targetNumber: 24,
+    })).toBe(false);
+  });
+
+  it("rejects a claim when the live canonical repository name differs", () => {
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
+
+    expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
+      repositoryId: "R_123", repository: "owner/renamed", targetNumber: 24,
+    })).toBe(false);
+  });
+
+  it("rejects a claim when the live target PR differs", () => {
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
+
+    expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
+      repositoryId: "R_123", repository: "owner/repo", targetNumber: 25,
+    })).toBe(false);
+  });
+
+  it("rejects legacy review labels without in-progress as active authority", () => {
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:review" }, { name: "agent:reviewing" }] };
+
+    expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget)).toBe(false);
+  });
+
   it("rejects later GitHub effects after the active claim is revoked", () => {
     const contract = {
       binding,
@@ -128,7 +175,7 @@ describe("PR review GitHub claim", () => {
     };
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:blocked" }] };
     const headers = "date: Mon, 20 Jul 2026 10:03:00 GMT";
-    expect(validateActiveReviewClaim(pr, [request], [claim()], headers, contract)).toBe(false);
+    expect(validateActiveReviewClaim(pr, [request], [claim()], headers, contract, liveTarget)).toBe(false);
   });
 
   it("rejects an edited winning marker whose owner no longer matches the persisted claim", () => {
@@ -140,7 +187,46 @@ describe("PR review GitHub claim", () => {
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
     const edited = claim({ body: renderReviewClaimComment(editedBinding) });
 
-    expect(validateActiveReviewClaim(pr, [request], [edited], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract)).toBe(false);
+    expect(validateActiveReviewClaim(pr, [request], [edited], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget)).toBe(false);
+  });
+
+  it("rejects a repair transition when the live repository ID differs", () => {
+    const repairedHead = "b".repeat(40);
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
+
+    expect(validateRepairAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
+      repositoryId: "R_other", repository: "owner/repo", targetNumber: 24,
+    }, { originalHeadOid: head, headOid: repairedHead })).toBe(false);
+  });
+
+  it("rejects a repair transition when the live canonical repository name differs", () => {
+    const repairedHead = "b".repeat(40);
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
+
+    expect(validateRepairAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
+      repositoryId: "R_123", repository: "owner/renamed", targetNumber: 24,
+    }, { originalHeadOid: head, headOid: repairedHead })).toBe(false);
+  });
+
+  it("rejects a repair transition when the live target PR differs", () => {
+    const repairedHead = "b".repeat(40);
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
+
+    expect(validateRepairAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
+      repositoryId: "R_123", repository: "owner/repo", targetNumber: 25,
+    }, { originalHeadOid: head, headOid: repairedHead })).toBe(false);
   });
 
   it("requires an explicit repair transition before an old-head claim can authorize a repaired head", () => {
@@ -151,7 +237,7 @@ describe("PR review GitHub claim", () => {
     };
     const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }, { name: "agent:reviewing" }] };
 
-    expect(validateRepairAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
+    expect(validateRepairAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget, {
       originalHeadOid: head, headOid: repairedHead,
     })).toBe(true);
   });
@@ -163,7 +249,7 @@ describe("PR review GitHub claim", () => {
     };
     const pr = { state: "OPEN", headRefOid: "b".repeat(40), labels: [{ name: "agent:in-progress" }, { name: "agent:reviewing" }] };
 
-    expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract)).toBe(false);
+    expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget)).toBe(false);
   });
 
   it("does not let marker expiry extend authority", () => {

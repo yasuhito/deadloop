@@ -283,14 +283,24 @@ describe("enablement mutation guards", () => {
     let timeout: number | undefined;
 
     runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "issue", "comment", "1", "-R", project.githubRepo, "--body", "done"] },
-      (_command: string, _args: string[], options: { timeout?: number }) => {
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "issue", command: ["gh", "issue", "comment", "1", "-R", project.githubRepo, "--body", "done"] },
+      (_command: string, args: string[], options: { timeout?: number }) => {
         timeout = options.timeout;
-        return { status: 0 };
+        return { status: 0, stdout: args[0] === "api" ? JSON.stringify({ number: 1 }) : "" };
       },
     );
 
     expect(timeout).toBe(GUARDED_OPERATION_TIMEOUT_MS);
+  });
+
+  it("rejects issue mutation when GitHub does not return the exact issue identity", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+
+    expect(() => runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "issue", command: ["gh", "issue", "comment", "1", "-R", project.githubRepo, "--body", "done"] },
+      () => ({ status: 0, stdout: "{}", stderr: "" }),
+    )).toThrow("exact non-PR issue target");
   });
 
   it("rejects a guarded PR mutation without an active claim", () => {
@@ -302,8 +312,27 @@ describe("enablement mutation guards", () => {
       githubRepo: project.githubRepo,
       stateDir: project.stateDir,
       enabledAt: 1,
+      targetKind: "pull-request",
       command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"],
     })).toThrow("active review claim is required");
+  });
+
+  it("rejects a guarded PR mutation disguised as an issue target without an active claim", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+
+    expect(() => runGuarded({
+      projectRepo: project.repoPath,
+      githubRepo: project.githubRepo,
+      stateDir: project.stateDir,
+      enabledAt: 1,
+      targetKind: "issue",
+      command: ["gh", "issue", "comment", "24", "-R", project.githubRepo, "--body", "done"],
+    }, (_command: string, args: string[]) => ({
+      status: 0,
+      stdout: args[0] === "api" ? JSON.stringify({ number: 24, pull_request: { url: "https://api.github.test/pulls/24" } }) : "",
+      stderr: "",
+    }))).toThrow("exact non-PR issue target");
   });
 
   it("rejects a guarded PR mutation for another claim target", () => {
@@ -318,6 +347,7 @@ describe("enablement mutation guards", () => {
       githubRepo: project.githubRepo,
       stateDir: project.stateDir,
       enabledAt: 1,
+      targetKind: "pull-request",
       reviewClaim,
       command: ["gh", "pr", "comment", "25", "-R", project.githubRepo, "--body", "done"],
     }, () => { throw new Error("unexpected command"); })).toThrow("claim target does not match");
@@ -335,8 +365,9 @@ describe("enablement mutation guards", () => {
     };
     let mutated = false;
     runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, reviewClaim, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", reviewClaim, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
       (_command: string, args: string[]) => {
+        if (args[0] === "repo" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: project.githubRepo }), stderr: "" };
         if (args[0] === "pr" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] }), stderr: "" };
         if (args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[], [{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
         if (args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[], [claim]]), stderr: "" };
@@ -353,7 +384,7 @@ describe("enablement mutation guards", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     expect(() => runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "pr", "merge", "1", "-R", project.githubRepo] },
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", command: ["gh", "pr", "merge", "1", "-R", project.githubRepo] },
     )).toThrow("not approved");
   });
 
@@ -361,7 +392,7 @@ describe("enablement mutation guards", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     expect(() => runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "pr", "create", "-R", project.githubRepo, "--head", "agent/issue-1"] },
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", command: ["gh", "pr", "create", "-R", project.githubRepo, "--head", "agent/issue-1"] },
     )).toThrow("not approved");
   });
 
@@ -369,7 +400,7 @@ describe("enablement mutation guards", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     expect(() => runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "pr", "edit", "1", "-R", project.githubRepo, "--add-label", "agent:review"] },
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", command: ["gh", "pr", "edit", "1", "-R", project.githubRepo, "--add-label", "agent:review"] },
     )).toThrow("not approved");
   });
 
@@ -377,7 +408,7 @@ describe("enablement mutation guards", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     expect(() => runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["gh", "issue", "comment", "1", "-R", "other/repo", "--body", "done"] },
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "issue", command: ["gh", "issue", "comment", "1", "-R", "other/repo", "--body", "done"] },
     )).toThrow("does not match enabled repository");
   });
 
@@ -385,7 +416,7 @@ describe("enablement mutation guards", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     expect(() => runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, command: ["git", "branch", "-D", "agent/issue-1"] },
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "issue", command: ["git", "branch", "-D", "agent/issue-1"] },
     )).toThrow("only approved gh mutations");
   });
 

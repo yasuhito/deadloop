@@ -115,7 +115,7 @@ function completion(args: JsonObject): DriverResult {
     enabledAt: Number(args.enabledAt),
   };
 
-  return withEnabledDriverLock(project, (_enabled: unknown, recheck: () => void) => {
+  return withEnabledDriverLock(project, (enabled: { githubRepositoryId?: string; githubRepo?: string }, recheck: () => void) => {
     const automationLogin = successfulReceipt ? runner.runText(["gh", "api", "user", "--jq", ".login"]).trim() : "";
     if (successfulReceipt && !automationLogin) throw new Error("authenticated GitHub identity is unavailable");
     const pr = runner.runJson([
@@ -148,7 +148,6 @@ function completion(args: JsonObject): DriverResult {
     const expectedLiveHead = receipt?.action === "pushed" ? receiptHead : expectedHead;
     const workflowActive =
       labels.includes(String(args.inProgressLabel))
-      && labels.includes(String(args.reviewingLabel))
       && !labels.includes(String(args.blockedLabel));
     if (!workflowActive || !expectedLiveHead || liveHead !== expectedLiveHead) {
       return driverResult("done", `PR #${args.pr} repair completion was superseded; left untouched`, { driverAction: "repair_target_changed" });
@@ -161,12 +160,18 @@ function completion(args: JsonObject): DriverResult {
       if (String(current.headRefOid || "").toLowerCase() !== liveHead) {
         throw new Error("active review claim could not be reauthorized before repair completion mutation");
       }
+      const repository = runner.runJson(["gh", "repo", "view", String(args.githubRepo), "--json", "id,nameWithOwner"]);
+      const liveTarget = {
+        repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr),
+      };
       const events = observation.listPrTimelineEvents(String(args.githubRepo), String(args.pr));
       const currentComments = observation.listPrComments(String(args.githubRepo), String(args.pr));
       const headers = readGithubRestResponseHeaders(runner, String(args.githubRepo));
-      const authorized = liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
-        ? validateActiveReviewClaim(current, events, currentComments, headers, reviewClaim)
-        : successfulReceipt && validateRepairAuthorityTransition(current, events, currentComments, headers, reviewClaim, receipt || {});
+      const enabledIdentityMatches = String(enabled.githubRepositoryId || "") === liveTarget.repositoryId
+        && String(enabled.githubRepo || "") === liveTarget.repository;
+      const authorized = enabledIdentityMatches && (liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
+        ? validateActiveReviewClaim(current, events, currentComments, headers, reviewClaim, liveTarget)
+        : successfulReceipt && validateRepairAuthorityTransition(current, events, currentComments, headers, reviewClaim, liveTarget, receipt || {}));
       if (!authorized) throw new Error("active review claim could not be reauthorized before repair completion mutation");
     };
     reauthorize();

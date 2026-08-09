@@ -21,10 +21,12 @@ const approvedReview = {
 function runMerge(options: {
   mergeStatus?: number;
   autoMergeEnabled?: boolean | boolean[];
-  enabled?: { firstEnableAutoMerge: boolean; firstStartPending: boolean; autoMergeAcknowledged: boolean };
+  enabled?: { githubRepositoryId: string; githubRepo: string; firstEnableAutoMerge: boolean; firstStartPending: boolean; autoMergeAcknowledged: boolean };
   pr?: Record<string, unknown>;
   review?: typeof approvedReview;
   reviewClaim?: boolean;
+  repository?: { id: string; nameWithOwner: string };
+  claimTargetNumber?: number;
 } = {}) {
   const commands: string[][] = [];
   let lockHeld = false;
@@ -43,7 +45,7 @@ function runMerge(options: {
       inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked",
       ...(options.reviewClaim !== false ? { reviewClaim: {
-        binding: { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" },
+        binding: { repositoryId: "R_repo", repository: "owner/repo", targetNumber: options.claimTargetNumber ?? 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" },
         commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
         reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
       } } : {}),
@@ -53,6 +55,8 @@ function runMerge(options: {
         lockHeld = true;
         try {
           return operation(options.enabled || {
+            githubRepositoryId: "R_repo",
+            githubRepo: "owner/repo",
             firstEnableAutoMerge: false,
             firstStartPending: false,
             autoMergeAcknowledged: false,
@@ -71,6 +75,9 @@ function runMerge(options: {
       validateReviewPromise: () => options.review || approvedReview,
       run: (args: string[]) => {
         commands.push(args);
+        if (args[1] === "repo" && args[2] === "view") {
+          return { status: 0, stdout: JSON.stringify(options.repository || { id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
+        }
         if (args[2] === "view") {
           return { status: 0, stdout: JSON.stringify(options.pr || eligiblePr), stderr: "" };
         }
@@ -107,6 +114,18 @@ describe("reviewed PR merge", () => {
     expect(runMerge({ reviewClaim: true }).action).toBe(0);
   });
 
+  it("rejects merge when the live repository ID differs from the claim", () => {
+    expect(() => runMerge({ repository: { id: "R_other", nameWithOwner: "owner/repo" } })).toThrow("reauthorized");
+  });
+
+  it("rejects merge when the live canonical repository name differs from the claim", () => {
+    expect(() => runMerge({ repository: { id: "R_repo", nameWithOwner: "owner/renamed" } })).toThrow("reauthorized");
+  });
+
+  it("rejects merge when the actual target PR differs from the claim", () => {
+    expect(() => runMerge({ claimTargetNumber: 25 })).toThrow("reauthorized");
+  });
+
   it("revalidates current auto-merge configuration while holding the enablement lock", () => {
     expect(runMerge().configObservedInsideLock).toBe(true);
   });
@@ -124,15 +143,15 @@ describe("reviewed PR merge", () => {
   });
 
   it("rejects auto-merge during the first safe start", () => {
-    expect(() => runMerge({ enabled: { firstEnableAutoMerge: true, firstStartPending: true, autoMergeAcknowledged: false } })).toThrow("first safe start");
+    expect(() => runMerge({ enabled: { githubRepositoryId: "R_repo", githubRepo: "owner/repo", firstEnableAutoMerge: true, firstStartPending: true, autoMergeAcknowledged: false } })).toThrow("first safe start");
   });
 
   it("rejects a preexisting true setting until it is acknowledged", () => {
-    expect(() => runMerge({ enabled: { firstEnableAutoMerge: true, firstStartPending: false, autoMergeAcknowledged: false } })).toThrow("has not been acknowledged");
+    expect(() => runMerge({ enabled: { githubRepositoryId: "R_repo", githubRepo: "owner/repo", firstEnableAutoMerge: true, firstStartPending: false, autoMergeAcknowledged: false } })).toThrow("has not been acknowledged");
   });
 
   it("allows an acknowledged post-enable true setting", () => {
-    expect(runMerge({ enabled: { firstEnableAutoMerge: true, firstStartPending: false, autoMergeAcknowledged: true } }).action).toBe(0);
+    expect(runMerge({ enabled: { githubRepositoryId: "R_repo", githubRepo: "owner/repo", firstEnableAutoMerge: true, firstStartPending: false, autoMergeAcknowledged: true } }).action).toBe(0);
   });
 
   it("fails closed without a validated reviewer approval", () => {

@@ -8,7 +8,15 @@ const { parsePaginatedGithubJson, validateActiveReviewClaim } = require("./pr-re
 
 const GUARDED_OPERATION_TIMEOUT_MS = MAX_GUARDED_OPERATION_MS;
 
-type Args = { projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; command: string[]; reviewClaim?: Record<string, unknown> };
+type Args = {
+  projectRepo: string;
+  githubRepo: string;
+  stateDir: string;
+  enabledAt: number;
+  targetKind: "issue" | "pull-request";
+  command: string[];
+  reviewClaim?: Record<string, unknown>;
+};
 
 type ApprovedOperation = { positional: number; valueFlags: Set<string> };
 
@@ -74,14 +82,16 @@ function parseArgs(argv: string[]): Args {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  if (!values.projectRepo || !values.githubRepo || !values.stateDir || !Number.isFinite(enabledAt)) {
-    throw new Error("--project-repo, --github-repo, --state-dir, and --enabled-at are required");
+  if (!values.projectRepo || !values.githubRepo || !values.stateDir || !Number.isFinite(enabledAt)
+    || !["issue", "pull-request"].includes(values.targetKind)) {
+    throw new Error("--project-repo, --github-repo, --state-dir, --enabled-at, and --target-kind are required");
   }
   return {
     projectRepo: values.projectRepo,
     githubRepo: values.githubRepo,
     stateDir: values.stateDir,
     enabledAt,
+    targetKind: values.targetKind as Args["targetKind"],
     command: argv.slice(separator + 1),
     ...(values.reviewClaim ? { reviewClaim: JSON.parse(values.reviewClaim) } : {}),
   };
@@ -89,25 +99,47 @@ function parseArgs(argv: string[]): Args {
 
 function runGuarded(args: Args, spawn = spawnSync): number {
   const commandTarget = assertApprovedCommand(args.command, args.githubRepo);
-  if (args.command[1] === "pr"
+  if (args.targetKind === "pull-request"
     && (!args.reviewClaim || typeof args.reviewClaim !== "object" || Array.isArray(args.reviewClaim))) {
     throw new Error("active review claim is required before guarded PR mutation");
+  }
+  if (args.targetKind === "issue" && args.command[1] === "pr") {
+    throw new Error("issue mutation authority cannot target a pull request command");
   }
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
     (_enabled: unknown, recheck: () => void) => {
-      if (args.reviewClaim) {
-        const number = String((args.reviewClaim.binding as { targetNumber?: unknown })?.targetNumber || "");
-        if (args.command[1] === "pr" && commandTarget !== number) {
+      if (args.targetKind === "issue") {
+        const issue = spawn("gh", ["api", `repos/${args.githubRepo}/issues/${commandTarget}`], {
+          encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GUARDED_OPERATION_TIMEOUT_MS,
+        });
+        let liveIssue: Record<string, unknown> = {};
+        try { liveIssue = JSON.parse(issue.stdout || "{}"); } catch { throw new Error("live GitHub issue target could not be verified"); }
+        if (issue.status !== 0 || Number(liveIssue.number) !== Number(commandTarget) || liveIssue.pull_request) {
+          throw new Error("issue mutation authority could not verify the exact non-PR issue target");
+        }
+      }
+      if (args.targetKind === "pull-request") {
+        const number = String((args.reviewClaim!.binding as { targetNumber?: unknown })?.targetNumber || "");
+        if (commandTarget !== number) {
           throw new Error("active review claim target does not match guarded PR mutation target");
         }
         const query = (queryArgs: string[]) => spawn("gh", queryArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GUARDED_OPERATION_TIMEOUT_MS });
-        const pr = query(["pr", "view", number, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
-        const events = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${number}/events`]);
-        const comments = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${number}/comments`]);
+        const repository = query(["repo", "view", args.githubRepo, "--json", "id,nameWithOwner"]);
+        const pr = query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
+        const events = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${commandTarget}/events`]);
+        const comments = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${commandTarget}/comments`]);
         const headers = query(["api", "--include", `repos/${args.githubRepo}`]);
-        if ([pr, events, comments, headers].some((result) => result.status !== 0)
-          || !validateActiveReviewClaim(JSON.parse(pr.stdout || "{}"), parsePaginatedGithubJson(events.stdout), parsePaginatedGithubJson(comments.stdout), headers.stdout, args.reviewClaim)) {
+        const identity = JSON.parse(repository.stdout || "{}");
+        if ([repository, pr, events, comments, headers].some((result) => result.status !== 0)
+          || !validateActiveReviewClaim(
+            JSON.parse(pr.stdout || "{}"),
+            parsePaginatedGithubJson(events.stdout),
+            parsePaginatedGithubJson(comments.stdout),
+            headers.stdout,
+            args.reviewClaim!,
+            { repositoryId: String(identity.id || ""), repository: String(identity.nameWithOwner || ""), targetNumber: Number(commandTarget) },
+          )) {
           throw new Error("active review claim could not be reauthorized before GitHub mutation");
         }
       }
