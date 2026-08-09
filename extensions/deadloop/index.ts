@@ -10,6 +10,7 @@ import {
   REPO_POLICY_FILE,
   automationEnvironment,
   automationStateKey,
+  authorizeAutomationLogin,
   codeFreshnessWarning,
   isLinkedGitWorktree,
   nextSlotAfter,
@@ -347,7 +348,9 @@ function loadProjectsResult(
         && candidate.githubRepo === project.githubRepo
         && candidate.enabled !== false
       );
-      return enabled ? { ...project, githubRepositoryId: enabled.githubRepositoryId } : project;
+      return enabled
+        ? authorizeAutomationLogin({ ...project, githubRepositoryId: enabled.githubRepositoryId }, enabled.automationLogin)
+        : project;
     });
     if (!options.includeDisabled) result.projects = result.projects.filter((project) => isProjectEnabled(project));
     debugLog(
@@ -1255,6 +1258,8 @@ async function detectProjectIdentity(pi, cwd) {
 
 async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disableGeneration) {
   await commandExec(pi, "gh", ["auth", "status"]);
+  const automationLogin = (await commandExec(pi, "gh", ["api", "user", "--jq", ".login"])).stdout.trim().toLowerCase();
+  if (!automationLogin) throw new Error("authenticated GitHub login is required to enable deadloop");
   const view = JSON.parse((await commandExec(pi, "gh", ["repo", "view", identity.githubRepo, "--json", "id,viewerPermission,nameWithOwner"])).stdout || "{}");
   if (view.nameWithOwner !== identity.githubRepo || String(view.id || "") !== identity.githubRepositoryId) {
     throw new Error("GitHub repository identity changed during enablement");
@@ -1286,6 +1291,7 @@ async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disable
       await commandExec(pi, "gh", ["label", "create", name, "-R", identity.githubRepo, "--color", color]);
     });
   }
+  return automationLogin;
 }
 function revalidatePendingIssueHandoff(handoff) {
   if (handoff.kind !== "issue" || !handoff.input || typeof handoff.input !== "object") return true;
@@ -1868,7 +1874,7 @@ export default function (pi) {
         if (!requiredVerificationMatches(verifiedProject.requiredVerification, preflightProject.requiredVerification)) {
           throw new Error("required verification contract changed during enablement");
         }
-        await prepareGithub(pi, identity, primaryRepoPath, enableAttemptToken, disableGeneration);
+        const automationLogin = await prepareGithub(pi, identity, primaryRepoPath, enableAttemptToken, disableGeneration);
         await withEnablementStateLock(async () => {
           if (
             !ownsEnableAttempt(primaryRepoPath, enableAttemptToken) ||
@@ -1877,12 +1883,22 @@ export default function (pi) {
             throw new Error("enablement was revoked while preflight was running");
           }
           await revalidateLocalProjectIdentity(pi, identity);
+          const revalidatedAutomationLogin = (await commandExec(pi, "gh", ["api", "user", "--jq", ".login"])).stdout.trim().toLowerCase();
+          if (!revalidatedAutomationLogin || revalidatedAutomationLogin !== automationLogin) {
+            throw new Error("authenticated GitHub login changed during enablement");
+          }
           const configuredProject = resolveEnableProject(ctx.cwd, identity);
           if (!requiredVerificationMatches(configuredProject.requiredVerification, preflightProject.requiredVerification)) {
             throw new Error("required verification contract changed during enablement");
           }
           const firstEnable = { firstEnableAutoMerge: Boolean(configuredProject.autoMerge) };
-          const next = upsertEnabledProject(loadEnablementState(), { ...identity, disableGeneration }, Date.now(), firstEnable, enableAttemptToken);
+          const next = upsertEnabledProject(
+            loadEnablementState(),
+            { ...identity, automationLogin, disableGeneration },
+            Date.now(),
+            firstEnable,
+            enableAttemptToken,
+          );
           enabledAt = findEnabledProject(next, identity)?.enabledAt;
           saveEnablementState(next);
           enablementSaved = true;

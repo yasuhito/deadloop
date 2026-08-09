@@ -8,7 +8,7 @@ const { parsePaginatedGithubJson, validateActiveReviewClaim } = require("./pr-re
 
 const GUARDED_OPERATION_TIMEOUT_MS = MAX_GUARDED_OPERATION_MS;
 
-type Args = { projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; command: string[]; reviewClaim?: Record<string, unknown> }; 
+type Args = { projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; command: string[]; reviewClaim?: Record<string, unknown> };
 
 type ApprovedOperation = { positional: number; valueFlags: Set<string> };
 

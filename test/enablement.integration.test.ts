@@ -139,6 +139,7 @@ async function loadExtension(
     upstream?: string;
     noUpstream?: boolean;
     defaultBranch?: string;
+    authenticatedLogin?: string;
     beforePrimaryCheckout?: () => Promise<void>;
     beforeGithubRepoCheck?: () => Promise<void>;
     beforeLabelLookup?: (name: string) => Promise<void>;
@@ -219,6 +220,9 @@ async function loadExtension(
       }
       if (command === "gh" && args[0] === "pr" && args[1] === "list" && options.recoveryFixture) {
         return { code: 0, stdout: "[]", stderr: "" };
+      }
+      if (command === "gh" && args[0] === "api" && args[1] === "user") {
+        return { code: 0, stdout: `${options.authenticatedLogin ?? "deadloop-bot"}\n`, stderr: "" };
       }
       if (command === "gh" && args[0] === "api") {
         const name = decodeURIComponent(args.at(-1)?.split("/").at(-1) || "");
@@ -743,6 +747,62 @@ async function unresolvedProjectCheckDoctorObservation(attemptRecord: "missing" 
 }
 
 describe("enablement command integration", () => {
+  it("persists the authenticated GitHub login as an authorized automation identity", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, { authenticatedLogin: "Deadloop-Bot" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    expect(state.projects[0].automationLogin).toBe("deadloop-bot");
+  });
+
+  it("does not enable without an authenticated GitHub login", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, { authenticatedLogin: "" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("authenticated GitHub login is required");
+  });
+
+  it("passes the default enablement identity to the reviewer driver environment", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({
+      checkCommand: "true",
+      automations: [{
+        id: "demo:pr-reviewer",
+        name: "demo PR reviewer",
+        promptFile: "pr-reviewer.prompt.md",
+        precheckFile: "pr-reviewer.precheck.sh",
+        driverFile: "pr-reviewer-driver.ts",
+      }],
+    }));
+    git(repoPath, ["add", "deadloop.json"]);
+    git(repoPath, ["commit", "--quiet", "-m", "configure reviewer fixture"]);
+    git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+    let reviewerCommand = "";
+    const extension = await loadExtension(root, {
+      authenticatedLogin: "Deadloop-Bot",
+      runAutomationScript: async (args) => {
+        const command = args.join(" ");
+        if (command.includes("pr-reviewer-driver.ts")) reviewerCommand = command;
+        return {
+          code: 0,
+          stdout: command.includes("pr-reviewer-driver.ts") ? JSON.stringify({ action: "skip", summary: "fixture" }) : "",
+          stderr: "",
+        };
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    for (let attempt = 0; attempt < 100 && !reviewerCommand; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(reviewerCommand).toContain("DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS='deadloop-bot'");
+  });
+
   it("records prepared verification worktree intent before creation", async () => {
     expect((await ownedWorktreeIntentObservation()).state).toBe("prepared");
   });

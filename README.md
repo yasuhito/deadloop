@@ -53,7 +53,7 @@ The preflight tries to restore generated runtime artifacts on every exit. If res
 
 ### Confirm GitHub access and labels
 
-After the preflight succeeds, `/deadloop-enable` verifies GitHub write access. It creates only the standard labels that are missing.
+After the preflight succeeds, `/deadloop-enable` verifies GitHub write access and resolves the authenticated GitHub login. It stores that login in local enablement state as an explicit authorized automation identity, then creates only the standard labels that are missing. Enablement fails if the authenticated login cannot be verified.
 
 ### Keep automatic merge off initially
 
@@ -71,7 +71,7 @@ Re-enable each repository after upgrading from an older release.
 
 ### Add local overrides only when needed
 
-Copy the example into Pi's local state only when you need overrides such as `autoMerge` or a custom `worktreeRoot`:
+Copy the example into Pi's local state only when you need overrides such as `autoMerge`, a custom `worktreeRoot`, or additional `automationLogins` for other Automation hosts in the same trusted fleet:
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop

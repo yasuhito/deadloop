@@ -549,6 +549,16 @@ function normalizeAutomationLogins(value: string[] | undefined): string[] {
   return [...new Set(value.map((login) => login.trim().toLowerCase()))];
 }
 
+export function authorizeAutomationLogin(project: NormalizedProject, login: string | undefined): NormalizedProject {
+  if (!login) return project;
+  const normalizedLogin = login.trim().toLowerCase();
+  if (!normalizedLogin) return project;
+  return {
+    ...project,
+    automationLogins: [...new Set([...project.automationLogins, normalizedLogin])],
+  };
+}
+
 function normalizeWorkerInstructions(raw: Pick<RawProject, "workerInstructions" | "workerInstructionFiles">): string {
   if (raw.workerInstructions && raw.workerInstructions.trim()) return raw.workerInstructions;
   const files = raw.workerInstructionFiles === undefined ? [...DEFAULT_WORKER_INSTRUCTION_FILES] : raw.workerInstructionFiles;
