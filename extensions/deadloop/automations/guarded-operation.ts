@@ -4,10 +4,11 @@
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { validateActiveReviewClaim } = require("./pr-review-claim.ts");
 
 const GUARDED_OPERATION_TIMEOUT_MS = MAX_GUARDED_OPERATION_MS;
 
-type Args = { projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; command: string[] };
+type Args = { projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; command: string[]; reviewClaim?: Record<string, unknown> }; 
 
 type ApprovedOperation = { positional: number; valueFlags: Set<string> };
 
@@ -75,7 +76,14 @@ function parseArgs(argv: string[]): Args {
   if (!values.projectRepo || !values.githubRepo || !values.stateDir || !Number.isFinite(enabledAt)) {
     throw new Error("--project-repo, --github-repo, --state-dir, and --enabled-at are required");
   }
-  return { projectRepo: values.projectRepo, githubRepo: values.githubRepo, stateDir: values.stateDir, enabledAt, command: argv.slice(separator + 1) };
+  return {
+    projectRepo: values.projectRepo,
+    githubRepo: values.githubRepo,
+    stateDir: values.stateDir,
+    enabledAt,
+    command: argv.slice(separator + 1),
+    ...(values.reviewClaim ? { reviewClaim: JSON.parse(values.reviewClaim) } : {}),
+  };
 }
 
 function runGuarded(args: Args, spawn = spawnSync): number {
@@ -83,6 +91,18 @@ function runGuarded(args: Args, spawn = spawnSync): number {
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
     (_enabled: unknown, recheck: () => void) => {
+      if (args.reviewClaim) {
+        const number = String((args.reviewClaim.binding as { targetNumber?: unknown })?.targetNumber || "");
+        const query = (queryArgs: string[]) => spawnSync("gh", queryArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GUARDED_OPERATION_TIMEOUT_MS });
+        const pr = query(["pr", "view", number, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
+        const events = query(["api", `repos/${args.githubRepo}/issues/${number}/events`]);
+        const comments = query(["api", `repos/${args.githubRepo}/issues/${number}/comments`]);
+        const headers = query(["api", "--include", `repos/${args.githubRepo}`]);
+        if ([pr, events, comments, headers].some((result) => result.status !== 0)
+          || !validateActiveReviewClaim(JSON.parse(pr.stdout || "{}"), JSON.parse(events.stdout || "[]"), JSON.parse(comments.stdout || "[]"), headers.stdout, args.reviewClaim)) {
+          throw new Error("active review claim could not be reauthorized before GitHub mutation");
+        }
+      }
       recheck();
       const result = spawn(args.command[0], args.command.slice(1), {
         stdio: "inherit",

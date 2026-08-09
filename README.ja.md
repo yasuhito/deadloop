@@ -118,12 +118,15 @@ gh label create needs-triage --repo owner/repo --color f9d0c4 || true
 gh label create agent:explore --repo owner/repo --color 0052cc || true
 gh label create agent:implement --repo owner/repo --color 1d76db || true
 gh label create agent:review --repo owner/repo --color 5319e7 || true
+gh label create agent:reviewing --repo owner/repo --color c2e0c6 || true
 gh label create agent:update-branch --repo owner/repo --color 006b75 || true
 gh label create agent:in-progress --repo owner/repo --color fbca04 || true
 gh label create agent:blocked --repo owner/repo --color b60205 || true
 ```
 
 Issue は、`ready-for-agent` と `agent:implement` の両方が付いている場合に限り処理対象になります。
+
+`agent:reviewing` は、ブランチ更新、レビュー修復、マージ完了の既存経路向け互換ラベルとして残します。新しいレビュー要求の取得には代わりに `agent:in-progress` を使います。
 
 ## マージ競合の自動修復
 

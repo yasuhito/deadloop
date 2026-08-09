@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 const {
   activeReviewRequest,
+  parseGithubRestDate,
   renderReviewClaimComment,
   selectReviewClaimWinner,
+  validateActiveReviewClaim,
 } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 
 const head = "a".repeat(40);
@@ -53,6 +55,42 @@ describe("PR review GitHub claim", () => {
   it("rejects a claim for an older request event", () => {
     const old = { ...binding, requestEventId: "event-21" };
     expect(selectReviewClaimWinner([claim({ body: renderReviewClaimComment(old) })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
+  });
+
+  it("uses the authenticated REST Date header as server time", () => {
+    expect(parseGithubRestDate("HTTP/2 200\r\ndate: Mon, 20 Jul 2026 10:03:00 GMT\r\n", new Date("2026-07-20T10:02:00Z"))?.toISOString()).toBe("2026-07-20T10:03:00.000Z");
+  });
+
+  it("rejects a missing REST Date header", () => {
+    expect(parseGithubRestDate("HTTP/2 200\r\n", new Date("2026-07-20T10:02:00Z"))).toBeNull();
+  });
+
+  it("rejects a malformed REST Date header", () => {
+    expect(parseGithubRestDate("date: not-a-date", new Date("2026-07-20T10:02:00Z"))).toBeNull();
+  });
+
+  it("rejects REST Date evidence older than the protected observation", () => {
+    expect(parseGithubRestDate("date: Mon, 20 Jul 2026 10:01:00 GMT", new Date("2026-07-20T10:02:00Z"))).toBeNull();
+  });
+
+  it("expires a claim at the exact authority boundary", () => {
+    expect(selectReviewClaimWinner([claim()], binding, ["deadloop-a"], new Date("2026-07-20T11:01:00Z"), 3600)).toBeNull();
+  });
+
+  it("rejects later GitHub effects after the active claim is revoked", () => {
+    const contract = {
+      binding,
+      commentId: "101",
+      authorizedLogins: ["deadloop-a"],
+      authoritySeconds: 3600,
+      reviewLabel: "agent:review",
+      reviewingLabel: "agent:reviewing",
+      inProgressLabel: "agent:in-progress",
+      blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:blocked" }] };
+    const headers = "date: Mon, 20 Jul 2026 10:03:00 GMT";
+    expect(validateActiveReviewClaim(pr, [request], [claim()], headers, contract)).toBe(false);
   });
 
   it("does not let marker expiry extend authority", () => {

@@ -4,6 +4,7 @@ const {
   attemptRecordPath,
   createPreparedAttempt,
   readAttemptRecord,
+  transitionAttempt,
   transitionPersistedAttempt,
   writeAttemptRecordAtomically,
 } = require("./attempt-lifecycle-runtime.cjs");
@@ -40,6 +41,7 @@ type AgentLaunchFlowInput = {
   resolveWorktreeHead?: boolean;
   autoMergePolicy?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  reviewClaim?: Record<string, unknown>;
   renderPrompt: (input: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => string;
 };
 
@@ -199,7 +201,10 @@ function recordAgentLaunchGithubClaimed(input: AgentLaunchFlowInput): AttemptRec
   }
   if (existing.phase === "github_claimed") return existing;
   if (existing.phase !== "prepared") throw new Error(`attempt phase ${existing.phase} cannot record a GitHub claim`);
-  return transitionPersistedAttempt(prepared.runDir, "github_claimed");
+  if (!input.reviewClaim) return transitionPersistedAttempt(prepared.runDir, "github_claimed");
+  const claimed = transitionAttempt({ ...existing, reviewClaim: input.reviewClaim }, "github_claimed");
+  writeAttemptRecordAtomically(attemptRecordPath(prepared.runDir), claimed);
+  return readAttemptRecord(prepared.runDir);
 }
 
 function ensureFreshCheckout(input: AgentLaunchFlowInput, runner: RunnerAdapter): void {

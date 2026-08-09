@@ -1117,6 +1117,7 @@ const STANDARD_LABELS = [
   ["needs-triage", "f9d0c4"],
   ["agent:explore", "0052cc"],
   ["agent:review", "5319e7"],
+  ["agent:reviewing", "c2e0c6"],
   ["agent:update-branch", "006b75"],
   ["agent:in-progress", "fbca04"],
   ["agent:blocked", "b60205"],

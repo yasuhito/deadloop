@@ -83,9 +83,9 @@ Key fields:
 - `automationLogins` — GitHub logins authorized to publish cross-host claim comments for this local Automation host fleet. Keep this machine/fleet authorization in local `projects.json`; the currently authenticated login must be listed.
 - `reviewerModel` — optional reviewer model passed through verbatim.
 - `labels` — GitHub labels used to coordinate issue and PR state. Omit this when using the standard labels.
-- `automations` — scheduled automation entries and their prompt/precheck files. Omit this to use the standard issue coordinator and PR reviewer. Set an explicit array only when customizing or disabling the standard automation set. Optional `driverFile` entries run bundled deterministic automation scripts after precheck and before sending any prompt; the driver can return `skip`, `done`, `needs_llm`, or `error` JSON to avoid unnecessary LLM context.
+- `automations` — scheduled automation entries and their prompt/precheck files. Omit this to use the standard issue coordinator and PR reviewer. Set an explicit array only when customizing or disabling the standard automation set. Optional `driverFile` entries run bundled deterministic automation scripts after precheck and before sending any prompt; the driver can return `skip`, `done`, `needs_llm`, or `error` JSON to avoid unnecessary LLM context. Reviewer entries may set `maxRuntimeSeconds` and `shutdownGraceSeconds`; review-claim authority is derived from those normalized execution limits.
 
-Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `externalReview`, `workerInstructionFiles`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` / `driverFile` for automations. The legacy project-level `enabled` field is ignored; only `/deadloop-enable` and `/deadloop-disable` control scheduling. Keep `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local or inferred. Invalid JSON or disallowed keys stop that project safely and appear in `/deadloop-status` and `/deadloop-doctor`.
+Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `externalReview`, `workerInstructionFiles`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` / `driverFile` / `maxRuntimeSeconds` / `shutdownGraceSeconds` for automations. The legacy project-level `enabled` field is ignored; only `/deadloop-enable` and `/deadloop-disable` control scheduling. Keep `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local or inferred. Invalid JSON or disallowed keys stop that project safely and appear in `/deadloop-status` and `/deadloop-doctor`.
 
 Per-launch prompts and promise reports live under `~/.pi/agent/deadloop/runs/`, not in the target worktree. The configured project check runs through deadloop's isolation wrapper: untracked `.deadloop` and `.pi-subagents` directories are temporarily hidden, and restoration is attempted on every exit path. A restoration failure retains and reports the quarantine and temporary worktree for inspection. Tracked files are never hidden; validation fails closed if either runtime directory contains one.
 
@@ -104,10 +104,13 @@ gh label create needs-triage --repo owner/repo --color f9d0c4 || true
 gh label create agent:explore --repo owner/repo --color 0052cc || true
 gh label create agent:implement --repo owner/repo --color 1d76db || true
 gh label create agent:review --repo owner/repo --color 5319e7 || true
+gh label create agent:reviewing --repo owner/repo --color c2e0c6 || true
 gh label create agent:update-branch --repo owner/repo --color 006b75 || true
 gh label create agent:in-progress --repo owner/repo --color fbca04 || true
 gh label create agent:blocked --repo owner/repo --color b60205 || true
 ```
+
+`agent:reviewing` remains a compatibility label for the existing branch-update, repair, and merge completion paths. New review-request claims use `agent:in-progress`.
 
 An issue is eligible for the issue coordinator only when it has both:
 

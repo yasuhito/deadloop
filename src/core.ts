@@ -64,6 +64,8 @@ export type RawAutomation = {
   precheckFile?: string;
   driverFile?: string;
   precheckTimeoutSeconds?: number;
+  maxRuntimeSeconds?: number;
+  shutdownGraceSeconds?: number;
   initialLastScheduledAt?: number;
 };
 
@@ -77,6 +79,8 @@ export type NormalizedAutomation = {
   precheckFile?: string;
   driverFile?: string;
   precheckTimeoutSeconds: number;
+  maxRuntimeSeconds: number;
+  shutdownGraceSeconds: number;
   initialLastScheduledAt: number;
 };
 
@@ -275,6 +279,12 @@ export function normalizeAutomation(
     precheckTimeoutSeconds: Number.isFinite(automation.precheckTimeoutSeconds)
       ? automation.precheckTimeoutSeconds!
       : 60,
+    maxRuntimeSeconds: Number.isFinite(automation.maxRuntimeSeconds) && automation.maxRuntimeSeconds! > 0
+      ? automation.maxRuntimeSeconds!
+      : 86_400,
+    shutdownGraceSeconds: Number.isFinite(automation.shutdownGraceSeconds) && automation.shutdownGraceSeconds! >= 0
+      ? automation.shutdownGraceSeconds!
+      : 300,
     initialLastScheduledAt: Number.isFinite(automation.initialLastScheduledAt) ? automation.initialLastScheduledAt! : 0,
   };
 }
@@ -321,7 +331,9 @@ const REPO_POLICY_LABEL_KEYS = new Set([
   "wontfix",
   "needsTriage",
 ]);
-const REPO_POLICY_AUTOMATION_KEYS = new Set(["id", "name", "promptFile", "precheckFile", "driverFile"]);
+const REPO_POLICY_AUTOMATION_KEYS = new Set([
+  "id", "name", "promptFile", "precheckFile", "driverFile", "maxRuntimeSeconds", "shutdownGraceSeconds",
+]);
 
 function validateObject(value: unknown, context: string): asserts value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -780,6 +792,8 @@ function automationRuntimeValues(
     needsTriageLabel: project.labels.needsTriage,
     automationId: automation.id,
     automationName: automation.name,
+    automationMaxRuntimeSeconds: automation.maxRuntimeSeconds,
+    automationShutdownGraceSeconds: automation.shutdownGraceSeconds,
     automationDir,
   };
 }
@@ -821,6 +835,12 @@ export function automationEnvironment(
     DEADLOOP_WORKER_LAUNCH_POLICY: envText(values.workerLaunchPolicy),
     DEADLOOP_REVIEWER_AGENT: envText(values.reviewerAgent),
     DEADLOOP_REVIEWER_MODEL: envText(values.reviewerModel),
+    DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS: automation.driverFile === "pr-reviewer-driver.ts"
+      ? envText(values.automationMaxRuntimeSeconds)
+      : undefined,
+    DEADLOOP_CLAIM_CLEANUP_GRACE_SECONDS: automation.driverFile === "pr-reviewer-driver.ts"
+      ? envText(values.automationShutdownGraceSeconds)
+      : undefined,
     DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: envText(project.automationLogins.join(",")),
     DEADLOOP_AUTO_MERGE: envText(values.autoMerge),
     DEADLOOP_CI_FALLBACK_ENABLED: envText(values.ciFallbackEnabled),

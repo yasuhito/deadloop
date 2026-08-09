@@ -10,6 +10,7 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { assertAuthorizedSource } = require("./guarded-push.ts");
+const { validateActiveReviewClaim } = require("./pr-review-claim.ts");
 
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
@@ -25,6 +26,7 @@ type FinalizeArgs = {
   enabledAt: number;
   checkCommand: string;
   resultFile: string;
+  reviewClaim?: JsonObject;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
 type EnabledProject = { githubRepo: string; githubRepositoryId: string };
@@ -132,7 +134,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
         "-R",
         args.githubRepo,
         "--json",
-        "state,headRefName,headRefOid,isCrossRepository",
+        "state,headRefName,headRefOid,isCrossRepository,labels",
       ], MAX_GUARDED_OPERATION_MS),
     );
     const guard = decideRepairPushGuard(pr, args.branch, args.expectedHead);
@@ -141,6 +143,14 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       originalHeadOid: args.expectedHead.toLowerCase(),
       currentRemoteHeadOid: String(pr.headRefOid || "").toLowerCase(),
     };
+    if (args.reviewClaim) {
+      const events = JSON.parse(checked(ops, ["gh", "api", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS));
+      const comments = JSON.parse(checked(ops, ["gh", "api", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS));
+      const headers = checkedRaw(ops, ["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
+      if (!validateActiveReviewClaim(pr, events, comments, headers, args.reviewClaim)) {
+        throw new Error("active review claim could not be reauthorized before repair push");
+      }
+    }
     const pushDestination = resolveVerifiedPushDestination(
       ops,
       args.repo,
@@ -209,6 +219,7 @@ function parseArgs(argv: string[]): FinalizeArgs {
     enabledAt: Number(required(values, "enabledAt")),
     checkCommand: required(values, "checkCommand"),
     resultFile: required(values, "resultFile"),
+    ...(values.reviewClaim ? { reviewClaim: JSON.parse(values.reviewClaim) } : {}),
   };
 }
 

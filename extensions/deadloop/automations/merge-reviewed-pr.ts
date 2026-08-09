@@ -7,6 +7,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
+const { validateActiveReviewClaim } = require("./pr-review-claim.ts");
 
 type MergeArgs = {
   projectRepo: string;
@@ -19,6 +20,7 @@ type MergeArgs = {
   reviewLabel: string;
   reviewingLabel: string;
   blockedLabel: string;
+  reviewClaim?: Record<string, unknown>;
 };
 type EnabledProject = {
   firstEnableAutoMerge: boolean;
@@ -187,6 +189,16 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     assertMergeAuthorized(enabled);
     assertReviewApproved(args, ops);
     assertCurrentPrEligible(args, ops);
+    if (args.reviewClaim) {
+      const prResult = ops.run(["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefOid,labels"], MAX_GUARDED_OPERATION_MS);
+      const eventsResult = ops.run(["gh", "api", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS);
+      const commentsResult = ops.run(["gh", "api", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS);
+      const dateResult = ops.run(["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
+      if ([prResult, eventsResult, commentsResult, dateResult].some((result) => result.status !== 0)
+        || !validateActiveReviewClaim(JSON.parse(prResult.stdout), JSON.parse(eventsResult.stdout), JSON.parse(commentsResult.stdout), dateResult.stdout, args.reviewClaim)) {
+        throw new Error("active review claim could not be reauthorized; automatic merge stopped");
+      }
+    }
     recheck();
     const autoMergeStillEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
     if (!autoMergeStillEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
@@ -223,6 +235,7 @@ function parseArgs(argv: string[]): MergeArgs {
     reviewLabel: values.reviewLabel,
     reviewingLabel: values.reviewingLabel,
     blockedLabel: values.blockedLabel,
+    ...(values.reviewClaim ? { reviewClaim: JSON.parse(values.reviewClaim) } : {}),
   };
 }
 

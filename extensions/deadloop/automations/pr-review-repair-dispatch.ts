@@ -34,6 +34,7 @@ const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
+const { readGithubRestResponseHeaders, validateActiveReviewClaim } = require("./pr-review-claim.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 import type { RunnerAdapter } from "../../../src/runner";
@@ -67,6 +68,12 @@ function envConfig(args: JsonObject = {}) {
     reviewingLabel: configValue(args, "reviewingLabel", process.env.DEADLOOP_REVIEWING_LABEL, "agent:reviewing"),
     blockedLabel: configValue(args, "blockedLabel", process.env.DEADLOOP_BLOCKED_LABEL, "agent:blocked"),
     humanLabel: configValue(args, "humanLabel", process.env.DEADLOOP_HUMAN_LABEL, "ready-for-human"),
+    inProgressLabel: configValue(args, "inProgressLabel", process.env.DEADLOOP_IN_PROGRESS_LABEL, "agent:in-progress"),
+    reviewClaim: (() => {
+      const value = configValue(args, "reviewClaim", process.env.DEADLOOP_REVIEW_CLAIM, "");
+      if (!value) return null;
+      try { return JSON.parse(value); } catch { throw new Error("review claim contract is malformed"); }
+    })(),
     automationDir,
   };
 }
@@ -167,7 +174,18 @@ function withRevalidatedPrMutation(
   withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
     const livePr = readLivePr(env.githubRepo, prNumber);
     assertSameLaunchTarget(expectedPr, livePr, "pr");
-    mutation(createGithubOperations(commandRunner, recheck), livePr);
+    const observation = createGithubOperations(commandRunner);
+    const reauthorize = () => {
+      if (env.reviewClaim && !validateActiveReviewClaim(
+        observation.getPr(env.githubRepo, prNumber),
+        observation.listPrTimelineEvents(env.githubRepo, prNumber),
+        observation.listPrComments(env.githubRepo, prNumber),
+        readGithubRestResponseHeaders(commandRunner, env.githubRepo),
+        env.reviewClaim,
+      )) throw new StaleLaunchError(`PR #${prNumber} active review claim could not be reauthorized`);
+    };
+    reauthorize();
+    mutation(createGithubOperations(commandRunner, () => { recheck(); reauthorize(); }), livePr);
   });
 }
 
@@ -224,6 +242,7 @@ function repairWorkerPrompt(
     shellQuote(env.checkCommand),
     "--result-file",
     shellQuote(path.join(path.dirname(promiseFile), "finalizer-result.json")),
+    ...(env.reviewClaim ? ["--review-claim", shellQuote(JSON.stringify(env.reviewClaim))] : []),
   ].join(" ");
   return `Repair only the actionable review findings below on existing PR #${prNumber}.
 
@@ -675,6 +694,7 @@ function dispatch(args: JsonObject): DriverResult {
         promiseFile: recoveredLaunch.promiseFile, attemptRecordFile: path.join(path.dirname(recoveredLaunch.promiseFile), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
         repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
         reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, blockedLabel: env.blockedLabel,
+        reviewClaim: env.reviewClaim,
         attemptKey: selection.key,
       };
       return driverResult("needs_llm", `Recovered review-repair monitor for PR #${prNumber}`, {
@@ -859,6 +879,7 @@ function dispatch(args: JsonObject): DriverResult {
     promiseFile: launch.promiseFile, attemptRecordFile: launch.attemptRecordFile || path.join(path.dirname(String(launch.promiseFile)), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
     repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
     reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, blockedLabel: env.blockedLabel,
+    reviewClaim: env.reviewClaim,
     attemptKey: selection.key,
   };
   return driverResult("needs_llm", `Launched review-repair worker for PR #${prNumber}`, {

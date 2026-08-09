@@ -9,6 +9,7 @@ type MonitorPromptBaseInput = {
   githubRepo?: string;
   stateDir?: string;
   enabledAt?: number;
+  reviewClaim?: Record<string, unknown> | null;
 };
 
 export type IssueMonitorPromptInput = MonitorPromptBaseInput & {
@@ -53,6 +54,8 @@ export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   reviewLabel: string;
   reviewingLabel: string;
   blockedLabel: string;
+  inProgressLabel?: string;
+  reviewClaim?: Record<string, unknown>;
 };
 
 export type RepairMonitorPromptInput = MonitorPromptBaseInput & {
@@ -63,6 +66,7 @@ export type RepairMonitorPromptInput = MonitorPromptBaseInput & {
   reviewLabel: string;
   reviewingLabel: string;
   blockedLabel: string;
+  reviewClaim?: Record<string, unknown> | null;
 };
 
 function shellQuotePrompt(value: string): string {
@@ -71,7 +75,8 @@ function shellQuotePrompt(value: string): string {
 }
 
 function renderPromisePollingRules(input: MonitorPromptBaseInput): string {
-  const guardedOperation = `node ${shellQuotePrompt(`${input.automationDir}/guarded-operation.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --`;
+  const claim = input.reviewClaim ? ` --review-claim ${shellQuotePrompt(JSON.stringify(input.reviewClaim))}` : "";
+  const guardedOperation = `node ${shellQuotePrompt(`${input.automationDir}/guarded-operation.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))}${claim} --`;
   return `Monitor only this promise file. It is the only completion authority:
 - ${input.promiseFile}
 
@@ -173,6 +178,8 @@ function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): str
     ["DEADLOOP_REVIEWING_LABEL", input.reviewingLabel],
     ["DEADLOOP_BLOCKED_LABEL", input.blockedLabel],
     ["DEADLOOP_HUMAN_LABEL", input.humanLabel],
+    ["DEADLOOP_IN_PROGRESS_LABEL", input.inProgressLabel || "agent:in-progress"],
+    ...(input.reviewClaim ? [["DEADLOOP_REVIEW_CLAIM", JSON.stringify(input.reviewClaim)]] : []),
   ].map(([name, value]) => `${name}=${shellQuotePrompt(value)}`).join(" ");
   const argumentsWithConfig = [
     "--promise", shellQuotePrompt(input.promiseFile),
@@ -193,6 +200,8 @@ function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): str
     "--reviewing-label", shellQuotePrompt(input.reviewingLabel),
     "--blocked-label", shellQuotePrompt(input.blockedLabel),
     "--human-label", shellQuotePrompt(input.humanLabel),
+    "--in-progress-label", shellQuotePrompt(input.inProgressLabel || "agent:in-progress"),
+    ...(input.reviewClaim ? ["--review-claim", shellQuotePrompt(JSON.stringify(input.reviewClaim))] : []),
   ].join(" ");
   return `${environment} node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-dispatch.ts`)} ${argumentsWithConfig}`;
 }
@@ -201,7 +210,7 @@ function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string 
   const approvedLabels = input.autoMerge
     ? [input.reviewLabel, input.reviewingLabel]
     : [input.humanLabel];
-  const guardedMerge = `node ${shellQuotePrompt(`${input.automationDir}/merge-reviewed-pr.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-promise ${shellQuotePrompt(input.promiseFile)} --review-label ${shellQuotePrompt(input.reviewLabel)} --reviewing-label ${shellQuotePrompt(input.reviewingLabel)} --blocked-label ${shellQuotePrompt(input.blockedLabel)}`;
+  const guardedMerge = `node ${shellQuotePrompt(`${input.automationDir}/merge-reviewed-pr.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-promise ${shellQuotePrompt(input.promiseFile)} --review-label ${shellQuotePrompt(input.reviewLabel)} --reviewing-label ${shellQuotePrompt(input.reviewingLabel)} --blocked-label ${shellQuotePrompt(input.blockedLabel)}${input.reviewClaim ? ` --review-claim ${shellQuotePrompt(JSON.stringify(input.reviewClaim))}` : ""}`;
   return `Deterministic driver launched reviewer for PR #${input.prNumber}. Do not launch another agent and do not reselect another PR.
 
 Review binding:
@@ -239,7 +248,7 @@ ${renderPromisePollingRules(input)}
 
 Terminal handling:
 - As soon as validation returns complete or blocked, run this deterministic completion handler exactly once and follow its result:
-  \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-complete.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --result ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/finalizer-result.json`)} --contract ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/review-contract.json`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --branch ${shellQuotePrompt(input.branch)} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --attempt-key ${shellQuotePrompt(input.attemptKey || "<attemptKey>")} --review-label ${shellQuotePrompt(input.reviewLabel)} --reviewing-label ${shellQuotePrompt(input.reviewingLabel)} --blocked-label ${shellQuotePrompt(input.blockedLabel)}\`
+  \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-complete.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --result ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/finalizer-result.json`)} --contract ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/review-contract.json`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --branch ${shellQuotePrompt(input.branch)} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --attempt-key ${shellQuotePrompt(input.attemptKey || "<attemptKey>")} --review-label ${shellQuotePrompt(input.reviewLabel)} --reviewing-label ${shellQuotePrompt(input.reviewingLabel)} --blocked-label ${shellQuotePrompt(input.blockedLabel)}${input.reviewClaim ? ` --review-claim ${shellQuotePrompt(JSON.stringify(input.reviewClaim))}` : ""}\`
 - The handler posts a success comment only when the structured promise, finalizer receipt, and live new head agree. It posts idempotent recovery guidance for blocked or inconclusive completion and posts nothing for stale_head.
 - After a repair_pushed or stale_head result is confirmed by the handler, run \`${renderWorkspaceCompletion(input)}\`. Never close a blocked or inconclusive repair workspace.
 - Do not independently render comments, infer changes from git diffs or logs, or change labels.

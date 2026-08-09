@@ -28,7 +28,9 @@ const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 const {
   activeReviewRequest,
+  parseGithubRestDate,
   parseReviewClaim,
+  readGithubRestResponseHeaders,
   renderReviewClaimComment,
   selectReviewClaimWinner,
 } = require("./pr-review-claim.ts");
@@ -43,6 +45,9 @@ type GithubEffect =
   | { operation: "move_pr_labels"; repo: string; prNumber: string; move: LabelMove };
 const SCRIPT_DIR = __dirname;
 class ReviewClaimLostError extends StaleLaunchError {
+  constructor(message: string) { super(message); }
+}
+class ReviewServerTimeError extends StaleLaunchError {
   constructor(message: string) { super(message); }
 }
 const commandRunner = createCommandRunner();
@@ -136,6 +141,9 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
       effects.labels[String(number)] = [...labels];
       return { names: labels };
     },
+    readRestResponseHeaders: () => fixture.restResponseHeaders === undefined
+      ? "HTTP/2 200\r\ndate: Wed, 08 Jul 2026 00:00:00 GMT\r\n"
+      : String(fixture.restResponseHeaders),
     listPrTimelineEvents: (_repo: string, number: string | number) => {
       const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
       return pr?.timelineEvents || [{ id: `fixture-review-${number}`, event: "labeled", created_at: "2026-07-07T23:59:00Z", label: { name: "agent:review" } }];
@@ -190,6 +198,7 @@ type DriverLaunchInput = {
   inputRevision: { head: string; base?: string };
   intendedWorktreePath: string;
   autoMergePolicy?: boolean;
+  reviewClaim?: JsonObject;
   renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
 };
 
@@ -601,6 +610,57 @@ function currentReviewRequest(github: ReturnType<typeof githubOperations>, env: 
   return request;
 }
 
+function freshServerNow(
+  github: ReturnType<typeof githubOperations>,
+  env: ReturnType<typeof envConfig>,
+  evidence: JsonObject[],
+): Date {
+  const latestEvidence = Math.max(...evidence.map((value) => Date.parse(String(value.createdAt || value.created_at || ""))));
+  const headers = typeof (github as any).readRestResponseHeaders === "function"
+    ? (github as any).readRestResponseHeaders(env.githubRepo)
+    : readGithubRestResponseHeaders(commandRunner, env.githubRepo);
+  const serverNow = parseGithubRestDate(headers, new Date(latestEvidence));
+  if (!serverNow) throw new ReviewServerTimeError("fresh GitHub REST Date evidence is missing, malformed, or older than the protected observation");
+  return serverNow;
+}
+
+function blockUnverifiableClaim(
+  github: ReturnType<typeof githubOperations>,
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  reason: string,
+): void {
+  const number = Number(pr.number || 0);
+  const live = github.getPr(env.githubRepo, number);
+  assertSamePrRevision(pr, live);
+  github.commentPr(env.githubRepo, number, `deadloop stopped this review claim because ${reason}. Remove \`${env.blockedLabel}\` and add \`${env.reviewLabel}\` again after GitHub server-time evidence is available.`);
+  const managed = new Set([env.reviewLabel, env.reviewingLabel, env.inProgressLabel, env.blockedLabel]);
+  github.replacePrLabels(env.githubRepo, number, [...labelNames(live).filter((label) => !managed.has(label)), env.blockedLabel]);
+}
+
+function assertActiveReviewClaim(
+  github: ReturnType<typeof githubOperations>,
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  claim: JsonObject,
+): JsonObject {
+  const number = Number(pr.number || 0);
+  const live = github.getPr(env.githubRepo, number);
+  assertSamePrRevision(pr, live);
+  const request = currentReviewRequest(github, env, number);
+  if (String(request.id || request.node_id || "") !== claim.binding.requestEventId) {
+    throw new StaleLaunchError(`PR #${number} review request generation changed`);
+  }
+  const comments = github.listPrComments(env.githubRepo, number);
+  const claimedComment = comments.find((comment: JsonObject) => String(comment.id || comment.databaseId) === claim.commentId);
+  const now = freshServerNow(github, env, [request, claimedComment || {}]);
+  const winner = selectReviewClaimWinner(comments, claim.binding, claim.authorizedLogins, now, claim.authoritySeconds);
+  if (String(winner?.id || winner?.databaseId || "") !== claim.commentId) {
+    throw new ReviewClaimLostError(`PR #${number} no longer has the active review claim`);
+  }
+  return live;
+}
+
 function claimReviewRequest(
   github: ReturnType<typeof githubOperations>,
   pr: JsonObject,
@@ -627,10 +687,18 @@ function claimReviewRequest(
     throw new StaleLaunchError(`PR #${number} received a newer review request`);
   }
   const authorized = [...new Set(env.authorizedAutomationLogins.map((login) => login.toLowerCase()).filter(Boolean))];
-  const now = new Date(String(posted.createdAt || posted.created_at || ""));
-  if (Number.isNaN(now.getTime())) throw new Error("GitHub claim comment has no authoritative server createdAt");
   const comments = github.listPrComments(env.githubRepo, number);
-  const winner = selectReviewClaimWinner(comments, binding, authorized, now, reviewClaimAuthoritySeconds(env));
+  const authoritativeNow = (evidence: JsonObject[]): Date => {
+    try {
+      return freshServerNow(github, env, evidence);
+    } catch (error) {
+      if (error instanceof ReviewServerTimeError) blockUnverifiableClaim(github, pr, env, error.message);
+      throw error;
+    }
+  };
+  const now = authoritativeNow([request, posted]);
+  const authoritySeconds = reviewClaimAuthoritySeconds(env);
+  const winner = selectReviewClaimWinner(comments, binding, authorized, now, authoritySeconds);
   const winnerMarker = winner && parseReviewClaim(winner.body);
   if (!winner || winnerMarker?.owner !== env.claimOwner || String(winner.id || winner.databaseId) !== String(posted.id || posted.databaseId)) {
     throw new ReviewClaimLostError(`PR #${number} review request was claimed by another Automation host`);
@@ -644,8 +712,10 @@ function claimReviewRequest(
   if (String(beforeTransitionRequest.id || beforeTransitionRequest.node_id || "") !== requestEventId) {
     throw new StaleLaunchError(`PR #${number} review request changed before label transition`);
   }
+  const beforeTransitionComments = github.listPrComments(env.githubRepo, number);
+  const beforeTransitionNow = authoritativeNow([beforeTransitionRequest, posted]);
   const beforeTransitionWinner = selectReviewClaimWinner(
-    github.listPrComments(env.githubRepo, number), binding, authorized, now, reviewClaimAuthoritySeconds(env),
+    beforeTransitionComments, binding, authorized, beforeTransitionNow, authoritySeconds,
   );
   if (String(beforeTransitionWinner?.id || beforeTransitionWinner?.databaseId || "") !== String(posted.id || posted.databaseId)) {
     throw new ReviewClaimLostError(`PR #${number} review request was claimed before label transition`);
@@ -670,13 +740,25 @@ function claimReviewRequest(
   if (String(finalRequest.id || finalRequest.node_id || "") !== requestEventId) {
     throw new StaleLaunchError(`PR #${number} review request changed after label transition`);
   }
+  const finalComments = github.listPrComments(env.githubRepo, number);
+  const finalNow = authoritativeNow([finalRequest, posted]);
   const finalWinner = selectReviewClaimWinner(
-    github.listPrComments(env.githubRepo, number), binding, authorized, now, reviewClaimAuthoritySeconds(env),
+    finalComments, binding, authorized, finalNow, authoritySeconds,
   );
   if (String(finalWinner?.id || finalWinner?.databaseId || "") !== String(posted.id || posted.databaseId)) {
     throw new StaleLaunchError(`PR #${number} review claim changed after label transition`);
   }
-  return { binding, commentId: String(posted.id || posted.databaseId), labels: nextLabels };
+  return {
+    binding,
+    commentId: String(posted.id || posted.databaseId),
+    authorizedLogins: authorized,
+    authoritySeconds,
+    reviewLabel: env.reviewLabel,
+    reviewingLabel: env.reviewingLabel,
+    inProgressLabel: env.inProgressLabel,
+    blockedLabel: env.blockedLabel,
+    labels: nextLabels,
+  };
 }
 
 function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
@@ -691,13 +773,21 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
       env,
       fixture,
       plan.input,
-      (github) => { claim = claimReviewRequest(github, pr, env); },
+      (github) => {
+        claim = claimReviewRequest(github, pr, env);
+        plan.input.reviewClaim = claim;
+      },
       () => {
         if (fixture) return;
         if (claim) {
           const github = githubOperations();
-          const live = github.getPr(env.githubRepo, number);
-          assertSamePrRevision(pr, live);
+          let live: JsonObject;
+          try {
+            live = assertActiveReviewClaim(github, pr, env, claim);
+          } catch (error) {
+            if (error instanceof ReviewServerTimeError) blockUnverifiableClaim(github, pr, env, error.message);
+            throw error;
+          }
           const labels = new Set(labelNames(live));
           if (!labels.has(env.inProgressLabel) || labels.has(env.reviewLabel)
             || labels.has(env.reviewingLabel) || labels.has(env.blockedLabel)) {
@@ -1031,7 +1121,9 @@ function drive(fixturePath: string | undefined): DriverResult {
     humanLabel: env.humanLabel,
     reviewLabel: env.reviewLabel,
     reviewingLabel: env.reviewingLabel,
+    inProgressLabel: env.inProgressLabel,
     blockedLabel: env.blockedLabel,
+    reviewClaim: launch.claim,
   };
   return driverResult("needs_llm", `Launched reviewer agent for PR #${decision.number}`, {
     driverAction: "reviewer_monitor_request",

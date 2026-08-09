@@ -132,6 +132,8 @@ describe("deterministic extension core", () => {
           precheckFile: undefined,
           driverFile: undefined,
           precheckTimeoutSeconds: 60,
+          maxRuntimeSeconds: 86_400,
+          shutdownGraceSeconds: 300,
           initialLastScheduledAt: 0,
         },
       ],

@@ -126,6 +126,8 @@ if (args[0] === "pr" && args[1] === "list") {
   process.stdout.write(JSON.stringify(prs()[0]));
 } else if (args[0] === "repo" && args[1] === "view") {
   process.stdout.write(JSON.stringify({id:"R_repo"}));
+} else if (args[0] === "api" && args.includes("--include")) {
+  process.stdout.write("HTTP/2 200\\r\\ndate: Mon, 13 Jul 2026 00:02:00 GMT\\r\\n\\r\\n{}");
 } else if (args[0] === "api" && args.some((arg) => arg.endsWith("/events"))) {
   process.stdout.write(JSON.stringify([[{id:4401,event:"labeled",created_at:"2026-07-13T00:00:00Z",label:{name:"agent:review"}}]]));
 } else if (args[0] === "api" && args.includes("POST")) {

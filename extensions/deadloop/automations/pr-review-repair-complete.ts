@@ -13,6 +13,7 @@ const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
+const { readGithubRestResponseHeaders, validateActiveReviewClaim } = require("./pr-review-claim.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -145,7 +146,22 @@ function completion(args: JsonObject): DriverResult {
     }
 
     const comments = (pr.comments || []) as JsonObject[];
-    const github = createGithubOperations(runner, recheck);
+    const reviewClaim = args.reviewClaim ? JSON.parse(String(args.reviewClaim)) : null;
+    const observation = createGithubOperations(runner);
+    const reauthorize = () => {
+      if (!reviewClaim) return;
+      const current = observation.getPr(String(args.githubRepo), String(args.pr));
+      if (String(current.headRefOid || "").toLowerCase() !== liveHead
+        || !validateActiveReviewClaim(
+          { ...current, headRefOid: reviewClaim.binding?.revision },
+          observation.listPrTimelineEvents(String(args.githubRepo), String(args.pr)),
+          observation.listPrComments(String(args.githubRepo), String(args.pr)),
+          readGithubRestResponseHeaders(runner, String(args.githubRepo)),
+          reviewClaim,
+        )) throw new Error("active review claim could not be reauthorized before repair completion mutation");
+    };
+    reauthorize();
+    const github = createGithubOperations(runner, () => { recheck(); reauthorize(); });
 
     if (successfulReceipt) {
       if (repairResultCommentExists(comments, String(args.attemptKey), receiptHead, automationLogin)) {

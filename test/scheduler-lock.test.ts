@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -37,6 +37,22 @@ describe("scheduler lock", () => {
     const script = `const lock=require(${JSON.stringify(path.resolve("src/scheduler-lock.cjs"))}); const result=lock.acquireSchedulerLock(process.argv[1],{}); if(!result.acquired) process.exit(2);`;
 
     expect(spawnSync(process.execPath, ["-e", script, lockPath]).status).toBe(0);
+  });
+
+  it("rejects another host while a child Automation host remains alive", async () => {
+    const lockPath = lockFixture();
+    const script = `const lock=require(${JSON.stringify(path.resolve("src/scheduler-lock.cjs"))}); const result=lock.acquireSchedulerLock(process.argv[1],{}); if(!result.acquired) process.exit(2); process.stdout.write("ready\\n"); setInterval(()=>{},1000);`;
+    const child = spawn(process.execPath, ["-e", script, lockPath], { stdio: ["ignore", "pipe", "inherit"] });
+    await new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.stdout.once("data", () => resolve());
+    });
+
+    const contender = acquireSchedulerLock(lockPath, {});
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("exit", resolve));
+
+    expect(contender.acquired).toBe(false);
   });
 
   it("lets another host acquire after process exit releases the OS lock", () => {

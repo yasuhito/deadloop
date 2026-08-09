@@ -99,6 +99,49 @@ function sameBinding(marker: JsonObject, expected: ReviewClaimBinding): boolean 
     && marker.owner.length > 0;
 }
 
+function readGithubRestResponseHeaders(commandRunner: { runText(args: string[]): string }, repo: string): string {
+  return commandRunner.runText(["gh", "api", "--include", `repos/${repo}`]);
+}
+
+function parseGithubRestDate(headers: unknown, notBefore: Date): Date | null {
+  if (Number.isNaN(notBefore.getTime())) return null;
+  const matches = [...String(headers || "").matchAll(/^date:\s*(.+)$/gim)];
+  const value = matches.at(-1)?.[1]?.trim() || "";
+  const serverNow = new Date(value);
+  if (!value || Number.isNaN(serverNow.getTime()) || serverNow.getTime() < notBefore.getTime()) return null;
+  return serverNow;
+}
+
+function validateActiveReviewClaim(
+  pr: JsonObject,
+  events: JsonObject[],
+  comments: JsonObject[],
+  restHeaders: unknown,
+  contract: JsonObject,
+): boolean {
+  const request = activeReviewRequest(events, String(contract.reviewLabel || "agent:review"));
+  const claimComment = comments.find((comment) => serverCommentId(comment) === String(contract.commentId || ""));
+  if (!request || !claimComment
+    || String(pr.state || "").toUpperCase() !== "OPEN"
+    || String(pr.headRefOid || "").toLowerCase() !== String(contract.binding?.revision || "").toLowerCase()
+    || String(request.id || request.node_id || "") !== String(contract.binding?.requestEventId || "")) return false;
+  const evidenceTime = Math.max(eventTime(request), commentTime(claimComment));
+  const serverNow = parseGithubRestDate(restHeaders, new Date(evidenceTime));
+  if (!serverNow) return false;
+  const winner = selectReviewClaimWinner(
+    comments,
+    contract.binding as ReviewClaimBinding,
+    Array.isArray(contract.authorizedLogins) ? contract.authorizedLogins : [],
+    serverNow,
+    Number(contract.authoritySeconds),
+  );
+  const labels = new Set((pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
+  const managed = labels.has(String(contract.inProgressLabel || "agent:in-progress"))
+    || (labels.has(String(contract.reviewLabel || "agent:review")) && labels.has(String(contract.reviewingLabel || "agent:reviewing")));
+  return managed && !labels.has(String(contract.blockedLabel || "agent:blocked"))
+    && serverCommentId(winner || {}) === String(contract.commentId || "");
+}
+
 function selectReviewClaimWinner(
   comments: JsonObject[],
   expected: ReviewClaimBinding,
@@ -127,7 +170,10 @@ function selectReviewClaimWinner(
 
 module.exports = {
   activeReviewRequest,
+  parseGithubRestDate,
   parseReviewClaim,
+  readGithubRestResponseHeaders,
   renderReviewClaimComment,
   selectReviewClaimWinner,
+  validateActiveReviewClaim,
 };
