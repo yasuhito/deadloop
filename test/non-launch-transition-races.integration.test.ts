@@ -86,6 +86,6 @@ describe("non-launch transition revalidation", () => {
   });
 
   it("does not block a draft PR that becomes ready before mutation", () => {
-    expect(runRace("pr")).toEqual({ action: "draft_gate_stale", mutated: false });
+    expect(runRace("pr")).toEqual({ action: "draft_unclaimed", mutated: false });
   });
 });

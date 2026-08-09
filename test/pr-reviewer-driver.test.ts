@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const driverScript = "extensions/deadloop/automations/pr-reviewer-driver.ts";
-const { resolveAuthorizedAutomationLogins } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
+const { assertTrustedReviewIdentity, blockUnverifiableClaim, claimReviewRequest, resolveAuthorizedAutomationLogins } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
 
 function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> = {}) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/pr-reviewer-driver", fixtureName)], {
@@ -40,6 +40,62 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("external-review-request.json", {
       DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "",
     }).driverAction).toBe("configuration_error");
+  });
+
+  it("rejects an authenticated identity that changed from current enablement", () => {
+    const env = { automationLogin: "deadloop-bot", authorizedAutomationLogins: ["deadloop-bot"] };
+
+    expect(() => assertTrustedReviewIdentity("other-bot", env, "deadloop-bot")).toThrow("does not match");
+  });
+
+  it("does not replace labels when identity changes after the claim comment", () => {
+    const head = "a".repeat(40);
+    const pr = { number: 24, state: "OPEN", headRefName: "feature", headRefOid: head, labels: [{ name: "agent:review" }] };
+    const request = { id: "22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } };
+    const comments: Record<string, unknown>[] = [];
+    let labelMutations = 0;
+    const github = {
+      listPrTimelineEvents: () => [request],
+      createPrComment: (_repo: string, _number: number, body: string) => {
+        const comment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body };
+        comments.push(comment);
+        return comment;
+      },
+      getPr: () => pr,
+      listPrComments: () => comments,
+      readRestResponseHeaders: () => "date: Mon, 20 Jul 2026 10:03:00 GMT",
+      replacePrLabels: () => { labelMutations += 1; },
+    };
+    try {
+      claimReviewRequest(github, pr, {
+        githubRepositoryId: "R_repo", githubRepo: "owner/repo", claimOwner: "host-a",
+        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", implementLabel: "agent:implement",
+        inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", automationLogin: "deadloop-bot",
+        authorizedAutomationLogins: ["deadloop-bot"], reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
+      }, () => "other-bot");
+    } catch {}
+
+    expect(labelMutations).toBe(0);
+  });
+
+  it("does not consume a newer review generation added after the server-time block comment", () => {
+    const head = "a".repeat(40);
+    const pr = { number: 24, state: "OPEN", headRefName: "feature", headRefOid: head, labels: [{ name: "agent:review" }, { name: "customer:keep" }] };
+    let commented = false;
+    let labelMutations = 0;
+    const github = {
+      getPr: () => pr,
+      listPrTimelineEvents: () => [{ id: commented ? "new" : "old", event: "labeled", created_at: commented ? "2026-01-01T00:01:00Z" : "2026-01-01T00:00:00Z", label: { name: "agent:review" } }],
+      commentPr: () => { commented = true; },
+      replacePrLabels: () => { labelMutations += 1; },
+    };
+
+    blockUnverifiableClaim(github, pr, {
+      githubRepo: "owner/repo", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing",
+      implementLabel: "agent:implement", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    }, "server time unavailable", "old");
+
+    expect(labelMutations).toBe(0);
   });
 
   it("persists reviewer monitor input as a generation-bound handoff", () => {
@@ -110,44 +166,44 @@ describe("PR reviewer deterministic driver", () => {
     );
   });
 
-  it("routes a merge conflict to one dedicated branch-update worker", () => {
-    expect(runDriverFixture("merge-conflict.json").driverAction).toBe("branch_update_monitor_request");
+  it("fails closed on a merge conflict before branch-update side effects", () => {
+    expect(runDriverFixture("merge-conflict.json").driverAction).toBe("branch_update_claim_required");
   });
 
   it("does not launch a reviewer for a conflicting head", () => {
-    expect(runDriverFixture("merge-conflict.json").launch.reviewerName).toBeUndefined();
+    expect(runDriverFixture("merge-conflict.json").launch).toBeUndefined();
   });
 
-  it("persists branch-update monitor input as a generation-bound handoff", () => {
-    expect(runDriverFixture("merge-conflict.json").monitorHandoff.kind).toBe("branch-update");
+  it("creates no branch-update workspace before a migrated claim exists", () => {
+    expect(runDriverFixture("merge-conflict.json").testAdapterEffects.herdrStarts).toHaveLength(0);
   });
 
-  it("uses a deterministic retry-key worker name for the exact head/base pair", () => {
-    expect(runDriverFixture("merge-conflict.json").launch.updaterName).toBe("demo-pr-31-branch-update-63bdfe090637cf9ff5d4");
+  it("creates no branch-update journal handoff before a migrated claim exists", () => {
+    expect(runDriverFixture("merge-conflict.json").monitorHandoff).toBeUndefined();
   });
 
-  it("preserves both review labels during branch update", () => {
-    expect(runDriverFixture("merge-conflict.json").labelsPreserved).toEqual(["agent:review", "agent:reviewing"]);
-  });
-
-  it("bounds branch update push through the deterministic finalizer", () => {
-    expect(runDriverFixture("merge-conflict.json").prompt).toContain("never launch or select an agent, push a branch, review the PR, or merge it");
+  it("does not mutate GitHub while branch update lacks a claim protocol", () => {
+    expect(runDriverFixture("merge-conflict.json").testAdapterEffects.githubComments).toHaveLength(0);
   });
 
   it("returns an updated conflict branch to normal review", () => {
     expect(runDriverFixture("merge-conflict-updated.json").driverAction).toBe("reviewer_monitor_request");
   });
 
-  it("blocks a second attempt for the exact same head/base pair", () => {
-    expect(runDriverFixture("merge-conflict-double-attempt.json").driverAction).toBe("branch_update_attempt_exhausted");
+  it("does not inspect an old branch-update attempt before claim migration", () => {
+    expect(runDriverFixture("merge-conflict-double-attempt.json").driverAction).toBe("branch_update_claim_required");
   });
 
   it("reports the deterministic reviewer name", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).launch.reviewerName).toBe("demo-pr-24-reviewer");
   });
 
-  it("reports the selection decision when requesting external review", () => {
-    expect(runDriverFixture("external-review-request.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).decision.reason).toBe("selectable");
+  it("stops an external review request before pre-claim GitHub mutation", () => {
+    expect(runDriverFixture("external-review-request.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).driverAction).toBe("external_review_unclaimed");
+  });
+
+  it("stops a draft gate before pre-claim GitHub mutation", () => {
+    expect(runDriverFixture("draft-pr.json").testAdapterEffects.githubComments).toHaveLength(0);
   });
 
   it("reports the selection decision while waiting for external review", () => {

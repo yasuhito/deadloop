@@ -182,8 +182,8 @@ Then("The blocking comment shows recovery steps of pull request", function (this
   assert.match(this.blockedComment || "", /## Recovery steps/);
 });
 
-Then("The pull request blocking comment shows a safe requeue method", function (this: OperatorStatusWorld) {
-  assert.match(this.blockedComment || "", /gh issue edit <issueNumber> -R owner\/repo --remove-label agent:blocked --add-label agent:implement/);
+Then("No draft blocking comment is posted before claim", function (this: OperatorStatusWorld) {
+  assert.equal(this.blockedComment || "", "");
 });
 
 Given("The deadloop extension can start", function (this: OperatorStatusWorld) {

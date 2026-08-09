@@ -4,7 +4,7 @@
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
-const { parsePaginatedGithubJson, validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const { parsePaginatedGithubJson, savedReviewClaimContract, validateActiveReviewClaim } = require("./pr-review-claim.ts");
 
 const GUARDED_OPERATION_TIMEOUT_MS = MAX_GUARDED_OPERATION_MS;
 
@@ -15,8 +15,15 @@ type Args = {
   enabledAt: number;
   targetKind: "issue" | "pull-request";
   command: string[];
+  attemptRecord?: string;
   reviewClaim?: Record<string, unknown>;
 };
+
+type SavedClaimLoader = (
+  attemptRecord: string,
+  supplied: unknown,
+  authority: { stateDir: string; githubRepo: string; targetNumber: number },
+) => Record<string, unknown>;
 
 type ApprovedOperation = { positional: number; valueFlags: Set<string> };
 
@@ -93,22 +100,22 @@ function parseArgs(argv: string[]): Args {
     enabledAt,
     targetKind: values.targetKind as Args["targetKind"],
     command: argv.slice(separator + 1),
+    ...(values.attemptRecord ? { attemptRecord: values.attemptRecord } : {}),
     ...(values.reviewClaim ? { reviewClaim: JSON.parse(values.reviewClaim) } : {}),
   };
 }
 
-function runGuarded(args: Args, spawn = spawnSync): number {
+function runGuarded(args: Args, spawn = spawnSync, loadSavedClaim: SavedClaimLoader = savedReviewClaimContract): number {
   const commandTarget = assertApprovedCommand(args.command, args.githubRepo);
-  if (args.targetKind === "pull-request"
-    && (!args.reviewClaim || typeof args.reviewClaim !== "object" || Array.isArray(args.reviewClaim))) {
-    throw new Error("active review claim is required before guarded PR mutation");
+  if (args.targetKind === "pull-request" && !args.attemptRecord) {
+    throw new Error("saved attempt record is required before guarded PR mutation");
   }
   if (args.targetKind === "issue" && args.command[1] === "pr") {
     throw new Error("issue mutation authority cannot target a pull request command");
   }
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
-    (_enabled: unknown, recheck: () => void) => {
+    (enabled: { automationLogin?: string }, recheck: () => void) => {
       if (args.targetKind === "issue") {
         const issue = spawn("gh", ["api", `repos/${args.githubRepo}/issues/${commandTarget}`], {
           encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GUARDED_OPERATION_TIMEOUT_MS,
@@ -120,11 +127,23 @@ function runGuarded(args: Args, spawn = spawnSync): number {
         }
       }
       if (args.targetKind === "pull-request") {
-        const number = String((args.reviewClaim!.binding as { targetNumber?: unknown })?.targetNumber || "");
+        const suppliedTarget = Number(commandTarget);
+        const savedClaim = loadSavedClaim(args.attemptRecord!, args.reviewClaim, {
+          stateDir: args.stateDir,
+          githubRepo: args.githubRepo,
+          targetNumber: suppliedTarget,
+        });
+        const number = String((savedClaim.binding as { targetNumber?: unknown })?.targetNumber || "");
         if (commandTarget !== number) {
           throw new Error("active review claim target does not match guarded PR mutation target");
         }
         const query = (queryArgs: string[]) => spawn("gh", queryArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GUARDED_OPERATION_TIMEOUT_MS });
+        const authenticated = query(["api", "user", "--jq", ".login"]);
+        const automationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
+        if (authenticated.status !== 0 || !automationLogin || String(authenticated.stdout || "").trim().toLowerCase() !== automationLogin) {
+          throw new Error("current authenticated GitHub identity does not match enablement authority");
+        }
+        recheck();
         const repository = query(["repo", "view", args.githubRepo, "--json", "id,nameWithOwner"]);
         const pr = query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
         const events = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${commandTarget}/events`]);
@@ -137,13 +156,13 @@ function runGuarded(args: Args, spawn = spawnSync): number {
             parsePaginatedGithubJson(events.stdout),
             parsePaginatedGithubJson(comments.stdout),
             headers.stdout,
-            args.reviewClaim!,
+            { ...savedClaim, authorizedLogins: [automationLogin] },
             { repositoryId: String(identity.id || ""), repository: String(identity.nameWithOwner || ""), targetNumber: Number(commandTarget) },
           )) {
           throw new Error("active review claim could not be reauthorized before GitHub mutation");
         }
       }
-      recheck();
+      if (args.targetKind === "issue") recheck();
       const result = spawn(args.command[0], args.command.slice(1), {
         stdio: "inherit",
         timeout: GUARDED_OPERATION_TIMEOUT_MS,

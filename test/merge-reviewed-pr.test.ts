@@ -27,14 +27,25 @@ function runMerge(options: {
   reviewClaim?: boolean;
   repository?: { id: string; nameWithOwner: string };
   claimTargetNumber?: number;
+  finalRace?: "expiry" | "comment" | "request" | "head" | "labels";
 } = {}) {
   const commands: string[][] = [];
   let lockHeld = false;
   let configObservedInsideLock = false;
   let mutationObservedInsideLock = false;
   let autoMergeChecks = 0;
+  let prReads = 0;
+  let eventReads = 0;
+  let commentReads = 0;
+  let dateReads = 0;
+  const authoritativeReviewClaim = {
+    binding: { repositoryId: "R_repo", repository: "owner/repo", targetNumber: options.claimTargetNumber ?? 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" },
+    commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  };
   const action = mergeReviewedPr(
     {
+      attemptRecord: "/state/runs/reviewer/attempt.json",
       projectRepo: "/repo",
       githubRepo: "owner/repo",
       stateDir: "/state",
@@ -44,28 +55,29 @@ function runMerge(options: {
       reviewPromise: "/state/reviewer-promise.json",
       inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked",
-      ...(options.reviewClaim !== false ? { reviewClaim: {
-        binding: { repositoryId: "R_repo", repository: "owner/repo", targetNumber: options.claimTargetNumber ?? 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" },
-        commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
-        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-      } } : {}),
+      ...(options.reviewClaim !== false ? { reviewClaim: authoritativeReviewClaim } : {}),
     },
     {
+      ...(options.reviewClaim !== false ? { loadSavedReviewClaim: () => authoritativeReviewClaim } : {}),
       withLock: (_project: unknown, operation: (enabled: unknown) => number) => {
         lockHeld = true;
         try {
-          return operation(options.enabled || {
-            githubRepositoryId: "R_repo",
-            githubRepo: "owner/repo",
-            firstEnableAutoMerge: false,
-            firstStartPending: false,
-            autoMergeAcknowledged: false,
+          return operation({
+            automationLogin: "deadloop-bot",
+            ...(options.enabled || {
+              githubRepositoryId: "R_repo",
+              githubRepo: "owner/repo",
+              firstEnableAutoMerge: false,
+              firstStartPending: false,
+              autoMergeAcknowledged: false,
+            }),
           });
         } finally {
           lockHeld = false;
         }
       },
       isAutoMergeEnabled: () => {
+        commands.push(["config"]);
         configObservedInsideLock = lockHeld;
         const configured = options.autoMergeEnabled ?? true;
         return Array.isArray(configured)
@@ -79,16 +91,32 @@ function runMerge(options: {
           return { status: 0, stdout: JSON.stringify(options.repository || { id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
         }
         if (args[2] === "view") {
-          return { status: 0, stdout: JSON.stringify(options.pr || eligiblePr), stderr: "" };
+          prReads += 1;
+          const basePr = options.pr || eligiblePr;
+          const finalPr = prReads >= 3 && options.finalRace === "head"
+            ? { ...basePr, headRefOid: "b".repeat(40) }
+            : prReads >= 3 && options.finalRace === "labels"
+              ? { ...basePr, labels: [...eligiblePr.labels, { name: "agent:blocked" }] }
+              : basePr;
+          return { status: 0, stdout: JSON.stringify(finalPr), stderr: "" };
         }
         if (args.some((arg) => arg.endsWith("/events"))) {
-          return { status: 0, stdout: JSON.stringify([[], [{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
+          eventReads += 1;
+          const id = eventReads >= 2 && options.finalRace === "request" ? 23 : 22;
+          return { status: 0, stdout: JSON.stringify([[], [{ id, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
         }
         if (args.some((arg) => arg.endsWith("/comments"))) {
+          commentReads += 1;
           const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" };
-          return { status: 0, stdout: JSON.stringify([[], [{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }]]), stderr: "" };
+          const comments = commentReads >= 2 && options.finalRace === "comment" ? [] : [{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }];
+          return { status: 0, stdout: JSON.stringify([[], comments]), stderr: "" };
         }
-        if (args[1] === "api") return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
+        if (args[1] === "api" && args[2] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+        if (args[1] === "api") {
+          dateReads += 1;
+          const date = dateReads >= 2 && options.finalRace === "expiry" ? "Mon, 20 Jul 2026 11:01:00 GMT" : "Mon, 20 Jul 2026 10:03:00 GMT";
+          return { status: 0, stdout: `date: ${date}`, stderr: "" };
+        }
         mutationObservedInsideLock = lockHeld;
         const status = options.mergeStatus ?? 0;
         return { status, stdout: "", stderr: status ? "head commit changed" : "" };
@@ -138,9 +166,30 @@ describe("reviewed PR merge", () => {
     expect(() => runMerge({ autoMergeEnabled: false })).toThrow("autoMerge is not currently enabled");
   });
 
-  it("rechecks auto-merge intent immediately before the merge mutation", () => {
+  it("rechecks auto-merge before the final fresh claim observation adjacent to merge", () => {
+    const commands = runMerge().commands;
+    expect(commands.slice(-8).map((args) => args.join(" "))).toEqual([
+      "config",
+      "gh api user --jq .login",
+      "gh repo view owner/repo --json id,nameWithOwner",
+      "gh pr view 24 -R owner/repo --json state,headRefOid,labels",
+      "gh api --paginate --slurp repos/owner/repo/issues/24/events",
+      "gh api --paginate --slurp repos/owner/repo/issues/24/comments",
+      "gh api --include repos/owner/repo",
+      `gh pr merge 24 -R owner/repo --squash --delete-branch --match-head-commit ${expectedHead}`,
+    ]);
+  });
+
+  it("stops before the final claim observation when auto-merge is disabled", () => {
     expect(() => runMerge({ autoMergeEnabled: [true, false] })).toThrow("autoMerge is not currently enabled");
   });
+
+  it.each(["expiry", "comment", "request", "head", "labels"] as const)(
+    "suppresses merge when %s changes during the final claim inspection",
+    (finalRace) => {
+      expect(() => runMerge({ finalRace })).toThrow("reauthorized");
+    },
+  );
 
   it("rejects auto-merge during the first safe start", () => {
     expect(() => runMerge({ enabled: { githubRepositoryId: "R_repo", githubRepo: "owner/repo", firstEnableAutoMerge: true, firstStartPending: true, autoMergeAcknowledged: false } })).toThrow("first safe start");

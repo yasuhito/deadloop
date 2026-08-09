@@ -63,19 +63,19 @@ This prevents duplicate and early reviews of pull requests that are being prepar
 * When deadloop searches for review target
 * Then No review target is selected
 
-## Scenario: Request external review for a pull request that has not been sent for external review
+## Scenario: Do not request external review before an active claim
 
 * Given There is a pull request waiting for review.
 * And External review is enabled
 * When deadloop decides how to handle external reviews
-* Then deadloop requests external review
+* Then deadloop leaves external-review request state untouched before claim
 
-## Scenario: Do not start normal review while waiting for an external review.
+## Scenario: Do not mutate while waiting for external review before an active claim
 
 * Given There is a pull request waiting for external review
 * And External review is enabled
 * When deadloop decides how to handle external reviews
-* Then deadloop waits for external review to complete
+* Then deadloop waits for external review without mutation
 
 ## Scenario: Start normal review when external review waiting period expires
 
@@ -90,11 +90,11 @@ This prevents duplicate and early reviews of pull requests that are being prepar
 * When deadloop selects and processes the review target
 * Then deadloop does not start the Reviewer
 
-## Scenario: Show recovery steps for a draft pull request
+## Scenario: Do not post draft recovery state before an active claim
 
 * Given There is a draft pull request
 * When deadloop tries to start a review
-* Then deadloop shows recovery steps for pull request
+* Then deadloop leaves the draft pull request untouched before claim
 
 ## Scenario: Reclaim a stale review claim and select its pull request
 

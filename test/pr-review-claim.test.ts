@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const {
@@ -5,6 +8,7 @@ const {
   parseGithubRestDate,
   parsePaginatedGithubJson,
   renderReviewClaimComment,
+  savedReviewClaimContract,
   selectReviewClaimWinner,
   validateActiveReviewClaim,
   validateRepairAuthorityTransition,
@@ -162,6 +166,34 @@ describe("PR review GitHub claim", () => {
     expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget)).toBe(false);
   });
 
+  it.each([
+    "agent:review",
+    "agent:reviewing",
+    "agent:implement",
+    "agent:update-branch",
+    "agent:blocked",
+  ])("rejects active authority when conflicting managed state %s coexists", (conflict) => {
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+    };
+    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }, { name: conflict }] };
+
+    expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget)).toBe(false);
+  });
+
+  it("allows an unrelated user label beside the exact active managed state", () => {
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+    };
+    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }, { name: "customer:important" }] };
+
+    expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget)).toBe(true);
+  });
+
   it("rejects later GitHub effects after the active claim is revoked", () => {
     const contract = {
       binding,
@@ -235,7 +267,7 @@ describe("PR review GitHub claim", () => {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
       reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
-    const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }, { name: "agent:reviewing" }] };
+    const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
 
     expect(validateRepairAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget, {
       originalHeadOid: head, headOid: repairedHead,
@@ -250,6 +282,47 @@ describe("PR review GitHub claim", () => {
     const pr = { state: "OPEN", headRefOid: "b".repeat(40), labels: [{ name: "agent:in-progress" }, { name: "agent:reviewing" }] };
 
     expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget)).toBe(false);
+  });
+
+  it.each([
+    ["authoritySeconds", (value: any) => ({ ...value, authoritySeconds: 7200 })],
+    ["managed label", (value: any) => ({ ...value, blockedLabel: "attacker:state" })],
+    ["repository", (value: any) => ({ ...value, binding: { ...value.binding, repository: "other/repo" } })],
+    ["target", (value: any) => ({ ...value, binding: { ...value.binding, targetNumber: 25 } })],
+    ["request", (value: any) => ({ ...value, binding: { ...value.binding, requestEventId: "event-evil" } })],
+    ["head", (value: any) => ({ ...value, binding: { ...value.binding, revision: "b".repeat(40) } })],
+    ["owner", (value: any) => ({ ...value, binding: { ...value.binding, owner: "host-evil" } })],
+  ])("rejects caller tampering with saved claim %s before authorization", (_name, mutate) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-claim-"));
+    const runDir = path.join(root, "runs", "attempt");
+    fs.mkdirSync(runDir, { recursive: true });
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    fs.writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+      attemptId: "attempt", launchUuid: "launch", project: "demo", repository: binding.repository,
+      role: "reviewer", target: { kind: "pull-request", number: 24 }, inputRevision: { head },
+      branch: "feature", worktreePath: "/worktree", agentName: "reviewer", workspaceLabel: "reviewer",
+      promptFile: "/prompt", promiseFile: "/promise", phase: "agent_started", lastSuccessfulPhase: "agent_started",
+      reviewClaim: contract,
+    }));
+    try {
+      expect(() => savedReviewClaimContract(path.join(runDir, "attempt.json"), mutate(contract), {
+        stateDir: root, githubRepo: binding.repository, projectId: "demo", targetNumber: 24,
+      })).toThrow("does not exactly match");
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("rejects an arbitrary attempt.json outside the canonical runs directory", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-claim-path-"));
+    const arbitrary = path.join(root, "attempt.json");
+    fs.writeFileSync(arbitrary, "{}");
+    try {
+      expect(() => savedReviewClaimContract(arbitrary, {}, {
+        stateDir: root, githubRepo: binding.repository, projectId: "demo", targetNumber: 24,
+      })).toThrow("canonical runs directory");
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
   it("does not let marker expiry extend authority", () => {

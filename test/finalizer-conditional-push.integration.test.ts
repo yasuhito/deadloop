@@ -55,6 +55,7 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
   const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 1, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a" };
   const run = (args: string[]) => {
     if (args[0] === "node") return { status: 0, stdout: "", stderr: "" };
+    if (args[0] === "gh" && args[1] === "api" && args[2] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
     if (args[0] === "gh" && args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
     if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }]]), stderr: "" };
     if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
@@ -77,8 +78,13 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
     });
     return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
   };
+  const reviewClaim = {
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  };
   const common = {
     repo,
+    attemptRecord: "/state/runs/attempt/attempt.json",
     projectRepo: repo,
     githubRepo: "owner/repo",
     pr: "1",
@@ -90,14 +96,12 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
     enabledAt: 1,
     checkCommand: "true",
     resultFile: path.join(path.dirname(repo), "result.json"),
-    reviewClaim: {
-      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-    },
+    reviewClaim,
   };
   const ops = {
     run,
-    assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
+    loadSavedReviewClaim: () => reviewClaim,
+    assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot" }),
   };
   const result = finalizer === "repair"
     ? finalizeReviewRepair(common, ops)
@@ -137,6 +141,7 @@ describe("finalizer exact-head pushes against real remotes", () => {
     mkdirSync(runDir, { recursive: true });
     writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
       repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
+      automationLogin: "deadloop-bot",
       firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
       autoMergeAcknowledged: false, enabled: true,
     }] }));
@@ -153,10 +158,18 @@ process.exit(result.status ?? 1);
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
       reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+      attemptId: "attempt", launchUuid: "launch", project: "demo", repository: "owner/repo",
+      role: "review-repair", target: { kind: "pull-request", number: 1 }, inputRevision: { head: expectedHead },
+      branch, worktreePath: repo, agentName: "repair", workspaceLabel: "repair",
+      promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
+      phase: "agent_started", lastSuccessfulPhase: "agent_started", reviewClaim,
+    }));
     const gh = path.join(bin, "gh");
     writeFileSync(gh, `#!/usr/bin/env node
 const args = process.argv.slice(2);
-if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
+if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+else if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
 else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(JSON.stringify([[{id:101,created_at:"2026-07-20T10:01:00Z",updated_at:"2026-07-20T10:01:00Z",user:{login:"deadloop-bot"},body:${JSON.stringify(renderReviewClaimComment(binding))}}]]));
 else if (args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");

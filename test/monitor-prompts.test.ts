@@ -190,7 +190,7 @@ describe("monitor prompts", () => {
       reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("merge-reviewed-pr.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --in-progress-label agent:in-progress --blocked-label agent:blocked");
+    expect(prompt).toContain("merge-reviewed-pr.ts --attempt-record /state/attempt.json --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --in-progress-label agent:in-progress --blocked-label agent:blocked");
   });
 
   it("prohibits branch-update monitor mutations without an active review claim", () => {    const prompt = renderBranchUpdateMonitorPrompt({

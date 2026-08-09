@@ -45,7 +45,7 @@ function runCompletion(options: {
   spawnSync("git", ["-C", projectRepo, "init", "--quiet"]);
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
-    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
+    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
   }] }));
@@ -74,7 +74,7 @@ function runCompletion(options: {
     role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
     branch: "agent/issue-24", worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
     workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
-    phase: "agent_started", lastSuccessfulPhase: "agent_started",
+    phase: "agent_started", lastSuccessfulPhase: "agent_started", reviewClaim,
   }));
   fs.writeFileSync(
     contractFile,
@@ -94,7 +94,7 @@ else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop
 else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
 else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))});
 else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
-else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:in-progress" }, { name: "agent:reviewing" }])},comments:${JSON.stringify(options.comments || [])}}));
+else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:in-progress" }])},comments:${JSON.stringify(options.comments || [])}}));
 else if (args[0] === "pr" && args[1] === "comment") fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
 else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.ACTIONS_FILE, args.join(" ") + "\\n");
 `,
@@ -171,10 +171,15 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   spawnSync("git", ["-C", projectRepo, "init", "--quiet"]);
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
-    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
+    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
   }] }));
+  const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a" };
+  const reviewClaim = {
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  };
   const checks = [{ command: "npm test", result: "passed" }];
   const receipt = { action: "pushed", reason: "repair_pushed", originalHeadOid: oldHead, headOid: newHead, checks };
   fs.writeFileSync(promiseFile, JSON.stringify({
@@ -190,15 +195,10 @@ async function runConcurrentSuccessRetries(): Promise<number> {
     role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
     branch: "agent/issue-24", worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
     workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
-    phase: "agent_started", lastSuccessfulPhase: "agent_started",
+    phase: "agent_started", lastSuccessfulPhase: "agent_started", reviewClaim,
   }));
   fs.writeFileSync(contractFile, JSON.stringify({ attemptKey: key, expectedHead: oldHead, findingTitles: ["Unsafe fallback"] }));
   fs.writeFileSync(commentsFile, "[]");
-  const binding = { repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a" };
-  const reviewClaim = {
-    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
-    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-  };
   const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
   const gh = path.join(bin, "gh");
   fs.writeFileSync(gh, `#!/usr/bin/env node
@@ -209,7 +209,7 @@ else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop
 else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
 else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))});
 else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
-else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:"OPEN",headRefName:"agent/issue-24",headRefOid:"${newHead}",isCrossRepository:false,labels:[{name:"agent:in-progress"},{name:"agent:reviewing"}],comments:JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"))}));
+else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:"OPEN",headRefName:"agent/issue-24",headRefOid:"${newHead}",isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"))}));
 else if (args[0] === "pr" && args[1] === "comment") {
   const comments = JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"));
   comments.push({body:args[args.indexOf("--body")+1],author:{login:"deadloop-bot"}});

@@ -103,6 +103,7 @@ function preparedRecordInput(input: AgentLaunchFlowInput, prepared: PreparedLaun
     promiseFile: prepared.promiseFile,
     ...(input.autoMergePolicy === undefined ? {} : { autoMergePolicy: input.autoMergePolicy }),
     ...(input.requiredVerification === undefined ? {} : { requiredVerification: input.requiredVerification }),
+    ...(input.reviewClaim === undefined ? {} : { reviewClaim: input.reviewClaim }),
   };
 }
 
@@ -150,7 +151,8 @@ function samePreparedIdentity(record: AttemptRecord, expected: PreparedAttemptIn
     && path.resolve(record.promptFile) === path.resolve(expected.promptFile)
     && path.resolve(record.promiseFile) === path.resolve(expected.promiseFile)
     && record.autoMergePolicy === expected.autoMergePolicy
-    && JSON.stringify(record.requiredVerification) === JSON.stringify(expected.requiredVerification);
+    && JSON.stringify(record.requiredVerification) === JSON.stringify(expected.requiredVerification)
+    && JSON.stringify(record.reviewClaim) === JSON.stringify(expected.reviewClaim);
 }
 
 /** Persist the launch intent before a GitHub claim, label, comment, or runner mutation. */
@@ -199,12 +201,12 @@ function recordAgentLaunchGithubClaimed(input: AgentLaunchFlowInput): AttemptRec
   if (!samePreparedIdentity(existing, preparedRecordInput(input, prepared))) {
     throw new Error("attempt run directory identity does not match this claim");
   }
+  if (existing.role === "reviewer" && !existing.reviewClaim) {
+    throw new Error("reviewer GitHub claim cannot be recorded without an immutable review claim contract");
+  }
   if (existing.phase === "github_claimed") return existing;
   if (existing.phase !== "prepared") throw new Error(`attempt phase ${existing.phase} cannot record a GitHub claim`);
-  if (!input.reviewClaim) return transitionPersistedAttempt(prepared.runDir, "github_claimed");
-  const claimed = transitionAttempt({ ...existing, reviewClaim: input.reviewClaim }, "github_claimed");
-  writeAttemptRecordAtomically(attemptRecordPath(prepared.runDir), claimed);
-  return readAttemptRecord(prepared.runDir);
+  return transitionPersistedAttempt(prepared.runDir, "github_claimed");
 }
 
 function ensureFreshCheckout(input: AgentLaunchFlowInput, runner: RunnerAdapter): void {

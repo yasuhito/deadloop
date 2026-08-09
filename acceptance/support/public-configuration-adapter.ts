@@ -35,13 +35,14 @@ const {
 };
 const {
   envConfig: reviewerEnvironment,
-  launchPrReviewerFlow,
+  launchClaimedPrReviewerFlow,
 } = require("../../extensions/deadloop/automations/pr-reviewer-driver.ts") as {
   envConfig: (source: NodeJS.ProcessEnv) => Record<string, any>;
-  launchPrReviewerFlow: (
+  launchClaimedPrReviewerFlow: (
     pr: Record<string, unknown>,
     env: Record<string, any>,
     reason: string,
+    reviewClaim: Record<string, unknown>,
     ops: Record<string, unknown>,
   ) => unknown;
 };
@@ -116,10 +117,14 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
         DEADLOOP_WORKTREE_ROOT: sandbox,
         DEADLOOP_GITHUB_REPO: project.githubRepo || "owner/repo",
       });
-      launchPrReviewerFlow(
+      launchClaimedPrReviewerFlow(
         { number: 24, headRefName: "agent/configuration-observation", headRefOid: "a".repeat(40) },
         env,
         "configuration observation",
+        {
+          binding: { repository: project.githubRepo || "owner/repo", targetNumber: 24, revision: "a".repeat(40) },
+          commentId: "acceptance-claim",
+        },
         ops,
       );
     }

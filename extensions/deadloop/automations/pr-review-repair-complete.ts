@@ -13,7 +13,7 @@ const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
-const { readGithubRestResponseHeaders, validateActiveReviewClaim, validateRepairAuthorityTransition } = require("./pr-review-claim.ts");
+const { readGithubRestResponseHeaders, savedReviewClaimContract, validateActiveReviewClaim, validateRepairAuthorityTransition } = require("./pr-review-claim.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -61,20 +61,29 @@ function sameFindingTitles(repairs: JsonObject[], findingTitles: unknown): boole
 }
 
 function completion(args: JsonObject): DriverResult {
-  let reviewClaim: JsonObject;
+  if (!args.reviewClaim) throw new Error("active review claim is required before repair completion");
+  let suppliedReviewClaim: JsonObject;
   try {
-    reviewClaim = typeof args.reviewClaim === "string" ? JSON.parse(args.reviewClaim) : args.reviewClaim;
+    suppliedReviewClaim = typeof args.reviewClaim === "string" ? JSON.parse(args.reviewClaim) : args.reviewClaim;
   } catch {
     throw new Error("active review claim must be valid JSON before repair completion");
-  }
-  if (!reviewClaim || typeof reviewClaim !== "object" || Array.isArray(reviewClaim)) {
-    throw new Error("active review claim is required before repair completion");
   }
   const runner = createCommandRunner();
   runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
   const location = canonicalAttemptLocation(args);
   const record = readAttemptRecord(location.runDir);
   assertAttemptProjectBinding(record, args);
+  const reviewClaim = savedReviewClaimContract(location.attemptRecord, suppliedReviewClaim, {
+    stateDir: String(args.stateDir),
+    githubRepo: String(args.githubRepo),
+    projectId: String(args.projectId),
+    targetNumber: Number(args.pr),
+  });
+  for (const field of ["reviewLabel", "reviewingLabel", "inProgressLabel", "blockedLabel"] as const) {
+    if (String(reviewClaim[field] || "") !== String(args[field] || "")) {
+      throw new Error(`${field} does not exactly match the saved review claim contract`);
+    }
+  }
   for (const [field, value, basename] of [
     ["promise", args.promise, "promise.json"],
     ["result", args.result, "finalizer-result.json"],
@@ -115,9 +124,9 @@ function completion(args: JsonObject): DriverResult {
     enabledAt: Number(args.enabledAt),
   };
 
-  return withEnabledDriverLock(project, (enabled: { githubRepositoryId?: string; githubRepo?: string }, recheck: () => void) => {
-    const automationLogin = successfulReceipt ? runner.runText(["gh", "api", "user", "--jq", ".login"]).trim() : "";
-    if (successfulReceipt && !automationLogin) throw new Error("authenticated GitHub identity is unavailable");
+  return withEnabledDriverLock(project, (enabled: { githubRepositoryId?: string; githubRepo?: string; automationLogin?: string }, recheck: () => void) => {
+    const enabledLogin = String(enabled.automationLogin || "").trim().toLowerCase();
+    if (!enabledLogin) throw new Error("enablement authority has no authenticated GitHub identity");
     const pr = runner.runJson([
       "gh", "pr", "view", String(args.pr), "-R", String(args.githubRepo),
       "--json", "state,headRefName,headRefOid,isCrossRepository,labels,comments",
@@ -167,18 +176,23 @@ function completion(args: JsonObject): DriverResult {
       const events = observation.listPrTimelineEvents(String(args.githubRepo), String(args.pr));
       const currentComments = observation.listPrComments(String(args.githubRepo), String(args.pr));
       const headers = readGithubRestResponseHeaders(runner, String(args.githubRepo));
+      const authenticatedLogin = runner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
+      if (!authenticatedLogin || authenticatedLogin !== enabledLogin) {
+        throw new Error("current authenticated GitHub identity does not match enablement authority");
+      }
       const enabledIdentityMatches = String(enabled.githubRepositoryId || "") === liveTarget.repositoryId
         && String(enabled.githubRepo || "") === liveTarget.repository;
+      const authoritativeClaim = { ...reviewClaim, authorizedLogins: [authenticatedLogin] };
       const authorized = enabledIdentityMatches && (liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
-        ? validateActiveReviewClaim(current, events, currentComments, headers, reviewClaim, liveTarget)
-        : successfulReceipt && validateRepairAuthorityTransition(current, events, currentComments, headers, reviewClaim, liveTarget, receipt || {}));
+        ? validateActiveReviewClaim(current, events, currentComments, headers, authoritativeClaim, liveTarget)
+        : successfulReceipt && validateRepairAuthorityTransition(current, events, currentComments, headers, authoritativeClaim, liveTarget, receipt || {}));
       if (!authorized) throw new Error("active review claim could not be reauthorized before repair completion mutation");
     };
     reauthorize();
     const github = createGithubOperations(runner, () => { recheck(); reauthorize(); });
 
     if (successfulReceipt) {
-      if (repairResultCommentExists(comments, String(args.attemptKey), receiptHead, automationLogin)) {
+      if (repairResultCommentExists(comments, String(args.attemptKey), receiptHead, enabledLogin)) {
         github.movePrLabels(String(args.githubRepo), String(args.pr), {
           remove: [String(args.inProgressLabel), String(args.reviewingLabel)], add: String(args.reviewLabel),
         });

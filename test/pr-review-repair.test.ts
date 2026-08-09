@@ -50,13 +50,15 @@ function finalizeWith(
   pushUrl = "https://github.com/owner/repo.git",
   repositoryIds: Record<string, string> = {},
   raceRemoteHead?: string | null,
-  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; dirty?: boolean; missingAncestor?: boolean; checkFailure?: boolean } = {},
+  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; dirty?: boolean; missingAncestor?: boolean; checkFailure?: boolean; finalManagedConflict?: boolean } = {},
 ) {
   let observedHead = actualHead;
   let localHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  let prReads = 0;
   return finalizeReviewRepair(
     {
       repo: "/worktree",
+      attemptRecord: "/state/runs/repair/attempt.json",
       projectRepo: "/repo",
       githubRepo: "owner/repo",
       pr: "243",
@@ -71,9 +73,10 @@ function finalizeWith(
       reviewClaim,
     },
     {
+      loadSavedReviewClaim: () => reviewClaim,
       assertEnabled: () => {
         if (headAfterAuthorization) observedHead = headAfterAuthorization;
-        return { githubRepo: "owner/repo", githubRepositoryId: "R_repo" };
+        return { githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin };
       },
       run: (args: string[], timeoutMs?: number) => {
         commands.push(args);
@@ -94,6 +97,7 @@ function finalizeWith(
           return { status: 0, stdout: `${args[2] === "/repo" ? localHeadChanges.projectCommonDir || "/common" : localHeadChanges.worktreeCommonDir || "/common"}\n`, stderr: "" };
         }
         if (args.includes("symbolic-ref")) return { status: 0, stdout: `${localHeadChanges.checkedOutBranch || "agent/issue-243"}\n`, stderr: "" };
+        if (args[0] === "gh" && args[1] === "api" && args[2] === "user") return { status: 0, stdout: `${automationLogin}\n`, stderr: "" };
         if (args[0] === "gh" && args[1] === "repo") {
           if (localHeadChanges.beforePush) localHead = localHeadChanges.beforePush;
           return { status: 0, stdout: JSON.stringify({ id: repositoryIds[args[3]] || (args[3] === "other/repo" ? "R_other" : "R_repo"), nameWithOwner: args[3] }), stderr: "" };
@@ -106,6 +110,7 @@ function finalizeWith(
         }
         if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
         if (args[0] === "gh") {
+          prReads += 1;
           return {
             status: 0,
             stdout: JSON.stringify({
@@ -113,7 +118,9 @@ function finalizeWith(
               isCrossRepository: false,
               headRefName: "agent/issue-243",
               headRefOid: observedHead,
-              labels: [{ name: "agent:in-progress" }],
+              labels: prReads >= 2 && localHeadChanges.finalManagedConflict
+                ? [{ name: "agent:in-progress" }, { name: "agent:blocked" }]
+                : [{ name: "agent:in-progress" }],
             }),
             stderr: "",
           };
@@ -151,6 +158,7 @@ function finalizeVerifiedRename() {
     return finalizeReviewRepair(
       {
         repo,
+        attemptRecord: "/state/runs/repair/attempt.json",
         projectRepo: repo,
         githubRepo: "owner/repo",
         pr: "243",
@@ -165,11 +173,13 @@ function finalizeVerifiedRename() {
         reviewClaim: renameReviewClaim,
       },
       {
-        assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
+        loadSavedReviewClaim: () => renameReviewClaim,
+        assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin }),
         run: (args: string[]) => {
           if (args[0] === "node" || args.includes("push")) return { status: 0, stdout: "", stderr: "" };
           if (args.includes("ls-remote")) return { status: 0, stdout: `${expectedHead}\trefs/heads/${branch}\n`, stderr: "" };
           if (args.includes("get-url")) return { status: 0, stdout: "https://github.com/owner/repo.git\n", stderr: "" };
+          if (args[0] === "gh" && args[1] === "api" && args[2] === "user") return { status: 0, stdout: `${automationLogin}\n`, stderr: "" };
           if (args[0] === "gh" && args[1] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
           if (args[0] === "gh" && args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
           if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: automationLogin }, body: renderReviewClaimComment(renameBinding) }]]), stderr: "" };
@@ -193,13 +203,14 @@ function finalizeWhileDisabled() {
   try {
     finalizeReviewRepair(
       {
-        repo: "/worktree", projectRepo: "/repo", githubRepo: "owner/repo", pr: "243",
+        repo: "/worktree", attemptRecord: "/state/runs/repair/attempt.json", projectRepo: "/repo", githubRepo: "owner/repo", pr: "243",
         branch: "agent/issue-243", expectedHead: head, remote: "origin",
         automationDir: "/automation", stateDir: "/state", enabledAt: 1, checkCommand: "npm test",
         resultFile: "/state/result.json",
         reviewClaim,
       },
       {
+        loadSavedReviewClaim: () => reviewClaim,
         assertEnabled: () => { throw new Error("deadloop is disabled for this repository"); },
         run: (args: string[]) => {
           commands.push(args);
@@ -235,7 +246,7 @@ function prompt() {
 describe("automatic PR review repair", () => {
   it("fails before repair work when the active review claim is omitted", () => {
     expect(() => finalizeReviewRepair({
-      repo: "/worktree", projectRepo: "/repo", githubRepo: "owner/repo", pr: "243", branch: "agent/issue-243",
+      repo: "/worktree", attemptRecord: "/state/runs/repair/attempt.json", projectRepo: "/repo", githubRepo: "owner/repo", pr: "243", branch: "agent/issue-243",
       expectedHead: head, remote: "origin", automationDir: "/automation", stateDir: "/state", enabledAt: 1,
       checkCommand: "npm test", resultFile: "/state/result.json",
     }, { run: () => { throw new Error("unexpected command"); } })).toThrow("active review claim is required");
@@ -512,6 +523,13 @@ describe("automatic PR review repair", () => {
     const result = finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, null);
 
     expect(result.action).toBe("stale_head");
+  });
+
+  it("does not push when managed labels change during the final claim inspection", () => {
+    const commands: string[][] = [];
+    try { finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { finalManagedConflict: true }); } catch {}
+
+    expect(commands.some((command) => command.includes("push"))).toBe(false);
   });
 
   it("does not push after a stale immediate head recheck", () => {

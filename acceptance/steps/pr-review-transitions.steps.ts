@@ -65,14 +65,14 @@ Then("deadloop starts normal review", function (this: TransitionWorld) {
   assert.equal(this.result?.testAdapterEffects?.herdrStarts?.length, 1);
 });
 
-Then("deadloop requests external review for the current head", function (this: TransitionWorld) {
-  assert.equal(
-    this.result?.githubEffects?.some(
-      (effect) => effect.operation === "comment_pr"
-        && effect.body?.includes("deadloop:external-review-request head=new2525"),
-    ),
-    true,
-  );
+Then("deadloop leaves the external review request untouched before claim", function (this: TransitionWorld) {
+  const effects = this.result?.testAdapterEffects as { githubComments?: unknown[]; labelReplacements?: unknown[]; herdrStarts?: unknown[] } | undefined;
+  assert.deepEqual({
+    action: this.result?.driverAction,
+    comments: effects?.githubComments?.length ?? 0,
+    labels: effects?.labelReplacements?.length ?? 0,
+    starts: effects?.herdrStarts?.length ?? 0,
+  }, { action: "external_review_unclaimed", comments: 0, labels: 0, starts: 0 });
 });
 
 When("deadloop completes approval processing for the current pull request", function (this: TransitionWorld) {
@@ -81,6 +81,7 @@ When("deadloop completes approval processing for the current pull request", func
   try {
     mergeReviewedPr(
       {
+        attemptRecord: "/state/runs/reviewer/attempt.json",
         projectRepo: "/repo",
         githubRepo: "owner/repo",
         stateDir: "/state",
@@ -90,9 +91,12 @@ When("deadloop completes approval processing for the current pull request", func
         reviewPromise: "/state/reviewer-promise.json",
         inProgressLabel: "agent:in-progress",
         blockedLabel: "agent:blocked",
-        reviewClaim: {},
+        reviewClaim: {
+          inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+        },
       },
       {
+        loadSavedReviewClaim: () => ({ inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked" }),
         withLock: (_project: unknown, operation: (enabled: unknown) => number) => operation({
           firstEnableAutoMerge: false,
           firstStartPending: false,

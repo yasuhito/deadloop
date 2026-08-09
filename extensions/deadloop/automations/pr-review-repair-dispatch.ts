@@ -34,7 +34,7 @@ const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
-const { readGithubRestResponseHeaders, validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const { readGithubRestResponseHeaders, savedReviewClaimContract, validateActiveReviewClaim } = require("./pr-review-claim.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 import type { RunnerAdapter } from "../../../src/runner";
@@ -174,8 +174,17 @@ function requireReviewClaimForManagedPr(pr: JsonObject, env: ReturnType<typeof e
   }
 }
 
-function reauthorizeReviewClaim(prNumber: string, env: ReturnType<typeof envConfig>): void {
+function reauthorizeReviewClaim(
+  prNumber: string,
+  env: ReturnType<typeof envConfig>,
+  enabled?: { automationLogin?: string },
+): void {
   if (!env.reviewClaim) throw new StaleLaunchError(`PR #${prNumber} active review claim is missing`);
+  const authenticated = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
+  const enabledLogin = String(enabled?.automationLogin || "").trim().toLowerCase();
+  if (!authenticated || !enabledLogin || authenticated !== enabledLogin) {
+    throw new StaleLaunchError(`PR #${prNumber} authenticated identity no longer matches enablement authority`);
+  }
   const observation = createGithubOperations(commandRunner);
   const repository = commandRunner.runJson(["gh", "repo", "view", env.githubRepo, "--json", "id,nameWithOwner"]);
   if (!validateActiveReviewClaim(
@@ -183,7 +192,7 @@ function reauthorizeReviewClaim(prNumber: string, env: ReturnType<typeof envConf
     observation.listPrTimelineEvents(env.githubRepo, prNumber),
     observation.listPrComments(env.githubRepo, prNumber),
     readGithubRestResponseHeaders(commandRunner, env.githubRepo),
-    env.reviewClaim,
+    { ...env.reviewClaim, authorizedLogins: [enabledLogin] },
     { repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(prNumber) },
   )) throw new StaleLaunchError(`PR #${prNumber} active review claim could not be reauthorized`);
 }
@@ -194,11 +203,11 @@ function withRevalidatedPrMutation(
   expectedPr: JsonObject,
   mutation: (guardedGithub: ReturnType<typeof createGithubOperations>, livePr: JsonObject) => void,
 ): void {
-  withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+  withEnabledDriverLock(env, (enabled: { automationLogin?: string }, recheck: () => void) => {
     const livePr = readLivePr(env.githubRepo, prNumber);
     assertSameLaunchTarget(expectedPr, livePr, "pr");
     requireReviewClaimForManagedPr(livePr, env);
-    const reauthorize = () => reauthorizeReviewClaim(prNumber, env);
+    const reauthorize = () => reauthorizeReviewClaim(prNumber, env, enabled);
     reauthorize();
     mutation(createGithubOperations(commandRunner, () => { recheck(); reauthorize(); }), livePr);
   });
@@ -242,6 +251,8 @@ function repairWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-review-repair-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--attempt-record",
+    shellQuote(path.join(path.dirname(promiseFile), "attempt.json")),
     "--project-repo",
     shellQuote(env.repoPath),
     "--github-repo",
@@ -422,6 +433,7 @@ function repairLaunchInput(
     role: "review-repair" as const,
     target: { kind: "pull-request" as const, number: Number(prNumber) },
     inputRevision: { head: expectedHead },
+    reviewClaim: env.reviewClaim || undefined,
     intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
     renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
       repairWorkerPrompt(prNumber, branch, expectedHead, findings, key, promiseFile, worktreePath, env),
@@ -517,21 +529,39 @@ function dispatch(args: JsonObject): DriverResult {
   runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   const env = envConfig(args);
   if (!env.githubRepo) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
+  const prNumber = String(args.pr);
   const hasAttemptRecord = Boolean(args.attemptRecord && fs.existsSync(String(args.attemptRecord)));
-  const validation = validatePromise(String(args.promise), hasAttemptRecord ? String(args.attemptRecord) : undefined);
+  if (!hasAttemptRecord) throw new Error("saved reviewer attempt record is required before repair dispatch");
+  env.reviewClaim = savedReviewClaimContract(String(args.attemptRecord), env.reviewClaim || undefined, {
+    stateDir: env.stateDir,
+    githubRepo: env.githubRepo,
+    projectId: env.projectId,
+    targetNumber: Number(prNumber),
+  });
+  const validation = validatePromise(String(args.promise), String(args.attemptRecord));
   if (validation.status === "none" || validation.status === "invalid") {
     return driverResult("error", `reviewer promise is ${validation.status}`, { driverAction: "invalid_promise", validation });
   }
   const promise = validation.promise as JsonObject;
-  const rawReport = hasAttemptRecord ? JSON.parse(fs.readFileSync(String(args.promise), "utf8")) : null;
-  const attemptRecord = hasAttemptRecord ? readAttemptRecord(path.dirname(String(args.attemptRecord))) : null;
-  const persistenceMarker = attemptRecord && rawReport?.schemaVersion === 1
+  const rawReport = JSON.parse(fs.readFileSync(String(args.promise), "utf8"));
+  const attemptRecord = readAttemptRecord(path.dirname(String(args.attemptRecord)));
+  const configuredClaimFields = {
+    reviewLabel: env.reviewLabel,
+    reviewingLabel: env.reviewingLabel,
+    inProgressLabel: env.inProgressLabel,
+    blockedLabel: env.blockedLabel,
+  };
+  for (const [field, value] of Object.entries(configuredClaimFields)) {
+    if (String((env.reviewClaim as JsonObject)[field] || "") !== value) {
+      throw new Error(`${field} does not exactly match the saved review claim contract`);
+    }
+  }
+  const persistenceMarker = rawReport?.schemaVersion === 1
     ? renderAttemptPersistenceMarker(attemptRecord, rawReport, {
         findings: rawReport.role === "reviewer" ? rawReport.result?.findings || [] : [],
         boundedRepairAttemptMarked: rawReport.role === "reviewer" && rawReport.result?.outcome === "changes_requested",
       })
     : "";
-  const prNumber = String(args.pr);
   const expectedHead = String(args.expectedHead).toLowerCase();
   const branch = String(args.branch);
   const pr = readLivePr(env.githubRepo, prNumber);
@@ -670,11 +700,11 @@ function dispatch(args: JsonObject): DriverResult {
             recordClaim: () => recordRepairLaunchGithubClaim(
               prNumber, branch, expectedHead, findings, selection.key, env, resumeUuid,
             ),
-            revalidate: () => {
+            revalidate: (enabled: { automationLogin?: string }) => {
               const livePr = readLivePr(env.githubRepo, prNumber);
               assertSameLaunchTarget(refreshedPr, livePr, "pr");
               requireReviewClaimForManagedPr(livePr, env);
-              reauthorizeReviewClaim(prNumber, env);
+              reauthorizeReviewClaim(prNumber, env, enabled);
               const labels = labelNames(livePr.labels);
               const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
               if (liveSelection.cumulativeLimitExceeded) {
@@ -815,14 +845,14 @@ function dispatch(args: JsonObject): DriverResult {
   try {
     launch = withEnabledDriverLaunch(
       env,
-      (recheck: () => void) => {
+      (recheck: () => void, enabled: { automationLogin?: string }) => {
         if (hasAttemptRecord) {
           recheck();
           return;
         }
         requireReviewClaimForManagedPr(refreshedPr, env);
-        reauthorizeReviewClaim(prNumber, env);
-        const guardedGithub = createGithubOperations(commandRunner, () => { recheck(); reauthorizeReviewClaim(prNumber, env); });
+        reauthorizeReviewClaim(prNumber, env, enabled);
+        const guardedGithub = createGithubOperations(commandRunner, () => { recheck(); reauthorizeReviewClaim(prNumber, env, enabled); });
         guardedGithub.commentPr(env.githubRepo, prNumber, renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }));
       },
       (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck, repairLaunchUuid),
@@ -833,11 +863,11 @@ function dispatch(args: JsonObject): DriverResult {
         recordClaim: () => recordRepairLaunchGithubClaim(
           prNumber, branch, expectedHead, findings, selection.key, env, repairLaunchUuid,
         ),
-        revalidate: () => {
+        revalidate: (enabled: { automationLogin?: string }) => {
           const livePr = readLivePr(env.githubRepo, prNumber);
           assertSameLaunchTarget(refreshedPr, livePr, "pr");
           requireReviewClaimForManagedPr(livePr, env);
-          reauthorizeReviewClaim(prNumber, env);
+          reauthorizeReviewClaim(prNumber, env, enabled);
           const labels = labelNames(livePr.labels);
           if (!labels.includes(env.inProgressLabel) || labels.includes(env.blockedLabel)) {
             throw new StaleLaunchError(`PR #${prNumber} is no longer eligible for repair`);

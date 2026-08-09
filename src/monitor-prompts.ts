@@ -81,7 +81,10 @@ function renderPromisePollingRules(
   mutationAuthority = true,
 ): string {
   const claim = input.reviewClaim ? ` --review-claim ${shellQuotePrompt(JSON.stringify(input.reviewClaim))}` : "";
-  const guardedOperation = `node ${shellQuotePrompt(`${input.automationDir}/guarded-operation.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --target-kind ${targetKind}${claim} --`;
+  const attempt = targetKind === "pull-request"
+    ? ` --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)}`
+    : "";
+  const guardedOperation = `node ${shellQuotePrompt(`${input.automationDir}/guarded-operation.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --target-kind ${targetKind}${attempt}${claim} --`;
   const mutationRules = mutationAuthority
     ? `- Run only approved non-merge GitHub mutations through this prefix: \`${guardedOperation}\`. Approved forms are \`gh issue edit\` for labels, \`gh issue comment\`, \`gh pr edit\` for label removal, and \`gh pr comment\`; every command must explicitly use \`-R ${input.githubRepo || "<githubRepo>"}\`.
 - Never run those mutations directly. Each guarded operation is synchronized with \`/deadloop-disable\`; if it reports that deadloop is disabled, stop without that mutation. Re-evaluate only on a later scheduler cycle after re-enable.
@@ -218,7 +221,7 @@ function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string 
   const approvedLabels = input.autoMerge
     ? [input.inProgressLabel || "agent:in-progress"]
     : [input.humanLabel];
-  const guardedMerge = `node ${shellQuotePrompt(`${input.automationDir}/merge-reviewed-pr.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-promise ${shellQuotePrompt(input.promiseFile)} --in-progress-label ${shellQuotePrompt(input.inProgressLabel || "agent:in-progress")} --blocked-label ${shellQuotePrompt(input.blockedLabel)}${input.reviewClaim ? ` --review-claim ${shellQuotePrompt(JSON.stringify(input.reviewClaim))}` : ""}`;
+  const guardedMerge = `node ${shellQuotePrompt(`${input.automationDir}/merge-reviewed-pr.ts`)} --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-promise ${shellQuotePrompt(input.promiseFile)} --in-progress-label ${shellQuotePrompt(input.inProgressLabel || "agent:in-progress")} --blocked-label ${shellQuotePrompt(input.blockedLabel)}${input.reviewClaim ? ` --review-claim ${shellQuotePrompt(JSON.stringify(input.reviewClaim))}` : ""}`;
   return `Deterministic driver launched reviewer for PR #${input.prNumber}. Do not launch another agent and do not reselect another PR.
 
 Review binding:

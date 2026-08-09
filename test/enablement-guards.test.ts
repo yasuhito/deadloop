@@ -54,7 +54,7 @@ fi
 
 function writeState(project: ReturnType<typeof fixture>, record: Record<string, unknown>, withSafetyFields = true) {
   const safetyFields = withSafetyFields
-    ? { githubRepositoryId: "R_repo", firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }
+    ? { githubRepositoryId: "R_repo", automationLogin: "deadloop-bot", firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }
     : {};
   writeFileSync(path.join(project.stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{ repoPath: project.repoPath, githubRepo: project.githubRepo, ...safetyFields, ...record }] }));
 }
@@ -179,6 +179,25 @@ describe("enablement mutation guards", () => {
       expect(events).toEqual(["mutated", "disable-excluded", "launched"]);
     },
   );
+
+  it("can persist a winning GitHub claim before creating its attempt journal", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const events: string[] = [];
+
+    withEnabledDriverLaunch(
+      { ...project, enabledAt: 1 },
+      () => events.push("github-claim"),
+      () => events.push("launched"),
+      {
+        claimBeforePrepare: true,
+        prepareAttempt: () => events.push("prepared"),
+        recordClaim: () => events.push("claim-recorded"),
+      },
+    );
+
+    expect(events).toEqual(["github-claim", "prepared", "claim-recorded", "launched"]);
+  });
 
   it("records the guarded claim before a runner failure", () => {
     const project = fixture();
@@ -314,7 +333,7 @@ describe("enablement mutation guards", () => {
       enabledAt: 1,
       targetKind: "pull-request",
       command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"],
-    })).toThrow("active review claim is required");
+    })).toThrow("saved attempt record is required");
   });
 
   it("rejects a guarded PR mutation disguised as an issue target without an active claim", () => {
@@ -348,9 +367,10 @@ describe("enablement mutation guards", () => {
       stateDir: project.stateDir,
       enabledAt: 1,
       targetKind: "pull-request",
+      attemptRecord: path.join(project.stateDir, "runs", "reviewer", "attempt.json"),
       reviewClaim,
       command: ["gh", "pr", "comment", "25", "-R", project.githubRepo, "--body", "done"],
-    }, () => { throw new Error("unexpected command"); })).toThrow("claim target does not match");
+    }, () => { throw new Error("unexpected command"); }, () => reviewClaim)).toThrow("claim target does not match");
   });
 
   it("authorizes a guarded mutation when the active claim is on a later REST page", () => {
@@ -365,8 +385,9 @@ describe("enablement mutation guards", () => {
     };
     let mutated = false;
     runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", reviewClaim, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord: path.join(project.stateDir, "runs", "reviewer", "attempt.json"), reviewClaim, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
       (_command: string, args: string[]) => {
+        if (args[0] === "api" && args[1] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
         if (args[0] === "repo" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: project.githubRepo }), stderr: "" };
         if (args[0] === "pr" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] }), stderr: "" };
         if (args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[], [{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
@@ -375,9 +396,34 @@ describe("enablement mutation guards", () => {
         mutated = true;
         return { status: 0, stdout: "", stderr: "" };
       },
+      () => reviewClaim,
     );
 
     expect(mutated).toBe(true);
+  });
+
+  it("suppresses a generic PR mutation when the winning comment disappears during final inspection", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const head = "a".repeat(40);
+    const binding = { repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a" };
+    const reviewClaim = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+
+    expect(() => runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord: path.join(project.stateDir, "runs", "reviewer", "attempt.json"), reviewClaim, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
+      (_command: string, args: string[]) => {
+        if (args[0] === "api" && args[1] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+        if (args[0] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: project.githubRepo }), stderr: "" };
+        if (args[0] === "pr") return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] }), stderr: "" };
+        if (args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
+        if (args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: "[[]]", stderr: "" };
+        return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
+      },
+      () => reviewClaim,
+    )).toThrow("reauthorized");
   });
 
   it("rejects merge through the generic guarded operation", () => {

@@ -1,3 +1,7 @@
+const path = require("node:path") as typeof import("node:path");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
+
 const CLAIM_MARKER_RE = /<!--\s*deadloop:review-claim\s+v1=([A-Za-z0-9_-]+)\s*-->/g;
 
 const CLAIM_KEYS = [
@@ -29,6 +33,15 @@ type LiveReviewTarget = {
   repository: string;
   targetNumber: number;
 };
+
+const CANONICAL_PR_MANAGED_LABELS = [
+  "agent:review",
+  "agent:reviewing",
+  "agent:implement",
+  "agent:update-branch",
+  "agent:in-progress",
+  "agent:blocked",
+];
 
 function eventTime(event: JsonObject): number {
   return Date.parse(String(event.created_at || event.createdAt || ""));
@@ -166,8 +179,13 @@ function validateActiveReviewClaim(
   );
   const winnerMarker = parseReviewClaim(winner?.body);
   const labels = new Set((pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
-  const managed = labels.has(String(contract.inProgressLabel || "agent:in-progress"));
-  return managed && !labels.has(String(contract.blockedLabel || "agent:blocked"))
+  const inProgress = String(contract.inProgressLabel || "agent:in-progress");
+  const managedLabels = [...new Set([
+    ...CANONICAL_PR_MANAGED_LABELS,
+    ...(Array.isArray(contract.managedLabels) ? contract.managedLabels.map(String) : []),
+  ])];
+  const exactManagedState = managedLabels.filter((label: string) => labels.has(label));
+  return exactManagedState.length === 1 && exactManagedState[0] === inProgress
     && serverCommentId(winner || {}) === String(contract.commentId || "")
     && winnerMarker?.owner === contract.binding?.owner;
 }
@@ -205,10 +223,54 @@ function validateRepairAuthorityTransition(
   );
   const marker = parseReviewClaim(winner?.body);
   const labels = new Set((pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
+  const inProgress = String(contract.inProgressLabel || "agent:in-progress");
+  const managedLabels = [...new Set([
+    ...CANONICAL_PR_MANAGED_LABELS,
+    ...(Array.isArray(contract.managedLabels) ? contract.managedLabels.map(String) : []),
+  ])];
+  const exactManagedState = managedLabels.filter((label: string) => labels.has(label));
   return serverCommentId(winner || {}) === String(contract.commentId || "")
     && marker?.owner === contract.binding?.owner
-    && labels.has(String(contract.inProgressLabel || "agent:in-progress"))
-    && !labels.has(String(contract.blockedLabel || "agent:blocked"));
+    && exactManagedState.length === 1
+    && exactManagedState[0] === inProgress;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as JsonObject).sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+type SavedClaimAuthority = {
+  stateDir: string;
+  githubRepo?: string;
+  projectId?: string;
+  targetNumber?: number;
+};
+
+function savedReviewClaimContract(attemptRecordFile: string, supplied: unknown, authority: SavedClaimAuthority): JsonObject {
+  const location = canonicalAttemptLocation({ stateDir: authority.stateDir, attemptRecord: attemptRecordFile });
+  const record = readAttemptRecord(location.runDir);
+  if ((record.role !== "reviewer" && record.role !== "review-repair")
+    || record.target.kind !== "pull-request" || !record.reviewClaim) {
+    throw new Error("saved active review claim is missing from the PR attempt record");
+  }
+  const contract = record.reviewClaim as JsonObject;
+  if (supplied !== undefined && stableJson(supplied) !== stableJson(contract)) {
+    throw new Error("supplied review claim does not exactly match the saved attempt contract");
+  }
+  if ((authority.githubRepo && record.repository !== authority.githubRepo)
+    || (authority.projectId && record.project !== authority.projectId)
+    || (authority.targetNumber !== undefined && record.target.number !== authority.targetNumber)
+    || contract.binding?.repository !== record.repository
+    || Number(contract.binding?.targetNumber) !== record.target.number
+    || String(contract.binding?.revision || "").toLowerCase() !== String(record.inputRevision.head || "").toLowerCase()) {
+    throw new Error("saved review claim does not match the immutable attempt identity");
+  }
+  return contract;
 }
 
 function parsePaginatedGithubJson(stdout: unknown): JsonObject[] {
@@ -254,6 +316,7 @@ module.exports = {
   parsePaginatedGithubJson,
   readGithubRestResponseHeaders,
   renderReviewClaimComment,
+  savedReviewClaimContract,
   selectReviewClaimWinner,
   validateActiveReviewClaim,
   validateRepairAuthorityTransition,
