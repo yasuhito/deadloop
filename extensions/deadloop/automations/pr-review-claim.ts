@@ -1,4 +1,3 @@
-const path = require("node:path") as typeof import("node:path");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 

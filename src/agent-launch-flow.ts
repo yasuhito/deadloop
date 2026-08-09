@@ -4,7 +4,6 @@ const {
   attemptRecordPath,
   createPreparedAttempt,
   readAttemptRecord,
-  transitionAttempt,
   transitionPersistedAttempt,
   writeAttemptRecordAtomically,
 } = require("./attempt-lifecycle-runtime.cjs");

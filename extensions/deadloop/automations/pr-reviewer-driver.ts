@@ -898,69 +898,6 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
   return { reviewerName, headRefName, reason, claim, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
-function draftBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>): string {
-  const number = Number(pr.number || 0);
-  const headRefName = oneLine(pr.headRefName || "<headRefName>");
-  return `## What happened
-- Skipped automated review and auto-merge because the PR is a draft.
-- Confirmed facts:
-- PR #${number} is in draft state.
-- Next decision: mark the PR ready and add \`${env.reviewLabel}\` again when it is ready for review.
-
-## Recovery steps
-1. Inspect the cause.
-   \`\`\`bash
-gh pr view ${number} -R ${shellQuote(env.githubRepo)} --comments --json number,title,url,headRefName,headRefOid,labels,commits,statusCheckRollup
-gh pr checks ${number} -R ${shellQuote(env.githubRepo)}
-node ${shellQuote(env.automationDir)}/extract-worker-promise.ts --file '<promiseFile>' || true
-herdr agent list
-herdr pane list
-\`\`\`
-2. Inspect retained workspaces or branches.
-   Not applicable: the draft gate did not create a worktree, workspace, or branch. Do not remove another attempt's evidence.
-   \`\`\`bash
-herdr workspace list
-herdr worktree list --cwd ${shellQuote(env.repoPath)} --json
-git -C ${shellQuote(env.repoPath)} worktree list
-git -C ${shellQuote(env.repoPath)} branch --list ${shellQuote(headRefName)}
-\`\`\`
-3. Re-queue the target issue after fixing the cause.
-   \`\`\`bash
-gh issue edit <issueNumber> -R ${shellQuote(env.githubRepo)} --remove-label ${shellQuote(env.blockedLabel)} --add-label ${shellQuote(env.implementLabel)}
-\`\`\``;
-}
-
-function applyDraftGate(
-  pr: JsonObject,
-  env: ReturnType<typeof envConfig>,
-  fixture: JsonObject | null,
-  comment: string,
-): { applied: boolean; githubEffects: GithubEffect[] } {
-  const githubEffects: GithubEffect[] = [];
-  const applied = applyPrTransition(pr, env, fixture, (livePlan) => livePlan.kind === "draft_gate", (github, live) => {
-    const number = String(live.number);
-    github.commentPr(env.githubRepo, number, comment);
-    github.movePrLabels(env.githubRepo, number, { remove: [env.reviewingLabel, env.reviewLabel], add: env.blockedLabel });
-  }, githubEffects);
-  return { applied, githubEffects };
-}
-
-function applyExternalReviewRequest(
-  pr: JsonObject,
-  env: ReturnType<typeof envConfig>,
-  fixture: JsonObject | null,
-): { applied: boolean; githubEffects: GithubEffect[] } {
-  const githubEffects: GithubEffect[] = [];
-  const applied = applyPrTransition(pr, env, fixture, (livePlan) => livePlan.kind === "external_review_request", (github, live) => {
-    const number = String(live.number);
-    const head = String(live.headRefOid || "");
-    github.addPrReviewer(env.githubRepo, number, "@copilot", { check: false });
-    github.commentPr(env.githubRepo, number, `@coderabbitai review\n\n<!-- deadloop:external-review-request head=${head} -->`);
-    github.movePrLabels(env.githubRepo, number, { remove: env.reviewingLabel }, { check: false });
-  }, githubEffects);
-  return { applied, githubEffects };
-}
-
 function drive(fixturePath: string | undefined): DriverResult {
   if (!fixturePath) {
     runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });

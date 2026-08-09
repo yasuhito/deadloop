@@ -895,7 +895,7 @@ describe("enablement command integration", () => {
             },
           },
         });
-        expect(result.outcome).toBe("passed");
+        expect(result.outcome, readFileSync(result.logPath, "utf8")).toBe("passed");
       } finally {
         if (previousNestedCheck === undefined) delete process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK;
         else process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK = previousNestedCheck;
