@@ -198,6 +198,7 @@ Useful commands:
 /deadloop-status
 /deadloop-doctor
 /deadloop-abandon-attempt <attempt-id>  # only when doctor presents it
+/deadloop-complete-github-state-migration updated-hosts-stopped  # one-time #238 deployment gate
 ```
 
 Operator environment variables:
