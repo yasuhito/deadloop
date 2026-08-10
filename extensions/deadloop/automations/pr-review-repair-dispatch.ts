@@ -35,6 +35,7 @@ const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cj
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
 const { readGithubRestResponseHeaders, savedReviewClaimContract, validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 import type { RunnerAdapter } from "../../../src/runner";
@@ -185,6 +186,7 @@ function reauthorizeReviewClaim(
   if (!authenticated || !enabledLogin || authenticated !== enabledLogin) {
     throw new StaleLaunchError(`PR #${prNumber} authenticated identity no longer matches enablement authority`);
   }
+  const currentConfiguration = assertCurrentReviewClaimAuthority(env.reviewClaim, env.stateDir, enabled, authenticated);
   const observation = createGithubOperations(commandRunner);
   const repository = commandRunner.runJson(["gh", "repo", "view", env.githubRepo, "--json", "id,nameWithOwner"]);
   if (!validateActiveReviewClaim(
@@ -192,7 +194,7 @@ function reauthorizeReviewClaim(
     observation.listPrTimelineEvents(env.githubRepo, prNumber),
     observation.listPrComments(env.githubRepo, prNumber),
     readGithubRestResponseHeaders(commandRunner, env.githubRepo),
-    { ...env.reviewClaim, authorizedLogins: [enabledLogin] },
+    { ...env.reviewClaim, authorizedLogins: currentConfiguration.authorizedLogins },
     { repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(prNumber) },
   )) throw new StaleLaunchError(`PR #${prNumber} active review claim could not be reauthorized`);
 }

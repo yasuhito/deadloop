@@ -200,7 +200,7 @@ function consistentSavedClaimContract(contract: JsonObject): boolean {
 
 function claimContractMatchesConfiguration(
   contract: JsonObject,
-  configuration: { authoritySeconds: number; managedLabels: string[]; requestLabel: string; requiredLabels: string[] },
+  configuration: JsonObject,
 ): boolean {
   if (!consistentSavedClaimContract(contract)) return false;
   const activeState = normalizedActiveState(contract.binding as ReviewClaimBinding);
@@ -209,6 +209,21 @@ function claimContractMatchesConfiguration(
     && stableJson(configuration.managedLabels) === stableJson(activeState.managedLabels)
     && configuration.requestLabel === activeState.requestLabel
     && stableJson(configuration.requiredLabels) === stableJson(activeState.requiredLabels);
+}
+
+function assertClaimMatchesCurrentConfiguration(contract: JsonObject, configuration: JsonObject): void {
+  if (!claimContractMatchesConfiguration(contract, configuration)
+    || contract.reviewerMaxRuntimeSeconds !== configuration.reviewerMaxRuntimeSeconds
+    || contract.cleanupGraceSeconds !== configuration.cleanupGraceSeconds
+    || contract.authoritySeconds !== contract.reviewerMaxRuntimeSeconds + contract.cleanupGraceSeconds
+    || contract.binding?.repositoryId !== configuration.repositoryId
+    || contract.binding?.repository !== configuration.repository
+    || stableJson((contract.authorizedLogins || []).map((value: unknown) => String(value).toLowerCase()).sort())
+      !== stableJson(configuration.authorizedLogins)
+    || String(contract.automationLogin || "").toLowerCase() !== configuration.authenticatedLogin
+    || String(contract.reviewerAgent || "") !== configuration.reviewerAgent) {
+    throw new Error("active review claim no longer matches current enablement and normalized configuration");
+  }
 }
 
 function reviewClaimCommentMatchesContract(comment: JsonObject, contract: JsonObject): boolean {
@@ -409,6 +424,7 @@ function selectReviewClaimWinner(
 
 module.exports = {
   activeReviewRequest,
+  assertClaimMatchesCurrentConfiguration,
   claimContractMatchesConfiguration,
   parseGithubRestDate,
   parseReviewClaim,

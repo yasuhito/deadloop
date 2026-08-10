@@ -26,6 +26,7 @@ npx skills@latest add yasuhito/deadloop
 
 - v0 is a Pi package / extension.
 - The default runner is [Herdr](https://herdr.dev/).
+- The supported host platform currently requires a Unix-like system with a compatible `flock` executable (normally provided by util-linux) and nonblocking file-descriptor locks. `/deadloop-enable` verifies this capability before enabling automation.
 
 ## Configure
 
@@ -130,7 +131,9 @@ An issue is eligible only when it has both `ready-for-agent` and `agent:implemen
 
 ## Merge-conflict recovery
 
-When a selected same-repository PR conflicts with the configured base, deadloop can start one guarded branch-update worker.
+During the current GitHub-claim bootstrap, branch-update mutations stop without side effects. They remain unavailable until the `agent:update-branch` handoff tracked by #241 is implemented. The existing non-force, exact-head, required-verification, and normal-merge safety contracts remain required; this temporary stop does not remove them.
+
+The guarded branch-update behavior below describes the retained safety contract, not a currently reachable mutation path.
 
 The worker merges the selected base commit into the existing PR branch. It never rebases.
 
@@ -175,7 +178,7 @@ See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for details.
 ## Roll out in phases
 
 1. **Issue coordination only** — Start here for a slow rollout. Humans still review and merge PRs.
-2. **Automated PR review** — Use the standard PR reviewer with `autoMerge: false`. Reviewed PRs move to `ready-for-human`. External review requests remain off unless `externalReview.enabled` is `true`.
+2. **Automated PR review** — Use the standard PR reviewer with `autoMerge: false`. Reviewed PRs move to `ready-for-human`. During the current bootstrap, external-review mutations stop without side effects until they are connected under an active review claim; enabling `externalReview` does not bypass that stop.
 3. **Optional auto-merge** — Consider `autoMerge: true` only after proving branch protection, CI, review expectations, dry-run or manual approval practices, and stop conditions.
 
 ## Run

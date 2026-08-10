@@ -18,7 +18,35 @@ function readOwner(lockPath) {
 }
 
 function tryFlock(fd) {
-  const result = spawnSync("flock", ["--nonblock", "3"], {
+  return tryFlockWith(fd, spawnSync);
+}
+
+function preflightSchedulerLockCapability(options = {}) {
+  const makeTemp = options.mkdtempSync || fs.mkdtempSync;
+  const remove = options.rmSync || fs.rmSync;
+  const run = options.spawnSync || spawnSync;
+  const root = makeTemp(require("node:path").join(require("node:os").tmpdir(), "deadloop-flock-preflight-"));
+  const lockPath = require("node:path").join(root, "capability.lock");
+  const fd = fs.openSync(lockPath, "a+", 0o600);
+  try {
+    let acquired;
+    try { acquired = tryFlockWith(fd, run); } catch (error) {
+      throw new Error(`deadloop requires a compatible flock executable (usually util-linux): ${error.message}`);
+    }
+    if (!acquired) throw new Error("deadloop requires flock support for nonblocking file-descriptor locks");
+    const contender = run("flock", ["--nonblock", lockPath, "true"], { encoding: "utf8", stdio: ["ignore", "ignore", "pipe"] });
+    if (contender.error) throw new Error(`deadloop requires a compatible flock executable (usually util-linux): ${contender.error.message}`);
+    if (contender.status !== 1) {
+      throw new Error("deadloop requires flock support for nonblocking file-descriptor locks (normally provided by util-linux)");
+    }
+  } finally {
+    fs.closeSync(fd);
+    remove(root, { recursive: true, force: true });
+  }
+}
+
+function tryFlockWith(fd, run) {
+  const result = run("flock", ["--nonblock", "3"], {
     encoding: "utf8",
     stdio: ["ignore", "ignore", "pipe", fd],
   });
@@ -77,4 +105,4 @@ function releaseSchedulerLock(lockPath, token) {
   }
 }
 
-module.exports = { acquireSchedulerLock, readOwner, releaseSchedulerLock };
+module.exports = { acquireSchedulerLock, preflightSchedulerLockCapability, readOwner, releaseSchedulerLock };

@@ -14,6 +14,7 @@ const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cj
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { readGithubRestResponseHeaders, savedReviewClaimContract, validateActiveReviewClaim, validateRepairAuthorityTransition } = require("./pr-review-claim.ts");
+const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -182,7 +183,8 @@ function completion(args: JsonObject): DriverResult {
       }
       const enabledIdentityMatches = String(enabled.githubRepositoryId || "") === liveTarget.repositoryId
         && String(enabled.githubRepo || "") === liveTarget.repository;
-      const authoritativeClaim = { ...reviewClaim, authorizedLogins: [authenticatedLogin] };
+      const currentConfiguration = assertCurrentReviewClaimAuthority(reviewClaim, String(args.stateDir), enabled, authenticatedLogin);
+      const authoritativeClaim = { ...reviewClaim, authorizedLogins: currentConfiguration.authorizedLogins };
       const authorized = enabledIdentityMatches && (liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
         ? validateActiveReviewClaim(current, events, currentComments, headers, authoritativeClaim, liveTarget)
         : successfulReceipt && validateRepairAuthorityTransition(current, events, currentComments, headers, authoritativeClaim, liveTarget, receipt || {}));

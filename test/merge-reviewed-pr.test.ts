@@ -33,6 +33,7 @@ function runMerge(options: {
   repository?: { id: string; nameWithOwner: string };
   claimTargetNumber?: number;
   finalRace?: "expiry" | "comment" | "request" | "head" | "labels";
+  currentConfiguration?: Record<string, unknown>;
 } = {}) {
   const commands: string[][] = [];
   let lockHeld = false;
@@ -49,7 +50,7 @@ function runMerge(options: {
       requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a",
       authority: { durationSeconds: 3600 }, activeState: activeReviewState,
     },
-    commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+    commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
     reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const action = mergeReviewedPr(
@@ -67,11 +68,29 @@ function runMerge(options: {
       ...(options.reviewClaim !== false ? { reviewClaim: authoritativeReviewClaim } : {}),
     },
     {
-      ...(options.reviewClaim !== false ? { loadSavedReviewClaim: () => authoritativeReviewClaim } : {}),
+      ...(options.reviewClaim !== false ? {
+        loadSavedReviewClaim: () => authoritativeReviewClaim,
+        loadCurrentReviewClaimConfiguration: () => ({
+          reviewerMaxRuntimeSeconds: 3500,
+          cleanupGraceSeconds: 100,
+          authoritySeconds: 3600,
+          managedLabels: activeReviewState.managedLabels,
+          requestLabel: "agent:review",
+          requiredLabels: ["agent:in-progress"],
+          repositoryId: "R_repo",
+          repository: "owner/repo",
+          authorizedLogins: ["deadloop-bot"],
+          authenticatedLogin: "deadloop-bot",
+          reviewerAgent: "pi",
+          ...options.currentConfiguration,
+        }),
+      } : {}),
       withLock: (_project: unknown, operation: (enabled: unknown) => number) => {
         lockHeld = true;
         try {
           return operation({
+            repoPath: "/repo",
+            baseBranch: "origin/main",
             automationLogin: "deadloop-bot",
             ...(options.enabled || {
               githubRepositoryId: "R_repo",
@@ -165,6 +184,15 @@ describe("reviewed PR merge", () => {
 
   it("rejects merge when the actual target PR differs from the claim", () => {
     expect(() => runMerge({ claimTargetNumber: 25 })).toThrow("reauthorized");
+  });
+
+  it.each([
+    ["shortened runtime", { reviewerMaxRuntimeSeconds: 3400, authoritySeconds: 3500 }],
+    ["changed labels", { requestLabel: "agent:review-v2" }],
+    ["changed identities", { authorizedLogins: ["deadloop-bot", "other-bot"] }],
+    ["changed repository", { repositoryId: "R_other" }],
+  ])("stops merge before mutation when current claim configuration has %s", (_name, currentConfiguration) => {
+    expect(() => runMerge({ currentConfiguration })).toThrow("current enablement");
   });
 
   it("revalidates current auto-merge configuration while holding the enablement lock", () => {

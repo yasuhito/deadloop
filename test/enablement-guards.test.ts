@@ -25,6 +25,19 @@ const activeReviewState = {
   requestLabel: "agent:review",
   requiredLabels: ["agent:in-progress"],
 };
+const currentReviewConfiguration = {
+  reviewerMaxRuntimeSeconds: 86400,
+  cleanupGraceSeconds: 300,
+  authoritySeconds: 86700,
+  managedLabels: activeReviewState.managedLabels,
+  requestLabel: "agent:review",
+  requiredLabels: ["agent:in-progress"],
+  repositoryId: "R_repo",
+  repository: "owner/repo",
+  authorizedLogins: ["deadloop-bot"],
+  authenticatedLogin: "deadloop-bot",
+  reviewerAgent: "pi",
+};
 
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-guard-"));
@@ -384,11 +397,11 @@ describe("enablement mutation guards", () => {
     const head = "a".repeat(40);
     const binding = {
       repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
-      authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+      authority: { durationSeconds: 86700 }, activeState: activeReviewState,
     };
     const claim = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
     const reviewClaim = {
-      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
       reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     let mutated = false;
@@ -405,9 +418,55 @@ describe("enablement mutation guards", () => {
         return { status: 0, stdout: "", stderr: "" };
       },
       () => reviewClaim,
+      () => currentReviewConfiguration,
     );
 
     expect(mutated).toBe(true);
+  });
+
+  it.each([
+    ["comment", ["gh", "pr", "comment", "24", "-R", "owner/repo", "--body", "done"]],
+    ["label/ready", ["gh", "pr", "edit", "24", "-R", "owner/repo", "--remove-label", "agent:in-progress"]],
+  ] as const)("blocks generic guarded %s mutations for every current activation race", (_seam, command) => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const head = "a".repeat(40);
+    const binding = {
+      repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
+      authority: { durationSeconds: 86700 }, activeState: activeReviewState,
+    };
+    const reviewClaim = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi",
+      reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    let mutated = false;
+    const failures = [
+      { ...currentReviewConfiguration, reviewerMaxRuntimeSeconds: 80000, authoritySeconds: 80300 },
+      { ...currentReviewConfiguration, cleanupGraceSeconds: 100, authoritySeconds: 86500 },
+      { ...currentReviewConfiguration, requestLabel: "custom:review" },
+      { ...currentReviewConfiguration, authorizedLogins: ["other-bot"] },
+      { ...currentReviewConfiguration, authenticatedLogin: "other-bot" },
+    ];
+    const results = failures.map((configuration) => {
+      mutated = false;
+      let error = "";
+      try {
+        runGuarded(
+          { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord: path.join(project.stateDir, "runs", "reviewer", "attempt.json"), reviewClaim, command: [...command] },
+          (_command: string, args: string[]) => {
+            if (args[0] === "api" && args[1] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+            mutated = true;
+            return { status: 0, stdout: "", stderr: "" };
+          },
+          () => reviewClaim,
+          () => configuration,
+        );
+      } catch (caught) { error = String(caught); }
+      return { error: error.includes("current enablement"), mutated };
+    });
+
+    expect(results).toEqual(failures.map(() => ({ error: true, mutated: false })));
   });
 
   it("suppresses a generic PR mutation when the winning comment disappears during final inspection", () => {
@@ -416,10 +475,10 @@ describe("enablement mutation guards", () => {
     const head = "a".repeat(40);
     const binding = {
       repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
-      authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+      authority: { durationSeconds: 86700 }, activeState: activeReviewState,
     };
     const reviewClaim = {
-      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
       reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
 
@@ -434,6 +493,7 @@ describe("enablement mutation guards", () => {
         return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
       },
       () => reviewClaim,
+      () => currentReviewConfiguration,
     )).toThrow("reauthorized");
   });
 

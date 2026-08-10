@@ -59,6 +59,7 @@ const {
 } = require("../../src/disable-generation.cjs");
 const {
   acquireSchedulerLock: acquireSchedulerFileLock,
+  preflightSchedulerLockCapability,
   releaseSchedulerLock: releaseSchedulerFileLock,
 } = require("../../src/scheduler-lock.cjs");
 import { inferredProjectId, schedulerLockName } from "../../src/project-identity";
@@ -1829,6 +1830,7 @@ export default function (pi) {
       let enablementSaved = false;
       const enableAttemptToken = crypto.randomUUID();
       try {
+        (pi.testing?.schedulerLockCapabilityPreflight || preflightSchedulerLockCapability)();
         let enabledAt;
         const disableGenerations = await withEnablementStateLock(async () => loadDisableGenerations(STATE_DIR));
         primaryRepoPath = await detectPrimaryCheckout(pi, ctx.cwd);

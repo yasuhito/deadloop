@@ -11,6 +11,7 @@ const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../s
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { assertAuthorizedSource } = require("./guarded-push.ts");
 const { parsePaginatedGithubJson, savedReviewClaimContract, validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
@@ -30,10 +31,11 @@ type FinalizeArgs = {
   reviewClaim: JsonObject;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
-type EnabledProject = { githubRepo: string; githubRepositoryId: string };
+type EnabledProject = { repoPath?: string; baseBranch?: string; githubRepo: string; githubRepositoryId: string; automationLogin?: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   loadSavedReviewClaim?: typeof savedReviewClaimContract;
+  loadCurrentReviewClaimConfiguration?: (...args: unknown[]) => Record<string, unknown>;
   assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => EnabledProject;
 };
 
@@ -166,12 +168,15 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       if (!automationLogin || authenticated !== automationLogin) {
         throw new Error("current authenticated GitHub identity does not match enablement authority before repair push");
       }
+      const currentConfiguration = assertCurrentReviewClaimAuthority(
+        savedClaim, args.stateDir, enabled, authenticated, ops.loadCurrentReviewClaimConfiguration,
+      );
       const repository = JSON.parse(checked(ops, ["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS));
       const currentPr = JSON.parse(checked(ops, ["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefName,headRefOid,isCrossRepository,labels"], MAX_GUARDED_OPERATION_MS));
       const events = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS));
       const comments = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS));
       const headers = checkedRaw(ops, ["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
-      const authoritativeClaim = { ...savedClaim, authorizedLogins: [automationLogin] };
+      const authoritativeClaim = { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins };
       if (!validateActiveReviewClaim(currentPr, events, comments, headers, authoritativeClaim, {
         repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr),
       })) throw new Error("active review claim could not be reauthorized before repair push");

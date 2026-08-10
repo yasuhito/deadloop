@@ -34,10 +34,10 @@ const activeReviewState = {
 };
 const reviewClaimBinding = {
   repositoryId: "R_repo", repository: "owner/repo", targetNumber: 243, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
-  authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+  authority: { durationSeconds: 86700 }, activeState: activeReviewState,
 };
 const reviewClaim = {
-  binding: reviewClaimBinding, commentId: "101", authorizedLogins: [automationLogin], authoritySeconds: 3600,
+  binding: reviewClaimBinding, commentId: "101", authorizedLogins: [automationLogin], automationLogin, reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
   reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
 };
 const findings = [
@@ -58,7 +58,7 @@ function finalizeWith(
   pushUrl = "https://github.com/owner/repo.git",
   repositoryIds: Record<string, string> = {},
   raceRemoteHead?: string | null,
-  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; dirty?: boolean; missingAncestor?: boolean; checkFailure?: boolean; finalManagedConflict?: boolean } = {},
+  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; dirty?: boolean; missingAncestor?: boolean; checkFailure?: boolean; finalManagedConflict?: boolean; currentConfiguration?: Record<string, unknown> } = {},
 ) {
   let observedHead = actualHead;
   let localHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -82,6 +82,12 @@ function finalizeWith(
     },
     {
       loadSavedReviewClaim: () => reviewClaim,
+      loadCurrentReviewClaimConfiguration: () => ({
+        reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+        managedLabels: activeReviewState.managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
+        repositoryId: "R_repo", repository: "owner/repo", authorizedLogins: [automationLogin],
+        authenticatedLogin: automationLogin, reviewerAgent: "pi", ...localHeadChanges.currentConfiguration,
+      }),
       assertEnabled: () => {
         if (headAfterAuthorization) observedHead = headAfterAuthorization;
         return { githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin };
@@ -182,6 +188,12 @@ function finalizeVerifiedRename() {
       },
       {
         loadSavedReviewClaim: () => renameReviewClaim,
+        loadCurrentReviewClaimConfiguration: () => ({
+          reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+          managedLabels: activeReviewState.managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
+          repositoryId: "R_repo", repository: "owner/repo", authorizedLogins: [automationLogin],
+          authenticatedLogin: automationLogin, reviewerAgent: "pi",
+        }),
         assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin }),
         run: (args: string[]) => {
           if (args[0] === "node" || args.includes("push")) return { status: 0, stdout: "", stderr: "" };
@@ -252,6 +264,17 @@ function prompt() {
 }
 
 describe("automatic PR review repair", () => {
+  it.each([
+    ["runtime", { reviewerMaxRuntimeSeconds: 80000, authoritySeconds: 80300 }],
+    ["grace", { cleanupGraceSeconds: 100, authoritySeconds: 86500 }],
+    ["labels", { requestLabel: "custom:review" }],
+    ["identities", { authorizedLogins: ["other-bot"] }],
+    ["authenticated login", { authenticatedLogin: "other-bot" }],
+  ])("performs no repair push after current %s configuration changes", (_name, currentConfiguration) => {
+    const commands: string[][] = [];
+    expect(() => finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { currentConfiguration })).toThrow("current enablement");
+  });
+
   it("fails before repair work when the active review claim is omitted", () => {
     expect(() => finalizeReviewRepair({
       repo: "/worktree", attemptRecord: "/state/runs/repair/attempt.json", projectRepo: "/repo", githubRepo: "owner/repo", pr: "243", branch: "agent/issue-243",

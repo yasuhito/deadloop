@@ -30,6 +30,10 @@ function runCompletion(options: {
   liveHead?: string;
   state?: string;
   labels?: { name: string }[];
+  currentProject?: Record<string, unknown>;
+  authenticatedLogin?: string;
+  enabled?: boolean;
+  raceAfterComment?: "runtime" | "grace" | "managed label" | "authorized identity" | "authenticated login" | "enablement";
 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-repair-complete-"));
   roots.push(root);
@@ -43,23 +47,39 @@ function runCompletion(options: {
   const contractFile = path.join(runDir, "review-contract.json");
   const postedFile = path.join(root, "posted.txt");
   const actionsFile = path.join(root, "actions.txt");
+  const authLoginFile = path.join(root, "authenticated-login");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(runDir, { recursive: true });
   fs.mkdirSync(projectRepo);
   writeCompatibleHerdr(bin);
   spawnSync("git", ["-C", projectRepo, "init", "--quiet"]);
+  spawnSync("git", ["-C", projectRepo, "config", "user.email", "test@example.com"]);
+  spawnSync("git", ["-C", projectRepo, "config", "user.name", "Test"]);
+  fs.writeFileSync(path.join(projectRepo, "README.md"), "fixture\n");
+  fs.writeFileSync(path.join(projectRepo, "deadloop.json"), "{}\n");
+  spawnSync("git", ["-C", projectRepo, "add", "."]);
+  spawnSync("git", ["-C", projectRepo, "commit", "--quiet", "-m", "fixture"]);
+  const branchName = spawnSync("git", ["-C", projectRepo, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).stdout.trim();
+  const baseBranch = `origin/${branchName}`;
+  spawnSync("git", ["-C", projectRepo, "update-ref", `refs/remotes/${baseBranch}`, "HEAD"]);
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
-  fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
-    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot", enabledAt: 1,
+  const enabledProjectsFile = path.join(stateDir, "enabled-projects.json");
+  const projectsFile = path.join(stateDir, "projects.json");
+  fs.writeFileSync(authLoginFile, `${options.authenticatedLogin || "deadloop-bot"}\n`);
+  fs.writeFileSync(enabledProjectsFile, JSON.stringify({ projects: [{
+    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch, automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
-    autoMergeAcknowledged: false, enabled: true,
+    autoMergeAcknowledged: false, enabled: options.enabled ?? true,
+  }] }));
+  fs.writeFileSync(projectsFile, JSON.stringify({ projects: [{
+    id: "demo", repoPath: projectRepo, githubRepo: "owner/repo", baseBranch, ...options.currentProject,
   }] }));
   const binding = {
     repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a",
-    authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+    authority: { durationSeconds: 86700 }, activeState: activeReviewState,
   };
   const reviewClaim = {
-    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
     reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
@@ -98,12 +118,27 @@ function runCompletion(options: {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
-else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+else if (args[0] === "api" && args[1] === "user") process.stdout.write(fs.readFileSync(process.env.AUTH_LOGIN_FILE, "utf8"));
 else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
 else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))});
 else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:in-progress" }])},comments:${JSON.stringify(options.comments || [])}}));
-else if (args[0] === "pr" && args[1] === "comment") fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
+else if (args[0] === "pr" && args[1] === "comment") {
+  fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
+  if (process.env.RACE_AFTER_COMMENT === "authenticated login") fs.writeFileSync(process.env.AUTH_LOGIN_FILE, "other-bot\\n");
+  else if (process.env.RACE_AFTER_COMMENT === "enablement") {
+    const data = JSON.parse(fs.readFileSync(process.env.ENABLED_PROJECTS_FILE, "utf8"));
+    data.projects[0].enabled = false;
+    fs.writeFileSync(process.env.ENABLED_PROJECTS_FILE, JSON.stringify(data));
+  } else if (process.env.RACE_AFTER_COMMENT) {
+    const data = JSON.parse(fs.readFileSync(process.env.PROJECTS_FILE, "utf8"));
+    if (process.env.RACE_AFTER_COMMENT === "runtime") data.projects[0].automations = [{id:"demo:pr-reviewer",driverFile:"pr-reviewer-driver.ts",maxRuntimeSeconds:80000,shutdownGraceSeconds:300}];
+    if (process.env.RACE_AFTER_COMMENT === "grace") data.projects[0].automations = [{id:"demo:pr-reviewer",driverFile:"pr-reviewer-driver.ts",maxRuntimeSeconds:86400,shutdownGraceSeconds:100}];
+    if (process.env.RACE_AFTER_COMMENT === "managed label") data.projects[0].labels = {review:"custom:review"};
+    if (process.env.RACE_AFTER_COMMENT === "authorized identity") data.projects[0].automationLogins = ["other-bot"];
+    fs.writeFileSync(process.env.PROJECTS_FILE, JSON.stringify(data));
+  }
+}
 else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.ACTIONS_FILE, args.join(" ") + "\\n");
 `,
   );
@@ -149,7 +184,12 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
       "--review-claim",
       JSON.stringify(reviewClaim),
     ],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"), POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile } },
+    { cwd: process.cwd(), encoding: "utf8", env: {
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
+      POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile, AUTH_LOGIN_FILE: authLoginFile,
+      ENABLED_PROJECTS_FILE: enabledProjectsFile, PROJECTS_FILE: projectsFile,
+      RACE_AFTER_COMMENT: options.raceAfterComment || "",
+    } },
   );
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   return {
@@ -177,18 +217,27 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   fs.mkdirSync(projectRepo);
   writeCompatibleHerdr(bin);
   spawnSync("git", ["-C", projectRepo, "init", "--quiet"]);
+  spawnSync("git", ["-C", projectRepo, "config", "user.email", "test@example.com"]);
+  spawnSync("git", ["-C", projectRepo, "config", "user.name", "Test"]);
+  fs.writeFileSync(path.join(projectRepo, "README.md"), "fixture\n");
+  fs.writeFileSync(path.join(projectRepo, "deadloop.json"), "{}\n");
+  spawnSync("git", ["-C", projectRepo, "add", "."]);
+  spawnSync("git", ["-C", projectRepo, "commit", "--quiet", "-m", "fixture"]);
+  const branchName = spawnSync("git", ["-C", projectRepo, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).stdout.trim();
+  const baseBranch = `origin/${branchName}`;
+  spawnSync("git", ["-C", projectRepo, "update-ref", `refs/remotes/${baseBranch}`, "HEAD"]);
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
-    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot", enabledAt: 1,
+    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch, automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
   }] }));
   const binding = {
     repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a",
-    authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+    authority: { durationSeconds: 86700 }, activeState: activeReviewState,
   };
   const reviewClaim = {
-    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
     reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const checks = [{ command: "npm test", result: "passed" }];
@@ -251,6 +300,34 @@ afterEach(() => {
 });
 
 describe("review repair deterministic completion", () => {
+  it.each([
+    ["runtime", { currentProject: { automations: [{ id: "demo:pr-reviewer", driverFile: "pr-reviewer-driver.ts", maxRuntimeSeconds: 80000, shutdownGraceSeconds: 300 }] } }],
+    ["grace", { currentProject: { automations: [{ id: "demo:pr-reviewer", driverFile: "pr-reviewer-driver.ts", maxRuntimeSeconds: 86400, shutdownGraceSeconds: 100 }] } }],
+    ["labels", { currentProject: { labels: { review: "custom:review" } } }],
+    ["identities", { currentProject: { automationLogins: ["other-bot"] } }],
+    ["authenticated login", { authenticatedLogin: "other-bot" }],
+    ["enablement", { enabled: false }],
+  ])("performs no repair completion comment or label mutation after current %s changes", (_name, change) => {
+    const result = runCompletion({
+      promise: { status: "complete", summary: "fixed", reason: "repair_pushed", repairs: [{ title: "Unsafe fallback", summary: "fixed" }], checks: [{ command: "npm test", result: "passed" }] },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks: [{ command: "npm test", result: "passed" }] },
+      ...change,
+    });
+    expect({ posted: result.posted, actions: result.actions }).toEqual({ posted: "", actions: "" });
+  });
+  it.each(["runtime", "grace", "managed label", "authorized identity", "authenticated login", "enablement"] as const)(
+    "suppresses the repair-completion label mutation when %s races after the success comment",
+    (raceAfterComment) => {
+      const checks = [{ command: "npm test", result: "passed" }];
+      const result = runCompletion({
+        promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed" }], checks },
+        receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+        raceAfterComment,
+      });
+      expect(result.actions).toBe("");
+    },
+  );
+
   it("fails before repair completion effects when the active review claim is omitted", () => {
     expect(() => completion({})).toThrow("active review claim is required");
   });

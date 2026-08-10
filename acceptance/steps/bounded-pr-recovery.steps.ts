@@ -23,10 +23,12 @@ const activeReviewState = {
 };
 const reviewClaimBinding = {
   repositoryId: "R_repo", repository: "owner/repo", targetNumber: 31, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
-  authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+  authority: { durationSeconds: 86700 }, activeState: activeReviewState,
 };
 const reviewClaim = {
-  binding: reviewClaimBinding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+  binding: reviewClaimBinding, commentId: "101", authorizedLogins: ["deadloop-bot"],
+  automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400,
+  cleanupGraceSeconds: 300, authoritySeconds: 86700,
   reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
 };
 
@@ -103,12 +105,16 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     fs.mkdirSync(worktree, { recursive: true });
     fs.mkdirSync(runDir, { recursive: true });
     fs.writeFileSync(labelsFile, JSON.stringify(["agent:in-progress"]));
+    fs.writeFileSync(path.join(state, "projects.json"), JSON.stringify({ projects: [{
+      id: "demo", repoPath: root, githubRepo: "owner/repo", baseBranch: "origin/main",
+    }] }));
     fs.writeFileSync(
       path.join(state, "enabled-projects.json"),
       JSON.stringify({ projects: [{
         repoPath: root,
         githubRepo: "owner/repo",
         githubRepositoryId: "R_repo",
+        baseBranch: "origin/main",
         automationLogin: "deadloop-bot",
         enabledAt: 1,
         firstEnableAutoMerge: false,
@@ -189,6 +195,8 @@ else {
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+else if (args.includes("rev-parse") && args.some(arg => arg.endsWith("^{commit}"))) process.stdout.write("${"f".repeat(40)}\\n");
+else if (args.includes("show") && args.some(arg => arg.endsWith(":deadloop.json"))) process.exit(1);
 `,
     );
     executable(
@@ -263,6 +271,12 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
 function finalizerOps(commands: string[][], actualHead = head, isCrossRepository = false) {
   return {
     loadSavedReviewClaim: () => reviewClaim,
+    loadCurrentReviewClaimConfiguration: () => ({
+      reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+      managedLabels: activeReviewState.managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
+      repositoryId: "R_repo", repository: "owner/repo", authorizedLogins: ["deadloop-bot"],
+      authenticatedLogin: "deadloop-bot", reviewerAgent: "pi",
+    }),
     assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot" }),
     run: (args: string[]) => {
       commands.push(args);

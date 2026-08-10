@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { acquireSchedulerLock, releaseSchedulerLock } = require("../src/scheduler-lock.cjs");
+const { acquireSchedulerLock, preflightSchedulerLockCapability, releaseSchedulerLock } = require("../src/scheduler-lock.cjs");
 const sandboxes: string[] = [];
 
 function lockFixture(): string {
@@ -19,6 +19,22 @@ afterEach(() => {
 });
 
 describe("scheduler lock", () => {
+  it("proves the installed flock supports the required nonblocking FD lock", () => {
+    expect(() => preflightSchedulerLockCapability()).not.toThrow();
+  });
+
+  it("fails preflight when the flock executable is missing", () => {
+    expect(() => preflightSchedulerLockCapability({
+      spawnSync: () => ({ error: new Error("ENOENT"), status: null, stderr: "" }),
+    })).toThrow("util-linux");
+  });
+
+  it("fails preflight when flock does not retain the inherited FD lock", () => {
+    let calls = 0;
+    expect(() => preflightSchedulerLockCapability({
+      spawnSync: () => ({ error: undefined, status: calls++ === 0 ? 0 : 0, stderr: "" }),
+    })).toThrow("nonblocking file-descriptor locks");
+  });
   it("lets only one contender acquire while the original creator is delayed before publication", () => {
     const lockPath = lockFixture();
     let contender: ReturnType<typeof acquireSchedulerLock> | undefined;

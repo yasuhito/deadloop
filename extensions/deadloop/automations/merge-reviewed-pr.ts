@@ -8,6 +8,7 @@ const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
 const { parsePaginatedGithubJson, savedReviewClaimContract, validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 type MergeArgs = {
   attemptRecord: string;
@@ -23,6 +24,8 @@ type MergeArgs = {
   reviewClaim: Record<string, unknown>;
 };
 type EnabledProject = {
+  repoPath: string;
+  baseBranch?: string;
   githubRepositoryId: string;
   githubRepo: string;
   automationLogin?: string;
@@ -35,6 +38,7 @@ type PromiseValidation = { status?: unknown; promise?: Record<string, unknown> }
 type MergeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   loadSavedReviewClaim?: typeof savedReviewClaimContract;
+  loadCurrentReviewClaimConfiguration?: (...args: unknown[]) => Record<string, unknown>;
   isAutoMergeEnabled?: (args: MergeArgs) => boolean;
   validateReviewPromise?: (file: string) => PromiseValidation;
   withLock?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }, operation: (enabled: EnabledProject, recheck: () => void) => number) => number;
@@ -211,6 +215,9 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
         throw new Error("current authenticated GitHub identity does not match enablement authority; automatic merge stopped");
       }
       recheck();
+      const currentConfiguration = assertCurrentReviewClaimAuthority(
+        savedClaim, args.stateDir, enabled, automationLogin, ops.loadCurrentReviewClaimConfiguration,
+      );
       const repositoryResult = ops.run(["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS);
       const prResult = ops.run(["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefOid,labels"], MAX_GUARDED_OPERATION_MS);
       const eventsResult = ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS);
@@ -225,7 +232,7 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
           parsePaginatedGithubJson(eventsResult.stdout),
           parsePaginatedGithubJson(commentsResult.stdout),
           dateResult.stdout,
-          { ...savedClaim, authorizedLogins: [automationLogin] },
+          { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins },
           { repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr) },
         )) {
         throw new Error("active review claim could not be reauthorized; automatic merge stopped");

@@ -150,6 +150,7 @@ async function loadExtension(
     beforeEnablementProjectCheck?: (worktreePath: string) => Promise<void>;
     runAutomationScript?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
     herdrCompatibilityPreflight?: () => void;
+    schedulerLockCapabilityPreflight?: () => void;
     recoveryFixture?: {
       issues: unknown[];
       worktrees: unknown[];
@@ -256,6 +257,7 @@ async function loadExtension(
       beforeEnablementWorktreeCreate: options.beforeEnablementWorktreeCreate,
       beforeEnablementProjectCheck: options.beforeEnablementProjectCheck,
       herdrCompatibilityPreflight: options.herdrCompatibilityPreflight || (() => undefined),
+      schedulerLockCapabilityPreflight: options.schedulerLockCapabilityPreflight,
     },
   });
   retainedExtensionShutdowns.push(async () => {
@@ -747,6 +749,54 @@ async function unresolvedProjectCheckDoctorObservation(attemptRecord: "missing" 
 }
 
 describe("enablement command integration", () => {
+  it("runs the OS lock capability preflight before GitHub enablement mutations", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const events: string[] = [];
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { events.push("lock-preflight"); },
+      beforeLabelCreate: async () => { events.push("github-mutation"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect({ first: events[0], githubMutation: events.includes("github-mutation") }).toEqual({
+      first: "lock-preflight", githubMutation: true,
+    });
+  });
+
+  it("does not persist enablement when flock is unavailable", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { throw new Error("flock executable is required (usually util-linux)"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"))).toBe(false);
+  });
+
+  it("writes no enable-attempt persistence when flock capability is unavailable", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { throw new Error("flock unavailable"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const stateDir = path.join(root, ".pi", "agent", "deadloop");
+    expect(existsSync(stateDir) && readdirSync(stateDir).some((name) => name.startsWith("enable-attempt-"))).toBe(false);
+  });
+
+  it("explains incompatible nonblocking FD flock behavior", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { throw new Error("flock must support nonblocking file-descriptor locks"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("nonblocking file-descriptor locks");
+  });
   it("persists the authenticated GitHub login as an authorized automation identity", async () => {
     const { root, repoPath } = fixtureRepository();
     const extension = await loadExtension(root, { authenticatedLogin: "Deadloop-Bot" });

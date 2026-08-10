@@ -26,6 +26,7 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
+const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 const {
   activeReviewRequest,
   claimContractMatchesConfiguration,
@@ -230,7 +231,7 @@ function launchWithAdapters(
   fixture: JsonObject | null,
   input: DriverLaunchInput,
   mutateWorkflowState: (github: ReturnType<typeof githubOperations>) => void,
-  revalidate: (enabled?: { automationLogin?: string; githubRepositoryId?: string; githubRepo?: string }) => void,
+  revalidate: (enabled?: { repoPath?: string; baseBranch?: string; automationLogin?: string; githubRepositoryId?: string; githubRepo?: string }) => void,
   operations?: SelectedLaunchOperations,
 ): JsonObject {
   const mutate = (recheck: () => void) => mutateWorkflowState(
@@ -694,6 +695,7 @@ function blockUnverifiableClaim(
   reason: string,
   expectedRequestEventId: string,
   claim: JsonObject,
+  authorizeCurrent: () => void = () => {},
 ): void {
   const number = Number(pr.number || 0);
   const hasBoundClaim = (): boolean => {
@@ -708,14 +710,15 @@ function blockUnverifiableClaim(
   assertSamePrRevision(pr, beforeComment);
   const requestBeforeComment = currentReviewRequest(github, env, number);
   if (String(requestBeforeComment.id || requestBeforeComment.node_id || "") !== expectedRequestEventId || !hasBoundClaim()) return;
+  authorizeCurrent();
   github.commentPr(env.githubRepo, number, `deadloop stopped this review claim because ${reason}. Remove \`${env.blockedLabel}\` and add \`${env.reviewLabel}\` again after GitHub server-time evidence is available.`);
 
   const beforeLabels = github.getPr(env.githubRepo, number);
   assertSamePrRevision(pr, beforeLabels);
   const requestBeforeLabels = currentReviewRequest(github, env, number);
   if (String(requestBeforeLabels.id || requestBeforeLabels.node_id || "") !== expectedRequestEventId || !hasBoundClaim()) return;
-  const managed = new Set([env.reviewLabel, env.reviewingLabel, env.implementLabel, "agent:update-branch", env.inProgressLabel, env.blockedLabel]);
-  github.replacePrLabels(env.githubRepo, number, [...labelNames(beforeLabels).filter((label) => !managed.has(label)), env.blockedLabel]);
+  authorizeCurrent();
+  github.movePrLabels(env.githubRepo, number, { add: env.blockedLabel });
 }
 
 function assertActiveReviewClaim(
@@ -774,12 +777,16 @@ function reauthorizeClaimedReview(
   claim: JsonObject,
   authenticate?: () => string,
   enabledIdentity?: { githubRepositoryId?: string; githubRepo?: string },
+  authorizeCurrent?: (claim: JsonObject) => void,
 ): JsonObject {
   try {
     return assertActiveReviewClaim(github, pr, env, claim, authenticate, enabledIdentity);
   } catch (error) {
     if (error instanceof ReviewServerTimeError) {
-      blockUnverifiableClaim(github, pr, env, error.message, String(claim.binding?.requestEventId || ""), claim);
+      blockUnverifiableClaim(
+        github, pr, env, error.message, String(claim.binding?.requestEventId || ""), claim,
+        () => authorizeCurrent?.(claim),
+      );
     }
     throw error;
   }
@@ -801,6 +808,7 @@ function claimReviewRequest(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
   authenticate: () => string = () => assertAuthenticatedReviewIdentity(env),
+  authorizeCurrent?: (claim: JsonObject) => void,
 ): JsonObject {
   const number = Number(pr.number || 0);
   assertReviewRepositoryIdentity(github, env);
@@ -820,24 +828,30 @@ function claimReviewRequest(
     activeState: { managedLabels, requestLabel: env.reviewLabel, requiredLabels: [env.inProgressLabel] },
   };
   if (!binding.repositoryId || !binding.revision || !binding.owner) throw new Error("review claim identity is incomplete");
-  const posted = github.createPrComment(env.githubRepo, number, renderReviewClaimComment(binding));
-  const live = github.getPr(env.githubRepo, number);
-  assertSameLaunchTarget(pr, live, "pr");
-  const refreshedRequest = currentReviewRequest(github, env, number);
-  if (String(refreshedRequest.id || refreshedRequest.node_id || "") !== requestEventId) {
-    throw new StaleLaunchError(`PR #${number} received a newer review request`);
-  }
   const authorized = [...new Set(env.authorizedAutomationLogins.map((login) => login.toLowerCase()).filter(Boolean))];
   const claim = {
     binding,
-    commentId: String(posted.id || posted.databaseId),
+    commentId: "",
     authorizedLogins: authorized,
+    automationLogin: env.automationLogin.trim().toLowerCase(),
+    reviewerAgent: env.reviewerAgent,
+    reviewerMaxRuntimeSeconds: env.reviewerMaxRuntimeSeconds,
+    cleanupGraceSeconds: env.claimCleanupGraceSeconds,
     authoritySeconds,
     reviewLabel: env.reviewLabel,
     reviewingLabel: env.reviewingLabel,
     inProgressLabel: env.inProgressLabel,
     blockedLabel: env.blockedLabel,
   };
+  authorizeCurrent?.(claim);
+  const posted = github.createPrComment(env.githubRepo, number, renderReviewClaimComment(binding));
+  claim.commentId = String(posted.id || posted.databaseId);
+  const live = github.getPr(env.githubRepo, number);
+  assertSameLaunchTarget(pr, live, "pr");
+  const refreshedRequest = currentReviewRequest(github, env, number);
+  if (String(refreshedRequest.id || refreshedRequest.node_id || "") !== requestEventId) {
+    throw new StaleLaunchError(`PR #${number} received a newer review request`);
+  }
   const requireBoundComment = (comments: JsonObject[], phase: string): JsonObject => {
     const comment = comments.find((candidate) => String(candidate.id || candidate.databaseId || "") === claim.commentId);
     if (!comment || !reviewClaimCommentMatchesContract(comment, claim)) {
@@ -851,7 +865,9 @@ function claimReviewRequest(
     try {
       return freshServerNow(github, env, evidence);
     } catch (error) {
-      if (error instanceof ReviewServerTimeError) blockUnverifiableClaim(github, pr, env, error.message, requestEventId, claim);
+      if (error instanceof ReviewServerTimeError) {
+        blockUnverifiableClaim(github, pr, env, error.message, requestEventId, claim, () => authorizeCurrent?.(claim));
+      }
       throw error;
     }
   };
@@ -884,6 +900,7 @@ function claimReviewRequest(
   if (String(beforeTransitionWinner?.id || beforeTransitionWinner?.databaseId || "") !== String(posted.id || posted.databaseId)) {
     throw new ReviewClaimLostError(`PR #${number} review request was claimed before label transition`);
   }
+  authorizeCurrent?.(claim);
   const managed = new Set(managedLabels);
   const nextLabels = labelNames(beforeTransition).filter((label) => !managed.has(label));
   nextLabels.push(env.inProgressLabel);
@@ -924,29 +941,45 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
   let claim: JsonObject | null = null;
   let launch: JsonObject;
   let enabledAutomationLogin = "";
-  let enabledRepositoryIdentity: { githubRepositoryId?: string; githubRepo?: string } = {};
+  let enabledRepositoryIdentity: { repoPath?: string; baseBranch?: string; githubRepositoryId?: string; githubRepo?: string; automationLogin?: string } = {};
   try {
     launch = launchWithAdapters(
       env,
       fixture,
       plan.input,
       (github) => {
-        claim = claimReviewRequest(github, pr, env, fixture
-          ? () => env.automationLogin
-          : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin));
+        claim = claimReviewRequest(
+          github,
+          pr,
+          env,
+          fixture ? () => env.automationLogin : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
+          fixture ? undefined : (currentClaim) => {
+            const authenticated = assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
+            assertCurrentReviewClaimAuthority(currentClaim, env.stateDir, enabledRepositoryIdentity, authenticated);
+          },
+        );
         plan.input.reviewClaim = claim;
       },
       (enabled) => {
         if (fixture) return;
         enabledAutomationLogin = String(enabled?.automationLogin || enabledAutomationLogin).trim().toLowerCase();
         enabledRepositoryIdentity = {
+          repoPath: enabled?.repoPath,
+          baseBranch: enabled?.baseBranch,
           githubRepositoryId: enabled?.githubRepositoryId,
           githubRepo: enabled?.githubRepo,
+          automationLogin: enabled?.automationLogin,
         };
         assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
         if (claim) {
           const github = githubOperations();
-          const live = reauthorizeClaimedReview(github, pr, env, claim, undefined, enabledRepositoryIdentity);
+          const live = reauthorizeClaimedReview(
+            github, pr, env, claim, undefined, enabledRepositoryIdentity,
+            (currentClaim) => {
+              const authenticated = assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
+              assertCurrentReviewClaimAuthority(currentClaim, env.stateDir, enabledRepositoryIdentity, authenticated);
+            },
+          );
           const labels = new Set(labelNames(live));
           const managedLabels = reviewClaimManagedLabels(env).filter((label) => labels.has(label));
           if (managedLabels.length !== 1 || managedLabels[0] !== env.inProgressLabel) {

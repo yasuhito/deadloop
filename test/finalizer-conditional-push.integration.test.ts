@@ -59,7 +59,7 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
   chmodSync(hookPath, 0o755);
   const binding = {
     repositoryId: "R_repo", repository: "owner/repo", targetNumber: 1, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a",
-    authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+    authority: { durationSeconds: 86700 }, activeState: activeReviewState,
   };
   const run = (args: string[]) => {
     if (args[0] === "node") return { status: 0, stdout: "", stderr: "" };
@@ -87,7 +87,7 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
     return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
   };
   const reviewClaim = {
-    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
     reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const common = {
@@ -109,6 +109,12 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
   const ops = {
     run,
     loadSavedReviewClaim: () => reviewClaim,
+    loadCurrentReviewClaimConfiguration: () => ({
+      reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+      managedLabels: activeReviewState.managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
+      repositoryId: "R_repo", repository: "owner/repo", authorizedLogins: ["deadloop-bot"],
+      authenticatedLogin: "deadloop-bot", reviewerAgent: "pi",
+    }),
     assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot" }),
   };
   const result = finalizer === "repair"
@@ -139,7 +145,7 @@ describe("finalizer exact-head pushes against real remotes", () => {
   });
 
   function runRenderedRepairFinalizer() {
-    const { repo, remote, expectedHead } = fixture();
+    const { repo, remote, rootOid, expectedHead } = fixture();
     const root = path.dirname(repo);
     const bin = path.join(root, "bin");
     const configDir = path.join(root, "config");
@@ -147,11 +153,16 @@ describe("finalizer exact-head pushes against real remotes", () => {
     const runDir = path.join(stateDir, "runs", "rendered");
     mkdirSync(bin);
     mkdirSync(runDir, { recursive: true });
+    git(repo, ["update-ref", "refs/remotes/origin/main", rootOid]);
+    const baseBranch = "origin/main";
     writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
-      repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
+      repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch, enabledAt: 1,
       automationLogin: "deadloop-bot",
       firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
       autoMergeAcknowledged: false, enabled: true,
+    }] }));
+    writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{
+      id: "demo", repoPath: repo, githubRepo: "owner/repo", baseBranch,
     }] }));
     const gitCommand = path.join(bin, "git");
     writeFileSync(gitCommand, `#!/usr/bin/env node
@@ -163,10 +174,10 @@ process.exit(result.status ?? 1);
     chmodSync(gitCommand, 0o755);
     const binding = {
       repositoryId: "R_repo", repository: "owner/repo", targetNumber: 1, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a",
-      authority: { durationSeconds: 3600 }, activeState: activeReviewState,
+      authority: { durationSeconds: 86700 }, activeState: activeReviewState,
     };
     const reviewClaim = {
-      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], authoritySeconds: 3600,
+      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
       reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({

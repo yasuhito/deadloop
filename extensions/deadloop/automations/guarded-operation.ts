@@ -5,6 +5,7 @@
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { parsePaginatedGithubJson, savedReviewClaimContract, validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 const GUARDED_OPERATION_TIMEOUT_MS = MAX_GUARDED_OPERATION_MS;
 
@@ -105,7 +106,12 @@ function parseArgs(argv: string[]): Args {
   };
 }
 
-function runGuarded(args: Args, spawn = spawnSync, loadSavedClaim: SavedClaimLoader = savedReviewClaimContract): number {
+function runGuarded(
+  args: Args,
+  spawn = spawnSync,
+  loadSavedClaim: SavedClaimLoader = savedReviewClaimContract,
+  loadCurrentConfiguration?: (...args: unknown[]) => Record<string, unknown>,
+): number {
   const commandTarget = assertApprovedCommand(args.command, args.githubRepo);
   if (args.targetKind === "pull-request" && !args.attemptRecord) {
     throw new Error("saved attempt record is required before guarded PR mutation");
@@ -144,6 +150,9 @@ function runGuarded(args: Args, spawn = spawnSync, loadSavedClaim: SavedClaimLoa
           throw new Error("current authenticated GitHub identity does not match enablement authority");
         }
         recheck();
+        const currentConfiguration = assertCurrentReviewClaimAuthority(
+          savedClaim, args.stateDir, enabled, automationLogin, loadCurrentConfiguration,
+        );
         const repository = query(["repo", "view", args.githubRepo, "--json", "id,nameWithOwner"]);
         const pr = query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
         const events = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${commandTarget}/events`]);
@@ -156,7 +165,7 @@ function runGuarded(args: Args, spawn = spawnSync, loadSavedClaim: SavedClaimLoa
             parsePaginatedGithubJson(events.stdout),
             parsePaginatedGithubJson(comments.stdout),
             headers.stdout,
-            { ...savedClaim, authorizedLogins: [automationLogin] },
+            { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins },
             { repositoryId: String(identity.id || ""), repository: String(identity.nameWithOwner || ""), targetNumber: Number(commandTarget) },
           )) {
           throw new Error("active review claim could not be reauthorized before GitHub mutation");

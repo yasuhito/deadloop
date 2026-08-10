@@ -86,11 +86,15 @@ Given("A blocked pull request has a completed Reviewer and its head changed afte
   fs.mkdirSync(bin);
   fs.mkdirSync(worktree, { recursive: true });
   fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(path.join(state, "projects.json"), JSON.stringify({ projects: [{
+    id: "demo", repoPath: root, githubRepo: "owner/repo", baseBranch: "origin/main",
+  }] }));
   fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
     projects: [{
       repoPath: root,
       githubRepo: "owner/repo",
       githubRepositoryId: "R_repo",
+      baseBranch: "origin/main",
       automationLogin: "deadloop-bot",
       enabledAt: 1,
       firstEnableAutoMerge: false,
@@ -149,6 +153,8 @@ if (args[0] === "pr" && args[1] === "list") {
   executable(path.join(bin, "git"), `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+else if (args.includes("rev-parse") && args.some(arg => arg.endsWith("^{commit}"))) process.stdout.write("${"f".repeat(40)}\\n");
+else if (args.includes("show") && args.some(arg => arg.endsWith(":deadloop.json"))) process.exit(1);
 `);
   executable(path.join(bin, "herdr"), `#!/usr/bin/env node
 const fs = require("node:fs");

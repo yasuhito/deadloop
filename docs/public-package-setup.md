@@ -30,6 +30,8 @@ Pi packages and extensions run with your local user permissions. Install only fr
 
 ## 2. Enable the local scheduler and add optional policy
 
+The current supported host is a Unix-like platform with a compatible `flock` executable, normally from util-linux. It must support the nonblocking file-descriptor locking used by deadloop's repository scheduler. `/deadloop-enable` tests the executable and actual lock behavior before it persists enablement, changes GitHub labels, or starts the scheduler; an unavailable or incompatible implementation fails closed. A portable lock backend is not included yet.
+
 Start Pi from a normal (non-linked) Git checkout and run:
 
 ```text
@@ -133,7 +135,7 @@ Use the standard `pr-reviewer` only after Phase 1 is reliable. Keep:
 
 With auto-merge disabled, the reviewer automation starts a review agent session, requests fixes when needed, and hands the PR to `ready-for-human` instead of merging. External review requests are disabled by default; enable `externalReview` only in repositories where the external service is installed and allowed.
 
-Before review, a same-repository PR that conflicts with the configured base is given one guarded merge-update attempt for each exact PR-head/base-head pair. The dedicated worker merges (never rebases), runs `checkCommand`, and atomically updates only the existing PR branch if its head still equals the validated commit. Operators do not need another label: `agent:review` and `agent:reviewing` remain during the update. A stale head waits for the next cycle without a push; a failed or unsafe attempt adds `agent:blocked`. To retry after intervention, change the PR head or base head, inspect the recorded `deadloop:branch-update-attempt` PR comment, then remove `agent:blocked`.
+During the current GitHub-claim bootstrap, branch-update mutations stop without side effects until #241 implements the `agent:update-branch` handoff. External-review mutations likewise stop until they are connected under an active review claim. Enabling `externalReview` does not bypass this restriction. The existing branch-update contracts—normal merge rather than rebase, required verification, exact-head authorization, and non-force push—remain mandatory and have not been removed.
 
 ### Phase 3: Consider auto-merge
 
