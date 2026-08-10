@@ -133,6 +133,7 @@ function exposePostBlockReviewRequests(
       events,
       comments,
       authorizedLogins: [...authorized],
+      blockedLabel: env.blockedLabel,
     })) return pr;
     return { ...pr, labels: labelNames(pr).filter((label) => label !== env.blockedLabel).map((name) => ({ name })) };
   });

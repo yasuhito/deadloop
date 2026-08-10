@@ -93,14 +93,21 @@ describe("PR work-authority reconciliation", () => {
   it("requires a bound recovery marker before selecting a post-block request", () => {
     const cutoff = { id: "30", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } };
     const request = { id: "31", event: "labeled", created_at: "2026-08-01T10:02:00Z", actor: { login: "human" }, label: { name: "agent:review" } };
-    expect(postBlockRequestIsEligible({ pr: base.pr, request, events: [cutoff, request], comments: [], authorizedLogins: ["deadloop-bot"] })).toBe(false);
+    expect(postBlockRequestIsEligible({ pr: base.pr, request, events: [cutoff, request], comments: [], authorizedLogins: ["deadloop-bot"], blockedLabel: "agent:blocked" })).toBe(false);
   });
 
   it("selects a post-block request bound by the recovery marker", () => {
     const cutoff = { id: "30", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } };
     const request = { id: "31", event: "labeled", created_at: "2026-08-01T10:02:00Z", actor: { login: "human" }, label: { name: "agent:review" } };
     const comments = [{ author: { login: "deadloop-bot" }, body: recoveryComment(base.pr.number, base.pr.headRefOid, "claim_expired", "30") }];
-    expect(postBlockRequestIsEligible({ pr: base.pr, request, events: [cutoff, request], comments, authorizedLogins: ["deadloop-bot"] })).toBe(true);
+    expect(postBlockRequestIsEligible({ pr: base.pr, request, events: [cutoff, request], comments, authorizedLogins: ["deadloop-bot"], blockedLabel: "agent:blocked" })).toBe(true);
+  });
+
+  it("validates a post-block request with a configured blocked label", () => {
+    const cutoff = { id: "40", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "custom:blocked" } };
+    const request = { id: "41", event: "labeled", created_at: "2026-08-01T10:02:00Z", actor: { login: "human" }, label: { name: "agent:review" } };
+    const comments = [{ author: { login: "deadloop-bot" }, body: recoveryComment(base.pr.number, base.pr.headRefOid, "claim_expired", "40") }];
+    expect(postBlockRequestIsEligible({ pr: base.pr, request, events: [cutoff, request], comments, authorizedLogins: ["deadloop-bot"], blockedLabel: "custom:blocked" })).toBe(true);
   });
 
   it("does not let report_received imply active work", () => {

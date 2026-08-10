@@ -175,6 +175,7 @@ function sameLabels(left: string[], right: string[]): boolean {
 type ReconciliationOperations = {
   automationLogin: string;
   recordBlockStarted?(input: { reason: string; timelineEventIds: string[] }): void | Promise<void>;
+  completeBlock?(cutoffEventId: string): void | Promise<void>;
   listTimelineEvents(): JsonObject[] | Promise<JsonObject[]>;
   listComments(): JsonObject[] | Promise<JsonObject[]>;
   replaceLabels(labels: string[]): void | Promise<void>;
@@ -224,6 +225,7 @@ async function applyPrWorkAuthorityReconciliation(
         && String(marker?.cutoffEventId || "") === cutoffEventId;
     });
     if (!alreadyExplained) await operations.comment(body);
+    await operations.completeBlock?.(cutoffEventId);
   }
 
   let cleanup: string = decision.cleanup;
@@ -252,6 +254,7 @@ function postBlockRequestIsEligible(input: {
   events: JsonObject[];
   comments: JsonObject[];
   authorizedLogins: string[];
+  blockedLabel: string;
 }): boolean {
   const authorized = new Set(input.authorizedLogins.map((login) => login.toLowerCase()));
   for (const comment of input.comments) {
@@ -261,7 +264,7 @@ function postBlockRequestIsEligible(input: {
       || Number(marker.number) !== input.pr.number
       || String(marker.head || "").toLowerCase() !== input.pr.headRefOid.toLowerCase()) continue;
     const cutoff = input.events.find((event) => eventId(event) === String(marker.cutoffEventId || "")
-      && eventAction(event) === "labeled" && eventLabel(event) === "agent:blocked" && eventActor(event) === author);
+      && eventAction(event) === "labeled" && eventLabel(event) === input.blockedLabel && eventActor(event) === author);
     if (cutoff && requestAfterInvalidationCutoff(input.request, cutoff)) return true;
   }
   return false;
