@@ -37,6 +37,10 @@ function withEnabledDriverLaunch(project, mutateWorkflowState, launchAgent, opti
       // journal, workspace, branch, or runner mutation behind.
       mutateWorkflowState(recheck, _enabled);
       recheck();
+      // Re-observe the persisted GitHub claim before creating any local
+      // attempt, workspace, branch, or runner state.
+      options.revalidate?.(_enabled);
+      recheck();
       options.prepareAttempt?.();
     } else {
       // Non-review launches retain their existing crash-recovery contract.

@@ -137,6 +137,8 @@ if (args[0] === "pr" && args[1] === "list") {
   process.stdout.write("HTTP/2 200\\r\\ndate: Mon, 13 Jul 2026 00:02:00 GMT\\r\\n\\r\\n{}");
 } else if (args[0] === "api" && args.some((arg) => arg.endsWith("/events"))) {
   process.stdout.write(JSON.stringify([[{id:4401,event:"labeled",created_at:"2026-07-13T00:00:00Z",label:{name:"agent:review"}}]]));
+} else if (args[0] === "api" && !args.includes("PUT") && args.some((arg) => arg.endsWith("/labels"))) {
+  process.stdout.write(JSON.stringify([prs()[0].labels]));
 } else if (args[0] === "api" && args.includes("POST")) {
   const state = prs();
   const bodyArg = args.find((arg) => arg.startsWith("body=")) || "body=";

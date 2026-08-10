@@ -69,6 +69,18 @@ describe("GitHub operations", () => {
     expect(commands[0]).toEqual(["gh", "issue", "edit", "12", "-R", "owner/repo", "--remove-label", "agent:implement", "--add-label", "needs-triage"]);
   });
 
+  it("paginates live PR labels", () => {
+    const commands: string[][] = [];
+    const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), [[{ name: "one" }], [{ name: "two" }]]) });
+
+    const labels = github.listPrLabels("owner/repo", 24);
+
+    expect({ command: commands[0], labels }).toEqual({
+      command: ["gh", "api", "--paginate", "--slurp", "repos/owner/repo/issues/24/labels"],
+      labels: [{ name: "one" }, { name: "two" }],
+    });
+  });
+
   it("comments on PRs", () => {
     const commands: string[][] = [];
     const github = createGithubOperations({ runText: (args: string[]) => (commands.push(args), ""), runJson: () => [] });

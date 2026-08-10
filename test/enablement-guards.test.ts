@@ -209,12 +209,13 @@ describe("enablement mutation guards", () => {
       () => events.push("launched"),
       {
         claimBeforePrepare: true,
+        revalidate: () => events.push("revalidated"),
         prepareAttempt: () => events.push("prepared"),
         recordClaim: () => events.push("claim-recorded"),
       },
     );
 
-    expect(events).toEqual(["github-claim", "prepared", "claim-recorded", "launched"]);
+    expect(events).toEqual(["revalidated", "github-claim", "revalidated", "prepared", "claim-recorded", "launched"]);
   });
 
   it("records the guarded claim before a runner failure", () => {

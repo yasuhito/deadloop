@@ -93,6 +93,11 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
       ], { input: JSON.stringify({ labels }) });
     },
 
+    listPrLabels(repo: string, prNumber: string | number): JsonObject[] {
+      const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${prNumber}/labels`]);
+      return Array.isArray(pages) ? pages.flat() : [];
+    },
+
     listPrTimelineEvents(repo: string, prNumber: string | number): JsonObject[] {
       const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${prNumber}/events`]);
       return Array.isArray(pages) ? pages.flat() : [];

@@ -232,8 +232,9 @@ describe("PR reviewer deterministic driver", () => {
   function reauthorizationScenario(
     mutate?: ClaimMutation,
     observedRepositoryId = "R_repo",
-    authorizeCurrent?: (claim: Record<string, unknown>) => void,
+    authorizeCurrent?: (claim: Record<string, unknown>) => Record<string, unknown> | void,
     restHeaders: string | (() => string) = "",
+    authorizedLogins = ["deadloop-bot"],
   ) {
     const head = "a".repeat(40);
     const managedLabels = ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"];
@@ -253,19 +254,23 @@ describe("PR reviewer deterministic driver", () => {
       getRepositoryIdentity: () => ({ id: observedRepositoryId, nameWithOwner: "owner/repo" }),
       getPr: () => pr,
       listPrTimelineEvents: () => [{ id: "event-22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }],
+      listPrLabels: () => pr.labels,
       listPrComments: () => comments,
       readRestResponseHeaders: () => typeof restHeaders === "function" ? restHeaders() : restHeaders,
       commentPr: (_repo: string, _number: number, body: string) => {
         comments.push({ body });
         pr.labels.push({ name: "customer:keep" });
       },
-      movePrLabels: (_repo: string, _number: number, move: { add?: string }) => {
-        if (move.add && !pr.labels.some((label: { name: string }) => label.name === move.add)) pr.labels.push({ name: move.add });
+      movePrLabels: (_repo: string, _number: number, move: { add?: string | string[]; remove?: string | string[] }) => {
+        const labels = new Set(pr.labels.map(({ name }) => name));
+        for (const label of [move.remove || []].flat()) labels.delete(label);
+        for (const label of [move.add || []].flat()) labels.add(label);
+        pr.labels = [...labels].map((name) => ({ name }));
       },
       addPrReviewer: () => { reviewRequestMutations += 1; },
     };
     const claim = {
-      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
+      binding, commentId: "101", authorizedLogins, automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
       reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked", managedLabels, labels: ["agent:in-progress"],
     };
@@ -275,7 +280,7 @@ describe("PR reviewer deterministic driver", () => {
     try {
       reauthorizeClaimedReview(github, pr, {
         githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot",
-        authorizedAutomationLogins: ["deadloop-bot"], reviewLabel: "agent:review", reviewingLabel: "agent:reviewing",
+        authorizedAutomationLogins: authorizedLogins, reviewLabel: "agent:review", reviewingLabel: "agent:reviewing",
         implementLabel: "agent:implement", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
         reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
       }, claim, () => "deadloop-bot", { githubRepositoryId: "R_repo", githubRepo: "owner/repo" }, authorizeCurrent);
@@ -308,6 +313,29 @@ describe("PR reviewer deterministic driver", () => {
   it.each(invalidClaimCases)("does not add review requests when the claim is %s", (_case, mutate) => {
     const result = reauthorizationScenario(mutate);
     expect(result.after.reviewRequests).toBe(result.before.reviewRequests);
+  });
+
+  it("restores the request when an earlier claim from another authorized identity appears before launch", () => {
+    const result = reauthorizationScenario(
+      (comments, originalBinding) => {
+        comments.unshift({
+          id: 100,
+          created_at: "2026-07-20T10:00:30Z",
+          updated_at: "2026-07-20T10:00:30Z",
+          user: { login: "deadloop-other" },
+          body: require("../extensions/deadloop/automations/pr-review-claim.ts").renderReviewClaimComment({
+            ...originalBinding,
+            owner: "host-other",
+          }),
+        });
+      },
+      "R_repo",
+      () => ({ authorizedLogins: ["deadloop-bot", "deadloop-other"] }),
+      "date: Mon, 20 Jul 2026 10:03:00 GMT",
+      ["deadloop-bot", "deadloop-other"],
+    );
+
+    expect(result.after.labels).toEqual(["agent:review"]);
   });
 
   it("performs no final pre-launch effect when the claim expires while current configuration is observed", () => {
@@ -373,13 +401,27 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("external-review-request.json").launch.claim.labels).not.toContain("agent:reviewing");
   });
 
-  function transitionRaceScenario(options: { removeUserLabel?: boolean } = {}) {
+  function transitionRaceScenario(options: {
+    newGeneration?: boolean;
+    initialUserLabel?: boolean;
+    removeUserLabel?: boolean;
+    includeAutomationManagedEvents?: boolean;
+    failUnrelatedRecovery?: boolean;
+  } = {}) {
     const head = "a".repeat(40);
     const oldRequest = { id: "22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } };
-    const newRequest = { id: "23", event: "labeled", created_at: "2026-07-20T10:04:00Z", label: { name: "agent:review" } };
+    const newRequest = { id: "23", event: "labeled", created_at: "2026-07-20T10:04:00Z", actor: { login: "octocat" }, label: { name: "agent:review" } };
     const userLabel = { id: "24", event: "labeled", created_at: "2026-07-20T10:04:01Z", actor: { login: "octocat" }, label: { name: "customer:urgent" } };
     const userUnlabel = { id: "25", event: "unlabeled", created_at: "2026-07-20T10:04:02Z", actor: { login: "octocat" }, label: { name: "customer:urgent" } };
-    const pr = { number: 24, state: "OPEN", headRefName: "feature", headRefOid: head, labels: [{ name: "agent:review" }] };
+    const automationUnlabel = { id: "26", event: "unlabeled", created_at: "2026-07-20T10:04:03Z", actor: { login: "deadloop-bot" }, label: { name: "agent:review" } };
+    const automationLabel = { id: "27", event: "labeled", created_at: "2026-07-20T10:04:04Z", actor: { login: "deadloop-bot" }, label: { name: "agent:in-progress" } };
+    const pr = {
+      number: 24,
+      state: "OPEN",
+      headRefName: "feature",
+      headRefOid: head,
+      labels: [{ name: "agent:review" }, ...(options.initialUserLabel ? [{ name: "customer:urgent" }] : [])],
+    };
     const events = [oldRequest];
     const comments: Record<string, unknown>[] = [];
     const recoveryMoves: Array<{ add?: string | string[]; remove?: string | string[] }> = [];
@@ -397,14 +439,18 @@ describe("PR reviewer deterministic driver", () => {
       readRestResponseHeaders: () => "date: Mon, 20 Jul 2026 10:03:00 GMT",
       replacePrLabels: (_repo: string, _number: number, labels: string[]) => {
         events.push(
-          newRequest,
-          userLabel,
-          ...(options.removeUserLabel ? [userUnlabel] : []),
+          ...(options.newGeneration === false ? [] : [newRequest]),
+          ...(options.removeUserLabel ? [userUnlabel] : [userLabel]),
+          ...(options.includeAutomationManagedEvents ? [automationUnlabel, automationLabel] : []),
         );
         pr.labels = [...labels].map((name) => ({ name }));
       },
+      listPrLabels: () => pr.labels,
       movePrLabels: (_repo: string, _number: number, move: { add?: string | string[]; remove?: string | string[] }) => {
         recoveryMoves.push(move);
+        if (options.failUnrelatedRecovery && Array.isArray(move.add) && move.add.includes("customer:urgent")) {
+          throw new Error("unrelated label recovery failed");
+        }
         const labels = new Set(pr.labels.map(({ name }) => name));
         for (const label of [move.remove || []].flat()) labels.delete(label);
         for (const label of [move.add || []].flat()) labels.add(label);
@@ -424,6 +470,14 @@ describe("PR reviewer deterministic driver", () => {
     return { labels: pr.labels.map(({ name }) => name), recoveryMoves, rejection };
   }
 
+  it("preserves an unrelated label added during replacement without a new request generation", () => {
+    expect(transitionRaceScenario({ newGeneration: false }).labels).toContain("customer:urgent");
+  });
+
+  it("does not resurrect an unrelated label removed during replacement without a new request generation", () => {
+    expect(transitionRaceScenario({ newGeneration: false, initialUserLabel: true, removeUserLabel: true }).labels).not.toContain("customer:urgent");
+  });
+
   it("restores a newer review request added immediately before the winning label replacement", () => {
     expect(transitionRaceScenario().labels).toContain("agent:review");
   });
@@ -432,14 +486,21 @@ describe("PR reviewer deterministic driver", () => {
     expect(transitionRaceScenario().labels).toContain("customer:urgent");
   });
 
-  it("does not resurrect an unrelated label removed after its raced addition", () => {
-    expect(transitionRaceScenario({ removeUserLabel: true }).labels).not.toContain("customer:urgent");
+  it("does not resurrect an unrelated label removed with a newer review request", () => {
+    expect(transitionRaceScenario({ initialUserLabel: true, removeUserLabel: true }).labels).not.toContain("customer:urgent");
   });
 
-  it("restores raced labels before releasing the old in-progress state", () => {
+  it("does not recover Automation-managed transition events as unrelated label changes", () => {
+    expect(transitionRaceScenario({ newGeneration: false, includeAutomationManagedEvents: true }).recoveryMoves).toEqual([
+      { add: ["customer:urgent"] },
+    ]);
+  });
+
+  it("restores a raced request before releasing old in-progress and reconciling unrelated labels", () => {
     expect(transitionRaceScenario().recoveryMoves).toEqual([
-      { add: ["customer:urgent", "agent:review"] },
+      { add: "agent:review" },
       { remove: "agent:in-progress" },
+      { add: ["customer:urgent"] },
     ]);
   });
 
@@ -447,12 +508,82 @@ describe("PR reviewer deterministic driver", () => {
     expect(transitionRaceScenario().labels).not.toContain("agent:in-progress");
   });
 
+  it("keeps a newer request visible when unrelated-label recovery fails", () => {
+    expect(transitionRaceScenario({ failUnrelatedRecovery: true }).labels).toContain("agent:review");
+  });
+
   it("rejects the old claim after restoring the raced request generation", () => {
     expect(transitionRaceScenario().rejection).toContain("request changed after label transition");
   });
 
-  it("launches no reviewer when another host has the earlier valid claim", () => {
+  it("launches no reviewer when another host sharing the same login has the earlier valid claim", () => {
     expect(runDriverFixture("review-claim-loser.json").driverAction).toBe("reviewer_launch_stale");
+  });
+
+  function laterVisibleAuthorizedClaimScenario(visibleOnCommentRead: number) {
+    const head = "a".repeat(40);
+    const pr = { number: 24, state: "OPEN", headRefName: "feature", headRefOid: head, labels: [{ name: "agent:review" }] };
+    const request = { id: "22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } };
+    const comments: Record<string, any>[] = [];
+    let commentReads = 0;
+    let replacements = 0;
+    const github = {
+      getRepositoryIdentity: () => ({ id: "R_repo", nameWithOwner: "owner/repo" }),
+      getPr: () => pr,
+      listPrLabels: () => pr.labels,
+      listPrTimelineEvents: () => [request],
+      createPrComment: (_repo: string, _number: number, body: string) => {
+        const own = { id: 102, created_at: "2026-07-20T10:02:00Z", updated_at: "2026-07-20T10:02:00Z", user: { login: "deadloop-b" }, body };
+        const marker = require("../extensions/deadloop/automations/pr-review-claim.ts").parseReviewClaim(body);
+        comments.push({
+          id: 101,
+          created_at: "2026-07-20T10:01:00Z",
+          updated_at: "2026-07-20T10:01:00Z",
+          user: { login: "deadloop-a" },
+          body: require("../extensions/deadloop/automations/pr-review-claim.ts").renderReviewClaimComment({
+            repositoryId: marker.repositoryId,
+            repository: marker.repository,
+            targetNumber: marker.targetNumber,
+            requestEventId: marker.requestEventId,
+            role: marker.role,
+            revision: marker.revision,
+            owner: "host-a",
+            authority: marker.authority,
+            activeState: marker.activeState,
+          }),
+        }, own);
+        return own;
+      },
+      listPrComments: () => (++commentReads < visibleOnCommentRead ? comments.slice(1) : comments),
+      readRestResponseHeaders: () => "date: Mon, 20 Jul 2026 10:03:00 GMT",
+      replacePrLabels: (_repo: string, _number: number, labels: string[]) => {
+        replacements += 1;
+        pr.labels = labels.map((name) => ({ name }));
+      },
+      movePrLabels: (_repo: string, _number: number, move: { add?: string | string[]; remove?: string | string[] }) => {
+        const labels = new Set(pr.labels.map(({ name }) => name));
+        for (const label of [move.remove || []].flat()) labels.delete(label);
+        for (const label of [move.add || []].flat()) labels.add(label);
+        pr.labels = [...labels].map((name) => ({ name }));
+      },
+    };
+    try {
+      claimReviewRequest(github, pr, {
+        githubRepositoryId: "R_repo", githubRepo: "owner/repo", claimOwner: "host-b",
+        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", implementLabel: "agent:implement",
+        inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", automationLogin: "deadloop-b",
+        authorizedAutomationLogins: ["deadloop-a", "deadloop-b"], reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
+      }, () => "deadloop-b", () => ({ authorizedLogins: ["deadloop-a", "deadloop-b"] }));
+    } catch {}
+    return { labels: pr.labels.map(({ name }) => name), replacements };
+  }
+
+  it("does not replace labels when an earlier claim from another authorized identity becomes visible before transition", () => {
+    expect(laterVisibleAuthorizedClaimScenario(2).replacements).toBe(0);
+  });
+
+  it("restores the request when an earlier authorized claim becomes visible after transition", () => {
+    expect(laterVisibleAuthorizedClaimScenario(3).labels).toEqual(["agent:review"]);
   });
 
   it("launches no reviewer after the atomic label result mismatches", () => {
