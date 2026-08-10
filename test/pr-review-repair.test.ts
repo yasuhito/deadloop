@@ -58,7 +58,7 @@ function finalizeWith(
   pushUrl = "https://github.com/owner/repo.git",
   repositoryIds: Record<string, string> = {},
   raceRemoteHead?: string | null,
-  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; dirty?: boolean; missingAncestor?: boolean; checkFailure?: boolean; finalManagedConflict?: boolean; currentConfiguration?: Record<string, unknown> } = {},
+  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; dirty?: boolean; missingAncestor?: boolean; checkFailure?: boolean; finalManagedConflict?: boolean; currentConfiguration?: Record<string, unknown>; dateHeaders?: string } = {},
 ) {
   let observedHead = actualHead;
   let localHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -122,7 +122,7 @@ function finalizeWith(
         if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) {
           return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: automationLogin }, body: renderReviewClaimComment(reviewClaimBinding) }]]), stderr: "" };
         }
-        if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
+        if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: localHeadChanges.dateHeaders ?? "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
         if (args[0] === "gh") {
           prReads += 1;
           return {
@@ -561,6 +561,27 @@ describe("automatic PR review repair", () => {
     try { finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { finalManagedConflict: true }); } catch {}
 
     expect(commands.some((command) => command.includes("push"))).toBe(false);
+  });
+
+  it("posts a visible block comment instead of pushing when only REST Date is unavailable", () => {
+    const commands: string[][] = [];
+    try { finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { dateHeaders: "" }); } catch {}
+
+    expect(commands.some((command) => command[0] === "gh" && command[1] === "pr" && command[2] === "comment")).toBe(true);
+  });
+
+  it("adds only blocked at the repair-push seam when REST Date is unavailable", () => {
+    const commands: string[][] = [];
+    try { finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { dateHeaders: "" }); } catch {}
+
+    expect(commands.find((command) => command[0] === "gh" && command[1] === "pr" && command[2] === "edit")?.slice(-2)).toEqual(["--add-label", "agent:blocked"]);
+  });
+
+  it("performs no repair-push GitHub mutation when binding conflicts and REST Date is unavailable", () => {
+    const commands: string[][] = [];
+    try { finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { dateHeaders: "", finalManagedConflict: true }); } catch {}
+
+    expect(commands.some((command) => command[0] === "gh" && command[1] === "pr" && ["comment", "edit"].includes(command[2]))).toBe(false);
   });
 
   it("does not push after a stale immediate head recheck", () => {

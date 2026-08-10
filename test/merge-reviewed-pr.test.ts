@@ -34,6 +34,8 @@ function runMerge(options: {
   claimTargetNumber?: number;
   finalRace?: "expiry" | "comment" | "request" | "head" | "labels";
   currentConfiguration?: Record<string, unknown>;
+  dateUnavailable?: boolean;
+  editedClaim?: boolean;
 } = {}) {
   const commands: string[][] = [];
   let lockHeld = false;
@@ -53,7 +55,9 @@ function runMerge(options: {
     commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
     reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
-  const action = mergeReviewedPr(
+  let action: number;
+  try {
+    action = mergeReviewedPr(
     {
       attemptRecord: "/state/runs/reviewer/attempt.json",
       projectRepo: "/repo",
@@ -140,21 +144,25 @@ function runMerge(options: {
             role: "reviewer", revision: expectedHead, owner: "host-a",
             authority: { durationSeconds: 3600 }, activeState: activeReviewState,
           };
-          const comments = commentReads >= 2 && options.finalRace === "comment" ? [] : [{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }];
+          const comments = commentReads >= 2 && options.finalRace === "comment" ? [] : [{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: options.editedClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }];
           return { status: 0, stdout: JSON.stringify([[], comments]), stderr: "" };
         }
         if (args[1] === "api" && args[2] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
         if (args[1] === "api") {
           dateReads += 1;
           const date = dateReads >= 2 && options.finalRace === "expiry" ? "Mon, 20 Jul 2026 11:01:00 GMT" : "Mon, 20 Jul 2026 10:03:00 GMT";
-          return { status: 0, stdout: `date: ${date}`, stderr: "" };
+          return { status: 0, stdout: options.dateUnavailable ? "" : `date: ${date}`, stderr: "" };
         }
         mutationObservedInsideLock = lockHeld;
         const status = options.mergeStatus ?? 0;
         return { status, stdout: "", stderr: status ? "head commit changed" : "" };
       },
     },
-  );
+    );
+  } catch (error) {
+    Object.assign(error instanceof Error ? error : new Error(String(error)), { commands });
+    throw error;
+  }
   return { action, commands, configObservedInsideLock, mutationObservedInsideLock };
 }
 
@@ -184,6 +192,27 @@ describe("reviewed PR merge", () => {
 
   it("rejects merge when the actual target PR differs from the claim", () => {
     expect(() => runMerge({ claimTargetNumber: 25 })).toThrow("reauthorized");
+  });
+
+  it("visibly blocks ready/merge when only REST Date is unavailable", () => {
+    let commands: string[][] = [];
+    try { runMerge({ dateUnavailable: true }); } catch (error) { commands = (error as { commands?: string[][] }).commands || []; }
+
+    expect(commands.some((command) => command[1] === "pr" && command[2] === "comment")).toBe(true);
+  });
+
+  it("adds only blocked at the ready/merge Date-failure seam", () => {
+    let commands: string[][] = [];
+    try { runMerge({ dateUnavailable: true }); } catch (error) { commands = (error as { commands?: string[][] }).commands || []; }
+
+    expect(commands.find((command) => command[1] === "pr" && command[2] === "edit")?.slice(-2)).toEqual(["--add-label", "agent:blocked"]);
+  });
+
+  it("performs no ready/merge GitHub mutation for an edited claim with missing REST Date", () => {
+    let commands: string[][] = [];
+    try { runMerge({ dateUnavailable: true, editedClaim: true }); } catch (error) { commands = (error as { commands?: string[][] }).commands || []; }
+
+    expect(commands.some((command) => command[1] === "pr" && ["comment", "edit", "merge"].includes(command[2]))).toBe(false);
   });
 
   it.each([

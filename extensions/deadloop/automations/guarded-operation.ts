@@ -4,7 +4,12 @@
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
-const { parsePaginatedGithubJson, savedReviewClaimContract, validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const {
+  classifyActiveReviewClaim,
+  parsePaginatedGithubJson,
+  savedReviewClaimContract,
+  visiblyBlockReviewClaimTimeFailure,
+} = require("./pr-review-claim.ts");
 const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 const GUARDED_OPERATION_TIMEOUT_MS = MAX_GUARDED_OPERATION_MS;
@@ -153,23 +158,66 @@ function runGuarded(
         const currentConfiguration = assertCurrentReviewClaimAuthority(
           savedClaim, args.stateDir, enabled, automationLogin, loadCurrentConfiguration,
         );
-        const repository = query(["repo", "view", args.githubRepo, "--json", "id,nameWithOwner"]);
-        const pr = query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
-        const events = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${commandTarget}/events`]);
-        const comments = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${commandTarget}/comments`]);
-        const headers = query(["api", "--include", `repos/${args.githubRepo}`]);
-        const identity = JSON.parse(repository.stdout || "{}");
-        if ([repository, pr, events, comments, headers].some((result) => result.status !== 0)
-          || !validateActiveReviewClaim(
-            JSON.parse(pr.stdout || "{}"),
-            parsePaginatedGithubJson(events.stdout),
-            parsePaginatedGithubJson(comments.stdout),
-            headers.stdout,
-            { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins },
-            { repositoryId: String(identity.id || ""), repository: String(identity.nameWithOwner || ""), targetNumber: Number(commandTarget) },
-          )) {
-          throw new Error("active review claim could not be reauthorized before GitHub mutation");
+        const authoritativeClaim = { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins };
+        const readObservation = (includeDate: boolean) => {
+          const repository = query(["repo", "view", args.githubRepo, "--json", "id,nameWithOwner"]);
+          const pr = query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
+          const events = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${commandTarget}/events`]);
+          const comments = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${commandTarget}/comments`]);
+          const headers = includeDate ? query(["api", "--include", `repos/${args.githubRepo}`]) : { status: 0, stdout: "", stderr: "" };
+          if ([repository, pr, events, comments].some((result) => result.status !== 0)) {
+            return { kind: "binding_mismatch", comments: [], labels: [] };
+          }
+          try {
+            const identity = JSON.parse(repository.stdout || "{}");
+            const livePr = JSON.parse(pr.stdout || "{}");
+            const liveComments = parsePaginatedGithubJson(comments.stdout);
+            return {
+              ...classifyActiveReviewClaim(
+                livePr,
+                parsePaginatedGithubJson(events.stdout),
+                liveComments,
+                headers.status === 0 ? headers.stdout : "",
+                authoritativeClaim,
+                { repositoryId: String(identity.id || ""), repository: String(identity.nameWithOwner || ""), targetNumber: Number(commandTarget) },
+              ),
+              comments: liveComments,
+              labels: (livePr.labels || []).map((label: { name?: unknown } | string) => typeof label === "string" ? label : String(label.name || "")),
+            };
+          } catch {
+            return { kind: "binding_mismatch", comments: [], labels: [] };
+          }
+        };
+        const authority = readObservation(true);
+        if (authority.kind === "server_time_unverifiable") {
+          visiblyBlockReviewClaimTimeFailure({
+            contract: authoritativeClaim,
+            blockedLabel: String(savedClaim.blockedLabel || "agent:blocked"),
+            observe: () => {
+              recheck();
+              const login = query(["api", "user", "--jq", ".login"]);
+              if (login.status !== 0 || String(login.stdout || "").trim().toLowerCase() !== automationLogin) {
+                return { kind: "binding_mismatch", comments: [], labels: [] };
+              }
+              try {
+                assertCurrentReviewClaimAuthority(savedClaim, args.stateDir, enabled, automationLogin, loadCurrentConfiguration);
+              } catch {
+                return { kind: "binding_mismatch", comments: [], labels: [] };
+              }
+              return readObservation(false);
+            },
+            comment: (body: string) => {
+              const result = query(["pr", "comment", commandTarget, "-R", args.githubRepo, "--body", body]);
+              if (result.status !== 0) throw new Error("visible review claim block comment failed");
+            },
+            addBlocked: () => {
+              const result = query(["pr", "edit", commandTarget, "-R", args.githubRepo, "--add-label", String(savedClaim.blockedLabel || "agent:blocked")]);
+              if (result.status !== 0) throw new Error("visible review claim blocked label failed");
+            },
+          });
+          throw new Error("active review claim server time could not be verified before GitHub mutation");
         }
+        if (authority.kind !== "authorized") throw new Error("active review claim could not be reauthorized before GitHub mutation");
       }
       if (args.targetKind === "issue") recheck();
       const result = spawn(args.command[0], args.command.slice(1), {

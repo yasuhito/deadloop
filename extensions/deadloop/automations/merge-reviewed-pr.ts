@@ -7,7 +7,12 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
-const { parsePaginatedGithubJson, savedReviewClaimContract, validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const {
+  classifyActiveReviewClaim,
+  parsePaginatedGithubJson,
+  savedReviewClaimContract,
+  visiblyBlockReviewClaimTimeFailure,
+} = require("./pr-review-claim.ts");
 const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 type MergeArgs = {
@@ -223,20 +228,76 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
       const eventsResult = ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS);
       const commentsResult = ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS);
       const dateResult = ops.run(["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
-      const repository = JSON.parse(repositoryResult.stdout || "{}");
-      if ([repositoryResult, prResult, eventsResult, commentsResult, dateResult].some((result) => result.status !== 0)
-        || String(enabled.githubRepositoryId || "") !== String(repository.id || "")
-        || String(enabled.githubRepo || "") !== String(repository.nameWithOwner || "")
-        || !validateActiveReviewClaim(
-          JSON.parse(prResult.stdout),
-          parsePaginatedGithubJson(eventsResult.stdout),
-          parsePaginatedGithubJson(commentsResult.stdout),
-          dateResult.stdout,
-          { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins },
-          { repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr) },
-        )) {
-        throw new Error("active review claim could not be reauthorized; automatic merge stopped");
+      const authoritativeClaim = { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins };
+      const classifyObservation = (
+        repositoryObservation: CommandResult,
+        prObservation: CommandResult,
+        eventObservation: CommandResult,
+        commentObservation: CommandResult,
+        headers: string,
+      ) => {
+        if ([repositoryObservation, prObservation, eventObservation, commentObservation].some((result) => result.status !== 0)) {
+          return { kind: "binding_mismatch", comments: [], labels: [] };
+        }
+        try {
+          const repository = JSON.parse(repositoryObservation.stdout || "{}");
+          const livePr = JSON.parse(prObservation.stdout || "{}");
+          const comments = parsePaginatedGithubJson(commentObservation.stdout);
+          const identityMatches = String(enabled.githubRepositoryId || "") === String(repository.id || "")
+            && String(enabled.githubRepo || "") === String(repository.nameWithOwner || "");
+          return {
+            ...(identityMatches
+              ? classifyActiveReviewClaim(
+                  livePr,
+                  parsePaginatedGithubJson(eventObservation.stdout),
+                  comments,
+                  headers,
+                  authoritativeClaim,
+                  { repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr) },
+                )
+              : { kind: "binding_mismatch" }),
+            comments,
+            labels: (livePr.labels || []).map((label: Record<string, unknown> | string) => typeof label === "string" ? label : String(label.name || "")),
+          };
+        } catch {
+          return { kind: "binding_mismatch", comments: [], labels: [] };
+        }
+      };
+      const authority = classifyObservation(repositoryResult, prResult, eventsResult, commentsResult, dateResult.status === 0 ? dateResult.stdout : "");
+      if (authority.kind === "server_time_unverifiable") {
+        visiblyBlockReviewClaimTimeFailure({
+          contract: authoritativeClaim,
+          blockedLabel: args.blockedLabel,
+          observe: () => {
+            recheck();
+            const loginResult = ops.run(["gh", "api", "user", "--jq", ".login"], MAX_GUARDED_OPERATION_MS);
+            const login = String(loginResult.stdout || "").trim().toLowerCase();
+            try {
+              if (loginResult.status !== 0 || !login || login !== automationLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
+              assertCurrentReviewClaimAuthority(savedClaim, args.stateDir, enabled, login, ops.loadCurrentReviewClaimConfiguration);
+            } catch {
+              return { kind: "binding_mismatch", comments: [], labels: [] };
+            }
+            return classifyObservation(
+              ops.run(["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS),
+              ops.run(["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefOid,labels"], MAX_GUARDED_OPERATION_MS),
+              ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS),
+              ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS),
+              "",
+            );
+          },
+          comment: (body: string) => {
+            const result = ops.run(["gh", "pr", "comment", args.pr, "-R", args.githubRepo, "--body", body], MAX_GUARDED_OPERATION_MS);
+            if (result.status !== 0) throw new Error("visible review claim block comment failed; automatic merge stopped");
+          },
+          addBlocked: () => {
+            const result = ops.run(["gh", "pr", "edit", args.pr, "-R", args.githubRepo, "--add-label", args.blockedLabel], MAX_GUARDED_OPERATION_MS);
+            if (result.status !== 0) throw new Error("visible review claim blocked label failed; automatic merge stopped");
+          },
+        });
+        throw new Error("active review claim server time could not be verified; automatic merge stopped");
       }
+      if (authority.kind !== "authorized") throw new Error("active review claim could not be reauthorized; automatic merge stopped");
     };
     reauthorizeClaim();
     const autoMergeStillEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);

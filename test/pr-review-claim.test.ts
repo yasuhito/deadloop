@@ -7,6 +7,9 @@ const {
   activeReviewRequest,
   assertClaimMatchesCurrentConfiguration,
   claimContractMatchesConfiguration,
+  classifyActiveReviewClaim,
+  classifyRepairAuthorityTransition,
+  visiblyBlockReviewClaimTimeFailure,
   parseGithubRestDate,
   parsePaginatedGithubJson,
   parseReviewClaim,
@@ -138,6 +141,97 @@ describe("PR review GitHub claim", () => {
 
   it("rejects a missing REST Date header", () => {
     expect(parseGithubRestDate("HTTP/2 200\r\n", new Date("2026-07-20T10:02:00Z"))).toBeNull();
+  });
+
+  it("classifies missing REST Date separately after every active binding matches", () => {
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
+
+    expect(classifyActiveReviewClaim(pr, [request], [claim()], "", contract, liveTarget).kind).toBe("server_time_unverifiable");
+  });
+
+  it("classifies an edited claim as claim invalid even when REST Date is missing", () => {
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
+
+    expect(classifyActiveReviewClaim(pr, [request], [claim({ updatedAt: "2026-07-20T10:02:00Z" })], "", contract, liveTarget).kind).toBe("claim_invalid");
+  });
+
+  it("classifies an expired active claim separately", () => {
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
+
+    expect(classifyActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 11:01:00 GMT", contract, liveTarget).kind).toBe("expired");
+  });
+
+  it("classifies missing REST Date separately after every repair-transition binding matches", () => {
+    const repairedHead = "b".repeat(40);
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
+
+    expect(classifyRepairAuthorityTransition(pr, [request], [claim()], "", contract, liveTarget, {
+      originalHeadOid: head, headOid: repairedHead,
+    }).kind).toBe("server_time_unverifiable");
+  });
+
+  function visibleTimeBlockScenario(classifications = ["server_time_unverifiable", "server_time_unverifiable"], retries = 1) {
+    const comments: Array<Record<string, unknown>> = [];
+    const labels = ["agent:in-progress", "customer:keep"];
+    let observations = 0;
+    for (let retry = 0; retry < retries; retry += 1) {
+      visiblyBlockReviewClaimTimeFailure({
+        contract: { binding, commentId: "101", automationLogin: "deadloop-a" },
+        blockedLabel: "agent:blocked",
+        observe: () => ({ kind: classifications[observations++] || "binding_mismatch", comments, labels }),
+        comment: (body: string) => { comments.push({ id: 102, created_at: "2026-07-20T10:04:00Z", updated_at: "2026-07-20T10:04:00Z", user: { login: "deadloop-a" }, body }); },
+        addBlocked: () => { labels.push("agent:blocked"); },
+      });
+    }
+    return { comments, labels };
+  }
+
+  it("posts one visible explanation for a Date-only authority failure", () => {
+    expect(visibleTimeBlockScenario().comments).toHaveLength(1);
+  });
+
+  it("adds only blocked while preserving the review generation and user labels", () => {
+    expect(visibleTimeBlockScenario().labels).toEqual(["agent:in-progress", "customer:keep", "agent:blocked"]);
+  });
+
+  it("does not add blocked when non-time binding changes after the explanation", () => {
+    expect(visibleTimeBlockScenario(["server_time_unverifiable", "binding_mismatch"]).labels).toEqual(["agent:in-progress", "customer:keep"]);
+  });
+
+  it("does not duplicate visible Date-failure effects on retry", () => {
+    const result = visibleTimeBlockScenario(undefined, 2);
+    expect({ comments: result.comments.length, blocked: result.labels.filter((label) => label === "agent:blocked").length }).toEqual({ comments: 1, blocked: 1 });
+  });
+
+  it("does not trust a visible-block marker copied by another commenter", () => {
+    const result = visibleTimeBlockScenario();
+    result.labels.splice(result.labels.indexOf("agent:blocked"), 1);
+    (result.comments[0].user as { login: string }).login = "stranger";
+    visiblyBlockReviewClaimTimeFailure({
+      contract: { binding, commentId: "101", automationLogin: "deadloop-a" },
+      blockedLabel: "agent:blocked",
+      observe: () => ({ kind: "server_time_unverifiable", comments: result.comments, labels: result.labels }),
+      comment: (body: string) => { result.comments.push({ id: 103, created_at: "2026-07-20T10:05:00Z", updated_at: "2026-07-20T10:05:00Z", user: { login: "deadloop-a" }, body }); },
+      addBlocked: () => { result.labels.push("agent:blocked"); },
+    });
+
+    expect(result.comments).toHaveLength(2);
   });
 
   it("rejects a malformed REST Date header", () => {

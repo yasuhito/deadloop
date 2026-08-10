@@ -10,7 +10,12 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { assertAuthorizedSource } = require("./guarded-push.ts");
-const { parsePaginatedGithubJson, savedReviewClaimContract, validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const {
+  classifyActiveReviewClaim,
+  parsePaginatedGithubJson,
+  savedReviewClaimContract,
+  visiblyBlockReviewClaimTimeFailure,
+} = require("./pr-review-claim.ts");
 const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 type JsonObject = Record<string, any>;
@@ -171,15 +176,43 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       const currentConfiguration = assertCurrentReviewClaimAuthority(
         savedClaim, args.stateDir, enabled, authenticated, ops.loadCurrentReviewClaimConfiguration,
       );
-      const repository = JSON.parse(checked(ops, ["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS));
-      const currentPr = JSON.parse(checked(ops, ["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefName,headRefOid,isCrossRepository,labels"], MAX_GUARDED_OPERATION_MS));
-      const events = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS));
-      const comments = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS));
-      const headers = checkedRaw(ops, ["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
       const authoritativeClaim = { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins };
-      if (!validateActiveReviewClaim(currentPr, events, comments, headers, authoritativeClaim, {
-        repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr),
-      })) throw new Error("active review claim could not be reauthorized before repair push");
+      const inspect = (headers: string) => {
+        const repository = JSON.parse(checked(ops, ["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS));
+        const currentPr = JSON.parse(checked(ops, ["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefName,headRefOid,isCrossRepository,labels"], MAX_GUARDED_OPERATION_MS));
+        const events = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS));
+        const comments = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS));
+        return {
+          ...classifyActiveReviewClaim(currentPr, events, comments, headers, authoritativeClaim, {
+            repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr),
+          }),
+          comments,
+          labels: (currentPr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")),
+        };
+      };
+      const dateResult = ops.run(["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
+      const authority = inspect(dateResult.status === 0 ? dateResult.stdout : "");
+      if (authority.kind === "server_time_unverifiable") {
+        visiblyBlockReviewClaimTimeFailure({
+          contract: authoritativeClaim,
+          blockedLabel: String(savedClaim.blockedLabel || "agent:blocked"),
+          observe: () => {
+            recheck();
+            const login = checked(ops, ["gh", "api", "user", "--jq", ".login"], MAX_GUARDED_OPERATION_MS).toLowerCase();
+            try {
+              if (!automationLogin || login !== automationLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
+              assertCurrentReviewClaimAuthority(savedClaim, args.stateDir, enabled, login, ops.loadCurrentReviewClaimConfiguration);
+              return inspect("");
+            } catch {
+              return { kind: "binding_mismatch", comments: [], labels: [] };
+            }
+          },
+          comment: (body: string) => { checked(ops, ["gh", "pr", "comment", args.pr, "-R", args.githubRepo, "--body", body], MAX_GUARDED_OPERATION_MS); },
+          addBlocked: () => { checked(ops, ["gh", "pr", "edit", args.pr, "-R", args.githubRepo, "--add-label", String(savedClaim.blockedLabel || "agent:blocked")], MAX_GUARDED_OPERATION_MS); },
+        });
+        throw new Error("active review claim server time could not be verified before repair push");
+      }
+      if (authority.kind !== "authorized") throw new Error("active review claim could not be reauthorized before repair push");
     };
     const push = pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid, reauthorizeImmediatelyBeforePush);
     if (!push.pushed) {

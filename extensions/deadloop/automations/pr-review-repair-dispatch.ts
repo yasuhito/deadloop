@@ -34,7 +34,12 @@ const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
-const { readGithubRestResponseHeaders, savedReviewClaimContract, validateActiveReviewClaim } = require("./pr-review-claim.ts");
+const {
+  classifyActiveReviewClaim,
+  readGithubRestResponseHeaders,
+  savedReviewClaimContract,
+  visiblyBlockReviewClaimTimeFailure,
+} = require("./pr-review-claim.ts");
 const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
@@ -188,15 +193,47 @@ function reauthorizeReviewClaim(
   }
   const currentConfiguration = assertCurrentReviewClaimAuthority(env.reviewClaim, env.stateDir, enabled, authenticated);
   const observation = createGithubOperations(commandRunner);
-  const repository = commandRunner.runJson(["gh", "repo", "view", env.githubRepo, "--json", "id,nameWithOwner"]);
-  if (!validateActiveReviewClaim(
-    observation.getPr(env.githubRepo, prNumber),
-    observation.listPrTimelineEvents(env.githubRepo, prNumber),
-    observation.listPrComments(env.githubRepo, prNumber),
-    readGithubRestResponseHeaders(commandRunner, env.githubRepo),
-    { ...env.reviewClaim, authorizedLogins: currentConfiguration.authorizedLogins },
-    { repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(prNumber) },
-  )) throw new StaleLaunchError(`PR #${prNumber} active review claim could not be reauthorized`);
+  const authoritativeClaim = { ...env.reviewClaim, authorizedLogins: currentConfiguration.authorizedLogins };
+  const inspect = (headers: string) => {
+    const repository = commandRunner.runJson(["gh", "repo", "view", env.githubRepo, "--json", "id,nameWithOwner"]);
+    const livePr = observation.getPr(env.githubRepo, prNumber);
+    const comments = observation.listPrComments(env.githubRepo, prNumber);
+    return {
+      ...classifyActiveReviewClaim(
+        livePr,
+        observation.listPrTimelineEvents(env.githubRepo, prNumber),
+        comments,
+        headers,
+        authoritativeClaim,
+        { repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(prNumber) },
+      ),
+      comments,
+      labels: labelNames(livePr.labels),
+    };
+  };
+  let restHeaders = "";
+  try { restHeaders = readGithubRestResponseHeaders(commandRunner, env.githubRepo); } catch {}
+  const authority = inspect(restHeaders);
+  if (authority.kind === "server_time_unverifiable") {
+    visiblyBlockReviewClaimTimeFailure({
+      contract: authoritativeClaim,
+      blockedLabel: env.blockedLabel,
+      observe: () => {
+        const currentLogin = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
+        if (!currentLogin || currentLogin !== enabledLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
+        try {
+          assertCurrentReviewClaimAuthority(env.reviewClaim!, env.stateDir, enabled, currentLogin);
+          return inspect("");
+        } catch {
+          return { kind: "binding_mismatch", comments: [], labels: [] };
+        }
+      },
+      comment: (body: string) => observation.commentPr(env.githubRepo, prNumber, body),
+      addBlocked: () => observation.movePrLabels(env.githubRepo, prNumber, { add: env.blockedLabel }),
+    });
+    throw new StaleLaunchError(`PR #${prNumber} active review claim server time could not be verified`);
+  }
+  if (authority.kind !== "authorized") throw new StaleLaunchError(`PR #${prNumber} active review claim could not be reauthorized`);
 }
 
 function withRevalidatedPrMutation(

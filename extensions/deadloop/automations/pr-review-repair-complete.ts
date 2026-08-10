@@ -13,7 +13,13 @@ const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
-const { readGithubRestResponseHeaders, savedReviewClaimContract, validateActiveReviewClaim, validateRepairAuthorityTransition } = require("./pr-review-claim.ts");
+const {
+  classifyActiveReviewClaim,
+  classifyRepairAuthorityTransition,
+  readGithubRestResponseHeaders,
+  savedReviewClaimContract,
+  visiblyBlockReviewClaimTimeFailure,
+} = require("./pr-review-claim.ts");
 const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
@@ -166,29 +172,60 @@ function completion(args: JsonObject): DriverResult {
     const comments = (pr.comments || []) as JsonObject[];
     const observation = createGithubOperations(runner);
     const reauthorize = () => {
-      const current = observation.getPr(String(args.githubRepo), String(args.pr));
-      if (String(current.headRefOid || "").toLowerCase() !== liveHead) {
-        throw new Error("active review claim could not be reauthorized before repair completion mutation");
-      }
-      const repository = runner.runJson(["gh", "repo", "view", String(args.githubRepo), "--json", "id,nameWithOwner"]);
-      const liveTarget = {
-        repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr),
-      };
-      const events = observation.listPrTimelineEvents(String(args.githubRepo), String(args.pr));
-      const currentComments = observation.listPrComments(String(args.githubRepo), String(args.pr));
-      const headers = readGithubRestResponseHeaders(runner, String(args.githubRepo));
       const authenticatedLogin = runner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
       if (!authenticatedLogin || authenticatedLogin !== enabledLogin) {
         throw new Error("current authenticated GitHub identity does not match enablement authority");
       }
-      const enabledIdentityMatches = String(enabled.githubRepositoryId || "") === liveTarget.repositoryId
-        && String(enabled.githubRepo || "") === liveTarget.repository;
       const currentConfiguration = assertCurrentReviewClaimAuthority(reviewClaim, String(args.stateDir), enabled, authenticatedLogin);
       const authoritativeClaim = { ...reviewClaim, authorizedLogins: currentConfiguration.authorizedLogins };
-      const authorized = enabledIdentityMatches && (liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
-        ? validateActiveReviewClaim(current, events, currentComments, headers, authoritativeClaim, liveTarget)
-        : successfulReceipt && validateRepairAuthorityTransition(current, events, currentComments, headers, authoritativeClaim, liveTarget, receipt || {}));
-      if (!authorized) throw new Error("active review claim could not be reauthorized before repair completion mutation");
+      const inspect = (headers: string) => {
+        const current = observation.getPr(String(args.githubRepo), String(args.pr));
+        const repository = runner.runJson(["gh", "repo", "view", String(args.githubRepo), "--json", "id,nameWithOwner"]);
+        const liveTarget = {
+          repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr),
+        };
+        const currentComments = observation.listPrComments(String(args.githubRepo), String(args.pr));
+        const events = observation.listPrTimelineEvents(String(args.githubRepo), String(args.pr));
+        const enabledIdentityMatches = String(enabled.githubRepositoryId || "") === liveTarget.repositoryId
+          && String(enabled.githubRepo || "") === liveTarget.repository;
+        const validation = !enabledIdentityMatches || String(current.headRefOid || "").toLowerCase() !== liveHead
+          ? { kind: "binding_mismatch" }
+          : liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
+            ? classifyActiveReviewClaim(current, events, currentComments, headers, authoritativeClaim, liveTarget)
+            : successfulReceipt
+              ? classifyRepairAuthorityTransition(current, events, currentComments, headers, authoritativeClaim, liveTarget, receipt || {})
+              : { kind: "binding_mismatch" };
+        return {
+          ...validation,
+          comments: currentComments,
+          labels: (current.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")),
+        };
+      };
+      let restHeaders = "";
+      try { restHeaders = readGithubRestResponseHeaders(runner, String(args.githubRepo)); } catch {}
+      const authority = inspect(restHeaders);
+      if (authority.kind === "server_time_unverifiable") {
+        const visibleGithub = createGithubOperations(runner);
+        visiblyBlockReviewClaimTimeFailure({
+          contract: authoritativeClaim,
+          blockedLabel: String(args.blockedLabel),
+          observe: () => {
+            recheck();
+            const login = runner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
+            try {
+              if (!login || login !== enabledLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
+              assertCurrentReviewClaimAuthority(reviewClaim, String(args.stateDir), enabled, login);
+              return inspect("");
+            } catch {
+              return { kind: "binding_mismatch", comments: [], labels: [] };
+            }
+          },
+          comment: (body: string) => visibleGithub.commentPr(String(args.githubRepo), String(args.pr), body),
+          addBlocked: () => visibleGithub.movePrLabels(String(args.githubRepo), String(args.pr), { add: String(args.blockedLabel) }),
+        });
+        throw new Error("active review claim server time could not be verified before repair completion mutation");
+      }
+      if (authority.kind !== "authorized") throw new Error("active review claim could not be reauthorized before repair completion mutation");
     };
     reauthorize();
     const github = createGithubOperations(runner, () => { recheck(); reauthorize(); });

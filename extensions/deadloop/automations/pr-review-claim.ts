@@ -264,6 +264,89 @@ function matchesLiveReviewTarget(contract: JsonObject, liveTarget: LiveReviewTar
     && contract.binding?.targetNumber === liveTarget.targetNumber;
 }
 
+type ReviewClaimValidation =
+  | { kind: "authorized" }
+  | { kind: "claim_invalid" }
+  | { kind: "binding_mismatch" }
+  | { kind: "expired" }
+  | { kind: "server_time_unverifiable" };
+
+function exactManagedStateMatches(pr: JsonObject, activeState: ReviewClaimActiveState): boolean {
+  const labels = new Set((pr.labels || []).map((label: JsonObject | string) =>
+    typeof label === "string" ? label : String(label.name || "")));
+  return stableJson(activeState.managedLabels.filter((label) => labels.has(label))) === stableJson(activeState.requiredLabels);
+}
+
+function earliestBoundClaimWithoutTime(comments: JsonObject[], contract: JsonObject): JsonObject | null {
+  const authorized = new Set((Array.isArray(contract.authorizedLogins) ? contract.authorizedLogins : [])
+    .map((login: unknown) => String(login).toLowerCase()).filter(Boolean));
+  const valid = comments.filter((comment) => {
+    const marker = parseReviewClaim(comment.body);
+    return Boolean(serverCommentId(comment))
+      && hasUneditedCommentEvidence(comment)
+      && Number.isFinite(commentTime(comment))
+      && authorized.has(commentIdentity(comment))
+      && marker !== null
+      && sameBinding(marker, contract.binding as ReviewClaimBinding);
+  });
+  valid.sort((left, right) => commentTime(left) - commentTime(right)
+    || serverCommentId(left).localeCompare(serverCommentId(right), undefined, { numeric: true }));
+  return valid[0] || null;
+}
+
+function classifyBoundReviewClaim(
+  pr: JsonObject,
+  events: JsonObject[],
+  comments: JsonObject[],
+  restHeaders: unknown,
+  contract: JsonObject,
+  liveTarget: LiveReviewTarget,
+  expectedHead: string,
+): ReviewClaimValidation {
+  if (!consistentSavedClaimContract(contract)) return { kind: "claim_invalid" };
+  if (!matchesLiveReviewTarget(contract, liveTarget)) return { kind: "binding_mismatch" };
+  const configuredState = normalizedActiveState(contract.binding as ReviewClaimBinding);
+  if (!configuredState) return { kind: "binding_mismatch" };
+  const request = activeReviewRequest(events, configuredState.requestLabel);
+  const claimComment = comments.find((comment) => serverCommentId(comment) === String(contract.commentId || ""));
+  if (!claimComment || !reviewClaimCommentMatchesContract(claimComment, contract)) return { kind: "claim_invalid" };
+  if (!request
+    || String(pr.state || "").toUpperCase() !== "OPEN"
+    || String(pr.headRefOid || "").toLowerCase() !== expectedHead
+    || String(request.id || request.node_id || "") !== String(contract.binding?.requestEventId || "")
+    || !exactManagedStateMatches(pr, configuredState)
+    || serverCommentId(earliestBoundClaimWithoutTime(comments, contract) || {}) !== String(contract.commentId || "")) {
+    return { kind: "binding_mismatch" };
+  }
+  const serverNow = parseGithubRestDate(restHeaders, new Date(Math.max(eventTime(request), commentTime(claimComment))));
+  if (!serverNow) return { kind: "server_time_unverifiable" };
+  if (serverNow.getTime() >= commentTime(claimComment) + Number(contract.authoritySeconds) * 1000) return { kind: "expired" };
+  const winner = selectReviewClaimWinner(
+    comments,
+    contract.binding as ReviewClaimBinding,
+    Array.isArray(contract.authorizedLogins) ? contract.authorizedLogins : [],
+    serverNow,
+    Number(contract.authoritySeconds),
+  );
+  return serverCommentId(winner || {}) === String(contract.commentId || "")
+    ? { kind: "authorized" }
+    : { kind: "binding_mismatch" };
+}
+
+function classifyActiveReviewClaim(
+  pr: JsonObject,
+  events: JsonObject[],
+  comments: JsonObject[],
+  restHeaders: unknown,
+  contract: JsonObject,
+  liveTarget: LiveReviewTarget,
+): ReviewClaimValidation {
+  return classifyBoundReviewClaim(
+    pr, events, comments, restHeaders, contract, liveTarget,
+    String(contract.binding?.revision || "").toLowerCase(),
+  );
+}
+
 function validateActiveReviewClaim(
   pr: JsonObject,
   events: JsonObject[],
@@ -272,33 +355,25 @@ function validateActiveReviewClaim(
   contract: JsonObject,
   liveTarget: LiveReviewTarget,
 ): boolean {
-  if (!matchesLiveReviewTarget(contract, liveTarget) || !consistentSavedClaimContract(contract)) return false;
-  const configuredState = normalizedActiveState(contract.binding as ReviewClaimBinding);
-  if (!configuredState) return false;
-  const request = activeReviewRequest(events, configuredState.requestLabel);
-  const claimComment = comments.find((comment) => serverCommentId(comment) === String(contract.commentId || ""));
-  if (!request || !claimComment || !reviewClaimCommentMatchesContract(claimComment, contract)
-    || String(pr.state || "").toUpperCase() !== "OPEN"
-    || String(pr.headRefOid || "").toLowerCase() !== String(contract.binding?.revision || "").toLowerCase()
-    || String(request.id || request.node_id || "") !== String(contract.binding?.requestEventId || "")) return false;
-  const evidenceTime = Math.max(eventTime(request), commentTime(claimComment));
-  const serverNow = parseGithubRestDate(restHeaders, new Date(evidenceTime));
-  if (!serverNow) return false;
-  const winner = selectReviewClaimWinner(
-    comments,
-    contract.binding as ReviewClaimBinding,
-    Array.isArray(contract.authorizedLogins) ? contract.authorizedLogins : [],
-    serverNow,
-    Number(contract.authoritySeconds),
-  );
-  const marker = parseReviewClaim(winner?.body);
-  const labels = new Set((pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
-  const activeState = normalizedActiveState(contract.binding as ReviewClaimBinding);
-  if (!activeState) return false;
-  const exactManagedState = activeState.managedLabels.filter((label: string) => labels.has(label));
-  return stableJson(exactManagedState) === stableJson(activeState.requiredLabels)
-    && serverCommentId(winner || {}) === String(contract.commentId || "")
-    && marker?.owner === contract.binding?.owner;
+  return classifyActiveReviewClaim(pr, events, comments, restHeaders, contract, liveTarget).kind === "authorized";
+}
+
+function classifyRepairAuthorityTransition(
+  pr: JsonObject,
+  events: JsonObject[],
+  comments: JsonObject[],
+  restHeaders: unknown,
+  contract: JsonObject,
+  liveTarget: LiveReviewTarget,
+  transition: { originalHeadOid?: unknown; headOid?: unknown },
+): ReviewClaimValidation {
+  const originalHead = String(transition.originalHeadOid || "").toLowerCase();
+  const repairedHead = String(transition.headOid || "").toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(originalHead) || !/^[0-9a-f]{40}$/.test(repairedHead)
+    || originalHead === repairedHead
+    || originalHead !== String(contract.binding?.revision || "").toLowerCase()
+    || repairedHead !== String(pr.headRefOid || "").toLowerCase()) return { kind: "binding_mismatch" };
+  return classifyBoundReviewClaim(pr, events, comments, restHeaders, contract, liveTarget, repairedHead);
 }
 
 function validateRepairAuthorityTransition(
@@ -310,38 +385,46 @@ function validateRepairAuthorityTransition(
   liveTarget: LiveReviewTarget,
   transition: { originalHeadOid?: unknown; headOid?: unknown },
 ): boolean {
-  if (!matchesLiveReviewTarget(contract, liveTarget) || !consistentSavedClaimContract(contract)) return false;
-  const originalHead = String(transition.originalHeadOid || "").toLowerCase();
-  const repairedHead = String(transition.headOid || "").toLowerCase();
-  if (!/^[0-9a-f]{40}$/.test(originalHead) || !/^[0-9a-f]{40}$/.test(repairedHead)
-    || originalHead === repairedHead
-    || originalHead !== String(contract.binding?.revision || "").toLowerCase()
-    || repairedHead !== String(pr.headRefOid || "").toLowerCase()) return false;
+  return classifyRepairAuthorityTransition(pr, events, comments, restHeaders, contract, liveTarget, transition).kind === "authorized";
+}
 
-  const configuredState = normalizedActiveState(contract.binding as ReviewClaimBinding);
-  if (!configuredState) return false;
-  const request = activeReviewRequest(events, configuredState.requestLabel);
-  const claimComment = comments.find((comment) => serverCommentId(comment) === String(contract.commentId || ""));
-  if (!request || !claimComment || !reviewClaimCommentMatchesContract(claimComment, contract)
-    || String(pr.state || "").toUpperCase() !== "OPEN"
-    || String(request.id || request.node_id || "") !== String(contract.binding?.requestEventId || "")) return false;
-  const serverNow = parseGithubRestDate(restHeaders, new Date(Math.max(eventTime(request), commentTime(claimComment))));
-  if (!serverNow) return false;
-  const winner = selectReviewClaimWinner(
-    comments,
-    contract.binding as ReviewClaimBinding,
-    Array.isArray(contract.authorizedLogins) ? contract.authorizedLogins : [],
-    serverNow,
-    Number(contract.authoritySeconds),
-  );
-  const marker = parseReviewClaim(winner?.body);
-  const labels = new Set((pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
-  const activeState = normalizedActiveState(contract.binding as ReviewClaimBinding);
-  if (!activeState) return false;
-  const exactManagedState = activeState.managedLabels.filter((label: string) => labels.has(label));
-  return serverCommentId(winner || {}) === String(contract.commentId || "")
-    && marker?.owner === contract.binding?.owner
-    && stableJson(exactManagedState) === stableJson(activeState.requiredLabels);
+type TimeBlockObservation = ReviewClaimValidation & { comments: JsonObject[]; labels: string[] };
+
+function reviewClaimTimeBlockMarker(contract: JsonObject): string {
+  const key = Buffer.from(JSON.stringify({
+    requestEventId: String(contract.binding?.requestEventId || ""),
+    claimCommentId: String(contract.commentId || ""),
+  })).toString("base64url");
+  return `<!-- deadloop:review-claim-time-block v1=${key} -->`;
+}
+
+function reviewClaimTimeBlockBody(contract: JsonObject): string {
+  return `deadloop stopped because GitHub server-time evidence for this review claim was unavailable or unsafe to verify. Retry the review after GitHub REST Date evidence recovers.\n\n${reviewClaimTimeBlockMarker(contract)}`;
+}
+
+function reviewClaimTimeBlockCommentMatches(comment: JsonObject, contract: JsonObject): boolean {
+  return Boolean(serverCommentId(comment))
+    && hasUneditedCommentEvidence(comment)
+    && commentIdentity(comment) === String(contract.automationLogin || "").toLowerCase()
+    && String(comment.body || "") === reviewClaimTimeBlockBody(contract);
+}
+
+function visiblyBlockReviewClaimTimeFailure(operations: {
+  contract: JsonObject;
+  blockedLabel: string;
+  observe(): TimeBlockObservation;
+  comment(body: string): void;
+  addBlocked(): void;
+}): boolean {
+  let observation = operations.observe();
+  const alreadyCommented = observation.comments.some((comment) => reviewClaimTimeBlockCommentMatches(comment, operations.contract));
+  if (alreadyCommented && observation.labels.includes(operations.blockedLabel)) return true;
+  if (observation.kind !== "server_time_unverifiable") return false;
+  if (!alreadyCommented) operations.comment(reviewClaimTimeBlockBody(operations.contract));
+  observation = operations.observe();
+  if (observation.kind !== "server_time_unverifiable") return false;
+  if (!observation.labels.includes(operations.blockedLabel)) operations.addBlocked();
+  return true;
 }
 
 function stableJson(value: unknown): string {
@@ -425,6 +508,8 @@ function selectReviewClaimWinner(
 module.exports = {
   activeReviewRequest,
   assertClaimMatchesCurrentConfiguration,
+  classifyActiveReviewClaim,
+  classifyRepairAuthorityTransition,
   claimContractMatchesConfiguration,
   parseGithubRestDate,
   parseReviewClaim,
@@ -436,4 +521,5 @@ module.exports = {
   selectReviewClaimWinner,
   validateActiveReviewClaim,
   validateRepairAuthorityTransition,
+  visiblyBlockReviewClaimTimeFailure,
 };

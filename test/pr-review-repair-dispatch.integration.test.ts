@@ -37,7 +37,7 @@ function reviewClaimEnvironment(head: string, targetNumber = 243, repository = "
 
 function executable(file: string, content: string): void {
   const prepared = path.basename(file) === "gh"
-    ? content.replace("\n", `\nconst deadloopGhArgs = process.argv.slice(2);\nif (deadloopGhArgs[0] === "api" && deadloopGhArgs[1] === "user") { const login = process.env.TEST_AUTH_LOGIN_FILE && require("node:fs").existsSync(process.env.TEST_AUTH_LOGIN_FILE) ? require("node:fs").readFileSync(process.env.TEST_AUTH_LOGIN_FILE, "utf8").trim() : (process.env.TEST_AUTH_LOGIN || "deadloop-bot"); process.stdout.write(login + "\\n"); process.exit(0); }\nif (process.env.DEADLOOP_REVIEW_CLAIM) {\n  const reviewClaim = JSON.parse(process.env.DEADLOOP_REVIEW_CLAIM);\n  if (deadloopGhArgs[0] === "repo" && deadloopGhArgs[1] === "view" && deadloopGhArgs.some((arg) => arg.includes("nameWithOwner"))) { process.stdout.write(JSON.stringify({id:reviewClaim.binding.repositoryId,nameWithOwner:reviewClaim.binding.repository})); process.exit(0); }\n  if (deadloopGhArgs.some((arg) => arg.endsWith("/events"))) { process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:reviewClaim.reviewLabel}}]])); process.exit(0); }\n  if (deadloopGhArgs.some((arg) => arg.endsWith("/comments"))) { process.stdout.write(JSON.stringify([[JSON.parse(process.env.TEST_REVIEW_CLAIM_COMMENT)]])); process.exit(0); }\n  if (deadloopGhArgs[0] === "api" && deadloopGhArgs.includes("--include")) { process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT"); process.exit(0); }\n}\n`)
+    ? content.replace("\n", `\nconst deadloopGhArgs = process.argv.slice(2);\nif (deadloopGhArgs[0] === "api" && deadloopGhArgs[1] === "user") { const login = process.env.TEST_AUTH_LOGIN_FILE && require("node:fs").existsSync(process.env.TEST_AUTH_LOGIN_FILE) ? require("node:fs").readFileSync(process.env.TEST_AUTH_LOGIN_FILE, "utf8").trim() : (process.env.TEST_AUTH_LOGIN || "deadloop-bot"); process.stdout.write(login + "\\n"); process.exit(0); }\nif (process.env.DEADLOOP_REVIEW_CLAIM) {\n  const reviewClaim = JSON.parse(process.env.DEADLOOP_REVIEW_CLAIM);\n  if (deadloopGhArgs[0] === "repo" && deadloopGhArgs[1] === "view" && deadloopGhArgs.some((arg) => arg.includes("nameWithOwner"))) { process.stdout.write(JSON.stringify({id:reviewClaim.binding.repositoryId,nameWithOwner:reviewClaim.binding.repository})); process.exit(0); }\n  if (deadloopGhArgs.some((arg) => arg.endsWith("/events"))) { process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:reviewClaim.reviewLabel}}]])); process.exit(0); }\n  if (deadloopGhArgs.some((arg) => arg.endsWith("/comments"))) { process.stdout.write(JSON.stringify([[JSON.parse(process.env.TEST_REVIEW_CLAIM_COMMENT)]])); process.exit(0); }\n  if (deadloopGhArgs[0] === "api" && deadloopGhArgs.includes("--include")) { process.stdout.write(process.env.TEST_REST_HEADERS ?? "date: Mon, 20 Jul 2026 10:03:00 GMT"); process.exit(0); }\n  if (process.env.TEST_VISIBLE_EFFECTS_FILE && deadloopGhArgs[0] === "pr" && ["comment", "edit"].includes(deadloopGhArgs[1])) { require("node:fs").appendFileSync(process.env.TEST_VISIBLE_EFFECTS_FILE, deadloopGhArgs.join(" ") + "\\n"); process.exit(0); }\n}\n`)
     : path.basename(file) === "git"
       ? content.replace("\n", `\nconst deadloopGitArgs = process.argv.slice(2);\nif ((deadloopGitArgs.includes("rev-parse") && deadloopGitArgs.some((arg) => arg.endsWith("^{commit}"))) || (deadloopGitArgs.includes("show") && deadloopGitArgs.some((arg) => arg.endsWith(":deadloop.json")))) {\n  const result = require("node:child_process").spawnSync("/usr/bin/git", deadloopGitArgs, {encoding:"utf8"});\n  process.stdout.write(result.stdout || ""); process.stderr.write(result.stderr || ""); process.exit(result.status ?? 1);\n}\n`)
       : content;
@@ -551,6 +551,8 @@ function runV1ChangesRequestedTwice(options: {
   renderedCommand?: boolean;
   attempts?: number;
   injectCumulativeLimitRace?: boolean;
+  dateUnavailable?: boolean;
+  editedClaim?: boolean;
 } = {}): {
   launches: number;
   actions: string[];
@@ -558,6 +560,7 @@ function runV1ChangesRequestedTwice(options: {
   repairWorktreePath: string;
   labelsPreserved: string[];
   dispatcherArgsForwarded: boolean;
+  githubMutations: string;
 } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-v1-repair-sequence-"));
   tempDirs.push(root);
@@ -580,6 +583,7 @@ function runV1ChangesRequestedTwice(options: {
   const comments = path.join(root, "comments.json");
   const ghViewCount = path.join(root, "gh-view-count");
   const runtime = path.join(root, "runtime.json");
+  const visibleEffects = path.join(root, "visible-effects.log");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(reviewerRun, { recursive: true });
   fs.mkdirSync(worktreeRoot, { recursive: true });
@@ -671,9 +675,11 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     ...reviewClaimEnvironment(head),
     DEADLOOP_REVIEW_CLAIM: JSON.stringify(savedReviewClaim),
     TEST_REVIEW_CLAIM_COMMENT: JSON.stringify({
-      id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z",
+      id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: options.editedClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z",
       user: { login: "deadloop-bot" }, body: renderReviewClaimComment(savedReviewClaim.binding),
     }),
+    TEST_REST_HEADERS: options.dateUnavailable ? "" : "date: Mon, 20 Jul 2026 10:03:00 GMT",
+    TEST_VISIBLE_EFFECTS_FILE: options.dateUnavailable ? visibleEffects : "",
     PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: repo, DEADLOOP_WORKTREE_ROOT: worktreeRoot,
     DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
@@ -720,6 +726,7 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
       `--blocked-label ${labels.blocked}`,
       `--human-label ${labels.human}`,
     ].every((argument) => dispatcherCommand.includes(argument)),
+    githubMutations: fs.existsSync(visibleEffects) ? fs.readFileSync(visibleEffects, "utf8") : "",
   };
 }
 
@@ -747,6 +754,19 @@ describe("review repair dispatch integration", () => {
       { labels: [] },
       { inProgressLabel: "agent:in-progress", reviewClaim: { binding: {} } },
     )).toThrow("in-progress");
+  });
+
+  it("visibly blocks repair dispatch when only REST Date is unavailable", () => {
+    expect(runV1ChangesRequestedTwice({ attempts: 1, dateUnavailable: true }).githubMutations).toContain("pr comment 243");
+  });
+
+  it("adds only blocked at the repair-dispatch Date-failure seam", () => {
+    const mutations = runV1ChangesRequestedTwice({ attempts: 1, dateUnavailable: true }).githubMutations.trim().split("\n");
+    expect(mutations.at(-1)?.split(/\s+/).slice(-2)).toEqual(["--add-label", "agent:blocked"]);
+  });
+
+  it("performs no repair-dispatch mutation for an edited claim with missing REST Date", () => {
+    expect(runV1ChangesRequestedTwice({ attempts: 1, dateUnavailable: true, editedClaim: true }).githubMutations).toBe("");
   });
 
   it("persists exact V1 findings, closes the reviewer workspace, and launches one repair without a duplicate", () => {

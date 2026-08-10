@@ -33,6 +33,8 @@ function runCompletion(options: {
   currentProject?: Record<string, unknown>;
   authenticatedLogin?: string;
   enabled?: boolean;
+  dateUnavailable?: boolean;
+  editedClaim?: boolean;
   raceAfterComment?: "runtime" | "grace" | "managed label" | "authorized identity" | "authenticated login" | "enablement";
 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-repair-complete-"));
@@ -82,7 +84,7 @@ function runCompletion(options: {
     binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
     reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
-  const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
+  const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: options.editedClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
   const outcome = String(options.promise.reason || "");
   const strongPromise = {
     schemaVersion: 1, attemptId: key, role: "review-repair",
@@ -121,7 +123,7 @@ if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringif
 else if (args[0] === "api" && args[1] === "user") process.stdout.write(fs.readFileSync(process.env.AUTH_LOGIN_FILE, "utf8"));
 else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
 else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))});
-else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
+else if (args[0] === "api" && args.includes("--include")) process.stdout.write(${JSON.stringify(options.dateUnavailable ? "" : "date: Mon, 20 Jul 2026 10:03:00 GMT")});
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:in-progress" }])},comments:${JSON.stringify(options.comments || [])}}));
 else if (args[0] === "pr" && args[1] === "comment") {
   fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
@@ -327,6 +329,40 @@ describe("review repair deterministic completion", () => {
       expect(result.actions).toBe("");
     },
   );
+
+  it("visibly blocks repair completion when only REST Date is unavailable", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed", paths: ["src/review.ts"] }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      dateUnavailable: true,
+    });
+
+    expect(result.posted).toContain("GitHub server-time evidence");
+  });
+
+  it("adds only blocked at the repair-completion Date-failure seam", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed", paths: ["src/review.ts"] }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      dateUnavailable: true,
+    });
+
+    expect(result.actions.trim().split(/\s+/).slice(-2)).toEqual(["--add-label", "agent:blocked"]);
+  });
+
+  it("performs no repair-completion mutation for an edited claim with missing REST Date", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed", paths: ["src/review.ts"] }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      dateUnavailable: true,
+      editedClaim: true,
+    });
+
+    expect({ posted: result.posted, actions: result.actions }).toEqual({ posted: "", actions: "" });
+  });
 
   it("fails before repair completion effects when the active review claim is omitted", () => {
     expect(() => completion({})).toThrow("active review claim is required");

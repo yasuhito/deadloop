@@ -424,6 +424,61 @@ describe("enablement mutation guards", () => {
     expect(mutated).toBe(true);
   });
 
+  function guardedDateFailureScenario(editClaim = false) {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const head = "a".repeat(40);
+    const binding = {
+      repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
+      authority: { durationSeconds: 86700 }, activeState: activeReviewState,
+    };
+    const claim = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: editClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
+    const comments: Record<string, unknown>[] = [claim];
+    const labels = ["agent:in-progress", "customer:keep"];
+    const mutations: string[] = [];
+    const reviewClaim = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    try {
+      runGuarded(
+        { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord: path.join(project.stateDir, "runs", "reviewer", "attempt.json"), reviewClaim, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "requested"] },
+        (_command: string, args: string[]) => {
+          if (args[0] === "api" && args[1] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+          if (args[0] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: project.githubRepo }), stderr: "" };
+          if (args[0] === "pr" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: head, labels: labels.map((name) => ({ name })) }), stderr: "" };
+          if (args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
+          if (args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([comments]), stderr: "" };
+          if (args[0] === "api") return { status: 0, stdout: "", stderr: "" };
+          if (args[0] === "pr" && args[1] === "comment") {
+            mutations.push(String(args.at(-1)) === "requested" ? "requested" : "visible-comment");
+            comments.push({ id: 102, body: String(args.at(-1)) });
+          }
+          if (args[0] === "pr" && args[1] === "edit") {
+            mutations.push("blocked");
+            labels.push("agent:blocked");
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        },
+        () => reviewClaim,
+        () => currentReviewConfiguration,
+      );
+    } catch {}
+    return { mutations, labels };
+  }
+
+  it("visibly blocks a generic guarded PR mutation when only REST Date is unavailable", () => {
+    expect(guardedDateFailureScenario().mutations).toEqual(["visible-comment", "blocked"]);
+  });
+
+  it("performs no generic GitHub mutation when the claim is edited and REST Date is unavailable", () => {
+    expect(guardedDateFailureScenario(true).mutations).toEqual([]);
+  });
+
+  it("preserves unrelated labels while visibly blocking a guarded Date failure", () => {
+    expect(guardedDateFailureScenario().labels).toEqual(["agent:in-progress", "customer:keep", "agent:blocked"]);
+  });
+
   it.each([
     ["comment", ["gh", "pr", "comment", "24", "-R", "owner/repo", "--body", "done"]],
     ["label/ready", ["gh", "pr", "edit", "24", "-R", "owner/repo", "--remove-label", "agent:in-progress"]],
