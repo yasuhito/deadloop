@@ -9,12 +9,28 @@ import { Given, Then, When } from "@cucumber/cucumber";
 const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
 const { renderRepairMarker, renderTechnicalFailureMarker, reviewResultFingerprint } = require("../../extensions/deadloop/automations/pr-review-repair-state.ts");
 const { finalizeReviewRepair } = require("../../extensions/deadloop/automations/pr-review-repair-finalize.ts");
+const { renderReviewClaimComment } = require("../../extensions/deadloop/automations/pr-review-claim.ts");
 
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const repairedHead = "cccccccccccccccccccccccccccccccccccccccc";
 const branch = "agent/issue-31";
 const findings = [{ title: "Lint contract failure", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
+const activeReviewState = {
+  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  requestLabel: "agent:review",
+  requiredLabels: ["agent:in-progress"],
+};
+const reviewClaimBinding = {
+  repositoryId: "R_repo", repository: "owner/repo", targetNumber: 31, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
+  authority: { durationSeconds: 86700 }, activeState: activeReviewState,
+};
+const reviewClaim = {
+  binding: reviewClaimBinding, commentId: "101", authorizedLogins: ["deadloop-bot"],
+  automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400,
+  cleanupGraceSeconds: 300, authoritySeconds: 86700,
+  reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+};
 
 type RecoveryWorld = {
   case?: string;
@@ -61,6 +77,7 @@ function reviewerDriver(fixture: string): Record<string, unknown> {
         DEADLOOP_REVIEWER_AGENT: "pi",
         DEADLOOP_REVIEWER_MODEL: "",
         DEADLOOP_AUTO_MERGE: "0",
+        DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
         DEADLOOP_NOW: "2026-07-08T00:00:00Z",
       },
     },
@@ -77,21 +94,28 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     const worktree = path.join(worktreeRoot, "agent-issue-31");
     const configDir = path.join(root, "config");
     const state = path.join(configDir, "deadloop");
-    const promise = path.join(root, "review-promise.json");
+    const runDir = path.join(state, "runs", "reviewer");
+    const promise = path.join(runDir, "promise.json");
+    const attemptRecord = path.join(runDir, "attempt.json");
     const githubLog = path.join(root, "github.log");
     const herdrLog = path.join(root, "herdr.log");
     const labelsFile = path.join(root, "labels.json");
     const commentsFile = path.join(root, "comments.json");
     fs.mkdirSync(bin);
     fs.mkdirSync(worktree, { recursive: true });
-    fs.mkdirSync(state, { recursive: true });
-    fs.writeFileSync(labelsFile, JSON.stringify(["agent:review", "agent:reviewing"]));
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(labelsFile, JSON.stringify(["agent:in-progress"]));
+    fs.writeFileSync(path.join(state, "projects.json"), JSON.stringify({ projects: [{
+      id: "demo", repoPath: root, githubRepo: "owner/repo", baseBranch: "origin/main",
+    }] }));
     fs.writeFileSync(
       path.join(state, "enabled-projects.json"),
       JSON.stringify({ projects: [{
         repoPath: root,
         githubRepo: "owner/repo",
         githubRepositoryId: "R_repo",
+        baseBranch: "origin/main",
+        automationLogin: "deadloop-bot",
         enabledAt: 1,
         firstEnableAutoMerge: false,
         firstStartPending: false,
@@ -101,18 +125,33 @@ function repairDispatch(testCase: string): Record<string, unknown> {
       }] }),
     );
     const blocked = testCase === "first-technical-failure" || testCase === "repeated-technical-failure";
-    fs.writeFileSync(
-      promise,
-      JSON.stringify(blocked
-        ? { status: "blocked", reason: "reviewer failed", summary: "Technical review failure." }
-        : { status: "complete", outcome: "changes_requested", reason: "", summary: "Repair required.", findings }),
-    );
+    const currentHead = testCase === "repeated-repair" ? repairedHead : head;
+    const activeReviewClaimBinding = { ...reviewClaimBinding, revision: currentHead };
+    const activeReviewClaim = { ...reviewClaim, binding: activeReviewClaimBinding };
+    const reportBase = {
+      schemaVersion: 1, attemptId: "reviewer", role: "reviewer",
+      target: { repository: "owner/repo", kind: "pull-request", number: 31 }, inputRevision: { head: currentHead },
+      summary: blocked ? "Technical review failure." : "Repair required.", evidence: { reviewed: ["PR diff"] },
+    };
+    fs.writeFileSync(promise, JSON.stringify(blocked
+      ? { ...reportBase, status: "blocked", result: { reason: "reviewer failed", explanation: "Technical review failure.", recovery: "Retry the review." } }
+      : { ...reportBase, status: "complete", result: { outcome: "changes_requested", reviewedHead: currentHead, findings } }));
+    fs.writeFileSync(attemptRecord, JSON.stringify({
+      attemptId: "reviewer", launchUuid: "reviewer", project: "demo", repository: "owner/repo", role: "reviewer",
+      target: { kind: "pull-request", number: 31 }, inputRevision: { head: currentHead }, branch,
+      worktreePath: worktree, agentName: "reviewer", workspaceLabel: "reviewer",
+      promptFile: path.join(runDir, "prompt.md"), promiseFile: promise,
+      phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", reviewClaim: activeReviewClaim,
+    }));
+    const claimComment = {
+      id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z",
+      user: { login: "deadloop-bot" }, body: renderReviewClaimComment(activeReviewClaimBinding),
+    };
     const comments = testCase === "repeated-repair"
       ? [{ body: renderRepairMarker(head, reviewResultFingerprint(findings)), author: { login: "deadloop-bot" } }]
       : testCase === "repeated-technical-failure"
         ? [{ body: renderTechnicalFailureMarker(head) }]
         : [];
-    const currentHead = testCase === "repeated-repair" ? repairedHead : head;
     fs.writeFileSync(commentsFile, JSON.stringify(comments));
     const executable = (file: string, content: string) => {
       fs.writeFileSync(file, content);
@@ -124,12 +163,15 @@ function repairDispatch(testCase: string): Record<string, unknown> {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
+else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(JSON.stringify([[${JSON.stringify(claimComment)}]]));
+else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number: 31, state: "OPEN", headRefName: "${branch}", headRefOid: "${currentHead}", isCrossRepository: false,
   labels: JSON.parse(fs.readFileSync(process.env.TEST_LABELS_FILE, "utf8")).map(name => ({name})),
   comments: JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"))
 }));
-else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id: "R_repo"}));
+else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id: "R_repo", nameWithOwner: "owner/repo"}));
 else {
   if (args[0] === "pr" && args[1] === "edit") {
     const labels = new Set(JSON.parse(fs.readFileSync(process.env.TEST_LABELS_FILE, "utf8")));
@@ -153,6 +195,8 @@ else {
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+else if (args.includes("rev-parse") && args.some(arg => arg.endsWith("^{commit}"))) process.stdout.write("${"f".repeat(40)}\\n");
+else if (args.includes("show") && args.some(arg => arg.endsWith(":deadloop.json"))) process.exit(1);
 `,
     );
     executable(
@@ -173,7 +217,7 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
     );
     const result = spawnSync(
       "node",
-      ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--pr", "31", "--expected-head", currentHead, "--branch", branch],
+      ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attemptRecord, "--pr", "31", "--expected-head", currentHead, "--branch", branch],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -187,6 +231,7 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
           DEADLOOP_GITHUB_REPO: "owner/repo",
           DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
+          DEADLOOP_REVIEW_CLAIM: JSON.stringify(activeReviewClaim),
           TEST_COMMENTS_FILE: commentsFile,
           TEST_GITHUB_LOG: githubLog,
           TEST_HERDR_LOG: herdrLog,
@@ -225,18 +270,29 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
 
 function finalizerOps(commands: string[][], actualHead = head, isCrossRepository = false) {
   return {
-    assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
+    loadSavedReviewClaim: () => reviewClaim,
+    loadCurrentReviewClaimConfiguration: () => ({
+      reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+      managedLabels: activeReviewState.managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
+      repositoryId: "R_repo", repository: "owner/repo", authorizedLogins: ["deadloop-bot"],
+      authenticatedLogin: "deadloop-bot", reviewerAgent: "pi",
+    }),
+    assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot" }),
     run: (args: string[]) => {
       commands.push(args);
       if (args.includes("get-url")) return { status: 0, stdout: "https://github.com/owner/repo.git\n", stderr: "" };
       if (args.includes("ls-remote")) return { status: 0, stdout: `${head}\trefs/heads/${branch}\n`, stderr: "" };
       if (args.includes("--git-common-dir")) return { status: 0, stdout: "/common\n", stderr: "" };
       if (args.includes("symbolic-ref")) return { status: 0, stdout: `${branch}\n`, stderr: "" };
-      if (args[0] === "gh" && args[1] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
+      if (args[0] === "gh" && args[1] === "api" && args[2] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+      if (args[0] === "gh" && args[1] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
+      if (args[0] === "gh" && args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
+      if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(reviewClaimBinding) }]]), stderr: "" };
+      if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
       if (args[0] === "gh") {
         return {
           status: 0,
-          stdout: JSON.stringify({ state: "OPEN", isCrossRepository, headRefName: branch, headRefOid: actualHead }),
+          stdout: JSON.stringify({ state: "OPEN", isCrossRepository, headRefName: branch, headRefOid: actualHead, labels: [{ name: "agent:in-progress" }] }),
           stderr: "",
         };
       }
@@ -250,6 +306,7 @@ function repairFinalizer(commands: string[][], actualHead = head) {
   return finalizeReviewRepair(
     {
       repo: "/worktree",
+      attemptRecord: "/state/runs/reviewer/attempt.json",
       projectRepo: "/repo",
       githubRepo: "owner/repo",
       pr: "31",
@@ -260,6 +317,7 @@ function repairFinalizer(commands: string[][], actualHead = head) {
       stateDir: "/state",
       enabledAt: 1,
       checkCommand: "npm test",
+      reviewClaim,
     },
     finalizerOps(commands, actualHead, false),
   );
@@ -371,9 +429,14 @@ When("deadloop completes conflict recovery", function (this: RecoveryWorld) {
   this.result = branchUpdateFinalizer(this.commands, head, this.case === "cross-repository-branch-update");
 });
 
-Then("deadloop starts a dedicated conflict-recovery attempt", function (this: RecoveryWorld) {
-  const starts = adapterEffects(this.result)?.herdrStarts?.filter((start: any) => start.name.includes("branch-update")) ?? [];
-  assert.equal(starts.length, 1);
+Then("deadloop leaves the conflicted pull request untouched before claim", function (this: RecoveryWorld) {
+  const effects = adapterEffects(this.result) || {};
+  assert.deepEqual({
+    action: this.result?.driverAction,
+    comments: effects.githubComments?.length ?? 0,
+    labels: effects.labelReplacements?.length ?? 0,
+    starts: effects.herdrStarts?.length ?? 0,
+  }, { action: "branch_update_claim_required", comments: 0, labels: 0, starts: 0 });
 });
 
 Then("deadloop does not start another dedicated conflict-recovery attempt", function (this: RecoveryWorld) {
@@ -392,7 +455,7 @@ Then("The selection reason after conflict recovery is repair re-review", functio
 
 Then("deadloop preserves the review state", function (this: RecoveryWorld) {
   const labels = adapterEffects(this.result)?.labels?.["31"] ?? this.result?.observedLabels;
-  assert.deepEqual(labels, ["agent:review", "agent:reviewing"]);
+  assert.deepEqual(labels, this.case === "conflict" ? ["agent:review", "agent:reviewing"] : ["agent:in-progress"]);
 });
 
 Then("deadloop starts a dedicated repair attempt", function (this: RecoveryWorld) {

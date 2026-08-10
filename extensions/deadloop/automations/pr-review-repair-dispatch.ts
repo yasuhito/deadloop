@@ -34,6 +34,13 @@ const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
+const {
+  classifyActiveReviewClaim,
+  readGithubRestResponseHeaders,
+  savedReviewClaimContract,
+  visiblyBlockReviewClaimTimeFailure,
+} = require("./pr-review-claim.ts");
+const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 import type { RunnerAdapter } from "../../../src/runner";
@@ -67,6 +74,12 @@ function envConfig(args: JsonObject = {}) {
     reviewingLabel: configValue(args, "reviewingLabel", process.env.DEADLOOP_REVIEWING_LABEL, "agent:reviewing"),
     blockedLabel: configValue(args, "blockedLabel", process.env.DEADLOOP_BLOCKED_LABEL, "agent:blocked"),
     humanLabel: configValue(args, "humanLabel", process.env.DEADLOOP_HUMAN_LABEL, "ready-for-human"),
+    inProgressLabel: configValue(args, "inProgressLabel", process.env.DEADLOOP_IN_PROGRESS_LABEL, "agent:in-progress"),
+    reviewClaim: (() => {
+      const value = configValue(args, "reviewClaim", process.env.DEADLOOP_REVIEW_CLAIM, "");
+      if (!value) return null;
+      try { return JSON.parse(value); } catch { throw new Error("review claim contract is malformed"); }
+    })(),
     automationDir,
   };
 }
@@ -158,17 +171,94 @@ gh pr view ${prNumber} -R ${shellQuote(env.githubRepo)} --comments --json number
 3. Push a new commit, then remove ${env.blockedLabel}; the changed head can start a new review cycle.${marker ? `\n\n${marker}` : ""}`;
 }
 
+function requireReviewClaimForManagedPr(pr: JsonObject, env: ReturnType<typeof envConfig>): void {
+  if (!env.reviewClaim || typeof env.reviewClaim !== "object" || Array.isArray(env.reviewClaim)) {
+    throw new Error("active review claim is required before review repair mutation");
+  }
+  if (!labelNames(pr.labels).includes(env.inProgressLabel)) {
+    throw new Error("active in-progress state is required before review repair mutation");
+  }
+}
+
+function reauthorizeReviewClaim(
+  prNumber: string,
+  env: ReturnType<typeof envConfig>,
+  enabled?: { automationLogin?: string },
+): void {
+  if (!env.reviewClaim) throw new StaleLaunchError(`PR #${prNumber} active review claim is missing`);
+  const authenticated = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
+  const enabledLogin = String(enabled?.automationLogin || "").trim().toLowerCase();
+  if (!authenticated || !enabledLogin || authenticated !== enabledLogin) {
+    throw new StaleLaunchError(`PR #${prNumber} authenticated identity no longer matches enablement authority`);
+  }
+  const currentConfiguration = assertCurrentReviewClaimAuthority(env.reviewClaim, env.stateDir, enabled, authenticated);
+  const observation = createGithubOperations(commandRunner);
+  const authoritativeClaim = { ...env.reviewClaim, authorizedLogins: currentConfiguration.authorizedLogins };
+  const observe = () => {
+    const repository = commandRunner.runJson(["gh", "repo", "view", env.githubRepo, "--json", "id,nameWithOwner"]);
+    const livePr = observation.getPr(env.githubRepo, prNumber);
+    const comments = observation.listPrComments(env.githubRepo, prNumber);
+    const events = observation.listPrTimelineEvents(env.githubRepo, prNumber);
+    return (headers: string) => ({
+      ...classifyActiveReviewClaim(
+        livePr,
+        events,
+        comments,
+        headers,
+        authoritativeClaim,
+        { repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(prNumber) },
+      ),
+      comments,
+      labels: labelNames(livePr.labels),
+    });
+  };
+  const classifyObservation = observe();
+  let restHeaders = "";
+  try { restHeaders = readGithubRestResponseHeaders(commandRunner, env.githubRepo); } catch {}
+  const authority = classifyObservation(restHeaders);
+  if (authority.kind === "server_time_unverifiable") {
+    visiblyBlockReviewClaimTimeFailure({
+      contract: authoritativeClaim,
+      blockedLabel: env.blockedLabel,
+      observe: () => {
+        const currentLogin = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
+        if (!currentLogin || currentLogin !== enabledLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
+        try {
+          assertCurrentReviewClaimAuthority(env.reviewClaim!, env.stateDir, enabled, currentLogin);
+          return observe()("");
+        } catch {
+          return { kind: "binding_mismatch", comments: [], labels: [] };
+        }
+      },
+      comment: (body: string) => observation.commentPr(env.githubRepo, prNumber, body),
+      addBlocked: () => observation.movePrLabels(env.githubRepo, prNumber, { add: env.blockedLabel }),
+    });
+    throw new StaleLaunchError(`PR #${prNumber} active review claim server time could not be verified`);
+  }
+  if (authority.kind !== "authorized") throw new StaleLaunchError(`PR #${prNumber} active review claim could not be reauthorized`);
+}
+
 function withRevalidatedPrMutation(
   prNumber: string,
   env: ReturnType<typeof envConfig>,
   expectedPr: JsonObject,
   mutation: (guardedGithub: ReturnType<typeof createGithubOperations>, livePr: JsonObject) => void,
 ): void {
-  withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+  withEnabledDriverLock(env, (enabled: { automationLogin?: string }, recheck: () => void) => {
     const livePr = readLivePr(env.githubRepo, prNumber);
     assertSameLaunchTarget(expectedPr, livePr, "pr");
-    mutation(createGithubOperations(commandRunner, recheck), livePr);
+    requireReviewClaimForManagedPr(livePr, env);
+    const reauthorize = () => reauthorizeReviewClaim(prNumber, env, enabled);
+    reauthorize();
+    mutation(createGithubOperations(commandRunner, () => { recheck(); reauthorize(); }), livePr);
   });
+}
+
+function blockedClaimMove(env: ReturnType<typeof envConfig>) {
+  return {
+    remove: [env.inProgressLabel, env.reviewingLabel],
+    add: [env.reviewLabel, env.blockedLabel],
+  };
 }
 
 function applyHumanBlock(
@@ -182,7 +272,7 @@ function applyHumanBlock(
   const comment = recoveryComment(prNumber, env, reason, summary, marker);
   withRevalidatedPrMutation(prNumber, env, expectedPr, (guardedGithub) => {
     guardedGithub.commentPr(env.githubRepo, prNumber, comment);
-    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+    guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
   });
   return comment;
 }
@@ -202,6 +292,8 @@ function repairWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-review-repair-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--attempt-record",
+    shellQuote(path.join(path.dirname(promiseFile), "attempt.json")),
     "--project-repo",
     shellQuote(env.repoPath),
     "--github-repo",
@@ -224,6 +316,7 @@ function repairWorkerPrompt(
     shellQuote(env.checkCommand),
     "--result-file",
     shellQuote(path.join(path.dirname(promiseFile), "finalizer-result.json")),
+    ...(env.reviewClaim ? ["--review-claim", shellQuote(JSON.stringify(env.reviewClaim))] : []),
   ].join(" ");
   return `Repair only the actionable review findings below on existing PR #${prNumber}.
 
@@ -381,6 +474,7 @@ function repairLaunchInput(
     role: "review-repair" as const,
     target: { kind: "pull-request" as const, number: Number(prNumber) },
     inputRevision: { head: expectedHead },
+    reviewClaim: env.reviewClaim || undefined,
     intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
     renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
       repairWorkerPrompt(prNumber, branch, expectedHead, findings, key, promiseFile, worktreePath, env),
@@ -476,24 +570,43 @@ function dispatch(args: JsonObject): DriverResult {
   runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   const env = envConfig(args);
   if (!env.githubRepo) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
+  const prNumber = String(args.pr);
   const hasAttemptRecord = Boolean(args.attemptRecord && fs.existsSync(String(args.attemptRecord)));
-  const validation = validatePromise(String(args.promise), hasAttemptRecord ? String(args.attemptRecord) : undefined);
+  if (!hasAttemptRecord) throw new Error("saved reviewer attempt record is required before repair dispatch");
+  env.reviewClaim = savedReviewClaimContract(String(args.attemptRecord), env.reviewClaim || undefined, {
+    stateDir: env.stateDir,
+    githubRepo: env.githubRepo,
+    projectId: env.projectId,
+    targetNumber: Number(prNumber),
+  });
+  const validation = validatePromise(String(args.promise), String(args.attemptRecord));
   if (validation.status === "none" || validation.status === "invalid") {
     return driverResult("error", `reviewer promise is ${validation.status}`, { driverAction: "invalid_promise", validation });
   }
   const promise = validation.promise as JsonObject;
-  const rawReport = hasAttemptRecord ? JSON.parse(fs.readFileSync(String(args.promise), "utf8")) : null;
-  const attemptRecord = hasAttemptRecord ? readAttemptRecord(path.dirname(String(args.attemptRecord))) : null;
-  const persistenceMarker = attemptRecord && rawReport?.schemaVersion === 1
+  const rawReport = JSON.parse(fs.readFileSync(String(args.promise), "utf8"));
+  const attemptRecord = readAttemptRecord(path.dirname(String(args.attemptRecord)));
+  const configuredClaimFields = {
+    reviewLabel: env.reviewLabel,
+    reviewingLabel: env.reviewingLabel,
+    inProgressLabel: env.inProgressLabel,
+    blockedLabel: env.blockedLabel,
+  };
+  for (const [field, value] of Object.entries(configuredClaimFields)) {
+    if (String((env.reviewClaim as JsonObject)[field] || "") !== value) {
+      throw new Error(`${field} does not exactly match the saved review claim contract`);
+    }
+  }
+  const persistenceMarker = rawReport?.schemaVersion === 1
     ? renderAttemptPersistenceMarker(attemptRecord, rawReport, {
         findings: rawReport.role === "reviewer" ? rawReport.result?.findings || [] : [],
         boundedRepairAttemptMarked: rawReport.role === "reviewer" && rawReport.result?.outcome === "changes_requested",
       })
     : "";
-  const prNumber = String(args.pr);
   const expectedHead = String(args.expectedHead).toLowerCase();
   const branch = String(args.branch);
   const pr = readLivePr(env.githubRepo, prNumber);
+  requireReviewClaimForManagedPr(pr, env);
 
   if (String(pr.state || "").toUpperCase() !== "OPEN" || Boolean(pr.isCrossRepository) || String(pr.headRefName || "") !== branch) {
     const comment = applyHumanBlock(prNumber, env, pr, "the selected PR is no longer a safe same-repository branch target", promise.summary);
@@ -505,12 +618,17 @@ function dispatch(args: JsonObject): DriverResult {
     }
     const technicalDecision = decideTechnicalReviewFailure(pr.comments || [], expectedHead);
     if (technicalDecision.action === "retry") {
-      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub) => guardedGithub.commentPr(
-        env.githubRepo,
-        prNumber,
-        `Reviewer technical failure will be retried once for this head: ${publicText(promise.reason, "technical review failure")}\n\n${renderTechnicalFailureMarker(expectedHead)}`,
-      ));
-      return driverResult("done", `PR #${prNumber} reviewer technical failure retained review labels for one retry`, {
+      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub) => {
+        guardedGithub.commentPr(
+          env.githubRepo,
+          prNumber,
+          `Reviewer technical failure will be retried once for this head: ${publicText(promise.reason, "technical review failure")}\n\n${renderTechnicalFailureMarker(expectedHead)}`,
+        );
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, {
+          remove: [env.inProgressLabel, env.reviewingLabel], add: env.reviewLabel,
+        });
+      });
+      return driverResult("done", `PR #${prNumber} reviewer technical failure requeued review once`, {
         driverAction: "review_technical_retry",
       });
     }
@@ -555,8 +673,9 @@ function dispatch(args: JsonObject): DriverResult {
         guardedGithub.commentPr(env.githubRepo, prNumber, comment);
       }
       const labels = labelNames(livePr.labels);
-      if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
-        guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+      if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
+        || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
       }
     });
     return driverResult("done", `PR #${prNumber} review requires a human`, { driverAction: "review_human_blocked", comment });
@@ -622,15 +741,17 @@ function dispatch(args: JsonObject): DriverResult {
             recordClaim: () => recordRepairLaunchGithubClaim(
               prNumber, branch, expectedHead, findings, selection.key, env, resumeUuid,
             ),
-            revalidate: () => {
+            revalidate: (enabled: { automationLogin?: string }) => {
               const livePr = readLivePr(env.githubRepo, prNumber);
               assertSameLaunchTarget(refreshedPr, livePr, "pr");
+              requireReviewClaimForManagedPr(livePr, env);
+              reauthorizeReviewClaim(prNumber, env, enabled);
               const labels = labelNames(livePr.labels);
               const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
               if (liveSelection.cumulativeLimitExceeded) {
                 throw new Error("cumulative_repair_limit_exceeded_before_recovery");
               }
-              if (!labels.includes(env.reviewLabel) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)
+              if (!labels.includes(env.inProgressLabel) || labels.includes(env.blockedLabel)
                 || liveSelection.action !== "already_attempted" || liveSelection.key !== selection.key) {
                 throw new StaleLaunchError(`PR #${prNumber} interrupted repair is no longer resumable`);
               }
@@ -674,7 +795,8 @@ function dispatch(args: JsonObject): DriverResult {
         prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
         promiseFile: recoveredLaunch.promiseFile, attemptRecordFile: path.join(path.dirname(recoveredLaunch.promiseFile), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
         repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
-        reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, blockedLabel: env.blockedLabel,
+        reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
+        reviewClaim: env.reviewClaim,
         attemptKey: selection.key,
       };
       return driverResult("needs_llm", `Recovered review-repair monitor for PR #${prNumber}`, {
@@ -690,8 +812,9 @@ function dispatch(args: JsonObject): DriverResult {
       comment = applyHumanBlock(prNumber, env, refreshedPr, "the repair attempt was recorded but no confirmed worker launch exists", promise.summary, interruptionMarker);
     } else {
       const labels = labelNames(refreshedPr.labels);
-      if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
-        withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel }));
+      if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
+        || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
+        withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env)));
       }
     }
     return driverResult("done", `PR #${prNumber} repair dispatch was interrupted; marked blocked`, { driverAction: "review_repair_dispatch_interrupted", selection, comment });
@@ -709,8 +832,9 @@ function dispatch(args: JsonObject): DriverResult {
         guardedGithub.commentPr(env.githubRepo, prNumber, comment);
       }
       const labels = labelNames(livePr.labels);
-      if (labels.includes(env.reviewingLabel) || !labels.includes(env.blockedLabel)) {
-        guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: env.reviewingLabel, add: env.blockedLabel });
+      if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
+        || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
       }
     });
     const cumulativeLimitReached = selection.reason === "cumulative_repair_limit";
@@ -738,7 +862,6 @@ function dispatch(args: JsonObject): DriverResult {
         renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }),
         persistenceMarker, attemptRecord?.attemptId);
       if (body) guardedGithub.commentPr(env.githubRepo, prNumber, body);
-      guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
     });
     const closed = commandRunner.runJson([
       "node", path.join(env.automationDir, "complete-attempt-workspace.ts"),
@@ -748,8 +871,9 @@ function dispatch(args: JsonObject): DriverResult {
       "--github-repo", env.githubRepo,
       "--state-dir", env.stateDir,
       "--enabled-at", String(env.enabledAt),
-      "--expected-label", env.reviewLabel,
-      "--expected-label", env.reviewingLabel,
+      "--expected-label", env.inProgressLabel,
+      ...(labelNames(refreshedPr.labels).includes(env.reviewingLabel) ? ["--expected-label", env.reviewingLabel] : []),
+      "--managed-label", env.inProgressLabel,
       "--managed-label", env.reviewLabel,
       "--managed-label", env.reviewingLabel,
       "--managed-label", env.blockedLabel,
@@ -762,14 +886,15 @@ function dispatch(args: JsonObject): DriverResult {
   try {
     launch = withEnabledDriverLaunch(
       env,
-      (recheck: () => void) => {
+      (recheck: () => void, enabled: { automationLogin?: string }) => {
         if (hasAttemptRecord) {
           recheck();
           return;
         }
-        const guardedGithub = createGithubOperations(commandRunner, recheck);
+        requireReviewClaimForManagedPr(refreshedPr, env);
+        reauthorizeReviewClaim(prNumber, env, enabled);
+        const guardedGithub = createGithubOperations(commandRunner, () => { recheck(); reauthorizeReviewClaim(prNumber, env, enabled); });
         guardedGithub.commentPr(env.githubRepo, prNumber, renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }));
-        guardedGithub.movePrLabels(env.githubRepo, prNumber, { add: [env.reviewLabel, env.reviewingLabel] });
       },
       (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck, repairLaunchUuid),
       {
@@ -779,11 +904,13 @@ function dispatch(args: JsonObject): DriverResult {
         recordClaim: () => recordRepairLaunchGithubClaim(
           prNumber, branch, expectedHead, findings, selection.key, env, repairLaunchUuid,
         ),
-        revalidate: () => {
+        revalidate: (enabled: { automationLogin?: string }) => {
           const livePr = readLivePr(env.githubRepo, prNumber);
           assertSameLaunchTarget(refreshedPr, livePr, "pr");
+          requireReviewClaimForManagedPr(livePr, env);
+          reauthorizeReviewClaim(prNumber, env, enabled);
           const labels = labelNames(livePr.labels);
-          if (!labels.includes(env.reviewLabel) || !labels.includes(env.reviewingLabel) || labels.includes(env.blockedLabel)) {
+          if (!labels.includes(env.inProgressLabel) || labels.includes(env.blockedLabel)) {
             throw new StaleLaunchError(`PR #${prNumber} is no longer eligible for repair`);
           }
           const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
@@ -858,11 +985,12 @@ function dispatch(args: JsonObject): DriverResult {
     prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
     promiseFile: launch.promiseFile, attemptRecordFile: launch.attemptRecordFile || path.join(path.dirname(String(launch.promiseFile)), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
     repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
-    reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, blockedLabel: env.blockedLabel,
+    reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
+    reviewClaim: env.reviewClaim,
     attemptKey: selection.key,
   };
   return driverResult("needs_llm", `Launched review-repair worker for PR #${prNumber}`, {
-    driverAction: "review_repair_monitor_request", selection, labelsPreserved: [env.reviewLabel, env.reviewingLabel], launch,
+    driverAction: "review_repair_monitor_request", selection, labelsPreserved: [env.inProgressLabel], launch,
     ...(launchEvidenceError ? { launchEvidenceError } : {}),
     monitorHandoff: { kind: "repair", input: monitorInput },
     prompt: renderRepairMonitorPrompt(monitorInput),
@@ -880,4 +1008,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { dispatch, envConfig, launchRepair, parseArgs, readLivePr, recordRepairLaunchGithubClaim, repairWorkerPrompt };
+module.exports = { blockedClaimMove, dispatch, envConfig, launchRepair, parseArgs, readLivePr, recordRepairLaunchGithubClaim, repairWorkerPrompt, requireReviewClaimForManagedPr };

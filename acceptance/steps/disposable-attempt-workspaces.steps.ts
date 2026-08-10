@@ -21,7 +21,7 @@ import { runScheduledAutomation } from "../../src/automation-runner";
 import { normalizeProject } from "../../src/core";
 
 const { envConfig: workerEnvironment, launchIssueWorkerFlow } = require("../../extensions/deadloop/automations/issue-coordinator-driver.ts");
-const { envConfig: reviewerEnvironment, launchBranchUpdate, launchPrReviewerFlow } = require("../../extensions/deadloop/automations/pr-reviewer-driver.ts");
+const { envConfig: reviewerEnvironment, launchBranchUpdate, launchClaimedPrReviewerFlow } = require("../../extensions/deadloop/automations/pr-reviewer-driver.ts");
 const { envConfig: repairEnvironment, launchRepair, recordRepairLaunchGithubClaim } = require("../../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 const { selectCleanupPlan } = require("../../extensions/deadloop/automations/cleanup-completed-worker-worktrees.ts");
 
@@ -386,9 +386,12 @@ When("deadloop starts the Reviewer", function (this: World) {
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo",
     DEADLOOP_WORKTREE_ROOT: root, DEADLOOP_STATE_DIR: root,
   });
-  this.currentWorkspace = launchPrReviewerFlow({
+  this.currentWorkspace = launchClaimedPrReviewerFlow({
     number: 12, headRefName: "agent/issue-12", headRefOid: inputHead,
-  }, env, "acceptance", roleLaunchOps(root, "workspace-2"));
+  }, env, "acceptance", {
+    binding: { repository: "owner/repo", targetNumber: 12, revision: inputHead },
+    commentId: "acceptance-claim",
+  }, roleLaunchOps(root, "workspace-2"));
   rmSync(root, { recursive: true, force: true });
 });
 When("deadloop starts the repair agent and branch-update agent", function (this: World) {

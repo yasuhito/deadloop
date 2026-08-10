@@ -134,6 +134,7 @@ export type AttemptRecord = AttemptIdentity & {
   outputRevision?: string;
   autoMergePolicy?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  reviewClaim?: Record<string, unknown>;
   abandonment?: AttemptAbandonment;
 };
 
@@ -147,6 +148,7 @@ export type PreparedAttemptInput = AttemptIdentity & {
   promiseFile: string;
   autoMergePolicy?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  reviewClaim?: Record<string, unknown>;
 };
 
 const SUCCESSFUL_PHASES: Exclude<AttemptPhase, "launch_failed" | "abandoned">[] = [
@@ -288,6 +290,11 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(parseRequiredVerification(record.requiredVerification, false)
       ? { requiredVerification: parseRequiredVerification(record.requiredVerification, true) }
       : {}),
+    ...(record.reviewClaim === undefined
+      ? {}
+      : record.reviewClaim && typeof record.reviewClaim === "object" && !Array.isArray(record.reviewClaim)
+        ? { reviewClaim: record.reviewClaim as Record<string, unknown> }
+        : fail("reviewClaim must be an object")),
     ...(abandonment ? { abandonment } : {}),
   };
 }
@@ -338,6 +345,7 @@ function assertRecordAdvance(current: AttemptRecord, next: AttemptRecord): void 
     if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
+  if (current.reviewClaim !== undefined && JSON.stringify(current.reviewClaim) !== JSON.stringify(next.reviewClaim)) throw new Error("Attempt record reviewClaim cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"] as const) {
     if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }

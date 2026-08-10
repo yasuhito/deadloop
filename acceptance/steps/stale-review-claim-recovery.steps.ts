@@ -107,6 +107,7 @@ function runDriver(fixtureData: Record<string, unknown>): DriverResult {
         DEADLOOP_GITHUB_REPO: "owner/repo",
         DEADLOOP_REVIEWER_AGENT: "pi",
         DEADLOOP_AUTO_MERGE: "0",
+        DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
         DEADLOOP_NOW: fixedNow.toISOString(),
         DEADLOOP_STATE_DIR: stateDir,
       },

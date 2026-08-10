@@ -10,10 +10,18 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { assertAuthorizedSource } = require("./guarded-push.ts");
+const {
+  classifyActiveReviewClaim,
+  parsePaginatedGithubJson,
+  savedReviewClaimContract,
+  visiblyBlockReviewClaimTimeFailure,
+} = require("./pr-review-claim.ts");
+const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
   repo: string;
+  attemptRecord: string;
   projectRepo: string;
   githubRepo: string;
   pr: string;
@@ -25,11 +33,14 @@ type FinalizeArgs = {
   enabledAt: number;
   checkCommand: string;
   resultFile: string;
+  reviewClaim: JsonObject;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
-type EnabledProject = { githubRepo: string; githubRepositoryId: string };
+type EnabledProject = { repoPath?: string; baseBranch?: string; githubRepo: string; githubRepositoryId: string; automationLogin?: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
+  loadSavedReviewClaim?: typeof savedReviewClaimContract;
+  loadCurrentReviewClaimConfiguration?: (...args: unknown[]) => Record<string, unknown>;
   assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => EnabledProject;
 };
 
@@ -59,7 +70,7 @@ function pushConditionally(
   branch: string,
   expectedHead: string,
   candidateOid: string,
-  recheck: () => void,
+  beforePush: () => void,
 ): { pushed: boolean; currentRemoteHeadOid: string } {
   const ref = `refs/heads/${branch}`;
   if (checked(ops, ["git", "-C", repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
@@ -69,7 +80,7 @@ function pushConditionally(
   if (remoteBeforePush.toLowerCase() !== expectedHead.toLowerCase()) {
     return { pushed: false, currentRemoteHeadOid: remoteBeforePush.toLowerCase() };
   }
-  recheck();
+  beforePush();
   const push = ops.run(
     ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
@@ -91,6 +102,12 @@ function decideRepairPushGuard(pr: JsonObject, expectedBranch: string, expectedH
 }
 
 function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): JsonObject {
+  if (!args.reviewClaim) throw new Error("active review claim is required before repair push");
+  const savedClaim = (ops.loadSavedReviewClaim || savedReviewClaimContract)(args.attemptRecord, args.reviewClaim, {
+    stateDir: args.stateDir,
+    githubRepo: args.githubRepo,
+    targetNumber: Number(args.pr),
+  });
   checked(ops, ["git", "check-ref-format", "--branch", args.branch]);
   const candidateOid = checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS);
   if (ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedHead, candidateOid]).status !== 0) {
@@ -117,7 +134,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   }
 
   const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
-  const guardAndPush = (enabled: EnabledProject, recheck: () => void = () => {}) => {
+  const guardAndPush = (enabled: EnabledProject & { automationLogin?: string }, recheck: () => void = () => {}) => {
     assertAuthorizedSource(
       { projectRepo: args.projectRepo, worktree: args.repo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt, remote: args.remote, branch: args.branch },
       enabled,
@@ -132,7 +149,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
         "-R",
         args.githubRepo,
         "--json",
-        "state,headRefName,headRefOid,isCrossRepository",
+        "state,headRefName,headRefOid,isCrossRepository,labels",
       ], MAX_GUARDED_OPERATION_MS),
     );
     const guard = decideRepairPushGuard(pr, args.branch, args.expectedHead);
@@ -149,7 +166,56 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       enabled.githubRepositoryId,
       MAX_GUARDED_OPERATION_MS,
     );
-    const push = pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid, recheck);
+    const reauthorizeImmediatelyBeforePush = () => {
+      recheck();
+      const automationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
+      const authenticated = checked(ops, ["gh", "api", "user", "--jq", ".login"], MAX_GUARDED_OPERATION_MS).toLowerCase();
+      if (!automationLogin || authenticated !== automationLogin) {
+        throw new Error("current authenticated GitHub identity does not match enablement authority before repair push");
+      }
+      const currentConfiguration = assertCurrentReviewClaimAuthority(
+        savedClaim, args.stateDir, enabled, authenticated, ops.loadCurrentReviewClaimConfiguration,
+      );
+      const authoritativeClaim = { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins };
+      const observe = () => {
+        const repository = JSON.parse(checked(ops, ["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS));
+        const currentPr = JSON.parse(checked(ops, ["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefName,headRefOid,isCrossRepository,labels"], MAX_GUARDED_OPERATION_MS));
+        const events = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS));
+        const comments = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS));
+        return (headers: string) => ({
+          ...classifyActiveReviewClaim(currentPr, events, comments, headers, authoritativeClaim, {
+            repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr),
+          }),
+          comments,
+          labels: (currentPr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")),
+        });
+      };
+      const classifyObservation = observe();
+      const dateResult = ops.run(["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
+      const authority = classifyObservation(dateResult.status === 0 ? dateResult.stdout : "");
+      if (authority.kind === "server_time_unverifiable") {
+        visiblyBlockReviewClaimTimeFailure({
+          contract: authoritativeClaim,
+          blockedLabel: String(savedClaim.blockedLabel || "agent:blocked"),
+          observe: () => {
+            recheck();
+            const login = checked(ops, ["gh", "api", "user", "--jq", ".login"], MAX_GUARDED_OPERATION_MS).toLowerCase();
+            try {
+              if (!automationLogin || login !== automationLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
+              assertCurrentReviewClaimAuthority(savedClaim, args.stateDir, enabled, login, ops.loadCurrentReviewClaimConfiguration);
+              return observe()("");
+            } catch {
+              return { kind: "binding_mismatch", comments: [], labels: [] };
+            }
+          },
+          comment: (body: string) => { checked(ops, ["gh", "pr", "comment", args.pr, "-R", args.githubRepo, "--body", body], MAX_GUARDED_OPERATION_MS); },
+          addBlocked: () => { checked(ops, ["gh", "pr", "edit", args.pr, "-R", args.githubRepo, "--add-label", String(savedClaim.blockedLabel || "agent:blocked")], MAX_GUARDED_OPERATION_MS); },
+        });
+        throw new Error("active review claim server time could not be verified before repair push");
+      }
+      if (authority.kind !== "authorized") throw new Error("active review claim could not be reauthorized before repair push");
+    };
+    const push = pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid, reauthorizeImmediatelyBeforePush);
     if (!push.pushed) {
       return {
         action: "stale_head",
@@ -198,6 +264,7 @@ function parseArgs(argv: string[]): FinalizeArgs {
   }
   return {
     repo: required(values, "repo"),
+    attemptRecord: required(values, "attemptRecord"),
     projectRepo: required(values, "projectRepo"),
     githubRepo: required(values, "githubRepo"),
     pr: required(values, "pr"),
@@ -209,6 +276,7 @@ function parseArgs(argv: string[]): FinalizeArgs {
     enabledAt: Number(required(values, "enabledAt")),
     checkCommand: required(values, "checkCommand"),
     resultFile: required(values, "resultFile"),
+    reviewClaim: JSON.parse(required(values, "reviewClaim")),
   };
 }
 
