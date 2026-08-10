@@ -194,14 +194,15 @@ function reauthorizeReviewClaim(
   const currentConfiguration = assertCurrentReviewClaimAuthority(env.reviewClaim, env.stateDir, enabled, authenticated);
   const observation = createGithubOperations(commandRunner);
   const authoritativeClaim = { ...env.reviewClaim, authorizedLogins: currentConfiguration.authorizedLogins };
-  const inspect = (headers: string) => {
+  const observe = () => {
     const repository = commandRunner.runJson(["gh", "repo", "view", env.githubRepo, "--json", "id,nameWithOwner"]);
     const livePr = observation.getPr(env.githubRepo, prNumber);
     const comments = observation.listPrComments(env.githubRepo, prNumber);
-    return {
+    const events = observation.listPrTimelineEvents(env.githubRepo, prNumber);
+    return (headers: string) => ({
       ...classifyActiveReviewClaim(
         livePr,
-        observation.listPrTimelineEvents(env.githubRepo, prNumber),
+        events,
         comments,
         headers,
         authoritativeClaim,
@@ -209,11 +210,12 @@ function reauthorizeReviewClaim(
       ),
       comments,
       labels: labelNames(livePr.labels),
-    };
+    });
   };
+  const classifyObservation = observe();
   let restHeaders = "";
   try { restHeaders = readGithubRestResponseHeaders(commandRunner, env.githubRepo); } catch {}
-  const authority = inspect(restHeaders);
+  const authority = classifyObservation(restHeaders);
   if (authority.kind === "server_time_unverifiable") {
     visiblyBlockReviewClaimTimeFailure({
       contract: authoritativeClaim,
@@ -223,7 +225,7 @@ function reauthorizeReviewClaim(
         if (!currentLogin || currentLogin !== enabledLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
         try {
           assertCurrentReviewClaimAuthority(env.reviewClaim!, env.stateDir, enabled, currentLogin);
-          return inspect("");
+          return observe()("");
         } catch {
           return { kind: "binding_mismatch", comments: [], labels: [] };
         }

@@ -177,21 +177,22 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
         savedClaim, args.stateDir, enabled, authenticated, ops.loadCurrentReviewClaimConfiguration,
       );
       const authoritativeClaim = { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins };
-      const inspect = (headers: string) => {
+      const observe = () => {
         const repository = JSON.parse(checked(ops, ["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS));
         const currentPr = JSON.parse(checked(ops, ["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefName,headRefOid,isCrossRepository,labels"], MAX_GUARDED_OPERATION_MS));
         const events = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS));
         const comments = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS));
-        return {
+        return (headers: string) => ({
           ...classifyActiveReviewClaim(currentPr, events, comments, headers, authoritativeClaim, {
             repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr),
           }),
           comments,
           labels: (currentPr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")),
-        };
+        });
       };
+      const classifyObservation = observe();
       const dateResult = ops.run(["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
-      const authority = inspect(dateResult.status === 0 ? dateResult.stdout : "");
+      const authority = classifyObservation(dateResult.status === 0 ? dateResult.stdout : "");
       if (authority.kind === "server_time_unverifiable") {
         visiblyBlockReviewClaimTimeFailure({
           contract: authoritativeClaim,
@@ -202,7 +203,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
             try {
               if (!automationLogin || login !== automationLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
               assertCurrentReviewClaimAuthority(savedClaim, args.stateDir, enabled, login, ops.loadCurrentReviewClaimConfiguration);
-              return inspect("");
+              return observe()("");
             } catch {
               return { kind: "binding_mismatch", comments: [], labels: [] };
             }

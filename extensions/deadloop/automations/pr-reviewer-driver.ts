@@ -728,6 +728,7 @@ function assertActiveReviewClaim(
   claim: JsonObject,
   authenticate: () => string = () => commandRunner.runText(["gh", "api", "user", "--jq", ".login"]),
   enabledIdentity: { githubRepositoryId?: string; githubRepo?: string } = {},
+  authorizeCurrent?: (claim: JsonObject) => void,
 ): JsonObject {
   const number = Number(pr.number || 0);
   if (!claimContractMatchesConfiguration(claim, {
@@ -762,6 +763,7 @@ function assertActiveReviewClaim(
   if (!claimedComment || !reviewClaimCommentMatchesContract(claimedComment, claim)) {
     throw new ReviewClaimLostError(`PR #${number} no longer has the bound immutable review claim comment`);
   }
+  authorizeCurrent?.(claim);
   const now = freshServerNow(github, env, [request, claimedComment]);
   const winner = selectReviewClaimWinner(comments, claim.binding, [authenticatedLogin], now, claim.authoritySeconds);
   if (String(winner?.id || winner?.databaseId || "") !== claim.commentId) {
@@ -780,7 +782,7 @@ function reauthorizeClaimedReview(
   authorizeCurrent?: (claim: JsonObject) => void,
 ): JsonObject {
   try {
-    return assertActiveReviewClaim(github, pr, env, claim, authenticate, enabledIdentity);
+    return assertActiveReviewClaim(github, pr, env, claim, authenticate, enabledIdentity, authorizeCurrent);
   } catch (error) {
     if (error instanceof ReviewServerTimeError) {
       blockUnverifiableClaim(
@@ -882,7 +884,10 @@ function claimReviewRequest(
   // labels and the latest request generation come from the freshest snapshot.
   const beforeTransition = github.getPr(env.githubRepo, number);
   assertSameLaunchTarget(live, beforeTransition, "pr");
-  const beforeTransitionRequest = currentReviewRequest(github, env, number);
+  const beforeTransitionEvents = github.listPrTimelineEvents(env.githubRepo, number);
+  const beforeTransitionEventIds = new Set(beforeTransitionEvents.map((event: JsonObject) => String(event.id || event.node_id || "")));
+  const beforeTransitionRequest = activeReviewRequest(beforeTransitionEvents, env.reviewLabel);
+  if (!beforeTransitionRequest) throw new StaleLaunchError(`PR #${number} has no review request event`);
   if (String(beforeTransitionRequest.id || beforeTransitionRequest.node_id || "") !== requestEventId) {
     throw new StaleLaunchError(`PR #${number} review request changed before label transition`);
   }
@@ -893,6 +898,7 @@ function claimReviewRequest(
   }
   const beforeTransitionComments = github.listPrComments(env.githubRepo, number);
   const beforeTransitionClaim = requireBoundComment(beforeTransitionComments, "before label transition");
+  authorizeCurrent?.(claim);
   const beforeTransitionNow = authoritativeNow([beforeTransitionRequest, beforeTransitionClaim]);
   const beforeTransitionWinner = selectReviewClaimWinner(
     beforeTransitionComments, binding, [authenticatedLogin], beforeTransitionNow, authoritySeconds,
@@ -900,7 +906,6 @@ function claimReviewRequest(
   if (String(beforeTransitionWinner?.id || beforeTransitionWinner?.databaseId || "") !== String(posted.id || posted.databaseId)) {
     throw new ReviewClaimLostError(`PR #${number} review request was claimed before label transition`);
   }
-  authorizeCurrent?.(claim);
   const managed = new Set(managedLabels);
   const nextLabels = labelNames(beforeTransition).filter((label) => !managed.has(label));
   nextLabels.push(env.inProgressLabel);
@@ -909,6 +914,48 @@ function claimReviewRequest(
   const transitioned = github.getPr(env.githubRepo, number);
   assertSamePrRevision(pr, transitioned);
   const transitionedLabels = new Set(labelNames(transitioned));
+  const finalEvents = github.listPrTimelineEvents(env.githubRepo, number);
+  const finalRequest = activeReviewRequest(finalEvents, env.reviewLabel);
+  if (!finalRequest) throw new StaleLaunchError(`PR #${number} has no review request event`);
+  if (String(finalRequest.id || finalRequest.node_id || "") !== requestEventId) {
+    const finalRequestId = String(finalRequest.id || finalRequest.node_id || "");
+    if (!beforeTransitionEventIds.has(finalRequestId)) {
+      const racedEvents = finalEvents
+        .filter((event: JsonObject) => !beforeTransitionEventIds.has(String(event.id || event.node_id || "")))
+        .filter((event: JsonObject) => {
+          const action = String(event.event || "").toLowerCase();
+          const label = String(event.label?.name || "");
+          const actor = String(event.actor?.login || "").toLowerCase();
+          const transitionEffect = actor === authenticatedLogin
+            && ((action === "labeled" && nextLabels.includes(label))
+              || (action === "unlabeled" && !nextLabels.includes(label)));
+          return label && ["labeled", "unlabeled"].includes(action) && !transitionEffect;
+        })
+        .sort((left: JsonObject, right: JsonObject) => {
+          const time = Date.parse(String(left.created_at || left.createdAt || ""))
+            - Date.parse(String(right.created_at || right.createdAt || ""));
+          return time || String(left.id || left.node_id || "").localeCompare(
+            String(right.id || right.node_id || ""), undefined, { numeric: true },
+          );
+        });
+      const racedLabelState = new Map<string, boolean>();
+      for (const event of racedEvents) {
+        racedLabelState.set(String(event.label?.name || ""), String(event.event || "").toLowerCase() === "labeled");
+      }
+      const labelsToRestore = [...racedLabelState]
+        .filter(([label, present]) => present && label !== env.reviewLabel && !transitionedLabels.has(label))
+        .map(([label]) => label);
+      // The newer labeled event is the request generation. The transition's
+      // own unlabeled event does not cancel that generation, so restore it
+      // from the timeline even when both events share an automation login.
+      labelsToRestore.push(env.reviewLabel);
+      // Restore first: if the second call fails, the GitHub request remains
+      // visible and the old exact-managed-state check still prevents launch.
+      if (labelsToRestore.length > 0) github.movePrLabels(env.githubRepo, number, { add: labelsToRestore });
+      github.movePrLabels(env.githubRepo, number, { remove: env.inProgressLabel });
+    }
+    throw new StaleLaunchError(`PR #${number} review request changed after label transition`);
+  }
   const expectedLabels = [...new Set(nextLabels)].sort();
   if (JSON.stringify([...transitionedLabels].sort()) !== JSON.stringify(expectedLabels)
     || !transitionedLabels.has(env.inProgressLabel)
@@ -916,10 +963,6 @@ function claimReviewRequest(
     || transitionedLabels.has(env.reviewingLabel)
     || transitionedLabels.has(env.blockedLabel)) {
     throw new StaleLaunchError(`PR #${number} review claim label transition did not persist`);
-  }
-  const finalRequest = currentReviewRequest(github, env, number);
-  if (String(finalRequest.id || finalRequest.node_id || "") !== requestEventId) {
-    throw new StaleLaunchError(`PR #${number} review request changed after label transition`);
   }
   const finalComments = github.listPrComments(env.githubRepo, number);
   const finalClaim = requireBoundComment(finalComments, "after label transition");

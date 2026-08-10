@@ -35,6 +35,7 @@ function runCompletion(options: {
   enabled?: boolean;
   dateUnavailable?: boolean;
   editedClaim?: boolean;
+  expireAfterObservations?: boolean;
   raceAfterComment?: "runtime" | "grace" | "managed label" | "authorized identity" | "authenticated login" | "enablement";
 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-repair-complete-"));
@@ -50,6 +51,7 @@ function runCompletion(options: {
   const postedFile = path.join(root, "posted.txt");
   const actionsFile = path.join(root, "actions.txt");
   const authLoginFile = path.join(root, "authenticated-login");
+  const observationFile = path.join(root, "claim-observation-complete");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(runDir, { recursive: true });
   fs.mkdirSync(projectRepo);
@@ -122,8 +124,8 @@ const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if (args[0] === "api" && args[1] === "user") process.stdout.write(fs.readFileSync(process.env.AUTH_LOGIN_FILE, "utf8"));
 else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
-else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))});
-else if (args[0] === "api" && args.includes("--include")) process.stdout.write(${JSON.stringify(options.dateUnavailable ? "" : "date: Mon, 20 Jul 2026 10:03:00 GMT")});
+else if (args.some((arg) => arg.endsWith("/comments"))) { fs.writeFileSync(process.env.OBSERVATION_FILE, "complete"); process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))}); }
+else if (args[0] === "api" && args.includes("--include")) { const expired = process.env.EXPIRE_AFTER_OBSERVATIONS === "1" && fs.existsSync(process.env.OBSERVATION_FILE); process.stdout.write(expired ? "date: Tue, 21 Jul 2026 10:06:01 GMT" : ${JSON.stringify(options.dateUnavailable ? "" : "date: Mon, 20 Jul 2026 10:03:00 GMT")}); }
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:in-progress" }])},comments:${JSON.stringify(options.comments || [])}}));
 else if (args[0] === "pr" && args[1] === "comment") {
   fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
@@ -190,6 +192,7 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
       ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
       POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile, AUTH_LOGIN_FILE: authLoginFile,
       ENABLED_PROJECTS_FILE: enabledProjectsFile, PROJECTS_FILE: projectsFile,
+      OBSERVATION_FILE: observationFile, EXPIRE_AFTER_OBSERVATIONS: options.expireAfterObservations ? "1" : "0",
       RACE_AFTER_COMMENT: options.raceAfterComment || "",
     } },
   );
@@ -329,6 +332,17 @@ describe("review repair deterministic completion", () => {
       expect(result.actions).toBe("");
     },
   );
+
+  it("posts no repair success when the claim expires while completion observations are being collected", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed" }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      expireAfterObservations: true,
+    });
+
+    expect(result.posted).toBe("");
+  });
 
   it("visibly blocks repair completion when only REST Date is unavailable", () => {
     const checks = [{ command: "npm test", result: "passed" }];

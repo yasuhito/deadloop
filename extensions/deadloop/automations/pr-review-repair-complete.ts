@@ -178,7 +178,7 @@ function completion(args: JsonObject): DriverResult {
       }
       const currentConfiguration = assertCurrentReviewClaimAuthority(reviewClaim, String(args.stateDir), enabled, authenticatedLogin);
       const authoritativeClaim = { ...reviewClaim, authorizedLogins: currentConfiguration.authorizedLogins };
-      const inspect = (headers: string) => {
+      const observe = () => {
         const current = observation.getPr(String(args.githubRepo), String(args.pr));
         const repository = runner.runJson(["gh", "repo", "view", String(args.githubRepo), "--json", "id,nameWithOwner"]);
         const liveTarget = {
@@ -186,24 +186,27 @@ function completion(args: JsonObject): DriverResult {
         };
         const currentComments = observation.listPrComments(String(args.githubRepo), String(args.pr));
         const events = observation.listPrTimelineEvents(String(args.githubRepo), String(args.pr));
-        const enabledIdentityMatches = String(enabled.githubRepositoryId || "") === liveTarget.repositoryId
-          && String(enabled.githubRepo || "") === liveTarget.repository;
-        const validation = !enabledIdentityMatches || String(current.headRefOid || "").toLowerCase() !== liveHead
-          ? { kind: "binding_mismatch" }
-          : liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
-            ? classifyActiveReviewClaim(current, events, currentComments, headers, authoritativeClaim, liveTarget)
-            : successfulReceipt
-              ? classifyRepairAuthorityTransition(current, events, currentComments, headers, authoritativeClaim, liveTarget, receipt || {})
-              : { kind: "binding_mismatch" };
-        return {
-          ...validation,
-          comments: currentComments,
-          labels: (current.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")),
+        return (headers: string) => {
+          const enabledIdentityMatches = String(enabled.githubRepositoryId || "") === liveTarget.repositoryId
+            && String(enabled.githubRepo || "") === liveTarget.repository;
+          const validation = !enabledIdentityMatches || String(current.headRefOid || "").toLowerCase() !== liveHead
+            ? { kind: "binding_mismatch" }
+            : liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
+              ? classifyActiveReviewClaim(current, events, currentComments, headers, authoritativeClaim, liveTarget)
+              : successfulReceipt
+                ? classifyRepairAuthorityTransition(current, events, currentComments, headers, authoritativeClaim, liveTarget, receipt || {})
+                : { kind: "binding_mismatch" };
+          return {
+            ...validation,
+            comments: currentComments,
+            labels: (current.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")),
+          };
         };
       };
+      const classifyObservation = observe();
       let restHeaders = "";
       try { restHeaders = readGithubRestResponseHeaders(runner, String(args.githubRepo)); } catch {}
-      const authority = inspect(restHeaders);
+      const authority = classifyObservation(restHeaders);
       if (authority.kind === "server_time_unverifiable") {
         const visibleGithub = createGithubOperations(runner);
         visiblyBlockReviewClaimTimeFailure({
@@ -215,7 +218,7 @@ function completion(args: JsonObject): DriverResult {
             try {
               if (!login || login !== enabledLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
               assertCurrentReviewClaimAuthority(reviewClaim, String(args.stateDir), enabled, login);
-              return inspect("");
+              return observe()("");
             } catch {
               return { kind: "binding_mismatch", comments: [], labels: [] };
             }

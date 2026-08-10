@@ -58,11 +58,12 @@ function finalizeWith(
   pushUrl = "https://github.com/owner/repo.git",
   repositoryIds: Record<string, string> = {},
   raceRemoteHead?: string | null,
-  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; dirty?: boolean; missingAncestor?: boolean; checkFailure?: boolean; finalManagedConflict?: boolean; currentConfiguration?: Record<string, unknown>; dateHeaders?: string } = {},
+  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; dirty?: boolean; missingAncestor?: boolean; checkFailure?: boolean; finalManagedConflict?: boolean; currentConfiguration?: Record<string, unknown>; dateHeaders?: string; expireAfterObservations?: boolean } = {},
 ) {
   let observedHead = actualHead;
   let localHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   let prReads = 0;
+  let claimObservationComplete = false;
   return finalizeReviewRepair(
     {
       repo: "/worktree",
@@ -120,9 +121,15 @@ function finalizeWith(
           return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
         }
         if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) {
+          claimObservationComplete = true;
           return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: automationLogin }, body: renderReviewClaimComment(reviewClaimBinding) }]]), stderr: "" };
         }
-        if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: localHeadChanges.dateHeaders ?? "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
+        if (args[0] === "gh" && args.includes("--include")) {
+          const date = localHeadChanges.expireAfterObservations && claimObservationComplete
+            ? "date: Tue, 21 Jul 2026 10:06:01 GMT"
+            : "date: Mon, 20 Jul 2026 10:03:00 GMT";
+          return { status: 0, stdout: localHeadChanges.dateHeaders ?? date, stderr: "" };
+        }
         if (args[0] === "gh") {
           prReads += 1;
           return {
@@ -559,6 +566,13 @@ describe("automatic PR review repair", () => {
   it("does not push when managed labels change during the final claim inspection", () => {
     const commands: string[][] = [];
     try { finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { finalManagedConflict: true }); } catch {}
+
+    expect(commands.some((command) => command.includes("push"))).toBe(false);
+  });
+
+  it("does not push when the claim expires while repair-push observations are being collected", () => {
+    const commands: string[][] = [];
+    try { finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { expireAfterObservations: true }); } catch {}
 
     expect(commands.some((command) => command.includes("push"))).toBe(false);
   });

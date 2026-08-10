@@ -424,7 +424,7 @@ describe("enablement mutation guards", () => {
     expect(mutated).toBe(true);
   });
 
-  function guardedDateFailureScenario(editClaim = false) {
+  function guardedDateFailureScenario(editClaim = false, expireAfterObservations = false) {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     const head = "a".repeat(40);
@@ -436,6 +436,7 @@ describe("enablement mutation guards", () => {
     const comments: Record<string, unknown>[] = [claim];
     const labels = ["agent:in-progress", "customer:keep"];
     const mutations: string[] = [];
+    let observationComplete = false;
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
       reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
@@ -448,8 +449,15 @@ describe("enablement mutation guards", () => {
           if (args[0] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: project.githubRepo }), stderr: "" };
           if (args[0] === "pr" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: head, labels: labels.map((name) => ({ name })) }), stderr: "" };
           if (args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
-          if (args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([comments]), stderr: "" };
-          if (args[0] === "api") return { status: 0, stdout: "", stderr: "" };
+          if (args.some((arg) => arg.endsWith("/comments"))) {
+            observationComplete = true;
+            return { status: 0, stdout: JSON.stringify([comments]), stderr: "" };
+          }
+          if (args[0] === "api") return {
+            status: 0,
+            stdout: expireAfterObservations && observationComplete ? "date: Tue, 21 Jul 2026 10:06:01 GMT" : "",
+            stderr: "",
+          };
           if (args[0] === "pr" && args[1] === "comment") {
             mutations.push(String(args.at(-1)) === "requested" ? "requested" : "visible-comment");
             comments.push({ id: 102, body: String(args.at(-1)) });
@@ -466,6 +474,10 @@ describe("enablement mutation guards", () => {
     } catch {}
     return { mutations, labels };
   }
+
+  it("performs no generic mutation when the claim expires while observations are being collected", () => {
+    expect(guardedDateFailureScenario(false, true).mutations).toEqual([]);
+  });
 
   it("visibly blocks a generic guarded PR mutation when only REST Date is unavailable", () => {
     expect(guardedDateFailureScenario().mutations).toEqual(["visible-comment", "blocked"]);

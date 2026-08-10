@@ -233,6 +233,7 @@ describe("PR reviewer deterministic driver", () => {
     mutate?: ClaimMutation,
     observedRepositoryId = "R_repo",
     authorizeCurrent?: (claim: Record<string, unknown>) => void,
+    restHeaders: string | (() => string) = "",
   ) {
     const head = "a".repeat(40);
     const managedLabels = ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"];
@@ -253,7 +254,7 @@ describe("PR reviewer deterministic driver", () => {
       getPr: () => pr,
       listPrTimelineEvents: () => [{ id: "event-22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }],
       listPrComments: () => comments,
-      readRestResponseHeaders: () => "",
+      readRestResponseHeaders: () => typeof restHeaders === "function" ? restHeaders() : restHeaders,
       commentPr: (_repo: string, _number: number, body: string) => {
         comments.push({ body });
         pr.labels.push({ name: "customer:keep" });
@@ -309,6 +310,20 @@ describe("PR reviewer deterministic driver", () => {
     expect(result.after.reviewRequests).toBe(result.before.reviewRequests);
   });
 
+  it("performs no final pre-launch effect when the claim expires while current configuration is observed", () => {
+    let configurationObserved = false;
+    const result = reauthorizationScenario(
+      undefined,
+      "R_repo",
+      () => { configurationObserved = true; },
+      () => configurationObserved
+        ? "date: Mon, 20 Jul 2026 11:01:00 GMT"
+        : "date: Mon, 20 Jul 2026 10:03:00 GMT",
+    );
+
+    expect(result.after).toEqual(result.before);
+  });
+
   it("adds one visible block comment when only server time is missing", () => {
     expect(reauthorizationScenario().after.comments).toBe(2);
   });
@@ -333,7 +348,7 @@ describe("PR reviewer deterministic driver", () => {
     let checks = 0;
     const result = reauthorizationScenario(undefined, "R_repo", () => {
       checks += 1;
-      if (checks === 2) throw new Error("runtime shortened after comment");
+      if (checks === 3) throw new Error("runtime shortened after comment");
     });
     expect(result.after.labels).toEqual(["agent:in-progress", "customer:keep"]);
   });
@@ -356,6 +371,84 @@ describe("PR reviewer deterministic driver", () => {
 
   it("does not write the retired reviewing label", () => {
     expect(runDriverFixture("external-review-request.json").launch.claim.labels).not.toContain("agent:reviewing");
+  });
+
+  function transitionRaceScenario(options: { removeUserLabel?: boolean } = {}) {
+    const head = "a".repeat(40);
+    const oldRequest = { id: "22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } };
+    const newRequest = { id: "23", event: "labeled", created_at: "2026-07-20T10:04:00Z", label: { name: "agent:review" } };
+    const userLabel = { id: "24", event: "labeled", created_at: "2026-07-20T10:04:01Z", actor: { login: "octocat" }, label: { name: "customer:urgent" } };
+    const userUnlabel = { id: "25", event: "unlabeled", created_at: "2026-07-20T10:04:02Z", actor: { login: "octocat" }, label: { name: "customer:urgent" } };
+    const pr = { number: 24, state: "OPEN", headRefName: "feature", headRefOid: head, labels: [{ name: "agent:review" }] };
+    const events = [oldRequest];
+    const comments: Record<string, unknown>[] = [];
+    const recoveryMoves: Array<{ add?: string | string[]; remove?: string | string[] }> = [];
+    let rejection = "";
+    const github = {
+      getRepositoryIdentity: () => ({ id: "R_repo", nameWithOwner: "owner/repo" }),
+      getPr: () => pr,
+      listPrTimelineEvents: () => events,
+      createPrComment: (_repo: string, _number: number, body: string) => {
+        const comment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body };
+        comments.push(comment);
+        return comment;
+      },
+      listPrComments: () => comments,
+      readRestResponseHeaders: () => "date: Mon, 20 Jul 2026 10:03:00 GMT",
+      replacePrLabels: (_repo: string, _number: number, labels: string[]) => {
+        events.push(
+          newRequest,
+          userLabel,
+          ...(options.removeUserLabel ? [userUnlabel] : []),
+        );
+        pr.labels = [...labels].map((name) => ({ name }));
+      },
+      movePrLabels: (_repo: string, _number: number, move: { add?: string | string[]; remove?: string | string[] }) => {
+        recoveryMoves.push(move);
+        const labels = new Set(pr.labels.map(({ name }) => name));
+        for (const label of [move.remove || []].flat()) labels.delete(label);
+        for (const label of [move.add || []].flat()) labels.add(label);
+        pr.labels = [...labels].map((name) => ({ name }));
+      },
+    };
+    try {
+      claimReviewRequest(github, pr, {
+        githubRepositoryId: "R_repo", githubRepo: "owner/repo", claimOwner: "host-a",
+        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", implementLabel: "agent:implement",
+        inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", automationLogin: "deadloop-bot",
+        authorizedAutomationLogins: ["deadloop-bot"], reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
+      }, () => "deadloop-bot");
+    } catch (error) {
+      rejection = error instanceof Error ? error.message : String(error);
+    }
+    return { labels: pr.labels.map(({ name }) => name), recoveryMoves, rejection };
+  }
+
+  it("restores a newer review request added immediately before the winning label replacement", () => {
+    expect(transitionRaceScenario().labels).toContain("agent:review");
+  });
+
+  it("restores an unrelated label added with a newer review request before replacement", () => {
+    expect(transitionRaceScenario().labels).toContain("customer:urgent");
+  });
+
+  it("does not resurrect an unrelated label removed after its raced addition", () => {
+    expect(transitionRaceScenario({ removeUserLabel: true }).labels).not.toContain("customer:urgent");
+  });
+
+  it("restores raced labels before releasing the old in-progress state", () => {
+    expect(transitionRaceScenario().recoveryMoves).toEqual([
+      { add: ["customer:urgent", "agent:review"] },
+      { remove: "agent:in-progress" },
+    ]);
+  });
+
+  it("releases the old in-progress state after restoring the raced generation", () => {
+    expect(transitionRaceScenario().labels).not.toContain("agent:in-progress");
+  });
+
+  it("rejects the old claim after restoring the raced request generation", () => {
+    expect(transitionRaceScenario().rejection).toContain("request changed after label transition");
   });
 
   it("launches no reviewer when another host has the earlier valid claim", () => {
