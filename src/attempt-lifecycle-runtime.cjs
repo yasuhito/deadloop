@@ -27,13 +27,6 @@ function requiredVerification(value, required) {
   }
   return contract;
 }
-function codeSupply(value) {
-  if (value === undefined) return undefined;
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid attempt record: codeSupply must be an object");
-  const lockHash = nonEmpty(value.lockHash, "codeSupply.lockHash");
-  if (!/^[0-9a-f]{64}$/i.test(lockHash)) throw new Error("Invalid attempt record: codeSupply.lockHash must be a SHA-256 hash");
-  return { codeIdentity: sha(value.codeIdentity, "codeSupply.codeIdentity"), lockHash, packageRoot: nonEmpty(value.packageRoot, "codeSupply.packageRoot") };
-}
 function parseAttemptRecord(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid attempt record: record must be an object");
   if (!ROLES.has(value.role)) throw new Error("Invalid attempt record: role is invalid");
@@ -89,7 +82,6 @@ function parseAttemptRecord(value) {
     ...(value.autoMergePolicy === undefined ? {} : { autoMergePolicy: value.autoMergePolicy }),
     ...(value.reviewHistoryRequired === undefined ? {} : { reviewHistoryRequired: value.reviewHistoryRequired }),
     ...(requiredVerification(value.requiredVerification, false) ? { requiredVerification: requiredVerification(value.requiredVerification, true) } : {}),
-    ...(codeSupply(value.codeSupply) ? { codeSupply: codeSupply(value.codeSupply) } : {}),
     ...(value.reviewClaim === undefined ? {} : { reviewClaim: value.reviewClaim }),
     ...(abandonment ? { abandonment } : {}),
   };
@@ -177,7 +169,6 @@ function assertAdvance(current, next) {
   if (!sameIdentity(current, next)) throw new Error("Attempt record identity cannot change");
   for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy", "reviewHistoryRequired"]) if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
-  if (JSON.stringify(current.codeSupply) !== JSON.stringify(next.codeSupply)) throw new Error("Attempt record codeSupply cannot change");
   if (current.reviewClaim !== undefined && JSON.stringify(current.reviewClaim) !== JSON.stringify(next.reviewClaim)) throw new Error("Attempt record reviewClaim cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"]) if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (current.abandonment !== undefined && JSON.stringify(current.abandonment) !== JSON.stringify(next.abandonment)) throw new Error("Attempt record abandonment evidence cannot change");

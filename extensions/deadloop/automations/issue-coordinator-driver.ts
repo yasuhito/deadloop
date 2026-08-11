@@ -258,7 +258,6 @@ function issueWorkerLaunchPlan(
       role: "worker" as const,
       target: { kind: "issue" as const, number },
       inputRevision: { head: baseHead },
-      codeSupply: env.codeSupply,
       requiredVerification: requiredVerificationContract(env, verificationBaseHead),
       intendedWorktreePath,
       resolveWorktreeHead: true,
@@ -401,13 +400,6 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
       path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
     requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION || "",
-    codeSupply: source.DEADLOOP_CODE_IDENTITY && source.DEADLOOP_DEPENDENCY_LOCK_HASH && source.DEADLOOP_CODE_SNAPSHOT_DIR
-      ? {
-          codeIdentity: source.DEADLOOP_CODE_IDENTITY,
-          lockHash: source.DEADLOOP_DEPENDENCY_LOCK_HASH,
-          packageRoot: source.DEADLOOP_CODE_SNAPSHOT_DIR,
-        }
-      : undefined,
     configPath: source.DEADLOOP_CONFIG || "",
     fixtureMode: source.DEADLOOP_FIXTURE_MODE === "1",
     workerInstructions: source.DEADLOOP_WORKER_INSTRUCTIONS || "Read AGENTS.md and follow the issue contract.",

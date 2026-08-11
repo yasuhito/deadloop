@@ -61,28 +61,6 @@ afterEach(() => {
 });
 
 describe("attempt lifecycle contract", () => {
-  it("retains the fixed execution supply in the attempt record", () => {
-    const runDir = runDirectory();
-    createPreparedAttempt(runDir, {
-      attemptId: "attempt-supply",
-      launchUuid: "launch-supply",
-      project: "demo",
-      repository: "octo/demo",
-      role: "worker",
-      target: { kind: "issue", number: 42 },
-      inputRevision: { head: "a".repeat(40) },
-      branch: "agent/issue-42",
-      worktreePath: "/worktrees/issue-42",
-      agentName: "dl-w-42-123456789abc",
-      workspaceLabel: "Issue #42",
-      promptFile: path.join(runDir, "worker-prompt.md"),
-      promiseFile: path.join(runDir, "promise.json"),
-      codeSupply: { codeIdentity: "c".repeat(40), lockHash: "d".repeat(64), packageRoot: "/state/code-snapshots/c/package" },
-    });
-
-    expect(readAttemptRecord(runDir).codeSupply).toEqual({ codeIdentity: "c".repeat(40), lockHash: "d".repeat(64), packageRoot: "/state/code-snapshots/c/package" });
-  });
-
   it("rejects a report with another attempt ID", () => {
     const record = preparedAttempt();
 

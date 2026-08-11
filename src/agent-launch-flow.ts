@@ -11,7 +11,7 @@ const { deriveHerdr075AgentName } = require("./herdr-agent-name.cjs");
 const { createHerdrRunner } = require("./herdr-runner.ts");
 const { writeWorkerContractSnapshot } = require("./worker-required-verification-runtime.cjs");
 
-import type { AttemptRecord, AttemptRole, AttemptTarget, CodeSupply, InputRevision, PreparedAttemptInput } from "./attempt-lifecycle";
+import type { AttemptRecord, AttemptRole, AttemptTarget, InputRevision, PreparedAttemptInput } from "./attempt-lifecycle";
 import type { RequiredVerificationContract } from "./required-verification";
 import type { RunnerAdapter } from "./runner";
 
@@ -41,7 +41,6 @@ type AgentLaunchFlowInput = {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
-  codeSupply?: CodeSupply;
   reviewClaim?: Record<string, unknown>;
   renderPrompt: (input: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => string;
 };
@@ -105,7 +104,6 @@ function preparedRecordInput(input: AgentLaunchFlowInput, prepared: PreparedLaun
     ...(input.autoMergePolicy === undefined ? {} : { autoMergePolicy: input.autoMergePolicy }),
     ...(input.reviewHistoryRequired === undefined ? {} : { reviewHistoryRequired: input.reviewHistoryRequired }),
     ...(input.requiredVerification === undefined ? {} : { requiredVerification: input.requiredVerification }),
-    ...(input.codeSupply === undefined ? {} : { codeSupply: input.codeSupply }),
     ...(input.reviewClaim === undefined ? {} : { reviewClaim: input.reviewClaim }),
   };
 }

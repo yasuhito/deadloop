@@ -82,7 +82,6 @@ function envConfig(args: JsonObject = {}) {
     blockedLabel: configValue(args, "blockedLabel", process.env.DEADLOOP_BLOCKED_LABEL, "agent:blocked"),
     humanLabel: configValue(args, "humanLabel", process.env.DEADLOOP_HUMAN_LABEL, "ready-for-human"),
     inProgressLabel: configValue(args, "inProgressLabel", process.env.DEADLOOP_IN_PROGRESS_LABEL, "agent:in-progress"),
-    codeSupply: undefined as undefined | { codeIdentity: string; lockHash: string; packageRoot: string },
     reviewClaim: (() => {
       const value = configValue(args, "reviewClaim", process.env.DEADLOOP_REVIEW_CLAIM, "");
       if (!value) return null;
@@ -555,7 +554,6 @@ function repairLaunchInput(
     role: "review-repair" as const,
     target: { kind: "pull-request" as const, number: Number(prNumber) },
     inputRevision: { head: expectedHead },
-    codeSupply: env.codeSupply,
     reviewClaim: env.reviewClaim || undefined,
     intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
     renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
@@ -668,7 +666,6 @@ function dispatch(args: JsonObject): DriverResult {
   const promise = validation.promise as JsonObject;
   const rawReport = JSON.parse(fs.readFileSync(String(args.promise), "utf8"));
   const attemptRecord = readAttemptRecord(path.dirname(String(args.attemptRecord)));
-  env.codeSupply = attemptRecord.codeSupply;
   const configuredClaimFields = {
     reviewLabel: env.reviewLabel,
     reviewingLabel: env.reviewingLabel,
