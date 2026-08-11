@@ -23,6 +23,7 @@ function runRace(kind: "issue" | "pr") {
     repoPath: repo,
     githubRepo: "owner/repo",
     githubRepositoryId: "R_repo",
+    automationLogin: "deadloop-bot",
     enabledAt: 1,
     firstEnableAutoMerge: false,
     firstStartPending: false,

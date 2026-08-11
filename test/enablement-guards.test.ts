@@ -105,6 +105,13 @@ describe("enablement mutation guards", () => {
     });
   }
 
+  it("rejects active enablement without an authorized automation identity", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1, automationLogin: undefined });
+
+    expect(() => assertEnabled(project)).toThrow("disabled");
+  });
+
   it("rejects a reused repository name after the enabled repository transfers", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1, githubAliases: ["owner/repo"] });

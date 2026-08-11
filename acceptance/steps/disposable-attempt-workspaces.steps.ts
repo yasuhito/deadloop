@@ -343,7 +343,7 @@ function launchBranchUpdateBoundary(workspaceId: string) {
   fs.chmodSync(path.join(binDir, "gh"), 0o755);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({
     projects: [{
-      repoPath, githubRepo: "owner/repo", githubRepositoryId: "R_fixture", enabledAt, disableGeneration: 0,
+      repoPath, githubRepo: "owner/repo", githubRepositoryId: "R_fixture", automationLogin: "deadloop-bot", enabledAt, disableGeneration: 0,
       firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
       autoMergeAcknowledged: false, enabled: true,
     }],
