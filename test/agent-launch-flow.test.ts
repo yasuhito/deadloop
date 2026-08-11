@@ -35,6 +35,10 @@ function input(root: string, role: "worker" | "reviewer" = "worker") {
       source: { kind: "repo_policy" as const, location: "deadloop.json" },
       baseRevision: "a".repeat(40),
     },
+    ...(role === "reviewer" ? { reviewClaim: {
+      binding: { repository: "owner/repo", targetNumber: number, revision: "a".repeat(40) },
+      authoritySeconds: 3600,
+    } } : {}),
     intendedWorktreePath: role === "worker" ? "/wt/worker" : "/wt/review",
     resolveWorktreeHead: role === "worker",
     renderPrompt: ({ promiseFile, worktreeHead }: { promiseFile: string; worktreeHead?: string }) =>
@@ -76,6 +80,26 @@ describe("0.7.5 エージェント起動フロー", () => {
       const ops = operations(root, "worker", []);
       const prepared = prepareAgentLaunchFlow(input(root), ops);
       expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).phase).toBe("prepared");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("reviewer は固定済み claim 契約なしで GitHub claim 記録へ進めない", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const launchInput: any = input(root, "reviewer");
+      delete launchInput.reviewClaim;
+      prepareAgentLaunchFlow(launchInput, operations(root, "reviewer", []));
+      expect(() => recordAgentLaunchGithubClaimed(launchInput)).toThrow("immutable review claim contract");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("修復試行へ継承したレビュー claim 契約を準備時に固定する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const reviewClaim = { binding: { repository: "owner/repo", targetNumber: 44 }, authoritySeconds: 3600 };
+      const launchInput = { ...input(root, "reviewer"), role: "review-repair", reviewClaim };
+      const prepared = prepareAgentLaunchFlow(launchInput, operations(root, "reviewer", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).reviewClaim).toEqual(reviewClaim);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

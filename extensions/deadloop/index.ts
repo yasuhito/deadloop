@@ -10,6 +10,7 @@ import {
   REPO_POLICY_FILE,
   automationEnvironment,
   automationStateKey,
+  authorizeAutomationLogin,
   codeFreshnessWarning,
   isLinkedGitWorktree,
   nextSlotAfter,
@@ -58,6 +59,7 @@ const {
 } = require("../../src/disable-generation.cjs");
 const {
   acquireSchedulerLock: acquireSchedulerFileLock,
+  preflightSchedulerLockCapability,
   releaseSchedulerLock: releaseSchedulerFileLock,
 } = require("../../src/scheduler-lock.cjs");
 import { inferredProjectId, schedulerLockName } from "../../src/project-identity";
@@ -87,6 +89,7 @@ import {
   removeEnabledProjectGeneration,
   upsertEnabledProject,
 } from "../../src/enablement";
+import { preserveEnablementAutomationLogins } from "../../src/enablement-write";
 
 const EXTENSION_NAME = "deadloop";
 const STATUS_KEY = EXTENSION_NAME;
@@ -341,13 +344,28 @@ function loadProjectsResult(
   const result = addImplicitProject(cwd, parsed, options);
   if (result.ok) {
     const enablement = loadEnablementState();
+    if (!options.enableIdentity) {
+      const baseBranchChanged = result.projects.some((project) => {
+        const enabled = enablement.projects.find((candidate) =>
+          candidate.repoPath === path.resolve(project.repoPath || "")
+          && candidate.githubRepo === project.githubRepo
+          && candidate.enabled !== false
+        );
+        return Boolean(enabled?.baseBranch && enabled.baseBranch !== project.baseBranch);
+      });
+      if (baseBranchChanged) {
+        return { ok: false, reason: "configured base branch changed since enablement; run /deadloop-enable to authorize it" };
+      }
+    }
     result.projects = result.projects.map((project) => {
       const enabled = enablement.projects.find((candidate) =>
         candidate.repoPath === path.resolve(project.repoPath || "")
         && candidate.githubRepo === project.githubRepo
         && candidate.enabled !== false
       );
-      return enabled ? { ...project, githubRepositoryId: enabled.githubRepositoryId } : project;
+      return enabled
+        ? authorizeAutomationLogin({ ...project, githubRepositoryId: enabled.githubRepositoryId }, enabled.automationLogin)
+        : project;
     });
     if (!options.includeDisabled) result.projects = result.projects.filter((project) => isProjectEnabled(project));
     debugLog(
@@ -416,7 +434,13 @@ function loadEnablementState() {
 }
 
 function saveEnablementState(state) {
-  writeJsonFile(ENABLEMENT_PATH, state);
+  let previous = null;
+  try {
+    previous = JSON.parse(fs.readFileSync(ENABLEMENT_PATH, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") debugLog("enablement preservation read failed", error?.message || error);
+  }
+  writeJsonFile(ENABLEMENT_PATH, preserveEnablementAutomationLogins(previous, state));
 }
 
 
@@ -481,14 +505,36 @@ async function completeFirstSchedulerStart(project) {
   }));
 }
 
-async function disableEnablementAttempt(identity, enabledAt, enableAttemptToken) {
-  await updateEnablementState((state) => removeEnabledProjectAttempt(state, identity, enabledAt, enableAttemptToken));
-}
-
 async function rollbackFailedEnablementAttempt(identity, enabledAt, repoPath, enableAttemptToken) {
   await updateEnablementState((state) => ownsEnableAttempt(repoPath, enableAttemptToken)
     ? removeEnabledProjectGeneration(state, identity, enabledAt)
     : state);
+}
+
+async function rollbackSavedEnablementAttempt(identity, enabledAt, enableAttemptToken, previousEnabledProject) {
+  await updateEnablementState((state) => {
+    const current = findEnabledProject(state, identity);
+    if (current?.enabledAt !== enabledAt || current.enableAttemptToken !== enableAttemptToken) return state;
+    if (!previousEnabledProject?.automationLogin) {
+      return removeEnabledProjectAttempt(state, identity, enabledAt, enableAttemptToken);
+    }
+    return {
+      projects: state.projects.map((project) => project === current ? previousEnabledProject : project),
+    };
+  });
+}
+
+function assertSavedAutomationAuthority(identity, expected) {
+  const saved = findEnabledProject(loadEnablementState(), identity);
+  if (
+    saved?.enabledAt !== expected.enabledAt
+    || saved.enableAttemptToken !== expected.enableAttemptToken
+    || saved.automationLogin !== expected.automationLogin
+    || saved.disableGeneration !== expected.disableGeneration
+    || disableGenerationForRepo(loadDisableGenerations(STATE_DIR), identity.repoPath) !== expected.disableGeneration
+  ) {
+    throw new Error("automation authority changed after enablement was saved");
+  }
 }
 
 function isProjectEnabled(project) {
@@ -1111,13 +1157,16 @@ async function buildLiveDoctorReport(pi, cwd) {
 const STANDARD_LABELS = [
   ["ready-for-agent", "0e8a16"],
   ["agent:implement", "1d76db"],
-  ["agent:in-progress", "fbca04"],
-  ["agent:review", "5319e7"],
-  ["agent:reviewing", "c2e0c6"],
-  ["agent:blocked", "b60205"],
   ["ready-for-human", "d93f0b"],
+  ["wontfix", "ffffff"],
   ["needs-info", "fef2c0"],
   ["needs-triage", "f9d0c4"],
+  ["agent:explore", "0052cc"],
+  ["agent:review", "5319e7"],
+  ["agent:reviewing", "c2e0c6"],
+  ["agent:update-branch", "006b75"],
+  ["agent:in-progress", "fbca04"],
+  ["agent:blocked", "b60205"],
 ];
 
 async function commandExec(pi, command, args, timeout = 15_000) {
@@ -1252,6 +1301,8 @@ async function detectProjectIdentity(pi, cwd) {
 
 async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disableGeneration) {
   await commandExec(pi, "gh", ["auth", "status"]);
+  const automationLogin = (await commandExec(pi, "gh", ["api", "user", "--jq", ".login"])).stdout.trim().toLowerCase();
+  if (!automationLogin) throw new Error("authenticated GitHub login is required to enable deadloop");
   const view = JSON.parse((await commandExec(pi, "gh", ["repo", "view", identity.githubRepo, "--json", "id,viewerPermission,nameWithOwner"])).stdout || "{}");
   if (view.nameWithOwner !== identity.githubRepo || String(view.id || "") !== identity.githubRepositoryId) {
     throw new Error("GitHub repository identity changed during enablement");
@@ -1283,6 +1334,7 @@ async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disable
       await commandExec(pi, "gh", ["label", "create", name, "-R", identity.githubRepo, "--color", color]);
     });
   }
+  return automationLogin;
 }
 function revalidatePendingIssueHandoff(handoff) {
   if (handoff.kind !== "issue" || !handoff.input || typeof handoff.input !== "object") return true;
@@ -1793,14 +1845,15 @@ export default function (pi) {
       return { started: true };
     }
     const lock = acquireSchedulerLock(project);
-    ownsLock = lock.acquired;
-    active = { project, lockPath: lock.lockPath, lockToken: lock.token };
-    if (!ownsLock) {
-      setLooperStatus(ctx, `${project.id} standby: owner pid ${lock.owner ?? "unknown"}`);
-      timer = setInterval(() => startScheduler(ctx, project), TICK_MS);
-      timer.unref?.();
-      return { started: true };
+    if (!lock.acquired) {
+      ownsLock = false;
+      active = null;
+      const reason = `repository is already served by Automation host pid ${lock.owner ?? "unknown"}`;
+      setLooperStatus(ctx, `skipped: ${reason}`);
+      return { started: false, reason };
     }
+    ownsLock = true;
+    active = { project, lockPath: lock.lockPath, lockToken: lock.token };
     updateStatus(ctx, project, loadState());
     timer = setInterval(() => pollScheduler(ctx).catch((error) => console.warn(`[${EXTENSION_NAME}] tick failed:`, error?.message || error)), TICK_MS);
     timer.unref?.();
@@ -1815,10 +1868,18 @@ export default function (pi) {
       let primaryRepoPath;
       let identity;
       let previousEnabledAt;
+      let previousEnabledProject;
       let retainedVerificationJournalPath;
       let enablementSaved = false;
       const enableAttemptToken = crypto.randomUUID();
+      const progressKey = `deadloop-enable:${enableAttemptToken}`;
+      const showProgress = ctx.hasUI;
+      if (showProgress) {
+        ctx.ui.notify("Enabling deadloop. Required verification may take several minutes.", "info");
+        ctx.ui.setStatus(progressKey, "deadloop: enabling…");
+      }
       try {
+        (pi.testing?.schedulerLockCapabilityPreflight || preflightSchedulerLockCapability)();
         let enabledAt;
         const disableGenerations = await withEnablementStateLock(async () => loadDisableGenerations(STATE_DIR));
         primaryRepoPath = await detectPrimaryCheckout(pi, ctx.cwd);
@@ -1838,6 +1899,7 @@ export default function (pi) {
         registerEnablementVerification(primaryRepoPath, verificationController, verificationSettled);
         let verification;
         try {
+          if (showProgress) ctx.ui.setStatus(progressKey, "deadloop: running required verification…");
           verification = await runEnablementVerification({
             stateDir: STATE_DIR,
             primaryRepoPath,
@@ -1853,7 +1915,12 @@ export default function (pi) {
         }
         if (verification.outcome !== "passed") {
           const retained = verification.cleanup === "retained" ? `; retained worktree journal: ${verification.journalPath}` : "";
-          throw new Error(`required verification failed (exit ${verification.exitCode}); log: ${verification.logPath}${retained}`);
+          const failure = verification.outcome === "interrupted"
+            ? "was interrupted"
+            : verification.outcome === "timed_out"
+              ? "timed out"
+              : `failed (exit ${verification.exitCode})`;
+          throw new Error(`required verification ${failure}; log: ${verification.logPath}${retained}`);
         }
         if (verification.cleanup === "retained") {
           retainedVerificationJournalPath = verification.journalPath;
@@ -1865,7 +1932,11 @@ export default function (pi) {
         if (!requiredVerificationMatches(verifiedProject.requiredVerification, preflightProject.requiredVerification)) {
           throw new Error("required verification contract changed during enablement");
         }
-        await prepareGithub(pi, identity, primaryRepoPath, enableAttemptToken, disableGeneration);
+        if (verifiedProject.baseBranch !== preflightProject.baseBranch) {
+          throw new Error("base branch changed during enablement");
+        }
+        if (showProgress) ctx.ui.setStatus(progressKey, "deadloop: checking GitHub access and labels…");
+        const automationLogin = await prepareGithub(pi, identity, primaryRepoPath, enableAttemptToken, disableGeneration);
         await withEnablementStateLock(async () => {
           if (
             !ownsEnableAttempt(primaryRepoPath, enableAttemptToken) ||
@@ -1874,32 +1945,63 @@ export default function (pi) {
             throw new Error("enablement was revoked while preflight was running");
           }
           await revalidateLocalProjectIdentity(pi, identity);
+          const revalidatedAutomationLogin = (await commandExec(pi, "gh", ["api", "user", "--jq", ".login"])).stdout.trim().toLowerCase();
+          if (!revalidatedAutomationLogin || revalidatedAutomationLogin !== automationLogin) {
+            throw new Error("authenticated GitHub login changed during enablement");
+          }
           const configuredProject = resolveEnableProject(ctx.cwd, identity);
           if (!requiredVerificationMatches(configuredProject.requiredVerification, preflightProject.requiredVerification)) {
             throw new Error("required verification contract changed during enablement");
           }
+          if (configuredProject.baseBranch !== preflightProject.baseBranch) {
+            throw new Error("base branch changed during enablement");
+          }
           const firstEnable = { firstEnableAutoMerge: Boolean(configuredProject.autoMerge) };
-          const next = upsertEnabledProject(loadEnablementState(), { ...identity, disableGeneration }, Date.now(), firstEnable, enableAttemptToken);
+          const currentEnablementState = loadEnablementState();
+          previousEnabledProject = findEnabledProject(currentEnablementState, identity);
+          const next = upsertEnabledProject(
+            currentEnablementState,
+            { ...identity, baseBranch: configuredProject.baseBranch, automationLogin, disableGeneration },
+            Date.now(),
+            firstEnable,
+            enableAttemptToken,
+          );
           enabledAt = findEnabledProject(next, identity)?.enabledAt;
           saveEnablementState(next);
           enablementSaved = true;
         });
         finishEnableAttempt(primaryRepoPath, enableAttemptToken);
         let project;
+        let schedulerStartedForAttempt = false;
         try {
           await pi.testing?.afterEnablementSaved?.();
+          const expectedAuthority = {
+            enabledAt,
+            enableAttemptToken,
+            automationLogin,
+            disableGeneration,
+          };
+          assertSavedAutomationAuthority(identity, expectedAuthority);
           const projects = loadProjects(ctx.cwd);
           project = await activeSchedulerProject(ctx.cwd, projects);
           if (!project) throw new Error("enabled repository configuration could not be resolved safely");
           if (!requiredVerificationMatches(project.requiredVerification, preflightProject.requiredVerification)) {
             throw new Error("required verification contract changed before scheduler startup");
           }
-          const schedulerStart = startScheduler(ctx, project);
-          if (!schedulerStart.started) throw new Error(schedulerStart.reason);
-        } catch (error) {
-          if (previousEnabledAt === undefined) {
-            await disableEnablementAttempt(identity, enabledAt, enableAttemptToken);
+          if (project.baseBranch !== preflightProject.baseBranch) {
+            throw new Error("base branch changed before scheduler startup");
           }
+          await withEnablementStateLock(async () => {
+            assertSavedAutomationAuthority(identity, expectedAuthority);
+            const schedulerStart = startScheduler(ctx, project);
+            if (!schedulerStart.started) throw new Error(schedulerStart.reason);
+            schedulerStartedForAttempt = true;
+            await pi.testing?.afterEnablementSchedulerStart?.();
+            assertSavedAutomationAuthority(identity, expectedAuthority);
+          });
+        } catch (error) {
+          if (schedulerStartedForAttempt) await stopScheduler(ctx);
+          await rollbackSavedEnablementAttempt(identity, enabledAt, enableAttemptToken, previousEnabledProject);
           throw error;
         }
         const owner = ownsLock ? "this session" : `another session (pid ${readLock(projectLockPath(project))?.pid || "unknown"})`;
@@ -1917,6 +2019,8 @@ export default function (pi) {
         const message = `deadloop was not enabled: ${error?.message || error}`;
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
+      } finally {
+        if (showProgress) ctx.ui.setStatus(progressKey, undefined);
       }
     },
   });

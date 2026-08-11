@@ -19,7 +19,7 @@ type DriverResult = {
   driverAction?: string;
   comment?: string;
   githubEffects?: GithubEffect[];
-  testAdapterEffects?: { herdrStarts?: unknown[] };
+  testAdapterEffects?: { herdrStarts?: unknown[]; githubComments?: unknown[]; labelReplacements?: unknown[] };
 };
 type SelectionWorld = {
   fixtureName?: string;
@@ -213,28 +213,37 @@ Then("The selection reason is repair re-review", function (this: SelectionWorld)
   assert.equal(this.decision?.reason, "repair_rereview");
 });
 
-Then("deadloop requests external review", function (this: SelectionWorld) {
-  assert.equal(
-    this.driverResult?.githubEffects?.some(
-      (effect) => effect.operation === "add_pr_reviewer" && effect.reviewer === "@copilot",
-    ),
-    true,
-  );
+Then("deadloop leaves external-review request state untouched before claim", function (this: SelectionWorld) {
+  assert.deepEqual({
+    action: this.driverResult?.driverAction,
+    comments: this.driverResult?.testAdapterEffects?.githubComments?.length ?? 0,
+    labels: this.driverResult?.testAdapterEffects?.labelReplacements?.length ?? 0,
+    starts: this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0,
+  }, { action: "external_review_unclaimed", comments: 0, labels: 0, starts: 0 });
 });
 
 Then("deadloop does not start the Reviewer", function (this: SelectionWorld) {
   assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0, 0);
 });
 
-Then("deadloop waits for external review to complete", function (this: SelectionWorld) {
-  assert.equal(this.driverResult?.driverAction, "wait");
+Then("deadloop waits for external review without mutation", function (this: SelectionWorld) {
+  assert.deepEqual({
+    action: this.driverResult?.driverAction,
+    comments: this.driverResult?.testAdapterEffects?.githubComments?.length ?? 0,
+    labels: this.driverResult?.testAdapterEffects?.labelReplacements?.length ?? 0,
+    starts: this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0,
+  }, { action: "wait", comments: 0, labels: 0, starts: 0 });
 });
 
 Then("deadloop starts the Reviewer for normal review", function (this: SelectionWorld) {
   assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length, 1);
 });
 
-Then("deadloop shows recovery steps for pull request", function (this: SelectionWorld) {
-  const commentEffect = this.driverResult?.githubEffects?.find((effect) => effect.operation === "comment_pr");
-  assert.match(commentEffect?.body ?? "", /## Recovery steps/);
+Then("deadloop leaves the draft pull request untouched before claim", function (this: SelectionWorld) {
+  assert.deepEqual({
+    action: this.driverResult?.driverAction,
+    comments: this.driverResult?.testAdapterEffects?.githubComments?.length ?? 0,
+    labels: this.driverResult?.testAdapterEffects?.labelReplacements?.length ?? 0,
+    starts: this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0,
+  }, { action: "draft_unclaimed", comments: 0, labels: 0, starts: 0 });
 });

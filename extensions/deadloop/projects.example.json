@@ -7,6 +7,7 @@
       "baseBranch": "origin/main",
       "worktreeRoot": "/absolute/path/to/herdr/worktrees/example-project/",
       "autoMerge": false,
+      "automationLogins": [],
       "ciFallback": {
         "enabled": false,
         "mode": "billing-only",

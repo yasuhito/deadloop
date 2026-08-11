@@ -4,6 +4,11 @@ const { persistAuthorizedApproval } = require("../extensions/deadloop/automation
 const { handoffReviewedPr } = require("../extensions/deadloop/automations/handoff-reviewed-pr.ts");
 
 const head = "a".repeat(40);
+const acceptedHistory = { repository: "owner/repo", pullRequestNumber: 24, revision: "accepted", history: {} };
+const approvedReview = {
+  status: "complete",
+  promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [] },
+};
 const args = {
   projectRepo: "/repo",
   githubRepo: "owner/repo",
@@ -12,8 +17,10 @@ const args = {
   pr: "24",
   expectedHead: head,
   reviewPromise: "/state/runs/reviewer/promise.json",
+  historyObservation: "/state/runs/reviewer/pr-review-history-accepted.json",
   reviewLabel: "agent:review",
   reviewingLabel: "agent:reviewing",
+  inProgressLabel: "agent:in-progress",
   blockedLabel: "agent:blocked",
   humanLabel: "ready-for-human",
 };
@@ -31,11 +38,14 @@ function runHandoff(options: {
   let prReads = 0;
   let requiredVerificationPolicyChanged = false;
   let liveHead = head;
-  let labels = ["agent:review", "agent:reviewing"];
+  let labels = ["agent:in-progress"];
   try {
     handoffReviewedPr(args, {
       withLock: (_project: unknown, operation: (enabled: object, recheck: () => void) => number) => operation({ githubRepositoryId: "R_repo" }, () => {}),
       isAutoMergeEnabled: () => options.policyChanges === true && ++policyReads > 1,
+      validateReviewPromise: () => approvedReview,
+      readHistory: () => acceptedHistory,
+      observeHistory: () => acceptedHistory,
       assertReviewVerification: () => {
         verificationReads += 1;
         if (options.verificationError) throw new Error(options.verificationError);
@@ -57,7 +67,7 @@ function runHandoff(options: {
           if (options.headChangesDuringLabelMutation) liveHead = "b".repeat(40);
           labels = ["ready-for-human"];
         } else {
-          labels = ["agent:review", "agent:reviewing"];
+          labels = ["agent:in-progress"];
         }
         return { status: 0, stdout: "", stderr: "" };
       },
@@ -115,10 +125,10 @@ describe("reviewed PR human-handoff boundary", () => {
     expect(handoffMutationCount({ headChangesDuringAuthorization: true })).toBe(0);
   });
 
-  it("restores review labels when the head changes during the handoff mutation", () => {
+  it("restores the active claim state when the head changes during the handoff mutation", () => {
     expect(runHandoff({ headChangesDuringLabelMutation: true })).toEqual({
       edits: 2,
-      labels: ["agent:review", "agent:reviewing"],
+      labels: ["agent:in-progress"],
     });
   });
 

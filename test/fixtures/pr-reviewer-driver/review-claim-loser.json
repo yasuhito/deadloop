@@ -1,11 +1,13 @@
 {
+  "winningForeignClaimOwner": "other-host",
   "prs": [
     {
-      "number": 22,
+      "number": 52,
       "updatedAt": "2026-07-08T00:00:00Z",
-      "headRefOid": "def456",
+      "headRefName": "agent/pr-52",
+      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "isDraft": false,
-      "labels": [{"name": "agent:review"}, {"name": "documentation"}],
+      "labels": [{"name": "agent:review"}],
       "statusCheckRollup": [],
       "comments": [],
       "reviewRequests": []

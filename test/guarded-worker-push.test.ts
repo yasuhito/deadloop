@@ -42,7 +42,7 @@ function fixture(checkCommand = "true") {
   mkdirSync(evidenceDir, { recursive: true });
   writeFileSync(evidencePath, JSON.stringify(verificationRecord));
   writeFileSync(path.join(runDir, "required-verification.json"), JSON.stringify(verificationRecord));
-  writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{ repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1, firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }] }));
+  writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{ repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot", enabledAt: 1, firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }] }));
   let pushedRef = "";
   const common = path.join(repo, ".git");
   const ops = { run: (argv: string[]) => {
