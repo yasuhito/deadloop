@@ -758,7 +758,7 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
   };
 }
 
-function runHumanRequiredHistoryRace(): { action: string; mutations: string[] } {
+function runHumanRequiredHistoryRace(options: { blockDuringRelease?: boolean } = {}): { action: string; mutations: string[] } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-human-history-race-"));
   tempDirs.push(root);
   const bin = path.join(root, "bin");
@@ -802,13 +802,13 @@ function runHumanRequiredHistoryRace(): { action: string; mutations: string[] } 
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const fs=require("node:fs");const a=process.argv.slice(2);
 if(a[0]==="repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
-else if(a[0]==="pr"&&a[1]==="view") process.stdout.write(JSON.stringify({number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:process.env.HEAD,isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:[]}));
+else if(a[0]==="pr"&&a[1]==="view") {const blocked=process.env.BLOCK_FLAG&&fs.existsSync(process.env.BLOCK_FLAG);process.stdout.write(JSON.stringify({number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:process.env.HEAD,isCrossRepository:false,labels:blocked?[{name:"agent:in-progress"},{name:"agent:blocked"}]:[{name:"agent:in-progress"}],comments:[]}));}
 else if(a[0]==="api"&&a.includes("graphql")) process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:process.env.HEAD}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
 else if(a[0]==="api"&&a[1].includes("/pulls/243")&&a.includes("-H")) process.stdout.write("diff\\n");
 else if(a[0]==="api"&&a[1].endsWith("/pulls/243")) process.stdout.write(JSON.stringify({number:243,state:"open",head:{ref:"agent/issue-243",sha:process.env.HEAD},base:{ref:"main",sha:process.env.BASE}}));
 else if(a[0]==="api"&&a.some((value)=>value.includes("/issues/243/comments"))) {const n=fs.existsSync(process.env.READS)?Number(fs.readFileSync(process.env.READS,"utf8")):0;fs.writeFileSync(process.env.READS,String(n+1));const raced=n===3?[{id:1,user:{login:"deadloop-bot"},body:"deterministic result",created_at:"x",updated_at:"x"},{id:2,user:{login:"human"},body:"racing comment",created_at:"x",updated_at:"x"}]:[];process.stdout.write(JSON.stringify([raced]));}
 else if(a[0]==="api") process.stdout.write(JSON.stringify([[]]));
-else if(a[0]==="pr"&&a[1]==="comment") {fs.appendFileSync(process.env.MUTATIONS,a.join(" ")+"\\n");process.stdout.write("https://github.com/owner/repo/pull/243#issuecomment-1\\n");}
+else if(a[0]==="pr"&&a[1]==="comment") {fs.appendFileSync(process.env.MUTATIONS,a.join(" ")+"\\n");if(process.env.BLOCK_AFTER_COMMENT==="1")fs.writeFileSync(process.env.BLOCK_FLAG,"1");process.stdout.write("https://github.com/owner/repo/pull/243#issuecomment-1\\n");}
 else {fs.appendFileSync(process.env.MUTATIONS,a.join(" ")+"\\n");}
 `);
   executable(path.join(bin, "git"), `#!/usr/bin/env node
@@ -823,6 +823,7 @@ const a=process.argv.slice(2);if(a.includes("get-url")) process.stdout.write("ht
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: root, DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
     ...reviewClaimEnvironment(head, 243),
     HEAD: head, BASE: base, READS: historyReads, MUTATIONS: mutations,
+    BLOCK_FLAG: path.join(root, "block-flag"), BLOCK_AFTER_COMMENT: options.blockDuringRelease ? "1" : "0",
   }});
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   return {
@@ -899,6 +900,15 @@ describe("review repair dispatch integration", () => {
         expect.stringContaining("pr comment 243"),
         expect.stringContaining("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review"),
       ],
+    });
+  });
+
+  it("keeps labels untouched when a concurrent block lands before the stale-history release", () => {
+    const result = runHumanRequiredHistoryRace({ blockDuringRelease: true });
+
+    expect(result).toEqual({
+      action: "review_stale_history",
+      mutations: [expect.stringContaining("pr comment 243")],
     });
   });
 

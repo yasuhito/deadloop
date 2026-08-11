@@ -24,6 +24,7 @@ type HandoffArgs = {
   historyObservation: string;
   reviewLabel: string;
   reviewingLabel: string;
+  inProgressLabel: string;
   blockedLabel: string;
   humanLabel: string;
 };
@@ -86,7 +87,7 @@ function currentHistory(args: HandoffArgs, ops: HandoffOps): JsonObject {
 function releaseStaleClaim(args: HandoffArgs, ops: HandoffOps): HandoffResult {
   const result = ops.run([
     "gh", "pr", "edit", args.pr, "-R", args.githubRepo,
-    "--remove-label", args.reviewingLabel, "--add-label", args.reviewLabel,
+    "--remove-label", args.inProgressLabel, "--remove-label", args.reviewingLabel, "--add-label", args.reviewLabel,
   ], MAX_GUARDED_OPERATION_MS);
   if (result.status !== 0) throw new Error(commandError(result, "stale review claim could not be released"));
   return { action: "stale_history" };
@@ -108,8 +109,8 @@ function assertEligiblePr(args: HandoffArgs, ops: HandoffOps): void {
   if (pr.state !== "OPEN" || pr.isDraft !== false || pr.headRefOid !== args.expectedHead) {
     throw new Error("PR is no longer eligible for human handoff");
   }
-  if (!labels.has(args.reviewLabel) || !labels.has(args.reviewingLabel) || labels.has(args.blockedLabel)) {
-    throw new Error("required review labels are no longer present; human handoff stopped");
+  if (!labels.has(args.inProgressLabel) || labels.has(args.blockedLabel)) {
+    throw new Error("the active review claim state is no longer present; human handoff stopped");
   }
 }
 
@@ -130,10 +131,11 @@ function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRu
       recheck();
       return releaseStaleClaim(args, ops);
     }
+    assertEligiblePr(args, ops);
     recheck();
     const result = ops.run([
       "gh", "pr", "edit", args.pr, "-R", args.githubRepo,
-      "--remove-label", args.reviewLabel, "--remove-label", args.reviewingLabel,
+      "--remove-label", args.inProgressLabel, "--remove-label", args.reviewLabel, "--remove-label", args.reviewingLabel,
       "--add-label", args.humanLabel,
     ], MAX_GUARDED_OPERATION_MS);
     if (result.status !== 0) throw new Error(commandError(result, "reviewed PR human handoff failed"));
@@ -151,7 +153,7 @@ function parseArgs(argv: string[]): HandoffArgs {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  const required = ["projectRepo", "githubRepo", "stateDir", "pr", "expectedHead", "reviewPromise", "historyObservation", "reviewLabel", "reviewingLabel", "blockedLabel", "humanLabel"];
+  const required = ["projectRepo", "githubRepo", "stateDir", "pr", "expectedHead", "reviewPromise", "historyObservation", "reviewLabel", "reviewingLabel", "inProgressLabel", "blockedLabel", "humanLabel"];
   if (required.some((name) => !values[name]) || !Number.isFinite(enabledAt)) throw new Error("required human handoff arguments are missing");
   return { ...values, enabledAt } as HandoffArgs;
 }

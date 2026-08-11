@@ -141,11 +141,30 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function observePrHistory(repository: string, pullRequestNumber: number, runner: CommandRunner): PrHistoryObservation {
+function pullSnapshot(
+  repository: string,
+  pullRequestNumber: number,
+  runner: CommandRunner,
+): { pull: JsonObject; head: string; base: string } {
   let pull: JsonObject;
-  let diff: string;
   try {
     pull = runner.runJson(["gh", "api", `repos/${repository}/pulls/${pullRequestNumber}`]);
+  } catch (error) {
+    throw new IncompletePrHistoryObservationError("pullRequest", error instanceof Error ? error.message : String(error));
+  }
+  const head = text(pull?.head?.sha);
+  const base = text(pull?.base?.sha);
+  if (!head || !base) throw new IncompletePrHistoryObservationError("pullRequest", "head or base revision is missing");
+  if (Number(pull.number ?? pullRequestNumber) !== pullRequestNumber) {
+    throw new IncompletePrHistoryObservationError("pullRequest", "observed PR number does not match the requested PR");
+  }
+  return { pull, head, base };
+}
+
+function observePrHistory(repository: string, pullRequestNumber: number, runner: CommandRunner): PrHistoryObservation {
+  const { pull, head, base } = pullSnapshot(repository, pullRequestNumber, runner);
+  let diff: string;
+  try {
     diff = runner.runText([
       "gh", "api", `repos/${repository}/pulls/${pullRequestNumber}`,
       "-H", "Accept: application/vnd.github.diff",
@@ -153,9 +172,6 @@ function observePrHistory(repository: string, pullRequestNumber: number, runner:
   } catch (error) {
     throw new IncompletePrHistoryObservationError("pullRequest", error instanceof Error ? error.message : String(error));
   }
-  const head = text(pull?.head?.sha);
-  const base = text(pull?.base?.sha);
-  if (!head || !base) throw new IncompletePrHistoryObservationError("pullRequest", "head or base revision is missing");
 
   const commits = paginatedCommits(runner, repository, pullRequestNumber).map((commit) => {
     const sha = text(commit.sha);
@@ -171,6 +187,13 @@ function observePrHistory(repository: string, pullRequestNumber: number, runner:
   const inlineReviewComments = sorted(paginated(
     runner, repository, `pulls/${pullRequestNumber}/comments`, "inlineReviewComments",
   )).map(canonicalInlineComment);
+  if (text(commits.at(-1)?.sha) !== head) {
+    throw new IncompletePrHistoryObservationError("commits", "commit sequence does not end at the observed PR head");
+  }
+  const confirmation = pullSnapshot(repository, pullRequestNumber, runner);
+  if (confirmation.head !== head || confirmation.base !== base || text(confirmation.pull.state) !== text(pull.state)) {
+    throw new IncompletePrHistoryObservationError("pullRequest", "PR head or base changed while history was being observed");
+  }
   const history: CanonicalHistory = {
     pullRequest: {
       number: Number(pull.number ?? pullRequestNumber),

@@ -24,11 +24,16 @@ function fixtureRunner(overrides: Record<string, unknown> = {}) {
     reviews: apiPages([{ id: 2, body: "review", user: { login: "bob" }, state: "COMMENTED", commit_id: "a".repeat(40), submitted_at: "2026-01-01T00:00:00Z" }]),
     "review-comments": apiPages([{ id: 3, body: "inline", user: { login: "carol" }, commit_id: "a".repeat(40), path: "src/a.ts", line: 4, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }]),
   };
+  let pullReads = 0;
   return {
     runJson(args: string[]) {
       const endpoint = args.find((argument) => argument.startsWith("repos/")) || "";
       if (args.includes("graphql")) return overrides.commits ?? collections.commits;
-      if (endpoint === "repos/owner/repo/pulls/12") return { ...pull, ...overrides.pull as object };
+      if (endpoint === "repos/owner/repo/pulls/12") {
+        pullReads += 1;
+        const snapshot = { ...pull, ...overrides.pull as object };
+        return pullReads > 1 && overrides.confirmPull ? { ...snapshot, ...overrides.confirmPull as object } : snapshot;
+      }
       if (endpoint.includes("/issues/12/comments")) return overrides.comments ?? collections["issues-comments"];
       if (endpoint.includes("/reviews")) return overrides.reviews ?? collections.reviews;
       if (endpoint.includes("/comments")) return overrides.inlineComments ?? collections["review-comments"];
@@ -119,5 +124,35 @@ describe("PR review history observation", () => {
 
   it("fails technically when a paginated collection is incomplete", () => {
     expect(() => observePrHistory("owner/repo", 12, fixtureRunner({ reviews: { items: [] } }))).toThrow(IncompletePrHistoryObservationError);
+  });
+
+  it("rejects a snapshot when the PR head changes during observation", () => {
+    expect(() => observePrHistory("owner/repo", 12, fixtureRunner({
+      confirmPull: { head: { ref: "feature", sha: "c".repeat(40) } },
+    }))).toThrow("PR head or base changed while history was being observed");
+  });
+
+  it("rejects a snapshot when the PR base changes during observation", () => {
+    expect(() => observePrHistory("owner/repo", 12, fixtureRunner({
+      confirmPull: { base: { ref: "main", sha: "d".repeat(40) } },
+    }))).toThrow("PR head or base changed while history was being observed");
+  });
+
+  it("rejects a snapshot when the PR state changes during observation", () => {
+    expect(() => observePrHistory("owner/repo", 12, fixtureRunner({
+      confirmPull: { state: "closed" },
+    }))).toThrow("PR head or base changed while history was being observed");
+  });
+
+  it("rejects a snapshot whose commit sequence does not end at the observed head", () => {
+    expect(() => observePrHistory("owner/repo", 12, fixtureRunner({
+      commits: [{ data: { repository: { pullRequest: { commits: { nodes: [{ commit: { oid: "e".repeat(40) } }], pageInfo: { hasNextPage: false, endCursor: null } } } } } }],
+    }))).toThrow("commit sequence does not end at the observed PR head");
+  });
+
+  it("rejects a snapshot whose observed PR number differs from the request", () => {
+    expect(() => observePrHistory("owner/repo", 12, fixtureRunner({
+      pull: { number: 13 },
+    }))).toThrow("observed PR number does not match the requested PR");
   });
 });
