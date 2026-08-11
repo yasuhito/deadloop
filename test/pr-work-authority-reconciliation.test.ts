@@ -327,6 +327,7 @@ async function runExpiredClaimReconciliation() {
     process.env.PATH = `${bin}:${originalPath || ""}`;
     writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
       repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "repo-id", enabledAt: 1,
+      automationLogin: "deadloop-bot",
       firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
       autoMergeAcknowledged: false, enabled: true,
     }] }));
