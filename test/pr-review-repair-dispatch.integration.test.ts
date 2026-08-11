@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -551,6 +552,8 @@ function runV1ChangesRequestedTwice(options: {
   renderedCommand?: boolean;
   attempts?: number;
   injectCumulativeLimitRace?: boolean;
+  injectBlockingHistoryRace?: boolean;
+  historyRequired?: boolean;
   dateUnavailable?: boolean;
   editedClaim?: boolean;
   expireAfterObservations?: boolean;
@@ -602,8 +605,22 @@ function runV1ChangesRequestedTwice(options: {
   const head = spawnSync("git", ["-C", worktree, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
   fs.writeFileSync(
     comments,
-    JSON.stringify(options.injectCumulativeLimitRace ? trustedCumulativeComments.slice(0, 2) : []),
+    JSON.stringify(options.injectCumulativeLimitRace || options.injectBlockingHistoryRace ? trustedCumulativeComments.slice(0, 2) : []),
   );
+  if (options.injectBlockingHistoryRace) {
+    const conversationComments = trustedCumulativeComments.slice(0, 2).map((comment, index) => ({
+      id: String(index + 1), nodeId: "", author: "deadloop-bot", body: String(comment.body), createdAt: "x", updatedAt: "x",
+    }));
+    const history = {
+      pullRequest: { number: 243, state: "open", headRef: "agent/issue-243", headSha: head, baseRef: "main", baseSha: "b".repeat(40) },
+      commits: [{ sha: head }], diff: { sha256: createHash("sha256").update("diff\n").digest("hex"), bytes: 5 },
+      conversationComments, submittedReviews: [], inlineReviewComments: [],
+    };
+    fs.writeFileSync(path.join(reviewerRun, "pr-review-history.json"), JSON.stringify({
+      schemaVersion: 1, repository: "owner/repo", pullRequestNumber: 243, observedAt: "2026-01-01T00:00:00.000Z",
+      revision: createHash("sha256").update(`${JSON.stringify(history)}\n`).digest("hex"), history, evidence: { exactDiff: "diff\n" },
+    }));
+  }
   fs.writeFileSync(runtime, JSON.stringify({ workspace: "reviewer-workspace", agent: null, launches: 0 }));
   fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ projects: [{
     repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch: "origin/master", automationLogin: "deadloop-bot", enabledAt: 1,
@@ -641,6 +658,7 @@ function runV1ChangesRequestedTwice(options: {
     worktreePath: worktree, agentName: "dl-r-243-111111111111", workspaceLabel: "reviewer",
     promptFile: path.join(reviewerRun, "prompt.md"), promiseFile: promise, phase: "agent_started",
     lastSuccessfulPhase: "agent_started", workspaceId: "reviewer-workspace", tabId: "reviewer-tab", rootPaneId: "reviewer-pane",
+    ...(options.historyRequired || options.injectBlockingHistoryRace ? { reviewHistoryRequired: true } : {}),
     reviewClaim: savedReviewClaim,
   }));
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
@@ -650,13 +668,18 @@ else if(a[0]==="pr"&&a[1]==="view") {
   const count=fs.existsSync(process.env.GH_VIEW_COUNT)?Number(fs.readFileSync(process.env.GH_VIEW_COUNT,"utf8")):0;
   fs.writeFileSync(process.env.GH_VIEW_COUNT,String(count+1));
   const comments=JSON.parse(fs.readFileSync(process.env.COMMENTS,"utf8"));
-  if(process.env.INJECT_LIMIT_RACE==="1"&&count===2) {
+  if(process.env.INJECT_LIMIT_RACE==="1"&&count===2||process.env.INJECT_BLOCKING_HISTORY_RACE==="1"&&count===1) {
     comments.push(${JSON.stringify({ ...cumulativeRepairFixture.comments[2], author: { login: "deadloop-bot" } })});
     fs.writeFileSync(process.env.COMMENTS,JSON.stringify(comments));
   }
   process.stdout.write(JSON.stringify({number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:process.env.HEAD,isCrossRepository:false,labels:${JSON.stringify(liveLabels)},comments}));
 }
 else if(a[0]==="pr"&&a[1]==="comment"){const c=JSON.parse(fs.readFileSync(process.env.COMMENTS,"utf8"));c.push({body:a[a.indexOf("--body")+1],author:{login:"deadloop-bot"}});fs.writeFileSync(process.env.COMMENTS,JSON.stringify(c));}
+else if(a[0]==="api"&&a.includes("graphql")) process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:process.env.HEAD}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
+else if(a[0]==="api"&&a[1].includes("/pulls/243")&&a.includes("-H")) process.stdout.write("diff\\n");
+else if(a[0]==="api"&&a[1].endsWith("/pulls/243")) process.stdout.write(JSON.stringify({number:243,state:"open",head:{ref:"agent/issue-243",sha:process.env.HEAD},base:{ref:"main",sha:"${"b".repeat(40)}"}}));
+else if(a[0]==="api"&&a.some((value)=>value.includes("/issues/243/comments"))) {const c=JSON.parse(fs.readFileSync(process.env.COMMENTS,"utf8"));process.stdout.write(JSON.stringify([c.map((comment,index)=>({id:index+1,body:comment.body,user:comment.author,created_at:"x",updated_at:"x"}))]));}
+else if(a[0]==="api") process.stdout.write(JSON.stringify([[]]));
 `);
   executable(path.join(bin, "herdr"), `#!/usr/bin/env node
 const fs=require("node:fs");const a=process.argv.slice(2);const f=process.env.RUNTIME;const s=JSON.parse(fs.readFileSync(f,"utf8"));
@@ -690,7 +713,8 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     DEADLOOP_REVIEW_LABEL: labels.review, DEADLOOP_REVIEWING_LABEL: labels.reviewing,
     DEADLOOP_BLOCKED_LABEL: labels.blocked, DEADLOOP_HUMAN_LABEL: labels.human,
     HEAD: head, COMMENTS: comments, GH_VIEW_COUNT: ghViewCount,
-    INJECT_LIMIT_RACE: options.injectCumulativeLimitRace ? "1" : "0", RUNTIME: runtime, WORKTREE: worktree };
+    INJECT_LIMIT_RACE: options.injectCumulativeLimitRace ? "1" : "0",
+    INJECT_BLOCKING_HISTORY_RACE: options.injectBlockingHistoryRace ? "1" : "0", RUNTIME: runtime, WORKTREE: worktree };
   const dispatcherCommand = options.renderedCommand
     ? (() => {
         const prompt = renderReviewerMonitorPrompt({
@@ -731,6 +755,82 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
       `--human-label ${labels.human}`,
     ].every((argument) => dispatcherCommand.includes(argument)),
     githubMutations: fs.existsSync(visibleEffects) ? fs.readFileSync(visibleEffects, "utf8") : "",
+  };
+}
+
+function runHumanRequiredHistoryRace(options: { blockDuringRelease?: boolean } = {}): { action: string; mutations: string[] } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-human-history-race-"));
+  tempDirs.push(root);
+  const bin = path.join(root, "bin");
+  const state = path.join(root, "config", "deadloop");
+  const run = path.join(state, "runs", "reviewer-run");
+  const promise = path.join(run, "promise.json");
+  const attempt = path.join(run, "attempt.json");
+  const historyFile = path.join(run, "pr-review-history.json");
+  const historyReads = path.join(root, "history-reads");
+  const mutations = path.join(root, "mutations.log");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(run, { recursive: true });
+  enableProject(state, root);
+  const head = "a".repeat(40);
+  const base = "b".repeat(40);
+  const history = {
+    pullRequest: { number: 243, state: "open", headRef: "agent/issue-243", headSha: head, baseRef: "main", baseSha: base },
+    commits: [{ sha: head }],
+    diff: { sha256: createHash("sha256").update("diff\n").digest("hex"), bytes: 5 },
+    conversationComments: [],
+    submittedReviews: [],
+    inlineReviewComments: [],
+  };
+  fs.writeFileSync(historyFile, JSON.stringify({
+    schemaVersion: 1, repository: "owner/repo", pullRequestNumber: 243, observedAt: "2026-01-01T00:00:00.000Z",
+    revision: createHash("sha256").update(`${JSON.stringify(history)}\n`).digest("hex"), history, evidence: { exactDiff: "diff\n" },
+  }));
+  fs.writeFileSync(promise, JSON.stringify({
+    schemaVersion: 1, attemptId: "reviewer-attempt", role: "reviewer",
+    target: { repository: "owner/repo", kind: "pull-request", number: 243 }, inputRevision: { head },
+    status: "complete", summary: "A human decision is required.",
+    result: { outcome: "human_required", reviewedHead: head, findings: [] }, evidence: { reviewed: ["diff"] },
+  }));
+  fs.writeFileSync(attempt, JSON.stringify({
+    attemptId: "reviewer-attempt", launchUuid: "reviewer-run", project: "demo", repository: "owner/repo",
+    role: "reviewer", target: { kind: "pull-request", number: 243 }, inputRevision: { head }, branch: "agent/issue-243",
+    worktreePath: root, agentName: "reviewer", workspaceLabel: "reviewer", promptFile: path.join(run, "prompt.md"),
+    promiseFile: promise, phase: "agent_started", lastSuccessfulPhase: "agent_started", reviewHistoryRequired: true,
+    reviewClaim: JSON.parse(reviewClaimEnvironment(head, 243).DEADLOOP_REVIEW_CLAIM),
+  }));
+  executable(path.join(bin, "gh"), `#!/usr/bin/env node
+const fs=require("node:fs");const a=process.argv.slice(2);
+if(a[0]==="repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
+else if(a[0]==="pr"&&a[1]==="view") {const blocked=process.env.BLOCK_FLAG&&fs.existsSync(process.env.BLOCK_FLAG);process.stdout.write(JSON.stringify({number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:process.env.HEAD,isCrossRepository:false,labels:blocked?[{name:"agent:in-progress"},{name:"agent:blocked"}]:[{name:"agent:in-progress"}],comments:[]}));}
+else if(a[0]==="api"&&a.includes("graphql")) process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:process.env.HEAD}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
+else if(a[0]==="api"&&a[1].includes("/pulls/243")&&a.includes("-H")) process.stdout.write("diff\\n");
+else if(a[0]==="api"&&a[1].endsWith("/pulls/243")) process.stdout.write(JSON.stringify({number:243,state:"open",head:{ref:"agent/issue-243",sha:process.env.HEAD},base:{ref:"main",sha:process.env.BASE}}));
+else if(a[0]==="api"&&a.some((value)=>value.includes("/issues/243/comments"))) {const n=fs.existsSync(process.env.READS)?Number(fs.readFileSync(process.env.READS,"utf8")):0;fs.writeFileSync(process.env.READS,String(n+1));const raced=n===3?[{id:1,user:{login:"deadloop-bot"},body:"deterministic result",created_at:"x",updated_at:"x"},{id:2,user:{login:"human"},body:"racing comment",created_at:"x",updated_at:"x"}]:[];process.stdout.write(JSON.stringify([raced]));}
+else if(a[0]==="api") process.stdout.write(JSON.stringify([[]]));
+else if(a[0]==="pr"&&a[1]==="comment") {fs.appendFileSync(process.env.MUTATIONS,a.join(" ")+"\\n");if(process.env.BLOCK_AFTER_COMMENT==="1")fs.writeFileSync(process.env.BLOCK_FLAG,"1");process.stdout.write("https://github.com/owner/repo/pull/243#issuecomment-1\\n");}
+else {fs.appendFileSync(process.env.MUTATIONS,a.join(" ")+"\\n");}
+`);
+  executable(path.join(bin, "git"), `#!/usr/bin/env node
+const a=process.argv.slice(2);if(a.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+`);
+  compatibleHerdr(bin);
+  const result = spawnSync("node", [
+    "extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attempt,
+    "--pr", "243", "--expected-head", head, "--branch", "agent/issue-243",
+  ], { cwd: process.cwd(), encoding: "utf8", env: {
+    ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
+    DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: root, DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
+    ...reviewClaimEnvironment(head, 243),
+    HEAD: head, BASE: base, READS: historyReads, MUTATIONS: mutations,
+    BLOCK_FLAG: path.join(root, "block-flag"), BLOCK_AFTER_COMMENT: options.blockDuringRelease ? "1" : "0",
+  }});
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+  return {
+    action: JSON.parse(result.stdout).driverAction,
+    mutations: fs.existsSync(mutations)
+      ? fs.readFileSync(mutations, "utf8").trim().split("\n").filter((line) => line.startsWith("pr "))
+      : [],
   };
 }
 
@@ -787,6 +887,31 @@ describe("review repair dispatch integration", () => {
     });
   });
 
+  it("fails closed when metadata requires history but the prompt and history artifacts are missing", () => {
+    expect(runV1ChangesRequestedTwice({ attempts: 1, historyRequired: true }).actions[0]).toBe("incomplete_review_history");
+  });
+
+  it("releases a human-required claim when unrelated history races with its result comment", () => {
+    const result = runHumanRequiredHistoryRace();
+
+    expect(result).toEqual({
+      action: "review_stale_history",
+      mutations: [
+        expect.stringContaining("pr comment 243"),
+        expect.stringContaining("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review"),
+      ],
+    });
+  });
+
+  it("keeps labels untouched when a concurrent block lands before the stale-history release", () => {
+    const result = runHumanRequiredHistoryRace({ blockDuringRelease: true });
+
+    expect(result).toEqual({
+      action: "review_stale_history",
+      mutations: [expect.stringContaining("pr comment 243")],
+    });
+  });
+
   it("reports only in-progress as the managed state preserved for repair", () => {
     expect(runV1ChangesRequestedTwice({ attempts: 1 }).labelsPreserved).toEqual(["agent:in-progress"]);
   });
@@ -796,6 +921,15 @@ describe("review repair dispatch integration", () => {
 
     expect({ action: result.actions[0], launches: result.launches }).toEqual({
       action: "review_repair_limit_reached",
+      launches: 0,
+    });
+  });
+
+  it("releases the review claim when history changes before a cumulative-limit block", () => {
+    const result = runV1ChangesRequestedTwice({ attempts: 1, injectBlockingHistoryRace: true });
+
+    expect({ action: result.actions[0], launches: result.launches }).toEqual({
+      action: "review_stale_history",
       launches: 0,
     });
   });

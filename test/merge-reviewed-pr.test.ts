@@ -36,12 +36,14 @@ function runMerge(options: {
   currentConfiguration?: Record<string, unknown>;
   dateUnavailable?: boolean;
   editedClaim?: boolean;
+  onHistoryCheck?: (count: number) => void;
 } = {}) {
   const commands: string[][] = [];
   let lockHeld = false;
   let configObservedInsideLock = false;
   let mutationObservedInsideLock = false;
   let autoMergeChecks = 0;
+  let historyChecks = 0;
   let prReads = 0;
   let eventReads = 0;
   let commentReads = 0;
@@ -67,6 +69,7 @@ function runMerge(options: {
       pr: "24",
       expectedHead,
       reviewPromise: "/state/reviewer-promise.json",
+      historyObservation: "/state/runs/reviewer/pr-review-history-accepted.json",
       inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked",
       ...(options.reviewClaim !== false ? { reviewClaim: authoritativeReviewClaim } : {}),
@@ -117,6 +120,7 @@ function runMerge(options: {
           : configured;
       },
       validateReviewPromise: () => options.review || approvedReview,
+      assertReviewHistoryFresh: () => options.onHistoryCheck?.(++historyChecks),
       run: (args: string[]) => {
         commands.push(args);
         if (args[1] === "repo" && args[2] === "view") {
@@ -228,6 +232,12 @@ describe("reviewed PR merge", () => {
     expect(runMerge().configObservedInsideLock).toBe(true);
   });
 
+  it("rechecks review history freshness immediately before the merge mutation", () => {
+    const counts: number[] = [];
+    runMerge({ onHistoryCheck: (count) => counts.push(count) });
+    expect(counts).toEqual([1, 2]);
+  });
+
   it("holds the enablement lock while performing the merge mutation", () => {
     expect(runMerge().mutationObservedInsideLock).toBe(true);
   });
@@ -238,8 +248,9 @@ describe("reviewed PR merge", () => {
 
   it("rechecks auto-merge before the final fresh claim observation adjacent to merge", () => {
     const commands = runMerge().commands;
-    expect(commands.slice(-8).map((args) => args.join(" "))).toEqual([
+    expect(commands.slice(-9).map((args) => args.join(" "))).toEqual([
       "config",
+      "gh pr view 24 -R owner/repo --json state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,labels",
       "gh api user --jq .login",
       "gh repo view owner/repo --json id,nameWithOwner",
       "gh pr view 24 -R owner/repo --json state,headRefOid,labels",
@@ -254,10 +265,16 @@ describe("reviewed PR merge", () => {
     expect(() => runMerge({ autoMergeEnabled: [true, false] })).toThrow("autoMerge is not currently enabled");
   });
 
-  it.each(["expiry", "comment", "request", "head", "labels"] as const)(
+  it.each([
+    ["expiry", "reauthorized"],
+    ["comment", "reauthorized"],
+    ["request", "reauthorized"],
+    ["head", "PR head changed"],
+    ["labels", "PR is blocked"],
+  ] as const)(
     "suppresses merge when %s changes during the final claim inspection",
-    (finalRace) => {
-      expect(() => runMerge({ finalRace })).toThrow("reauthorized");
+    (finalRace, expected) => {
+      expect(() => runMerge({ finalRace })).toThrow(expected);
     },
   );
 

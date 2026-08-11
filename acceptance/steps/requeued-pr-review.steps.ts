@@ -150,6 +150,16 @@ if (args[0] === "pr" && args[1] === "list") {
   });
 } else if (args[0] === "api" && args.some((arg) => arg.endsWith("/comments"))) {
   process.stdout.write(JSON.stringify([prs()[0].comments]));
+} else if (args[0] === "api" && args.includes("graphql")) {
+  const pr = prs()[0];
+  process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:pr.headRefOid}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
+} else if (args[0] === "api" && args.includes("Accept: application/vnd.github.diff")) {
+  process.stdout.write("diff --git a/file b/file\\n");
+} else if (args[0] === "api" && args.find((arg) => arg.startsWith("repos/")) === "repos/owner/repo/pulls/44") {
+  const pr = prs()[0];
+  process.stdout.write(JSON.stringify({number:44,state:"open",head:{ref:pr.headRefName,sha:pr.headRefOid},base:{ref:"main",sha:"b".repeat(40)}}));
+} else if (args[0] === "api") {
+  process.stdout.write(JSON.stringify([[]]));
 }
 `);
   executable(path.join(bin, "git"), `#!/usr/bin/env node

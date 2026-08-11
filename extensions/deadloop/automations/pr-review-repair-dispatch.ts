@@ -35,6 +35,13 @@ const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cj
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
 const {
+  advancePrHistoryAfterDeterministicComment,
+  comparePrHistoryObservations,
+  observePrHistory,
+  readPrHistoryObservation,
+  writePrHistoryObservation,
+} = require("../../../src/pr-review-history.ts");
+const {
   classifyActiveReviewClaim,
   readGithubRestResponseHeaders,
   savedReviewClaimContract,
@@ -243,15 +250,74 @@ function withRevalidatedPrMutation(
   env: ReturnType<typeof envConfig>,
   expectedPr: JsonObject,
   mutation: (guardedGithub: ReturnType<typeof createGithubOperations>, livePr: JsonObject) => void,
-): void {
+  historyFile = "",
+): JsonObject | undefined {
+  let staleComparison: JsonObject | undefined;
   withEnabledDriverLock(env, (enabled: { automationLogin?: string }, recheck: () => void) => {
     const livePr = readLivePr(env.githubRepo, prNumber);
     assertSameLaunchTarget(expectedPr, livePr, "pr");
     requireReviewClaimForManagedPr(livePr, env);
     const reauthorize = () => reauthorizeReviewClaim(prNumber, env, enabled);
     reauthorize();
-    mutation(createGithubOperations(commandRunner, () => { recheck(); reauthorize(); }), livePr);
+    const guardedGithub = createGithubOperations(commandRunner, () => { recheck(); reauthorize(); });
+    if (historyFile && fs.existsSync(historyFile)) {
+      const expectedHistory = readPrHistoryObservation(historyFile);
+      const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+      const comparison = comparePrHistoryObservations(expectedHistory, currentHistory);
+      if (comparison.kind !== "unchanged") {
+        staleComparison = comparison;
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel, env.reviewingLabel], add: env.reviewLabel });
+        return;
+      }
+    }
+    mutation(guardedGithub, livePr);
   });
+  return staleComparison;
+}
+
+function claimedPrStillReleasable(livePr: JsonObject, env: ReturnType<typeof envConfig>, expectedHead: string): boolean {
+  const labels = labelNames(livePr.labels);
+  return String(livePr.state || "").toUpperCase() === "OPEN"
+    && String(livePr.headRefOid || "").toLowerCase() === expectedHead.toLowerCase()
+    && labels.includes(env.inProgressLabel)
+    && !labels.includes(env.blockedLabel);
+}
+
+function releaseObservedStaleReviewHistory(
+  prNumber: string,
+  env: ReturnType<typeof envConfig>,
+  comparison: JsonObject,
+  expectedHead: string,
+): { stale: true; comparison: JsonObject } {
+  withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+    const livePr = readLivePr(env.githubRepo, prNumber);
+    if (!claimedPrStillReleasable(livePr, env, expectedHead)) return;
+    const guardedGithub = createGithubOperations(commandRunner, recheck);
+    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel, env.reviewingLabel], add: env.reviewLabel });
+  });
+  return { stale: true, comparison };
+}
+
+function releaseStaleReviewHistory(
+  prNumber: string,
+  env: ReturnType<typeof envConfig>,
+  historyFile: string,
+  expectedHead: string,
+): { stale: boolean; comparison?: JsonObject } {
+  const expected = readPrHistoryObservation(historyFile);
+  let comparison: JsonObject | undefined;
+  let stale = false;
+  withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+    const current = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+    comparison = comparePrHistoryObservations(expected, current);
+    if (comparison.kind !== "stale") return;
+    stale = true;
+    const livePr = readLivePr(env.githubRepo, prNumber);
+    if (!claimedPrStillReleasable(livePr, env, expectedHead)) return;
+    const guardedGithub = createGithubOperations(commandRunner, recheck);
+    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel, env.reviewingLabel], add: env.reviewLabel });
+  });
+  return { stale, comparison };
 }
 
 function blockedClaimMove(env: ReturnType<typeof envConfig>) {
@@ -268,13 +334,27 @@ function applyHumanBlock(
   reason: string,
   summary: string,
   marker = "",
-): string {
+  historyFile = "",
+): { comment: string; staleComparison?: JsonObject } {
   const comment = recoveryComment(prNumber, env, reason, summary, marker);
-  withRevalidatedPrMutation(prNumber, env, expectedPr, (guardedGithub) => {
+  const staleComparison = withRevalidatedPrMutation(prNumber, env, expectedPr, (guardedGithub) => {
     guardedGithub.commentPr(env.githubRepo, prNumber, comment);
     guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
+  }, historyFile);
+  return { comment, ...(staleComparison ? { staleComparison } : {}) };
+}
+
+function staleHistoryResult(prNumber: string, comparison: JsonObject, context: string): DriverResult {
+  return driverResult("done", `PR #${prNumber} review history changed ${context}; released the active claim`, {
+    driverAction: "review_stale_history",
+    historyComparison: comparison,
   });
-  return comment;
+}
+
+function createdCommentIdentity(output: string, author: string, body: string): { id: string; author: string; body: string } {
+  const id = output.trim().match(/#issuecomment-(\d+)\/?$/)?.[1];
+  if (!id || !author) throw new Error("persisted review comment identity is unavailable");
+  return { id, author, body };
 }
 
 function repairWorkerPrompt(
@@ -607,10 +687,43 @@ function dispatch(args: JsonObject): DriverResult {
   const branch = String(args.branch);
   const pr = readLivePr(env.githubRepo, prNumber);
   requireReviewClaimForManagedPr(pr, env);
+  const historyFile = hasAttemptRecord
+    ? path.join(path.dirname(String(args.attemptRecord)), "pr-review-history.json")
+    : "";
+  const acceptedHistoryFile = historyFile ? path.join(path.dirname(historyFile), "pr-review-history-accepted.json") : "";
+  const historyRequired = attemptRecord?.reviewHistoryRequired === true;
+  if (historyRequired) {
+    if (!fs.existsSync(historyFile)) {
+      return driverResult("error", `PR #${prNumber} attempt history observation is missing`, {
+        driverAction: "incomplete_review_history",
+        reason: "missing_attempt_history_observation",
+      });
+    }
+    try {
+      readPrHistoryObservation(historyFile);
+    } catch {
+      return driverResult("error", `PR #${prNumber} attempt history observation is invalid`, {
+        driverAction: "incomplete_review_history",
+        reason: "invalid_attempt_history_observation",
+      });
+    }
+  }
+  if (historyFile && fs.existsSync(historyFile)) {
+    const freshness = releaseStaleReviewHistory(prNumber, env, historyFile, expectedHead);
+    if (freshness.stale) {
+      return driverResult("done", `PR #${prNumber} review history changed; released the active claim for a fresh review`, {
+        driverAction: "review_stale_history",
+        historyComparison: freshness.comparison,
+        labelsPreserved: [env.reviewLabel],
+        labelsRemoved: [env.inProgressLabel, env.reviewingLabel],
+      });
+    }
+  }
 
   if (String(pr.state || "").toUpperCase() !== "OPEN" || Boolean(pr.isCrossRepository) || String(pr.headRefName || "") !== branch) {
-    const comment = applyHumanBlock(prNumber, env, pr, "the selected PR is no longer a safe same-repository branch target", promise.summary);
-    return driverResult("done", `PR #${prNumber} requires human intervention`, { driverAction: "review_human_blocked", comment });
+    const block = applyHumanBlock(prNumber, env, pr, "the selected PR is no longer a safe same-repository branch target", promise.summary, "", historyFile);
+    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before human block");
+    return driverResult("done", `PR #${prNumber} requires human intervention`, { driverAction: "review_human_blocked", comment: block.comment });
   }
   if (validation.status === "blocked") {
     if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
@@ -618,7 +731,7 @@ function dispatch(args: JsonObject): DriverResult {
     }
     const technicalDecision = decideTechnicalReviewFailure(pr.comments || [], expectedHead);
     if (technicalDecision.action === "retry") {
-      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub) => {
+      const staleComparison = withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub) => {
         guardedGithub.commentPr(
           env.githubRepo,
           prNumber,
@@ -627,15 +740,17 @@ function dispatch(args: JsonObject): DriverResult {
         guardedGithub.movePrLabels(env.githubRepo, prNumber, {
           remove: [env.inProgressLabel, env.reviewingLabel], add: env.reviewLabel,
         });
-      });
+      }, historyFile);
+      if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before technical retry");
       return driverResult("done", `PR #${prNumber} reviewer technical failure requeued review once`, {
         driverAction: "review_technical_retry",
       });
     }
-    const comment = applyHumanBlock(prNumber, env, pr, "the reviewer failed technically twice on the same PR head", promise.summary);
+    const block = applyHumanBlock(prNumber, env, pr, "the reviewer failed technically twice on the same PR head", promise.summary, "", historyFile);
+    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before technical retry exhaustion");
     return driverResult("done", `PR #${prNumber} exhausted its technical review retry`, {
       driverAction: "review_technical_retry_exhausted",
-      comment,
+      comment: block.comment,
     });
   }
 
@@ -655,74 +770,171 @@ function dispatch(args: JsonObject): DriverResult {
     if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
-    withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
-      const body = persistedReviewBody(livePr.comments || [], expectedHead, reviewFingerprint, outcome,
-        renderApprovedReviewComment(commentInput), persistenceMarker, attemptRecord?.attemptId);
-      if (body) guardedGithub.commentPr(env.githubRepo, prNumber, body);
-    });
+    let persistedBody = "";
+    let createdComment: { id: string; author: string; body: string } | undefined;
+    let observedStaleComparison: JsonObject | undefined;
+    try {
+      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
+        if (historyFile && fs.existsSync(historyFile)) {
+          const expectedHistory = readPrHistoryObservation(historyFile);
+          const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+          const comparison = comparePrHistoryObservations(expectedHistory, currentHistory);
+          if (comparison.kind !== "unchanged") {
+            observedStaleComparison = comparison;
+            throw new StaleLaunchError(`PR #${prNumber} review history changed before result persistence`);
+          }
+        }
+        persistedBody = persistedReviewBody(livePr.comments || [], expectedHead, reviewFingerprint, outcome,
+          renderApprovedReviewComment(commentInput), persistenceMarker, attemptRecord?.attemptId);
+        if (persistedBody) {
+          const output = guardedGithub.commentPr(env.githubRepo, prNumber, persistedBody);
+          if (historyFile && fs.existsSync(historyFile)) {
+            const automationLogin = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim();
+            createdComment = createdCommentIdentity(output, automationLogin, persistedBody);
+          }
+        }
+      });
+    } catch (error) {
+      if (!isStaleLaunchError(error) || !observedStaleComparison) throw error;
+      const freshness = releaseObservedStaleReviewHistory(prNumber, env, observedStaleComparison, expectedHead);
+      return driverResult("done", `PR #${prNumber} review history changed before result persistence; released the active claim`, {
+        driverAction: "review_stale_history", historyComparison: freshness.comparison,
+      });
+    }
+    if (historyFile && fs.existsSync(historyFile)) {
+      const expectedHistory = readPrHistoryObservation(historyFile);
+      const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+      const advancement = advancePrHistoryAfterDeterministicComment(expectedHistory, afterPersistence, createdComment);
+      if (advancement.kind !== "accepted") {
+        const freshness = releaseObservedStaleReviewHistory(prNumber, env, advancement.comparison, expectedHead);
+        return driverResult("done", `PR #${prNumber} review history changed during result persistence; released the active claim`, {
+          driverAction: "review_stale_history",
+          historyComparison: freshness.comparison,
+        });
+      }
+      writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
+    }
     return driverResult("done", `PR #${prNumber} review completed without actionable findings`, { driverAction: "review_approved" });
   }
   if (outcome === "human_required") {
+    if (historyFile && fs.existsSync(historyFile)) {
+      const freshness = releaseStaleReviewHistory(prNumber, env, historyFile, expectedHead);
+      if (freshness.stale) {
+        return driverResult("done", `PR #${prNumber} review history changed; released the active claim for a fresh review`, {
+          driverAction: "review_stale_history", historyComparison: freshness.comparison,
+        });
+      }
+    }
     if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
     let comment = "Review result comment already exists.";
-    withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
-      if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, outcome)) {
-        comment = renderHumanRequiredComment(commentInput);
-        guardedGithub.commentPr(env.githubRepo, prNumber, comment);
-      }
-      const labels = labelNames(livePr.labels);
-      if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
-        || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
-        guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
-      }
-    });
+    let createdComment: { id: string; author: string; body: string } | undefined;
+    let observedStaleComparison: JsonObject | undefined;
+    try {
+      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
+        let expectedHistory: ReturnType<typeof readPrHistoryObservation> | undefined;
+        if (historyFile && fs.existsSync(historyFile)) {
+          expectedHistory = readPrHistoryObservation(historyFile);
+          const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+          const comparison = comparePrHistoryObservations(expectedHistory, currentHistory);
+          if (comparison.kind !== "unchanged") {
+            observedStaleComparison = comparison;
+            throw new StaleLaunchError(`PR #${prNumber} review history changed before human handoff`);
+          }
+        }
+        if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, outcome)) {
+          comment = renderHumanRequiredComment(commentInput);
+          const output = guardedGithub.commentPr(env.githubRepo, prNumber, comment);
+          if (expectedHistory) {
+            const automationLogin = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim();
+            createdComment = createdCommentIdentity(output, automationLogin, comment);
+          }
+        }
+        if (expectedHistory) {
+          const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+          const advancement = advancePrHistoryAfterDeterministicComment(expectedHistory, afterPersistence, createdComment);
+          if (advancement.kind !== "accepted") {
+            observedStaleComparison = advancement.comparison;
+            throw new StaleLaunchError(`PR #${prNumber} review history changed during human handoff`);
+          }
+          writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
+        }
+        const labels = labelNames(livePr.labels);
+        if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
+          || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
+          guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
+        }
+      });
+    } catch (error) {
+      if (!isStaleLaunchError(error) || !observedStaleComparison) throw error;
+      const freshness = releaseObservedStaleReviewHistory(prNumber, env, observedStaleComparison, expectedHead);
+      return driverResult("done", `PR #${prNumber} review history changed before human handoff; released the active claim`, {
+        driverAction: "review_stale_history", historyComparison: freshness.comparison,
+      });
+    }
     return driverResult("done", `PR #${prNumber} review requires a human`, { driverAction: "review_human_blocked", comment });
   }
 
   const worktree = inspectRepairWorktree(env.repoPath, branch);
   const refreshedPr = readLivePr(env.githubRepo, prNumber);
   if (String(refreshedPr.state || "").toUpperCase() !== "OPEN" || Boolean(refreshedPr.isCrossRepository) || String(refreshedPr.headRefName || "") !== branch) {
-    const comment = applyHumanBlock(prNumber, env, refreshedPr, "the selected PR stopped being a safe same-repository branch target before repair dispatch", promise.summary);
-    return driverResult("done", `PR #${prNumber} requires human intervention`, { driverAction: "review_human_blocked", comment });
+    const block = applyHumanBlock(prNumber, env, refreshedPr, "the selected PR stopped being a safe same-repository branch target before repair dispatch", promise.summary, "", historyFile);
+    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before repair dispatch block");
+    return driverResult("done", `PR #${prNumber} requires human intervention`, { driverAction: "review_human_blocked", comment: block.comment });
   }
   if (worktree.kind === "ambiguous") {
-    const comment = applyHumanBlock(prNumber, env, refreshedPr, "more than one worktree claims the repair branch", "Worktree ownership must be made unambiguous before another repair starts.");
-    return driverResult("done", `PR #${prNumber} repair worktree ownership is ambiguous; marked blocked`, { driverAction: "review_repair_ambiguous_worktree", comment });
+    const block = applyHumanBlock(prNumber, env, refreshedPr, "more than one worktree claims the repair branch", "Worktree ownership must be made unambiguous before another repair starts.", "", historyFile);
+    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before ambiguous-worktree block");
+    return driverResult("done", `PR #${prNumber} repair worktree ownership is ambiguous; marked blocked`, { driverAction: "review_repair_ambiguous_worktree", comment: block.comment });
   }
   if (worktree.kind === "present" && !worktree.clean) {
-    const comment = applyHumanBlock(prNumber, env, refreshedPr, "the existing repair worktree is dirty", "The existing repair worktree must be inspected before another repair starts.");
-    return driverResult("done", `PR #${prNumber} repair worktree is dirty; marked blocked`, { driverAction: "review_repair_dirty_worktree", comment });
+    const block = applyHumanBlock(prNumber, env, refreshedPr, "the existing repair worktree is dirty", "The existing repair worktree must be inspected before another repair starts.", "", historyFile);
+    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before dirty-worktree block");
+    return driverResult("done", `PR #${prNumber} repair worktree is dirty; marked blocked`, { driverAction: "review_repair_dirty_worktree", comment: block.comment });
   }
   const refreshedHead = String(refreshedPr.headRefOid || "").toLowerCase();
   if (refreshedHead !== expectedHead) {
     if (worktree.kind === "present" && worktree.head === refreshedHead) {
       return driverResult("done", `PR #${prNumber} head changed before repair dispatch; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
-    const comment = applyHumanBlock(prNumber, env, refreshedPr, "the refreshed PR head does not have one matching clean repair worktree", "The PR branch and worktree ownership must be reconciled before another repair starts.");
-    return driverResult("done", `PR #${prNumber} refreshed head lacks a matching repair worktree; marked blocked`, { driverAction: "review_repair_worktree_mismatch", comment });
+    const block = applyHumanBlock(prNumber, env, refreshedPr, "the refreshed PR head does not have one matching clean repair worktree", "The PR branch and worktree ownership must be reconciled before another repair starts.", "", historyFile);
+    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before repair-worktree mismatch block");
+    return driverResult("done", `PR #${prNumber} refreshed head lacks a matching repair worktree; marked blocked`, { driverAction: "review_repair_worktree_mismatch", comment: block.comment });
   }
   if (worktree.kind === "present" && worktree.head !== expectedHead) {
-    const comment = applyHumanBlock(prNumber, env, refreshedPr, "the clean repair worktree and current PR head do not match", "The existing worktree must be reconciled without rewriting history before another repair starts.");
-    return driverResult("done", `PR #${prNumber} repair worktree does not match its current head; marked blocked`, { driverAction: "review_repair_worktree_mismatch", comment });
+    const block = applyHumanBlock(prNumber, env, refreshedPr, "the clean repair worktree and current PR head do not match", "The existing worktree must be reconciled without rewriting history before another repair starts.", "", historyFile);
+    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before repair-worktree mismatch block");
+    return driverResult("done", `PR #${prNumber} repair worktree does not match its current head; marked blocked`, { driverAction: "review_repair_worktree_mismatch", comment: block.comment });
+  }
+
+  if (historyFile && fs.existsSync(historyFile)) {
+    const freshness = releaseStaleReviewHistory(prNumber, env, historyFile, expectedHead);
+    if (freshness.stale) {
+      return driverResult("done", `PR #${prNumber} review history changed before repair selection; released the active claim`, {
+        driverAction: "review_stale_history", historyComparison: freshness.comparison,
+      });
+    }
   }
 
   const automationLogin = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim();
   if (!automationLogin) throw new Error("authenticated GitHub identity is unavailable");
   const selection = selectRepairAttempt(refreshedPr.comments || [], expectedHead, findings, automationLogin);
   if (selection.cumulativeLimitExceeded) {
-    const comment = applyHumanBlock(
+    const block = applyHumanBlock(
       prNumber,
       env,
       refreshedPr,
       "the PR exceeded the cumulative limit of three automatic repair attempts",
       "Inspect the current head and correct the branch without rewriting history before removing the blocked label.",
+      "",
+      historyFile,
     );
+    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before cumulative-limit block");
     return driverResult("done", `PR #${prNumber} exceeded the cumulative repair limit; marked blocked`, {
       driverAction: "review_repair_limit_reached",
       selection,
-      comment,
+      comment: block.comment,
     });
   }
   if (selection.action === "already_attempted") {
@@ -731,6 +943,7 @@ function dispatch(args: JsonObject): DriverResult {
     if (!recoveredLaunch && retained?.launchUuid && ["prepared", "github_claimed"].includes(String(retained.phase || ""))) {
       const resumeUuid = retained.launchUuid;
       let resumed: JsonObject;
+      let recoveryStaleComparison: JsonObject | undefined;
       try {
         resumed = withEnabledDriverLaunch(
           env,
@@ -746,6 +959,18 @@ function dispatch(args: JsonObject): DriverResult {
               assertSameLaunchTarget(refreshedPr, livePr, "pr");
               requireReviewClaimForManagedPr(livePr, env);
               reauthorizeReviewClaim(prNumber, env, enabled);
+              const recoveryHistoryFile = fs.existsSync(acceptedHistoryFile)
+                ? acceptedHistoryFile
+                : fs.existsSync(historyFile) ? historyFile : "";
+              if (recoveryHistoryFile) {
+                const recoveryHistory = readPrHistoryObservation(recoveryHistoryFile);
+                const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+                const comparison = comparePrHistoryObservations(recoveryHistory, currentHistory);
+                if (comparison.kind !== "unchanged") {
+                  recoveryStaleComparison = comparison;
+                  throw new StaleLaunchError(`PR #${prNumber} review history changed before repair recovery`);
+                }
+              }
               const labels = labelNames(livePr.labels);
               const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
               if (liveSelection.cumulativeLimitExceeded) {
@@ -759,18 +984,32 @@ function dispatch(args: JsonObject): DriverResult {
           },
         );
       } catch (error) {
+        if (isStaleLaunchError(error) && error instanceof Error && error.message.includes("review history")) {
+          const recoveryHistoryFile = fs.existsSync(acceptedHistoryFile)
+            ? acceptedHistoryFile
+            : fs.existsSync(historyFile) ? historyFile : "";
+          const freshness = recoveryStaleComparison
+            ? releaseObservedStaleReviewHistory(prNumber, env, recoveryStaleComparison, expectedHead)
+            : releaseStaleReviewHistory(prNumber, env, recoveryHistoryFile, expectedHead);
+          return driverResult("done", `PR #${prNumber} review history changed before repair recovery; released the active claim`, {
+            driverAction: "review_stale_history", historyComparison: freshness.comparison,
+          });
+        }
         if (!(error instanceof Error) || error.message !== "cumulative_repair_limit_exceeded_before_recovery") throw error;
         const latestPr = readLivePr(env.githubRepo, prNumber);
-        const comment = applyHumanBlock(
+        const block = applyHumanBlock(
           prNumber,
           env,
           latestPr,
           "the PR exceeded the cumulative limit of three automatic repair attempts before recovery",
           "Inspect the current head and correct the branch without rewriting history before removing the blocked label.",
+          "",
+          fs.existsSync(acceptedHistoryFile) ? acceptedHistoryFile : historyFile,
         );
+        if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before recovery cumulative-limit block");
         return driverResult("done", `PR #${prNumber} exceeded the cumulative repair limit; marked blocked`, {
           driverAction: "review_repair_limit_reached",
-          comment,
+          comment: block.comment,
         });
       }
       recoveredLaunch = { repairName: resumed.agentName, promiseFile: resumed.promiseFile, launchUuid: resumeUuid, phase: "agent_started" };
@@ -782,7 +1021,7 @@ function dispatch(args: JsonObject): DriverResult {
       if (workerConfirmed) recoveredLaunch = findRunMetadata(expectedHead, selection.key, env);
     }
     if (workerConfirmed && recoveredLaunch) {
-      withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
+      const staleComparison = withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
         if (!reviewCommentExists(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
           guardedGithub.commentPr(
             env.githubRepo,
@@ -790,7 +1029,8 @@ function dispatch(args: JsonObject): DriverResult {
             renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint, repairAlreadyStarted: true }),
           );
         }
-      });
+      }, fs.existsSync(acceptedHistoryFile) ? acceptedHistoryFile : historyFile);
+      if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before repair recovery persistence");
       const monitorInput = {
         prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
         promiseFile: recoveredLaunch.promiseFile, attemptRecordFile: path.join(path.dirname(recoveredLaunch.promiseFile), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
@@ -809,19 +1049,22 @@ function dispatch(args: JsonObject): DriverResult {
     const alreadyRecovered = (refreshedPr.comments || []).some((comment: JsonObject) => String(comment?.body || "").includes(interruptionMarker));
     let comment = "Interrupted repair dispatch recovery already exists.";
     if (!alreadyRecovered) {
-      comment = applyHumanBlock(prNumber, env, refreshedPr, "the repair attempt was recorded but no confirmed worker launch exists", promise.summary, interruptionMarker);
+      const block = applyHumanBlock(prNumber, env, refreshedPr, "the repair attempt was recorded but no confirmed worker launch exists", promise.summary, interruptionMarker, historyFile);
+      if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before interrupted-dispatch block");
+      comment = block.comment;
     } else {
       const labels = labelNames(refreshedPr.labels);
       if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
         || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
-        withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env)));
+        const staleComparison = withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env)), historyFile);
+        if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before interrupted-dispatch block");
       }
     }
     return driverResult("done", `PR #${prNumber} repair dispatch was interrupted; marked blocked`, { driverAction: "review_repair_dispatch_interrupted", selection, comment });
   }
   if (selection.action !== "launch_repair") {
     let comment = "Review result comment already exists.";
-    withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
+    const staleComparison = withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
       if (!reviewCommentExists(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
         comment = renderChangesRequestedComment({
           ...commentInput,
@@ -836,7 +1079,8 @@ function dispatch(args: JsonObject): DriverResult {
         || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
         guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
       }
-    });
+    }, historyFile);
+    if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before non-launch repair block");
     const cumulativeLimitReached = selection.reason === "cumulative_repair_limit";
     return driverResult(
       "done",
@@ -851,18 +1095,50 @@ function dispatch(args: JsonObject): DriverResult {
     );
   }
 
-  const repairLaunchUuid = randomUUID();
-  const preparedRepair = launchRepair(
-    prNumber, branch, expectedHead, findings, selection.key, env, undefined, repairLaunchUuid, true,
-  );
-
   if (hasAttemptRecord) {
-    withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
-      const body = persistedReviewBody(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome,
-        renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }),
-        persistenceMarker, attemptRecord?.attemptId);
-      if (body) guardedGithub.commentPr(env.githubRepo, prNumber, body);
-    });
+    let persistedBody = "";
+    let createdComment: { id: string; author: string; body: string } | undefined;
+    let observedStaleComparison: JsonObject | undefined;
+    try {
+      withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
+        if (historyFile && fs.existsSync(historyFile)) {
+          const expectedHistory = readPrHistoryObservation(historyFile);
+          const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+          const comparison = comparePrHistoryObservations(expectedHistory, currentHistory);
+          if (comparison.kind !== "unchanged") {
+            observedStaleComparison = comparison;
+            throw new StaleLaunchError(`PR #${prNumber} review history changed before repair result persistence`);
+          }
+        }
+        persistedBody = persistedReviewBody(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome,
+          renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }),
+          persistenceMarker, attemptRecord?.attemptId);
+        if (persistedBody) {
+          const output = guardedGithub.commentPr(env.githubRepo, prNumber, persistedBody);
+          if (historyFile && fs.existsSync(historyFile)) {
+            createdComment = createdCommentIdentity(output, automationLogin, persistedBody);
+          }
+        }
+      });
+    } catch (error) {
+      if (!isStaleLaunchError(error) || !observedStaleComparison) throw error;
+      const freshness = releaseObservedStaleReviewHistory(prNumber, env, observedStaleComparison, expectedHead);
+      return driverResult("done", `PR #${prNumber} review history changed before repair result persistence; released the active claim`, {
+        driverAction: "review_stale_history", historyComparison: freshness.comparison,
+      });
+    }
+    if (historyFile && fs.existsSync(historyFile)) {
+      const expectedHistory = readPrHistoryObservation(historyFile);
+      const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+      const advancement = advancePrHistoryAfterDeterministicComment(expectedHistory, afterPersistence, createdComment);
+      if (advancement.kind !== "accepted") {
+        const freshness = releaseObservedStaleReviewHistory(prNumber, env, advancement.comparison, expectedHead);
+        return driverResult("done", `PR #${prNumber} review history changed during repair dispatch; released the active claim`, {
+          driverAction: "review_stale_history", historyComparison: freshness.comparison,
+        });
+      }
+      writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
+    }
     const closed = commandRunner.runJson([
       "node", path.join(env.automationDir, "complete-attempt-workspace.ts"),
       "--attempt-record", String(args.attemptRecord),
@@ -882,7 +1158,20 @@ function dispatch(args: JsonObject): DriverResult {
     if (closed?.driverAction !== "workspace_closed") throw new Error("reviewer workspace was not closed before repair launch");
   }
 
+  if (historyRequired && !fs.existsSync(acceptedHistoryFile)) {
+    return driverResult("error", `PR #${prNumber} accepted history observation is missing before repair launch`, {
+      driverAction: "incomplete_review_history",
+      reason: "missing_accepted_history_observation",
+    });
+  }
+
+  const repairLaunchUuid = randomUUID();
+  const preparedRepair = launchRepair(
+    prNumber, branch, expectedHead, findings, selection.key, env, undefined, repairLaunchUuid, true,
+  );
+
   let launch: JsonObject;
+  let launchStaleComparison: JsonObject | undefined;
   try {
     launch = withEnabledDriverLaunch(
       env,
@@ -909,6 +1198,18 @@ function dispatch(args: JsonObject): DriverResult {
           assertSameLaunchTarget(refreshedPr, livePr, "pr");
           requireReviewClaimForManagedPr(livePr, env);
           reauthorizeReviewClaim(prNumber, env, enabled);
+          if (historyRequired && !fs.existsSync(acceptedHistoryFile)) {
+            throw new Error(`PR #${prNumber} accepted history observation is missing before repair launch`);
+          }
+          if (acceptedHistoryFile && fs.existsSync(acceptedHistoryFile)) {
+            const acceptedHistory = readPrHistoryObservation(acceptedHistoryFile);
+            const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+            const comparison = comparePrHistoryObservations(acceptedHistory, currentHistory);
+            if (comparison.kind !== "unchanged") {
+              launchStaleComparison = comparison;
+              throw new StaleLaunchError(`PR #${prNumber} review history changed before repair launch`);
+            }
+          }
           const labels = labelNames(livePr.labels);
           if (!labels.includes(env.inProgressLabel) || labels.includes(env.blockedLabel)) {
             throw new StaleLaunchError(`PR #${prNumber} is no longer eligible for repair`);
@@ -934,21 +1235,32 @@ function dispatch(args: JsonObject): DriverResult {
     );
   } catch (error) {
     if (isStaleLaunchError(error)) {
+      if (error instanceof Error && error.message.includes("review history") && acceptedHistoryFile) {
+        const freshness = launchStaleComparison
+          ? releaseObservedStaleReviewHistory(prNumber, env, launchStaleComparison, expectedHead)
+          : releaseStaleReviewHistory(prNumber, env, acceptedHistoryFile, expectedHead);
+        return driverResult("done", `PR #${prNumber} review history changed before repair launch; released the active claim`, {
+          driverAction: "review_stale_history", historyComparison: freshness.comparison,
+        });
+      }
       return driverResult("done", `PR #${prNumber} changed before repair launch; left workflow state untouched`, { driverAction: "review_repair_launch_stale" });
     }
     if (error instanceof Error && error.message.includes("deadloop is disabled")) throw error;
     if (error instanceof Error && error.message === "cumulative_repair_limit_exceeded_before_launch") {
       const latestPr = readLivePr(env.githubRepo, prNumber);
-      const comment = applyHumanBlock(
+      const block = applyHumanBlock(
         prNumber,
         env,
         latestPr,
         "the PR exceeded the cumulative limit of three automatic repair attempts before launch",
         "Inspect the current head and correct the branch without rewriting history before removing the blocked label.",
+        "",
+        fs.existsSync(acceptedHistoryFile) ? acceptedHistoryFile : historyFile,
       );
+      if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before launch cumulative-limit block");
       return driverResult("done", `PR #${prNumber} exceeded the cumulative repair limit; marked blocked`, {
         driverAction: "review_repair_limit_reached",
-        comment,
+        comment: block.comment,
       });
     }
     const failedLaunch = (error as Error & { launch?: JsonObject }).launch;
@@ -960,15 +1272,17 @@ function dispatch(args: JsonObject): DriverResult {
       launch = { ...failedLaunch, recovered: true };
     } else {
       const latestPr = readLivePr(env.githubRepo, prNumber);
-      const comment = applyHumanBlock(
+      const block = applyHumanBlock(
         prNumber,
         env,
         latestPr,
         `the bounded repair launch failed after its attempt marker was recorded: ${error instanceof Error ? error.message : String(error)}`,
         promise.summary,
         `<!-- deadloop:review-repair-dispatch-stop key=${selection.key} -->`,
+        fs.existsSync(acceptedHistoryFile) ? acceptedHistoryFile : historyFile,
       );
-      return driverResult("done", `PR #${prNumber} repair launch failed; marked blocked`, { driverAction: "review_repair_launch_failed", comment });
+      if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before launch-failure block");
+      return driverResult("done", `PR #${prNumber} repair launch failed; marked blocked`, { driverAction: "review_repair_launch_failed", comment: block.comment });
     }
   }
 
