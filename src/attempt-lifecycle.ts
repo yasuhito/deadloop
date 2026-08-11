@@ -133,7 +133,9 @@ export type AttemptRecord = AttemptIdentity & {
   rootPaneId?: string;
   outputRevision?: string;
   autoMergePolicy?: boolean;
+  reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  reviewClaim?: Record<string, unknown>;
   abandonment?: AttemptAbandonment;
 };
 
@@ -146,7 +148,9 @@ export type PreparedAttemptInput = AttemptIdentity & {
   promptFile: string;
   promiseFile: string;
   autoMergePolicy?: boolean;
+  reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  reviewClaim?: Record<string, unknown>;
 };
 
 const SUCCESSFUL_PHASES: Exclude<AttemptPhase, "launch_failed" | "abandoned">[] = [
@@ -285,9 +289,17 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(record.autoMergePolicy === undefined
       ? {}
       : typeof record.autoMergePolicy === "boolean" ? { autoMergePolicy: record.autoMergePolicy } : fail("autoMergePolicy must be boolean")),
+    ...(record.reviewHistoryRequired === undefined
+      ? {}
+      : typeof record.reviewHistoryRequired === "boolean" ? { reviewHistoryRequired: record.reviewHistoryRequired } : fail("reviewHistoryRequired must be boolean")),
     ...(parseRequiredVerification(record.requiredVerification, false)
       ? { requiredVerification: parseRequiredVerification(record.requiredVerification, true) }
       : {}),
+    ...(record.reviewClaim === undefined
+      ? {}
+      : record.reviewClaim && typeof record.reviewClaim === "object" && !Array.isArray(record.reviewClaim)
+        ? { reviewClaim: record.reviewClaim as Record<string, unknown> }
+        : fail("reviewClaim must be an object")),
     ...(abandonment ? { abandonment } : {}),
   };
 }
@@ -334,10 +346,11 @@ function sameAttemptIdentity(left: AttemptRecord, right: AttemptRecord): boolean
 
 function assertRecordAdvance(current: AttemptRecord, next: AttemptRecord): void {
   if (!sameAttemptIdentity(current, next)) throw new Error("Attempt record identity cannot change");
-  for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy"] as const) {
+  for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy", "reviewHistoryRequired"] as const) {
     if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
+  if (current.reviewClaim !== undefined && JSON.stringify(current.reviewClaim) !== JSON.stringify(next.reviewClaim)) throw new Error("Attempt record reviewClaim cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"] as const) {
     if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }

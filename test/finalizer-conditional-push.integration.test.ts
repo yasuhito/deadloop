@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { finalizeReviewRepair } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
+const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 const { finalizeBranchUpdate } = require("../extensions/deadloop/automations/pr-branch-update-finalize.ts");
 const { createPreparedAttempt } = require("../src/attempt-lifecycle-runtime.cjs");
@@ -13,6 +14,11 @@ const { writeWorkerContractSnapshot } = require("../src/worker-required-verifica
 const sandboxes: string[] = [];
 const branch = "agent/issue-1";
 const ref = `refs/heads/${branch}`;
+const activeReviewState = {
+  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  requestLabel: "agent:review",
+  requiredLabels: ["agent:in-progress"],
+};
 
 function git(repo: string, args: string[]): string {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
@@ -58,20 +64,28 @@ function runRace(finalizer: "repair" | "branch-update", race: "advance" | "delet
       : `git --git-dir='${remote}' update-ref '${ref}' '${rootOid}'`;
   writeFileSync(hookPath, `#!/bin/sh\n${updateRef}\n`);
   chmodSync(hookPath, 0o755);
+  const binding = {
+    repositoryId: "R_repo", repository: "owner/repo", targetNumber: 1, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a",
+    authority: { durationSeconds: 86700 }, activeState: activeReviewState,
+  };
   const run = (args: string[]) => {
     if (args[0] === "node") return { status: 0, stdout: "", stderr: "" };
+    if (args[0] === "gh" && args[1] === "api" && args[2] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+    if (args[0] === "gh" && args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
+    if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }]]), stderr: "" };
+    if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
     if (args[0] === "git" && args.includes("get-url")) {
       return { status: 0, stdout: "https://github.com/owner/repo.git\n", stderr: "" };
     }
     if (args[0] === "gh" && args[1] === "pr") {
       return {
         status: 0,
-        stdout: JSON.stringify({ state: "OPEN", isCrossRepository: false, headRefName: branch, headRefOid: expectedHead }),
+        stdout: JSON.stringify({ state: "OPEN", isCrossRepository: false, headRefName: branch, headRefOid: expectedHead, labels: [{ name: "agent:in-progress" }] }),
         stderr: "",
       };
     }
     if (args[0] === "gh" && args[1] === "repo") {
-      return { status: 0, stdout: JSON.stringify({ id: "R_repo" }), stderr: "" };
+      return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
     }
     const result = spawnSync(args[0], args.slice(1), {
       encoding: "utf8",
@@ -79,12 +93,16 @@ function runRace(finalizer: "repair" | "branch-update", race: "advance" | "delet
     });
     return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
   };
+  const reviewClaim = {
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  };
   const common = {
     repo,
     projectId: "demo",
+    attemptRecord: "/state/runs/attempt/attempt.json",
     projectRepo: repo,
     githubRepo: "owner/repo",
-    attemptRecord: "/state/runs/attempt/attempt.json",
     pr: "1",
     branch,
     expectedHead,
@@ -94,12 +112,19 @@ function runRace(finalizer: "repair" | "branch-update", race: "advance" | "delet
     enabledAt: 1,
     checkCommand: "true",
     resultFile: path.join(path.dirname(repo), "result.json"),
+    reviewClaim,
   };
   const ops = {
     run,
     ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, execute: (args: string[]) => unknown) => execute(["node", "/automation/run-project-check.ts"]),
-    readRepairFindingCount: () => 1,
-    assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
+    loadSavedReviewClaim: () => reviewClaim,
+    loadCurrentReviewClaimConfiguration: () => ({
+      reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+      managedLabels: activeReviewState.managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
+      repositoryId: "R_repo", repository: "owner/repo", authorizedLogins: ["deadloop-bot"],
+      authenticatedLogin: "deadloop-bot", reviewerAgent: "pi",
+    }),
+    assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot" }),
   };
   const result = finalizer === "repair"
     ? finalizeReviewRepair(common, ops)
@@ -129,7 +154,7 @@ describe("finalizer exact-head pushes against real remotes", () => {
   });
 
   function runRenderedRepairFinalizer() {
-    const { repo, remote, expectedHead } = fixture();
+    const { repo, remote, rootOid, expectedHead } = fixture();
     const root = path.dirname(repo);
     const bin = path.join(root, "bin");
     const configDir = path.join(root, "config");
@@ -137,10 +162,16 @@ describe("finalizer exact-head pushes against real remotes", () => {
     const runDir = path.join(stateDir, "runs", "rendered");
     mkdirSync(bin);
     mkdirSync(runDir, { recursive: true });
+    git(repo, ["update-ref", "refs/remotes/origin/main", rootOid]);
+    const baseBranch = "origin/main";
     writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
-      repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
+      repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch, enabledAt: 1,
+      automationLogin: "deadloop-bot",
       firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
       autoMergeAcknowledged: false, enabled: true,
+    }] }));
+    writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{
+      id: "demo", repoPath: repo, githubRepo: "owner/repo", baseBranch, checkCommand: "true",
     }] }));
     const gitCommand = path.join(bin, "git");
     writeFileSync(gitCommand, `#!/usr/bin/env node
@@ -150,11 +181,23 @@ const result = spawnSync("/usr/bin/git", args, {stdio:"inherit"});
 process.exit(result.status ?? 1);
 `);
     chmodSync(gitCommand, 0o755);
+    const binding = {
+      repositoryId: "R_repo", repository: "owner/repo", targetNumber: 1, requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a",
+      authority: { durationSeconds: 86700 }, activeState: activeReviewState,
+    };
+    const reviewClaim = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
     const gh = path.join(bin, "gh");
     writeFileSync(gh, `#!/usr/bin/env node
 const args = process.argv.slice(2);
-if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
-else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isCrossRepository:false,headRefName:"${branch}",headRefOid:"${expectedHead}",comments:[{body:"<!-- deadloop:review-repair-attempt key=11111111111111111111 head=${expectedHead} review=22222222222222222222 findings=1 -->"}]}));
+if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+else if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
+else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
+else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(JSON.stringify([[{id:101,created_at:"2026-07-20T10:01:00Z",updated_at:"2026-07-20T10:01:00Z",user:{login:"deadloop-bot"},body:${JSON.stringify(renderReviewClaimComment(binding))}}]]));
+else if (args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
+else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isCrossRepository:false,headRefName:"${branch}",headRefOid:"${expectedHead}",labels:[{name:"agent:in-progress"}],comments:[{body:"<!-- deadloop:review-repair-attempt key=11111111111111111111 head=${expectedHead} review=22222222222222222222 findings=1 -->"}]}));
 `);
     chmodSync(gh, 0o755);
     const promiseFile = path.join(runDir, "promise.json");
@@ -164,12 +207,11 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
       source: { kind: "local", location: `${path.join(stateDir, "projects.json")}#project=demo` },
       baseRevision: expectedHead,
     };
-    writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "true" }] }));
     const attempt = {
       attemptId: "attempt", launchUuid: "rendered", project: "demo", repository: "owner/repo", role: "review-repair",
       target: { kind: "pull-request", number: 1 }, inputRevision: { head: expectedHead }, branch, baseBranch: expectedHead,
       worktreePath: repo, agentName: "dl-repair-test", workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
-      requiredVerification: contract,
+      requiredVerification: contract, reviewClaim,
     };
     writeWorkerContractSnapshot(runDir, attempt);
     createPreparedAttempt(runDir, attempt);
@@ -178,9 +220,10 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
       projectId: "demo", repoPath: repo, githubRepo: "owner/repo", stateDir, checkCommand: "true",
       baseBranch: expectedHead, requiredVerification: contract,
       workerAgent: "pi", workerModel: "", remote: "origin", reviewLabel: "agent:review",
-      reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", automationDir, enabledAt: 1,
+      reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", inProgressLabel: "agent:in-progress",
+      reviewClaim, automationDir, enabledAt: 1,
     });
-    const command = rendered.match(/permitted push to the exact branch with an exact-head force-with-lease:\n  (.+)\n- Never edit labels/)?.[1];
+    const command = rendered.match(/permitted non-force push to the exact branch:\n  (.+)\n- Never edit labels/)?.[1];
     if (!command) throw new Error("rendered finalizer command was not found");
     const result = spawnSync("bash", ["-c", command], {
       cwd: process.cwd(), encoding: "utf8",

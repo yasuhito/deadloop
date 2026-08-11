@@ -241,7 +241,7 @@ Then("Only the selected branch is pushed", function (this: SafetyWorld) {
   assert.deepEqual(pushTargets(this), [[pushUrl, `${candidate}:refs/heads/${branch}`]]);
 });
 
-Then("The branch is pushed with a lease bound to the verified head", function (this: SafetyWorld) {
+Then("The branch is pushed without force", function (this: SafetyWorld) {
   assert.deepEqual(successfulPushForceOptions(this), [[]]);
 });
 

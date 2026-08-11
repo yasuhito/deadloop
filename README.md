@@ -26,6 +26,7 @@ npx skills@latest add yasuhito/deadloop
 
 - v0 is a Pi package / extension.
 - The default runner is [Herdr](https://herdr.dev/).
+- The supported host platform currently requires a Unix-like system with a compatible `flock` executable (normally provided by util-linux) and nonblocking file-descriptor locks. `/deadloop-enable` verifies this capability before enabling automation.
 
 ## Configure
 
@@ -53,7 +54,7 @@ The preflight tries to restore generated runtime artifacts on every exit. If res
 
 ### Confirm GitHub access and labels
 
-After the preflight succeeds, `/deadloop-enable` verifies GitHub write access. It creates only the standard labels that are missing.
+After the preflight succeeds, `/deadloop-enable` verifies GitHub write access and resolves the authenticated GitHub login. It stores that login in local enablement state as an explicit authorized automation identity, then creates only the standard labels that are missing. Enablement fails if the authenticated login cannot be verified.
 
 ### Keep automatic merge off initially
 
@@ -71,7 +72,7 @@ Re-enable each repository after upgrading from an older release.
 
 ### Add local overrides only when needed
 
-Copy the example into Pi's local state only when you need overrides such as `autoMerge` or a custom `worktreeRoot`:
+Copy the example into Pi's local state only when you need overrides such as `autoMerge`, a custom `worktreeRoot`, or additional `automationLogins` for other Automation hosts in the same trusted fleet. Add only GitHub logins whose identity and control you have verified; the example intentionally authorizes none:
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop
@@ -111,21 +112,28 @@ Create the standard labels once per repository:
 
 ```bash
 gh label create ready-for-agent --repo owner/repo --color 0e8a16 || true
-gh label create agent:implement --repo owner/repo --color 1d76db || true
-gh label create agent:in-progress --repo owner/repo --color fbca04 || true
-gh label create agent:review --repo owner/repo --color 5319e7 || true
-gh label create agent:reviewing --repo owner/repo --color c2e0c6 || true
-gh label create agent:blocked --repo owner/repo --color b60205 || true
 gh label create ready-for-human --repo owner/repo --color d93f0b || true
+gh label create wontfix --repo owner/repo --color ffffff || true
 gh label create needs-info --repo owner/repo --color fef2c0 || true
 gh label create needs-triage --repo owner/repo --color f9d0c4 || true
+gh label create agent:explore --repo owner/repo --color 0052cc || true
+gh label create agent:implement --repo owner/repo --color 1d76db || true
+gh label create agent:review --repo owner/repo --color 5319e7 || true
+gh label create agent:reviewing --repo owner/repo --color c2e0c6 || true
+gh label create agent:update-branch --repo owner/repo --color 006b75 || true
+gh label create agent:in-progress --repo owner/repo --color fbca04 || true
+gh label create agent:blocked --repo owner/repo --color b60205 || true
 ```
 
 An issue is eligible only when it has both `ready-for-agent` and `agent:implement`.
 
+`agent:reviewing` remains a compatibility label for older workflow state and branch-update paths. Review claims and repair authorization require `agent:in-progress`; new review flows never add `agent:reviewing`.
+
 ## Merge-conflict recovery
 
-When a selected same-repository PR conflicts with the configured base, deadloop can start one guarded branch-update worker.
+During the current GitHub-claim bootstrap, branch-update mutations stop without side effects. They remain unavailable until the `agent:update-branch` handoff tracked by #241 is implemented. The existing non-force, exact-head, required-verification, and normal-merge safety contracts remain required; this temporary stop does not remove them.
+
+The guarded branch-update behavior below describes the retained safety contract, not a currently reachable mutation path.
 
 The worker merges the selected base commit into the existing PR branch. It never rebases.
 
@@ -145,17 +153,17 @@ See [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) for the safety contr
 
 When the built-in reviewer reports structured actionable findings, deadloop can start one bounded repair worker on the existing PR branch.
 
-Review labels remain in place during the repair. deadloop does not add a repair label.
+During repair, deadloop preserves the active `agent:in-progress` claim without adding another workflow label. It does not create a new `agent:review` request generation until repair completion, and it removes any legacy `agent:reviewing` label when leaving the repair state.
 
 The worker receives only the findings.
 
-The finalizer first measures the size of the repair. If the repair is too large, it skips required verification, does not push, and hands the PR to a human.
-
-If the repair is within the size limit, the finalizer requires a passed record bound to the attempt's fixed required-verification contract and repair commit. It reuses only a fully matching record and atomically updates the exact branch only if the branch head still equals the validated commit.
+The finalizer runs the configured checks for every repair, regardless of how many files changed. It requires a passed record bound to the attempt's fixed required-verification contract and repair commit, reuses only a fully matching record, and atomically updates the exact branch only if the branch head still equals the validated commit.
 
 The finalizer never replaces another head or changes GitHub workflow state.
 
 The review result appears in a readable PR comment. The comment identifies the reviewed commit, reasons, findings, and next action.
+
+Each review is also bound to a complete, paginated observation of the PR's commit sequence, exact diff, conversation comments, submitted reviews, and inline review comments. Any addition, edit, deletion, head/base change, or diff change releases the active review claim and requires a fresh review; comment text is treated only as untrusted evidence.
 
 After a confirmed repair push, deadloop adds a separate result comment. This comment records the changes for each finding, the new commit, the checks, and the handoff to re-review.
 
@@ -172,7 +180,7 @@ See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for details.
 ## Roll out in phases
 
 1. **Issue coordination only** — Start here for a slow rollout. Humans still review and merge PRs.
-2. **Automated PR review** — Use the standard PR reviewer with `autoMerge: false`. Reviewed PRs move to `ready-for-human`. External review requests remain off unless `externalReview.enabled` is `true`.
+2. **Automated PR review** — Use the standard PR reviewer with `autoMerge: false`. Reviewed PRs move to `ready-for-human`. During the current bootstrap, external-review mutations stop without side effects until they are connected under an active review claim; enabling `externalReview` does not bypass that stop.
 3. **Optional auto-merge** — Consider `autoMerge: true` only after proving branch protection, CI, review expectations, dry-run or manual approval practices, and stop conditions.
 
 ## Run

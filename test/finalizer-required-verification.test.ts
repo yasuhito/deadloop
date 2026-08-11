@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 const {
   ensureRequiredVerificationRecord,
@@ -35,7 +40,7 @@ it("records a bounded finalizer verification timeout with the canonical typed ou
   const record = verificationRecordForResult(
     { attempt: attempt("review-repair"), currentContract: contract, targetCommit: candidate },
     candidate,
-    { status: 124, stdout: "", stderr: "project check timed out" },
+    { status: null, stdout: "", stderr: "project check wrapper timed out", timedOut: true },
     Date.now(),
     "/state/check.log",
   );
@@ -47,12 +52,130 @@ it("records finalizer verification interruption with the canonical typed outcome
   const record = verificationRecordForResult(
     { attempt: attempt("branch-update"), currentContract: contract, targetCommit: candidate },
     candidate,
-    { status: 130, stdout: "", stderr: "" },
+    { status: null, stdout: "", stderr: "", signal: "SIGINT" },
     Date.now(),
     "/state/check.log",
   );
 
   expect({ outcome: record.outcome, exitCode: record.exitCode, terminationReason: record.terminationReason }).toEqual({ outcome: "interrupted", exitCode: null, terminationReason: "interrupted" });
+});
+
+it("keeps a structured exit 124 an ordinary failed command with its real exit code", () => {
+  const record = verificationRecordForResult(
+    { attempt: attempt("review-repair"), currentContract: contract, targetCommit: candidate },
+    candidate,
+    { status: 124, stdout: "", stderr: "" },
+    Date.now(),
+    "/state/check.log",
+    { version: 1, code: 124, timedOut: false, interrupted: false, signal: null },
+  );
+
+  expect({ outcome: record.outcome, exitCode: record.exitCode, terminationReason: record.terminationReason }).toEqual({ outcome: "failed", exitCode: 124, terminationReason: undefined });
+});
+
+it("keeps a structured exit 130 an ordinary failed command with its real exit code", () => {
+  const record = verificationRecordForResult(
+    { attempt: attempt("review-repair"), currentContract: contract, targetCommit: candidate },
+    candidate,
+    { status: 130, stdout: "", stderr: "" },
+    Date.now(),
+    "/state/check.log",
+    { version: 1, code: 130, timedOut: false, interrupted: false, signal: null },
+  );
+
+  expect({ outcome: record.outcome, exitCode: record.exitCode }).toEqual({ outcome: "failed", exitCode: 130 });
+});
+
+it("fails closed when the structured result records a restoration failure", () => {
+  const record = verificationRecordForResult(
+    { attempt: attempt("review-repair"), currentContract: contract, targetCommit: candidate },
+    candidate,
+    { status: 0, stdout: "", stderr: "" },
+    Date.now(),
+    "/state/check.log",
+    { version: 1, code: 0, timedOut: false, interrupted: false, signal: null, restorationFailure: true },
+  );
+
+  expect({ outcome: record.outcome, restorationFailure: record.restorationFailure }).toEqual({ outcome: "failed", restorationFailure: true });
+});
+
+const subprocessRoots: string[] = [];
+afterEach(() => {
+  for (const dir of subprocessRoots.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+function subprocessCheckFixture(): { cwd: string; structuredPath: string; args: (command: string, timeoutMs: number) => string[] } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-finalizer-check-"));
+  subprocessRoots.push(root);
+  const cwd = path.join(root, "repo");
+  fs.mkdirSync(cwd);
+  spawnSync("git", ["-C", cwd, "init", "--quiet"]);
+  const structuredPath = path.join(root, "check-result.json");
+  return {
+    cwd,
+    structuredPath,
+    args: (command: string, timeoutMs: number) => [
+      "extensions/deadloop/automations/run-project-check.ts",
+      "--cwd", cwd,
+      "--timeout-ms", String(timeoutMs),
+      "--command", command,
+      "--quarantine-root", path.join(root, "quarantine"),
+      "--structured-result", structuredPath,
+    ],
+  };
+}
+
+describe("finalizer verification subprocess outcomes", () => {
+  it("records an ordinary exit 124 from a real subprocess as a failed command", () => {
+    const fixture = subprocessCheckFixture();
+    const result = spawnSync("node", fixture.args("exit 124", 60_000), { encoding: "utf8" });
+    const structured = JSON.parse(fs.readFileSync(fixture.structuredPath, "utf8"));
+    const record = verificationRecordForResult(
+      { attempt: attempt("review-repair"), currentContract: contract, targetCommit: candidate },
+      candidate,
+      { status: result.status, stdout: result.stdout, stderr: result.stderr },
+      Date.now(),
+      "/state/check.log",
+      structured,
+    );
+
+    expect({ outcome: record.outcome, exitCode: record.exitCode }).toEqual({ outcome: "failed", exitCode: 124 });
+  });
+
+  it("records a real subprocess timeout as timed_out", () => {
+    const fixture = subprocessCheckFixture();
+    const result = spawnSync("node", fixture.args("sleep 5", 200), { encoding: "utf8" });
+    const structured = JSON.parse(fs.readFileSync(fixture.structuredPath, "utf8"));
+    const record = verificationRecordForResult(
+      { attempt: attempt("review-repair"), currentContract: contract, targetCommit: candidate },
+      candidate,
+      { status: result.status, stdout: result.stdout, stderr: result.stderr },
+      Date.now(),
+      "/state/check.log",
+      structured,
+    );
+
+    expect({ outcome: record.outcome, exitCode: record.exitCode, terminationReason: record.terminationReason }).toEqual({ outcome: "timed_out", exitCode: null, terminationReason: "timeout" });
+  });
+
+  it("records a real subprocess interruption as interrupted", async () => {
+    const fixture = subprocessCheckFixture();
+    const child = spawn("node", fixture.args("sleep 5", 60_000), { stdio: "ignore" });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    child.kill("SIGINT");
+    await new Promise((resolve) => child.once("close", resolve));
+    const structured = JSON.parse(fs.readFileSync(fixture.structuredPath, "utf8"));
+    const record = verificationRecordForResult(
+      { attempt: attempt("review-repair"), currentContract: contract, targetCommit: candidate },
+      candidate,
+      { status: null, stdout: "", stderr: "", signal: "SIGINT" },
+      Date.now(),
+      "/state/check.log",
+      structured,
+    );
+
+    expect({ interrupted: structured.interrupted, outcome: record.outcome, terminationReason: record.terminationReason }).toEqual({ interrupted: true, outcome: "interrupted", terminationReason: "interrupted" });
+  });
 });
 
 for (const role of ["review-repair", "branch-update"] as const) {

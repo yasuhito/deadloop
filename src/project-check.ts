@@ -35,6 +35,7 @@ type ProjectCheckInput = {
   timeoutMs?: number;
   terminationGraceMs?: number;
   signal?: AbortSignal;
+  structuredResultPath?: string;
 };
 
 type ArtifactRestorationFailure = {
@@ -405,7 +406,28 @@ function parseCliArgs(argv: string[]): ProjectCheckInput {
   }
   const timeoutMs = values["timeout-ms"] ? Number(values["timeout-ms"]) : undefined;
   if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error("--timeout-ms must be positive");
-  return { cwd: values.cwd, command: values.command, quarantineRoot: values["quarantine-root"], timeoutMs };
+  return {
+    cwd: values.cwd,
+    command: values.command,
+    quarantineRoot: values["quarantine-root"],
+    timeoutMs,
+    ...(values["structured-result"] ? { structuredResultPath: values["structured-result"] } : {}),
+  };
+}
+
+function writeStructuredProjectCheckResult(file: string | undefined, result: ProjectCheckResult): void {
+  if (!file) return;
+  const payload = {
+    version: 1,
+    code: result.code,
+    timedOut: result.timedOut,
+    interrupted: result.interrupted,
+    signal: result.signal,
+    ...(result.restorationFailure ? { restorationFailure: true } : {}),
+  };
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(payload)}\n`);
+  fs.renameSync(temporary, file);
 }
 
 async function projectCheckMain(
@@ -426,6 +448,7 @@ async function projectCheckMain(
       if (failure) recordProjectCheckRestorationFailure(input, failure);
       throw error;
     }
+    writeStructuredProjectCheckResult(input.structuredResultPath, result);
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.restorationFailure) {

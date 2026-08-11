@@ -9,6 +9,7 @@ import {
   removeEnabledProjectGeneration,
   upsertEnabledProject,
 } from "../src/enablement";
+import { preserveEnablementAutomationLogins } from "../src/enablement-write";
 
 const project = { repoPath: "/repos/demo", githubRepo: "owner/demo", githubRepositoryId: "R_demo" };
 const safetyFields = {
@@ -96,6 +97,20 @@ describe("local enablement state", () => {
     const acknowledged = observeAutoMerge(observedFalse, project, true);
 
     expect(findEnabledProject(upsertEnabledProject(removeEnabledProject(acknowledged, project), project, 2), project)?.autoMergeAcknowledged).toBe(true);
+  });
+
+  it("does not let a stale state normalizer erase the authorized automation login", () => {
+    const previous = upsertEnabledProject(null, { ...project, automationLogin: "Deadloop-Bot" });
+    const staleUpdate = { projects: previous.projects.map(({ automationLogin: _automationLogin, ...enabled }) => enabled) };
+
+    expect(preserveEnablementAutomationLogins(previous, staleUpdate).projects[0].automationLogin).toBe("deadloop-bot");
+  });
+
+  it("does not transfer authorization to a different immutable GitHub repository", () => {
+    const previous = upsertEnabledProject(null, { ...project, automationLogin: "deadloop-bot" });
+    const replacement = upsertEnabledProject(null, { ...project, githubRepositoryId: "R_replacement" });
+
+    expect(preserveEnablementAutomationLogins(previous, replacement).projects[0].automationLogin).toBeUndefined();
   });
 
   it("rejects invalid first-enable auto-merge gate metadata", () => {

@@ -30,13 +30,15 @@ Pi packages and extensions run with your local user permissions. Install only fr
 
 ## 2. Enable the local scheduler and add optional policy
 
+The current supported host is a Unix-like platform with a compatible `flock` executable, normally from util-linux. It must support the nonblocking file-descriptor locking used by deadloop's repository scheduler. `/deadloop-enable` tests the executable and actual lock behavior before it persists enablement, changes GitHub labels, or starts the scheduler; an unavailable or incompatible implementation fails closed. A portable lock backend is not included yet.
+
 Start Pi from a normal (non-linked) Git checkout and run:
 
 ```text
 /deadloop-enable
 ```
 
-The command infers the local checkout, GitHub repository, base branch, and default Herdr worktree root. It first journals ownership and the trusted base revision, creates a detached temporary Git worktree at that exact revision, and runs the resolved required-verification command there. Uncommitted changes in the normal checkout are not included. This preflight creates no Herdr workspace and starts no agent. A failed command leaves scheduling disabled and reports the durable log path under `~/.pi/agent/deadloop/`; only a clean, revision-matched, proven-owned temporary worktree is removed. Repeated enablement reuses only a passed record with an exact repository, target commit, command, source identity, and base-revision match. Timeout, interruption, and runner-start failures have typed outcomes with a null exit code, and deadloop attempts to restore generated runtime artifacts before cleanup is considered. If restoration fails, it retains the quarantine and temporary worktree and records both paths. `/deadloop-doctor` shows the journal, record, log, revision, retained resources, and a read-only confirmation command whenever cleanup cannot be proven safe. The command then checks `gh` authentication and write permission and creates only missing standard labels. Only after a passed verification record and those steps succeed does it save local execution permission under `~/.pi/agent/deadloop/`. `deadloop.json` and `projects.json` are optional policy/override files and never start automation merely by existing. A newly enabled repository always starts with `autoMerge: false`; configure auto-merge only after the safety checks in this guide. After the initial safe start, deadloop must observe `autoMerge: false` and then an explicit change to `autoMerge: true` before it acknowledges automatic merge. That acknowledgement survives disable and re-enable. Keep `autoMerge: false` until you intend to enable automatic merge.
+The command infers the local checkout, GitHub repository, base branch, and default Herdr worktree root. It first journals ownership and the trusted base revision, creates a detached temporary Git worktree at that exact revision, and runs the resolved required-verification command there. Uncommitted changes in the normal checkout are not included. This preflight creates no Herdr workspace and starts no agent. A failed command leaves scheduling disabled and reports the durable log path under `~/.pi/agent/deadloop/`; only a clean, revision-matched, proven-owned temporary worktree is removed. Repeated enablement reuses only a passed record with an exact repository, target commit, command, source identity, and base-revision match. Timeout, interruption, and runner-start failures have typed outcomes with a null exit code, and deadloop attempts to restore generated runtime artifacts before cleanup is considered. If restoration fails, it retains the quarantine and temporary worktree and records both paths. `/deadloop-doctor` shows the journal, record, log, revision, retained resources, and a read-only confirmation command whenever cleanup cannot be proven safe. The command then checks `gh` authentication and write permission, resolves the authenticated GitHub login, and creates only missing standard labels. Only after a passed verification record and those steps succeed does it save local execution permission under `~/.pi/agent/deadloop/`, including the normalized authenticated login as an explicit authorized automation identity. The reviewer receives that saved identity at runtime, so the default path does not require `projects.json` and does not rely on an implicit "currently logged in" fallback. `deadloop.json` and `projects.json` are optional policy/override files and never start automation merely by existing. A newly enabled repository always starts with `autoMerge: false`; configure auto-merge only after the safety checks in this guide. After the initial safe start, deadloop must observe `autoMerge: false` and then an explicit change to `autoMerge: true` before it acknowledges automatic merge. That acknowledgement survives disable and re-enable. Keep `autoMerge: false` until you intend to enable automatic merge.
 
 Use Pi's user state config only for local overrides such as `autoMerge` or a custom `worktreeRoot`. If you need those overrides, copy the example config to Pi's user state directory and edit it for your repository. If you installed from GitHub, Pi clones the package under `~/.pi/agent/git/github.com/yasuhito/deadloop`:
 
@@ -80,11 +82,12 @@ Key fields:
 - `workerAgent` — worker CLI agent type. Allowed values are `"pi"` and `"claude"`; the default is `"pi"`.
 - `workerModel` — optional worker model passed through verbatim in the format understood by the selected `workerAgent`.
 - `reviewerAgent` — reviewer CLI agent type. Allowed values are `"pi"` and `"claude"`; the default is `"pi"`.
+- `automationLogins` — additional GitHub logins authorized to publish cross-host claim comments for other Automation hosts in the same trusted fleet. Leave this empty unless you have verified both the GitHub identity and who controls it; never copy an unfamiliar third-party login into this allowlist. `/deadloop-enable` verifies and stores this host's authenticated login separately in local enablement state, then combines it with these optional local entries at runtime. Reviewer claims still fail closed unless the authenticated runtime login appears in that explicit combined allowlist.
 - `reviewerModel` — optional reviewer model passed through verbatim.
 - `labels` — GitHub labels used to coordinate issue and PR state. Omit this when using the standard labels.
-- `automations` — scheduled automation entries and their prompt/precheck files. Omit this to use the standard issue coordinator and PR reviewer. Set an explicit array only when customizing or disabling the standard automation set. Optional `driverFile` entries run bundled deterministic automation scripts after precheck and before sending any prompt; the driver can return `skip`, `done`, `needs_llm`, or `error` JSON to avoid unnecessary LLM context.
+- `automations` — scheduled automation entries and their prompt/precheck files. Omit this to use the standard issue coordinator and PR reviewer. Set an explicit array only when customizing or disabling the standard automation set. Optional `driverFile` entries run bundled deterministic automation scripts after precheck and before sending any prompt; the driver can return `skip`, `done`, `needs_llm`, or `error` JSON to avoid unnecessary LLM context. Reviewer entries may set `maxRuntimeSeconds` and `shutdownGraceSeconds`; review-claim authority is derived from those normalized execution limits.
 
-Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `externalReview`, `workerInstructionFiles`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` / `driverFile` for automations. The legacy project-level `enabled` field is ignored; only `/deadloop-enable` and `/deadloop-disable` control scheduling. Keep `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local or inferred. Invalid JSON or disallowed keys stop that project safely and appear in `/deadloop-status` and `/deadloop-doctor`.
+Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerModel`, `reviewerAgent`, `reviewerModel`, `checkCommand`, `externalReview`, `workerInstructionFiles`, `workerInstructions`, `workerLaunchPolicy`, `labels`, and `id` / `name` / `promptFile` / `precheckFile` / `driverFile` / `maxRuntimeSeconds` / `shutdownGraceSeconds` for automations. The legacy project-level `enabled` field is ignored; only `/deadloop-enable` and `/deadloop-disable` control scheduling. Keep `repoPath`, `githubRepo`, `baseBranch`, `worktreeRoot`, `autoMerge`, `schedule`, and `precheckTimeoutSeconds` local or inferred. Invalid JSON or disallowed keys stop that project safely and appear in `/deadloop-status` and `/deadloop-doctor`.
 
 Per-launch prompts and promise reports live under `~/.pi/agent/deadloop/runs/`, not in the target worktree. The configured project check runs through deadloop's isolation wrapper: untracked `.deadloop` and `.pi-subagents` directories are temporarily hidden, and restoration is attempted on every exit path. A restoration failure retains and reports the quarantine and temporary worktree for inspection. Tracked files are never hidden; validation fails closed if either runtime directory contains one.
 
@@ -96,15 +99,20 @@ By default deadloop reads `~/.pi/agent/deadloop/projects.json`. Use `DEADLOOP_CO
 
 ```bash
 gh label create ready-for-agent --repo owner/repo --color 0e8a16 || true
-gh label create agent:implement --repo owner/repo --color 1d76db || true
-gh label create agent:in-progress --repo owner/repo --color fbca04 || true
-gh label create agent:review --repo owner/repo --color 5319e7 || true
-gh label create agent:reviewing --repo owner/repo --color c2e0c6 || true
-gh label create agent:blocked --repo owner/repo --color b60205 || true
 gh label create ready-for-human --repo owner/repo --color d93f0b || true
+gh label create wontfix --repo owner/repo --color ffffff || true
 gh label create needs-info --repo owner/repo --color fef2c0 || true
 gh label create needs-triage --repo owner/repo --color f9d0c4 || true
+gh label create agent:explore --repo owner/repo --color 0052cc || true
+gh label create agent:implement --repo owner/repo --color 1d76db || true
+gh label create agent:review --repo owner/repo --color 5319e7 || true
+gh label create agent:reviewing --repo owner/repo --color c2e0c6 || true
+gh label create agent:update-branch --repo owner/repo --color 006b75 || true
+gh label create agent:in-progress --repo owner/repo --color fbca04 || true
+gh label create agent:blocked --repo owner/repo --color b60205 || true
 ```
+
+`agent:reviewing` remains a compatibility label for older workflow state and branch-update paths. Review claims and repair authorization require `agent:in-progress`; new review flows never add `agent:reviewing`.
 
 An issue is eligible for the issue coordinator only when it has both:
 
@@ -127,7 +135,7 @@ Use the standard `pr-reviewer` only after Phase 1 is reliable. Keep:
 
 With auto-merge disabled, the reviewer automation starts a review agent session, requests fixes when needed, and hands the PR to `ready-for-human` instead of merging. External review requests are disabled by default; enable `externalReview` only in repositories where the external service is installed and allowed.
 
-Before review, a same-repository PR that conflicts with the configured base is given one guarded merge-update attempt for each exact PR-head/base-head pair. The dedicated worker merges (never rebases), runs `checkCommand`, and atomically updates only the existing PR branch if its head still equals the validated commit. Operators do not need another label: `agent:review` and `agent:reviewing` remain during the update. A stale head waits for the next cycle without a push; a failed or unsafe attempt adds `agent:blocked`. To retry after intervention, change the PR head or base head, inspect the recorded `deadloop:branch-update-attempt` PR comment, then remove `agent:blocked`.
+During the current GitHub-claim bootstrap, branch-update mutations stop without side effects until #241 implements the `agent:update-branch` handoff. External-review mutations likewise stop until they are connected under an active review claim. Enabling `externalReview` does not bypass this restriction. The existing branch-update contracts—normal merge rather than rebase, required verification, exact-head authorization, and non-force push—remain mandatory and have not been removed.
 
 ### Phase 3: Consider auto-merge
 

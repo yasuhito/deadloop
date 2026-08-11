@@ -11,11 +11,17 @@ const {
   workerRequiredVerificationPath,
   writeWorkerContractSnapshot,
 } = require("../src/worker-required-verification-runtime.cjs");
-
+const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
+const { completion } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
 const roots: string[] = [];
 const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
 const key = "abcdef1234567890abcd";
+const activeReviewState = {
+  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  requestLabel: "agent:review",
+  requiredLabels: ["agent:in-progress"],
+};
 
 function writeCompatibleHerdr(bin: string): void {
   const herdr = path.join(bin, "herdr");
@@ -32,6 +38,14 @@ function runCompletion(options: {
   state?: string;
   labels?: { name: string }[];
   verificationRecord?: "authenticated" | "legacy" | "missing";
+  headAfterPosting?: string;
+  currentProject?: Record<string, unknown>;
+  authenticatedLogin?: string;
+  enabled?: boolean;
+  dateUnavailable?: boolean;
+  editedClaim?: boolean;
+  expireAfterObservations?: boolean;
+  raceAfterComment?: "runtime" | "grace" | "managed label" | "authorized identity" | "authenticated login" | "enablement";
 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-repair-complete-"));
   roots.push(root);
@@ -46,6 +60,9 @@ function runCompletion(options: {
   const postedFile = path.join(root, "posted.txt");
   const actionsFile = path.join(root, "actions.txt");
   const viewsFile = path.join(root, "views.txt");
+  const retractedFile = path.join(root, "retracted.txt");
+  const authLoginFile = path.join(root, "authenticated-login");
+  const observationFile = path.join(root, "claim-observation-complete");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(runDir, { recursive: true });
   fs.mkdirSync(projectRepo);
@@ -53,16 +70,35 @@ function runCompletion(options: {
   spawnSync("git", ["-C", projectRepo, "init", "--quiet"]);
   spawnSync("git", ["-C", projectRepo, "config", "user.email", "test@example.com"]);
   spawnSync("git", ["-C", projectRepo, "config", "user.name", "Test"]);
-  fs.writeFileSync(path.join(projectRepo, "base.txt"), "base\n");
-  spawnSync("git", ["-C", projectRepo, "add", "base.txt"]);
-  spawnSync("git", ["-C", projectRepo, "commit", "--quiet", "-m", "base"]);
+  fs.writeFileSync(path.join(projectRepo, "README.md"), "fixture\n");
+  fs.writeFileSync(path.join(projectRepo, "deadloop.json"), "{}\n");
+  spawnSync("git", ["-C", projectRepo, "add", "."]);
+  spawnSync("git", ["-C", projectRepo, "commit", "--quiet", "-m", "fixture"]);
+  const branchName = spawnSync("git", ["-C", projectRepo, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).stdout.trim();
+  const baseBranch = `origin/${branchName}`;
+  spawnSync("git", ["-C", projectRepo, "update-ref", `refs/remotes/${baseBranch}`, "HEAD"]);
   const baseRevision = spawnSync("git", ["-C", projectRepo, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
-  fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
-    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
+  const enabledProjectsFile = path.join(stateDir, "enabled-projects.json");
+  const projectsFile = path.join(stateDir, "projects.json");
+  fs.writeFileSync(authLoginFile, `${options.authenticatedLogin || "deadloop-bot"}\n`);
+  fs.writeFileSync(enabledProjectsFile, JSON.stringify({ projects: [{
+    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch, automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
-    autoMergeAcknowledged: false, enabled: true,
+    autoMergeAcknowledged: false, enabled: options.enabled ?? true,
   }] }));
+  fs.writeFileSync(projectsFile, JSON.stringify({ projects: [{
+    id: "demo", repoPath: projectRepo, githubRepo: "owner/repo", baseBranch, checkCommand: "npm test", ...options.currentProject,
+  }] }));
+  const binding = {
+    repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a",
+    authority: { durationSeconds: 86700 }, activeState: activeReviewState,
+  };
+  const reviewClaim = {
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  };
+  const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: options.editedClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
   const outcome = String(options.promise.reason || "");
   const strongPromise = {
     schemaVersion: 1, attemptId: key, role: "review-repair",
@@ -81,13 +117,12 @@ function runCompletion(options: {
     repository: "owner/repo", command: "npm test",
     source: { kind: "local", location: `${path.join(stateDir, "projects.json")}#project=demo` }, baseRevision,
   };
-  fs.writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm test" }] }));
   const attempt = {
     schemaVersion: 1, attemptId: key, launchUuid: "repair-run", project: "demo", repository: "owner/repo",
     role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
     branch: "agent/issue-24", baseBranch: baseRevision, worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
     workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile, requiredVerification,
-    phase: "agent_started", lastSuccessfulPhase: "agent_started",
+    phase: "agent_started", lastSuccessfulPhase: "agent_started", reviewClaim,
   };
   fs.writeFileSync(attemptFile, JSON.stringify(attempt));
   writeWorkerContractSnapshot(runDir, attempt);
@@ -110,16 +145,38 @@ function runCompletion(options: {
     `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
-else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
+else if (args[0] === "api" && args[1] === "user") process.stdout.write(fs.readFileSync(process.env.AUTH_LOGIN_FILE, "utf8"));
+else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
+else if (args.some((arg) => arg.endsWith("/comments"))) { fs.writeFileSync(process.env.OBSERVATION_FILE, "complete"); process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))}); }
+else if (args[0] === "api" && args.includes("DELETE")) { fs.appendFileSync(process.env.RETRACTED_FILE, args.join(" ") + "\\n"); fs.rmSync(process.env.POSTED_FILE, {force:true}); }
+else if (args[0] === "api" && args.includes("--include")) { const expired = process.env.EXPIRE_AFTER_OBSERVATIONS === "1" && fs.existsSync(process.env.OBSERVATION_FILE); process.stdout.write(expired ? "date: Tue, 21 Jul 2026 10:06:01 GMT" : ${JSON.stringify(options.dateUnavailable ? "" : "date: Mon, 20 Jul 2026 10:03:00 GMT")}); }
 else if (args[0] === "pr" && args[1] === "view") {
   const views = fs.existsSync(process.env.VIEWS_FILE) ? Number(fs.readFileSync(process.env.VIEWS_FILE, "utf8")) : 0;
   fs.writeFileSync(process.env.VIEWS_FILE, String(views + 1));
+  const posted = fs.existsSync(process.env.POSTED_FILE);
   const comments = ${JSON.stringify(options.comments || [])};
-  if (fs.existsSync(process.env.POSTED_FILE)) comments.push({body:fs.readFileSync(process.env.POSTED_FILE, "utf8"),author:{login:"deadloop-bot"}});
-  process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:views === 0 ? "${options.liveHead || newHead}" : "${options.headAfterAuthorization || options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:review" }, { name: "agent:reviewing" }])},comments}));
+  if (posted) comments.push({body:fs.readFileSync(process.env.POSTED_FILE, "utf8"),author:{login:"deadloop-bot"}});
+  const head = posted && ${JSON.stringify(Boolean(options.headAfterPosting))} ? ${JSON.stringify(options.headAfterPosting || "")} : views >= 2 ? "${options.headAfterAuthorization || options.liveHead || newHead}" : "${options.liveHead || newHead}";
+  process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:head,isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:in-progress" }])},comments}));
 }
-else if (args[0] === "pr" && args[1] === "comment") fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
+else if (args[0] === "pr" && args[1] === "comment") {
+  fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
+  process.stdout.write("https://github.com/owner/repo/pull/24#issuecomment-9901\\n");
+  if (process.env.RACE_AFTER_COMMENT === "authenticated login") fs.writeFileSync(process.env.AUTH_LOGIN_FILE, "other-bot\\n");
+  else if (process.env.RACE_AFTER_COMMENT === "enablement") {
+    const data = JSON.parse(fs.readFileSync(process.env.ENABLED_PROJECTS_FILE, "utf8"));
+    data.projects[0].enabled = false;
+    fs.writeFileSync(process.env.ENABLED_PROJECTS_FILE, JSON.stringify(data));
+  } else if (process.env.RACE_AFTER_COMMENT) {
+    const data = JSON.parse(fs.readFileSync(process.env.PROJECTS_FILE, "utf8"));
+    if (process.env.RACE_AFTER_COMMENT === "runtime") data.projects[0].automations = [{id:"demo:pr-reviewer",driverFile:"pr-reviewer-driver.ts",maxRuntimeSeconds:80000,shutdownGraceSeconds:300}];
+    if (process.env.RACE_AFTER_COMMENT === "grace") data.projects[0].automations = [{id:"demo:pr-reviewer",driverFile:"pr-reviewer-driver.ts",maxRuntimeSeconds:86400,shutdownGraceSeconds:100}];
+    if (process.env.RACE_AFTER_COMMENT === "managed label") data.projects[0].labels = {review:"custom:review"};
+    if (process.env.RACE_AFTER_COMMENT === "authorized identity") data.projects[0].automationLogins = ["other-bot"];
+    fs.writeFileSync(process.env.PROJECTS_FILE, JSON.stringify(data));
+  }
+}
 else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.ACTIONS_FILE, args.join(" ") + "\\n");
 `,
   );
@@ -158,16 +215,28 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
       "agent:review",
       "--reviewing-label",
       "agent:reviewing",
+      "--in-progress-label",
+      "agent:in-progress",
       "--blocked-label",
       "agent:blocked",
+      "--review-claim",
+      JSON.stringify(reviewClaim),
     ],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"), POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile, VIEWS_FILE: viewsFile } },
+    { cwd: process.cwd(), encoding: "utf8", env: {
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
+      POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile, VIEWS_FILE: viewsFile, RETRACTED_FILE: retractedFile,
+      AUTH_LOGIN_FILE: authLoginFile,
+      ENABLED_PROJECTS_FILE: enabledProjectsFile, PROJECTS_FILE: projectsFile,
+      OBSERVATION_FILE: observationFile, EXPIRE_AFTER_OBSERVATIONS: options.expireAfterObservations ? "1" : "0",
+      RACE_AFTER_COMMENT: options.raceAfterComment || "",
+    } },
   );
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   return {
     output: JSON.parse(result.stdout),
     posted: fs.existsSync(postedFile) ? fs.readFileSync(postedFile, "utf8") : "",
     actions: fs.existsSync(actionsFile) ? fs.readFileSync(actionsFile, "utf8") : "",
+    retracted: fs.existsSync(retractedFile) ? fs.readFileSync(retractedFile, "utf8") : "",
   };
 }
 
@@ -191,16 +260,28 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   spawnSync("git", ["-C", projectRepo, "init", "--quiet"]);
   spawnSync("git", ["-C", projectRepo, "config", "user.email", "test@example.com"]);
   spawnSync("git", ["-C", projectRepo, "config", "user.name", "Test"]);
-  fs.writeFileSync(path.join(projectRepo, "base.txt"), "base\n");
-  spawnSync("git", ["-C", projectRepo, "add", "base.txt"]);
-  spawnSync("git", ["-C", projectRepo, "commit", "--quiet", "-m", "base"]);
+  fs.writeFileSync(path.join(projectRepo, "README.md"), "fixture\n");
+  fs.writeFileSync(path.join(projectRepo, "deadloop.json"), "{}\n");
+  spawnSync("git", ["-C", projectRepo, "add", "."]);
+  spawnSync("git", ["-C", projectRepo, "commit", "--quiet", "-m", "fixture"]);
+  const branchName = spawnSync("git", ["-C", projectRepo, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).stdout.trim();
+  const baseBranch = `origin/${branchName}`;
+  spawnSync("git", ["-C", projectRepo, "update-ref", `refs/remotes/${baseBranch}`, "HEAD"]);
   const baseRevision = spawnSync("git", ["-C", projectRepo, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
-    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", enabledAt: 1,
+    repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch, automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
   }] }));
+  const binding = {
+    repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a",
+    authority: { durationSeconds: 86700 }, activeState: activeReviewState,
+  };
+  const reviewClaim = {
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  };
   const checks = [{ command: "npm test", result: "passed" }];
   const receipt = { action: "pushed", reason: "repair_pushed", originalHeadOid: oldHead, headOid: newHead, checks };
   fs.writeFileSync(promiseFile, JSON.stringify({
@@ -211,17 +292,19 @@ async function runConcurrentSuccessRetries(): Promise<number> {
     evidence: { finalizer: receipt, validations: checks },
   }));
   fs.writeFileSync(resultFile, JSON.stringify(receipt));
+  fs.writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{
+    id: "demo", repoPath: projectRepo, githubRepo: "owner/repo", baseBranch, checkCommand: "npm test",
+  }] }));
   const requiredVerification = {
     repository: "owner/repo", command: "npm test",
     source: { kind: "local", location: `${path.join(stateDir, "projects.json")}#project=demo` }, baseRevision,
   };
-  fs.writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm test" }] }));
   const attempt = {
     schemaVersion: 1, attemptId: key, launchUuid: "repair-run", project: "demo", repository: "owner/repo",
     role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
     branch: "agent/issue-24", baseBranch: baseRevision, worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
     workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile, requiredVerification,
-    phase: "agent_started", lastSuccessfulPhase: "agent_started",
+    phase: "agent_started", lastSuccessfulPhase: "agent_started", reviewClaim,
   };
   fs.writeFileSync(attemptFile, JSON.stringify(attempt));
   writeWorkerContractSnapshot(runDir, attempt);
@@ -231,13 +314,17 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   });
   fs.writeFileSync(contractFile, JSON.stringify({ attemptKey: key, expectedHead: oldHead, findingTitles: ["Unsafe fallback"] }));
   fs.writeFileSync(commentsFile, "[]");
+  const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
   const gh = path.join(bin, "gh");
   fs.writeFileSync(gh, `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
-else if (args[0] === "api") process.stdout.write("deadloop-bot\\n");
-else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:"OPEN",headRefName:"agent/issue-24",headRefOid:"${newHead}",isCrossRepository:false,labels:[{name:"agent:review"},{name:"agent:reviewing"}],comments:JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"))}));
+if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
+else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
+else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))});
+else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
+else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:"OPEN",headRefName:"agent/issue-24",headRefOid:"${newHead}",isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"))}));
 else if (args[0] === "pr" && args[1] === "comment") {
   const comments = JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"));
   comments.push({body:args[args.indexOf("--body")+1],author:{login:"deadloop-bot"}});
@@ -251,7 +338,8 @@ else if (args[0] === "pr" && args[1] === "comment") {
     "--result", resultFile, "--contract", contractFile, "--project-repo", projectRepo, "--github-repo", "owner/repo", "--state-dir", stateDir,
     "--enabled-at", "1", "--pr", "24", "--branch", "agent/issue-24", "--expected-head", oldHead,
     "--attempt-key", key, "--review-label", "agent:review", "--reviewing-label", "agent:reviewing",
-    "--blocked-label", "agent:blocked",
+    "--in-progress-label", "agent:in-progress", "--blocked-label", "agent:blocked",
+    "--review-claim", JSON.stringify(reviewClaim),
   ];
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir, COMMENTS_FILE: commentsFile };
   await Promise.all([0, 1].map(() => new Promise<void>((resolve, reject) => {
@@ -267,14 +355,91 @@ afterEach(() => {
 });
 
 describe("review repair deterministic completion", () => {
-  it.each(["--attempt-record", "--project-id"])("requires canonical identity argument %s", (missingFlag) => {
+  it.each([
+    ["runtime", { currentProject: { automations: [{ id: "demo:pr-reviewer", driverFile: "pr-reviewer-driver.ts", maxRuntimeSeconds: 80000, shutdownGraceSeconds: 300 }] } }],
+    ["grace", { currentProject: { automations: [{ id: "demo:pr-reviewer", driverFile: "pr-reviewer-driver.ts", maxRuntimeSeconds: 86400, shutdownGraceSeconds: 100 }] } }],
+    ["labels", { currentProject: { labels: { review: "custom:review" } } }],
+    ["identities", { currentProject: { automationLogins: ["other-bot"] } }],
+    ["authenticated login", { authenticatedLogin: "other-bot" }],
+    ["enablement", { enabled: false }],
+  ])("performs no repair completion comment or label mutation after current %s changes", (_name, change) => {
+    const result = runCompletion({
+      promise: { status: "complete", summary: "fixed", reason: "repair_pushed", repairs: [{ title: "Unsafe fallback", summary: "fixed" }], checks: [{ command: "npm test", result: "passed" }] },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks: [{ command: "npm test", result: "passed" }] },
+      ...change,
+    });
+    expect({ posted: result.posted, actions: result.actions }).toEqual({ posted: "", actions: "" });
+  });
+  it.each(["runtime", "grace", "managed label", "authorized identity", "authenticated login", "enablement"] as const)(
+    "suppresses the repair-completion label mutation when %s races after the success comment",
+    (raceAfterComment) => {
+      const checks = [{ command: "npm test", result: "passed" }];
+      const result = runCompletion({
+        promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed" }], checks },
+        receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+        raceAfterComment,
+      });
+      expect(result.actions).toBe("");
+    },
+  );
+
+  it("posts no repair success when the claim expires while completion observations are being collected", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed" }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      expireAfterObservations: true,
+    });
+
+    expect(result.posted).toBe("");
+  });
+
+  it("visibly blocks repair completion when only REST Date is unavailable", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed", paths: ["src/review.ts"] }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      dateUnavailable: true,
+    });
+
+    expect(result.posted).toContain("GitHub server-time evidence");
+  });
+
+  it("adds only blocked at the repair-completion Date-failure seam", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed", paths: ["src/review.ts"] }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      dateUnavailable: true,
+    });
+
+    expect(result.actions.trim().split(/\s+/).slice(-2)).toEqual(["--add-label", "agent:blocked"]);
+  });
+
+  it("performs no repair-completion mutation for an edited claim with missing REST Date", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed", paths: ["src/review.ts"] }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      dateUnavailable: true,
+      editedClaim: true,
+    });
+
+    expect({ posted: result.posted, actions: result.actions }).toEqual({ posted: "", actions: "" });
+  });
+
+  it("fails before repair completion effects when the active review claim is omitted", () => {
+    expect(() => completion({})).toThrow("active review claim is required");
+  });
+
+  it.each(["--attempt-record", "--project-id", "--review-claim"])("requires mutation authority argument %s", (missingFlag) => {
     const { parseArgs } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
     const values = {
       promise: "/state/runs/one/promise.json", attemptRecord: "/state/runs/one/attempt.json", projectId: "demo",
       result: "/state/runs/one/finalizer-result.json", contract: "/state/runs/one/review-contract.json",
       projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: "1", pr: "24",
       branch: "agent/issue-24", expectedHead: oldHead, attemptKey: key, reviewLabel: "review",
-      reviewingLabel: "reviewing", blockedLabel: "blocked",
+      reviewingLabel: "reviewing", inProgressLabel: "in-progress", blockedLabel: "blocked", reviewClaim: "{}",
     };
     const args = Object.entries(values).flatMap(([name, value]) => {
       const flag = `--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)}`;
@@ -334,7 +499,7 @@ describe("review repair deterministic completion", () => {
       receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
     });
 
-    expect(result.actions).toContain("--remove-label agent:reviewing");
+    expect(result.actions).toContain("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review");
   });
 
   it("turns a malformed finalizer receipt into recovery instead of an exception", () => {
@@ -345,6 +510,16 @@ describe("review repair deterministic completion", () => {
     });
 
     expect(result.output.driverAction).toBe("repair_human_blocked");
+  });
+
+  it("requeues the review request when bounded repair requires human recovery", () => {
+    const result = runCompletion({
+      promise: { status: "blocked", reason: "check_failed", summary: "checks stopped" },
+      receipt: "{",
+      liveHead: oldHead,
+    });
+
+    expect(result.actions).toContain("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review --add-label agent:blocked");
   });
 
   it("does not post repair success for stale_head", () => {
@@ -414,6 +589,24 @@ describe("review repair deterministic completion", () => {
     expect({ action: result.output.driverAction, posted: result.posted }).toEqual({ action: "repair_target_changed", posted: "" });
   });
 
+  it("retracts the success comment when the head changes during posting", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: {
+        status: "complete", reason: "repair_pushed", summary: "fixed",
+        repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }], checks,
+      },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      headAfterPosting: "c".repeat(40),
+    });
+
+    expect({
+      action: result.output.driverAction,
+      retracted: result.retracted.includes("DELETE") && result.retracted.includes("issues/comments/9901"),
+      labelMutations: result.actions,
+    }).toEqual({ action: "repair_target_changed", retracted: true, labelMutations: "" });
+  });
+
   it("does not duplicate an existing repair result comment", () => {
     const checks = [{ command: "npm test", result: "passed" }];
     const result = runCompletion({
@@ -445,7 +638,7 @@ describe("review repair deterministic completion", () => {
       comments: [{ body: `<!-- deadloop:review-repair-result key=${key} head=${newHead} -->`, author: { login: "deadloop-bot" } }],
     });
 
-    expect(result.actions).toContain("--remove-label agent:reviewing");
+    expect(result.actions).toContain("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review");
   });
 
   it("serializes concurrent completion retries to one success comment", async () => {

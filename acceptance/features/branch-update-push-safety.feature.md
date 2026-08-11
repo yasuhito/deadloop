@@ -39,8 +39,8 @@ To protect a pull request author's changes, stop an update if the target changes
 * When deadloop attempts to complete the branch update
 * Then Only the selected branch is pushed
 
-## Scenario: Push an updatable pull request with an exact-head lease
+## Scenario: Push an updatable pull request without force
 
 * Given The pull request head was verified before the update
 * When deadloop attempts to complete the branch update
-* Then The branch is pushed with a lease bound to the verified head
+* Then The branch is pushed without force

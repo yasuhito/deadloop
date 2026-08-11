@@ -2,6 +2,7 @@
 // A finalizer may reuse only an exact authenticated passed record; every other
 // record shape is diagnostic evidence and causes the fixed contract to run.
 
+const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { isDeepStrictEqual } = require("node:util") as typeof import("node:util");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
@@ -96,24 +97,61 @@ type CommandResult = { status: number | null; stdout: string; stderr: string; si
 const FINALIZER_VERIFICATION_TIMEOUT_MS = 10 * 60_000;
 const FINALIZER_VERIFICATION_SUBPROCESS_TIMEOUT_MS = FINALIZER_VERIFICATION_TIMEOUT_MS + 25_000;
 
+type StructuredCheckResult = {
+  version: 1;
+  code: number | null;
+  timedOut: boolean;
+  interrupted: boolean;
+  signal: string | null;
+  restorationFailure?: boolean;
+};
+
+function readStructuredCheckResult(file: string): StructuredCheckResult | undefined {
+  let value: Partial<StructuredCheckResult>;
+  try {
+    value = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (value?.version !== 1 || typeof value.timedOut !== "boolean" || typeof value.interrupted !== "boolean") return undefined;
+  return value as StructuredCheckResult;
+}
+
 function verificationRecordForResult(
   input: Input,
   targetCommit: string,
   result: CommandResult,
   started: number,
   logPath: string,
+  structured?: StructuredCheckResult,
 ): JsonObject {
-  const timedOut = result.status === 124 || result.timedOut === true;
-  const interrupted = result.status === 130 || (result.status === null && (result.signal === "SIGINT" || result.signal === "SIGTERM"));
-  const outcome = timedOut ? "timed_out" : interrupted ? "interrupted" : result.status === 0 ? "passed" : "failed";
-  const terminationReason = timedOut ? "timeout" : interrupted ? "interrupted" : result.signal ? "signal" : undefined;
+  // The structured channel is authoritative: a configured check that merely
+  // exits 124 or 130 stays an ordinary failed command with its real exit code.
+  // Without a structured result the executor never completed, so the wrapper
+  // process outcome (timeout kill, signal kill) is the only trusted evidence.
+  const timedOut = structured ? structured.timedOut : result.timedOut === true;
+  const interrupted = structured
+    ? structured.interrupted
+    : result.status === null && (result.signal === "SIGINT" || result.signal === "SIGTERM");
+  const restorationFailed = structured?.restorationFailure === true;
+  const code = structured ? structured.code : result.status;
+  const outcome = timedOut
+    ? "timed_out"
+    : interrupted
+      ? "interrupted"
+      : structured && !restorationFailed && code === 0
+        ? "passed"
+        : "failed";
+  const signal = structured ? structured.signal : result.signal;
+  const terminationReason = timedOut ? "timeout" : interrupted ? "interrupted" : signal ? "signal" : undefined;
   return {
     version: 1,
     binding: requiredVerificationBinding(input.currentContract, targetCommit),
     outcome,
-    exitCode: timedOut || interrupted || result.status === null ? null : result.status,
+    exitCode: timedOut || interrupted || !structured || code === null ? null : code,
     ...(terminationReason ? { terminationReason } : {}),
-    ...(result.signal ? { terminationSignal: result.signal } : {}),
+    ...(signal ? { terminationSignal: signal } : {}),
+    ...(restorationFailed ? { restorationFailure: true } : {}),
     startedAt: new Date(started).toISOString(),
     durationMs: Math.max(0, Date.now() - started),
     logPath,
@@ -167,6 +205,8 @@ function ensureFinalizerRequiredVerification(
     authenticate,
     execute: () => {
       const started = Date.now();
+      const structuredResultPath = path.join(location.runDir, "required-verification-check-result.json");
+      fs.rmSync(structuredResultPath, { force: true });
       const result = run([
         "node",
         path.join(args.automationDir, "run-project-check.ts"),
@@ -178,10 +218,12 @@ function ensureFinalizerRequiredVerification(
         input.currentContract.command,
         "--quarantine-root",
         path.join(args.stateDir, "check-quarantine"),
+        "--structured-result",
+        structuredResultPath,
       ], FINALIZER_VERIFICATION_SUBPROCESS_TIMEOUT_MS);
       const logPath = path.join(location.runDir, "required-verification.log");
       writeVerificationLog(logPath, `${result.stdout || ""}${result.stderr || ""}`);
-      const record = verificationRecordForResult(input, targetCommit, result, started, logPath);
+      const record = verificationRecordForResult(input, targetCommit, result, started, logPath, readStructuredCheckResult(structuredResultPath));
       if (record.outcome !== "passed") {
         persistHostVerificationEvidence(recordFile, record);
         throw new Error(`required verification ${record.outcome}; log: ${logPath}`);

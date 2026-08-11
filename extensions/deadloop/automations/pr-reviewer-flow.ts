@@ -63,13 +63,13 @@ function selectedPr(prs: JsonObject[], number: number): JsonObject {
   return prs.find((pr) => Number(pr.number) === number) || { number };
 }
 
-function planPrReviewerAction(prs: JsonObject[], agents: JsonObject, env: PrReviewerFlowEnv): PrReviewerPlan {
+function planPrReviewerAction(prs: JsonObject[], _agents: JsonObject, env: PrReviewerFlowEnv): PrReviewerPlan {
   const config = decisionConfig(env);
   const attempts = env.stateDir ? attemptJournalsForPrReviewer(env.stateDir) : [];
   const decision = selectPrForReview(
     prs,
     config,
-    workingReviewerPrNumbers(agents, env.projectId, attempts, env.githubRepo || ""),
+    workingReviewerPrNumbers(_agents, env.projectId, attempts, env.githubRepo || ""),
     claimedReviewerHeads(env.projectId, attempts, env.githubRepo || ""),
   );
 
