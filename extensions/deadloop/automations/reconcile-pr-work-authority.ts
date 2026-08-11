@@ -44,6 +44,33 @@ function moveReconciledLabels(github: any, repository: string, number: number, c
   return observed;
 }
 
+/**
+ * Applies a request-invalidating transition as one full-label replacement, so a request queued
+ * between revalidation and this mutation cannot outlive the cutoff the mutation establishes.
+ * The postcondition proves the observed managed state is exactly the decided one. An unrelated
+ * label added inside that same window is not preserved: GitHub offers no conditional write, and
+ * invalidating every request atomically is the stronger requirement for this transition.
+ */
+function replaceReconciledLabels(github: any, repository: string, number: number, current: string[], next: string[], managedLabels: string[]): string[] {
+  const managed = new Set(managedLabels);
+  const desired = reconciledLabelReplacement(current, next, managedLabels);
+  github.replacePrLabels(repository, number, desired);
+  const observed = labels({ labels: github.listPrLabels(repository, number) });
+  if (!sameStringSet(observed.filter((label) => managed.has(label)), desired.filter((label) => managed.has(label)))) {
+    throw new Error("PR label recovery postcondition was not reached");
+  }
+  return observed;
+}
+
+/**
+ * Only an authorized claim loses its classification to the managed-label replacement: its exact
+ * active state stops matching. Every other kind stays derivable from evidence the replacement
+ * cannot change, so revalidation after the mutation must keep expecting it.
+ */
+function revalidatedReplacedClaimKind(claimKind: string, hasRecord: boolean): string {
+  return hasRecord && claimKind === "authorized" ? "ambiguous" : claimKind;
+}
+
 function claimCommentSnapshot(comments: JsonObject[]): string[] {
   return comments.filter((comment) => parseReviewClaim(comment.body) !== null)
     .map((comment) => JSON.stringify([comment.id || comment.databaseId, comment.created_at || comment.createdAt, comment.updated_at || comment.updatedAt, comment.body])).sort();
@@ -315,10 +342,11 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       completeBlock: record ? undefined : () => fs.rmSync(recoveryFile, { force: true }),
       listTimelineEvents: () => github.listPrTimelineEvents(args.githubRepo, number),
       listComments: () => github.listPrComments(args.githubRepo, number),
-      replaceLabels: (next: string[]) => guarded(() => {
+      replaceLabels: (next: string[], options: { invalidatesRequests: boolean }) => guarded(() => {
         const current = revalidate(input.pr.labels, claim.kind);
-        input.pr.labels = moveReconciledLabels(github, args.githubRepo, number, current, next, managed);
-        if (record && claim.kind !== "malformed" && claim.kind !== "superseded") claim = { kind: "ambiguous" };
+        const apply = options.invalidatesRequests ? replaceReconciledLabels : moveReconciledLabels;
+        input.pr.labels = apply(github, args.githubRepo, number, current, next, managed);
+        claim = { kind: revalidatedReplacedClaimKind(claim.kind, Boolean(record)) };
         if (!next.some((label) => requestLabels.includes(label))) expectedRequestEventId = "";
       }),
       comment: (body: string) => guarded(() => {
@@ -436,6 +464,8 @@ module.exports = {
   reconcile,
   reconciledLabelReplacement,
   reconciliationAuthorityMatches,
+  replaceReconciledLabels,
   revalidatedMissingRecordClaimKind,
+  revalidatedReplacedClaimKind,
   runtimeForAttempt,
 };

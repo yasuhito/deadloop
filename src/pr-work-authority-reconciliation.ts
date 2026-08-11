@@ -64,8 +64,10 @@ function releaseLabels(input: ReconciliationInput): string[] {
 }
 
 /**
- * Pure GitHub/workspace policy. Callers perform the returned full-label replacement in one API
- * mutation, then bind expiry invalidation to the resulting authenticated blocked event.
+ * Pure GitHub/workspace policy. Callers apply the returned label set in one API mutation, then
+ * bind expiry invalidation to the resulting authenticated blocked event. A decision carrying
+ * `invalidatesRequests` must be applied as a full replacement so a request queued during the
+ * mutation cannot survive its own cutoff; the other transitions preserve concurrent requests.
  */
 function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDecision {
   if (input.claim.kind === "authorized" && input.runtime.kind === "live_matching_owner") {
@@ -181,7 +183,7 @@ type ReconciliationOperations = {
   completeBlock?(cutoffEventId: string): void | Promise<void>;
   listTimelineEvents(): JsonObject[] | Promise<JsonObject[]>;
   listComments(): JsonObject[] | Promise<JsonObject[]>;
-  replaceLabels(labels: string[]): void | Promise<void>;
+  replaceLabels(labels: string[], options: { invalidatesRequests: boolean }): void | Promise<void>;
   comment(body: string): void | Promise<void>;
   recordReleaseStarted?(): void | Promise<void>;
   closeOwnedWorkspace?(): boolean | Promise<boolean>;
@@ -204,7 +206,7 @@ async function applyPrWorkAuthorityReconciliation(
     if (closed !== true) return { action: decision.action, cleanup: "preserve_workspace" };
     // Keep the local owner recoverable until GitHub visibly exposes the queued request.
     // A retry can finish either side of this journaled transition idempotently.
-    if (labelsChange) await operations.replaceLabels(decision.labels);
+    if (labelsChange) await operations.replaceLabels(decision.labels, { invalidatesRequests: false });
     await operations.releaseLocalOwnership?.();
     return { action: decision.action, cleanup: "ownership_released" };
   }
@@ -214,7 +216,7 @@ async function applyPrWorkAuthorityReconciliation(
   if (decision.action === "block" && labelsChange) {
     await operations.recordBlockStarted?.({ reason: decision.reason, timelineEventIds: timelineBaseline.map(eventId) });
   }
-  if (labelsChange) await operations.replaceLabels(decision.labels);
+  if (labelsChange) await operations.replaceLabels(decision.labels, { invalidatesRequests: decision.invalidatesRequests });
 
   let cutoffEventId: string | undefined;
   if (decision.action === "block") {
@@ -271,6 +273,7 @@ function postBlockRequestIsEligible(input: {
   blockedLabel: string;
 }): boolean {
   const authorized = new Set(input.authorizedLogins.map((login) => login.toLowerCase()));
+  const cutoffs: JsonObject[] = [];
   for (const comment of input.comments) {
     const author = String(comment.author?.login || comment.user?.login || "").toLowerCase();
     const marker = parseRecoveryMarker(comment.body);
@@ -279,9 +282,13 @@ function postBlockRequestIsEligible(input: {
       || String(marker.head || "").toLowerCase() !== input.pr.headRefOid.toLowerCase()) continue;
     const cutoff = input.events.find((event) => eventId(event) === String(marker.cutoffEventId || "")
       && eventAction(event) === "labeled" && eventLabel(event) === input.blockedLabel && eventActor(event) === author);
-    if (cutoff && requestAfterInvalidationCutoff(input.request, cutoff)) return true;
+    if (cutoff) cutoffs.push(cutoff);
   }
-  return false;
+  // Repeated block cycles on one head leave several bound markers. Only the latest
+  // authenticated blocked transition still authorizes work: an earlier cutoff was
+  // itself invalidated by the later one.
+  const latest = cutoffs.sort(compareGithubEvents).at(-1);
+  return latest !== undefined && requestAfterInvalidationCutoff(input.request, latest);
 }
 
 const LEGACY_MIGRATION_PRS = new Set([227, 228, 229, 236]);

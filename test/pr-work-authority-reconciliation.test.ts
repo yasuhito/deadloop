@@ -1,4 +1,5 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -19,7 +20,9 @@ const {
   reconcile,
   reconciledLabelReplacement,
   reconciliationAuthorityMatches,
+  replaceReconciledLabels,
   revalidatedMissingRecordClaimKind,
+  revalidatedReplacedClaimKind,
   runtimeForAttempt,
 } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
 const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
@@ -55,6 +58,25 @@ const base = {
   inProgressLabel: "agent:in-progress",
   blockedLabel: "agent:blocked",
 };
+
+/** Two authenticated block cycles on one head, so only the later cutoff still authorizes work. */
+function twoBlockCycles(request: { id: string; created_at: string }) {
+  const blockedEvent = (id: string, createdAt: string) => ({
+    id, event: "labeled", created_at: createdAt, actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" },
+  });
+  const requestEvent = { ...request, event: "labeled", actor: { login: "human" }, label: { name: "agent:review" } };
+  return {
+    pr: base.pr,
+    request: requestEvent,
+    events: [blockedEvent("30", "2026-08-01T10:01:00Z"), requestEvent, blockedEvent("32", "2026-08-01T10:03:00Z")],
+    comments: ["30", "32"].map((cutoffEventId) => ({
+      author: { login: "deadloop-bot" },
+      body: recoveryComment(base.pr.number, base.pr.headRefOid, "claim_expired", cutoffEventId),
+    })),
+    authorizedLogins: ["deadloop-bot"],
+    blockedLabel: "agent:blocked",
+  };
+}
 
 describe("PR work-authority reconciliation", () => {
   it("keeps a live matching claim unchanged", () => {
@@ -145,6 +167,14 @@ describe("PR work-authority reconciliation", () => {
     const request = { id: "41", event: "labeled", created_at: "2026-08-01T10:02:00Z", actor: { login: "human" }, label: { name: "agent:review" } };
     const comments = [{ author: { login: "deadloop-bot" }, body: recoveryComment(base.pr.number, base.pr.headRefOid, "claim_expired", "40") }];
     expect(postBlockRequestIsEligible({ pr: base.pr, request, events: [cutoff, request], comments, authorizedLogins: ["deadloop-bot"], blockedLabel: "custom:blocked" })).toBe(true);
+  });
+
+  it("rejects a request that follows only an obsolete blocked cutoff", () => {
+    expect(postBlockRequestIsEligible(twoBlockCycles({ id: "31", created_at: "2026-08-01T10:02:00Z" }))).toBe(false);
+  });
+
+  it("selects a request that follows the latest blocked cutoff", () => {
+    expect(postBlockRequestIsEligible(twoBlockCycles({ id: "33", created_at: "2026-08-01T10:04:00Z" }))).toBe(true);
   });
 
   it("does not let report_received imply active work", () => {
@@ -273,11 +303,113 @@ describe("PR work-authority reconciliation", () => {
   });
 });
 
+/**
+ * Runs the real reconciliation entrypoint against an expired reviewer claim whose workspace is
+ * safely stopped, so the whole recovery path — request-invalidating label replacement, recovery
+ * comment, workspace close, local release — executes against one live GitHub and runtime fake.
+ */
+async function runExpiredClaimReconciliation() {
+  const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
+  const originalPath = process.env.PATH;
+  const root = mkdtempSync(path.join(tmpdir(), "deadloop-expiry-recovery-"));
+  const repo = path.join(root, "repo");
+  const worktree = path.join(root, "worktree");
+  const stateDir = path.join(root, "deadloop");
+  const runDir = path.join(stateDir, "runs", "attempt-1");
+  const bin = path.join(root, "bin");
+  try {
+    for (const directory of [repo, worktree, bin, runDir]) mkdirSync(directory, { recursive: true });
+    execFileSync("git", ["init", "--quiet", repo]);
+    execFileSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
+    writeFileSync(path.join(bin, "gh"), "#!/bin/sh\nprintf '{\"id\":\"repo-id\"}\\n'\n");
+    execFileSync("chmod", ["+x", path.join(bin, "gh")]);
+    process.env.PI_CODING_AGENT_DIR = root;
+    process.env.PATH = `${bin}:${originalPath || ""}`;
+    writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
+      repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "repo-id", enabledAt: 1,
+      firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
+      autoMergeAcknowledged: false, enabled: true,
+    }] }));
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+      attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "reviewer",
+      target: { kind: "pull-request", number: 42 }, inputRevision: { head: "a".repeat(40) },
+      branch: "agent/issue-42", worktreePath: worktree, agentName: "dl-r-42-abcdef123456", workspaceLabel: "reviewer",
+      promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
+      workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1",
+      phase: "agent_started", lastSuccessfulPhase: "agent_started", reviewClaim,
+    }));
+
+    let live = ["agent:in-progress", "agent:review", "customer:keep"];
+    let workspaceOpen = true;
+    const events: Array<Record<string, unknown>> = [
+      { id: "10", event: "labeled", created_at: "2026-08-01T10:00:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:review" } },
+    ];
+    const comments: Array<Record<string, unknown>> = [claimComment];
+    const recoveryComments: string[] = [];
+    const pr = () => ({ number: 42, state: "OPEN", headRefOid: "a".repeat(40), labels: live.map((name) => ({ name })) });
+    // Another host queues a request after revalidation read the labels and before the recovery
+    // mutation reaches GitHub. Its labeled event precedes the resulting blocked cutoff.
+    const queueConcurrentRequest = () => { if (!live.includes("agent:implement")) live = [...live, "agent:implement"]; };
+    const commandRunner = {
+      runText: (argv: string[]) => {
+        if (argv[0] === "herdr") { workspaceOpen = false; return ""; }
+        if (argv[2] === "user") return "deadloop-bot\n";
+        if (argv.slice(0, 3).join(" ") === "gh pr edit") {
+          queueConcurrentRequest();
+          const labelArgument = (flag: string) => argv.filter((_token, index) => argv[index - 1] === flag);
+          const removed = labelArgument("--remove-label");
+          live = [...live.filter((label) => !removed.includes(label)), ...labelArgument("--add-label").filter((label) => !live.includes(label))];
+          return "";
+        }
+        return "date: Sat, 01 Aug 2026 10:01:01 GMT";
+      },
+      runJson: (argv: string[], options: { input?: string } = {}) => {
+        const command = argv.slice(0, 3).join(" ");
+        if (command === "herdr workspace list") return { result: { workspaces: workspaceOpen ? [{ workspace_id: "workspace-1", pane_count: 1, tab_count: 1, worktree: { checkout_path: worktree } }] : [] } };
+        if (command === "herdr agent list") return { result: { agents: [] } };
+        if (command === "herdr worktree list") return { result: { worktrees: [{ path: worktree }] } };
+        if (command === "gh repo view") return { id: "repo-id", nameWithOwner: "owner/repo" };
+        if (command === "gh pr list") return [pr()];
+        if (command === "gh pr view") return pr();
+        if (argv.includes("PUT")) {
+          queueConcurrentRequest();
+          live = JSON.parse(String(options.input || "{}")).labels;
+          events.push({ id: "20", event: "labeled", created_at: "2026-08-01T10:02:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } });
+          return live.map((name) => ({ name }));
+        }
+        if (argv.includes("POST")) {
+          const body = String(argv.at(-1) || "").replace(/^body=/, "");
+          recoveryComments.push(body);
+          comments.push({ id: "200", author: { login: "deadloop-bot" }, createdAt: "2026-08-01T10:02:01Z", updatedAt: "2026-08-01T10:02:01Z", body });
+          return { id: "200" };
+        }
+        const endpoint = String(argv.at(-1) || "");
+        if (endpoint.endsWith("/labels")) return [live.map((name) => ({ name }))];
+        if (endpoint.endsWith("/events")) return [[...events]];
+        if (endpoint.endsWith("/comments")) return [[...comments]];
+        return [];
+      },
+    };
+    await reconcile({
+      projectRepo: repo, githubRepo: "owner/repo", stateDir, projectId: "demo",
+      enabledAt: 1, automationLogin: "deadloop-bot",
+    }, commandRunner);
+    return { recoveryComments, labels: live, phase: JSON.parse(readFileSync(path.join(runDir, "attempt.json"), "utf8")).phase };
+  } finally {
+    if (originalConfigDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalConfigDir;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("reconciliation entrypoint", () => {
   const authoritySnapshot = {
     state: "OPEN", headRefOid: "a".repeat(40), claimKind: "authorized",
     requestEventId: "10", managedLabels: ["agent:in-progress"],
   };
+  const managedLabels = [...base.requestLabels, "agent:in-progress", "agent:blocked"];
 
   it("rejects a head race before a recovery mutation", () => {
     expect(reconciliationAuthorityMatches(authoritySnapshot, { ...authoritySnapshot, headRefOid: "b".repeat(40) })).toBe(false);
@@ -397,7 +529,7 @@ describe("reconciliation entrypoint", () => {
     }
   });
 
-  it("preserves a request added between revalidation and label mutation", () => {
+  it("preserves a request added between revalidation and a supersession label mutation", () => {
     let live = ["agent:in-progress", "customer:keep"];
     const github = {
       movePrLabels: (_repository: string, _number: number, move: { remove: string[]; add: string[] }) => {
@@ -407,7 +539,35 @@ describe("reconciliation entrypoint", () => {
       },
       listPrLabels: () => live.map((name) => ({ name })),
     };
-    expect(moveReconciledLabels(github, "owner/repo", 42, [...live], ["agent:blocked"], [...base.requestLabels, "agent:in-progress", "agent:blocked"])).toContain("agent:implement");
+    expect(moveReconciledLabels(github, "owner/repo", 42, [...live], ["agent:blocked"], managedLabels)).toContain("agent:implement");
+  });
+
+  it("invalidates a request added between revalidation and a request-invalidating mutation", () => {
+    const revalidated = ["agent:in-progress", "customer:keep"];
+    let live = [...revalidated, "agent:implement"];
+    const github = {
+      replacePrLabels: (_repository: string, _number: number, next: string[]) => { live = [...next]; },
+      listPrLabels: () => live.map((name) => ({ name })),
+    };
+    expect(replaceReconciledLabels(github, "owner/repo", 42, revalidated, ["agent:blocked"], managedLabels)).not.toContain("agent:implement");
+  });
+
+  it("fails closed when a request survives a request-invalidating mutation", () => {
+    const live = ["agent:in-progress", "customer:keep", "agent:implement"];
+    const github = {
+      replacePrLabels: () => {},
+      listPrLabels: () => live.map((name) => ({ name })),
+    };
+    expect(() => replaceReconciledLabels(github, "owner/repo", 42, ["agent:in-progress", "customer:keep"], ["agent:blocked"], managedLabels))
+      .toThrow("PR label recovery postcondition was not reached");
+  });
+
+  it.each(["expired", "server_time_unverifiable", "missing", "malformed", "superseded"])("keeps a %s claim classification after the managed-label replacement", (claimKind) => {
+    expect(revalidatedReplacedClaimKind(claimKind, true)).toBe(claimKind);
+  });
+
+  it("reclassifies an authorized claim as ambiguous after the managed-label replacement", () => {
+    expect(revalidatedReplacedClaimKind("authorized", true)).toBe("ambiguous");
   });
 
   it("fails closed when a claim is inserted before a missing-record recovery mutation", () => {
@@ -420,6 +580,18 @@ describe("reconciliation entrypoint", () => {
       ["customer:old", "agent:review", "agent:blocked"],
       ["agent:update-branch", "agent:implement", "agent:review", "agent:in-progress", "agent:blocked"],
     )).toEqual(["customer:concurrent", "agent:review", "agent:blocked"]);
+  });
+
+  it("posts the recovery comment after an expiry label replacement", async () => {
+    expect((await runExpiredClaimReconciliation()).recoveryComments).toHaveLength(1);
+  });
+
+  it("invalidates the queued request through the expiry label replacement", async () => {
+    expect((await runExpiredClaimReconciliation()).labels).toEqual(["customer:keep", "agent:blocked"]);
+  });
+
+  it("releases local ownership after the expiry recovery comment", async () => {
+    expect((await runExpiredClaimReconciliation()).phase).toBe("authority_released");
   });
 
   it("keeps a legacy migration blocked when its retained journal is malformed", async () => {
