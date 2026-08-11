@@ -20,6 +20,10 @@ function labelArgs(move: LabelMove): string[] {
 
 function createGithubOperations(commandRunner: CommandRunner, beforeMutation: () => void = () => {}) {
   return {
+    getRepositoryIdentity(repo: string): JsonObject {
+      return commandRunner.runJson(["gh", "repo", "view", repo, "--json", "id,nameWithOwner"]);
+    },
+
     listOpenIssues(repo: string): JsonObject[] {
       return commandRunner.runJson([
         "gh",
@@ -79,6 +83,36 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
     movePrLabels(repo: string, prNumber: string | number, move: LabelMove, options: { check?: boolean } = {}): void {
       beforeMutation();
       commandRunner.runText(["gh", "pr", "edit", String(prNumber), "-R", repo, ...labelArgs(move)], { check: options.check });
+    },
+
+    replacePrLabels(repo: string, prNumber: string | number, labels: string[]): JsonObject {
+      beforeMutation();
+      return commandRunner.runJson([
+        "gh", "api", "--method", "PUT", `repos/${repo}/issues/${prNumber}/labels`,
+        "--input", "-",
+      ], { input: JSON.stringify({ labels }) });
+    },
+
+    listPrLabels(repo: string, prNumber: string | number): JsonObject[] {
+      const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${prNumber}/labels`]);
+      return Array.isArray(pages) ? pages.flat() : [];
+    },
+
+    listPrTimelineEvents(repo: string, prNumber: string | number): JsonObject[] {
+      const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${prNumber}/events`]);
+      return Array.isArray(pages) ? pages.flat() : [];
+    },
+
+    listPrComments(repo: string, prNumber: string | number): JsonObject[] {
+      const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${prNumber}/comments`]);
+      return Array.isArray(pages) ? pages.flat() : [];
+    },
+
+    createPrComment(repo: string, prNumber: string | number, body: string): JsonObject {
+      beforeMutation();
+      return commandRunner.runJson([
+        "gh", "api", "--method", "POST", `repos/${repo}/issues/${prNumber}/comments`, "-f", `body=${body}`,
+      ]);
     },
 
     commentPr(repo: string, prNumber: string | number, body: string): string {

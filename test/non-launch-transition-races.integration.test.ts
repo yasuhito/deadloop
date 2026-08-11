@@ -66,6 +66,9 @@ esac
       PI_CODING_AGENT_DIR: configDir,
       DEADLOOP_REPO_PATH: repo,
       DEADLOOP_GITHUB_REPO: "owner/repo",
+      DEADLOOP_GITHUB_REPOSITORY_ID: "R_repo",
+      DEADLOOP_AUTOMATION_LOGIN: "deadloop-bot",
+      DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
       DEADLOOP_ENABLED_AT: "1",
       DEADLOOP_STATE_DIR: stateDir,
     },
@@ -83,6 +86,6 @@ describe("non-launch transition revalidation", () => {
   });
 
   it("does not block a draft PR that becomes ready before mutation", () => {
-    expect(runRace("pr")).toEqual({ action: "draft_gate_stale", mutated: false });
+    expect(runRace("pr")).toEqual({ action: "draft_unclaimed", mutated: false });
   });
 });

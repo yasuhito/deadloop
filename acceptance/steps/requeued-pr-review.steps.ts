@@ -58,6 +58,9 @@ function runReviewDriver(world: RequeuedReviewWorld): void {
       DEADLOOP_REPO_PATH: world.root,
       DEADLOOP_WORKTREE_ROOT: path.join(world.root, "worktrees"),
       DEADLOOP_GITHUB_REPO: "owner/repo",
+      DEADLOOP_GITHUB_REPOSITORY_ID: "R_repo",
+      DEADLOOP_AUTOMATION_LOGIN: "deadloop-bot",
+      DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
       DEADLOOP_ENABLED_AT: "1",
       DEADLOOP_STATE_DIR: path.join(world.configDir, "deadloop"),
       GH_TEST_PR_STATE: world.prState,
@@ -83,11 +86,16 @@ Given("A blocked pull request has a completed Reviewer and its head changed afte
   fs.mkdirSync(bin);
   fs.mkdirSync(worktree, { recursive: true });
   fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(path.join(state, "projects.json"), JSON.stringify({ projects: [{
+    id: "demo", repoPath: root, githubRepo: "owner/repo", baseBranch: "origin/main",
+  }] }));
   fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
     projects: [{
       repoPath: root,
       githubRepo: "owner/repo",
       githubRepositoryId: "R_repo",
+      baseBranch: "origin/main",
+      automationLogin: "deadloop-bot",
       enabledAt: 1,
       firstEnableAutoMerge: false,
       firstStartPending: false,
@@ -115,27 +123,50 @@ Given("A blocked pull request has a completed Reviewer and its head changed afte
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
+const prs = () => JSON.parse(fs.readFileSync(process.env.GH_TEST_PR_STATE, "utf8"));
+const save = (value) => fs.writeFileSync(process.env.GH_TEST_PR_STATE, JSON.stringify(value));
 if (args[0] === "pr" && args[1] === "list") {
-  process.stdout.write(fs.readFileSync(process.env.GH_TEST_PR_STATE, "utf8"));
-} else if (args[0] === "api") {
-  const endpoint = args.find((arg) => arg.startsWith("repos/"));
-  const pr = JSON.parse(fs.readFileSync(process.env.GH_TEST_PR_STATE, "utf8"))[0];
-  if (args.includes("graphql")) {
-    process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:pr.headRefOid}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
-  } else if (args.includes("Accept: application/vnd.github.diff")) {
-    process.stdout.write("diff --git a/file b/file\\n");
-  } else if (endpoint === "repos/owner/repo/pulls/44") {
-    process.stdout.write(JSON.stringify({number:44,state:"open",head:{ref:pr.headRefName,sha:pr.headRefOid},base:{ref:"main",sha:"b".repeat(40)}}));
-  } else {
-    process.stdout.write(JSON.stringify([[]]));
-  }
+  process.stdout.write(JSON.stringify(prs()));
+} else if (args[0] === "pr" && args[1] === "view") {
+  process.stdout.write(JSON.stringify(prs()[0]));
 } else if (args[0] === "repo" && args[1] === "view") {
-  process.stdout.write(JSON.stringify({id:"R_repo"}));
+  process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
+} else if (args[0] === "api" && args[1] === "user") {
+  process.stdout.write("deadloop-bot\\n");
+} else if (args[0] === "api" && args.includes("--include")) {
+  process.stdout.write("HTTP/2 200\\r\\ndate: Mon, 13 Jul 2026 00:02:00 GMT\\r\\n\\r\\n{}");
+} else if (args[0] === "api" && args.some((arg) => arg.endsWith("/events"))) {
+  process.stdout.write(JSON.stringify([[{id:4401,event:"labeled",created_at:"2026-07-13T00:00:00Z",label:{name:"agent:review"}}]]));
+} else if (args[0] === "api" && !args.includes("PUT") && args.some((arg) => arg.endsWith("/labels"))) {
+  process.stdout.write(JSON.stringify([prs()[0].labels]));
+} else if (args[0] === "api" && args.includes("POST")) {
+  const state = prs();
+  const bodyArg = args.find((arg) => arg.startsWith("body=")) || "body=";
+  const comment = {id:9901,created_at:"2026-07-13T00:01:00Z",updated_at:"2026-07-13T00:01:00Z",user:{login:"deadloop-bot"},body:bodyArg.slice(5)};
+  state[0].comments.push(comment); save(state); process.stdout.write(JSON.stringify(comment));
+} else if (args[0] === "api" && args.includes("PUT")) {
+  let input = ""; process.stdin.on("data", (chunk) => input += chunk); process.stdin.on("end", () => {
+    const state = prs(); state[0].labels = JSON.parse(input).labels.map((name) => ({name})); save(state); process.stdout.write(JSON.stringify(state[0].labels));
+  });
+} else if (args[0] === "api" && args.some((arg) => arg.endsWith("/comments"))) {
+  process.stdout.write(JSON.stringify([prs()[0].comments]));
+} else if (args[0] === "api" && args.includes("graphql")) {
+  const pr = prs()[0];
+  process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:pr.headRefOid}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
+} else if (args[0] === "api" && args.includes("Accept: application/vnd.github.diff")) {
+  process.stdout.write("diff --git a/file b/file\\n");
+} else if (args[0] === "api" && args.find((arg) => arg.startsWith("repos/")) === "repos/owner/repo/pulls/44") {
+  const pr = prs()[0];
+  process.stdout.write(JSON.stringify({number:44,state:"open",head:{ref:pr.headRefName,sha:pr.headRefOid},base:{ref:"main",sha:"b".repeat(40)}}));
+} else if (args[0] === "api") {
+  process.stdout.write(JSON.stringify([[]]));
 }
 `);
   executable(path.join(bin, "git"), `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+else if (args.includes("rev-parse") && args.some(arg => arg.endsWith("^{commit}"))) process.stdout.write("${"f".repeat(40)}\\n");
+else if (args.includes("show") && args.some(arg => arg.endsWith(":deadloop.json"))) process.exit(1);
 `);
   executable(path.join(bin, "herdr"), `#!/usr/bin/env node
 const fs = require("node:fs");

@@ -52,6 +52,12 @@ describe("PR reviewer use-case flow", () => {
     expect(planPrReviewerAction(data.prs, data.agents, env()).kind).toBe("review_required");
   });
 
+  it("does not let a retained local journal suppress a GitHub review request", () => {
+    const data = fixture("external-review-request.json");
+
+    expect(planPrReviewerAction(data.prs, { result: { agents: [{ name: "demo-pr-22-reviewer", status: "working" }] } }, env({ stateDir: path.join(fixtureDir, "state") })).kind).toBe("review_required");
+  });
+
   it("plans external review request when external review is enabled", () => {
     const data = fixture("external-review-request.json");
 

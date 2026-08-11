@@ -12,6 +12,7 @@ type EnabledProjectValue = EnablementIdentityValue & {
   enableAttemptToken?: string;
   githubAliases?: string[];
   baseBranch?: string;
+  automationLogin?: string;
   firstEnableAutoMerge: boolean;
   firstStartPending: boolean;
   lastObservedAutoMerge: boolean;
@@ -55,6 +56,9 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
     if (record.baseBranch !== undefined && (
       typeof record.baseBranch !== "string" || !record.baseBranch.startsWith("origin/")
     )) return null;
+    if (record.automationLogin !== undefined && (
+      typeof record.automationLogin !== "string" || !record.automationLogin.trim()
+    )) return null;
     for (const field of ["firstEnableAutoMerge", "firstStartPending", "lastObservedAutoMerge", "autoMergeAcknowledged", "enabled"] as const) {
       if (typeof record[field] !== "boolean") return null;
     }
@@ -73,6 +77,7 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
       ...(record.enableAttemptToken === undefined ? {} : { enableAttemptToken: record.enableAttemptToken }),
       ...(record.githubAliases === undefined ? {} : { githubAliases: [...new Set(record.githubAliases)] }),
       ...(record.baseBranch === undefined ? {} : { baseBranch: record.baseBranch }),
+      ...(record.automationLogin === undefined ? {} : { automationLogin: record.automationLogin.trim().toLowerCase() }),
       firstEnableAutoMerge: record.firstEnableAutoMerge,
       firstStartPending: record.firstStartPending,
       lastObservedAutoMerge: record.lastObservedAutoMerge,

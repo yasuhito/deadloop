@@ -26,6 +26,7 @@ npx skills@latest add yasuhito/deadloop
 
 - v0 は Pi パッケージ／拡張として動作します。
 - 既定の実行基盤は [Herdr](https://herdr.dev/) です。
+- 現在対応しているホスト環境は、互換性のある `flock` 実行ファイル（通常は util-linux が提供）と、非待機のファイル記述子ロックを利用できる Unix 系システムです。`/deadloop-enable` は自動処理を有効化する前に、この機能を検査します。
 
 ## 設定
 
@@ -53,7 +54,7 @@ deadloop は、チェックアウト先、GitHub リポジトリ、基準ブラ�
 
 ### GitHub の権限とラベルを確認する
 
-事前確認に成功すると、`/deadloop-enable` は GitHub への書き込み権限を確認します。不足している標準ラベルだけを作成します。
+事前確認に成功すると、`/deadloop-enable` は GitHub への書き込み権限と認証済み GitHub ログインを確認します。そのログインを明示的に許可した自動処理用の識別情報としてローカルの実行許可へ保存し、不足している標準ラベルだけを作成します。認証済みログインを確認できない場合は有効化しません。
 
 ### 最初は自動マージを無効にする
 
@@ -71,7 +72,7 @@ deadloop は、チェックアウト先、GitHub リポジトリ、基準ブラ�
 
 ### 必要な場合だけローカル設定を上書きする
 
-`autoMerge` やワークツリー保存先などを変更する場合だけ、設定例を Pi のローカル状態へコピーします。
+`autoMerge`、ワークツリー保存先、信頼済みの同一運用環境に属する別の自動処理ホスト用の追加 `automationLogins` などを変更する場合だけ、設定例を Pi のローカル状態へコピーします。`automationLogins` には、識別情報と管理者を自分で確認した GitHub ログインだけを追加してください。設定例では誰も許可していません。
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop
@@ -111,21 +112,28 @@ doctor は、各候補の情報源、作業ディレクトリ、明示された�
 
 ```bash
 gh label create ready-for-agent --repo owner/repo --color 0e8a16 || true
-gh label create agent:implement --repo owner/repo --color 1d76db || true
-gh label create agent:in-progress --repo owner/repo --color fbca04 || true
-gh label create agent:review --repo owner/repo --color 5319e7 || true
-gh label create agent:reviewing --repo owner/repo --color c2e0c6 || true
-gh label create agent:blocked --repo owner/repo --color b60205 || true
 gh label create ready-for-human --repo owner/repo --color d93f0b || true
+gh label create wontfix --repo owner/repo --color ffffff || true
 gh label create needs-info --repo owner/repo --color fef2c0 || true
 gh label create needs-triage --repo owner/repo --color f9d0c4 || true
+gh label create agent:explore --repo owner/repo --color 0052cc || true
+gh label create agent:implement --repo owner/repo --color 1d76db || true
+gh label create agent:review --repo owner/repo --color 5319e7 || true
+gh label create agent:reviewing --repo owner/repo --color c2e0c6 || true
+gh label create agent:update-branch --repo owner/repo --color 006b75 || true
+gh label create agent:in-progress --repo owner/repo --color fbca04 || true
+gh label create agent:blocked --repo owner/repo --color b60205 || true
 ```
 
 Issue は、`ready-for-agent` と `agent:implement` の両方が付いている場合に限り処理対象になります。
 
+`agent:reviewing` は、古い作業状態とブランチ更新経路向けの互換ラベルとして残します。レビュー要求の取得と修正の認証には `agent:in-progress` が必要で、新しいレビュー処理は `agent:reviewing` を追加しません。
+
 ## マージ競合の自動修復
 
-同じリポジトリにある選択済み PR が設定済みの基準ブランチと競合した場合、deadloop は一度だけ、安全策を備えたブランチ更新用の作業エージェントを起動できます。
+現在の GitHub claim 導入期間中は、ブランチ更新の変更処理を副作用なしで停止します。#241 で追跡する `agent:update-branch` への引き渡しが実装されるまで利用できません。既存の非 force、先頭コミットの厳密一致、必須検証、通常 merge の安全契約は引き続き必要であり、この一時停止によって廃止されるものではありません。
+
+以下のブランチ更新動作は、維持する安全契約の説明であり、現在到達できる変更経路の説明ではありません。
 
 作業エージェントは、選択された基準コミットを既存の PR ブランチへマージします。rebase は行いません。
 
@@ -145,13 +153,11 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 
 組み込みのレビューエージェントが構造化された修正可能な指摘を返すと、deadloop は既存の PR ブランチで、一度だけ専用の修正用作業エージェントを起動できます。
 
-修正中もレビュー用ラベルを維持します。修正専用ラベルは追加しません。
+修正中は、有効な取得を示す `agent:in-progress` を維持し、別の作業状態ラベルは追加しません。修正完了までは新しい `agent:review` 要求を作らず、修正状態から移るときに古い `agent:reviewing` があれば除去します。
 
 作業エージェントには、指摘事項だけを渡します。
 
-最終処理では、まず修正範囲を測定します。上限を超えた場合は、設定済みの検査を実行せず、push せずに人間へ引き渡します。
-
-修正が上限内の場合は、設定済みの検査を実行します。対象ブランチの先頭が検証済みコミットと一致する場合だけ、そのブランチを不可分に更新します。
+最終処理では、変更したファイル数にかかわらず、すべての修正で設定済みの検査を実行します。対象ブランチの先頭が検証済みコミットと一致する場合だけ、そのブランチを不可分に更新します。
 
 別の先頭コミットを置き換えたり、GitHub の作業状態を変更したりはしません。
 
@@ -174,7 +180,7 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 ## 段階的に導入する
 
 1. **Issue の調整のみ** — 慎重に導入したい場合は、ここから始めます。PR のレビューとマージは人間が行います。
-2. **PR の自動レビュー** — 標準の PR レビューを `autoMerge: false` で使用します。レビュー済み PR は `ready-for-human` に移して人間へ引き渡します。`externalReview.enabled` が `true` の場合を除き、外部レビューは要求しません。
+2. **PR の自動レビュー** — 標準の PR レビューを `autoMerge: false` で使用します。レビュー済み PR は `ready-for-human` に移して人間へ引き渡します。現在の導入期間中は、有効なレビュー claim 配下へ接続されるまで外部レビューの変更処理も副作用なしで停止します。`externalReview` を有効にしても、この停止を回避しません。
 3. **任意の自動マージ** — ブランチ保護、CI、レビュー要件、dry-run または人間による承認手順、停止条件が十分に実証されてから、`autoMerge: true` を検討してください。
 
 ## 実行

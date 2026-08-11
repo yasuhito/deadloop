@@ -139,6 +139,7 @@ async function loadExtension(
     upstream?: string;
     noUpstream?: boolean;
     defaultBranch?: string;
+    authenticatedLogin?: string;
     beforePrimaryCheckout?: () => Promise<void>;
     beforeGithubRepoCheck?: () => Promise<void>;
     beforeLabelLookup?: (name: string) => Promise<void>;
@@ -149,6 +150,7 @@ async function loadExtension(
     beforeEnablementProjectCheck?: (worktreePath: string) => Promise<void>;
     runAutomationScript?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
     herdrCompatibilityPreflight?: () => void;
+    schedulerLockCapabilityPreflight?: () => void;
     recoveryFixture?: {
       issues: unknown[];
       worktrees: unknown[];
@@ -220,6 +222,9 @@ async function loadExtension(
       if (command === "gh" && args[0] === "pr" && args[1] === "list" && options.recoveryFixture) {
         return { code: 0, stdout: "[]", stderr: "" };
       }
+      if (command === "gh" && args[0] === "api" && args[1] === "user") {
+        return { code: 0, stdout: `${options.authenticatedLogin ?? "deadloop-bot"}\n`, stderr: "" };
+      }
       if (command === "gh" && args[0] === "api") {
         const name = decodeURIComponent(args.at(-1)?.split("/").at(-1) || "");
         await options.beforeLabelLookup?.(name);
@@ -252,6 +257,7 @@ async function loadExtension(
       beforeEnablementWorktreeCreate: options.beforeEnablementWorktreeCreate,
       beforeEnablementProjectCheck: options.beforeEnablementProjectCheck,
       herdrCompatibilityPreflight: options.herdrCompatibilityPreflight || (() => undefined),
+      schedulerLockCapabilityPreflight: options.schedulerLockCapabilityPreflight,
     },
   });
   retainedExtensionShutdowns.push(async () => {
@@ -743,6 +749,110 @@ async function unresolvedProjectCheckDoctorObservation(attemptRecord: "missing" 
 }
 
 describe("enablement command integration", () => {
+  it("runs the OS lock capability preflight before GitHub enablement mutations", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const events: string[] = [];
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { events.push("lock-preflight"); },
+      beforeLabelCreate: async () => { events.push("github-mutation"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect({ first: events[0], githubMutation: events.includes("github-mutation") }).toEqual({
+      first: "lock-preflight", githubMutation: true,
+    });
+  });
+
+  it("does not persist enablement when flock is unavailable", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { throw new Error("flock executable is required (usually util-linux)"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"))).toBe(false);
+  });
+
+  it("writes no enable-attempt persistence when flock capability is unavailable", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { throw new Error("flock unavailable"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const stateDir = path.join(root, ".pi", "agent", "deadloop");
+    expect(existsSync(stateDir) && readdirSync(stateDir).some((name) => name.startsWith("enable-attempt-"))).toBe(false);
+  });
+
+  it("explains incompatible nonblocking FD flock behavior", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { throw new Error("flock must support nonblocking file-descriptor locks"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("nonblocking file-descriptor locks");
+  });
+  it("persists the authenticated GitHub login as an authorized automation identity", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, { authenticatedLogin: "Deadloop-Bot" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    expect(state.projects[0].automationLogin).toBe("deadloop-bot");
+  });
+
+  it("does not enable without an authenticated GitHub login", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, { authenticatedLogin: "" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("authenticated GitHub login is required");
+  });
+
+  it("passes the default enablement identity to the reviewer driver environment", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({
+      checkCommand: "true",
+      automations: [{
+        id: "demo:pr-reviewer",
+        name: "demo PR reviewer",
+        promptFile: "pr-reviewer.prompt.md",
+        precheckFile: "pr-reviewer.precheck.sh",
+        driverFile: "pr-reviewer-driver.ts",
+      }],
+    }));
+    git(repoPath, ["add", "deadloop.json"]);
+    git(repoPath, ["commit", "--quiet", "-m", "configure reviewer fixture"]);
+    git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+    let reviewerCommand = "";
+    const extension = await loadExtension(root, {
+      authenticatedLogin: "Deadloop-Bot",
+      runAutomationScript: async (args) => {
+        const command = args.join(" ");
+        if (command.includes("pr-reviewer-driver.ts")) reviewerCommand = command;
+        return {
+          code: 0,
+          stdout: command.includes("pr-reviewer-driver.ts") ? JSON.stringify({ action: "skip", summary: "fixture" }) : "",
+          stderr: "",
+        };
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    for (let attempt = 0; attempt < 100 && !reviewerCommand; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(reviewerCommand).toContain("DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS='deadloop-bot'");
+  });
+
   it("records prepared verification worktree intent before creation", async () => {
     expect((await ownedWorktreeIntentObservation()).state).toBe("prepared");
   });
@@ -835,7 +945,7 @@ describe("enablement command integration", () => {
             },
           },
         });
-        expect(result.outcome).toBe("passed");
+        expect(result.outcome, readFileSync(result.logPath, "utf8")).toBe("passed");
       } finally {
         if (previousNestedCheck === undefined) delete process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK;
         else process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK = previousNestedCheck;
@@ -1985,39 +2095,36 @@ describe("enablement command integration", () => {
     const schedulerLocks = readdirSync(stateDir).filter((name) => name.startsWith("scheduler."));
     expect({ locks: schedulerLocks.length, message: secondExtension.messages.at(-1) }).toEqual({
       locks: 1,
-      message: expect.stringContaining(`another session (pid ${process.pid})`),
+      message: expect.stringContaining(`repository is already served by Automation host pid ${process.pid}`),
     });
   });
 
-  it("reports another live lock owner as standby", async () => {
+  it("fails fast when another Automation host owns the repository lock", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
-    const stateDir = path.join(root, ".pi", "agent", "deadloop");
-    const lockPath = path.join(stateDir, schedulerLockName({ githubRepositoryId: "R_demo" }));
-    const { processStartIdentity } = require("../src/enablement-lock.cjs");
-    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startIdentity: processStartIdentity(process.pid), token: "owner" }));
-    const extension = await loadExtension(root);
+    const firstExtension = await loadExtension(root);
+    await invoke(firstExtension.commands.get("deadloop-enable")!, repoPath);
+    const secondExtension = await loadExtension(root);
 
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    await invoke(secondExtension.commands.get("deadloop-enable")!, repoPath);
 
-    expect(extension.messages.at(-1)).toContain(`another session (pid ${process.pid})`);
+    expect(secondExtension.messages.at(-1)).toContain(`repository is already served by Automation host pid ${process.pid}`);
   });
 
-  it("takes scheduler ownership after the original owner releases its lock", async () => {
+  it("does not retry repository lock acquisition after a second Automation host is rejected", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
-    const stateDir = path.join(root, ".pi", "agent", "deadloop");
-    const lockPath = path.join(stateDir, schedulerLockName({ githubRepositoryId: "R_demo" }));
-    const { processStartIdentity } = require("../src/enablement-lock.cjs");
-    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startIdentity: processStartIdentity(process.pid), token: "owner" }));
-    const extension = await loadExtension(root);
     vi.useFakeTimers();
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath, { isIdle: () => false });
-    rmSync(lockPath);
+    const firstExtension = await loadExtension(root);
+    await invoke(firstExtension.commands.get("deadloop-enable")!, repoPath);
+    const secondExtension = await loadExtension(root);
+    await invoke(secondExtension.commands.get("deadloop-enable")!, repoPath);
+    const lockPath = path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ githubRepositoryId: "R_demo" }));
+    await firstExtension.events.get("session_shutdown")!({}, { cwd: repoPath, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined } });
 
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(JSON.parse(readFileSync(lockPath, "utf8")).pid).toBe(process.pid);
+    expect(existsSync(lockPath)).toBe(false);
   });
 
   it("stops scheduler liveness when an origin push URL targets another repository", async () => {

@@ -218,13 +218,13 @@ describe("attempt completion persistence decisions", () => {
 
   it.each([
     [false, ["ready-for-human"]],
-    [true, ["agent:review", "agent:reviewing"]],
+    [true, ["agent:in-progress"]],
   ] as const)("allows unrelated labels with autoMerge=%s while requiring exact managed workflow labels", (_autoMerge, expectedLabels) => {
     const fixture = reviewerFixture("approved");
     const github = { ...fixture.github, labels: [...expectedLabels, "team:platform"] };
     const context = {
       reviewerExpectedLabels: expectedLabels,
-      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:blocked", "ready-for-human"],
+      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:in-progress", "agent:blocked", "ready-for-human"],
     };
 
     expect(decide(fixture.record, fixture.report, github, context)).toEqual({ action: "close" });
@@ -232,13 +232,13 @@ describe("attempt completion persistence decisions", () => {
 
   it.each([
     [false, ["ready-for-human"], "agent:review"],
-    [true, ["agent:review", "agent:reviewing"], "ready-for-human"],
+    [true, ["agent:in-progress"], "ready-for-human"],
   ] as const)("preserves autoMerge=%s reviewer ownership when a conflicting managed label remains", (_autoMerge, expectedLabels, conflictingLabel) => {
     const fixture = reviewerFixture("approved");
     const github = { ...fixture.github, labels: [...expectedLabels, conflictingLabel, "team:platform"] };
     const context = {
       reviewerExpectedLabels: expectedLabels,
-      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:blocked", "ready-for-human"],
+      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:in-progress", "agent:blocked", "ready-for-human"],
     };
 
     expect(decide(fixture.record, fixture.report, github, context)).toEqual({
@@ -249,12 +249,12 @@ describe("attempt completion persistence decisions", () => {
 
   it.each([
     [false, ["ready-for-human"], "agent:blocked"],
-    [true, ["agent:review", "agent:reviewing"], "ready-for-human"],
+    [true, ["agent:in-progress"], "ready-for-human"],
   ] as const)("keeps the selected restart runtime from closing autoMerge=%s with a conflicting managed label", (_autoMerge, expectedLabels, conflictingLabel) => {
     const fixture = reviewerFixture("approved");
     const context = {
       reviewerExpectedLabels: expectedLabels,
-      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:blocked", "ready-for-human"],
+      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:in-progress", "agent:blocked", "ready-for-human"],
     };
     expect(evaluateSelectedRuntimePersistence({
       record: fixture.record,

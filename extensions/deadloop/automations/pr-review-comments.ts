@@ -57,7 +57,7 @@ function renderChangesRequestedComment(input: JsonObject): string {
     const location = finding.line && path !== "Not specified" ? `${path}:${finding.line}` : path;
     return `### ${publicText(finding.title, "Review finding")} — ${finding.severity || "unspecified"}\n- File: ${code(location)}\n- Reason: ${publicText(finding.body, "The detailed evidence contained internal runtime information and was omitted.")}`;
   });
-  const marker = renderRepairMarker(input.headOid, input.reviewFingerprint, (input.findings || []).length);
+  const marker = renderRepairMarker(input.headOid, input.reviewFingerprint);
   const nextStep = input.repairUnavailable
     ? input.repairUnavailableReason === "cumulative_repair_limit"
       ? "This PR reached the cumulative limit of three automatic repair attempts. Automatic repair will not run again; inspect the current head, correct the branch without rewriting history, push a new commit, then remove `agent:blocked`."

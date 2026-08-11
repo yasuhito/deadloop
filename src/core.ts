@@ -25,6 +25,20 @@ export const DEFAULT_WORKER_INSTRUCTIONS =
 export const DEFAULT_WORKER_LAUNCH_POLICY =
   "Choose the Worker level from issue difficulty: low for simple docs, small test fixes, and local code changes; medium for ordinary implementation; high for cross-component work, design judgment, migrations, or difficult bugs. Add one line to the Worker prompt explaining the choice.";
 
+export const CANONICAL_GITHUB_LABELS = [
+  "needs-triage",
+  "needs-info",
+  "ready-for-agent",
+  "ready-for-human",
+  "wontfix",
+  "agent:explore",
+  "agent:implement",
+  "agent:review",
+  "agent:update-branch",
+  "agent:in-progress",
+  "agent:blocked",
+] as const;
+
 export type LabelConfig = {
   ready?: string;
   implement?: string;
@@ -50,6 +64,8 @@ export type RawAutomation = {
   precheckFile?: string;
   driverFile?: string;
   precheckTimeoutSeconds?: number;
+  maxRuntimeSeconds?: number;
+  shutdownGraceSeconds?: number;
   initialLastScheduledAt?: number;
 };
 
@@ -63,6 +79,8 @@ export type NormalizedAutomation = {
   precheckFile?: string;
   driverFile?: string;
   precheckTimeoutSeconds: number;
+  maxRuntimeSeconds: number;
+  shutdownGraceSeconds: number;
   initialLastScheduledAt: number;
 };
 
@@ -112,6 +130,7 @@ export type RawProject = {
   workerModel?: string;
   reviewerAgent?: string;
   reviewerModel?: string;
+  automationLogins?: string[];
   labels?: LabelConfig;
   automations?: RawAutomation[];
 };
@@ -154,6 +173,7 @@ export type NormalizedProject = {
   workerModel: string;
   reviewerAgent: ReviewerAgent;
   reviewerModel: string;
+  automationLogins: string[];
   labels: NormalizedLabels;
   automations: NormalizedAutomation[];
   configSource: ProjectConfigSource;
@@ -259,6 +279,12 @@ export function normalizeAutomation(
     precheckTimeoutSeconds: Number.isFinite(automation.precheckTimeoutSeconds)
       ? automation.precheckTimeoutSeconds!
       : 60,
+    maxRuntimeSeconds: Number.isFinite(automation.maxRuntimeSeconds) && automation.maxRuntimeSeconds! > 0
+      ? automation.maxRuntimeSeconds!
+      : 86_400,
+    shutdownGraceSeconds: Number.isFinite(automation.shutdownGraceSeconds) && automation.shutdownGraceSeconds! >= 0
+      ? automation.shutdownGraceSeconds!
+      : 300,
     initialLastScheduledAt: Number.isFinite(automation.initialLastScheduledAt) ? automation.initialLastScheduledAt! : 0,
   };
 }
@@ -305,7 +331,9 @@ const REPO_POLICY_LABEL_KEYS = new Set([
   "wontfix",
   "needsTriage",
 ]);
-const REPO_POLICY_AUTOMATION_KEYS = new Set(["id", "name", "promptFile", "precheckFile", "driverFile"]);
+const REPO_POLICY_AUTOMATION_KEYS = new Set([
+  "id", "name", "promptFile", "precheckFile", "driverFile", "maxRuntimeSeconds", "shutdownGraceSeconds",
+]);
 
 function validateObject(value: unknown, context: string): asserts value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -513,6 +541,24 @@ function normalizeExternalReview(value: RawExternalReviewConfig | undefined): No
   };
 }
 
+function normalizeAutomationLogins(value: string[] | undefined): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((login) => typeof login !== "string" || !login.trim())) {
+    throw new Error("automationLogins must be an array of non-empty GitHub login strings");
+  }
+  return [...new Set(value.map((login) => login.trim().toLowerCase()))];
+}
+
+export function authorizeAutomationLogin(project: NormalizedProject, login: string | undefined): NormalizedProject {
+  if (!login) return project;
+  const normalizedLogin = login.trim().toLowerCase();
+  if (!normalizedLogin) return project;
+  return {
+    ...project,
+    automationLogins: [...new Set([...project.automationLogins, normalizedLogin])],
+  };
+}
+
 function normalizeWorkerInstructions(raw: Pick<RawProject, "workerInstructions" | "workerInstructionFiles">): string {
   if (raw.workerInstructions && raw.workerInstructions.trim()) return raw.workerInstructions;
   const files = raw.workerInstructionFiles === undefined ? [...DEFAULT_WORKER_INSTRUCTION_FILES] : raw.workerInstructionFiles;
@@ -581,6 +627,7 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
     workerModel: raw.workerModel || "",
     reviewerAgent: normalizeAgentKind(raw.reviewerAgent, "reviewerAgent"),
     reviewerModel: raw.reviewerModel || "",
+    automationLogins: normalizeAutomationLogins(raw.automationLogins),
     labels: normalizeLabels(raw.labels || {}),
     automations: [],
     configSource: source,
@@ -755,6 +802,8 @@ function automationRuntimeValues(
     needsTriageLabel: project.labels.needsTriage,
     automationId: automation.id,
     automationName: automation.name,
+    automationMaxRuntimeSeconds: automation.maxRuntimeSeconds,
+    automationShutdownGraceSeconds: automation.shutdownGraceSeconds,
     automationDir,
   };
 }
@@ -783,6 +832,7 @@ export function automationEnvironment(
     DEADLOOP_CONFIG: envText(project.configSource.localPath),
     DEADLOOP_REPO_PATH: envText(values.repoPath),
     DEADLOOP_GITHUB_REPO: envText(values.githubRepo),
+    DEADLOOP_GITHUB_REPOSITORY_ID: envText(project.githubRepositoryId),
     DEADLOOP_BASE_BRANCH: envText(values.baseBranch),
     DEADLOOP_WORKTREE_ROOT: envText(values.worktreeRoot),
     DEADLOOP_CHECK_COMMAND: envText(values.checkCommand),
@@ -795,6 +845,13 @@ export function automationEnvironment(
     DEADLOOP_WORKER_LAUNCH_POLICY: envText(values.workerLaunchPolicy),
     DEADLOOP_REVIEWER_AGENT: envText(values.reviewerAgent),
     DEADLOOP_REVIEWER_MODEL: envText(values.reviewerModel),
+    DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS: automation.driverFile === "pr-reviewer-driver.ts"
+      ? envText(values.automationMaxRuntimeSeconds)
+      : undefined,
+    DEADLOOP_CLAIM_CLEANUP_GRACE_SECONDS: automation.driverFile === "pr-reviewer-driver.ts"
+      ? envText(values.automationShutdownGraceSeconds)
+      : undefined,
+    DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: envText(project.automationLogins.join(",")),
     DEADLOOP_AUTO_MERGE: envText(values.autoMerge),
     DEADLOOP_CI_FALLBACK_ENABLED: envText(values.ciFallbackEnabled),
     DEADLOOP_CI_FALLBACK_MODE: envText(values.ciFallbackMode),
