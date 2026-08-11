@@ -27,6 +27,7 @@ npx skills@latest add yasuhito/deadloop
 - v0 is a Pi package / extension.
 - The default runner is [Herdr](https://herdr.dev/).
 - The supported host platform currently requires a Unix-like system with a compatible `flock` executable (normally provided by util-linux) and nonblocking file-descriptor locks. `/deadloop-enable` verifies this capability before enabling automation.
+- Each Automation host fixes the deadloop checkout commit as its code identity when the extension loads. If the checkout advances, shared enablement writes and scheduler ticks stop until the operator runs `/reload`; status and doctor remain available and show both identities and the recovery step.
 
 ## Configure
 

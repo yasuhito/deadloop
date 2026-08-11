@@ -19,7 +19,7 @@ export type EnabledProject = {
   enabled: boolean;
 };
 
-export type EnablementState = { projects: EnabledProject[] };
+export type EnablementState = { projects: EnabledProject[]; lastWriterCodeIdentity?: string };
 
 export type ProjectIdentity = Pick<EnabledProject, "repoPath" | "githubRepo"> &
   Partial<Pick<EnabledProject, "githubRepositoryId" | "githubAliases" | "baseBranch" | "automationLogin" | "disableGeneration">>;

@@ -268,7 +268,7 @@
 | T127 | `test/core.test.ts` | `asks the repo policy provider for the configured base branch` | **Cucumber候補** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 | T128 | `test/core.test.ts` | `returns a status reason when project config cannot be parsed` | **Cucumber候補** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 | T129 | `test/core.test.ts` | `does not run a project that differs from the scheduler lock owner` | **Cucumber候補** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
-| T130 | `test/core.test.ts` | `warns when extension source mtime is newer than module load time` | **Vitest継続** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
+| T130 | `test/core.test.ts` | removed file-update-time freshness check | **Vitest継続** | Issue #250 より前の分類履歴 | テスト本体は commit に基づくコード識別子の停止判定へ置き換えた。 |
 | T131 | `test/core.test.ts` | `sanitizes display identifiers to lowercase slugs` | **Vitest継続** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
 | T132 | `test/core.test.ts` | `sanitizes punctuation-only identifiers to the project fallback` | **Vitest継続** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
 | T133 | `test/core.test.ts` | `sanitizes empty identifiers to the project fallback` | **Vitest継続** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |

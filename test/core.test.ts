@@ -6,8 +6,6 @@ import {
   DEFAULT_CHECK_COMMAND,
   DEFAULT_WORKER_LAUNCH_POLICY,
   automationEnvironment,
-  EXTENSION_CODE_CHANGED_WARNING,
-  codeFreshnessWarning,
   cronSlotAt,
   getDueSlot,
   isLinkedGitWorktree,
@@ -617,12 +615,6 @@ describe("deterministic extension core", () => {
         lockedProjectId: "demo",
       }),
     ).toMatchObject({ ok: false, reason: "active project changed since scheduler lock was acquired" });
-  });
-
-  it("warns when extension source mtime is newer than module load time", () => {
-    expect(codeFreshnessWarning(1000, [{ path: "extensions/deadloop/index.ts", mtimeMs: 1001 }])).toBe(
-      EXTENSION_CODE_CHANGED_WARNING,
-    );
   });
 
   it("sanitizes display identifiers to lowercase slugs", () => {

@@ -19,14 +19,14 @@ This record tracks the Cucumber migration for Issue #127. The existing Vitest te
 | T381 | `レビュー対象の pull request を表示する` |
 | T382 | `片付け候補の作業場所を表示する` |
 | T383 | `稼働中の作業場所を表示する` |
-| T384 | `コード更新の警告を表示する` |
+| T384 | Processed as a deletion candidate for Issue #250; the file-update-time warning was removed and replaced by code-identity stop reporting |
 | T385 | `自動化の直近の判断を表示する` |
 | T386 | `設定元を表示する` |
 | Issue #127 stop reason | `Issue の停止コメントに理由を表示する`; `pull request の停止コメントに理由を表示する` |
 
 ## Acceptance boundary
 
-Each status scenario names the Issue, pull request, workspace, warning, automation decision, or configuration state that its result depends on, then renders the report in When. The stopped-Issue scenarios state that Issue #11 looks like a PRD, design, or parent issue and run the issue coordinator driver with `driver-blocked-prd.json`. The stopped-pull-request scenarios state that pull request #23 is a draft awaiting review and run the PR reviewer driver with `draft-pr.json`.
+Each status scenario names the Issue, pull request, workspace, code identity, automation decision, or configuration state that its result depends on, then renders the report in When. The stopped-Issue scenarios state that Issue #11 looks like a PRD, design, or parent issue and run the issue coordinator driver with `driver-blocked-prd.json`. The stopped-pull-request scenarios state that pull request #23 is a draft awaiting review and run the PR reviewer driver with `draft-pr.json`.
 
 The deterministic draft gate does not read `pr-reviewer.prompt.md`. Its acceptance scenarios therefore cover the draft-PR comment output, not T052 or T053. Those two classifications retain focused Vitest coverage that reads the prompt file directly and guards its recovery heading and safe requeue command.
 
@@ -39,7 +39,6 @@ On 2026-07-24, each expected external result was temporarily changed to an impos
 - T381: review target PR `#21` was changed to `#999`.
 - T382: cleanup workspace `workspace-20` was changed to `workspace-999`.
 - T383: the active branch was changed to a nonexistent branch.
-- T384: the expected code-update warning was changed to `missing warning`.
 - T385: the selected Issue in the driver summary was changed from `#12` to `#999`.
 - T386: the expected repository-policy source was changed from `origin/main` to `origin/missing`.
 - T050: the Issue recovery heading was changed to `## Missing recovery steps`.
