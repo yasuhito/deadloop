@@ -145,14 +145,24 @@ describe("code snapshot execution supply", () => {
     expect(statSync(path.join(result.dependencyRoot, "fixture-dependency", "index.js")).ino).toBe(statSync(path.join(input.repo, "node_modules", "fixture-dependency", "index.js")).ino);
   });
 
-  it("makes hard-linked dependency files read-only after provisioning", () => {
+  it("leaves the package checkout dependencies writable", () => {
+    const input = fixture();
+    supply(input);
+    let writeBlocked = false;
+
+    try { writeFileSync(path.join(input.repo, "node_modules", "fixture-dependency", "index.js"), "reinstalled\n"); } catch { writeBlocked = true; }
+
+    expect(writeBlocked).toBe(false);
+  });
+
+  it("refuses a new entry inside the dependency snapshot", () => {
     const input = fixture();
     const result = supply(input);
     let writeBlocked = false;
 
-    try { writeFileSync(path.join(input.repo, "node_modules", "fixture-dependency", "index.js"), "mutated\n"); } catch { writeBlocked = true; }
+    try { writeFileSync(path.join(result.dependencyRoot, "fixture-dependency", "injected.js"), "injected\n"); } catch { writeBlocked = true; }
 
-    expect({ writeBlocked, contents: readFileSync(path.join(result.dependencyRoot, "fixture-dependency", "index.js"), "utf8") }).toEqual({ writeBlocked: true, contents: "module.exports = 1;\n" });
+    expect(writeBlocked).toBe(true);
   });
 
   it("links the code snapshot to the fixed dependency snapshot", () => {

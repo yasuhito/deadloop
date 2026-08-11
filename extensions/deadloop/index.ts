@@ -701,9 +701,6 @@ async function runAutomationScript(pi, project, automation, automationFile, supp
     ...automationEnvironment(project, automation),
     DEADLOOP_STATE_DIR: STATE_DIR,
     DEADLOOP_ENABLED_AT: String(project.enabledAt),
-    DEADLOOP_CODE_IDENTITY: supply.codeIdentity,
-    DEADLOOP_CODE_SNAPSHOT_DIR: supply.packageRoot,
-    DEADLOOP_DEPENDENCY_LOCK_HASH: supply.lockHash,
   };
   const exports = Object.entries(env)
     .filter(([key]) => key.startsWith("DEADLOOP_"))
@@ -1410,11 +1407,16 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
       } catch {}
     },
     now: () => Date.now(),
-    prepareExecutionSupply: () => ensureCodeSnapshot({
-      packageRoot: PACKAGE_ROOT,
-      stateDir: STATE_DIR,
-      codeIdentity: LOADED_CODE_IDENTITY,
-    }),
+    prepareExecutionSupply: () => {
+      try {
+        return ensureCodeSnapshot({ packageRoot: PACKAGE_ROOT, stateDir: STATE_DIR, codeIdentity: LOADED_CODE_IDENTITY });
+      } catch (error) {
+        // A stop nobody can see is indistinguishable from an idle host, so publish the reason
+        // before the throw stops this automation short of precheck and every driver.
+        setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
+    },
     readPrompt,
     revalidatePendingDriverHandoff: revalidatePendingIssueHandoff,
     resolveAutomationFileInDir,

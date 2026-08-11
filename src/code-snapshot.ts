@@ -104,14 +104,41 @@ function removeWritePermissions(root: string): void {
   fs.chmodSync(root, stat.mode & ~0o222);
 }
 
-function publishDirectory(temporary: string, destination: string): boolean {
+/**
+ * Hard-linked files share their inode with the package checkout, so making one read-only would
+ * strip write permission from the checkout as well. Only the snapshot's own directories become
+ * read-only here; that still refuses every attempt to add, remove, or replace an entry inside
+ * the snapshot. Trees which own their files use removeWritePermissions instead.
+ */
+function removeSharedTreeWritePermissions(root: string): void {
+  const stat = fs.lstatSync(root);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) return;
+  for (const entry of fs.readdirSync(root)) removeSharedTreeWritePermissions(path.join(root, entry));
+  fs.chmodSync(root, stat.mode & ~0o222);
+}
+
+/** A read-only directory cannot drop its own entries, so write access returns before removal. */
+function removeSnapshotTree(root: string): void {
+  restoreDirectoryWritePermissions(root);
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+function restoreDirectoryWritePermissions(root: string): void {
+  const stat = fs.lstatSync(root, { throwIfNoEntry: false });
+  if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) return;
+  fs.chmodSync(root, stat.mode | 0o200);
+  for (const entry of fs.readdirSync(root)) restoreDirectoryWritePermissions(path.join(root, entry));
+}
+
+/** Publishes the staged tree, or discards it when another host published the same one first. */
+function publishSnapshot(temporary: string, destination: string): { created: boolean } {
   try {
     fs.renameSync(temporary, destination);
-    return true;
+    return { created: true };
   } catch (error) {
     if (!fs.existsSync(destination)) throw error;
-    fs.rmSync(temporary, { recursive: true, force: true });
-    return false;
+    removeSnapshotTree(temporary);
+    return { created: false };
   }
 }
 
@@ -128,15 +155,20 @@ function ensureDependencySnapshot(packageRoot: string, stateDir: string, lockHas
   }
   const parent = path.join(stateDir, DEPENDENCY_SNAPSHOT_DIRECTORY);
   fs.mkdirSync(parent, { recursive: true });
-  const temporaryGeneration = path.join(parent, `.${lockHash}.${process.pid}.${randomUUID()}.tmp`);
-  const temporaryDependencies = path.join(temporaryGeneration, "node_modules");
+  const stagedSnapshot = path.join(parent, `.${lockHash}.${process.pid}.${randomUUID()}.tmp`);
+  const stagedDependencies = path.join(stagedSnapshot, "node_modules");
   try {
-    fs.mkdirSync(temporaryGeneration);
-    linkTree(source, temporaryDependencies);
-    removeWritePermissions(temporaryDependencies);
-    publishDirectory(temporaryGeneration, path.dirname(destination));
+    fs.mkdirSync(stagedSnapshot);
+    linkTree(source, stagedDependencies);
+    removeSharedTreeWritePermissions(stagedDependencies);
+    publishSnapshot(stagedSnapshot, path.dirname(destination));
   } catch (error) {
-    fs.rmSync(temporaryGeneration, { recursive: true, force: true });
+    removeSnapshotTree(stagedSnapshot);
+    // A hard link cannot cross a filesystem boundary. Name both sides, because the raw EXDEV
+    // says nothing about which two directories an operator has to bring back together.
+    if ((error as NodeJS.ErrnoException)?.code === "EXDEV") {
+      throw new Error(`code snapshot blocked: state directory ${stateDir} and package checkout ${packageRoot} are on different filesystems, so dependencies cannot be hard-linked`);
+    }
     throw error;
   }
   if (!fs.lstatSync(destination, { throwIfNoEntry: false })?.isDirectory()) {
@@ -152,8 +184,8 @@ function ensurePackageSnapshot(
   lock: { name: string; contents: Buffer },
   dependencyRoot: string,
 ): { packageRoot: string; created: boolean } {
-  const generationsRoot = path.join(stateDir, CODE_SNAPSHOT_DIRECTORY);
-  const destination = path.join(generationsRoot, codeIdentity, "package");
+  const snapshotsRoot = path.join(stateDir, CODE_SNAPSHOT_DIRECTORY);
+  const destination = path.join(snapshotsRoot, codeIdentity, "package");
   const existingLock = path.join(destination, lock.name);
   if (fs.lstatSync(destination, { throwIfNoEntry: false })?.isDirectory()) {
     if (!fs.existsSync(existingLock) || !fs.readFileSync(existingLock).equals(lock.contents)) {
@@ -167,10 +199,10 @@ function ensurePackageSnapshot(
     return { packageRoot: destination, created: false };
   }
 
-  fs.mkdirSync(generationsRoot, { recursive: true });
-  const temporaryGeneration = path.join(generationsRoot, `.${codeIdentity}.${process.pid}.${randomUUID()}.tmp`);
-  const temporaryPackage = path.join(temporaryGeneration, "package");
-  const archive = path.join(temporaryGeneration, "package.tar");
+  fs.mkdirSync(snapshotsRoot, { recursive: true });
+  const stagedSnapshot = path.join(snapshotsRoot, `.${codeIdentity}.${process.pid}.${randomUUID()}.tmp`);
+  const temporaryPackage = path.join(stagedSnapshot, "package");
+  const archive = path.join(stagedSnapshot, "package.tar");
   try {
     fs.mkdirSync(temporaryPackage, { recursive: true });
     execFileSync("git", ["-C", packageRoot, "archive", "--format=tar", `--output=${archive}`, codeIdentity], {
@@ -187,10 +219,10 @@ function ensurePackageSnapshot(
     }
     fs.symlinkSync(path.relative(temporaryPackage, dependencyRoot), path.join(temporaryPackage, "node_modules"));
     removeWritePermissions(temporaryPackage);
-    const created = publishDirectory(temporaryGeneration, path.dirname(destination));
+    const { created } = publishSnapshot(stagedSnapshot, path.dirname(destination));
     return { packageRoot: destination, created };
   } catch (error) {
-    fs.rmSync(temporaryGeneration, { recursive: true, force: true });
+    removeSnapshotTree(stagedSnapshot);
     throw error;
   }
 }
