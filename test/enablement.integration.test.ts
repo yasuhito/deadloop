@@ -38,7 +38,7 @@ const retainedExtensionShutdowns: Array<() => Promise<void>> = [];
 const repositoryTemplates = new Map<boolean, string>();
 // Execution-supply dependencies are intentionally hard-linked, so the package
 // checkout and Automation host state must share a filesystem in this suite.
-const fixtureParent = mkdtempSync(path.join(os.homedir(), ".cache", "deadloop-enablement-suite-"));
+const fixtureParent = mkdtempSync(path.join(path.dirname(process.cwd()), ".deadloop-enablement-suite-"));
 const enabledSafetyFields = {
   githubRepositoryId: "R_demo",
   automationLogin: "deadloop-bot",
