@@ -103,6 +103,16 @@ describe("code snapshot execution supply", () => {
     expect(second.dependencyRoot).toBe(first.dependencyRoot);
   });
 
+  it("reuses a fixed dependency generation after live dependencies disappear", () => {
+    const input = fixture();
+    const first = supply(input);
+    rmSync(path.join(input.repo, "node_modules"), { recursive: true });
+
+    const second = supply(input);
+
+    expect(second.dependencyRoot).toBe(first.dependencyRoot);
+  });
+
   it("uses a different dependency snapshot when the committed lock changes", () => {
     const input = fixture();
     const first = supply(input);

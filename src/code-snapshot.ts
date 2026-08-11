@@ -115,12 +115,13 @@ function publishDirectory(temporary: string, destination: string): boolean {
   }
 }
 
-function ensureDependencySnapshot(packageRoot: string, stateDir: string, lockHash: string): string {
+function ensureDependencySnapshot(packageRoot: string, stateDir: string, lockHash: string, lockContents: Buffer): string {
   const destination = path.join(stateDir, DEPENDENCY_SNAPSHOT_DIRECTORY, lockHash, "node_modules");
   if (fs.lstatSync(path.dirname(destination), { throwIfNoEntry: false })?.isDirectory() && fs.lstatSync(destination, { throwIfNoEntry: false })?.isDirectory()) {
     return destination;
   }
 
+  assertInstalledDependenciesMatchLock(packageRoot, lockContents);
   const source = path.join(packageRoot, "node_modules");
   if (!fs.lstatSync(source, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`code snapshot blocked: local dependencies are unavailable at ${source}`);
@@ -204,9 +205,8 @@ export function ensureCodeSnapshot(input: EnsureCodeSnapshotInput): CodeSnapshot
   if (!/^[0-9a-f]{40}$/i.test(codeIdentity)) throw new Error("code snapshot blocked: code identity is not a full commit SHA");
   const lock = committedLock(packageRoot, codeIdentity);
   const lockHash = createHash("sha256").update(lock.contents).digest("hex");
-  assertInstalledDependenciesMatchLock(packageRoot, lock.contents);
   fs.mkdirSync(input.stateDir, { recursive: true });
-  const dependencyRoot = ensureDependencySnapshot(packageRoot, input.stateDir, lockHash);
+  const dependencyRoot = ensureDependencySnapshot(packageRoot, input.stateDir, lockHash, lock.contents);
   const snapshot = ensurePackageSnapshot(packageRoot, input.stateDir, codeIdentity, lock, dependencyRoot);
   return {
     codeIdentity,
