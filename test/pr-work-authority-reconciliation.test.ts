@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const {
@@ -8,6 +11,8 @@ const {
   recoveryComment,
   requestAfterInvalidationCutoff,
 } = require("../src/pr-work-authority-reconciliation.ts");
+
+const { reconcile, reconciledLabelReplacement } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
 
 const base = {
   pr: {
@@ -160,6 +165,76 @@ describe("PR work-authority reconciliation", () => {
       },
     );
     expect(result.cleanup).toBe("preserve_workspace");
+  });
+
+  it("does not expose a superseding request when workspace cleanup fails", async () => {
+    let replaced = false;
+    await applyPrWorkAuthorityReconciliation(
+      { ...base, pr: { ...base.pr, labels: [...base.pr.labels, "agent:review"] }, claim: { kind: "superseded" }, runtime: { kind: "stopped_owned" } },
+      {
+        automationLogin: "deadloop-bot",
+        listTimelineEvents: () => [],
+        listComments: () => [],
+        replaceLabels: () => { replaced = true; },
+        comment: () => {},
+        closeOwnedWorkspace: () => false,
+      },
+    );
+    expect(replaced).toBe(false);
+  });
+
+  it("exposes a superseding request only after workspace cleanup succeeds", async () => {
+    const effects: string[] = [];
+    await applyPrWorkAuthorityReconciliation(
+      { ...base, pr: { ...base.pr, labels: [...base.pr.labels, "agent:review"] }, claim: { kind: "superseded" }, runtime: { kind: "stopped_owned" } },
+      {
+        automationLogin: "deadloop-bot",
+        listTimelineEvents: () => [],
+        listComments: () => [],
+        replaceLabels: () => { effects.push("labels"); },
+        comment: () => {},
+        closeOwnedWorkspace: () => { effects.push("close"); return true; },
+        releaseLocalOwnership: () => { effects.push("release"); },
+      },
+    );
+    expect(effects).toEqual(["close", "release", "labels"]);
+  });
+});
+
+describe("reconciliation entrypoint", () => {
+  it("preserves requested and concurrent unrelated labels while blocking ambiguous supersession", () => {
+    expect(reconciledLabelReplacement(
+      ["customer:concurrent", "agent:in-progress", "agent:review"],
+      ["customer:old", "agent:review", "agent:blocked"],
+      ["agent:update-branch", "agent:implement", "agent:review", "agent:in-progress", "agent:blocked"],
+    )).toEqual(["customer:concurrent", "agent:review", "agent:blocked"]);
+  });
+
+  it("keeps a legacy migration blocked when its retained journal is malformed", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deadloop-reconcile-"));
+    try {
+      const runDir = path.join(root, "runs", "malformed");
+      mkdirSync(runDir, { recursive: true });
+      writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+        project: "demo", repository: "yasuhito/deadloop", target: { kind: "pull-request", number: 227 },
+      }));
+      writeFileSync(path.join(root, "github-state-migration-v1.json"), JSON.stringify({
+        schemaVersion: 1, repository: "yasuhito/deadloop", repositoryId: "repo-id", confirmation: "updated-hosts-stopped",
+      }));
+      const commandRunner = {
+        runText: () => "deadloop-bot\n",
+        runJson: (argv: string[]) => argv.includes("view") && argv.includes("id,nameWithOwner")
+          ? { id: "repo-id", nameWithOwner: "yasuhito/deadloop" }
+          : argv.includes("list") ? [{ number: 227, state: "OPEN", headRefOid: "a".repeat(40), mergeable: "MERGEABLE", labels: [{ name: "agent:blocked" }] }] : [],
+      };
+      const result = await reconcile({
+        projectRepo: process.cwd(), githubRepo: "yasuhito/deadloop", stateDir: root,
+        projectId: "demo", enabledAt: Date.now(), automationLogin: "deadloop-bot",
+      }, commandRunner);
+      expect(result.migrations).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

@@ -194,6 +194,13 @@ async function applyPrWorkAuthorityReconciliation(
 
   const currentLabels = labelNames(input.pr.labels);
   const labelsChange = !sameLabels(currentLabels, decision.labels);
+  if (decision.action === "release_for_request") {
+    const closed = await operations.closeOwnedWorkspace?.();
+    if (closed !== true) return { action: decision.action, cleanup: "preserve_workspace" };
+    await operations.releaseLocalOwnership?.();
+    if (labelsChange) await operations.replaceLabels(decision.labels);
+    return { action: decision.action, cleanup: "ownership_released" };
+  }
   const timelineBaseline = decision.action === "block" && labelsChange
     ? await operations.listTimelineEvents()
     : [];

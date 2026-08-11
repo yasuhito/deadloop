@@ -112,6 +112,16 @@ describe("PR reviewer stale reviewing reclaim", () => {
     expect(selectPrForReview(prs, defaultDecisionConfig(), owners).selected).toBe(false);
   });
 
+  it("suppresses a queued review while its retained in-progress owner is active", () => {
+    const { defaultDecisionConfig, selectPrForReview } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const prs = [{
+      number: 42,
+      headRefOid: "a".repeat(40),
+      labels: [{ name: "agent:review" }, { name: "agent:in-progress" }],
+    }];
+    expect(selectPrForReview(prs, defaultDecisionConfig(), new Set([42])).selected).toBe(false);
+  });
+
   it("does not suppress an ordinary GitHub request from a retained journal alone", () => {
     const { defaultDecisionConfig, selectPrForReview, workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
     const owners = workingReviewerPrNumbers({}, "demo", [{

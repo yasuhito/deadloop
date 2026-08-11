@@ -12,6 +12,7 @@ type AnyRecord = Record<string, any>;
 type ReviewDecisionConfig = {
   reviewLabel: string;
   reviewingLabel: string;
+  inProgressLabel: string;
   humanLabel: string;
   blockedLabel: string;
   autoMerge: boolean;
@@ -30,6 +31,7 @@ function defaultDecisionConfig(overrides: Partial<ReviewDecisionConfig> = {}): R
   return {
     reviewLabel: "agent:review",
     reviewingLabel: "agent:reviewing",
+    inProgressLabel: "agent:in-progress",
     humanLabel: "ready-for-human",
     blockedLabel: "agent:blocked",
     autoMerge: false,
@@ -253,9 +255,10 @@ function selectPrForReview(
       continue;
     }
     const hasReviewingLabel = labels.has(config.reviewingLabel);
-    // Legacy in-flight work remains a migration/reconciliation concern, but a
-    // local journal alone cannot suppress a fresh GitHub request.
-    if (hasReviewingLabel && workingReviewerPrs.has(prNumberForPrReviewer(pr))) {
+    const hasInProgressLabel = labels.has(config.inProgressLabel);
+    // A retained journal suppresses work only while GitHub still exposes its
+    // active claim. An ordinary queued request without that claim stays eligible.
+    if ((hasReviewingLabel || hasInProgressLabel) && workingReviewerPrs.has(prNumberForPrReviewer(pr))) {
       skipped.push(skipForPrReviewer("reviewer_working", pr));
       continue;
     }
@@ -343,6 +346,7 @@ function cliConfig(args: AnyRecord): ReviewDecisionConfig {
   return defaultDecisionConfig({
     reviewLabel: args.reviewLabel || "agent:review",
     reviewingLabel: args.reviewingLabel || "agent:reviewing",
+    inProgressLabel: args.inProgressLabel || "agent:in-progress",
     humanLabel: args.humanLabel || "ready-for-human",
     blockedLabel: args.blockedLabel || "agent:blocked",
     autoMerge: parseBoolForPrReviewer(args.autoMerge),

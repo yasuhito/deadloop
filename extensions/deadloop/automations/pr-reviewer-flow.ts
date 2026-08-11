@@ -16,6 +16,7 @@ type PrReviewerFlowEnv = {
   stateDir: string;
   reviewLabel: string;
   reviewingLabel: string;
+  inProgressLabel: string;
   humanLabel: string;
   blockedLabel: string;
   autoMerge: boolean;
@@ -43,6 +44,7 @@ function decisionConfig(env: PrReviewerFlowEnv): JsonObject {
   return defaultDecisionConfig({
     reviewLabel: env.reviewLabel,
     reviewingLabel: env.reviewingLabel,
+    inProgressLabel: env.inProgressLabel || "agent:in-progress",
     humanLabel: env.humanLabel,
     blockedLabel: env.blockedLabel,
     autoMerge: env.autoMerge,

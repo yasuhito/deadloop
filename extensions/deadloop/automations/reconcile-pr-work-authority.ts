@@ -25,6 +25,14 @@ function labels(value: JsonObject): string[] {
   return (value.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")).filter(Boolean);
 }
 
+function reconciledLabelReplacement(current: string[], next: string[], managedLabels: string[]): string[] {
+  const managed = new Set(managedLabels);
+  return [...new Set([
+    ...current.filter((label) => !managed.has(label)),
+    ...next.filter((label) => managed.has(label)),
+  ])];
+}
+
 function loadAttempts(stateDir: string, projectId: string, repository: string): { valid: JsonObject[]; malformed: JsonObject[] } {
   const valid: JsonObject[] = [];
   const malformed: JsonObject[] = [];
@@ -173,11 +181,8 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       listComments: () => github.listPrComments(args.githubRepo, number),
       replaceLabels: (next: string[]) => guarded(() => {
         const current = labels({ labels: github.listPrLabels(args.githubRepo, number) });
-        const managed = new Set([...requestLabels, inProgressLabel, blockedLabel]);
-        const replacement = next.includes(blockedLabel)
-          ? [...current.filter((label) => !managed.has(label)), blockedLabel]
-          : current.filter((label) => label !== inProgressLabel && label !== blockedLabel);
-        return github.replacePrLabels(args.githubRepo, number, [...new Set(replacement)]);
+        const managed = [...requestLabels, inProgressLabel, blockedLabel];
+        return github.replacePrLabels(args.githubRepo, number, reconciledLabelReplacement(current, next, managed));
       }),
       comment: (body: string) => guarded(() => github.createPrComment(args.githubRepo, number, body)),
       closeOwnedWorkspace: record && runtime.kind === "stopped_owned" ? () => guarded(() => {
@@ -223,6 +228,8 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     if (migration.action !== "request" || completedMigrations.has(Number(pr.number))
       || !currentMigrationLabels.includes(blockedLabel) || currentMigrationLabels.includes(inProgressLabel)) continue;
     const retained = attempts.valid.filter((attempt) => attempt.target?.kind === "pull-request" && Number(attempt.target.number) === Number(pr.number));
+    const malformed = attempts.malformed.filter((attempt) => Number(attempt.target?.number) === Number(pr.number));
+    if (malformed.length) continue;
     let cleanupSafe = true;
     for (const record of retained) {
       let observed: { kind: string };
@@ -278,4 +285,4 @@ async function main(): Promise<void> {
 }
 
 if (require.main === module) void main();
-module.exports = { loadAttempts, reconcile, runtimeForAttempt };
+module.exports = { loadAttempts, reconcile, reconciledLabelReplacement, runtimeForAttempt };
