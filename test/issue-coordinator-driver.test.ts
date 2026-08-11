@@ -160,10 +160,22 @@ exit 2
     expect(runDriverFixture("driver-ready-worker.json", { DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution })).not.toHaveProperty("launch");
   });
 
-  it("resumes a fingerprinted partial stop after required verification resolves", () => {
+  it("resumes a fingerprinted partial stop while required verification remains blocked", () => {
+    expect(runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution,
+    }).driverAction).toBe("required_verification_blocked");
+  });
+
+  it("launches a Worker for a requeued fingerprinted Issue after required verification resolves", () => {
     expect(runDriverFixture("driver-partial-verification-stop.json", {
       DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify({ status: "resolved" }),
-    }).driverAction).toBe("required_verification_blocked");
+    }).driverAction).toBe("worker_monitor_request");
+  });
+
+  it("does not requeue a durable verification stop when only configuration resolves", () => {
+    expect(runDriverFixture("driver-durable-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify({ status: "resolved" }),
+    }).driverAction).toBe("no_candidate");
   });
 
   it("binds the Worker V1 identity to an exact commit SHA", () => {

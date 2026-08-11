@@ -527,8 +527,10 @@ function drive(fixturePath: string | undefined): DriverResult {
 
   const issues = issueList(fixture, env.githubRepo);
   const verificationResolution = parsedRequiredVerificationResolution(env);
-  const resumableStop = issues.find((candidate) => requiredVerificationStopFingerprint(candidate)
-    && !isExactDurableRequiredVerificationStop(candidate, env));
+  const resumableStop = verificationResolution?.status === "blocked"
+    ? issues.find((candidate) => requiredVerificationStopFingerprint(candidate)
+      && !isExactDurableRequiredVerificationStop(candidate, env))
+    : undefined;
   if (resumableStop) {
     const fingerprint = requiredVerificationStopFingerprint(resumableStop) as string;
     const stopped = fixture ? { fingerprint } : resumeRequiredVerificationStop(resumableStop, env, fingerprint);
