@@ -7,7 +7,7 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { applyPrWorkAuthorityReconciliation, migrationDecision } = require("../../../src/pr-work-authority-reconciliation.ts");
-const { classifyActiveReviewClaim } = require("./pr-review-claim.ts");
+const { classifyActiveReviewClaim, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -31,6 +31,27 @@ function reconciledLabelReplacement(current: string[], next: string[], managedLa
     ...current.filter((label) => !managed.has(label)),
     ...next.filter((label) => managed.has(label)),
   ])];
+}
+
+function moveReconciledLabels(github: any, repository: string, number: number, current: string[], next: string[], managedLabels: string[]): string[] {
+  const desired = reconciledLabelReplacement(current, next, managedLabels);
+  const remove = current.filter((label) => !desired.includes(label));
+  const add = desired.filter((label) => !current.includes(label));
+  github.movePrLabels(repository, number, { remove, add });
+  const observed = labels({ labels: github.listPrLabels(repository, number) });
+  if (add.some((label) => !observed.includes(label))
+    || remove.some((label) => observed.includes(label))) throw new Error("PR label recovery postcondition was not reached");
+  return observed;
+}
+
+function claimCommentSnapshot(comments: JsonObject[]): string[] {
+  return comments.filter((comment) => parseReviewClaim(comment.body) !== null)
+    .map((comment) => JSON.stringify([comment.id || comment.databaseId, comment.created_at || comment.createdAt, comment.updated_at || comment.updatedAt, comment.body])).sort();
+}
+
+function revalidatedMissingRecordClaimKind(expectedClaimKind: string, initialComments: JsonObject[], liveComments: JsonObject[]): string {
+  return JSON.stringify(claimCommentSnapshot(liveComments)) === JSON.stringify(claimCommentSnapshot(initialComments))
+    ? expectedClaimKind : "ambiguous";
 }
 
 function loadAttempts(stateDir: string, projectId: string, repository: string): { valid: JsonObject[]; released: JsonObject[]; malformed: JsonObject[] } {
@@ -94,26 +115,42 @@ function latestConfiguredRequest(events: JsonObject[], currentLabels: string[], 
     }).at(-1) || null;
 }
 
+function canonicalPath(value: unknown): string {
+  const resolved = path.resolve(String(value || ""));
+  try { return fs.realpathSync(resolved); } catch { return resolved; }
+}
+
+function canonicalPathContains(root: unknown, candidate: unknown): boolean {
+  const canonicalRoot = canonicalPath(root);
+  const canonicalCandidate = canonicalPath(candidate);
+  const relative = path.relative(canonicalRoot, canonicalCandidate);
+  return relative === "" || relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
 function runtimeForAttempt(runner: any, record: JsonObject, projectRepo = ""): { kind: string } {
   const workspaces = runner.listWorkspaces();
   const agents = runner.listAgents();
-  const checkoutWorkspaces = workspaces.filter((workspace: JsonObject) => String(workspace.worktreePath || "") === String(record.worktreePath || ""));
+  const checkoutWorkspaces = workspaces.filter((workspace: JsonObject) => canonicalPath(workspace.worktreePath) === canonicalPath(record.worktreePath));
   const matchingWorkspaces = checkoutWorkspaces.filter((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record.workspaceId || ""));
+  const checkoutAgents = agents.filter((agent: JsonObject) => canonicalPathContains(record.worktreePath, agent.cwd));
   const relatedAgents = agents.filter((agent: JsonObject) => String(agent.name || "") === String(record.agentName || "")
     || String(agent.paneId || "") === String(record.rootPaneId || "")
-    || String(agent.cwd || "") === String(record.worktreePath || ""));
+    || canonicalPathContains(record.worktreePath, agent.cwd));
   const matchingAgents = relatedAgents.filter((agent: JsonObject) => String(agent.name || "") === String(record.agentName || "")
     && String(agent.paneId || "") === String(record.rootPaneId || "")
-    && String(agent.cwd || "") === String(record.worktreePath || ""));
+    && canonicalPathContains(record.worktreePath, agent.cwd));
   if (matchingWorkspaces.length === 0 && validCloseReceipt(record) && projectRepo) {
-    const retained = runner.listWorktrees(projectRepo).some((worktree: JsonObject) => String(worktree.path || "") === String(record.worktreePath));
-    return retained && checkoutWorkspaces.length === 0 && relatedAgents.length === 0 ? { kind: "stopped_owned" } : { kind: "ambiguous" };
+    const retained = runner.listWorktrees(projectRepo).some((worktree: JsonObject) => canonicalPath(worktree.path) === canonicalPath(record.worktreePath));
+    return retained && checkoutWorkspaces.length === 0 && relatedAgents.length === 0 && checkoutAgents.length === 0 ? { kind: "stopped_owned" } : { kind: "ambiguous" };
   }
   if (matchingWorkspaces.length !== 1 || checkoutWorkspaces.length !== 1
     || Number(matchingWorkspaces[0].tabCount) !== 1 || Number(matchingWorkspaces[0].paneCount) !== 1
-    || matchingAgents.length > 1 || relatedAgents.length !== matchingAgents.length) return { kind: "ambiguous" };
-  if (matchingAgents.length === 1 && String(matchingAgents[0].status || "").toLowerCase() === "working") {
-    return { kind: "live_matching_owner" };
+    || matchingAgents.length > 1 || relatedAgents.length !== matchingAgents.length
+    || checkoutAgents.length !== matchingAgents.length) return { kind: "ambiguous" };
+  if (matchingAgents.length === 1) {
+    const status = String(matchingAgents[0].status || "").toLowerCase();
+    if (status === "working") return { kind: "live_matching_owner" };
+    if (!["done", "idle", "failed", "stopped"].includes(status)) return { kind: "ambiguous" };
   }
   return { kind: "stopped_owned" };
 }
@@ -131,6 +168,16 @@ function classifyClaim(
   const request = latestConfiguredRequest(events, labels(pr), requestLabels);
   const requestEventId = String(request?.id || request?.node_id || "");
   if (!record.reviewClaim) return { claim: { kind: "missing" }, requestEventId };
+  const target = { repositoryId: String(repositoryIdentity.id || ""), repository: String(repositoryIdentity.nameWithOwner || repository), targetNumber: Number(pr.number) };
+  const timeStatus = classifyReviewClaimTimeStatus(pr, events, comments, restHeaders, record.reviewClaim, target);
+  if (timeStatus.kind !== "authorized") {
+    return {
+      claim: timeStatus.kind === "claim_invalid" ? { kind: "malformed" }
+        : timeStatus.kind === "binding_mismatch" ? { kind: "ambiguous" }
+          : timeStatus,
+      requestEventId,
+    };
+  }
   if (requestEventId && requestEventId !== String(record.reviewClaim.binding?.requestEventId || "")) {
     return { claim: { kind: "superseded" }, requestEventId };
   }
@@ -140,7 +187,7 @@ function classifyClaim(
     comments,
     restHeaders,
     record.reviewClaim,
-    { repositoryId: String(repositoryIdentity.id || ""), repository: String(repositoryIdentity.nameWithOwner || repository), targetNumber: Number(pr.number) },
+    target,
   );
   return {
     claim: classified.kind === "claim_invalid" ? { kind: "malformed" }
@@ -242,7 +289,9 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         { ...livePr, labels: liveLabels }, liveEvents, liveComments, github.readRestResponseHeaders(args.githubRepo),
         record, requestLabels, repositoryIdentity, args.githubRepo,
       ) : {
-        claim: { kind: expectedClaimKind },
+        claim: {
+          kind: revalidatedMissingRecordClaimKind(expectedClaimKind, comments, liveComments),
+        },
         requestEventId: String(liveRequest?.id || liveRequest?.node_id || ""),
       };
       if (!reconciliationAuthorityMatches({
@@ -268,11 +317,9 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       listComments: () => github.listPrComments(args.githubRepo, number),
       replaceLabels: (next: string[]) => guarded(() => {
         const current = revalidate(input.pr.labels, claim.kind);
-        const replaced = github.replacePrLabels(args.githubRepo, number, reconciledLabelReplacement(current, next, managed));
-        input.pr.labels = reconciledLabelReplacement(current, next, managed);
+        input.pr.labels = moveReconciledLabels(github, args.githubRepo, number, current, next, managed);
         if (record && claim.kind !== "malformed" && claim.kind !== "superseded") claim = { kind: "ambiguous" };
         if (!next.some((label) => requestLabels.includes(label))) expectedRequestEventId = "";
-        return replaced;
       }),
       comment: (body: string) => guarded(() => {
         revalidate(input.pr.labels, claim.kind);
@@ -381,10 +428,14 @@ async function main(): Promise<void> {
 
 if (require.main === module) void main();
 module.exports = {
+  claimCommentSnapshot,
+  classifyClaim,
   latestConfiguredRequest,
   loadAttempts,
+  moveReconciledLabels,
   reconcile,
   reconciledLabelReplacement,
   reconciliationAuthorityMatches,
+  revalidatedMissingRecordClaimKind,
   runtimeForAttempt,
 };

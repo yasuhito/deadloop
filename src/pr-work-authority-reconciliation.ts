@@ -7,7 +7,8 @@ type ClaimObservation =
   | { kind: "missing" }
   | { kind: "malformed" }
   | { kind: "ambiguous" }
-  | { kind: "superseded" };
+  | { kind: "superseded" }
+  | { kind: "server_time_unverifiable" };
 
 type RuntimeObservation =
   | { kind: "live_matching_owner" }
@@ -32,7 +33,7 @@ type ReconciliationDecision =
   | { action: "release_for_request"; reason: "request_superseded_active_attempt"; labels: string[]; cleanup: "close_owned_workspace" | "preserve_workspace" }
   | {
       action: "block";
-      reason: "claim_expired" | "claim_missing" | "claim_malformed" | "claim_ambiguous" | "runtime_unreachable" | "runtime_ambiguous" | "runtime_owner_stopped";
+      reason: "claim_expired" | "claim_missing" | "claim_malformed" | "claim_ambiguous" | "server_time_unverifiable" | "runtime_unreachable" | "runtime_ambiguous" | "runtime_owner_stopped";
       labels: string[];
       cleanup: "none" | "close_owned_workspace" | "preserve_workspace";
       invalidatesRequests: boolean;
@@ -101,7 +102,8 @@ function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDec
     : input.claim.kind === "missing" ? "claim_missing"
       : input.claim.kind === "malformed" ? "claim_malformed"
         : input.claim.kind === "ambiguous" ? "claim_ambiguous"
-          : input.runtime.kind === "unreachable" ? "runtime_unreachable"
+          : input.claim.kind === "server_time_unverifiable" ? "server_time_unverifiable"
+            : input.runtime.kind === "unreachable" ? "runtime_unreachable"
             : input.runtime.kind === "ambiguous" ? "runtime_ambiguous"
               : "runtime_owner_stopped";
   return { action: "block", reason, labels: blockLabels(input), cleanup, invalidatesRequests: true };
@@ -161,6 +163,7 @@ function recoveryComment(number: number, head: string, reason: string, cutoffEve
     claim_missing: "the active claim comment or journal was missing",
     claim_malformed: "the active claim evidence was malformed",
     claim_ambiguous: "more than one possible owner or claim was observed",
+    server_time_unverifiable: "GitHub server time for the active claim could not be verified",
     runtime_unreachable: "the execution runtime could not be reached",
     runtime_ambiguous: "workspace ownership could not be proven",
     runtime_owner_stopped: "the recorded owner had stopped",

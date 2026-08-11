@@ -13,12 +13,34 @@ const {
 } = require("../src/pr-work-authority-reconciliation.ts");
 
 const {
+  classifyClaim,
   latestConfiguredRequest,
+  moveReconciledLabels,
   reconcile,
   reconciledLabelReplacement,
   reconciliationAuthorityMatches,
+  revalidatedMissingRecordClaimKind,
   runtimeForAttempt,
 } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
+const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
+
+const claimBinding = {
+  repositoryId: "repo-id", repository: "owner/repo", targetNumber: 42, requestEventId: "10", role: "reviewer",
+  revision: "a".repeat(40), owner: "host:1", authority: { durationSeconds: 60 },
+  activeState: {
+    managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+    requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
+  },
+};
+const reviewClaim = {
+  binding: claimBinding, commentId: "100", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot",
+  reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 55, cleanupGraceSeconds: 5, authoritySeconds: 60,
+  reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+};
+const claimComment = {
+  id: "100", author: { login: "deadloop-bot" }, createdAt: "2026-08-01T10:00:01Z", updatedAt: "2026-08-01T10:00:01Z",
+  body: renderReviewClaimComment(claimBinding),
+};
 
 const base = {
   pr: {
@@ -53,6 +75,10 @@ describe("PR work-authority reconciliation", () => {
 
   it("blocks unreachable runtime", () => {
     expect(reconcilePrWorkAuthority({ ...base, runtime: { kind: "unreachable" } }).reason).toBe("runtime_unreachable");
+  });
+
+  it("reports unverifiable server time without calling a live owner stopped", () => {
+    expect(reconcilePrWorkAuthority({ ...base, claim: { kind: "server_time_unverifiable" } }).reason).toBe("server_time_unverifiable");
   });
 
   it("releases safely stopped owned runtime", () => {
@@ -261,6 +287,18 @@ describe("reconciliation entrypoint", () => {
     expect(reconciliationAuthorityMatches(authoritySnapshot, { ...authoritySnapshot, claimKind: "superseded", requestEventId: "11", managedLabels: ["agent:in-progress", "agent:implement"] })).toBe(false);
   });
 
+  it.each(["agent:review", "agent:implement", "agent:update-branch"])("invalidates a queued %s request observed immediately before claim expiry", (requestLabel) => {
+    const events = [
+      { id: "10", event: "labeled", created_at: "2026-08-01T10:00:00Z", label: { name: "agent:review" } },
+      { id: "11", event: "labeled", created_at: "2026-08-01T10:00:59Z", label: { name: requestLabel } },
+    ];
+    expect(classifyClaim(
+      { number: 42, state: "OPEN", headRefOid: "a".repeat(40), labels: ["agent:in-progress", requestLabel] },
+      events, [claimComment], "date: Sat, 01 Aug 2026 10:01:01 GMT", { reviewClaim }, base.requestLabels,
+      { id: "repo-id", nameWithOwner: "owner/repo" }, "owner/repo",
+    ).claim.kind).toBe("expired");
+  });
+
   it.each(["agent:implement", "agent:update-branch"])("recognizes a queued %s request as the latest generation", (requestLabel) => {
     expect(latestConfiguredRequest(
       [
@@ -281,6 +319,24 @@ describe("reconciliation entrypoint", () => {
     expect(runtimeForAttempt(runner, { workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }).kind).toBe("ambiguous");
   });
 
+  it("refuses stopped ownership when another agent occupies a nested checkout path", () => {
+    const runner = {
+      listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 1 }],
+      listAgents: () => [{ name: "foreign", paneId: "pane-2", cwd: "/wt/src", status: "working" }],
+      listWorktrees: () => [{ path: "/wt" }],
+    };
+    expect(runtimeForAttempt(runner, { workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }).kind).toBe("ambiguous");
+  });
+
+  it("fails closed when the matching owner has an unknown status", () => {
+    const runner = {
+      listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 1 }],
+      listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt/src", status: "paused-maybe" }],
+      listWorktrees: () => [{ path: "/wt" }],
+    };
+    expect(runtimeForAttempt(runner, { workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }).kind).toBe("ambiguous");
+  });
+
   it("refuses stopped ownership when another agent occupies the checkout", () => {
     const runner = {
       listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 1 }],
@@ -288,6 +344,40 @@ describe("reconciliation entrypoint", () => {
       listWorktrees: () => [{ path: "/wt" }],
     };
     expect(runtimeForAttempt(runner, { workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }).kind).toBe("ambiguous");
+  });
+
+  it("applies nested checkout occupancy proof when recovering a close receipt", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deadloop-close-proof-"));
+    try {
+      writeFileSync(path.join(root, "authority-release-started.json"), JSON.stringify({
+        schemaVersion: 1, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt",
+      }));
+      const runner = {
+        listWorkspaces: () => [],
+        listAgents: () => [{ name: "foreign", paneId: "pane-2", cwd: "/wt/src", status: "working" }],
+        listWorktrees: () => [{ path: "/wt" }],
+      };
+      expect(runtimeForAttempt(runner, { runDir: root, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }, process.cwd()).kind).toBe("ambiguous");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on an unknown owner status while recovering a close receipt", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deadloop-close-proof-"));
+    try {
+      writeFileSync(path.join(root, "authority-release-started.json"), JSON.stringify({
+        schemaVersion: 1, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt",
+      }));
+      const runner = {
+        listWorkspaces: () => [],
+        listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt/src", status: "unknown" }],
+        listWorktrees: () => [{ path: "/wt" }],
+      };
+      expect(runtimeForAttempt(runner, { runDir: root, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }, process.cwd()).kind).toBe("ambiguous");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("applies checkout-wide agent proof when recovering a close receipt", () => {
@@ -305,6 +395,23 @@ describe("reconciliation entrypoint", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("preserves a request added between revalidation and label mutation", () => {
+    let live = ["agent:in-progress", "customer:keep"];
+    const github = {
+      movePrLabels: (_repository: string, _number: number, move: { remove: string[]; add: string[] }) => {
+        live.push("agent:implement");
+        live = live.filter((label) => !move.remove.includes(label));
+        live.push(...move.add.filter((label) => !live.includes(label)));
+      },
+      listPrLabels: () => live.map((name) => ({ name })),
+    };
+    expect(moveReconciledLabels(github, "owner/repo", 42, [...live], ["agent:blocked"], [...base.requestLabels, "agent:in-progress", "agent:blocked"])).toContain("agent:implement");
+  });
+
+  it("fails closed when a claim is inserted before a missing-record recovery mutation", () => {
+    expect(revalidatedMissingRecordClaimKind("missing", [], [claimComment])).toBe("ambiguous");
   });
 
   it("preserves requested and concurrent unrelated labels while blocking ambiguous supersession", () => {
