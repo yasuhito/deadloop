@@ -36,7 +36,9 @@ const retainedExtensionShutdowns: Array<() => Promise<void>> = [];
 // stable path lets every extension factory get fresh closure state without paying
 // for a transformed module reload; fixtureRepository replaces all files per test.
 const repositoryTemplates = new Map<boolean, string>();
-const fixtureParent = mkdtempSync(path.join(os.tmpdir(), "deadloop-enablement-suite-"));
+// Execution-supply dependencies are intentionally hard-linked, so the package
+// checkout and Automation host state must share a filesystem in this suite.
+const fixtureParent = mkdtempSync(path.join(os.homedir(), ".cache", "deadloop-enablement-suite-"));
 const enabledSafetyFields = {
   githubRepositoryId: "R_demo",
   automationLogin: "deadloop-bot",
@@ -367,7 +369,10 @@ afterEach(async () => {
   else process.env.DEADLOOP = originalDeadloop;
   if (originalDeadloopAutomations === undefined) delete process.env.DEADLOOP_AUTOMATIONS;
   else process.env.DEADLOOP_AUTOMATIONS = originalDeadloopAutomations;
-  for (const sandbox of sandboxes.splice(0)) rmSync(sandbox, { recursive: true, force: true });
+  for (const sandbox of sandboxes.splice(0)) {
+    execFileSync("chmod", ["-R", "u+w", sandbox]);
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 async function explicitNpmCommandWithoutLockfileObservation(): Promise<string | undefined> {

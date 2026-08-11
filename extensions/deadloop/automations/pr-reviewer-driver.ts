@@ -94,6 +94,13 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     stateDir:
       source.DEADLOOP_STATE_DIR ||
       path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
+    codeSupply: source.DEADLOOP_CODE_IDENTITY && source.DEADLOOP_DEPENDENCY_LOCK_HASH && source.DEADLOOP_CODE_SNAPSHOT_DIR
+      ? {
+          codeIdentity: source.DEADLOOP_CODE_IDENTITY,
+          lockHash: source.DEADLOOP_DEPENDENCY_LOCK_HASH,
+          packageRoot: source.DEADLOOP_CODE_SNAPSHOT_DIR,
+        }
+      : undefined,
     checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
     reviewerAgent: source.DEADLOOP_REVIEWER_AGENT || "pi",
     reviewerModel: source.DEADLOOP_REVIEWER_MODEL || "",
@@ -221,6 +228,7 @@ type DriverLaunchInput = {
   role: "reviewer" | "branch-update";
   target: { kind: "pull-request"; number: number };
   inputRevision: { head: string; base?: string };
+  codeSupply?: { codeIdentity: string; lockHash: string; packageRoot: string };
   intendedWorktreePath: string;
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
@@ -518,6 +526,7 @@ function branchUpdateLaunchPlan(
       role: "branch-update",
       target: { kind: "pull-request", number },
       inputRevision: { head: headOid, base: baseOid },
+      codeSupply: env.codeSupply,
       intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid, uuid),
@@ -597,6 +606,7 @@ function prReviewerLaunchPlan(
       reviewHistoryRequired: true,
       target: { kind: "pull-request", number },
       inputRevision: { head: String(pr.headRefOid || "") },
+      codeSupply: env.codeSupply,
       intendedWorktreePath: path.join(env.worktreeRoot, headRefName.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath, uuid, historyFile, historyRevision),

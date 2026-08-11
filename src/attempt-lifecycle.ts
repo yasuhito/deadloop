@@ -33,6 +33,12 @@ export type InputRevision = {
   base?: string;
 };
 
+export type CodeSupply = {
+  codeIdentity: string;
+  lockHash: string;
+  packageRoot: string;
+};
+
 /** Identity which binds a launch record and its completion report. */
 export type AttemptIdentity = {
   attemptId: string;
@@ -135,6 +141,7 @@ export type AttemptRecord = AttemptIdentity & {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  codeSupply?: CodeSupply;
   reviewClaim?: Record<string, unknown>;
   abandonment?: AttemptAbandonment;
 };
@@ -150,6 +157,7 @@ export type PreparedAttemptInput = AttemptIdentity & {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  codeSupply?: CodeSupply;
   reviewClaim?: Record<string, unknown>;
 };
 
@@ -224,6 +232,19 @@ function parseRequiredVerification(value: unknown, required: boolean): RequiredV
   return parsed;
 }
 
+function parseCodeSupply(value: unknown): CodeSupply | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail("codeSupply must be an object");
+  const supply = value as Record<string, unknown>;
+  const lockHash = nonEmptyString(supply.lockHash, "codeSupply.lockHash");
+  if (!/^[0-9a-f]{64}$/i.test(lockHash)) fail("codeSupply.lockHash must be a SHA-256 hash");
+  return {
+    codeIdentity: commitSha(supply.codeIdentity, "codeSupply.codeIdentity"),
+    lockHash,
+    packageRoot: nonEmptyString(supply.packageRoot, "codeSupply.packageRoot"),
+  };
+}
+
 function parseAttemptRecord(value: unknown): AttemptRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("record must be an object");
   const record = value as Record<string, unknown>;
@@ -295,6 +316,7 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(parseRequiredVerification(record.requiredVerification, false)
       ? { requiredVerification: parseRequiredVerification(record.requiredVerification, true) }
       : {}),
+    ...(parseCodeSupply(record.codeSupply) ? { codeSupply: parseCodeSupply(record.codeSupply) } : {}),
     ...(record.reviewClaim === undefined
       ? {}
       : record.reviewClaim && typeof record.reviewClaim === "object" && !Array.isArray(record.reviewClaim)
@@ -350,6 +372,7 @@ function assertRecordAdvance(current: AttemptRecord, next: AttemptRecord): void 
     if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
+  if (JSON.stringify(current.codeSupply) !== JSON.stringify(next.codeSupply)) throw new Error("Attempt record codeSupply cannot change");
   if (current.reviewClaim !== undefined && JSON.stringify(current.reviewClaim) !== JSON.stringify(next.reviewClaim)) throw new Error("Attempt record reviewClaim cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"] as const) {
     if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
