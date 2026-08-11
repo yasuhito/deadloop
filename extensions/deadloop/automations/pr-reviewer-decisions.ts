@@ -252,11 +252,13 @@ function selectPrForReview(
       skipped.push(skipForPrReviewer("blocked", pr));
       continue;
     }
-    if (workingReviewerPrs.has(prNumberForPrReviewer(pr))) {
+    const hasReviewingLabel = labels.has(config.reviewingLabel);
+    // Legacy in-flight work remains a migration/reconciliation concern, but a
+    // local journal alone cannot suppress a fresh GitHub request.
+    if (hasReviewingLabel && workingReviewerPrs.has(prNumberForPrReviewer(pr))) {
       skipped.push(skipForPrReviewer("reviewer_working", pr));
       continue;
     }
-    const hasReviewingLabel = labels.has(config.reviewingLabel);
     const currentHeadWasClaimed = claimedReviewerHeadKeys.has(reviewerClaimKey(prNumberForPrReviewer(pr), String(pr.headRefOid || "")));
     const repairRereview = hasRepairRereviewProvenance(pr, config.automationLogin) && (!hasReviewingLabel || !currentHeadWasClaimed);
     const staleReclaim = hasReviewingLabel && !repairRereview;

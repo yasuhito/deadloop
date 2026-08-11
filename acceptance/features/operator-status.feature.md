@@ -68,23 +68,23 @@ The operator can inspect Issues, pull requests, worktrees, configuration conditi
 * When deadloop creates the blocking comment
 * Then The blocking comment shows a safe requeue method
 
-## Scenario: Show reason in blocking comment for pull request
+## Scenario: Do not post a draft reason before an active claim
 
 * Given pull request #23 is a draft and waiting for review.
 * When deadloop creates the blocking comment
-* Then The pull request blocking comment shows the reason
+* Then No draft blocking comment is posted before claim
 
-## Scenario: Show recovery procedure in blocking comment of pull request
-
-* Given pull request #23 is a draft and waiting for review.
-* When deadloop creates the blocking comment
-* Then The blocking comment shows recovery steps of pull request
-
-## Scenario: Show safe requeue method in blocking comment for pull request
+## Scenario: Do not post draft recovery steps before an active claim
 
 * Given pull request #23 is a draft and waiting for review.
 * When deadloop creates the blocking comment
-* Then The pull request blocking comment shows a safe requeue method
+* Then No draft blocking comment is posted before claim
+
+## Scenario: Do not consume the draft review request before an active claim
+
+* Given pull request #23 is a draft and waiting for review.
+* When deadloop creates the blocking comment
+* Then No draft blocking comment is posted before claim
 
 ## Scenario: Register the current status display command
 

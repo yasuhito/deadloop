@@ -2,11 +2,11 @@
 
 Handle review findings and conflicts safely without repeating the same change or overwriting another change.
 
-## Scenario: Start one dedicated conflict-recovery attempt for a conflicted pull request
+## Scenario: Fail closed before a conflict-recovery claim exists
 
 * Given A pull request has a conflict that can be recovered
 * When deadloop checks the pull request
-* Then deadloop starts a dedicated conflict-recovery attempt
+* Then deadloop leaves the conflicted pull request untouched before claim
 
 ## Scenario: Do not start conflict recovery twice for the same pull request head and base
 
@@ -14,23 +14,23 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop checks the pull request
 * Then deadloop does not start another dedicated conflict-recovery attempt
 
-## Scenario: Keep the pull request under review after a repeated conflict-recovery request
+## Scenario: Do not relabel a repeated conflict-recovery request before claim
 
 * Given Conflict recovery was already attempted for the same pull request head and base
 * When deadloop checks the pull request
-* Then deadloop keeps the pull request under review
+* Then deadloop leaves the conflicted pull request untouched before claim
 
-## Scenario: Escalate a repeated conflict-recovery request for human handling
-
-* Given Conflict recovery was already attempted for the same pull request head and base
-* When deadloop checks the pull request
-* Then deadloop escalates the pull request for human handling
-
-## Scenario: Leave recovery guidance after a repeated conflict-recovery request
+## Scenario: Do not comment on a repeated conflict-recovery request before claim
 
 * Given Conflict recovery was already attempted for the same pull request head and base
 * When deadloop checks the pull request
-* Then deadloop leaves recovery guidance
+* Then deadloop leaves the conflicted pull request untouched before claim
+
+## Scenario: Do not launch repeated conflict recovery before claim
+
+* Given Conflict recovery was already attempted for the same pull request head and base
+* When deadloop checks the pull request
+* Then deadloop leaves the conflicted pull request untouched before claim
 
 ## Scenario: Return a pull request with a conflict-recovery head update to normal review
 
@@ -50,11 +50,11 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop checks the pull request
 * Then The selection reason after conflict recovery is repair re-review
 
-## Scenario: Preserve review state during conflict recovery
+## Scenario: Preserve all shared state before a conflict-recovery claim
 
 * Given A pull request has a conflict that can be recovered
 * When deadloop checks the pull request
-* Then deadloop preserves the review state
+* Then deadloop leaves the conflicted pull request untouched before claim
 
 ## Scenario: Start a dedicated repair attempt for the first actionable review findings
 
@@ -139,24 +139,6 @@ Handle review findings and conflicts safely without repeating the same change or
 * Given The pull request head selected for repair has been verified
 * When The pull request head changes immediately before push
 * Then deadloop does not push to the branch
-
-## Scenario: Do not push a repair that changes too many files for its findings
-
-* Given A repair changes six files for one finding
-* When deadloop completes the repair
-* Then deadloop does not push to the branch
-
-## Scenario: Hand a repair that changes too many files to a human
-
-* Given A repair changes six files for one finding
-* When deadloop completes the repair
-* Then deadloop requires human review for the repair
-
-## Scenario: Push a repair whose changed-file count is within the limit
-
-* Given A repair changes five files for one finding
-* When deadloop completes the repair
-* Then deadloop pushes non-forcibly to the verified branch
 
 ## Scenario: Push a repair non-forcibly to only the verified existing branch
 

@@ -12,6 +12,15 @@ describe("GitHub operations", () => {
     ]);
   });
 
+  it("observes immutable repository identity", () => {
+    const commands: string[][] = [];
+    const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), {}) });
+
+    github.getRepositoryIdentity("owner/repo");
+
+    expect(commands[0]).toEqual(["gh", "repo", "view", "owner/repo", "--json", "id,nameWithOwner"]);
+  });
+
   it("lists open issues", () => {
     const commands: string[][] = [];
     const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), []) });
@@ -58,6 +67,18 @@ describe("GitHub operations", () => {
     github.moveIssueLabels("owner/repo", 12, { remove: "agent:implement", add: "needs-triage" });
 
     expect(commands[0]).toEqual(["gh", "issue", "edit", "12", "-R", "owner/repo", "--remove-label", "agent:implement", "--add-label", "needs-triage"]);
+  });
+
+  it("paginates live PR labels", () => {
+    const commands: string[][] = [];
+    const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), [[{ name: "one" }], [{ name: "two" }]]) });
+
+    const labels = github.listPrLabels("owner/repo", 24);
+
+    expect({ command: commands[0], labels }).toEqual({
+      command: ["gh", "api", "--paginate", "--slurp", "repos/owner/repo/issues/24/labels"],
+      labels: [{ name: "one" }, { name: "two" }],
+    });
   });
 
   it("comments on PRs", () => {

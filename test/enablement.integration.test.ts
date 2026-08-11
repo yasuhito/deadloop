@@ -11,7 +11,17 @@ const { projectCheckMain } = require("../src/project-check.ts") as {
   projectCheckMain: (argv: string[], runner: (input: unknown) => Promise<unknown>) => Promise<void>;
 };
 
-type CommandContext = { cwd: string; mode: string; ui: { notify: () => void; setStatus: () => void }; isIdle?: () => boolean; hasPendingMessages?: () => boolean };
+type CommandContext = {
+  cwd: string;
+  mode: string;
+  hasUI?: boolean;
+  ui: {
+    notify: (message: string, level?: string) => void;
+    setStatus: (key: string, value: string | undefined) => void;
+  };
+  isIdle?: () => boolean;
+  hasPendingMessages?: () => boolean;
+};
 type CommandHandler = (_args: string, ctx: CommandContext) => Promise<void>;
 type EventHandler = (_event: unknown, ctx: CommandContext) => Promise<void>;
 
@@ -29,6 +39,7 @@ const repositoryTemplates = new Map<boolean, string>();
 const fixtureParent = mkdtempSync(path.join(os.tmpdir(), "deadloop-enablement-suite-"));
 const enabledSafetyFields = {
   githubRepositoryId: "R_demo",
+  automationLogin: "deadloop-bot",
   firstEnableAutoMerge: false,
   firstStartPending: false,
   lastObservedAutoMerge: false,
@@ -139,16 +150,19 @@ async function loadExtension(
     upstream?: string;
     noUpstream?: boolean;
     defaultBranch?: string;
+    authenticatedLogin?: string;
     beforePrimaryCheckout?: () => Promise<void>;
     beforeGithubRepoCheck?: () => Promise<void>;
     beforeLabelLookup?: (name: string) => Promise<void>;
     beforeLabelCreate?: (name: string) => Promise<void>;
     beforeDisableLock?: () => Promise<void>;
     afterEnablementSaved?: () => Promise<void>;
+    afterEnablementSchedulerStart?: () => Promise<void>;
     beforeEnablementWorktreeCreate?: (journalPath: string) => Promise<void>;
     beforeEnablementProjectCheck?: (worktreePath: string) => Promise<void>;
     runAutomationScript?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
     herdrCompatibilityPreflight?: () => void;
+    schedulerLockCapabilityPreflight?: () => void;
     recoveryFixture?: {
       issues: unknown[];
       worktrees: unknown[];
@@ -220,6 +234,9 @@ async function loadExtension(
       if (command === "gh" && args[0] === "pr" && args[1] === "list" && options.recoveryFixture) {
         return { code: 0, stdout: "[]", stderr: "" };
       }
+      if (command === "gh" && args[0] === "api" && args[1] === "user") {
+        return { code: 0, stdout: `${options.authenticatedLogin ?? "deadloop-bot"}\n`, stderr: "" };
+      }
       if (command === "gh" && args[0] === "api") {
         const name = decodeURIComponent(args.at(-1)?.split("/").at(-1) || "");
         await options.beforeLabelLookup?.(name);
@@ -249,9 +266,11 @@ async function loadExtension(
     testing: {
       beforeDisableLock: options.beforeDisableLock,
       afterEnablementSaved: options.afterEnablementSaved,
+      afterEnablementSchedulerStart: options.afterEnablementSchedulerStart,
       beforeEnablementWorktreeCreate: options.beforeEnablementWorktreeCreate,
       beforeEnablementProjectCheck: options.beforeEnablementProjectCheck,
       herdrCompatibilityPreflight: options.herdrCompatibilityPreflight || (() => undefined),
+      schedulerLockCapabilityPreflight: options.schedulerLockCapabilityPreflight,
     },
   });
   retainedExtensionShutdowns.push(async () => {
@@ -290,6 +309,43 @@ async function waitForFile(filePath: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`timed out waiting for ${filePath}`);
+}
+
+async function enablementProgressObservation(): Promise<{
+  notificationWhileVerificationRuns: string | undefined;
+  statusWhileVerificationRuns: { key: string; value: string | undefined } | undefined;
+  finalStatus: { key: string; value: string | undefined } | undefined;
+  statuses: Array<{ key: string; value: string | undefined }>;
+}> {
+  const { root, repoPath } = fixtureRepository();
+  let verificationStarted!: () => void;
+  let finishVerification!: () => void;
+  const started = new Promise<void>((resolve) => { verificationStarted = resolve; });
+  const blocked = new Promise<void>((resolve) => { finishVerification = resolve; });
+  const extension = await loadExtension(root, {
+    beforeEnablementProjectCheck: async () => {
+      verificationStarted();
+      await blocked;
+    },
+  });
+  const notifications: string[] = [];
+  const statuses: Array<{ key: string; value: string | undefined }> = [];
+  const enabling = extension.commands.get("deadloop-enable")!("", {
+    cwd: repoPath,
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      notify: (message: string) => { notifications.push(message); },
+      setStatus: (key: string, value: string | undefined) => { statuses.push({ key, value }); },
+    },
+  });
+
+  await started;
+  const notificationWhileVerificationRuns = notifications.at(-1);
+  const statusWhileVerificationRuns = statuses.at(-1);
+  finishVerification();
+  await enabling;
+  return { notificationWhileVerificationRuns, statusWhileVerificationRuns, finalStatus: statuses.at(-1), statuses };
 }
 
 afterAll(() => {
@@ -385,6 +441,7 @@ async function interruptedVerificationObservation(): Promise<{
 async function interruptedEnablementCommandObservation(trigger: "disable" | "shutdown"): Promise<{
   outcome: string;
   restoredArtifact: string;
+  message: string | undefined;
 }> {
   const { root, repoPath } = fixtureRepository();
   writeConfig(root, repoPath);
@@ -421,6 +478,66 @@ async function interruptedEnablementCommandObservation(trigger: "disable" | "shu
   return {
     outcome: JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome,
     restoredArtifact: readFileSync(path.join(worktreePath, ".deadloop", "evidence"), "utf8"),
+    message: extension.messages.find((message) => message.startsWith("deadloop was not enabled:")),
+  };
+}
+
+async function lostAutomationAuthorityObservation(): Promise<{
+  report: string | undefined;
+  active: boolean;
+  schedulerLockRetained: boolean;
+}> {
+  const { root, repoPath } = fixtureRepository();
+  writeConfig(root, repoPath);
+  const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
+  const extension = await loadExtension(root, {
+    afterEnablementSaved: async () => {
+      const state = JSON.parse(readFileSync(statePath, "utf8"));
+      delete state.projects[0].automationLogin;
+      writeFileSync(statePath, JSON.stringify(state));
+    },
+  });
+
+  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  const enabled = state.projects.find((project: { repoPath: string }) => project.repoPath === repoPath);
+  const lockPath = path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ githubRepositoryId: "R_demo" }));
+  return {
+    report: extension.messages.find((message) => message.startsWith("deadloop was not enabled:")),
+    active: enabled?.enabled === true,
+    schedulerLockRetained: existsSync(lockPath),
+  };
+}
+
+async function repeatedEnablementAuthorityLossObservation(): Promise<{
+  report: string | undefined;
+  before: { enabledAt: number; enableAttemptToken?: string; automationLogin?: string; baseBranch?: string };
+  after: { enabledAt: number; enableAttemptToken?: string; automationLogin?: string; baseBranch?: string };
+}> {
+  const { root, repoPath } = fixtureRepository();
+  writeConfig(root, repoPath);
+  const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
+  let saveCount = 0;
+  const extension = await loadExtension(root, {
+    afterEnablementSaved: async () => {
+      saveCount += 1;
+      if (saveCount !== 2) return;
+      const state = JSON.parse(readFileSync(statePath, "utf8"));
+      delete state.projects[0].automationLogin;
+      writeFileSync(statePath, JSON.stringify(state));
+    },
+  });
+  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+  const before = JSON.parse(readFileSync(statePath, "utf8")).projects[0];
+
+  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+  const after = JSON.parse(readFileSync(statePath, "utf8")).projects[0];
+  return {
+    report: extension.messages.filter((message) => message.startsWith("deadloop was not enabled:")).at(-1),
+    before,
+    after,
   };
 }
 
@@ -743,6 +860,284 @@ async function unresolvedProjectCheckDoctorObservation(attemptRecord: "missing" 
 }
 
 describe("enablement command integration", () => {
+  it("acknowledges enablement before required verification completes", async () => {
+    expect((await enablementProgressObservation()).notificationWhileVerificationRuns).toBe(
+      "Enabling deadloop. Required verification may take several minutes.",
+    );
+  });
+
+  it("shows required verification progress while the command is blocked", async () => {
+    expect((await enablementProgressObservation()).statusWhileVerificationRuns?.value).toBe(
+      "deadloop: running required verification…",
+    );
+  });
+
+  it("shows GitHub access and label progress after required verification", async () => {
+    expect((await enablementProgressObservation()).statuses.map(({ value }) => value)).toContain(
+      "deadloop: checking GitHub access and labels…",
+    );
+  });
+
+  it("clears enablement progress after the command completes", async () => {
+    const observation = await enablementProgressObservation();
+    expect(observation.finalStatus).toEqual({
+      key: observation.statusWhileVerificationRuns?.key,
+      value: undefined,
+    });
+  });
+
+  it("runs the OS lock capability preflight before GitHub enablement mutations", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const events: string[] = [];
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { events.push("lock-preflight"); },
+      beforeLabelCreate: async () => { events.push("github-mutation"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect({ first: events[0], githubMutation: events.includes("github-mutation") }).toEqual({
+      first: "lock-preflight", githubMutation: true,
+    });
+  });
+
+  it("does not persist enablement when flock is unavailable", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { throw new Error("flock executable is required (usually util-linux)"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"))).toBe(false);
+  });
+
+  it("writes no enable-attempt persistence when flock capability is unavailable", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { throw new Error("flock unavailable"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const stateDir = path.join(root, ".pi", "agent", "deadloop");
+    expect(existsSync(stateDir) && readdirSync(stateDir).some((name) => name.startsWith("enable-attempt-"))).toBe(false);
+  });
+
+  it("explains incompatible nonblocking FD flock behavior", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, {
+      schedulerLockCapabilityPreflight: () => { throw new Error("flock must support nonblocking file-descriptor locks"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("nonblocking file-descriptor locks");
+  });
+  it("persists the configured base branch instead of the current branch upstream", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.projects[0].baseBranch = "origin/master";
+    writeFileSync(configPath, JSON.stringify(config));
+    git(repoPath, ["update-ref", "refs/remotes/origin/topic", "HEAD"]);
+    const extension = await loadExtension(root, { upstream: "origin/topic" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    expect(state.projects[0].baseBranch).toBe("origin/master");
+  });
+
+  it("rejects a base branch change before scheduler startup even when both refs resolve to the same commit", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    git(repoPath, ["update-ref", "refs/remotes/origin/topic", "HEAD"]);
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const extension = await loadExtension(root, {
+      afterEnablementSaved: async () => {
+        const config = JSON.parse(readFileSync(configPath, "utf8"));
+        config.projects[0].baseBranch = "origin/topic";
+        writeFileSync(configPath, JSON.stringify(config));
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("configured base branch changed since enablement");
+  });
+
+  it("persists the authenticated GitHub login as an authorized automation identity", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, { authenticatedLogin: "Deadloop-Bot" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    expect(state.projects[0].automationLogin).toBe("deadloop-bot");
+  });
+
+  it("repairs an older enabled record that has no authorized automation identity", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const stateDir = path.join(root, ".pi", "agent", "deadloop");
+    writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({
+      projects: [{
+        repoPath,
+        githubRepo: "owner/demo",
+        githubRepositoryId: "R_demo",
+        enabledAt: 1,
+        disableGeneration: 0,
+        enableAttemptToken: "older-enable",
+        baseBranch: "origin/master",
+        ...enabledSafetyFields,
+        automationLogin: undefined,
+      }],
+    }));
+    const extension = await loadExtension(root, { authenticatedLogin: "Deadloop-Bot" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(path.join(stateDir, "enabled-projects.json"), "utf8"));
+    const lockPath = path.join(stateDir, schedulerLockName({ githubRepositoryId: "R_demo" }));
+    expect({
+      automationLogin: state.projects[0].automationLogin,
+      enabled: state.projects[0].enabled,
+      report: extension.messages.at(-1),
+      schedulerOwned: existsSync(lockPath),
+    }).toEqual({
+      automationLogin: "deadloop-bot",
+      enabled: true,
+      report: "deadloop enabled for owner/demo; scheduler owner: this session. autoMerge is off.",
+      schedulerOwned: true,
+    });
+  });
+
+  it("does not restore an unauthorized older record when repaired authority is lost", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
+    writeFileSync(statePath, JSON.stringify({
+      projects: [{
+        repoPath,
+        githubRepo: "owner/demo",
+        githubRepositoryId: "R_demo",
+        enabledAt: 1,
+        disableGeneration: 0,
+        enableAttemptToken: "older-enable",
+        baseBranch: "origin/master",
+        ...enabledSafetyFields,
+        automationLogin: undefined,
+      }],
+    }));
+    const extension = await loadExtension(root, {
+      afterEnablementSaved: async () => {
+        const state = JSON.parse(readFileSync(statePath, "utf8"));
+        delete state.projects[0].automationLogin;
+        writeFileSync(statePath, JSON.stringify(state));
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(state.projects[0].enabled).toBe(false);
+  });
+
+  it("reports failed enablement when persisted automation authority disappears before scheduler startup", async () => {
+    expect((await lostAutomationAuthorityObservation()).report).toContain("automation authority changed after enablement was saved");
+  });
+
+  it("releases scheduler ownership when automation authority changes during startup", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const statePath = path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json");
+    const extension = await loadExtension(root, {
+      afterEnablementSchedulerStart: async () => {
+        const state = JSON.parse(readFileSync(statePath, "utf8"));
+        delete state.projects[0].automationLogin;
+        writeFileSync(statePath, JSON.stringify(state));
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const lockPath = path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ githubRepositoryId: "R_demo" }));
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("does not leave the repository active when persisted automation authority disappears", async () => {
+    expect((await lostAutomationAuthorityObservation()).active).toBe(false);
+  });
+
+  it("does not retain scheduler ownership when persisted automation authority disappears", async () => {
+    expect((await lostAutomationAuthorityObservation()).schedulerLockRetained).toBe(false);
+  });
+
+  it("restores the prior authority when repeated enablement loses its saved identity", async () => {
+    const observation = await repeatedEnablementAuthorityLossObservation();
+    expect({
+      reportFailed: observation.report?.includes("automation authority changed after enablement was saved"),
+      enabledAt: observation.after.enabledAt,
+      enableAttemptToken: observation.after.enableAttemptToken,
+      automationLogin: observation.after.automationLogin,
+      baseBranch: observation.after.baseBranch,
+    }).toEqual({
+      reportFailed: true,
+      enabledAt: observation.before.enabledAt,
+      enableAttemptToken: observation.before.enableAttemptToken,
+      automationLogin: observation.before.automationLogin,
+      baseBranch: observation.before.baseBranch,
+    });
+  });
+
+  it("does not enable without an authenticated GitHub login", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root, { authenticatedLogin: "" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("authenticated GitHub login is required");
+  });
+
+  it("passes the default enablement identity to the reviewer driver environment", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({
+      checkCommand: "true",
+      automations: [{
+        id: "demo:pr-reviewer",
+        name: "demo PR reviewer",
+        promptFile: "pr-reviewer.prompt.md",
+        precheckFile: "pr-reviewer.precheck.sh",
+        driverFile: "pr-reviewer-driver.ts",
+      }],
+    }));
+    git(repoPath, ["add", "deadloop.json"]);
+    git(repoPath, ["commit", "--quiet", "-m", "configure reviewer fixture"]);
+    git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+    let reviewerCommand = "";
+    const extension = await loadExtension(root, {
+      authenticatedLogin: "Deadloop-Bot",
+      runAutomationScript: async (args) => {
+        const command = args.join(" ");
+        if (command.includes("pr-reviewer-driver.ts")) reviewerCommand = command;
+        return {
+          code: 0,
+          stdout: command.includes("pr-reviewer-driver.ts") ? JSON.stringify({ action: "skip", summary: "fixture" }) : "",
+          stderr: "",
+        };
+      },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    for (let attempt = 0; attempt < 100 && !reviewerCommand; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(reviewerCommand).toContain("DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS='deadloop-bot'");
+  });
+
   it("records prepared verification worktree intent before creation", async () => {
     expect((await ownedWorktreeIntentObservation()).state).toBe("prepared");
   });
@@ -835,7 +1230,7 @@ describe("enablement command integration", () => {
             },
           },
         });
-        expect(result.outcome).toBe("passed");
+        expect(result.outcome, readFileSync(result.logPath, "utf8")).toBe("passed");
       } finally {
         if (previousNestedCheck === undefined) delete process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK;
         else process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK = previousNestedCheck;
@@ -886,6 +1281,16 @@ describe("enablement command integration", () => {
 
   it("records session shutdown of the public enable command as interrupted", async () => {
     expect((await interruptedEnablementCommandObservation("shutdown")).outcome).toBe("interrupted");
+  });
+
+  it("reports interrupted required verification", async () => {
+    expect((await interruptedEnablementCommandObservation("disable")).message).toContain(
+      "required verification was interrupted",
+    );
+  });
+
+  it("does not report a null exit code for interrupted required verification", async () => {
+    expect((await interruptedEnablementCommandObservation("disable")).message).not.toContain("exit null");
   });
 
   it("waits for isolated artifacts to be restored during enable-command shutdown", async () => {
@@ -1185,6 +1590,22 @@ describe("enablement command integration", () => {
 
     const report = extension.messages.at(-1) || "";
     expect(report.includes("warning: projects.json") && !report.includes("  /deadloop-enable")).toBe(true);
+  });
+
+  it("reports a configured base branch change after enablement instead of scheduling it", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    git(repoPath, ["update-ref", "refs/remotes/origin/topic", "HEAD"]);
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.projects[0].baseBranch = "origin/topic";
+    writeFileSync(configPath, JSON.stringify(config));
+
+    await invoke(extension.commands.get("deadloop-status")!, repoPath);
+
+    expect(extension.messages.at(-1)).toContain("configured base branch changed since enablement");
   });
 
   it.each(["deadloop-status", "deadloop-doctor"])("reports remote identity drift as disabled in %s", async (command) => {
@@ -1505,6 +1926,48 @@ describe("enablement command integration", () => {
     await enabling;
 
     expect(extension.ghCommands.filter((args) => args[0] === "label" && args[1] === "create").map((args) => args[2])).toEqual(["ready-for-agent"]);
+  });
+
+  it("keeps one enablement status visible when another concurrent enable completes", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    let firstEnableSaved!: () => void;
+    let releaseFirstEnable!: () => void;
+    const firstSaved = new Promise<void>((resolve) => { firstEnableSaved = resolve; });
+    const holdFirst = new Promise<void>((resolve) => { releaseFirstEnable = resolve; });
+    let saveCount = 0;
+    const extension = await loadExtension(root, {
+      afterEnablementSaved: async () => {
+        saveCount += 1;
+        if (saveCount === 1) {
+          firstEnableSaved();
+          await holdFirst;
+        }
+      },
+    });
+    const activeStatuses = new Map<string, string>();
+    const context: CommandContext = {
+      cwd: repoPath,
+      mode: "tui",
+      hasUI: true,
+      ui: {
+        notify: () => undefined,
+        setStatus: (key, value) => {
+          if (value === undefined) activeStatuses.delete(key);
+          else activeStatuses.set(key, value);
+        },
+      },
+    };
+    const firstEnable = extension.commands.get("deadloop-enable")!("", context);
+    await firstSaved;
+    await extension.commands.get("deadloop-enable")!("", context);
+
+    try {
+      expect([...activeStatuses.keys()].filter((key) => key.startsWith("deadloop-enable:")).length).toBe(1);
+    } finally {
+      releaseFirstEnable();
+      await firstEnable;
+    }
   });
 
   it("does not recreate a label added by a concurrent enable", async () => {
@@ -1985,39 +2448,36 @@ describe("enablement command integration", () => {
     const schedulerLocks = readdirSync(stateDir).filter((name) => name.startsWith("scheduler."));
     expect({ locks: schedulerLocks.length, message: secondExtension.messages.at(-1) }).toEqual({
       locks: 1,
-      message: expect.stringContaining(`another session (pid ${process.pid})`),
+      message: expect.stringContaining(`repository is already served by Automation host pid ${process.pid}`),
     });
   });
 
-  it("reports another live lock owner as standby", async () => {
+  it("fails fast when another Automation host owns the repository lock", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
-    const stateDir = path.join(root, ".pi", "agent", "deadloop");
-    const lockPath = path.join(stateDir, schedulerLockName({ githubRepositoryId: "R_demo" }));
-    const { processStartIdentity } = require("../src/enablement-lock.cjs");
-    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startIdentity: processStartIdentity(process.pid), token: "owner" }));
-    const extension = await loadExtension(root);
+    const firstExtension = await loadExtension(root);
+    await invoke(firstExtension.commands.get("deadloop-enable")!, repoPath);
+    const secondExtension = await loadExtension(root);
 
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    await invoke(secondExtension.commands.get("deadloop-enable")!, repoPath);
 
-    expect(extension.messages.at(-1)).toContain(`another session (pid ${process.pid})`);
+    expect(secondExtension.messages.at(-1)).toContain(`repository is already served by Automation host pid ${process.pid}`);
   });
 
-  it("takes scheduler ownership after the original owner releases its lock", async () => {
+  it("does not retry repository lock acquisition after a second Automation host is rejected", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
-    const stateDir = path.join(root, ".pi", "agent", "deadloop");
-    const lockPath = path.join(stateDir, schedulerLockName({ githubRepositoryId: "R_demo" }));
-    const { processStartIdentity } = require("../src/enablement-lock.cjs");
-    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startIdentity: processStartIdentity(process.pid), token: "owner" }));
-    const extension = await loadExtension(root);
     vi.useFakeTimers();
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath, { isIdle: () => false });
-    rmSync(lockPath);
+    const firstExtension = await loadExtension(root);
+    await invoke(firstExtension.commands.get("deadloop-enable")!, repoPath);
+    const secondExtension = await loadExtension(root);
+    await invoke(secondExtension.commands.get("deadloop-enable")!, repoPath);
+    const lockPath = path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ githubRepositoryId: "R_demo" }));
+    await firstExtension.events.get("session_shutdown")!({}, { cwd: repoPath, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined } });
 
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(JSON.parse(readFileSync(lockPath, "utf8")).pid).toBe(process.pid);
+    expect(existsSync(lockPath)).toBe(false);
   });
 
   it("stops scheduler liveness when an origin push URL targets another repository", async () => {
