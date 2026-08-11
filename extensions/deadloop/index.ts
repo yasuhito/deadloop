@@ -89,6 +89,7 @@ import {
   removeEnabledProjectGeneration,
   upsertEnabledProject,
 } from "../../src/enablement";
+import { preserveEnablementAutomationLogins } from "../../src/enablement-write";
 
 const EXTENSION_NAME = "deadloop";
 const STATUS_KEY = EXTENSION_NAME;
@@ -420,7 +421,13 @@ function loadEnablementState() {
 }
 
 function saveEnablementState(state) {
-  writeJsonFile(ENABLEMENT_PATH, state);
+  let previous = null;
+  try {
+    previous = JSON.parse(fs.readFileSync(ENABLEMENT_PATH, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") debugLog("enablement preservation read failed", error?.message || error);
+  }
+  writeJsonFile(ENABLEMENT_PATH, preserveEnablementAutomationLogins(previous, state));
 }
 
 
