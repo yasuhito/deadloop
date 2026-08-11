@@ -12,7 +12,13 @@ const {
   requestAfterInvalidationCutoff,
 } = require("../src/pr-work-authority-reconciliation.ts");
 
-const { reconcile, reconciledLabelReplacement } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
+const {
+  latestConfiguredRequest,
+  reconcile,
+  reconciledLabelReplacement,
+  reconciliationAuthorityMatches,
+  runtimeForAttempt,
+} = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
 
 const base = {
   pr: {
@@ -183,7 +189,46 @@ describe("PR work-authority reconciliation", () => {
     expect(replaced).toBe(false);
   });
 
-  it("exposes a superseding request only after workspace cleanup succeeds", async () => {
+  it("retains local ownership when superseding-request exposure fails", async () => {
+    let released = false;
+    let message = "";
+    try {
+      await applyPrWorkAuthorityReconciliation(
+        { ...base, pr: { ...base.pr, labels: [...base.pr.labels, "agent:review"] }, claim: { kind: "superseded" }, runtime: { kind: "stopped_owned" } },
+        {
+          automationLogin: "deadloop-bot",
+          listTimelineEvents: () => [],
+          listComments: () => [],
+          replaceLabels: () => { throw new Error("label failure"); },
+          comment: () => {},
+          recordReleaseStarted: () => {},
+          closeOwnedWorkspace: () => true,
+          releaseLocalOwnership: () => { released = true; },
+        },
+      );
+    } catch (error) { message = error instanceof Error ? error.message : String(error); }
+    expect({ message, released }).toEqual({ message: "label failure", released: false });
+  });
+
+  it("finishes local release when a retry finds the request already exposed", async () => {
+    let released = false;
+    await applyPrWorkAuthorityReconciliation(
+      { ...base, pr: { ...base.pr, labels: ["customer:keep", "agent:review"] }, claim: { kind: "superseded" }, runtime: { kind: "stopped_owned" } },
+      {
+        automationLogin: "deadloop-bot",
+        listTimelineEvents: () => [],
+        listComments: () => [],
+        replaceLabels: () => {},
+        comment: () => {},
+        recordReleaseStarted: () => {},
+        closeOwnedWorkspace: () => true,
+        releaseLocalOwnership: () => { released = true; },
+      },
+    );
+    expect(released).toBe(true);
+  });
+
+  it("journals and exposes a superseding request before terminal local release", async () => {
     const effects: string[] = [];
     await applyPrWorkAuthorityReconciliation(
       { ...base, pr: { ...base.pr, labels: [...base.pr.labels, "agent:review"] }, claim: { kind: "superseded" }, runtime: { kind: "stopped_owned" } },
@@ -193,15 +238,75 @@ describe("PR work-authority reconciliation", () => {
         listComments: () => [],
         replaceLabels: () => { effects.push("labels"); },
         comment: () => {},
+        recordReleaseStarted: () => { effects.push("journal"); },
         closeOwnedWorkspace: () => { effects.push("close"); return true; },
         releaseLocalOwnership: () => { effects.push("release"); },
       },
     );
-    expect(effects).toEqual(["close", "release", "labels"]);
+    expect(effects).toEqual(["journal", "close", "labels", "release"]);
   });
 });
 
 describe("reconciliation entrypoint", () => {
+  const authoritySnapshot = {
+    state: "OPEN", headRefOid: "a".repeat(40), claimKind: "authorized",
+    requestEventId: "10", managedLabels: ["agent:in-progress"],
+  };
+
+  it("rejects a head race before a recovery mutation", () => {
+    expect(reconciliationAuthorityMatches(authoritySnapshot, { ...authoritySnapshot, headRefOid: "b".repeat(40) })).toBe(false);
+  });
+
+  it("rejects a newly queued request generation before a recovery mutation", () => {
+    expect(reconciliationAuthorityMatches(authoritySnapshot, { ...authoritySnapshot, claimKind: "superseded", requestEventId: "11", managedLabels: ["agent:in-progress", "agent:implement"] })).toBe(false);
+  });
+
+  it.each(["agent:implement", "agent:update-branch"])("recognizes a queued %s request as the latest generation", (requestLabel) => {
+    expect(latestConfiguredRequest(
+      [
+        { id: "10", event: "labeled", created_at: "2026-08-01T10:00:00Z", label: { name: "agent:review" } },
+        { id: "11", event: "labeled", created_at: "2026-08-01T10:01:00Z", label: { name: requestLabel } },
+      ],
+      ["agent:in-progress", requestLabel],
+      base.requestLabels,
+    )?.id).toBe("11");
+  });
+
+  it("refuses stopped ownership when the workspace has an extra pane", () => {
+    const runner = {
+      listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 2 }],
+      listAgents: () => [],
+      listWorktrees: () => [{ path: "/wt" }],
+    };
+    expect(runtimeForAttempt(runner, { workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }).kind).toBe("ambiguous");
+  });
+
+  it("refuses stopped ownership when another agent occupies the checkout", () => {
+    const runner = {
+      listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 1 }],
+      listAgents: () => [{ name: "foreign", paneId: "pane-2", cwd: "/wt", status: "working" }],
+      listWorktrees: () => [{ path: "/wt" }],
+    };
+    expect(runtimeForAttempt(runner, { workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }).kind).toBe("ambiguous");
+  });
+
+  it("applies checkout-wide agent proof when recovering a close receipt", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deadloop-close-proof-"));
+    try {
+      writeFileSync(path.join(root, "authority-release-started.json"), JSON.stringify({
+        schemaVersion: 1, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt",
+      }));
+      const runner = {
+        listWorkspaces: () => [],
+        listAgents: () => [{ name: "foreign", paneId: "pane-2", cwd: "/wt", status: "working" }],
+        listWorktrees: () => [{ path: "/wt" }],
+      };
+      expect(runtimeForAttempt(runner, { runDir: root, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }, process.cwd()).kind).toBe("ambiguous");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("preserves requested and concurrent unrelated labels while blocking ambiguous supersession", () => {
     expect(reconciledLabelReplacement(
       ["customer:concurrent", "agent:in-progress", "agent:review"],

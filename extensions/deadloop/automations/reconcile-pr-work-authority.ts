@@ -7,7 +7,7 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { applyPrWorkAuthorityReconciliation, migrationDecision } = require("../../../src/pr-work-authority-reconciliation.ts");
-const { activeReviewRequest, classifyActiveReviewClaim } = require("./pr-review-claim.ts");
+const { classifyActiveReviewClaim } = require("./pr-review-claim.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -33,19 +33,22 @@ function reconciledLabelReplacement(current: string[], next: string[], managedLa
   ])];
 }
 
-function loadAttempts(stateDir: string, projectId: string, repository: string): { valid: JsonObject[]; malformed: JsonObject[] } {
+function loadAttempts(stateDir: string, projectId: string, repository: string): { valid: JsonObject[]; released: JsonObject[]; malformed: JsonObject[] } {
   const valid: JsonObject[] = [];
+  const released: JsonObject[] = [];
   const malformed: JsonObject[] = [];
   let entries: string[] = [];
-  try { entries = fs.readdirSync(path.join(stateDir, "runs")); } catch { return { valid, malformed }; }
+  try { entries = fs.readdirSync(path.join(stateDir, "runs")); } catch { return { valid, released, malformed }; }
   for (const entry of entries) {
     const runDir = path.join(stateDir, "runs", entry);
     const file = path.join(runDir, "attempt.json");
     if (!fs.existsSync(file)) continue;
     try {
       const record = readAttemptRecord(runDir);
-      if (record.project === projectId && record.repository === repository && !releasesAttemptOwnership(record.phase)) {
-        valid.push({ ...record, runDir });
+      if (record.project === projectId && record.repository === repository) {
+        const entry = { ...record, runDir };
+        if (releasesAttemptOwnership(record.phase)) released.push(entry);
+        else valid.push(entry);
       }
     } catch {
       try {
@@ -54,7 +57,7 @@ function loadAttempts(stateDir: string, projectId: string, repository: string): 
       } catch {}
     }
   }
-  return { valid, malformed };
+  return { valid, released, malformed };
 }
 
 function writeJsonAtomically(file: string, value: JsonObject): void {
@@ -80,26 +83,83 @@ function validCloseReceipt(record: JsonObject): boolean {
   } catch { return false; }
 }
 
+function latestConfiguredRequest(events: JsonObject[], currentLabels: string[], requestLabels: string[]): JsonObject | null {
+  const queued = new Set(currentLabels.filter((label) => requestLabels.includes(label)));
+  return events.filter((event) => String(event.event || "").toLowerCase() === "labeled"
+    && queued.has(String(event.label?.name || ""))
+    && String(event.id || event.node_id || ""))
+    .sort((left, right) => {
+      const time = Date.parse(String(left.created_at || left.createdAt || "")) - Date.parse(String(right.created_at || right.createdAt || ""));
+      return time || String(left.id || left.node_id).localeCompare(String(right.id || right.node_id), undefined, { numeric: true });
+    }).at(-1) || null;
+}
+
 function runtimeForAttempt(runner: any, record: JsonObject, projectRepo = ""): { kind: string } {
   const workspaces = runner.listWorkspaces();
   const agents = runner.listAgents();
-  const matchingWorkspaces = workspaces.filter((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record.workspaceId || "")
-    && String(workspace.worktreePath || "") === String(record.worktreePath || ""));
-  const matchingAgents = agents.filter((agent: JsonObject) => String(agent.name || "") === String(record.agentName || "")
+  const checkoutWorkspaces = workspaces.filter((workspace: JsonObject) => String(workspace.worktreePath || "") === String(record.worktreePath || ""));
+  const matchingWorkspaces = checkoutWorkspaces.filter((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record.workspaceId || ""));
+  const relatedAgents = agents.filter((agent: JsonObject) => String(agent.name || "") === String(record.agentName || "")
+    || String(agent.paneId || "") === String(record.rootPaneId || "")
+    || String(agent.cwd || "") === String(record.worktreePath || ""));
+  const matchingAgents = relatedAgents.filter((agent: JsonObject) => String(agent.name || "") === String(record.agentName || "")
     && String(agent.paneId || "") === String(record.rootPaneId || "")
     && String(agent.cwd || "") === String(record.worktreePath || ""));
   if (matchingWorkspaces.length === 0 && validCloseReceipt(record) && projectRepo) {
     const retained = runner.listWorktrees(projectRepo).some((worktree: JsonObject) => String(worktree.path || "") === String(record.worktreePath));
-    const active = matchingAgents.some((agent: JsonObject) => String(agent.status || "").toLowerCase() === "working");
-    return retained && !active ? { kind: "stopped_owned" } : { kind: "ambiguous" };
+    return retained && checkoutWorkspaces.length === 0 && relatedAgents.length === 0 ? { kind: "stopped_owned" } : { kind: "ambiguous" };
   }
-  if (matchingWorkspaces.length !== 1 || matchingAgents.length > 1) return { kind: "ambiguous" };
+  if (matchingWorkspaces.length !== 1 || checkoutWorkspaces.length !== 1
+    || Number(matchingWorkspaces[0].tabCount) !== 1 || Number(matchingWorkspaces[0].paneCount) !== 1
+    || matchingAgents.length > 1 || relatedAgents.length !== matchingAgents.length) return { kind: "ambiguous" };
   if (matchingAgents.length === 1 && String(matchingAgents[0].status || "").toLowerCase() === "working") {
     return { kind: "live_matching_owner" };
   }
-  const foreignActive = agents.some((agent: JsonObject) => String(agent.paneId || "") === String(record.rootPaneId || "")
-    && String(agent.status || "").toLowerCase() === "working");
-  return foreignActive ? { kind: "ambiguous" } : { kind: "stopped_owned" };
+  return { kind: "stopped_owned" };
+}
+
+function classifyClaim(
+  pr: JsonObject,
+  events: JsonObject[],
+  comments: JsonObject[],
+  restHeaders: string,
+  record: JsonObject,
+  requestLabels: string[],
+  repositoryIdentity: JsonObject,
+  repository: string,
+): { claim: { kind: string }; requestEventId: string } {
+  const request = latestConfiguredRequest(events, labels(pr), requestLabels);
+  const requestEventId = String(request?.id || request?.node_id || "");
+  if (!record.reviewClaim) return { claim: { kind: "missing" }, requestEventId };
+  if (requestEventId && requestEventId !== String(record.reviewClaim.binding?.requestEventId || "")) {
+    return { claim: { kind: "superseded" }, requestEventId };
+  }
+  const classified = classifyActiveReviewClaim(
+    pr,
+    events,
+    comments,
+    restHeaders,
+    record.reviewClaim,
+    { repositoryId: String(repositoryIdentity.id || ""), repository: String(repositoryIdentity.nameWithOwner || repository), targetNumber: Number(pr.number) },
+  );
+  return {
+    claim: classified.kind === "claim_invalid" ? { kind: "malformed" }
+      : classified.kind === "binding_mismatch" ? { kind: "ambiguous" }
+        : classified,
+    requestEventId,
+  };
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  return left.length === right.length && [...left].sort().every((value, index) => value === [...right].sort()[index]);
+}
+
+function reconciliationAuthorityMatches(expected: JsonObject, observed: JsonObject): boolean {
+  return String(observed.state || "").toUpperCase() === "OPEN"
+    && String(observed.headRefOid || "").toLowerCase() === String(expected.headRefOid || "").toLowerCase()
+    && observed.claimKind === expected.claimKind
+    && observed.requestEventId === expected.requestEventId
+    && sameStringSet(observed.managedLabels || [], expected.managedLabels || []);
 }
 
 async function reconcile(args: JsonObject, commandRunner = createCommandRunner()): Promise<JsonObject> {
@@ -130,7 +190,18 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
   for (const pr of prs.filter((candidate: JsonObject) => labels(candidate).includes(inProgressLabel)
     || fs.existsSync(recoveryReceiptPath(args.stateDir, String(repositoryIdentity.id || ""), Number(candidate.number))))) {
     const number = Number(pr.number);
+    const recoveryFile = recoveryReceiptPath(args.stateDir, String(repositoryIdentity.id || ""), number);
     const matching = attempts.valid.filter((attempt) => attempt.target?.kind === "pull-request" && Number(attempt.target.number) === number);
+    if (matching.length === 0 && fs.existsSync(recoveryFile)) {
+      try {
+        const receipt = JSON.parse(fs.readFileSync(recoveryFile, "utf8"));
+        const released = attempts.released.find((attempt) => attempt.attemptId === receipt.attemptId && attempt.phase === "authority_released");
+        if (receipt.action === "authority_release_started" && released) {
+          fs.rmSync(recoveryFile, { force: true });
+          continue;
+        }
+      } catch {}
+    }
     const malformed = attempts.malformed.filter((attempt) => Number(attempt.target?.number) === number);
     const events = github.listPrTimelineEvents(args.githubRepo, number);
     const comments = github.listPrComments(args.githubRepo, number);
@@ -146,29 +217,45 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       runtime = { kind: "ambiguous" };
     } else {
       record = matching[0];
-      const latestRequest = activeReviewRequest(events, args.reviewLabel || "agent:review");
-      if (!record.reviewClaim) claim = { kind: "missing" };
-      else if (latestRequest && String(latestRequest.id || latestRequest.node_id || "") !== String(record.reviewClaim.binding?.requestEventId || "")) {
-        claim = { kind: "superseded" };
-      } else {
-        const classified = classifyActiveReviewClaim(
-          pr,
-          events,
-          comments,
-          github.readRestResponseHeaders(args.githubRepo),
-          record.reviewClaim,
-          { repositoryId: String(repositoryIdentity.id || ""), repository: String(repositoryIdentity.nameWithOwner || ""), targetNumber: number },
-        );
-        claim = classified.kind === "claim_invalid" ? { kind: "malformed" }
-          : classified.kind === "binding_mismatch" ? { kind: "ambiguous" }
-            : classified;
-      }
+      claim = classifyClaim(
+        { ...pr, labels: labels(pr) }, events, comments, github.readRestResponseHeaders(args.githubRepo),
+        record, requestLabels, repositoryIdentity, args.githubRepo,
+      ).claim;
       try { runtime = runtimeForAttempt(runner, record, args.projectRepo); }
       catch { runtime = { kind: "unreachable" }; }
     }
 
     const input = { pr: { ...pr, labels: labels(pr) }, claim, runtime, requestLabels, inProgressLabel, blockedLabel, journalPhase: record?.phase };
-    const recoveryFile = recoveryReceiptPath(args.stateDir, String(repositoryIdentity.id || ""), number);
+    const initialRequest = latestConfiguredRequest(events, labels(input.pr), requestLabels);
+    let expectedRequestEventId = record ? classifyClaim(
+      input.pr, events, comments, github.readRestResponseHeaders(args.githubRepo),
+      record, requestLabels, repositoryIdentity, args.githubRepo,
+    ).requestEventId : String(initialRequest?.id || initialRequest?.node_id || "");
+    const managed = [...requestLabels, inProgressLabel, blockedLabel];
+    const revalidate = (expectedManagedLabels: string[], expectedClaimKind: string): string[] => {
+      const livePr = github.getPr(args.githubRepo, number);
+      const liveLabels = labels({ labels: github.listPrLabels(args.githubRepo, number) });
+      const liveEvents = github.listPrTimelineEvents(args.githubRepo, number);
+      const liveComments = github.listPrComments(args.githubRepo, number);
+      const liveRequest = latestConfiguredRequest(liveEvents, liveLabels, requestLabels);
+      const observed = record ? classifyClaim(
+        { ...livePr, labels: liveLabels }, liveEvents, liveComments, github.readRestResponseHeaders(args.githubRepo),
+        record, requestLabels, repositoryIdentity, args.githubRepo,
+      ) : {
+        claim: { kind: expectedClaimKind },
+        requestEventId: String(liveRequest?.id || liveRequest?.node_id || ""),
+      };
+      if (!reconciliationAuthorityMatches({
+        state: "OPEN", headRefOid: pr.headRefOid, claimKind: expectedClaimKind,
+        requestEventId: expectedRequestEventId,
+        managedLabels: expectedManagedLabels.filter((label) => managed.includes(label)),
+      }, {
+        state: livePr.state, headRefOid: livePr.headRefOid, claimKind: observed.claim.kind,
+        requestEventId: observed.requestEventId,
+        managedLabels: liveLabels.filter((label) => managed.includes(label)),
+      })) throw new Error("PR work authority changed before recovery mutation");
+      return liveLabels;
+    };
     const result = await applyPrWorkAuthorityReconciliation(input, {
       automationLogin,
       recordBlockStarted: (started: JsonObject) => writeJsonAtomically(recoveryFile, {
@@ -180,11 +267,23 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       listTimelineEvents: () => github.listPrTimelineEvents(args.githubRepo, number),
       listComments: () => github.listPrComments(args.githubRepo, number),
       replaceLabels: (next: string[]) => guarded(() => {
-        const current = labels({ labels: github.listPrLabels(args.githubRepo, number) });
-        const managed = [...requestLabels, inProgressLabel, blockedLabel];
-        return github.replacePrLabels(args.githubRepo, number, reconciledLabelReplacement(current, next, managed));
+        const current = revalidate(input.pr.labels, claim.kind);
+        const replaced = github.replacePrLabels(args.githubRepo, number, reconciledLabelReplacement(current, next, managed));
+        input.pr.labels = reconciledLabelReplacement(current, next, managed);
+        if (record && claim.kind !== "malformed" && claim.kind !== "superseded") claim = { kind: "ambiguous" };
+        if (!next.some((label) => requestLabels.includes(label))) expectedRequestEventId = "";
+        return replaced;
       }),
-      comment: (body: string) => guarded(() => github.createPrComment(args.githubRepo, number, body)),
+      comment: (body: string) => guarded(() => {
+        revalidate(input.pr.labels, claim.kind);
+        return github.createPrComment(args.githubRepo, number, body);
+      }),
+      recordReleaseStarted: record ? () => writeJsonAtomically(recoveryFile, {
+        schemaVersion: 1, action: "authority_release_started", repository: args.githubRepo,
+        repositoryId: String(repositoryIdentity.id || ""), prNumber: number,
+        headRefOid: String(pr.headRefOid || ""), attemptId: record!.attemptId,
+        requestEventId: expectedRequestEventId,
+      }) : undefined,
       closeOwnedWorkspace: record && runtime.kind === "stopped_owned" ? () => guarded(() => {
         if (runtimeForAttempt(runner, record!, args.projectRepo).kind !== "stopped_owned") return false;
         writeJsonAtomically(closeReceiptPath(record!), {
@@ -193,9 +292,7 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         });
         const alreadyAbsent = !runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record!.workspaceId));
         if (!alreadyAbsent) runner.closeWorkspace(record!.workspaceId);
-        const absent = !runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record!.workspaceId));
-        const retained = runner.listWorktrees(args.projectRepo).some((worktree: JsonObject) => String(worktree.path || "") === String(record!.worktreePath));
-        return absent && retained;
+        return runtimeForAttempt(runner, record!, args.projectRepo).kind === "stopped_owned";
       }) : undefined,
       releaseLocalOwnership: record ? (cutoffEventId?: string) => {
         releasePersistedAttemptAuthority(record!.runDir, new Date().toISOString(), cutoffEventId);
@@ -246,9 +343,7 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         });
         const alreadyAbsent = !runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record.workspaceId));
         if (!alreadyAbsent) runner.closeWorkspace(record.workspaceId);
-        const absent = !runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record.workspaceId));
-        const retainedWorktree = runner.listWorktrees(args.projectRepo).some((worktree: JsonObject) => String(worktree.path || "") === String(record.worktreePath));
-        return absent && retainedWorktree;
+        return runtimeForAttempt(runner, record, args.projectRepo).kind === "stopped_owned";
       });
       if (!closed) { cleanupSafe = false; break; }
       releasePersistedAttemptAuthority(record.runDir, new Date().toISOString());
@@ -285,4 +380,11 @@ async function main(): Promise<void> {
 }
 
 if (require.main === module) void main();
-module.exports = { loadAttempts, reconcile, reconciledLabelReplacement, runtimeForAttempt };
+module.exports = {
+  latestConfiguredRequest,
+  loadAttempts,
+  reconcile,
+  reconciledLabelReplacement,
+  reconciliationAuthorityMatches,
+  runtimeForAttempt,
+};

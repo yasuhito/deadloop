@@ -180,6 +180,7 @@ type ReconciliationOperations = {
   listComments(): JsonObject[] | Promise<JsonObject[]>;
   replaceLabels(labels: string[]): void | Promise<void>;
   comment(body: string): void | Promise<void>;
+  recordReleaseStarted?(): void | Promise<void>;
   closeOwnedWorkspace?(): boolean | Promise<boolean>;
   releaseLocalOwnership?(cutoffEventId?: string): void | Promise<void>;
 };
@@ -195,10 +196,13 @@ async function applyPrWorkAuthorityReconciliation(
   const currentLabels = labelNames(input.pr.labels);
   const labelsChange = !sameLabels(currentLabels, decision.labels);
   if (decision.action === "release_for_request") {
+    await operations.recordReleaseStarted?.();
     const closed = await operations.closeOwnedWorkspace?.();
     if (closed !== true) return { action: decision.action, cleanup: "preserve_workspace" };
-    await operations.releaseLocalOwnership?.();
+    // Keep the local owner recoverable until GitHub visibly exposes the queued request.
+    // A retry can finish either side of this journaled transition idempotently.
     if (labelsChange) await operations.replaceLabels(decision.labels);
+    await operations.releaseLocalOwnership?.();
     return { action: decision.action, cleanup: "ownership_released" };
   }
   const timelineBaseline = decision.action === "block" && labelsChange
