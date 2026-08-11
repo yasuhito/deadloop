@@ -181,6 +181,23 @@ describe("PR work-authority reconciliation", () => {
     expect(reconcilePrWorkAuthority({ ...base, journalPhase: "report_received", claim: { kind: "missing" } }).action).toBe("block");
   });
 
+  it("does not reuse a blocked event from before an interrupted block transition", async () => {
+    const result = await applyPrWorkAuthorityReconciliation(
+      { ...base, pr: { ...base.pr, labels: ["agent:blocked", "customer:keep"] }, claim: { kind: "expired" } },
+      {
+        automationLogin: "deadloop-bot",
+        blockStarted: { reason: "claim_expired", timelineEventIds: ["30"] },
+        listTimelineEvents: () => [
+          { id: "30", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } },
+        ],
+        listComments: () => [],
+        replaceLabels: () => {},
+        comment: () => {},
+      },
+    );
+    expect(result.action).toBe("blocked_cutoff_unproven");
+  });
+
   it("creates one recovery comment across repeated reconciliation", async () => {
     const comments: Array<Record<string, unknown>> = [];
     const input = { ...base, pr: { ...base.pr, labels: [...base.pr.labels] }, claim: { kind: "expired" } };
@@ -405,12 +422,133 @@ async function runExpiredClaimReconciliation() {
   }
 }
 
+async function runRetainedMigration(input: { labels: string[]; malformed?: boolean; deployed?: boolean; mergeable?: string; raceBeforeRequest?: boolean; ignoreRequestMutation?: boolean; resumeAfterRequestCrash?: boolean; startedHead?: string }) {
+  const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
+  const originalPath = process.env.PATH;
+  const root = mkdtempSync(path.join(tmpdir(), "deadloop-predeployment-migration-"));
+  const repo = path.join(root, "repo");
+  const stateDir = path.join(root, "deadloop");
+  const runDir = path.join(stateDir, "runs", "attempt-1");
+  const worktree = path.join(root, "worktree");
+  const bin = path.join(root, "bin");
+  try {
+    for (const directory of [repo, worktree, bin, runDir]) mkdirSync(directory, { recursive: true });
+    execFileSync("git", ["init", "--quiet", repo]);
+    execFileSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
+    writeFileSync(path.join(bin, "gh"), "#!/bin/sh\nprintf '{\"id\":\"repo-id\"}\\n'\n");
+    execFileSync("chmod", ["+x", path.join(bin, "gh")]);
+    process.env.PI_CODING_AGENT_DIR = root;
+    process.env.PATH = `${bin}:${originalPath || ""}`;
+    writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
+      repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "repo-id", enabledAt: 1,
+      automationLogin: "deadloop-bot", firstEnableAutoMerge: false, firstStartPending: false,
+      lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true,
+    }] }));
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(input.malformed ? {
+      project: "demo", repository: "owner/repo", target: { kind: "pull-request", number: 42 },
+    } : {
+      attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "reviewer",
+      target: { kind: "pull-request", number: 42 }, inputRevision: { head: "a".repeat(40) },
+      branch: "agent/issue-42", worktreePath: worktree, agentName: "dl-r-42-abcdef123456", workspaceLabel: "reviewer",
+      promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
+      workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1",
+      phase: "agent_started", lastSuccessfulPhase: "agent_started", reviewClaim,
+    }));
+    if (input.deployed) writeFileSync(path.join(stateDir, "github-state-migration-v1.json"), JSON.stringify({
+      schemaVersion: 1, repository: "owner/repo", repositoryId: "repo-id",
+      confirmation: "updated-hosts-stopped", targetPrs: [42],
+      ...(input.startedHead ? { startedPrs: [{ number: 42, headRefOid: input.startedHead, requestLabel: "agent:review" }] } : {}),
+    }));
+    let live = [...input.labels];
+    let workspaceOpen = true;
+    let requestMutationCrashed = false;
+    const pr = () => ({ number: 42, state: "OPEN", headRefOid: "a".repeat(40), mergeable: input.mergeable || "MERGEABLE", labels: live.map((name) => ({ name })) });
+    const commandRunner = {
+      runText: (argv: string[]) => {
+        if (argv[0] === "herdr") { workspaceOpen = false; return ""; }
+        if (argv[2] === "user") return "deadloop-bot\n";
+        if (argv.slice(0, 3).join(" ") === "gh pr edit") {
+          live.push(...argv.filter((_token, index) => argv[index - 1] === "--add-label").filter((label) => !live.includes(label)));
+        }
+        return "";
+      },
+      runJson: (argv: string[], options: { input?: string } = {}) => {
+        const command = argv.slice(0, 3).join(" ");
+        if (command === "herdr workspace list") return { result: { workspaces: workspaceOpen ? [{ workspace_id: "workspace-1", pane_count: 1, tab_count: 1, worktree: { checkout_path: worktree } }] : [] } };
+        if (command === "herdr agent list") return { result: { agents: [] } };
+        if (command === "herdr worktree list") return { result: { worktrees: [{ path: worktree }] } };
+        if (command === "gh repo view") return { id: "repo-id", nameWithOwner: "owner/repo" };
+        if (command === "gh pr list") return [pr()];
+        if (command === "gh pr view") return pr();
+        if (argv.includes("PUT")) {
+          const next = JSON.parse(String(options.input || "{}")).labels;
+          if (!input.ignoreRequestMutation) live = next;
+          if (input.resumeAfterRequestCrash && !requestMutationCrashed) {
+            requestMutationCrashed = true;
+            throw new Error("simulated crash after request mutation");
+          }
+          return live.map((name) => ({ name }));
+        }
+        const endpoint = String(argv.at(-1) || "");
+        if (endpoint.endsWith("/labels")) {
+          const observed = input.raceBeforeRequest && !workspaceOpen ? live.filter((name) => name !== "agent:blocked") : live;
+          return [observed.map((name) => ({ name }))];
+        }
+        return [];
+      },
+    };
+    const args = {
+      projectRepo: repo, githubRepo: "owner/repo", stateDir, projectId: "demo",
+      enabledAt: 1, automationLogin: "deadloop-bot",
+    };
+    try { await reconcile(args, commandRunner); }
+    catch (error) { if (!input.resumeAfterRequestCrash) throw error; }
+    if (input.resumeAfterRequestCrash) await reconcile(args, commandRunner);
+    const attempt = input.malformed ? null : JSON.parse(readFileSync(path.join(runDir, "attempt.json"), "utf8"));
+    return { labels: live, phase: attempt?.phase };
+  } finally {
+    if (originalConfigDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalConfigDir;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("reconciliation entrypoint", () => {
   const authoritySnapshot = {
     state: "OPEN", headRefOid: "a".repeat(40), claimKind: "authorized",
     requestEventId: "10", managedLabels: ["agent:in-progress"],
   };
   const managedLabels = [...base.requestLabels, "agent:in-progress", "agent:blocked"];
+
+  it("restores the blocked state for a retained attempt before deployment", async () => {
+    expect((await runRetainedMigration({ labels: ["agent:review", "customer:keep"] })).labels).toEqual(["agent:review", "customer:keep", "agent:blocked"]);
+  });
+
+  it("restores the blocked state for a malformed retained attempt before deployment", async () => {
+    expect((await runRetainedMigration({ labels: ["agent:review", "customer:keep"], malformed: true })).labels).toEqual(["agent:review", "customer:keep", "agent:blocked"]);
+  });
+
+  it("retains ownership when mergeability is unknown at the deployment gate", async () => {
+    expect((await runRetainedMigration({ labels: ["agent:blocked", "customer:keep"], deployed: true, mergeable: "UNKNOWN" })).phase).toBe("agent_started");
+  });
+
+  it("retains ownership when labels change after workspace cleanup", async () => {
+    expect((await runRetainedMigration({ labels: ["agent:blocked", "customer:keep"], deployed: true, raceBeforeRequest: true })).phase).toBe("agent_started");
+  });
+
+  it("retains ownership when the Agent request mutation has no effect", async () => {
+    expect((await runRetainedMigration({ labels: ["agent:blocked", "customer:keep"], deployed: true, ignoreRequestMutation: true })).phase).toBe("agent_started");
+  });
+
+  it("finishes ownership release after restarting past the Agent request mutation", async () => {
+    expect((await runRetainedMigration({ labels: ["agent:blocked", "customer:keep"], deployed: true, resumeAfterRequestCrash: true })).phase).toBe("authority_released");
+  });
+
+  it("retains ownership when persisted request intent belongs to another head", async () => {
+    expect((await runRetainedMigration({ labels: ["agent:blocked", "customer:keep"], deployed: true, startedHead: "b".repeat(40) })).phase).toBe("agent_started");
+  });
 
   it("rejects a head race before a recovery mutation", () => {
     expect(reconciliationAuthorityMatches(authoritySnapshot, { ...authoritySnapshot, headRefOid: "b".repeat(40) })).toBe(false);
@@ -601,19 +739,19 @@ describe("reconciliation entrypoint", () => {
       const runDir = path.join(root, "runs", "malformed");
       mkdirSync(runDir, { recursive: true });
       writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
-        project: "demo", repository: "yasuhito/deadloop", target: { kind: "pull-request", number: 227 },
+        project: "demo", repository: "owner/repo", target: { kind: "pull-request", number: 42 },
       }));
       writeFileSync(path.join(root, "github-state-migration-v1.json"), JSON.stringify({
-        schemaVersion: 1, repository: "yasuhito/deadloop", repositoryId: "repo-id", confirmation: "updated-hosts-stopped",
+        schemaVersion: 1, repository: "owner/repo", repositoryId: "repo-id", confirmation: "updated-hosts-stopped",
       }));
       const commandRunner = {
         runText: () => "deadloop-bot\n",
         runJson: (argv: string[]) => argv.includes("view") && argv.includes("id,nameWithOwner")
-          ? { id: "repo-id", nameWithOwner: "yasuhito/deadloop" }
-          : argv.includes("list") ? [{ number: 227, state: "OPEN", headRefOid: "a".repeat(40), mergeable: "MERGEABLE", labels: [{ name: "agent:blocked" }] }] : [],
+          ? { id: "repo-id", nameWithOwner: "owner/repo" }
+          : argv.includes("list") ? [{ number: 42, state: "OPEN", headRefOid: "a".repeat(40), mergeable: "MERGEABLE", labels: [{ name: "agent:blocked" }] }] : [],
       };
       const result = await reconcile({
-        projectRepo: process.cwd(), githubRepo: "yasuhito/deadloop", stateDir: root,
+        projectRepo: process.cwd(), githubRepo: "owner/repo", stateDir: root,
         projectId: "demo", enabledAt: Date.now(), automationLogin: "deadloop-bot",
       }, commandRunner);
       expect(result.migrations).toEqual([]);
@@ -623,28 +761,24 @@ describe("reconciliation entrypoint", () => {
   });
 });
 
-describe("legacy PR migration guard", () => {
-  it("keeps PR 227 blocked before deployment", () => {
-    expect(migrationDecision({ repository: "yasuhito/deadloop", number: 227, deployed: false, conflicting: false }).action).toBe("keep_blocked");
+describe("retained PR migration guard", () => {
+  it("keeps a retained PR blocked before deployment", () => {
+    expect(migrationDecision({ deployed: false, conflicting: false }).action).toBe("keep_blocked");
   });
 
-  it("makes PR 227 review-eligible after deployment", () => {
-    expect(migrationDecision({ repository: "yasuhito/deadloop", number: 227, deployed: true, conflicting: false }).requestLabel).toBe("agent:review");
+  it("does not migrate a retained PR omitted from the deployment receipt", () => {
+    expect(migrationDecision({ deployed: true, conflicting: false, targeted: false }).action).toBe("not_applicable");
   });
 
-  it("keeps PR 228 blocked before deployment", () => {
-    expect(migrationDecision({ repository: "yasuhito/deadloop", number: 228, deployed: false, conflicting: true }).action).toBe("keep_blocked");
+  it("makes a clean retained PR review-eligible after deployment", () => {
+    expect(migrationDecision({ deployed: true, conflicting: false, targeted: true }).requestLabel).toBe("agent:review");
   });
 
-  it("turns conflicting PR 228 into an update request after deployment", () => {
-    expect(migrationDecision({ repository: "yasuhito/deadloop", number: 228, deployed: true, conflicting: true }).requestLabel).toBe("agent:update-branch");
+  it("keeps a conflicting retained PR blocked before deployment", () => {
+    expect(migrationDecision({ deployed: false, conflicting: true }).action).toBe("keep_blocked");
   });
 
-  it.each([229, 236])("keeps PR %s blocked before deployment", (number) => {
-    expect(migrationDecision({ repository: "yasuhito/deadloop", number, deployed: false, conflicting: false }).action).toBe("keep_blocked");
-  });
-
-  it.each([229, 236])("makes PR %s review-eligible after deployment", (number) => {
-    expect(migrationDecision({ repository: "yasuhito/deadloop", number, deployed: true, conflicting: false }).requestLabel).toBe("agent:review");
+  it("turns a conflicting retained PR into an update request after deployment", () => {
+    expect(migrationDecision({ deployed: true, conflicting: true, targeted: true }).requestLabel).toBe("agent:update-branch");
   });
 });

@@ -179,6 +179,7 @@ function sameLabels(left: string[], right: string[]): boolean {
 
 type ReconciliationOperations = {
   automationLogin: string;
+  blockStarted?: { reason: string; timelineEventIds: string[] };
   recordBlockStarted?(input: { reason: string; timelineEventIds: string[] }): void | Promise<void>;
   completeBlock?(cutoffEventId: string): void | Promise<void>;
   listTimelineEvents(): JsonObject[] | Promise<JsonObject[]>;
@@ -210,23 +211,27 @@ async function applyPrWorkAuthorityReconciliation(
     await operations.releaseLocalOwnership?.();
     return { action: decision.action, cleanup: "ownership_released" };
   }
-  const timelineBaseline = decision.action === "block" && labelsChange
+  const recordedTimelineEventIds = decision.action === "block" && operations.blockStarted?.reason === decision.reason
+    ? operations.blockStarted.timelineEventIds
+    : undefined;
+  const timelineBaseline = decision.action === "block" && labelsChange && !recordedTimelineEventIds
     ? await operations.listTimelineEvents()
     : [];
-  if (decision.action === "block" && labelsChange) {
-    await operations.recordBlockStarted?.({ reason: decision.reason, timelineEventIds: timelineBaseline.map(eventId) });
+  const timelineBaselineIds = recordedTimelineEventIds || timelineBaseline.map(eventId);
+  if (decision.action === "block" && labelsChange && !recordedTimelineEventIds) {
+    await operations.recordBlockStarted?.({ reason: decision.reason, timelineEventIds: timelineBaselineIds });
   }
   if (labelsChange) await operations.replaceLabels(decision.labels, { invalidatesRequests: decision.invalidatesRequests });
 
   let cutoffEventId: string | undefined;
   if (decision.action === "block") {
     const events = await operations.listTimelineEvents();
-    const baselineIds = new Set(timelineBaseline.map(eventId));
+    const baselineIds = new Set(timelineBaselineIds);
     const newBlockedEvents = events.filter((event) => !baselineIds.has(eventId(event))
       && eventAction(event) === "labeled"
       && eventLabel(event) === input.blockedLabel
       && eventActor(event) === operations.automationLogin.toLowerCase());
-    const cutoff = labelsChange
+    const cutoff = labelsChange || recordedTimelineEventIds
       ? newBlockedEvents.length === 1 ? newBlockedEvents[0] : null
       : authenticatedBlockedCutoff(events, operations.automationLogin, input.blockedLabel);
     if (!cutoff) return { action: "blocked_cutoff_unproven", cleanup: "preserve_workspace" };
@@ -291,21 +296,16 @@ function postBlockRequestIsEligible(input: {
   return latest !== undefined && requestAfterInvalidationCutoff(input.request, latest);
 }
 
-const LEGACY_MIGRATION_PRS = new Set([227, 228, 229, 236]);
-
 function migrationDecision(input: {
-  repository: string;
-  number: number;
   deployed: boolean;
   conflicting: boolean;
+  targeted?: boolean;
 }): { action: "not_applicable" | "keep_blocked" | "request"; requestLabel?: "agent:review" | "agent:update-branch" } {
-  if (input.repository.toLowerCase() !== "yasuhito/deadloop" || !LEGACY_MIGRATION_PRS.has(input.number)) {
-    return { action: "not_applicable" };
-  }
   if (!input.deployed) return { action: "keep_blocked" };
+  if (input.targeted !== true) return { action: "not_applicable" };
   return {
     action: "request",
-    requestLabel: input.number === 228 && input.conflicting ? "agent:update-branch" : "agent:review",
+    requestLabel: input.conflicting ? "agent:update-branch" : "agent:review",
   };
 }
 

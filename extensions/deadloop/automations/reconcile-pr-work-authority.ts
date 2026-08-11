@@ -300,6 +300,17 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     }
 
     const input = { pr: { ...pr, labels: labels(pr) }, claim, runtime, requestLabels, inProgressLabel, blockedLabel, journalPhase: record?.phase };
+    let blockStarted: { reason: string; timelineEventIds: string[] } | undefined;
+    try {
+      const receipt = JSON.parse(fs.readFileSync(recoveryFile, "utf8"));
+      if (receipt?.schemaVersion === 1 && receipt?.repository === args.githubRepo
+        && receipt?.repositoryId === String(repositoryIdentity.id || "") && Number(receipt?.prNumber) === number
+        && String(receipt?.headRefOid || "").toLowerCase() === String(pr.headRefOid || "").toLowerCase()
+        && typeof receipt?.reason === "string" && Array.isArray(receipt?.timelineEventIds)
+        && receipt.timelineEventIds.every((id: unknown) => typeof id === "string" && id)) {
+        blockStarted = { reason: receipt.reason, timelineEventIds: receipt.timelineEventIds };
+      }
+    } catch {}
     const initialRequest = latestConfiguredRequest(events, labels(input.pr), requestLabels);
     let expectedRequestEventId = record ? classifyClaim(
       input.pr, events, comments, github.readRestResponseHeaders(args.githubRepo),
@@ -334,6 +345,7 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     };
     const result = await applyPrWorkAuthorityReconciliation(input, {
       automationLogin,
+      blockStarted,
       recordBlockStarted: (started: JsonObject) => writeJsonAtomically(recoveryFile, {
         schemaVersion: 1, repository: args.githubRepo, repositoryId: String(repositoryIdentity.id || ""),
         prNumber: number, headRefOid: String(pr.headRefOid || ""), attemptId: record?.attemptId,
@@ -385,23 +397,66 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     migrationDeployed = migrationReceipt?.schemaVersion === 1
       && migrationReceipt?.repository === args.githubRepo
       && migrationReceipt?.repositoryId === String(repositoryIdentity.id || "")
-      && migrationReceipt?.confirmation === "updated-hosts-stopped";
+      && migrationReceipt?.confirmation === "updated-hosts-stopped"
+      && Array.isArray(migrationReceipt?.targetPrs)
+      && migrationReceipt.targetPrs.every((number: unknown) => Number.isSafeInteger(number) && Number(number) > 0);
   } catch {}
+  const migrationTargets = new Set((migrationDeployed ? migrationReceipt.targetPrs : []).map(Number));
   const completedMigrations = new Set((Array.isArray(migrationReceipt.completedPrs) ? migrationReceipt.completedPrs : []).map(Number));
+  const startedMigrations = new Map<number, JsonObject>((Array.isArray(migrationReceipt.startedPrs) ? migrationReceipt.startedPrs : [])
+    .filter((entry: unknown) => entry && typeof entry === "object" && Number.isSafeInteger(Number((entry as JsonObject).number)))
+    .map((entry: JsonObject) => [Number(entry.number), entry]));
   const migrations: JsonObject[] = [];
   for (const pr of prs) {
-    const migration = migrationDecision({
-      repository: args.githubRepo,
-      number: Number(pr.number),
-      deployed: migrationDeployed,
-      conflicting: String(pr.mergeable || "").toUpperCase() === "CONFLICTING",
-    });
-    const currentMigrationLabels = labels(pr);
-    if (migration.action !== "request" || completedMigrations.has(Number(pr.number))
-      || !currentMigrationLabels.includes(blockedLabel) || currentMigrationLabels.includes(inProgressLabel)) continue;
     const retained = attempts.valid.filter((attempt) => attempt.target?.kind === "pull-request" && Number(attempt.target.number) === Number(pr.number));
     const malformed = attempts.malformed.filter((attempt) => Number(attempt.target?.number) === Number(pr.number));
-    if (malformed.length) continue;
+    if (retained.length === 0 && malformed.length === 0) continue;
+    const migration = migrationDecision({
+      deployed: migrationDeployed,
+      conflicting: String(pr.mergeable || "").toUpperCase() === "CONFLICTING",
+      targeted: migrationTargets.has(Number(pr.number)),
+    });
+    if (migration.action === "not_applicable") continue;
+    const currentMigrationLabels = labels(pr);
+    if (migration.action === "keep_blocked") {
+      if (!currentMigrationLabels.includes(blockedLabel) && !currentMigrationLabels.includes(inProgressLabel)) {
+        guarded(() => {
+          const livePr = github.getPr(args.githubRepo, pr.number);
+          const liveLabels = labels({ labels: github.listPrLabels(args.githubRepo, pr.number) });
+          if (String(livePr.state || "").toUpperCase() !== "OPEN"
+            || String(livePr.headRefOid || "").toLowerCase() !== String(pr.headRefOid || "").toLowerCase()
+            || liveLabels.includes(inProgressLabel) || liveLabels.includes(blockedLabel)) return;
+          github.movePrLabels(args.githubRepo, pr.number, { remove: [], add: [blockedLabel] });
+          if (!labels({ labels: github.listPrLabels(args.githubRepo, pr.number) }).includes(blockedLabel)) {
+            throw new Error("retained PR did not reach its required pre-deployment blocked state");
+          }
+        });
+      }
+      continue;
+    }
+    if (retained.length === 0 || malformed.length) continue;
+    const started = startedMigrations.get(Number(pr.number));
+    const currentHead = String(pr.headRefOid || "").toLowerCase();
+    if (started && String(started.headRefOid || "").toLowerCase() !== currentHead) continue;
+    const startedRequestLabel = String(started?.requestLabel || "");
+    const requestAlreadyExposed = Boolean(startedRequestLabel)
+      && String(started?.headRefOid || "").toLowerCase() === currentHead
+      && currentMigrationLabels.includes(startedRequestLabel)
+      && !currentMigrationLabels.includes(blockedLabel) && !currentMigrationLabels.includes(inProgressLabel);
+    if (completedMigrations.has(Number(pr.number))
+      || !requestAlreadyExposed && (!currentMigrationLabels.includes(blockedLabel) || currentMigrationLabels.includes(inProgressLabel))) continue;
+    const prerequisitesReady = guarded(() => {
+      const livePr = github.getPr(args.githubRepo, pr.number);
+      const liveLabels = labels({ labels: github.listPrLabels(args.githubRepo, pr.number) });
+      const mergeable = String(livePr.mergeable || "").toUpperCase();
+      const expectedHead = String(pr.headRefOid || "").toLowerCase();
+      if (String(livePr.state || "").toUpperCase() !== "OPEN"
+        || String(livePr.headRefOid || "").toLowerCase() !== expectedHead
+        || liveLabels.includes(inProgressLabel)) return false;
+      if (requestAlreadyExposed) return liveLabels.includes(startedRequestLabel) && !liveLabels.includes(blockedLabel);
+      return liveLabels.includes(blockedLabel) && Boolean(mergeable) && mergeable !== "UNKNOWN";
+    });
+    if (!prerequisitesReady) continue;
     let cleanupSafe = true;
     for (const record of retained) {
       let observed: { kind: string };
@@ -421,29 +476,48 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         return runtimeForAttempt(runner, record, args.projectRepo).kind === "stopped_owned";
       });
       if (!closed) { cleanupSafe = false; break; }
-      releasePersistedAttemptAuthority(record.runDir, new Date().toISOString());
     }
     if (!cleanupSafe) continue;
     const migrated = guarded(() => {
       const livePr = github.getPr(args.githubRepo, pr.number);
-      if (String(livePr.state || "").toUpperCase() !== "OPEN") return false;
-      let requestLabel = migration.requestLabel;
-      if (Number(pr.number) === 228) {
-        const mergeable = String(livePr.mergeable || "").toUpperCase();
-        if (mergeable === "UNKNOWN" || !mergeable) return false;
-        requestLabel = mergeable === "CONFLICTING" ? args.updateBranchLabel || "agent:update-branch" : args.reviewLabel || "agent:review";
-      }
-      const current = labels({ labels: github.listPrLabels(args.githubRepo, pr.number) });
-      if (!current.includes(blockedLabel) || current.includes(inProgressLabel)) return false;
+      if (String(livePr.state || "").toUpperCase() !== "OPEN"
+        || String(livePr.headRefOid || "").toLowerCase() !== String(pr.headRefOid || "").toLowerCase()) return false;
+      const mergeable = String(livePr.mergeable || "").toUpperCase();
+      const requestLabel = startedRequestLabel || (mergeable === "CONFLICTING"
+        ? args.updateBranchLabel || "agent:update-branch"
+        : mergeable && mergeable !== "UNKNOWN" ? args.reviewLabel || "agent:review" : "");
+      if (!requestLabel) return false;
       const managed = new Set([...requestLabels, inProgressLabel, blockedLabel]);
-      const replacement = [...current.filter((label) => !managed.has(label)), requestLabel];
-      github.replacePrLabels(args.githubRepo, pr.number, [...new Set(replacement)]);
+      const current = labels({ labels: github.listPrLabels(args.githubRepo, pr.number) });
+      const alreadyExposed = current.includes(requestLabel)
+        && current.filter((label) => managed.has(label)).every((label) => label === requestLabel);
+      if (!alreadyExposed) {
+        if (!current.includes(blockedLabel) || current.includes(inProgressLabel)) return false;
+        const startedEntry = { number: Number(pr.number), headRefOid: String(pr.headRefOid || ""), requestLabel };
+        startedMigrations.set(Number(pr.number), startedEntry);
+        migrationReceipt = { ...migrationReceipt, startedPrs: [...startedMigrations.values()] };
+        writeJsonAtomically(migrationReceiptPath, migrationReceipt);
+        const replacement = [...current.filter((label) => !managed.has(label)), requestLabel];
+        github.replacePrLabels(args.githubRepo, pr.number, [...new Set(replacement)]);
+      }
+      const observedPr = github.getPr(args.githubRepo, pr.number);
+      const observedLabels = labels({ labels: github.listPrLabels(args.githubRepo, pr.number) });
+      if (String(observedPr.state || "").toUpperCase() !== "OPEN"
+        || String(observedPr.headRefOid || "").toLowerCase() !== String(pr.headRefOid || "").toLowerCase()
+        || !sameStringSet(observedLabels.filter((label) => managed.has(label)), [requestLabel])) return false;
       migration.requestLabel = requestLabel;
       return true;
     });
     if (!migrated) continue;
+    for (const record of retained) releasePersistedAttemptAuthority(record.runDir, new Date().toISOString());
     completedMigrations.add(Number(pr.number));
-    writeJsonAtomically(migrationReceiptPath, { ...migrationReceipt, completedPrs: [...completedMigrations].sort((left, right) => left - right) });
+    startedMigrations.delete(Number(pr.number));
+    migrationReceipt = {
+      ...migrationReceipt,
+      completedPrs: [...completedMigrations].sort((left, right) => left - right),
+      startedPrs: [...startedMigrations.values()],
+    };
+    writeJsonAtomically(migrationReceiptPath, migrationReceipt);
     migrations.push({ prNumber: Number(pr.number), requestLabel: migration.requestLabel });
   }
   return driverResult("done", `reconciled ${results.length} active PR work state(s)`, { driverAction: "pr_work_authority_reconciled", results, migrations });
