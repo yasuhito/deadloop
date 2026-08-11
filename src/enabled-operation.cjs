@@ -62,6 +62,7 @@ function assertLocallyEnabled(project) {
       candidate.repoPath === path.resolve(project.repoPath) && candidate.githubRepo === project.githubRepo && candidate.enabled !== false,
     );
     if (enabled) {
+      if (!enabled.automationLogin) throw new Error("deadloop enablement has no authorized automation identity");
       if (project.enabledAt !== undefined && enabled.enabledAt !== project.enabledAt) {
         throw new Error("deadloop enablement generation changed; operation stopped");
       }
