@@ -83,6 +83,18 @@ flowchart TD
 2. **deadloop に任せる** — deadloop は依頼ラベルを `agent:in-progress` に置き換え、`agent:review` を付けた PR を作成します。必要に応じて、レビューと修正を繰り返します。
 3. **完了または対応する** — 承認された PR は、自動マージが無効なら `ready-for-human` に移り、有効ならマージされます。`agent:blocked` が付くとループは止まります。Issue または PR のコメントに記載された原因を解消し、案内された復旧手順に従ってください。
 
+## 運用コマンド
+
+対象リポジトリで起動した Pi セッションから、次のコマンドを実行できます。
+
+| コマンド | 用途 |
+| --- | --- |
+| `/deadloop-enable` | リポジトリを検証し、deadloop が新しい作業を開始できるようにします。 |
+| `/deadloop-disable` | 新しい作業の開始を止めます。実行中の試行は完了することがあります。 |
+| `/deadloop-status` | deadloop が有効かどうかと、現在の状態の概要を表示します。 |
+| `/deadloop-doctor` | 設定や保持された試行を変更せずに診断します。 |
+| `/deadloop-abandon-attempt <attempt-id>` | doctor に表示された場合だけ、保持された試行を安全に放棄します。 |
+
 ## 詳細設定
 
 既定の検証コマンドは `npm run check` です。別のコマンドを使う場合は、リポジトリの基準ブランチへ `deadloop.json` をコミットします。
@@ -168,18 +180,6 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 1. **Issue の調整のみ** — 慎重に導入したい場合は、ここから始めます。PR のレビューとマージは人間が行います。
 2. **PR の自動レビュー** — 標準の PR レビューを `autoMerge: false` で使用します。レビュー済み PR は `ready-for-human` に移して人間へ引き渡します。外部レビューの変更処理は現在利用できません。`externalReview` を有効にしても利用可能にはなりません。
 3. **任意の自動マージ** — ブランチ保護、CI、レビュー要件、dry-run または人間による承認手順、停止条件が十分に実証されてから、`autoMerge: true` を検討してください。
-
-## 運用コマンド
-
-対象リポジトリで起動した Pi セッションから、次のコマンドを実行できます。
-
-```text
-/deadloop-enable
-/deadloop-disable
-/deadloop-status
-/deadloop-doctor
-/deadloop-abandon-attempt <attempt-id>  # doctor に表示された場合のみ
-```
 
 ## ドキュメント
 
