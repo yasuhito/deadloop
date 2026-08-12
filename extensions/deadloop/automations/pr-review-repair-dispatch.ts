@@ -80,7 +80,8 @@ function envConfig(args: JsonObject = {}) {
     remote: configValue(args, "remote", process.env.DEADLOOP_REVIEW_REPAIR_REMOTE, "origin"),
     reviewLabel: configValue(args, "reviewLabel", process.env.DEADLOOP_REVIEW_LABEL, "agent:review"),
     blockedLabel: configValue(args, "blockedLabel", process.env.DEADLOOP_BLOCKED_LABEL, "agent:blocked"),
-    humanLabel: configValue(args, "humanLabel", process.env.DEADLOOP_HUMAN_LABEL, "ready-for-human"),
+    implementLabel: configValue(args, "implementLabel", process.env.DEADLOOP_IMPLEMENT_LABEL, "agent:implement"),
+    updateBranchLabel: configValue(args, "updateBranchLabel", process.env.DEADLOOP_UPDATE_BRANCH_LABEL, "agent:update-branch"),
     inProgressLabel: configValue(args, "inProgressLabel", process.env.DEADLOOP_IN_PROGRESS_LABEL, "agent:in-progress"),
     reviewClaim: (() => {
       const value = configValue(args, "reviewClaim", process.env.DEADLOOP_REVIEW_CLAIM, "");
@@ -1162,7 +1163,8 @@ function dispatch(args: JsonObject): DriverResult {
       "--managed-label", env.reviewLabel,
       "--managed-label", env.inProgressLabel,
       "--managed-label", env.blockedLabel,
-      "--managed-label", env.humanLabel,
+      "--managed-label", env.implementLabel,
+      "--managed-label", env.updateBranchLabel,
     ]);
     if (closed?.driverAction !== "workspace_closed") throw new Error("reviewer workspace was not closed before repair launch");
   }

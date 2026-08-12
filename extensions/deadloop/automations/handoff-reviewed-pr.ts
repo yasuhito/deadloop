@@ -1,6 +1,9 @@
 #!/usr/bin/env node
-// Hand one approved PR to a human only while its accepted review history is current.
-// The label mutation is serialized with /deadloop-disable through the enablement lock.
+// Hand one approved PR back to people only while its accepted review history is current: the draft
+// becomes ready and every agent workflow label is removed, so GitHub shows a pull request no Agent
+// request is waiting on. The mutation is serialized with /deadloop-disable through the enablement
+// lock, and the ready transition runs first so a failed label removal leaves the requests visible
+// instead of stranding a silently unlabelled draft.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
@@ -23,9 +26,10 @@ type HandoffArgs = {
   reviewPromise: string;
   historyObservation: string;
   reviewLabel: string;
+  implementLabel: string;
+  updateBranchLabel: string;
   inProgressLabel: string;
   blockedLabel: string;
-  humanLabel: string;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
 type HandoffResult = { action: "handed_off" | "stale_history" };
@@ -91,21 +95,26 @@ function compareAcceptedHistory(args: HandoffArgs, ops: HandoffOps, expected: Js
   return comparePrHistoryObservations(expected, currentHistory(args, ops)).kind === "unchanged";
 }
 
-function assertEligiblePr(args: HandoffArgs, ops: HandoffOps): void {
+function agentWorkflowLabels(args: HandoffArgs): string[] {
+  return [args.reviewLabel, args.implementLabel, args.updateBranchLabel, args.inProgressLabel, args.blockedLabel];
+}
+
+function assertEligiblePr(args: HandoffArgs, ops: HandoffOps): JsonObject {
   const result = ops.run([
     "gh", "pr", "view", args.pr, "-R", args.githubRepo,
     "--json", "state,isDraft,headRefOid,labels",
   ], MAX_GUARDED_OPERATION_MS);
   if (result.status !== 0) throw new Error(commandError(result, "PR state could not be revalidated"));
   let pr: JsonObject;
-  try { pr = JSON.parse(result.stdout || "{}"); } catch { throw new Error("PR state response was invalid; human handoff stopped"); }
+  try { pr = JSON.parse(result.stdout || "{}"); } catch { throw new Error("PR state response was invalid; ready handoff stopped"); }
   const labels = new Set(Array.isArray(pr.labels) ? pr.labels.map((label) => label?.name).filter((name) => typeof name === "string") : []);
-  if (pr.state !== "OPEN" || pr.isDraft !== false || pr.headRefOid !== args.expectedHead) {
-    throw new Error("PR is no longer eligible for human handoff");
+  if (pr.state !== "OPEN" || pr.headRefOid !== args.expectedHead) {
+    throw new Error("PR is no longer eligible for ready handoff");
   }
   if (!labels.has(args.inProgressLabel) || labels.has(args.blockedLabel)) {
-    throw new Error("the active review claim state is no longer present; human handoff stopped");
+    throw new Error("the active review claim state is no longer present; ready handoff stopped");
   }
+  return pr;
 }
 
 function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRun }): HandoffResult {
@@ -123,14 +132,17 @@ function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRu
       recheck();
       return releaseStaleClaim(args, ops);
     }
-    assertEligiblePr(args, ops);
+    const eligible = assertEligiblePr(args, ops);
     recheck();
+    if (eligible.isDraft === true) {
+      const ready = ops.run(["gh", "pr", "ready", args.pr, "-R", args.githubRepo], MAX_GUARDED_OPERATION_MS);
+      if (ready.status !== 0) throw new Error(commandError(ready, "reviewed PR could not be marked ready"));
+    }
     const result = ops.run([
       "gh", "pr", "edit", args.pr, "-R", args.githubRepo,
-      "--remove-label", args.inProgressLabel, "--remove-label", args.reviewLabel,
-      "--add-label", args.humanLabel,
+      ...agentWorkflowLabels(args).flatMap((label) => ["--remove-label", label]),
     ], MAX_GUARDED_OPERATION_MS);
-    if (result.status !== 0) throw new Error(commandError(result, "reviewed PR human handoff failed"));
+    if (result.status !== 0) throw new Error(commandError(result, "reviewed PR ready handoff failed"));
     return { action: "handed_off" };
   };
   return ops.withLock ? ops.withLock(project, operation) : withEnabledProjectLock(project, operation);
@@ -145,7 +157,7 @@ function parseArgs(argv: string[]): HandoffArgs {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  const required = ["projectRepo", "githubRepo", "stateDir", "pr", "expectedHead", "reviewPromise", "historyObservation", "reviewLabel", "inProgressLabel", "blockedLabel", "humanLabel"];
+  const required = ["projectRepo", "githubRepo", "stateDir", "pr", "expectedHead", "reviewPromise", "historyObservation", "reviewLabel", "implementLabel", "updateBranchLabel", "inProgressLabel", "blockedLabel"];
   if (required.some((name) => !values[name]) || !Number.isFinite(enabledAt)) throw new Error("required human handoff arguments are missing");
   return { ...values, enabledAt } as HandoffArgs;
 }

@@ -586,8 +586,8 @@ function runV1ChangesRequestedTwice(options: {
   const worktreeRoot = path.join(root, options.customConfiguration ? "custom repair checkouts" : "worktrees");
   const worktree = path.join(worktreeRoot, "agent-issue-243");
   const labels = options.customConfiguration
-    ? { review: "custom:review", blocked: "custom:blocked", human: "custom:human" }
-    : { review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" };
+    ? { review: "custom:review", blocked: "custom:blocked", implement: "custom:implement", updateBranch: "custom:update-branch" }
+    : { review: "agent:review", blocked: "agent:blocked", implement: "agent:implement", updateBranch: "agent:update-branch" };
   const liveLabels = [
     { name: "agent:in-progress" },
     ...(options.customConfiguration ? [{ name: "ready-for-human" }] : []),
@@ -649,7 +649,7 @@ function runV1ChangesRequestedTwice(options: {
     binding: {
       ...baseReviewClaim.binding,
       activeState: {
-        managedLabels: [labels.review, "agent:implement", "agent:update-branch", "agent:in-progress", labels.blocked],
+        managedLabels: [labels.review, labels.implement, labels.updateBranch, "agent:in-progress", labels.blocked],
         requestLabel: labels.review,
         requiredLabels: ["agent:in-progress"],
       },
@@ -727,7 +727,8 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: repo, DEADLOOP_WORKTREE_ROOT: worktreeRoot,
     DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
-    DEADLOOP_BLOCKED_LABEL: labels.blocked, DEADLOOP_HUMAN_LABEL: labels.human,
+    DEADLOOP_BLOCKED_LABEL: labels.blocked, DEADLOOP_IMPLEMENT_LABEL: labels.implement,
+    DEADLOOP_UPDATE_BRANCH_LABEL: labels.updateBranch,
     HEAD: head, COMMENTS: comments, GH_VIEW_COUNT: ghViewCount,
     INJECT_LIMIT_RACE: options.injectCumulativeLimitRace ? "1" : "0",
     INJECT_BLOCKING_HISTORY_RACE: options.injectBlockingHistoryRace ? "1" : "0", RUNTIME: runtime, WORKTREE: worktree };
@@ -739,8 +740,8 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
           attemptRecordFile: attempt, actorName: "reviewer", projectId: "demo", repoPath: repo,
           worktreeRoot, githubRepo: "owner/repo", stateDir: state, enabledAt: 1,
           projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
-          checkCommand: "npm test", humanLabel: labels.human, reviewLabel: labels.review,
-          blockedLabel: labels.blocked,
+          checkCommand: "npm test", implementLabel: labels.implement, updateBranchLabel: labels.updateBranch,
+          reviewLabel: labels.review, blockedLabel: labels.blocked,
         });
         const command = prompt.match(/run the deterministic dispatcher[^`]*:\n  `([^`]+)`/)?.[1];
         if (!command) throw new Error("rendered dispatcher command was not found");
@@ -771,7 +772,8 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
       `--review-label ${labels.review}`,
       `--in-progress-label agent:in-progress`,
       `--blocked-label ${labels.blocked}`,
-      `--human-label ${labels.human}`,
+      `--implement-label ${labels.implement}`,
+      `--update-branch-label ${labels.updateBranch}`,
     ].every((argument) => dispatcherCommand.includes(argument)),
     githubMutations: fs.existsSync(visibleEffects) ? fs.readFileSync(visibleEffects, "utf8") : "",
   };
@@ -971,13 +973,13 @@ describe("review repair dispatch integration", () => {
       action: result.actions[0],
       dispatcherArgsForwarded: result.dispatcherArgsForwarded,
       labelsPreserved: result.labelsPreserved,
-      managedDefaultHumanLabelWasIgnored: result.reviewerPhase,
+      managedDefaultRequestLabelsWereIgnored: result.reviewerPhase,
       repairCheckout: result.repairWorktreePath.endsWith("/custom repair checkouts/agent-issue-243"),
     }).toEqual({
       action: "review_repair_monitor_request",
       dispatcherArgsForwarded: true,
       labelsPreserved: ["agent:in-progress"],
-      managedDefaultHumanLabelWasIgnored: "workspace_closed",
+      managedDefaultRequestLabelsWereIgnored: "workspace_closed",
       repairCheckout: true,
     });
   });

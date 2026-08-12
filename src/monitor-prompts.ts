@@ -50,8 +50,9 @@ export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   workerModel?: string;
   repairRemote?: string;
   remote?: string;
-  humanLabel: string;
   reviewLabel: string;
+  implementLabel: string;
+  updateBranchLabel: string;
   inProgressLabel: string;
   blockedLabel: string;
   reviewClaim?: Record<string, unknown>;
@@ -109,8 +110,10 @@ function renderAttemptPersistence(input: MonitorPromptBaseInput): string {
 function renderWorkspaceCompletion(input: MonitorPromptBaseInput, expectedLabels: string[] = []): string {
   const labels = expectedLabels.flatMap((label) => ["--expected-label", shellQuotePrompt(label)]).join(" ");
   const reviewer = input as Partial<ReviewerMonitorPromptInput>;
-  const managedLabels = [reviewer.reviewLabel, reviewer.inProgressLabel, reviewer.blockedLabel, reviewer.humanLabel]
-    .filter((label): label is string => Boolean(label));
+  const managedLabels = [
+    reviewer.reviewLabel, reviewer.implementLabel, reviewer.updateBranchLabel,
+    reviewer.inProgressLabel, reviewer.blockedLabel,
+  ].filter((label): label is string => Boolean(label));
   const managed = managedLabels.flatMap((label) => ["--managed-label", shellQuotePrompt(label)]).join(" ");
   const worker = input as Partial<IssueMonitorPromptInput>;
   const workerLabels = worker.readyLabel && worker.implementLabel && worker.reviewLabel
@@ -185,7 +188,8 @@ function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): str
     ["DEADLOOP_REVIEW_REPAIR_REMOTE", input.remote || input.repairRemote || "origin"],
     ["DEADLOOP_REVIEW_LABEL", input.reviewLabel],
     ["DEADLOOP_BLOCKED_LABEL", input.blockedLabel],
-    ["DEADLOOP_HUMAN_LABEL", input.humanLabel],
+    ["DEADLOOP_IMPLEMENT_LABEL", input.implementLabel],
+    ["DEADLOOP_UPDATE_BRANCH_LABEL", input.updateBranchLabel],
     ["DEADLOOP_IN_PROGRESS_LABEL", input.inProgressLabel || "agent:in-progress"],
     ...(input.reviewClaim ? [["DEADLOOP_REVIEW_CLAIM", JSON.stringify(input.reviewClaim)]] : []),
   ].map(([name, value]) => `${name}=${shellQuotePrompt(value)}`).join(" ");
@@ -206,7 +210,8 @@ function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): str
     "--remote", shellQuotePrompt(input.remote || input.repairRemote || "origin"),
     "--review-label", shellQuotePrompt(input.reviewLabel),
     "--blocked-label", shellQuotePrompt(input.blockedLabel),
-    "--human-label", shellQuotePrompt(input.humanLabel),
+    "--implement-label", shellQuotePrompt(input.implementLabel),
+    "--update-branch-label", shellQuotePrompt(input.updateBranchLabel),
     "--in-progress-label", shellQuotePrompt(input.inProgressLabel || "agent:in-progress"),
     ...(input.reviewClaim ? ["--review-claim", shellQuotePrompt(JSON.stringify(input.reviewClaim))] : []),
   ].join(" ");
@@ -214,12 +219,12 @@ function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): str
 }
 
 function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string {
-  const approvedLabels = input.autoMerge
-    ? [input.inProgressLabel || "agent:in-progress"]
-    : [input.humanLabel];
+  // With automatic merge off the approved pull request keeps no agent workflow label at all, so the
+  // workspace completion expects an empty managed set instead of a handoff label.
+  const approvedLabels = input.autoMerge ? [input.inProgressLabel || "agent:in-progress"] : [];
   const acceptedHistory = `${input.promiseFile.replace(/\/[^/]+$/, "")}/pr-review-history-accepted.json`;
   const guardedMerge = `node ${shellQuotePrompt(`${input.automationDir}/merge-reviewed-pr.ts`)} --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-promise ${shellQuotePrompt(input.promiseFile)} --history-observation ${shellQuotePrompt(acceptedHistory)} --in-progress-label ${shellQuotePrompt(input.inProgressLabel || "agent:in-progress")} --blocked-label ${shellQuotePrompt(input.blockedLabel)}${input.reviewClaim ? ` --review-claim ${shellQuotePrompt(JSON.stringify(input.reviewClaim))}` : ""}`;
-  const guardedHumanHandoff = `node ${shellQuotePrompt(`${input.automationDir}/handoff-reviewed-pr.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-promise ${shellQuotePrompt(input.promiseFile)} --history-observation ${shellQuotePrompt(acceptedHistory)} --review-label ${shellQuotePrompt(input.reviewLabel)} --in-progress-label ${shellQuotePrompt(input.inProgressLabel || "agent:in-progress")} --blocked-label ${shellQuotePrompt(input.blockedLabel)} --human-label ${shellQuotePrompt(input.humanLabel)}`;
+  const guardedReadyHandoff = `node ${shellQuotePrompt(`${input.automationDir}/handoff-reviewed-pr.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-promise ${shellQuotePrompt(input.promiseFile)} --history-observation ${shellQuotePrompt(acceptedHistory)} --review-label ${shellQuotePrompt(input.reviewLabel)} --implement-label ${shellQuotePrompt(input.implementLabel)} --update-branch-label ${shellQuotePrompt(input.updateBranchLabel)} --in-progress-label ${shellQuotePrompt(input.inProgressLabel || "agent:in-progress")} --blocked-label ${shellQuotePrompt(input.blockedLabel)}`;
   return `Deterministic driver launched reviewer for PR #${input.prNumber}. Do not launch another agent and do not reselect another PR.
 
 Review binding:
@@ -238,7 +243,7 @@ Completion handling:
 - For outcome=approved, re-check GitHub PR state, reviews, and checks before changing labels.
 - Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork. A local fallback may support human handoff, but it does not authorize automatic merge while GitHub reports missing, pending, failed, or ambiguous checks.
 - The deterministic policy for this monitor is \`autoMerge=${input.autoMerge ? "true" : "false"}\`; do not infer or change it during monitoring or restart cleanup.
-- If autoMerge=false, never merge or change review labels directly; run exactly \`${guardedHumanHandoff}\`. This command re-observes the accepted history under the enablement guard before replacing review workflow labels with exactly \`${input.humanLabel}\`.
+- If autoMerge=false, never merge or change review labels directly; run exactly \`${guardedReadyHandoff}\`. This command re-observes the accepted history under the enablement guard, marks the pull request ready, and removes every agent workflow label. It never adds a human handoff label to a PR.
 - If that command returns action=stale_history, do not hand off as reviewed. It releases the active claim by replacing ${input.inProgressLabel || "agent:in-progress"} with ${input.reviewLabel}; then close the reviewer workspace with \`${renderWorkspaceCompletion(input, [input.reviewLabel])}\`.
 - After an approved result and its policy-specific final labels are confirmed, run \`${renderWorkspaceCompletion(input, approvedLabels)}\`. For changes_requested with reported repair progress the deterministic dispatcher closes the reviewer workspace with ${input.inProgressLabel || "agent:in-progress"} before it opens the separate repair workspace; without repair progress it hands the result to a human instead.
 - If autoMerge=true, retain exactly ${input.inProgressLabel || "agent:in-progress"} while applying unchanged merge gates. Merge only after the head-bound review approval, reported GitHub CI checks, and repository mergeability gates all pass. Perform the merge only by running exactly \`${guardedMerge}\`; never run \`gh pr merge\` directly. This binds GitHub's mutation to the reviewed head while holding the enablement guard.
