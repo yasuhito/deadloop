@@ -181,15 +181,6 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 /deadloop-abandon-attempt <attempt-id>  # doctor に表示された場合のみ
 ```
 
-運用者向けの環境変数:
-
-```bash
-DEADLOOP_PROJECTS=my-project pi
-DEADLOOP=off pi
-DEADLOOP_AUTOMATIONS=off pi
-DEADLOOP_DEBUG=1 pi
-```
-
 ## ドキュメント
 
 - 設定ガイド: [docs/public-package-setup.md](docs/public-package-setup.md)

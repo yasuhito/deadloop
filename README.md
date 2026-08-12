@@ -181,15 +181,6 @@ Run these commands from the Pi session in the target repository:
 /deadloop-abandon-attempt <attempt-id>  # only when doctor presents it
 ```
 
-Operator environment variables:
-
-```bash
-DEADLOOP_PROJECTS=my-project pi
-DEADLOOP=off pi
-DEADLOOP_AUTOMATIONS=off pi
-DEADLOOP_DEBUG=1 pi
-```
-
 ## Documentation
 
 - Setup guide: [docs/public-package-setup.md](docs/public-package-setup.md)
