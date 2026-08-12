@@ -207,10 +207,6 @@ describe("PR work-authority reconciliation", () => {
     expect(postBlockRequestIsEligible(blockedOnAnEarlierRevision({ unauthenticated: true }))).toBe(false);
   });
 
-  it("does not let report_received imply active work", () => {
-    expect(reconcilePrWorkAuthority({ ...base, journalPhase: "report_received", claim: { kind: "missing" } }).action).toBe("block");
-  });
-
   it("does not reuse a blocked event from before an interrupted block transition", async () => {
     const result = await applyPrWorkAuthorityReconciliation(
       { ...base, pr: { ...base.pr, labels: ["agent:blocked", "customer:keep"] }, claim: { kind: "expired" } },
@@ -605,6 +601,15 @@ describe("reconciliation entrypoint", () => {
     const github = {
       replacePrLabels: () => {},
       listPrLabels: () => live.map((name) => ({ name })),
+    };
+    expect(() => replaceReconciledLabels(github, "owner/repo", 42, ["agent:in-progress", "customer:keep"], ["agent:blocked"], managedLabels))
+      .toThrow("PR label recovery postcondition was not reached");
+  });
+
+  it("fails closed when a preserved unrelated label does not survive a request-invalidating mutation", () => {
+    const github = {
+      replacePrLabels: () => {},
+      listPrLabels: () => [{ name: "agent:blocked" }],
     };
     expect(() => replaceReconciledLabels(github, "owner/repo", 42, ["agent:in-progress", "customer:keep"], ["agent:blocked"], managedLabels))
       .toThrow("PR label recovery postcondition was not reached");

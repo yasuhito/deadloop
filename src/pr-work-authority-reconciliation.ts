@@ -23,7 +23,6 @@ type ReconciliationInput = {
   requestLabels: string[];
   inProgressLabel: string;
   blockedLabel: string;
-  journalPhase?: string;
 };
 
 type ReconciliationDecision =
@@ -67,6 +66,11 @@ function releaseLabels(input: ReconciliationInput): string[] {
  * bind expiry invalidation to the resulting authenticated blocked event. A decision carrying
  * `invalidatesRequests` must be applied as a full replacement so a request queued during the
  * mutation cannot survive its own cutoff; the other transitions preserve concurrent requests.
+ *
+ * A full replacement carries the unrelated labels its immediately preceding read observed, and the
+ * caller verifies they survived. A label added after that read is outside the replacement and is
+ * not restored here, unlike the review-claim transition, which repairs raced labels from the
+ * timeline.
  */
 function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDecision {
   if (input.claim.kind === "authorized" && input.runtime.kind === "live_matching_owner") {
