@@ -11,7 +11,7 @@ deadloop 自体の開発も、deadloop で回します。
 For public users, use the same safe rollout model:
 
 1. **Issue coordination only** — enable `issue-coordinator` first. It may create implementation PRs, but humans still review and merge.
-2. **PR reviewer without auto-merge** — add `pr-reviewer` only after issue coordination is reliable. Keep `autoMerge: false` so reviewed PRs are handed to `ready-for-human`.
+2. **PR reviewer without auto-merge** — add `pr-reviewer` only after issue coordination is reliable. Keep `autoMerge: false` so an approved PR becomes ready with no agent workflow label left.
 3. **Conditional auto-merge** — consider `autoMerge: true` only after branch protection, CI, review expectations, manual approval/dry-run practices, and stop conditions are proven.
 
 1. **Phase 1: 実装 PR 作成まで**
@@ -59,7 +59,7 @@ For public users, use the same safe rollout model:
 }
 ```
 
-`pr-reviewer` を使う場合も最初は `autoMerge: false` のままにし、レビューエージェントの確認と検証が終わった PR を `ready-for-human` に渡す運用で試します。`autoMerge: true` は Phase 3 まで使いません。
+`pr-reviewer` を使う場合も最初は `autoMerge: false` のままにし、レビューエージェントの確認と検証が終わった PR を ready へ変えて agent 系ワークフローラベルを残さない運用で試します。`autoMerge: true` は Phase 3 まで使いません。
 
 ## 起動方法
 
@@ -87,6 +87,7 @@ gh label create ready-for-agent --repo yasuhito/deadloop --color 0e8a16 || true
 gh label create agent:implement --repo yasuhito/deadloop --color 1d76db || true
 gh label create agent:in-progress --repo yasuhito/deadloop --color fbca04 || true
 gh label create agent:review --repo yasuhito/deadloop --color 5319e7 || true
+gh label create agent:update-branch --repo yasuhito/deadloop --color 006b75 || true
 gh label create agent:blocked --repo yasuhito/deadloop --color b60205 || true
 gh label create ready-for-human --repo yasuhito/deadloop --color d93f0b || true
 gh label create needs-info --repo yasuhito/deadloop --color fef2c0 || true
@@ -130,7 +131,7 @@ deadloop の試験運用を安全に進めるため、PR reviewer の自動マ�
 
 ## What to build
 - project 設定に `autoMerge` または同等の安全フラグを追加する。
-- `pr-reviewer` プロンプトに、そのフラグが無効の場合はマージせず `ready-for-human` に渡す方針を反映する。
+- `pr-reviewer` プロンプトに、そのフラグが無効の場合はマージせず ready の PR として人間へ渡す方針を反映する。
 - 既定値は安全側に倒す。
 - README または docs に設定例を追記する。
 

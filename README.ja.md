@@ -59,19 +59,23 @@ flowchart TD
     W["`**実装中**
     ready-for-agent + agent:in-progress`"]
     R["`**PR のレビュー待ち**
-    agent:review`"]
+    draft PR + agent:review`"]
     V["`**レビューと修正**
     agent:in-progress`"]
+    U["`**branch 更新待ち**
+    agent:update-branch`"]
     H["`**人間へ引き渡し**
-    ready-for-human`"]
+    ready の PR、agent 系ラベルなし`"]
     M["マージ済み"]
     B["`**対応が必要**
     agent:blocked`"]
 
     I -->|deadloop が Issue を取得| W
-    W -->|PR を作成| R
+    W -->|draft PR を作成| R
     R -->|deadloop がレビューを取得| V
     V -->|修正を push| R
+    V -->|マージ競合| U
+    U -->|branch を更新| R
     V -->|承認・autoMerge 無効| H
     V -->|承認・autoMerge 有効| M
     H -->|人間がマージ| M
@@ -80,8 +84,8 @@ flowchart TD
 ```
 
 1. **実装を依頼する** — `ready-for-agent` は、エージェントが対応できる Issue であることを示します。`agent:implement` を付けると実装を依頼できます。deadloop が Issue を取得する前に `agent:implement` を外すと、依頼を取り消せます。
-2. **deadloop に任せる** — deadloop は依頼ラベルを `agent:in-progress` に置き換え、`agent:review` を付けた PR を作成します。必要に応じて、レビューと修正を繰り返します。
-3. **完了または対応する** — 承認された PR は、自動マージが無効なら `ready-for-human` に移り、有効ならマージされます。`agent:blocked` が付くとループは止まります。Issue または PR のコメントに記載された原因を解消し、案内された復旧手順に従ってください。
+2. **deadloop に任せる** — deadloop は依頼ラベルを `agent:in-progress` に置き換え、`agent:review` を付けた draft PR を作成します。必要に応じて、レビューと修正を繰り返します。PR の作業は要求ラベルだけが待ち行列になり、`agent:update-branch`、`agent:implement`、`agent:review` の順に一度に 1 件ずつ処理されます。
+3. **完了または対応する** — 承認された PR は、自動マージが無効なら ready へ変わり agent 系ワークフローラベルが外れます。有効ならマージされます。`ready-for-human` は Issue の分類用ラベルであり、PR には付きません。`agent:blocked` が付くとループは止まります。Issue または PR のコメントに記載された原因を解消し、案内された復旧手順に従ってください。
 
 ## 運用コマンド
 
@@ -176,7 +180,7 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 ## 段階的に導入する
 
 1. **Issue の調整のみ** — 慎重に導入したい場合は、ここから始めます。PR のレビューとマージは人間が行います。
-2. **PR の自動レビュー** — 標準の PR レビューを `autoMerge: false` で使用します。レビュー済み PR は `ready-for-human` に移して人間へ引き渡します。外部レビューの変更処理は現在利用できません。`externalReview` を有効にしても利用可能にはなりません。
+2. **PR の自動レビュー** — 標準の PR レビューを `autoMerge: false` で使用します。承認された PR は ready になり agent 系ワークフローラベルが残らないので、そこから先は人間が引き取ります。外部レビューの変更処理は現在利用できません。`externalReview` を有効にしても利用可能にはなりません。
 3. **任意の自動マージ** — ブランチ保護、CI、レビュー要件、dry-run または人間による承認手順、停止条件が十分に実証されてから、`autoMerge: true` を検討してください。
 
 ## ドキュメント

@@ -59,19 +59,23 @@ flowchart TD
     W["`**Implementation**
     ready-for-agent + agent:in-progress`"]
     R["`**PR review requested**
-    agent:review`"]
+    draft PR + agent:review`"]
     V["`**Review and repair**
     agent:in-progress`"]
-    H["`**Human handoff**
-    ready-for-human`"]
+    U["`**Branch update requested**
+    agent:update-branch`"]
+    H["`**Ready for people**
+    ready PR, no agent label`"]
     M["Merged"]
     B["`**Needs attention**
     agent:blocked`"]
 
     I -->|deadloop claims Issue| W
-    W -->|PR created| R
+    W -->|draft PR created| R
     R -->|deadloop claims review| V
     V -->|changes pushed| R
+    V -->|merge conflict| U
+    U -->|branch updated| R
     V -->|approved; autoMerge off| H
     V -->|approved; autoMerge on| M
     H -->|human merges| M
@@ -80,8 +84,8 @@ flowchart TD
 ```
 
 1. **Request implementation** — `ready-for-agent` marks an Issue as eligible. `agent:implement` requests implementation. Remove `agent:implement` before deadloop claims the Issue to cancel the request.
-2. **Let deadloop work** — deadloop replaces the request label with `agent:in-progress`, creates a PR with `agent:review`, and repeats review and repair as needed.
-3. **Finish or intervene** — An approved PR moves to `ready-for-human` when automatic merge is off, or is merged when it is on. `agent:blocked` stops the loop when deadloop needs help; fix the cause reported in the Issue or PR comment, then follow its recovery instructions.
+2. **Let deadloop work** — deadloop replaces the request label with `agent:in-progress`, creates a draft PR with `agent:review`, and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
+3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help; fix the cause reported in the Issue or PR comment, then follow its recovery instructions.
 
 ## Operator commands
 
@@ -176,7 +180,7 @@ See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for details.
 ## Roll out in phases
 
 1. **Issue coordination only** — Start here for a slow rollout. Humans still review and merge PRs.
-2. **Automated PR review** — Use the standard PR reviewer with `autoMerge: false`. Reviewed PRs move to `ready-for-human`. External-review mutations are currently unavailable; enabling `externalReview` does not make them available.
+2. **Automated PR review** — Use the standard PR reviewer with `autoMerge: false`. Approved PRs become ready with no agent workflow label left, so people take them from there. External-review mutations are currently unavailable; enabling `externalReview` does not make them available.
 3. **Optional auto-merge** — Consider `autoMerge: true` only after proving branch protection, CI, review expectations, dry-run or manual approval practices, and stop conditions.
 
 ## Documentation
