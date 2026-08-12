@@ -285,16 +285,16 @@ function postBlockRequestIsEligible(input: {
   for (const comment of input.comments) {
     const author = String(comment.author?.login || comment.user?.login || "").toLowerCase();
     const marker = parseRecoveryMarker(comment.body);
-    if (!authorized.has(author) || !marker
-      || Number(marker.number) !== input.pr.number
-      || String(marker.head || "").toLowerCase() !== input.pr.headRefOid.toLowerCase()) continue;
+    if (!authorized.has(author) || !marker || Number(marker.number) !== input.pr.number) continue;
+    // A marker records the revision its block covered, but every block this PR ever reached still
+    // orders the requests that follow it. Counting only markers on the current head would leave a
+    // PR whose author pushed a fix with no cutoff at all, and a request that can never be selected.
     const cutoff = input.events.find((event) => eventId(event) === String(marker.cutoffEventId || "")
       && eventAction(event) === "labeled" && eventLabel(event) === input.blockedLabel && eventActor(event) === author);
     if (cutoff) cutoffs.push(cutoff);
   }
-  // Repeated block cycles on one head leave several bound markers. Only the latest
-  // authenticated blocked transition still authorizes work: an earlier cutoff was
-  // itself invalidated by the later one.
+  // Repeated block cycles leave several bound markers. Only the latest authenticated blocked
+  // transition still authorizes work: an earlier cutoff was itself invalidated by the later one.
   const latest = cutoffs.sort(compareGithubEvents).at(-1);
   return latest !== undefined && requestAfterInvalidationCutoff(input.request, latest);
 }

@@ -77,6 +77,25 @@ function twoBlockCycles(request: { id: string; created_at: string }) {
   };
 }
 
+// deadloop blocked the PR while its head was an earlier revision, so its one recovery marker names
+// that revision rather than the head the PR carries now. Passing unauthenticated drops the blocked
+// timeline event the marker points at, leaving the cutoff unproven.
+function blockedOnAnEarlierRevision(options: { request?: { id: string; created_at: string }; unauthenticated?: boolean } = {}) {
+  const cutoff = { id: "30", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } };
+  const request = {
+    ...(options.request || { id: "31", created_at: "2026-08-01T10:02:00Z" }),
+    event: "labeled", actor: { login: "human" }, label: { name: "agent:review" },
+  };
+  return {
+    pr: base.pr,
+    request,
+    events: options.unauthenticated ? [request] : [cutoff, request],
+    comments: [{ author: { login: "deadloop-bot" }, body: recoveryComment(base.pr.number, "b".repeat(40), "claim_expired", "30") }],
+    authorizedLogins: ["deadloop-bot"],
+    blockedLabel: "agent:blocked",
+  };
+}
+
 describe("PR work-authority reconciliation", () => {
   it("keeps a live matching claim unchanged", () => {
     expect(reconcilePrWorkAuthority(base).action).toBe("keep_active");
@@ -174,6 +193,18 @@ describe("PR work-authority reconciliation", () => {
 
   it("selects a request that follows the latest blocked cutoff", () => {
     expect(postBlockRequestIsEligible(twoBlockCycles({ id: "33", created_at: "2026-08-01T10:04:00Z" }))).toBe(true);
+  });
+
+  it("selects a request added after a block the author has since pushed past", () => {
+    expect(postBlockRequestIsEligible(blockedOnAnEarlierRevision())).toBe(true);
+  });
+
+  it("rejects a request that predates a block the author has since pushed past", () => {
+    expect(postBlockRequestIsEligible(blockedOnAnEarlierRevision({ request: { id: "29", created_at: "2026-08-01T10:00:00Z" } }))).toBe(false);
+  });
+
+  it("rejects a post-block request while its bound blocked event stays unauthenticated", () => {
+    expect(postBlockRequestIsEligible(blockedOnAnEarlierRevision({ unauthenticated: true }))).toBe(false);
   });
 
   it("does not reuse a blocked event from before an interrupted block transition", async () => {

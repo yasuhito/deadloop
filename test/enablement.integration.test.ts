@@ -170,6 +170,8 @@ async function loadExtension(
     beforeEnablementProjectCheck?: (worktreePath: string) => Promise<void>;
     runAutomationScript?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
     herdrPreflight?: () => void;
+    // null keeps the hook off the testing object so the host runs its own reconciliation.
+    reconcilePrWorkAuthority?: (() => Promise<{ reconciled: boolean; reason: string }>) | null;
     schedulerLockCapabilityPreflight?: () => void;
     recoveryFixture?: {
       issues: unknown[];
@@ -278,6 +280,9 @@ async function loadExtension(
       beforeEnablementWorktreeCreate: options.beforeEnablementWorktreeCreate,
       beforeEnablementProjectCheck: options.beforeEnablementProjectCheck,
       herdrPreflight: options.herdrPreflight || (() => undefined),
+      ...(options.reconcilePrWorkAuthority === null
+        ? {}
+        : { reconcilePrWorkAuthority: options.reconcilePrWorkAuthority || (async () => ({ reconciled: true, reason: "" })) }),
       schedulerLockCapabilityPreflight: options.schedulerLockCapabilityPreflight,
     },
   });
@@ -309,6 +314,52 @@ function writeConfig(root: string, repoPath: string, options: { autoMerge?: bool
 
 async function invoke(handler: CommandHandler, cwd: string, schedulerState: Pick<CommandContext, "isIdle" | "hasPendingMessages"> = {}): Promise<void> {
   await handler("", { cwd, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined }, ...schedulerState });
+}
+
+function reviewerFixtureRepository(): { root: string; repoPath: string } {
+  const { root, repoPath } = fixtureRepository();
+  writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({
+    checkCommand: "true",
+    automations: [{
+      id: "demo:pr-reviewer",
+      name: "demo PR reviewer",
+      promptFile: "pr-reviewer.prompt.md",
+      precheckFile: "pr-reviewer.precheck.sh",
+      driverFile: "pr-reviewer-driver.ts",
+    }],
+  }));
+  git(repoPath, ["add", "deadloop.json"]);
+  git(repoPath, ["commit", "--quiet", "-m", "configure reviewer fixture"]);
+  git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+  return { root, repoPath };
+}
+
+// Passing null leaves the reconciliation hook off the testing object, so the host runs its own
+// reconciliation and fails on the unstubbed driver command. The scheduler must then hold and
+// publish the blocker rather than continue to candidate selection.
+async function unreconciledAuthorityStatus(): Promise<string> {
+  const { root, repoPath } = reviewerFixtureRepository();
+  const statuses: string[] = [];
+  const extension = await loadExtension(root, {
+    authenticatedLogin: "Deadloop-Bot",
+    reconcilePrWorkAuthority: null,
+    runAutomationScript: async () => ({ code: 0, stdout: "", stderr: "" }),
+  });
+  await extension.commands.get("deadloop-enable")!("", {
+    cwd: repoPath,
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      notify: () => undefined,
+      setStatus: (_key: string, value: string | undefined) => { if (value) statuses.push(value); },
+    },
+  });
+  const held = () => statuses.find((status) => status.includes("could not be reconciled safely"));
+  const deadline = Date.now() + SCHEDULED_DRIVER_WAIT_MS;
+  while (!held() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return held() || statuses.join(" | ");
 }
 
 async function waitForFile(filePath: string): Promise<void> {
@@ -1112,20 +1163,7 @@ describe("enablement command integration", () => {
   });
 
   it("passes the default enablement identity to the reviewer driver environment", async () => {
-    const { root, repoPath } = fixtureRepository();
-    writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({
-      checkCommand: "true",
-      automations: [{
-        id: "demo:pr-reviewer",
-        name: "demo PR reviewer",
-        promptFile: "pr-reviewer.prompt.md",
-        precheckFile: "pr-reviewer.precheck.sh",
-        driverFile: "pr-reviewer-driver.ts",
-      }],
-    }));
-    git(repoPath, ["add", "deadloop.json"]);
-    git(repoPath, ["commit", "--quiet", "-m", "configure reviewer fixture"]);
-    git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+    const { root, repoPath } = reviewerFixtureRepository();
     let reviewerCommand = "";
     const extension = await loadExtension(root, {
       authenticatedLogin: "Deadloop-Bot",
@@ -1147,6 +1185,10 @@ describe("enablement command integration", () => {
     }
 
     expect(reviewerCommand).toContain("DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS='deadloop-bot'");
+  }, SCHEDULED_DRIVER_TIMEOUT_MS);
+
+  it("names the blocker in the host status when PR work authority cannot be reconciled", async () => {
+    expect(await unreconciledAuthorityStatus()).toContain("the reconciliation driver returned no result");
   }, SCHEDULED_DRIVER_TIMEOUT_MS);
 
   it("records prepared verification worktree intent before creation", async () => {

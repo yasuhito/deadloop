@@ -18,6 +18,8 @@ type GithubEffect = {
 type DriverResult = {
   driverAction?: string;
   comment?: string;
+  prNumber?: number;
+  decision?: { skipped?: Array<{ number?: number; reason?: string }> };
   githubEffects?: GithubEffect[];
   testAdapterEffects?: { herdrStarts?: unknown[]; githubComments?: unknown[]; labelReplacements?: unknown[] };
 };
@@ -108,6 +110,14 @@ Given("There is a pull request being reviewed by another agent.", function (this
 
 Given("There is a blocked pull request", function (this: SelectionWorld) {
   setFixture(this, "precheck-blocked.json");
+});
+
+Given("A blocked pull request has a new Agent request after its author pushed a fix", function (this: SelectionWorld) {
+  setFixture(this, "precheck-blocked-request-after-push.json");
+});
+
+Given("A blocked pull request has only an Agent request that predates its block", function (this: SelectionWorld) {
+  setFixture(this, "precheck-blocked-request-before-block.json");
 });
 
 Given("Reviewable and unreviewable pull requests are both available", function (this: SelectionWorld) {
@@ -233,6 +243,14 @@ Then("deadloop waits for external review without mutation", function (this: Sele
     labels: this.driverResult?.testAdapterEffects?.labelReplacements?.length ?? 0,
     starts: this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0,
   }, { action: "wait", comments: 0, labels: 0, starts: 0 });
+});
+
+Then("deadloop stops skipping pull request #14 as blocked", function (this: SelectionWorld) {
+  assert.equal(this.driverResult?.prNumber, 14);
+});
+
+Then("deadloop skips pull request #14 as blocked", function (this: SelectionWorld) {
+  assert.deepEqual(this.driverResult?.decision?.skipped, [{ number: 14, reason: "blocked" }]);
 });
 
 Then("deadloop starts the Reviewer for normal review", function (this: SelectionWorld) {
