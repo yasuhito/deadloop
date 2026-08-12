@@ -55,15 +55,23 @@ describe("current review claim configuration", () => {
     const value = fixture({}, { automations: [{ id: "demo:issue-coordinator", driverFile: "issue-coordinator-driver.ts" }, { id: "demo:pr-reviewer", driverFile: "pr-reviewer-driver.ts", maxRuntimeSeconds: 3500, shutdownGraceSeconds: 100 }] });
     replacePolicy(value.repoPath, { automations: [{ id: "demo:issue-coordinator", driverFile: "issue-coordinator-driver.ts" }, { id: "demo:pr-reviewer", driverFile: "pr-reviewer-driver.ts", maxRuntimeSeconds: 1200, shutdownGraceSeconds: 50 }] });
 
-    expect(loadCurrentReviewClaimConfiguration(value.stateDir, value.enabled, "deadloop-bot").authoritySeconds).toBe(1250);
+    expect(loadCurrentReviewClaimConfiguration(value.stateDir, value.enabled, "deadloop-bot", "reviewer").authoritySeconds).toBe(1250);
   });
 
   it("merges partial local and repository label changes per canonical fields", () => {
     const value = fixture({ labels: { review: "local:review" } }, { labels: { blocked: "policy:blocked" } });
 
-    expect(loadCurrentReviewClaimConfiguration(value.stateDir, value.enabled, "deadloop-bot").managedLabels).toEqual([
+    expect(loadCurrentReviewClaimConfiguration(value.stateDir, value.enabled, "deadloop-bot", "reviewer").managedLabels).toEqual([
       "local:review", "agent:implement", "agent:update-branch", "agent:in-progress", "policy:blocked",
     ]);
+  });
+
+  it("rejects a claim whose role names no configured request label", () => {
+    const value = fixture();
+
+    expect(() => loadCurrentReviewClaimConfiguration(value.stateDir, value.enabled, "deadloop-bot", "")).toThrow(
+      "no request label",
+    );
   });
 
   it("rejects a configuration matching only the enabled repository name", () => {

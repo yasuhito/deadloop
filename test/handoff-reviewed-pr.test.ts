@@ -6,7 +6,7 @@ const expectedHead = "a".repeat(40);
 const acceptedHistory = { repository: "owner/repo", pullRequestNumber: 24, revision: "accepted", history: {} };
 const livePr = {
   state: "OPEN",
-  isDraft: false,
+  isDraft: true,
   headRefOid: expectedHead,
   labels: [{ name: "agent:in-progress" }],
 };
@@ -30,8 +30,9 @@ function runHandoff(
     {
       projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1,
       pr: "24", expectedHead, reviewPromise: "/state/promise.json", historyObservation: "/state/history.json",
-      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress",
-      blockedLabel: "agent:blocked", humanLabel: "ready-for-human",
+      reviewLabel: "agent:review", implementLabel: "agent:implement",
+      updateBranchLabel: "agent:update-branch", inProgressLabel: "agent:in-progress",
+      blockedLabel: "agent:blocked",
     },
     {
       withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => unknown) => operation({}, () => {}),
@@ -50,7 +51,7 @@ function runHandoff(
   return { result, commands };
 }
 
-describe("reviewed PR human handoff", () => {
+describe("reviewed PR ready handoff", () => {
   it("releases the active review claim when history changes after dispatcher approval", () => {
     const run = runHandoff([acceptedHistory, { revision: "new-comment" }]);
 
@@ -63,14 +64,33 @@ describe("reviewed PR human handoff", () => {
     });
   });
 
-  it("hands off only after both history observations remain current", () => {
+  it("marks the reviewed draft ready only after both history observations remain current", () => {
+    const run = runHandoff([acceptedHistory, acceptedHistory]);
+
+    expect(run.commands.at(-2)).toEqual(["gh", "pr", "ready", "24", "-R", "owner/repo"]);
+  });
+
+  it("removes every agent workflow label after the pull request becomes ready", () => {
     const run = runHandoff([acceptedHistory, acceptedHistory]);
 
     expect(run.commands.at(-1)).toEqual([
       "gh", "pr", "edit", "24", "-R", "owner/repo",
-      "--remove-label", "agent:in-progress", "--remove-label", "agent:review",
-      "--add-label", "ready-for-human",
+      "--remove-label", "agent:review", "--remove-label", "agent:implement",
+      "--remove-label", "agent:update-branch", "--remove-label", "agent:in-progress",
+      "--remove-label", "agent:blocked",
     ]);
+  });
+
+  it("adds no human handoff label to the reviewed pull request", () => {
+    const run = runHandoff([acceptedHistory, acceptedHistory]);
+
+    expect(run.commands.flat()).not.toContain("ready-for-human");
+  });
+
+  it("leaves an already ready pull request untouched by the ready command", () => {
+    const run = runHandoff([acceptedHistory, acceptedHistory], { prViews: [{ ...livePr, isDraft: false }] });
+
+    expect(run.commands.some((command) => command[2] === "ready")).toBe(false);
   });
 
   it("rechecks handoff eligibility after the final history observation", () => {
@@ -81,7 +101,7 @@ describe("reviewed PR human handoff", () => {
 
   it("stops when a concurrent workflow transition removed the active claim during observation", () => {
     expect(() => runHandoff([acceptedHistory, acceptedHistory], {
-      prViews: [livePr, { ...livePr, labels: [{ name: "ready-for-human" }] }],
+      prViews: [livePr, { ...livePr, labels: [{ name: "customer:urgent" }] }],
     })).toThrow("the active review claim state is no longer present");
   });
 

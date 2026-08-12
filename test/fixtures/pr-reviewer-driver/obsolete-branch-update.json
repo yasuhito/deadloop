@@ -2,27 +2,23 @@
   "prs": [
     {
       "number": 31,
-      "title": "Conflicting PR",
+      "title": "Recovered PR",
       "url": "https://github.com/owner/repo/pull/31",
       "updatedAt": "2026-07-08T00:00:00Z",
       "headRefName": "agent/issue-31",
       "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "isCrossRepository": false,
-      "isDraft": false,
+      "isDraft": true,
       "labels": [
         {
           "name": "agent:update-branch"
         }
       ],
       "statusCheckRollup": [],
-      "comments": [
-        {
-          "body": "<!-- deadloop:branch-update-attempt key=63bdfe090637cf9ff5d4 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa base=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->"
-        }
-      ],
+      "comments": [],
       "reviewRequests": [],
-      "mergeable": "CONFLICTING",
-      "mergeStateStatus": "DIRTY",
+      "mergeable": "MERGEABLE",
+      "mergeStateStatus": "CLEAN",
       "timelineEvents": [
         {
           "id": "branch-update-31",
@@ -39,10 +35,5 @@
     "result": {
       "agents": []
     }
-  },
-  "branchUpdate": {
-    "action": "delegate_worker",
-    "reason": "merge_conflict",
-    "baseOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   }
 }

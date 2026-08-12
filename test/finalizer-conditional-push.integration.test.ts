@@ -88,7 +88,7 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
   };
   const reviewClaim = {
     binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-    reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const common = {
     repo,
@@ -178,7 +178,7 @@ process.exit(result.status ?? 1);
     };
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
       attemptId: "attempt", launchUuid: "launch", project: "demo", repository: "owner/repo",

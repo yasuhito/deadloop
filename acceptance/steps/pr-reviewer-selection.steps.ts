@@ -6,7 +6,7 @@ import path from "node:path";
 import { Given, Then, When } from "@cucumber/cucumber";
 import { runPrReviewerDriverFixture } from "../support/pr-reviewer-driver";
 
-const { defaultDecisionConfig, selectPrForReview, workingReviewerPrNumbers } = require("../../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+const { defaultDecisionConfig, selectPrRequestTarget, workingReviewerPrNumbers } = require("../../extensions/deadloop/automations/pr-reviewer-decisions.ts");
 
 type PullRequest = Record<string, unknown>;
 type GithubEffect = {
@@ -158,7 +158,7 @@ When("deadloop searches for review target", function (this: SelectionWorld) {
     projectId: "demo",
     automationLogin: "deadloop-bot",
   });
-  this.decision = selectPrForReview(readFixture(this.fixtureName), config, workingReviewerPrNumbers(agents, config.projectId, this.attempts || [], "owner/repo"));
+  this.decision = selectPrRequestTarget(readFixture(this.fixtureName), config, workingReviewerPrNumbers(agents, config.projectId, this.attempts || [], "owner/repo"));
 });
 
 When("deadloop decides how to handle external reviews", function (this: SelectionWorld) {
@@ -196,7 +196,7 @@ Given("Another agent has started the review after selection.", function (this: S
   if (!this.fixtureName) throw new Error("review state is missing");
   const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo", automationLogin: "deadloop-bot" });
   this.prs = readFixture(this.fixtureName);
-  const firstDecision = selectPrForReview(this.prs, config);
+  const firstDecision = selectPrRequestTarget(this.prs, config);
   const selected = this.prs.find((pr) => pr.number === firstDecision.number);
   if (!selected) throw new Error("selected pull request is missing");
   selected.labels = [...(selected.labels as unknown[]), { name: "agent:in-progress" }];
@@ -208,7 +208,7 @@ Given("Another agent has started the review after selection.", function (this: S
 When("The next selection cycle begins", function (this: SelectionWorld) {
   if (!this.prs || !this.agents) throw new Error("review state is missing");
   const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo", automationLogin: "deadloop-bot" });
-  this.decision = selectPrForReview(this.prs, config, workingReviewerPrNumbers(this.agents, config.projectId, this.attempts || [], "owner/repo"));
+  this.decision = selectPrRequestTarget(this.prs, config, workingReviewerPrNumbers(this.agents, config.projectId, this.attempts || [], "owner/repo"));
 });
 
 Then("deadloop selects pull request #{int} for review", function (this: SelectionWorld, number: number) {
@@ -257,11 +257,10 @@ Then("deadloop starts the Reviewer for normal review", function (this: Selection
   assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length, 1);
 });
 
-Then("deadloop leaves the draft pull request untouched before claim", function (this: SelectionWorld) {
+Then("deadloop claims the draft pull request's review request", function (this: SelectionWorld) {
   assert.deepEqual({
     action: this.driverResult?.driverAction,
-    comments: this.driverResult?.testAdapterEffects?.githubComments?.length ?? 0,
     labels: this.driverResult?.testAdapterEffects?.labelReplacements?.length ?? 0,
     starts: this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0,
-  }, { action: "draft_unclaimed", comments: 0, labels: 0, starts: 0 });
+  }, { action: "reviewer_monitor_request", labels: 1, starts: 1 });
 });

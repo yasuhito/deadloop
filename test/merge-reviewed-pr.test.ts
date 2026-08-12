@@ -55,8 +55,9 @@ function runMerge(options: {
       authority: { durationSeconds: 3600 }, activeState: activeReviewState,
     },
     commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-    reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
+  let markedReady = false;
   let action: number;
   try {
     action = mergeReviewedPr(
@@ -126,9 +127,14 @@ function runMerge(options: {
         if (args[1] === "repo" && args[2] === "view") {
           return { status: 0, stdout: JSON.stringify(options.repository || { id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
         }
+        if (args[1] === "pr" && args[2] === "ready") {
+          markedReady = true;
+          return { status: 0, stdout: "", stderr: "" };
+        }
         if (args[2] === "view") {
           prReads += 1;
-          const basePr = options.pr || eligiblePr;
+          const observed = options.pr || eligiblePr;
+          const basePr = markedReady ? { ...observed, isDraft: false, mergeStateStatus: "CLEAN" } : observed;
           const finalPr = prReads >= 3 && options.finalRace === "head"
             ? { ...basePr, headRefOid: "b".repeat(40) }
             : prReads >= 3 && options.finalRace === "labels"
@@ -311,7 +317,25 @@ describe("reviewed PR merge", () => {
   });
 
   it("fails closed when the PR becomes a draft", () => {
-    expect(() => runMerge({ pr: { ...eligiblePr, isDraft: true } })).toThrow("PR is draft");
+    expect(() => runMerge({ pr: { ...eligiblePr, isDraft: undefined } })).toThrow("draft state is unknown");
+  });
+
+  it("marks a reviewed draft ready before the guarded merge", () => {
+    const run = runMerge({ pr: { ...eligiblePr, isDraft: true, mergeStateStatus: "DRAFT" } });
+
+    expect(run.commands.some((command) => command[1] === "pr" && command[2] === "ready")).toBe(true);
+  });
+
+  it("merges the reviewed draft after it becomes ready", () => {
+    const run = runMerge({ pr: { ...eligiblePr, isDraft: true, mergeStateStatus: "DRAFT" } });
+
+    expect(run.commands.at(-1)?.slice(1, 3)).toEqual(["pr", "merge"]);
+  });
+
+  it("does not repeat the ready transition for a pull request that is already ready", () => {
+    const run = runMerge({});
+
+    expect(run.commands.some((command) => command[1] === "pr" && command[2] === "ready")).toBe(false);
   });
 
   it("fails closed when GitHub reports mergeability as unknown", () => {

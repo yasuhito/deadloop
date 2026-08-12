@@ -52,13 +52,15 @@ GitHubの必須承認は、`autoMerge: true`でマージする場合の最終条
 
 各結果は対象head SHA、取得時刻、取得元を持つ。説明の改善案など、マージを止めない指摘は本文に残し、方針上は`passed`として扱える。`changes-requested`または`unavailable`を`passed`へ推測変換しない。
 
-外部レビューが`changes-requested`でも、deadloopレビューを実行して人間へまとめて渡す。外部レビューが一定時間応答しなければ`unavailable`として待機を終え、deadloopレビューを実行する。どちらの場合も成果と取得できた証拠を`ready-for-human`へ引き渡すが、自動マージ候補にはしない。
+外部レビューが`changes-requested`でも、deadloopレビューを実行して人間へまとめて渡す。外部レビューが一定時間応答しなければ`unavailable`として待機を終え、deadloopレビューを実行する。どちらの場合も成果と取得できた証拠を人間へ引き渡すが、自動マージ候補にはしない。
 
 ### 5. Keep human handoff and merge authorization separate
 
-`autoMerge: false`は、人間の確認を要求する唯一のdeadloop設定とする。専用の`requireHumanApproval`設定は追加しない。自動レビューが終わった時点で、GitHubの人間承認がまだなくても`ready-for-human`へ移す。
+`autoMerge: false`は、人間の確認を要求する唯一のdeadloop設定とする。専用の`requireHumanApproval`設定は追加しない。自動レビューが終わった時点で、GitHubの人間承認がまだなくても人間への引き渡しへ移す。
 
-`ready-for-human`は「マージ可能」や「人間承認済み」ではなく、deadloopの担当する確認が終わり、取得できなかった証拠、修正要求、残る判断を含めて次の操作を人間へ渡した状態を意味する。
+PRの引き渡しは、[GitHubのAgent要求をワークフロー状態の正本にする](https://github.com/yasuhito/deadloop/issues/238)以降、draftをreadyへ変更しAgent系ワークフローラベルを1つも残さない状態で表す。`ready-for-human`はIssueの分類ラベルとしてだけ使い、PRには付けない。
+
+引き渡しは「マージ可能」や「人間承認済み」ではなく、deadloopの担当する確認が終わり、取得できなかった証拠、修正要求、残る判断を含めて次の操作を人間へ渡した状態を意味する。
 
 `autoMerge: true`を明示した場合だけ、現在のheadに対する必須チェック、必須承認、設定済み外部レビューの`passed`、deadloopレビューの`passed`をすべて再取得できたときにマージ候補を返す。一つでも未完了、修正要求、確認不能、古いheadへの証拠であればマージせず、待機または人間への引き渡しを返す。coreはマージ直前にもheadと必須条件を再取得し、`mergeIfCurrent`を使う。
 

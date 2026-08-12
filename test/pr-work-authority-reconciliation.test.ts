@@ -36,7 +36,7 @@ const claimBinding = {
 const reviewClaim = {
   binding: claimBinding, commentId: "100", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot",
   reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 55, cleanupGraceSeconds: 5, authoritySeconds: 60,
-  reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
 };
 const claimComment = {
   id: "100", author: { login: "deadloop-bot" }, createdAt: "2026-08-01T10:00:01Z", updatedAt: "2026-08-01T10:00:01Z",

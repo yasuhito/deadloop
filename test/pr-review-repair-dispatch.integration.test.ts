@@ -30,7 +30,7 @@ function reviewClaimEnvironment(head: string, targetNumber = 243, repository = "
   return {
     DEADLOOP_REVIEW_CLAIM: JSON.stringify({
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     }),
     TEST_REVIEW_CLAIM_COMMENT: JSON.stringify({ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }),
   };
@@ -38,7 +38,7 @@ function reviewClaimEnvironment(head: string, targetNumber = 243, repository = "
 
 function executable(file: string, content: string): void {
   const prepared = path.basename(file) === "gh"
-    ? content.replace("\n", `\nconst deadloopGhArgs = process.argv.slice(2);\nif (deadloopGhArgs[0] === "api" && deadloopGhArgs[1] === "user") { const login = process.env.TEST_AUTH_LOGIN_FILE && require("node:fs").existsSync(process.env.TEST_AUTH_LOGIN_FILE) ? require("node:fs").readFileSync(process.env.TEST_AUTH_LOGIN_FILE, "utf8").trim() : (process.env.TEST_AUTH_LOGIN || "deadloop-bot"); process.stdout.write(login + "\\n"); process.exit(0); }\nif (process.env.DEADLOOP_REVIEW_CLAIM) {\n  const reviewClaim = JSON.parse(process.env.DEADLOOP_REVIEW_CLAIM);\n  if (deadloopGhArgs[0] === "repo" && deadloopGhArgs[1] === "view" && deadloopGhArgs.some((arg) => arg.includes("nameWithOwner"))) { process.stdout.write(JSON.stringify({id:reviewClaim.binding.repositoryId,nameWithOwner:reviewClaim.binding.repository})); process.exit(0); }\n  if (deadloopGhArgs.some((arg) => arg.endsWith("/events"))) { process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:reviewClaim.reviewLabel}}]])); process.exit(0); }\n  if (deadloopGhArgs.some((arg) => arg.endsWith("/comments"))) { if (process.env.TEST_OBSERVATION_FILE) require("node:fs").writeFileSync(process.env.TEST_OBSERVATION_FILE, "complete"); process.stdout.write(JSON.stringify([[JSON.parse(process.env.TEST_REVIEW_CLAIM_COMMENT)]])); process.exit(0); }\n  if (deadloopGhArgs[0] === "api" && deadloopGhArgs.includes("--include")) { const expired = process.env.TEST_EXPIRE_AFTER_OBSERVATIONS === "1" && process.env.TEST_OBSERVATION_FILE && require("node:fs").existsSync(process.env.TEST_OBSERVATION_FILE); process.stdout.write(expired ? "date: Tue, 21 Jul 2026 10:06:01 GMT" : (process.env.TEST_REST_HEADERS ?? "date: Mon, 20 Jul 2026 10:03:00 GMT")); process.exit(0); }\n  if (process.env.TEST_VISIBLE_EFFECTS_FILE && deadloopGhArgs[0] === "pr" && ["comment", "edit"].includes(deadloopGhArgs[1])) { require("node:fs").appendFileSync(process.env.TEST_VISIBLE_EFFECTS_FILE, deadloopGhArgs.join(" ") + "\\n"); process.exit(0); }\n}\n`)
+    ? content.replace("\n", `\nconst deadloopGhArgs = process.argv.slice(2);\nif (deadloopGhArgs[0] === "api" && deadloopGhArgs[1] === "user") { const login = process.env.TEST_AUTH_LOGIN_FILE && require("node:fs").existsSync(process.env.TEST_AUTH_LOGIN_FILE) ? require("node:fs").readFileSync(process.env.TEST_AUTH_LOGIN_FILE, "utf8").trim() : (process.env.TEST_AUTH_LOGIN || "deadloop-bot"); process.stdout.write(login + "\\n"); process.exit(0); }\nif (process.env.DEADLOOP_REVIEW_CLAIM) {\n  const reviewClaim = JSON.parse(process.env.DEADLOOP_REVIEW_CLAIM);\n  if (deadloopGhArgs[0] === "repo" && deadloopGhArgs[1] === "view" && deadloopGhArgs.some((arg) => arg.includes("nameWithOwner"))) { process.stdout.write(JSON.stringify({id:reviewClaim.binding.repositoryId,nameWithOwner:reviewClaim.binding.repository})); process.exit(0); }\n  if (deadloopGhArgs.some((arg) => arg.endsWith("/events"))) { process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:reviewClaim.requestLabel}}]])); process.exit(0); }\n  if (deadloopGhArgs.some((arg) => arg.endsWith("/comments"))) { if (process.env.TEST_OBSERVATION_FILE) require("node:fs").writeFileSync(process.env.TEST_OBSERVATION_FILE, "complete"); process.stdout.write(JSON.stringify([[JSON.parse(process.env.TEST_REVIEW_CLAIM_COMMENT)]])); process.exit(0); }\n  if (deadloopGhArgs[0] === "api" && deadloopGhArgs.includes("--include")) { const expired = process.env.TEST_EXPIRE_AFTER_OBSERVATIONS === "1" && process.env.TEST_OBSERVATION_FILE && require("node:fs").existsSync(process.env.TEST_OBSERVATION_FILE); process.stdout.write(expired ? "date: Tue, 21 Jul 2026 10:06:01 GMT" : (process.env.TEST_REST_HEADERS ?? "date: Mon, 20 Jul 2026 10:03:00 GMT")); process.exit(0); }\n  if (process.env.TEST_VISIBLE_EFFECTS_FILE && deadloopGhArgs[0] === "pr" && ["comment", "edit"].includes(deadloopGhArgs[1])) { require("node:fs").appendFileSync(process.env.TEST_VISIBLE_EFFECTS_FILE, deadloopGhArgs.join(" ") + "\\n"); process.exit(0); }\n}\n`)
     : path.basename(file) === "git"
       ? content.replace("\n", `\nconst deadloopGitArgs = process.argv.slice(2);\nif ((deadloopGitArgs.includes("rev-parse") && deadloopGitArgs.some((arg) => arg.endsWith("^{commit}"))) || (deadloopGitArgs.includes("show") && deadloopGitArgs.some((arg) => arg.endsWith(":deadloop.json")))) {\n  const result = require("node:child_process").spawnSync("/usr/bin/git", deadloopGitArgs, {encoding:"utf8"});\n  process.stdout.write(result.stdout || ""); process.stderr.write(result.stderr || ""); process.exit(result.status ?? 1);\n}\n`)
       : content;
@@ -586,8 +586,8 @@ function runV1ChangesRequestedTwice(options: {
   const worktreeRoot = path.join(root, options.customConfiguration ? "custom repair checkouts" : "worktrees");
   const worktree = path.join(worktreeRoot, "agent-issue-243");
   const labels = options.customConfiguration
-    ? { review: "custom:review", blocked: "custom:blocked", human: "custom:human" }
-    : { review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" };
+    ? { review: "custom:review", blocked: "custom:blocked", implement: "custom:implement", updateBranch: "custom:update-branch" }
+    : { review: "agent:review", blocked: "agent:blocked", implement: "agent:implement", updateBranch: "agent:update-branch" };
   const liveLabels = [
     { name: "agent:in-progress" },
     ...(options.customConfiguration ? [{ name: "ready-for-human" }] : []),
@@ -649,12 +649,12 @@ function runV1ChangesRequestedTwice(options: {
     binding: {
       ...baseReviewClaim.binding,
       activeState: {
-        managedLabels: [labels.review, "agent:implement", "agent:update-branch", "agent:in-progress", labels.blocked],
+        managedLabels: [labels.review, labels.implement, labels.updateBranch, "agent:in-progress", labels.blocked],
         requestLabel: labels.review,
         requiredLabels: ["agent:in-progress"],
       },
     },
-    reviewLabel: labels.review,
+    requestLabel: labels.review,
 
     blockedLabel: labels.blocked,
   };
@@ -727,7 +727,8 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: repo, DEADLOOP_WORKTREE_ROOT: worktreeRoot,
     DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
-    DEADLOOP_BLOCKED_LABEL: labels.blocked, DEADLOOP_HUMAN_LABEL: labels.human,
+    DEADLOOP_BLOCKED_LABEL: labels.blocked, DEADLOOP_IMPLEMENT_LABEL: labels.implement,
+    DEADLOOP_UPDATE_BRANCH_LABEL: labels.updateBranch,
     HEAD: head, COMMENTS: comments, GH_VIEW_COUNT: ghViewCount,
     INJECT_LIMIT_RACE: options.injectCumulativeLimitRace ? "1" : "0",
     INJECT_BLOCKING_HISTORY_RACE: options.injectBlockingHistoryRace ? "1" : "0", RUNTIME: runtime, WORKTREE: worktree };
@@ -739,8 +740,8 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
           attemptRecordFile: attempt, actorName: "reviewer", projectId: "demo", repoPath: repo,
           worktreeRoot, githubRepo: "owner/repo", stateDir: state, enabledAt: 1,
           projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
-          checkCommand: "npm test", humanLabel: labels.human, reviewLabel: labels.review,
-          blockedLabel: labels.blocked,
+          checkCommand: "npm test", implementLabel: labels.implement, updateBranchLabel: labels.updateBranch,
+          reviewLabel: labels.review, blockedLabel: labels.blocked,
         });
         const command = prompt.match(/run the deterministic dispatcher[^`]*:\n  `([^`]+)`/)?.[1];
         if (!command) throw new Error("rendered dispatcher command was not found");
@@ -771,7 +772,8 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
       `--review-label ${labels.review}`,
       `--in-progress-label agent:in-progress`,
       `--blocked-label ${labels.blocked}`,
-      `--human-label ${labels.human}`,
+      `--implement-label ${labels.implement}`,
+      `--update-branch-label ${labels.updateBranch}`,
     ].every((argument) => dispatcherCommand.includes(argument)),
     githubMutations: fs.existsSync(visibleEffects) ? fs.readFileSync(visibleEffects, "utf8") : "",
   };
@@ -971,13 +973,13 @@ describe("review repair dispatch integration", () => {
       action: result.actions[0],
       dispatcherArgsForwarded: result.dispatcherArgsForwarded,
       labelsPreserved: result.labelsPreserved,
-      managedDefaultHumanLabelWasIgnored: result.reviewerPhase,
+      managedDefaultRequestLabelsWereIgnored: result.reviewerPhase,
       repairCheckout: result.repairWorktreePath.endsWith("/custom repair checkouts/agent-issue-243"),
     }).toEqual({
       action: "review_repair_monitor_request",
       dispatcherArgsForwarded: true,
       labelsPreserved: ["agent:in-progress"],
-      managedDefaultHumanLabelWasIgnored: "workspace_closed",
+      managedDefaultRequestLabelsWereIgnored: "workspace_closed",
       repairCheckout: true,
     });
   });

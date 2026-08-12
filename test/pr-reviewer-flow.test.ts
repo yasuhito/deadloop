@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-const { planPrReviewerAction } = require("../extensions/deadloop/automations/pr-reviewer-flow.ts");
+const { planPrRequestAction } = require("../extensions/deadloop/automations/pr-reviewer-flow.ts");
 
 const fixtureDir = path.join(process.cwd(), "test/fixtures/pr-reviewer-driver");
 
@@ -31,54 +31,54 @@ describe("PR reviewer use-case flow", () => {
   it("plans no-candidate when no PR is selectable", () => {
     const data = fixture("no-candidate.json");
 
-    expect(planPrReviewerAction(data.prs, data.agents, env()).kind).toBe("skip_no_candidate");
+    expect(planPrRequestAction(data.prs, data.agents, env()).kind).toBe("skip_no_candidate");
   });
 
   it("plans waiting when checks are pending", () => {
     const data = fixture("pending-ci.json");
 
-    expect(planPrReviewerAction(data.prs, data.agents, env()).kind).toBe("skip_wait");
+    expect(planPrRequestAction(data.prs, data.agents, env()).kind).toBe("skip_wait");
   });
 
-  it("plans draft gate before review launch", () => {
+  it("plans a review for a draft pull request carrying a review request", () => {
     const data = fixture("draft-pr.json");
 
-    expect(planPrReviewerAction(data.prs, data.agents, env()).kind).toBe("draft_gate");
+    expect(planPrRequestAction(data.prs, data.agents, env()).kind).toBe("review_required");
   });
 
   it("plans reviewer launch by default without external review", () => {
     const data = fixture("external-review-request.json");
 
-    expect(planPrReviewerAction(data.prs, data.agents, env()).kind).toBe("review_required");
+    expect(planPrRequestAction(data.prs, data.agents, env()).kind).toBe("review_required");
   });
 
   it("does not let a retained local journal suppress a GitHub review request", () => {
     const data = fixture("external-review-request.json");
 
-    expect(planPrReviewerAction(data.prs, { result: { agents: [{ name: "demo-pr-22-reviewer", status: "working" }] } }, env({ stateDir: path.join(fixtureDir, "state") })).kind).toBe("review_required");
+    expect(planPrRequestAction(data.prs, { result: { agents: [{ name: "demo-pr-22-reviewer", status: "working" }] } }, env({ stateDir: path.join(fixtureDir, "state") })).kind).toBe("review_required");
   });
 
   it("plans external review request when external review is enabled", () => {
     const data = fixture("external-review-request.json");
 
-    expect(planPrReviewerAction(data.prs, data.agents, env({ externalReviewEnabled: true })).kind).toBe("external_review_request");
+    expect(planPrRequestAction(data.prs, data.agents, env({ externalReviewEnabled: true })).kind).toBe("external_review_request");
   });
 
   it("plans reviewer launch after stale external review", () => {
     const data = fixture("fallback-review.json");
 
-    expect(planPrReviewerAction(data.prs, data.agents, env({ externalReviewEnabled: true })).kind).toBe("review_required");
+    expect(planPrRequestAction(data.prs, data.agents, env({ externalReviewEnabled: true })).kind).toBe("review_required");
   });
 
   it("preserves the repair rereview reason through external review fallback", () => {
     const data = fixture("repair-rereview-fallback.json");
 
-    expect(planPrReviewerAction(data.prs, data.agents, env({ externalReviewEnabled: true })).reason).toBe("repair_rereview");
+    expect(planPrRequestAction(data.prs, data.agents, env({ externalReviewEnabled: true })).reason).toBe("repair_rereview");
   });
 
   it("preserves the stale claim reason through external review fallback", () => {
     const data = fixture("stale-claim-fallback.json");
 
-    expect(planPrReviewerAction(data.prs, data.agents, env({ externalReviewEnabled: true })).reason).toBe("stale_reclaim");
+    expect(planPrRequestAction(data.prs, data.agents, env({ externalReviewEnabled: true })).reason).toBe("stale_reclaim");
   });
 });

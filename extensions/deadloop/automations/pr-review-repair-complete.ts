@@ -15,7 +15,7 @@ const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../..
 const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const {
   classifyActiveReviewClaim,
-  classifyRepairAuthorityTransition,
+  classifyPushedHeadAuthorityTransition,
   readGithubRestResponseHeaders,
   savedReviewClaimContract,
   visiblyBlockReviewClaimTimeFailure,
@@ -86,10 +86,15 @@ function completion(args: JsonObject): DriverResult {
     projectId: String(args.projectId),
     targetNumber: Number(args.pr),
   });
-  for (const field of ["reviewLabel", "inProgressLabel", "blockedLabel"] as const) {
+  for (const field of ["inProgressLabel", "blockedLabel"] as const) {
     if (String(reviewClaim[field] || "") !== String(args[field] || "")) {
       throw new Error(`${field} does not exactly match the saved review claim contract`);
     }
+  }
+  // The label this completion adds is a workflow decision, not the request the claim consumed, so
+  // it is bound to the claim's managed set rather than to the claim's own request label.
+  if (!(reviewClaim.binding?.activeState?.managedLabels || []).includes(String(args.reviewLabel || ""))) {
+    throw new Error("reviewLabel is not managed by the saved review claim contract");
   }
   for (const [field, value, basename] of [
     ["promise", args.promise, "promise.json"],
@@ -194,7 +199,7 @@ function completion(args: JsonObject): DriverResult {
             : liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
               ? classifyActiveReviewClaim(current, events, currentComments, headers, authoritativeClaim, liveTarget)
               : successfulReceipt
-                ? classifyRepairAuthorityTransition(current, events, currentComments, headers, authoritativeClaim, liveTarget, receipt || {})
+                ? classifyPushedHeadAuthorityTransition(current, events, currentComments, headers, authoritativeClaim, liveTarget, receipt || {})
                 : { kind: "binding_mismatch" };
           return {
             ...validation,

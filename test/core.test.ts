@@ -112,6 +112,7 @@ describe("deterministic extension core", () => {
       labels: {
         ready: "agent-ready",
         implement: "agent:implement",
+        updateBranch: "agent:update-branch",
         inProgress: "agent:in-progress",
         blocked: "agent:blocked",
         review: "agent:review",
