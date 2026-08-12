@@ -134,7 +134,7 @@ function runMerge(options: {
         if (args[2] === "view") {
           prReads += 1;
           const observed = options.pr || eligiblePr;
-          const basePr = markedReady ? { ...observed, isDraft: false } : observed;
+          const basePr = markedReady ? { ...observed, isDraft: false, mergeStateStatus: "CLEAN" } : observed;
           const finalPr = prReads >= 3 && options.finalRace === "head"
             ? { ...basePr, headRefOid: "b".repeat(40) }
             : prReads >= 3 && options.finalRace === "labels"
@@ -254,7 +254,7 @@ describe("reviewed PR merge", () => {
 
   it("rechecks auto-merge before the final fresh claim observation adjacent to merge", () => {
     const commands = runMerge().commands;
-    expect(commands.slice(-10).map((args) => args.join(" "))).toEqual([
+    expect(commands.slice(-9).map((args) => args.join(" "))).toEqual([
       "config",
       "gh pr view 24 -R owner/repo --json state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,labels",
       "gh api user --jq .login",
@@ -263,7 +263,6 @@ describe("reviewed PR merge", () => {
       "gh api --paginate --slurp repos/owner/repo/issues/24/events",
       "gh api --paginate --slurp repos/owner/repo/issues/24/comments",
       "gh api --include repos/owner/repo",
-      "gh pr view 24 -R owner/repo --json state,isDraft,headRefOid",
       `gh pr merge 24 -R owner/repo --squash --delete-branch --match-head-commit ${expectedHead}`,
     ]);
   });
@@ -322,13 +321,13 @@ describe("reviewed PR merge", () => {
   });
 
   it("marks a reviewed draft ready before the guarded merge", () => {
-    const run = runMerge({ pr: { ...eligiblePr, isDraft: true } });
+    const run = runMerge({ pr: { ...eligiblePr, isDraft: true, mergeStateStatus: "DRAFT" } });
 
     expect(run.commands.some((command) => command[1] === "pr" && command[2] === "ready")).toBe(true);
   });
 
   it("merges the reviewed draft after it becomes ready", () => {
-    const run = runMerge({ pr: { ...eligiblePr, isDraft: true } });
+    const run = runMerge({ pr: { ...eligiblePr, isDraft: true, mergeStateStatus: "DRAFT" } });
 
     expect(run.commands.at(-1)?.slice(1, 3)).toEqual(["pr", "merge"]);
   });

@@ -61,11 +61,11 @@ function assertApproved(args: HandoffArgs, ops: HandoffOps): void {
   const validation = ops.validateReviewPromise?.(args.reviewPromise) || validatePromise(args.reviewPromise);
   const promise = validation.promise;
   if (validation.evidenceStrength !== "strong" || validation.status !== "complete" || !promise || promise.status !== "complete") {
-    throw new Error("validated reviewer approval is missing; human handoff stopped");
+    throw new Error("validated reviewer approval is missing; ready handoff stopped");
   }
   if (promise.outcome !== "approved" || promise.reviewedHead !== args.expectedHead
     || !Array.isArray(promise.findings) || promise.findings.length !== 0) {
-    throw new Error("reviewer approval is not bound to the expected head; human handoff stopped");
+    throw new Error("reviewer approval is not bound to the expected head; ready handoff stopped");
   }
 }
 
@@ -158,7 +158,7 @@ function parseArgs(argv: string[]): HandoffArgs {
   }
   const enabledAt = Number(values.enabledAt);
   const required = ["projectRepo", "githubRepo", "stateDir", "pr", "expectedHead", "reviewPromise", "historyObservation", "reviewLabel", "implementLabel", "updateBranchLabel", "inProgressLabel", "blockedLabel"];
-  if (required.some((name) => !values[name]) || !Number.isFinite(enabledAt)) throw new Error("required human handoff arguments are missing");
+  if (required.some((name) => !values[name]) || !Number.isFinite(enabledAt)) throw new Error("required ready handoff arguments are missing");
   return { ...values, enabledAt } as HandoffArgs;
 }
 

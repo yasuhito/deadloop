@@ -17,6 +17,7 @@ const {
   savedReviewClaimContract,
 } = require("./pr-review-claim.ts");
 const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
+const { labelNames } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -47,10 +48,6 @@ function pushedRevision(promiseFile: string): string {
   if (promise.result?.outcome !== "branch_update_pushed") return "";
   const revision = String(promise.result?.outputRevision || "").toLowerCase();
   return /^[0-9a-f]{40}$/.test(revision) ? revision : "";
-}
-
-function labelsOf(pr: JsonObject): string[] {
-  return (pr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || ""));
 }
 
 function completion(args: JsonObject): DriverResult {
@@ -100,7 +97,7 @@ function completion(args: JsonObject): DriverResult {
         pr: current,
         events: observation.listPrTimelineEvents(String(args.githubRepo), String(args.pr)),
         comments: observation.listPrComments(String(args.githubRepo), String(args.pr)),
-        labels: labelsOf(current),
+        labels: labelNames(current),
       };
     };
     const before = observe();
@@ -150,4 +147,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { completion, labelsOf, parseArgs, pushedRevision };
+module.exports = { completion, parseArgs, pushedRevision };

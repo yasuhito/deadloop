@@ -21,6 +21,7 @@ type ReviewDecisionConfig = {
   externalReviewWaitSeconds: number;
   projectId: string;
   automationLogin: string;
+  servedRoles: string[];
   now: Date;
 };
 
@@ -40,6 +41,10 @@ function defaultDecisionConfig(overrides: Partial<ReviewDecisionConfig> = {}): R
     externalReviewWaitSeconds: 1800,
     projectId: "",
     automationLogin: "",
+    // The review-result dispatcher still owns the repair launch under the review claim, so this
+    // driver serves no `review-repair` request. A pull request waiting on one is skipped whole,
+    // never downgraded to the review request queued behind it.
+    servedRoles: ["branch-update", "reviewer"],
     now: new Date(),
     ...overrides,
   };
@@ -269,6 +274,10 @@ function selectPrRequestTarget(
     }
     if (labels.has(config.blockedLabel)) {
       skipped.push(skipForPrReviewer("blocked", pr));
+      continue;
+    }
+    if (!config.servedRoles.includes(request.role)) {
+      skipped.push(skipForPrReviewer("unserved_request", pr));
       continue;
     }
     const hasInProgressLabel = labels.has(config.inProgressLabel);

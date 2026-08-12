@@ -16,7 +16,8 @@ function assertCurrentReviewClaimAuthority(
   authenticatedLogin: string,
   load = loadCurrentReviewClaimConfiguration,
 ): Record<string, unknown> {
-  const role = String((claim.binding as Record<string, unknown> | undefined)?.role || "reviewer");
+  // A claim without a role cannot name the request it consumed, so it is never authorized.
+  const role = String((claim.binding as Record<string, unknown> | undefined)?.role || "");
   const current = load(stateDir, enabled, authenticatedLogin, role);
   assertClaimMatchesCurrentConfiguration(claim, current);
   return current;

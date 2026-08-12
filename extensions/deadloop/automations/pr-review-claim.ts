@@ -1,4 +1,6 @@
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+
+import type { PrRequestRole } from "../../../src/pr-request-selection";
 const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
 const CLAIM_MARKER_RE = /<!--\s*deadloop:review-claim\s+v1=([A-Za-z0-9_-]+)\s*-->/g;
@@ -26,9 +28,6 @@ type ReviewClaimActiveState = {
   requestLabel: string;
   requiredLabels: string[];
 };
-
-/** Every PR role that consumes one GitHub Agent request under its own claim. */
-type PrRequestRole = "reviewer" | "review-repair" | "branch-update";
 
 type ReviewClaimBinding = {
   repositoryId: string;

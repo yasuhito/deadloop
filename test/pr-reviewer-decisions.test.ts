@@ -21,10 +21,6 @@ describe("pull request request-target selection", () => {
     expect(selectPrRequestTarget([pr(7, ["agent:update-branch"])], config).role).toBe("branch-update");
   });
 
-  it("selects a repair request as the review-repair role", () => {
-    expect(selectPrRequestTarget([pr(7, ["agent:implement"])], config).role).toBe("review-repair");
-  });
-
   it("selects a review request as the reviewer role", () => {
     expect(selectPrRequestTarget([pr(7, ["agent:review"])], config).role).toBe("reviewer");
   });
@@ -35,12 +31,8 @@ describe("pull request request-target selection", () => {
     ).toBe("branch-update");
   });
 
-  it("selects the repair first when one pull request carries both implement and review", () => {
-    expect(selectPrRequestTarget([pr(7, ["agent:review", "agent:implement"])], config).role).toBe("review-repair");
-  });
-
   it("reports the request label the selection consumes", () => {
-    expect(selectPrRequestTarget([pr(7, ["agent:review", "agent:implement"])], config).requestLabel).toBe("agent:implement");
+    expect(selectPrRequestTarget([pr(7, ["agent:review", "agent:update-branch"])], config).requestLabel).toBe("agent:update-branch");
   });
 
   it("selects a draft pull request that carries a review request", () => {
@@ -65,6 +57,20 @@ describe("pull request request-target selection", () => {
     const conflicted = pr(7, ["agent:update-branch"], { statusCheckRollup: [{ status: "IN_PROGRESS" }] });
 
     expect(selectPrRequestTarget([conflicted], config).selected).toBe(true);
+  });
+
+  it("does not let a pull request whose next request has no launcher hide the next candidate", () => {
+    expect(selectPrRequestTarget([pr(7, ["agent:implement"]), pr(9, ["agent:review"])], config).number).toBe(9);
+  });
+
+  it("reports why a request with no launcher was skipped", () => {
+    expect(selectPrRequestTarget([pr(7, ["agent:implement"])], config).skipped).toEqual([
+      { number: 7, reason: "unserved_request" },
+    ]);
+  });
+
+  it("does not fall back to the review request behind a request with no launcher", () => {
+    expect(selectPrRequestTarget([pr(7, ["agent:implement", "agent:review"])], config).selected).toBe(false);
   });
 
   it("does not select a review request while checks are still running", () => {

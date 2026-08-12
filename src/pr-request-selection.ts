@@ -38,6 +38,14 @@ function orderedPrRequestLabels(requestLabels: PrRequestLabels): string[] {
   return PR_REQUEST_ORDER.map((entry) => requestLabels[entry.key]);
 }
 
+/** The one request label a role consumes. An unknown role must never reach a GitHub mutation. */
+function prRequestLabelForRole(requestLabels: PrRequestLabels, role: string): string {
+  const entry = PR_REQUEST_ORDER.find((candidate) => candidate.role === role);
+  const label = entry && requestLabels[entry.key];
+  if (!label) throw new Error(`current configuration has no request label for the ${role} role`);
+  return label;
+}
+
 /** The single request to consume next, or null when the pull request has none waiting. */
 function selectPrRequest(labels: Iterable<string>, requestLabels: PrRequestLabels): PrRequest | null {
   const present = new Set(labels);
@@ -48,4 +56,4 @@ function selectPrRequest(labels: Iterable<string>, requestLabels: PrRequestLabel
   return null;
 }
 
-module.exports = { orderedPrRequestLabels, selectPrRequest };
+module.exports = { orderedPrRequestLabels, prRequestLabelForRole, selectPrRequest };

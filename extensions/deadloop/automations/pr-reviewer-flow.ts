@@ -29,7 +29,6 @@ type PrRequestPlan =
   | { kind: "skip_no_candidate"; summary: string; driverAction: "no_candidate"; decision: JsonObject }
   | { kind: "skip_wait"; summary: string; driverAction: "wait"; decision: JsonObject }
   | { kind: "branch_update_required"; decision: JsonObject; pr: JsonObject }
-  | { kind: "repair_required"; decision: JsonObject; pr: JsonObject }
   | { kind: "external_review_request"; decision: JsonObject; pr: JsonObject; gate: JsonObject }
   | { kind: "external_review_wait"; decision: JsonObject; pr: JsonObject; gate: JsonObject }
   | { kind: "review_required"; decision: JsonObject; pr: JsonObject; gate: JsonObject; reason: string };
@@ -90,7 +89,6 @@ function planPrRequestAction(prs: JsonObject[], _agents: JsonObject, env: PrRequ
 
   const pr = selectedPr(prs, Number(decision.number));
   if (decision.role === "branch-update") return { kind: "branch_update_required", decision, pr };
-  if (decision.role === "review-repair") return { kind: "repair_required", decision, pr };
 
   if (!env.externalReviewEnabled) {
     return {

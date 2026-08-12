@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { labelsOf, parseArgs, pushedRevision } = require("../extensions/deadloop/automations/pr-branch-update-complete.ts");
+const { parseArgs, pushedRevision } = require("../extensions/deadloop/automations/pr-branch-update-complete.ts");
 
 const originalHead = "a".repeat(40);
 const baseHead = "c".repeat(40);
@@ -74,13 +74,6 @@ describe("branch update completion", () => {
       ...pushedPromise,
       result: { outcome: "branch_update_pushed", outputRevision: "HEAD" },
     }))).toBe("");
-  });
-
-  it("reads label names from a live pull request", () => {
-    expect(labelsOf({ labels: [{ name: "agent:in-progress" }, "team:platform"] })).toEqual([
-      "agent:in-progress",
-      "team:platform",
-    ]);
   });
 
   it("requires the review claim argument", () => {

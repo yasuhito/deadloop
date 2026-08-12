@@ -197,13 +197,19 @@ function prepareAgentLaunchFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlo
   return prepared;
 }
 
+/**
+ * Roles whose attempt journal must carry the GitHub request claim they consumed. Their prepared
+ * identity includes that claim, so the claim has to exist before the journal is written.
+ */
+const CLAIM_BOUND_AGENT_ROLES = ["reviewer", "branch-update"];
+
 function recordAgentLaunchGithubClaimed(input: AgentLaunchFlowInput): AttemptRecord {
   const prepared = launchPaths(input);
   const existing = readAttemptRecord(prepared.runDir);
   if (!samePreparedIdentity(existing, preparedRecordInput(input, prepared))) {
     throw new Error("attempt run directory identity does not match this claim");
   }
-  if (["reviewer", "branch-update"].includes(String(existing.role)) && !existing.reviewClaim) {
+  if (CLAIM_BOUND_AGENT_ROLES.includes(String(existing.role)) && !existing.reviewClaim) {
     throw new Error(`${existing.role} GitHub claim cannot be recorded without an immutable review claim contract`);
   }
   if (existing.phase === "github_claimed") return existing;
@@ -346,4 +352,4 @@ function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): 
   }
 }
 
-module.exports = { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed };
+module.exports = { CLAIM_BOUND_AGENT_ROLES, launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed };

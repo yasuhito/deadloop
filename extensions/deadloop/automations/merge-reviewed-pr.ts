@@ -186,50 +186,31 @@ function assertReviewHistoryFresh(args: MergeArgs, ops: MergeOps): void {
   }
 }
 
-/**
- * A Worker PR is a draft until a review approves it, and GitHub refuses to merge a draft. The
- * approved head therefore becomes ready inside the same guarded run that merges it, while the
- * claim and the in-progress label stay in place: readiness is a step of the merge, not a handoff.
- */
-function markReadyForMerge(args: MergeArgs, ops: MergeOps): void {
-  const result = ops.run([
-    "gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,isDraft,headRefOid",
-  ], MAX_GUARDED_OPERATION_MS);
-  if (result.status !== 0) throw new Error((result.stderr || result.stdout || "PR draft state could not be read").trim());
-  let pr: { state?: unknown; isDraft?: unknown; headRefOid?: unknown };
-  try {
-    pr = JSON.parse(result.stdout || "{}");
-  } catch {
-    throw new Error("PR state response was invalid; automatic merge stopped");
-  }
-  if (pr.state !== "OPEN") throw new Error("PR is no longer open; automatic merge stopped");
-  if (pr.headRefOid !== args.expectedHead) throw new Error("PR head changed; automatic merge stopped");
-  if (pr.isDraft === false) return;
-  if (pr.isDraft !== true) throw new Error("PR draft state is unknown; automatic merge stopped");
-  const ready = ops.run(["gh", "pr", "ready", args.pr, "-R", args.githubRepo], MAX_GUARDED_OPERATION_MS);
-  if (ready.status !== 0) throw new Error((ready.stderr || ready.stdout || "approved PR could not be marked ready").trim());
-}
+type MergeTargetPr = {
+  state?: unknown;
+  isDraft?: unknown;
+  headRefOid?: unknown;
+  mergeable?: unknown;
+  mergeStateStatus?: unknown;
+  statusCheckRollup?: unknown;
+  labels?: unknown;
+};
 
-function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
+function readMergeTargetPr(args: MergeArgs, ops: MergeOps): MergeTargetPr {
   const result = ops.run([
     "gh", "pr", "view", args.pr, "-R", args.githubRepo,
     "--json", "state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,labels",
   ], MAX_GUARDED_OPERATION_MS);
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || "PR state could not be revalidated").trim());
-  let pr: {
-    state?: unknown;
-    isDraft?: unknown;
-    headRefOid?: unknown;
-    mergeable?: unknown;
-    mergeStateStatus?: unknown;
-    statusCheckRollup?: unknown;
-    labels?: unknown;
-  };
   try {
-    pr = JSON.parse(result.stdout || "{}");
+    return JSON.parse(result.stdout || "{}");
   } catch {
     throw new Error("PR state response was invalid; automatic merge stopped");
   }
+}
+
+/** The identity and ownership a merge target must keep, whether or not it is still a draft. */
+function assertMergeTargetUnchanged(pr: MergeTargetPr, args: MergeArgs): void {
   const labels = new Set(
     Array.isArray(pr.labels)
       ? pr.labels.map((label: unknown) => label && typeof label === "object" ? (label as { name?: unknown }).name : undefined)
@@ -238,13 +219,34 @@ function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
   );
   if (pr.state !== "OPEN") throw new Error("PR is no longer open; automatic merge stopped");
   if (pr.headRefOid !== args.expectedHead) throw new Error("PR head changed; automatic merge stopped");
-  if (pr.mergeable !== "MERGEABLE") throw new Error("PR mergeability is not confirmed; automatic merge stopped");
-  if (pr.mergeStateStatus !== "CLEAN") throw new Error("PR merge state is not clean; automatic merge stopped");
-  assertChecksPassed(pr.statusCheckRollup);
   if (!labels.has(args.inProgressLabel)) {
     throw new Error("required in-progress claim label is no longer present; automatic merge stopped");
   }
   if (labels.has(args.blockedLabel)) throw new Error("PR is blocked; automatic merge stopped");
+}
+
+/**
+ * A Worker PR is a draft until a review approves it, and GitHub both refuses to merge a draft and
+ * reports its merge state as DRAFT, so no merge gate can be evaluated before this step. The
+ * approved head therefore becomes ready inside the same guarded run that merges it, while the claim
+ * and the in-progress label stay in place: readiness is a step of the merge, not a handoff.
+ */
+function markReadyForMerge(args: MergeArgs, ops: MergeOps): void {
+  const pr = readMergeTargetPr(args, ops);
+  assertMergeTargetUnchanged(pr, args);
+  if (pr.isDraft === false) return;
+  if (pr.isDraft !== true) throw new Error("PR draft state is unknown; automatic merge stopped");
+  const ready = ops.run(["gh", "pr", "ready", args.pr, "-R", args.githubRepo], MAX_GUARDED_OPERATION_MS);
+  if (ready.status !== 0) throw new Error((ready.stderr || ready.stdout || "approved PR could not be marked ready").trim());
+}
+
+function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
+  const pr = readMergeTargetPr(args, ops);
+  assertMergeTargetUnchanged(pr, args);
+  if (pr.isDraft !== false) throw new Error("PR is draft or its draft state is unknown; automatic merge stopped");
+  if (pr.mergeable !== "MERGEABLE") throw new Error("PR mergeability is not confirmed; automatic merge stopped");
+  if (pr.mergeStateStatus !== "CLEAN") throw new Error("PR merge state is not clean; automatic merge stopped");
+  assertChecksPassed(pr.statusCheckRollup);
 }
 
 function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): number {
@@ -265,7 +267,7 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     assertMergeAuthorized(enabled);
     assertReviewApproved(args, ops);
     assertReviewHistoryFresh(args, ops);
-    assertCurrentPrEligible(args, ops);
+    assertMergeTargetUnchanged(readMergeTargetPr(args, ops), args);
     const reauthorizeClaim = () => {
       const automationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
       const authenticatedResult = ops.run(["gh", "api", "user", "--jq", ".login"], MAX_GUARDED_OPERATION_MS);
@@ -354,12 +356,16 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
       if (authority.kind !== "authorized") throw new Error("active review claim could not be reauthorized; automatic merge stopped");
     };
     reauthorizeClaim();
+    // GitHub reports a draft pull request as mergeStateStatus DRAFT, so the merge gate can only be
+    // evaluated once the approved head is ready. Readiness therefore precedes every gate below.
+    markReadyForMerge(args, ops);
+    assertCurrentPrEligible(args, ops);
+    reauthorizeClaim();
     const autoMergeStillEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
     if (!autoMergeStillEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
     assertReviewHistoryFresh(args, ops);
     assertCurrentPrEligible(args, ops);
     reauthorizeClaim();
-    markReadyForMerge(args, ops);
     const result = ops.run([
       "gh", "pr", "merge", args.pr, "-R", args.githubRepo,
       "--squash", "--delete-branch", "--match-head-commit", args.expectedHead,

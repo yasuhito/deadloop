@@ -7,8 +7,8 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { planPrRequestAction } = require("./pr-reviewer-flow.ts");
-const { orderedPrRequestLabels } = require("../../../src/pr-request-selection.ts");
-const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
+const { orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.ts");
+const { CLAIM_BOUND_AGENT_ROLES, launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { decideBranchUpdateLive } = require("./pr-branch-update-decision.ts");
@@ -82,16 +82,8 @@ function prRequestLabels(env: ReturnType<typeof envConfig>) {
   return { updateBranch: env.updateBranchLabel, implement: env.implementLabel, review: env.reviewLabel };
 }
 
-/** The one request label a role consumes. An unknown role must never reach a GitHub mutation. */
 function requestLabelForRole(env: ReturnType<typeof envConfig>, role: string): string {
-  const byRole: Record<string, string> = {
-    reviewer: env.reviewLabel,
-    "review-repair": env.implementLabel,
-    "branch-update": env.updateBranchLabel,
-  };
-  const label = byRole[role];
-  if (!label) throw new Error(`unsupported pull request request role: ${role}`);
-  return label;
+  return prRequestLabelForRole(prRequestLabels(env), role);
 }
 
 function envConfig(source: NodeJS.ProcessEnv = process.env) {
@@ -346,9 +338,7 @@ function launchWithAdapters(
   const launch = (recheck: () => void) => launchAgentFlow(input, { ...ops, beforeAgentStart: recheck });
   return withEnabledDriverLaunch(env, mutate, launch, {
     revalidate,
-    // A role that consumes a GitHub request records the resulting claim inside its prepared
-    // identity, so the claim has to exist before the attempt journal is written.
-    claimBeforePrepare: ["reviewer", "branch-update"].includes(input.role),
+    claimBeforePrepare: CLAIM_BOUND_AGENT_ROLES.includes(input.role),
     prepareAttempt: () => prepareAgentLaunchFlow(input, ops),
     recordClaim: () => recordAgentLaunchGithubClaimed(input),
   });
@@ -1387,16 +1377,6 @@ function drive(fixturePath: string | undefined): DriverResult {
       driverAction: "branch_update_requested",
       prNumber: plan.decision.number,
       comment: transition.comment,
-      ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
-    });
-  }
-
-  if (plan.kind === "repair_required") {
-    // The repair worker is still launched by the review-result dispatcher under the review claim,
-    // so no launcher consumes this request yet. Stopping without mutating anything keeps the pull
-    // request recoverable: removing the label returns it to the review request behind it.
-    return driverResult("skip", `PR #${plan.decision.number} carries ${env.implementLabel}, which no launcher consumes yet; remove it to return the PR to review`, {
-      driverAction: "review_repair_request_unclaimed", prNumber: plan.decision.number, decision: plan.decision,
       ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
     });
   }
