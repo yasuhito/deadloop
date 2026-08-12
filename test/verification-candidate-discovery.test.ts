@@ -114,10 +114,10 @@ describe("verification candidate discovery", () => {
     expect(discoverVerificationCandidates({ repositoryRoot: root })).toMatchObject({ status: "error", reason: "workflow_parse_error", source: ".github/workflows/ci.yml" });
   });
 
-  it("shows candidates without resolving no_source", () => {
+  it("shows the built-in default while trusted base revision evidence is unavailable", () => {
     const root = repository({ "package.json": JSON.stringify({ scripts: { check: "npm test" } }) });
 
-    expect(doctor(root)).toContain("requiredVerification: blocked; reason=no_source");
+    expect(doctor(root)).toContain("requiredVerification: blocked; reason=missing_base_revision; baseRevision=unknown; sources=default:deadloop=\"npm run check\"");
   });
 
   it("labels the no-candidate doctor outcome distinctly", () => {

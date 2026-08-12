@@ -10,13 +10,7 @@ Install from GitHub:
 pi install git:github.com/yasuhito/deadloop
 ```
 
-If you prefer to start from the Agent Skills ecosystem, install the setup skill first:
-
-```bash
-npx skills@latest add yasuhito/deadloop
-```
-
-The Skills CLI installs a `deadloop` setup skill for agents. It does not activate the Pi extension by itself, so run `pi install git:github.com/yasuhito/deadloop` as the package activation step.
+The Pi package installs the extension and its setup skill together.
 
 For a local checkout or development build:
 
@@ -54,17 +48,19 @@ For a local development checkout, copy from `/absolute/path/to/deadloop/extensio
 
 Shared repository policy lives in `deadloop.json` at the target repository root. deadloop reads it only from the trusted `baseBranch` after `git fetch`; a PR branch cannot change the policy used to decide that PR. Local `projects.json` explicit values win over repo policy, so remove a key locally when you want to inherit the shared value.
 
-Define the repository-owned aggregate verification command as shared policy whenever possible:
+The built-in required-verification command is `npm run check`. A repository with that script does not need `deadloop.json` or a local `checkCommand` setting.
+
+To use another command, define it as shared policy in `deadloop.json` and commit the file to the repository's base branch:
 
 ```json
 {
-  "checkCommand": "npm run check"
+  "checkCommand": "your verification command"
 }
 ```
 
-`/deadloop-status` and `/deadloop-doctor` show the required-verification resolution: the effective command, source identity, trusted base revision, and any local override. During the staged migration, the legacy inferred `checkCommand` remains available to unmigrated execution paths, but it is not reported as a resolved required-verification contract. An absent explicit source is shown as `no_source`, an explicitly empty command as `zero_targets`, differing values at the same priority as `source_conflict`, and any explicit command without trusted base revision evidence as `missing_base_revision`. A non-empty explicit command is accepted as written and judged by its eventual exit status rather than by command-name heuristics.
+`/deadloop-status` and `/deadloop-doctor` show the effective command, source identity, trusted base revision, and any local override. An explicitly empty command is shown as `zero_targets`, differing values at the same priority as `source_conflict`, and a command without trusted base revision evidence as `missing_base_revision`. A non-empty override is accepted as written and judged by its eventual exit status rather than by command-name heuristics.
 
-When required verification is blocked, `/deadloop-doctor` inspects the checkout without changing it. It reports `package.json` aggregate scripts (`check`, `verify`, `validate`, or `ci`), individual test/lint/type-check scripts, and each GitHub Actions `run` step as non-authoritative verification candidates. Every candidate retains its manifest or workflow location, declared working directory, and explicit execution context such as environment, shell, runner/container, matrix, services, and preceding setup actions. A no-candidate result is distinct from a typed manifest, workflow, or filesystem discovery error. Candidates do not resolve `no_source`, are never combined into a local command, and cannot make `/deadloop-enable` succeed; add an explicit repository-owned aggregate command to trusted `deadloop.json` instead.
+`/deadloop-doctor` also reports `package.json` aggregate scripts (`check`, `verify`, `validate`, or `ci`), individual test/lint/type-check scripts, and each GitHub Actions `run` step as diagnostic candidates. Every candidate retains its manifest or workflow location, declared working directory, and explicit execution context such as environment, shell, runner/container, matrix, services, and preceding setup actions. Candidates never replace the built-in command or an explicit override.
 
 If a project uses `workerAgent: "claude"` or `reviewerAgent: "claude"`, run `claude` interactively once from the target repository root and accept Claude Code workspace trust before enabling the automation.
 
@@ -74,7 +70,7 @@ Key fields:
 - `githubRepo` — GitHub repository in `owner/name` form. `/deadloop-enable` infers it from the canonical `origin` fetch and push URLs; set it in `projects.json` only as a local override.
 - `baseBranch` — branch or remote ref used as the worktree base, usually the current branch upstream or the verified GitHub default branch when no upstream exists. `/deadloop-enable` infers it; set it in `projects.json` only as a local override.
 - `worktreeRoot` — directory where the Herdr runner may create worker worktrees. `/deadloop-enable` defaults it to `~/.herdr/worktrees/<sanitized-checkout-name>-<12-character-identity-hash>/`; the hash is derived from the canonical checkout path and GitHub repository identity. Set it in `projects.json` only to use another local path.
-- `checkCommand` — explicit aggregate verification command. Prefer setting it in trusted shared `deadloop.json`; use a local value only as a deliberate override. The legacy inferred command remains available only to unmigrated execution paths during the staged rollout.
+- `checkCommand` — aggregate verification command. It defaults to `npm run check`. Set it in trusted shared `deadloop.json` when the repository needs another command; use a local value only as a deliberate non-shareable override.
 - `autoMerge` — keep `false` until the repository has proven safeguards. Only `true` allows the PR reviewer automation to squash merge and delete the head branch after its gates pass.
 - `externalReview` — optional external review service gate. It is disabled by default; set `{ "enabled": true }` only for repositories where the built-in CodeRabbit/Copilot request path is available.
 - `workerInstructionFiles` — optional list of repository instruction files to mention in worker prompts. Omit this to use the standard convention: `AGENTS.md`, `CONTEXT.md`, `README.md`, plus relevant docs.

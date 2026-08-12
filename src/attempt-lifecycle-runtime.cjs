@@ -14,7 +14,7 @@ function sha(value, field) { const text = nonEmpty(value, field); if (!/^[0-9a-f
 function requiredVerification(value, required) {
   if (value === undefined && !required) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid attempt record: requiredVerification must be an object");
-  if (!value.source || typeof value.source !== "object" || Array.isArray(value.source) || !["local", "repo_policy"].includes(value.source.kind)) throw new Error("Invalid attempt record: requiredVerification.source is invalid");
+  if (!value.source || typeof value.source !== "object" || Array.isArray(value.source) || !["local", "repo_policy", "default"].includes(value.source.kind)) throw new Error("Invalid attempt record: requiredVerification.source is invalid");
   const contract = {
     repository: nonEmpty(value.repository, "requiredVerification.repository"),
     command: nonEmpty(value.command, "requiredVerification.command"),

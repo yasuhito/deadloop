@@ -639,9 +639,6 @@ export function formatDoctorReport(snapshot: DoctorSnapshot): string {
     `config: ${formatConfigSource(snapshot.project)}`,
     formatRequiredVerification(snapshot.project.requiredVerification),
     ...(snapshot.verificationCandidates ? formatVerificationCandidates(snapshot.verificationCandidates) : []),
-    ...(snapshot.project.requiredVerification.status === "blocked" && snapshot.project.requiredVerification.reason === "no_source"
-      ? ["recovery: add a repository-owned aggregate checkCommand to trusted deadloop.json; use a local override only for a non-shareable exception"]
-      : []),
     "",
   ];
 

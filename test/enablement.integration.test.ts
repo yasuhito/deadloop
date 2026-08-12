@@ -1661,17 +1661,18 @@ describe("enablement command integration", () => {
     expect(JSON.parse(readFileSync(lockPath, "utf8")).projectId).toBe("demo");
   });
 
-  it("requires an explicit verification command when deadloop.json and projects.json are absent", async () => {
+  it("uses npm run check when deadloop.json and projects.json provide no override", async () => {
     const { root, repoPath } = fixtureRepository();
     rmSync(path.join(repoPath, "deadloop.json"));
-    git(repoPath, ["add", "deadloop.json"]);
-    git(repoPath, ["commit", "--quiet", "-m", "remove repository policy"]);
+    writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({ scripts: { check: "true" } }));
+    git(repoPath, ["add", "deadloop.json", "package.json"]);
+    git(repoPath, ["commit", "--quiet", "-m", "use default verification"]);
     git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
     const extension = await loadExtension(root);
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
-    expect(extension.messages.at(-1)).toContain("required verification blocked: no_source");
+    expect(extension.messages.at(-1)).toContain("deadloop enabled for owner/demo");
   });
 
   it("acknowledges an explicit post-enable change from false to true", async () => {

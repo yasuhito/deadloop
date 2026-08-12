@@ -26,52 +26,66 @@ This installs the deadloop extension and its setup skill together.
 
 ## Configure
 
-You need an authenticated `gh` CLI, a running compatible [Herdr](https://herdr.dev/) server, and a repository-level command that runs all required checks.
+You need an authenticated `gh` CLI and a running compatible [Herdr](https://herdr.dev/) server.
 
-1. Add the verification command to `deadloop.json` in the repository root:
-
-   ```json
-   {
-     "checkCommand": "npm run check"
-   }
-   ```
-
-   Replace `npm run check` with the command that runs your repository's tests and other required checks. Commit and push `deadloop.json` to the repository's base branch before continuing; deadloop reads shared policy from that branch.
-
-2. Start Pi from the repository's normal Git checkout:
+1. Start Pi from the repository's normal Git checkout:
 
    ```bash
    cd /absolute/path/to/your/repo
    pi
    ```
 
-3. Enable deadloop:
+2. Enable deadloop:
 
    ```text
    /deadloop-enable
    ```
 
-4. To send an Issue to deadloop, add both labels:
+3. To send an Issue to deadloop, add both labels:
 
    - `ready-for-agent`
    - `agent:implement`
 
-That is enough to start. deadloop creates any missing standard labels during enablement and leaves automatic merge off. It implements eligible Issues, opens PRs, reviews them, and hands reviewed PRs to a human.
+That is enough to start. During enablement, deadloop runs `npm run check`, creates any missing standard labels, and leaves automatic merge off. If the repository does not provide an `npm run check` script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
 
-## What enablement does
+## Control the loop with labels
 
-`/deadloop-enable` infers the repository, base branch, and Herdr worktree location. It then:
+You start the loop by labeling an Issue. deadloop owns the implementation and review transitions, then either hands the approved PR to a human or merges it according to policy.
 
-1. runs the configured verification command in a temporary worktree;
-2. verifies GitHub authentication and write access;
-3. creates any missing standard labels; and
-4. saves local permission to run the scheduler under `~/.pi/agent/deadloop/`.
+```mermaid
+flowchart LR
+    I["Issue queued<br/>ready-for-agent + agent:implement"]
+    W["Implementation<br/>ready-for-agent + agent:in-progress"]
+    R["PR review requested<br/>agent:review"]
+    V["Review and repair<br/>agent:in-progress"]
+    H["Human handoff<br/>ready-for-human"]
+    M["Merged"]
+    B["Needs attention<br/>agent:blocked"]
 
-If a check fails, deadloop remains disabled and reports what to fix. Use `/deadloop-doctor` for more detail.
+    I -->|deadloop claims Issue| W
+    W -->|PR created| R
+    R -->|deadloop claims review| V
+    V -->|changes pushed| R
+    V -->|approved; autoMerge off| H
+    V -->|approved; autoMerge on| M
+    H -->|human merges| M
+    W -. problem .-> B
+    V -. problem .-> B
+```
 
-Configuration files alone never start automation. `/deadloop-disable` stops new work without stopping active agents or deleting GitHub state, worktrees, or run artifacts. Re-enable each repository after upgrading from an older release.
+`ready-for-agent` marks an Issue as eligible, while `agent:implement` requests implementation. Remove `agent:implement` before deadloop claims the Issue to cancel that request. The remaining labels are normally managed by deadloop.
+
+`agent:blocked` stops the loop when deadloop needs help. Fix the cause reported in the Issue or PR comment, then follow its recovery instructions before requesting work again.
 
 ## Advanced configuration
+
+The default verification command is `npm run check`. To use another command, commit `deadloop.json` to the repository's base branch:
+
+```json
+{
+  "checkCommand": "your verification command"
+}
+```
 
 The default setup does not require a local configuration file. Create one only when you need overrides such as `autoMerge`, a custom `worktreeRoot`, or additional trusted automation hosts:
 
@@ -81,7 +95,7 @@ cp ~/.pi/agent/git/github.com/yasuhito/deadloop/extensions/deadloop/projects.exa
 $EDITOR ~/.pi/agent/deadloop/projects.json
 ```
 
-`projects.json` contains local paths and rollout choices. Do not commit it. Prefer the repository-owned `deadloop.json` for the shared verification command and other reviewable policy.
+`projects.json` contains local paths and rollout choices. Do not commit it. Prefer the repository-owned `deadloop.json` for shared, reviewable policy.
 
 See the [setup guide](docs/public-package-setup.md) for all settings and detailed enablement behavior.
 

@@ -61,6 +61,16 @@ describe("direct Node runtime parity", () => {
     );
   });
 
+  it("accepts the built-in required-verification source in both parsers", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-attempt-parity-"));
+    try {
+      const fixture = workerFixture().record;
+      const record = { ...fixture, requiredVerification: { ...fixture.requiredVerification!, source: { kind: "default" as const, location: "deadloop" } } };
+      writeFileSync(path.join(root, "attempt.json"), JSON.stringify(record));
+      expect(lifecycleRuntime.readAttemptRecord(root)).toEqual(readAttemptRecord(root));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("normalizes unknown record fields identically to the typed parser", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-attempt-parity-"));
     try {

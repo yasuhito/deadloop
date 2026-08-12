@@ -26,52 +26,66 @@ pi install git:github.com/yasuhito/deadloop
 
 ## 設定
 
-認証済みの `gh` CLI、起動中の互換 [Herdr](https://herdr.dev/) サーバー、リポジトリに必要な検査をまとめて実行するコマンドを用意してください。
+認証済みの `gh` CLI と、起動中の互換 [Herdr](https://herdr.dev/) サーバーを用意してください。
 
-1. リポジトリ直下の `deadloop.json` に検証コマンドを追加します。
-
-   ```json
-   {
-     "checkCommand": "npm run check"
-   }
-   ```
-
-   `npm run check` は、そのリポジトリのテストなど、必要な検査をまとめて実行するコマンドに置き換えてください。次へ進む前に、`deadloop.json` をリポジトリの基準ブランチへコミットして push します。deadloop は共有方針を基準ブランチから読み取ります。
-
-2. 通常の Git チェックアウトから Pi を起動します。
+1. 通常の Git チェックアウトから Pi を起動します。
 
    ```bash
    cd /absolute/path/to/your/repo
    pi
    ```
 
-3. deadloop を有効化します。
+2. deadloop を有効化します。
 
    ```text
    /deadloop-enable
    ```
 
-4. deadloop に任せる Issue に、次のラベルを両方付けます。
+3. deadloop に任せる Issue に、次のラベルを両方付けます。
 
    - `ready-for-agent`
    - `agent:implement`
 
-これだけで利用を開始できます。有効化すると、deadloop は不足している標準ラベルを作成し、自動マージを無効にした状態で動き始めます。対象の Issue を実装して PR を作成・レビューし、レビュー済みの PR を人間へ引き渡します。
+これだけで利用を開始できます。有効化すると、deadloop は `npm run check` を実行し、不足している標準ラベルを作成して、自動マージを無効にした状態で動き始めます。リポジトリに `npm run check` スクリプトがない場合は、[詳細設定](#詳細設定)に従って `deadloop.json` に別の `checkCommand` を指定してください。
 
-## 有効化で行うこと
+## ラベルでループを制御する
 
-`/deadloop-enable` は、リポジトリ、基準ブランチ、Herdr のワークツリー保存先を自動的に取得します。その後、次の処理を行います。
+Issue にラベルを付けると、ループが始まります。実装中とレビュー中の状態は deadloop が管理し、承認後は方針に従って PR を人間へ引き渡すか、自動でマージします。
 
-1. 一時ワークツリーで設定済みの検証コマンドを実行する
-2. GitHub の認証と書き込み権限を確認する
-3. 不足している標準ラベルを作成する
-4. `~/.pi/agent/deadloop/` にスケジューラーの実行許可を保存する
+```mermaid
+flowchart LR
+    I["実装待ちの Issue<br/>ready-for-agent + agent:implement"]
+    W["実装中<br/>ready-for-agent + agent:in-progress"]
+    R["PR のレビュー待ち<br/>agent:review"]
+    V["レビューと修正<br/>agent:in-progress"]
+    H["人間へ引き渡し<br/>ready-for-human"]
+    M["マージ済み"]
+    B["対応が必要<br/>agent:blocked"]
 
-検査に失敗した場合、deadloop は無効のまま、修正が必要な内容を表示します。詳しく調べるには `/deadloop-doctor` を使ってください。
+    I -->|deadloop が Issue を取得| W
+    W -->|PR を作成| R
+    R -->|deadloop がレビューを取得| V
+    V -->|修正を push| R
+    V -->|承認・autoMerge 無効| H
+    V -->|承認・autoMerge 有効| M
+    H -->|人間がマージ| M
+    W -. 問題発生 .-> B
+    V -. 問題発生 .-> B
+```
 
-設定ファイルが存在するだけでは、自動処理は始まりません。`/deadloop-disable` は新しい作業の開始を止めますが、実行中のエージェントは停止せず、GitHub の状態、ワークツリー、実行成果物も削除しません。旧版から更新した場合は、リポジトリごとに再度有効化してください。
+`ready-for-agent` は、エージェントが対応できる Issue であることを示します。`agent:implement` は実装を依頼するラベルです。deadloop が Issue を取得する前に `agent:implement` を外すと、その依頼を取り消せます。以降のラベルは通常、deadloop が管理します。
+
+`agent:blocked` が付くとループは止まります。Issue または PR のコメントに記載された原因を解消し、案内された復旧手順に従ってから、必要な作業を再依頼してください。
 
 ## 詳細設定
+
+既定の検証コマンドは `npm run check` です。別のコマンドを使う場合は、リポジトリの基準ブランチへ `deadloop.json` をコミットします。
+
+```json
+{
+  "checkCommand": "your verification command"
+}
+```
 
 標準の設定では、ローカル設定ファイルは不要です。`autoMerge`、ワークツリー保存先、信頼済みの別の自動処理ホストなどを上書きする場合だけ作成します。
 
@@ -81,7 +95,7 @@ cp ~/.pi/agent/git/github.com/yasuhito/deadloop/extensions/deadloop/projects.exa
 $EDITOR ~/.pi/agent/deadloop/projects.json
 ```
 
-`projects.json` にはローカルのパスや運用設定が含まれます。リポジトリにはコミットしないでください。共有する検証コマンドなど、レビュー対象にする方針は、リポジトリ内の `deadloop.json` に記載することを推奨します。
+`projects.json` にはローカルのパスや運用設定が含まれます。リポジトリにはコミットしないでください。共有してレビューする方針は、リポジトリ内の `deadloop.json` に記載することを推奨します。
 
 すべての設定項目と有効化の詳しい動作は、[設定ガイド](docs/public-package-setup.md)を参照してください。
 

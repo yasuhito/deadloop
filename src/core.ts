@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { AGENT_KINDS, type AgentKind, isAgentKind } from "./agent-profiles.cjs";
 import {
+  DEFAULT_REQUIRED_VERIFICATION_COMMAND,
   resolveRequiredVerification,
   type RequiredVerificationResolution,
 } from "./required-verification";
@@ -14,8 +15,7 @@ export function isLinkedGitWorktree(cwd: string, gitDir: string, gitCommonDir: s
   return path.resolve(cwd, gitDir) !== path.resolve(cwd, gitCommonDir);
 }
 
-export const DEFAULT_CHECK_COMMAND =
-  "git diff --check && node -e \"const fs=require('fs'),cp=require('child_process');if(!fs.existsSync('package.json'))process.exit(0);const s=JSON.parse(fs.readFileSync('package.json','utf8')).scripts||{};const skip='echo \\\"Error: no test specified\\\" && exit 1';const names=s.check?['check']:['test','lint','typecheck'].filter((n)=>s[n]&&s[n]!==skip);for(const n of names)cp.execFileSync('npm',['run',n],{stdio:'inherit'});\"";
+export const DEFAULT_CHECK_COMMAND = DEFAULT_REQUIRED_VERIFICATION_COMMAND;
 
 export const DEFAULT_WORKER_INSTRUCTION_FILES = ["AGENTS.md", "CONTEXT.md", "README.md"] as const;
 

@@ -209,7 +209,7 @@ function parseRequiredVerification(value: unknown, required: boolean): RequiredV
   const source = contract.source;
   if (!source || typeof source !== "object" || Array.isArray(source)) fail("requiredVerification.source must be an object");
   const sourceValue = source as Record<string, unknown>;
-  if (sourceValue.kind !== "local" && sourceValue.kind !== "repo_policy") fail("requiredVerification.source.kind is invalid");
+  if (sourceValue.kind !== "local" && sourceValue.kind !== "repo_policy" && sourceValue.kind !== "default") fail("requiredVerification.source.kind is invalid");
   const command = nonEmptyString(contract.command, "requiredVerification.command");
   const parsed: RequiredVerificationContract = {
     repository: nonEmptyString(contract.repository, "requiredVerification.repository"),

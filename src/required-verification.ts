@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { parse as parseYaml } from "yaml";
 
-export type RequiredVerificationSourceKind = "local" | "repo_policy";
+export type RequiredVerificationSourceKind = "local" | "repo_policy" | "default";
 
 export type VerificationCandidate = {
   category: "aggregate" | "individual" | "ci_run";
@@ -47,6 +47,13 @@ export type RequiredVerificationSource = {
   command: string;
 };
 
+export const DEFAULT_REQUIRED_VERIFICATION_COMMAND = "npm run check";
+export const DEFAULT_REQUIRED_VERIFICATION_SOURCE: RequiredVerificationSource = {
+  kind: "default",
+  location: "deadloop",
+  command: DEFAULT_REQUIRED_VERIFICATION_COMMAND,
+};
+
 export type RequiredVerificationSourceIdentity = Omit<RequiredVerificationSource, "command">;
 
 export type RequiredVerificationContract = {
@@ -60,7 +67,7 @@ export type RequiredVerificationContract = {
   };
 };
 
-export type RequiredVerificationBlockReason = "source_conflict" | "no_source" | "zero_targets" | "missing_base_revision";
+export type RequiredVerificationBlockReason = "source_conflict" | "zero_targets" | "missing_base_revision";
 
 export type RequiredVerificationResolution =
   | { status: "resolved"; contract: RequiredVerificationContract }
@@ -86,13 +93,14 @@ function identity(source: RequiredVerificationSource): RequiredVerificationSourc
 function blocked(
   input: RequiredVerificationResolutionInput,
   reason: RequiredVerificationBlockReason,
+  sources: RequiredVerificationSource[] = [...input.localSources, ...input.sharedSources],
 ): RequiredVerificationResolution {
   return {
     status: "blocked",
     reason,
     repository: input.repository,
     baseRevision: input.baseRevision,
-    sources: [...input.localSources, ...input.sharedSources],
+    sources,
   };
 }
 
@@ -107,11 +115,13 @@ export function resolveRequiredVerification(
     return blocked(input, "source_conflict");
   }
 
-  const selected = input.localSources[0] || input.sharedSources[0];
-  if (!selected) return blocked(input, "no_source");
+  const selected = input.localSources[0] || input.sharedSources[0] || DEFAULT_REQUIRED_VERIFICATION_SOURCE;
   if (!selected.command.trim()) return blocked(input, "zero_targets");
   if (!input.baseRevision.trim() || input.baseRevision === "unknown") {
-    return blocked(input, "missing_base_revision");
+    const sources = selected.kind === "default"
+      ? [DEFAULT_REQUIRED_VERIFICATION_SOURCE]
+      : [...input.localSources, ...input.sharedSources];
+    return blocked(input, "missing_base_revision", sources);
   }
 
   const replaced = input.localSources.length ? input.sharedSources[0] : undefined;

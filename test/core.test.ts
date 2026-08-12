@@ -85,10 +85,10 @@ describe("deterministic extension core", () => {
       checkCommand: DEFAULT_CHECK_COMMAND,
       requiredVerification: {
         status: "blocked",
-        reason: "no_source",
+        reason: "missing_base_revision",
         repository: "owner/repo",
         baseRevision: "unknown",
-        sources: [],
+        sources: [{ kind: "default", location: "deadloop", command: "npm run check" }],
       },
       autoMerge: false,
       ciFallback: {
