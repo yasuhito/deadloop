@@ -23,7 +23,7 @@ import {
   templateValues,
 } from "../../src/core";
 import { buildDoctorSnapshot, formatDoctorReport, herdr075DoctorFinding } from "../../src/doctor";
-import { compatibilityDiagnosticData } from "../../src/herdr-075-compat";
+import { compatibilityDiagnosticData, parseHerdr075Compatibility } from "../../src/herdr-075-compat";
 import { runHerdrCompatibilityPreflight } from "../../src/herdr-preflight";
 import { discoverVerificationCandidates } from "../../src/required-verification";
 import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } from "../../src/status";
@@ -169,6 +169,18 @@ function readConfigText() {
     if (error?.code === "ENOENT") return { text: "{}", configPath };
     throw error;
   }
+}
+
+function herdrServerIsUnreachableWithCompatibleClient(): boolean {
+  const client = childProcess.spawnSync("herdr", ["--version"], { encoding: "utf8", timeout: 10_000 });
+  if (client.status !== 0 || client.error) return false;
+  try {
+    parseHerdr075Compatibility(String(client.stdout || ""), "version: 0.7.5\ncompatible: yes\n");
+  } catch { return false; }
+  const server = childProcess.spawnSync("herdr", ["status", "server"], { encoding: "utf8", timeout: 10_000 });
+  if (server.status === 0 && !server.error) return false;
+  const failure = `${server.error?.message || ""}\n${server.stderr || ""}\n${server.stdout || ""}`.toLowerCase();
+  return /connection refused|cannot connect|failed to connect|unreachable|timed? out|no such file|no such socket|socket.*not found/.test(failure);
 }
 
 function herdrCompatibilityPreflight() {
@@ -1466,6 +1478,35 @@ function registerReportCommand(pi, name, description, customType, buildReport) {
   });
 }
 
+async function reconcilePrWorkAuthority(pi, project): Promise<boolean> {
+  if (pi.testing && typeof pi.testing.reconcilePrWorkAuthority !== "function") return true;
+  if (typeof pi.testing?.reconcilePrWorkAuthority === "function") {
+    return await pi.testing.reconcilePrWorkAuthority(project);
+  }
+  const labels = projectLabels(project);
+  const enabled = findEnabledProject(loadEnablementState(), project);
+  if (!enabled?.automationLogin) return false;
+  const result = await execJson(pi, "node", [
+    path.join(AUTOMATION_DIR, "reconcile-pr-work-authority.ts"),
+    "--project-id", project.id,
+    "--project-repo", project.repoPath,
+    "--github-repo", project.githubRepo,
+    "--state-dir", STATE_DIR,
+    "--enabled-at", String(project.enabledAt),
+    "--automation-login", enabled.automationLogin,
+    "--review-label", labels.review,
+    "--implement-label", labels.implement,
+    "--update-branch-label", "agent:update-branch",
+    "--in-progress-label", labels.inProgress,
+    "--blocked-label", labels.blocked,
+  ], null, { timeout: 90_000 });
+  if (!result || result.action === "error") {
+    debugLog("PR work-authority reconciliation failed", result?.summary || result?.error || "no result");
+    return false;
+  }
+  return true;
+}
+
 async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> {
   const runsDir = path.join(STATE_DIR, "runs");
   let runs: string[];
@@ -1552,7 +1593,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
   return safeToSchedule;
 }
 
-export { reconcilePersistedAttemptJournals, retainedAttemptClaimSnapshot, retainedAttemptDoctorFindings };
+export { reconcilePersistedAttemptJournals, reconcilePrWorkAuthority, retainedAttemptClaimSnapshot, retainedAttemptDoctorFindings };
 
 function attemptRecordForId(project, attemptId) {
   const runsDir = path.join(STATE_DIR, "runs");
@@ -1596,6 +1637,51 @@ export default function (pi) {
     "deadloop-doctor",
     buildLiveDoctorReport,
   );
+  pi.registerCommand("deadloop-complete-github-state-migration", {
+    description: "Confirm the GitHub-state deployment gate after every old Automation host is updated or stopped",
+    handler: async (args, ctx) => {
+      if (String(args || "").trim() !== "updated-hosts-stopped") {
+        displayCommandResult(
+          pi,
+          ctx,
+          "deadloop-complete-github-state-migration",
+          "Usage: /deadloop-complete-github-state-migration updated-hosts-stopped\nRun this only after the GitHub-state reconciliation changes are deployed and every old Automation host is updated or stopped.",
+        );
+        return;
+      }
+      try {
+        const data = await collectLiveSnapshotData(pi, ctx.cwd);
+        const project = data.selectedProject;
+        if (!project) throw new Error("deadloop is not enabled for the current repository");
+        if (!ownsSchedulerLock(project)) throw new Error("the current Automation host does not own the repository scheduler lock");
+        const enabled = assertEnabled({ repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt });
+        const login = childProcess.spawnSync("gh", ["api", "user", "--jq", ".login"], { encoding: "utf8", timeout: 10_000 });
+        if (login.status !== 0 || String(login.stdout || "").trim().toLowerCase() !== String(enabled.automationLogin || "").toLowerCase()) {
+          throw new Error("the authenticated GitHub login does not match the enabled Automation host");
+        }
+        const trustedFeature = gitOutput(project.repoPath, ["show", `${project.baseBranch}:src/pr-work-authority-reconciliation.ts`]);
+        if (!trustedFeature.includes("GITHUB_STATE_RECONCILIATION_VERSION = 1")) {
+          throw new Error("the trusted base does not contain the GitHub-state reconciliation feature marker");
+        }
+        const retained = retainedAttemptClaimSnapshot(project);
+        if (retained.ownershipAmbiguous) throw new Error("retained attempt ownership is ambiguous");
+        const targetPrs = [...new Set(retained.claims
+          .filter((target) => target?.kind === "pull-request" && Number.isSafeInteger(Number(target.number)) && Number(target.number) > 0)
+          .map((target) => Number(target.number)))].sort((left, right) => left - right);
+        writeJsonFile(path.join(STATE_DIR, "github-state-migration-v1.json"), {
+          schemaVersion: 1,
+          repository: project.githubRepo,
+          repositoryId: enabled.githubRepositoryId,
+          confirmation: "updated-hosts-stopped",
+          targetPrs,
+          confirmedAt: new Date().toISOString(),
+        });
+        displayCommandResult(pi, ctx, "deadloop-complete-github-state-migration", "Deployment gate recorded. The next reconciliation will inspect retained workspaces before migrating PR requests.");
+      } catch (error) {
+        displayCommandResult(pi, ctx, "deadloop-complete-github-state-migration", `Migration gate was not recorded: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  });
   pi.registerCommand("deadloop-abandon-attempt", {
     description: "Safely abandon one proven launch-failed attempt and requeue its unchanged Issue or PR",
     handler: async (args, ctx) => {
@@ -1680,6 +1766,11 @@ export default function (pi) {
     try {
       compatibilityPreflight();
     } catch (error) {
+      // Recovery-only exception: a compatible local client may reflect an unreachable runtime
+      // as agent:blocked. No candidate, launch, completion, push, ready, or merge path is opened.
+      if (herdrServerIsUnreachableWithCompatibleClient() && isProjectEnabled(schedulerRun.project)) {
+        await reconcilePrWorkAuthority(pi, schedulerRun.project);
+      }
       setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
@@ -1719,6 +1810,13 @@ export default function (pi) {
     running = true;
     let completedSafely = false;
     try {
+      // GitHub work authority is reconciled before local cleanup, pending handoffs, or candidate selection.
+      const authorityReconciled = await reconcilePrWorkAuthority(pi, project);
+      if (!authorityReconciled) {
+        setLooperStatus(ctx, "skipped: PR work authority could not be reconciled safely");
+        completedSafely = true;
+        return;
+      }
       // Restart reconciliation is idempotent and runs before pending handoffs or candidate selection.
       const safeToSchedule = await reconcilePersistedAttemptJournals(pi, project);
       if (!safeToSchedule) {

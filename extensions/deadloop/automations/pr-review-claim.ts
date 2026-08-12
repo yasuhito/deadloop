@@ -333,6 +333,35 @@ function classifyBoundReviewClaim(
     : { kind: "binding_mismatch" };
 }
 
+function classifyReviewClaimTimeStatus(
+  pr: JsonObject,
+  events: JsonObject[],
+  comments: JsonObject[],
+  restHeaders: unknown,
+  contract: JsonObject,
+  liveTarget: LiveReviewTarget,
+): ReviewClaimValidation {
+  if (!consistentSavedClaimContract(contract)) return { kind: "claim_invalid" };
+  if (!matchesLiveReviewTarget(contract, liveTarget)) return { kind: "binding_mismatch" };
+  const configuredState = normalizedActiveState(contract.binding as ReviewClaimBinding);
+  if (!configuredState) return { kind: "binding_mismatch" };
+  const request = events.find((event) => String(event.id || event.node_id || "") === String(contract.binding?.requestEventId || "")
+    && String(event.event || "").toLowerCase() === "labeled"
+    && String(event.label?.name || "") === configuredState.requestLabel);
+  const claimComment = comments.find((comment) => serverCommentId(comment) === String(contract.commentId || ""));
+  if (!request || !claimComment || !reviewClaimCommentMatchesContract(claimComment, contract)) return { kind: "claim_invalid" };
+  if (String(pr.state || "").toUpperCase() !== "OPEN"
+    || String(pr.headRefOid || "").toLowerCase() !== String(contract.binding?.revision || "").toLowerCase()
+    || serverCommentId(earliestBoundClaimWithoutTime(comments, contract) || {}) !== String(contract.commentId || "")) {
+    return { kind: "binding_mismatch" };
+  }
+  const serverNow = parseGithubRestDate(restHeaders, new Date(Math.max(eventTime(request), commentTime(claimComment))));
+  if (!serverNow) return { kind: "server_time_unverifiable" };
+  return serverNow.getTime() >= commentTime(claimComment) + Number(contract.authoritySeconds) * 1000
+    ? { kind: "expired" }
+    : { kind: "authorized" };
+}
+
 function classifyActiveReviewClaim(
   pr: JsonObject,
   events: JsonObject[],
@@ -510,6 +539,7 @@ module.exports = {
   assertClaimMatchesCurrentConfiguration,
   classifyActiveReviewClaim,
   classifyRepairAuthorityTransition,
+  classifyReviewClaimTimeStatus,
   claimContractMatchesConfiguration,
   parseGithubRestDate,
   parseReviewClaim,
