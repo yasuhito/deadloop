@@ -15,7 +15,7 @@ const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../..
 const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const {
   classifyActiveReviewClaim,
-  classifyRepairAuthorityTransition,
+  classifyPushedHeadAuthorityTransition,
   readGithubRestResponseHeaders,
   savedReviewClaimContract,
   visiblyBlockReviewClaimTimeFailure,
@@ -199,7 +199,7 @@ function completion(args: JsonObject): DriverResult {
             : liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
               ? classifyActiveReviewClaim(current, events, currentComments, headers, authoritativeClaim, liveTarget)
               : successfulReceipt
-                ? classifyRepairAuthorityTransition(current, events, currentComments, headers, authoritativeClaim, liveTarget, receipt || {})
+                ? classifyPushedHeadAuthorityTransition(current, events, currentComments, headers, authoritativeClaim, liveTarget, receipt || {})
                 : { kind: "binding_mismatch" };
           return {
             ...validation,

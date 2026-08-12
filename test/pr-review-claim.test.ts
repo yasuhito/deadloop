@@ -8,7 +8,7 @@ const {
   assertClaimMatchesCurrentConfiguration,
   claimContractMatchesConfiguration,
   classifyActiveReviewClaim,
-  classifyRepairAuthorityTransition,
+  classifyPushedHeadAuthorityTransition,
   visiblyBlockReviewClaimTimeFailure,
   parseGithubRestDate,
   parsePaginatedGithubJson,
@@ -17,7 +17,7 @@ const {
   savedReviewClaimContract,
   selectReviewClaimWinner,
   validateActiveReviewClaim,
-  validateRepairAuthorityTransition,
+  validatePushedHeadAuthorityTransition,
 } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 
 const head = "a".repeat(40);
@@ -175,7 +175,7 @@ describe("PR review GitHub claim", () => {
     };
     const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
 
-    expect(classifyRepairAuthorityTransition(pr, [request], [claim()], "", contract, liveTarget, {
+    expect(classifyPushedHeadAuthorityTransition(pr, [request], [claim()], "", contract, liveTarget, {
       originalHeadOid: head, headOid: repairedHead,
     }).kind).toBe("server_time_unverifiable");
   });
@@ -323,7 +323,7 @@ describe("PR review GitHub claim", () => {
     };
     const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
 
-    expect(validateRepairAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
+    expect(validatePushedHeadAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
       repositoryId: "R_other", repository: "owner/repo", targetNumber: 24,
     }, { originalHeadOid: head, headOid: repairedHead })).toBe(false);
   });
@@ -336,7 +336,7 @@ describe("PR review GitHub claim", () => {
     };
     const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
 
-    expect(validateRepairAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
+    expect(validatePushedHeadAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
       repositoryId: "R_123", repository: "owner/renamed", targetNumber: 24,
     }, { originalHeadOid: head, headOid: repairedHead })).toBe(false);
   });
@@ -349,7 +349,7 @@ describe("PR review GitHub claim", () => {
     };
     const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
 
-    expect(validateRepairAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
+    expect(validatePushedHeadAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, {
       repositoryId: "R_123", repository: "owner/repo", targetNumber: 25,
     }, { originalHeadOid: head, headOid: repairedHead })).toBe(false);
   });
@@ -362,7 +362,7 @@ describe("PR review GitHub claim", () => {
     };
     const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
 
-    expect(validateRepairAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget, {
+    expect(validatePushedHeadAuthorityTransition(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget, {
       originalHeadOid: head, headOid: repairedHead,
     })).toBe(true);
   });

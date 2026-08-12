@@ -34,6 +34,8 @@ export type BranchUpdateMonitorPromptInput = MonitorPromptBaseInput & {
   expectedBaseOid: string;
   branch: string;
   reviewLabel: string;
+  implementLabel?: string;
+  updateBranchLabel?: string;
   inProgressLabel: string;
   blockedLabel: string;
 };
@@ -152,6 +154,11 @@ After a \`blocked\` promise:
 Report only the resulting action and evidence.`;
 }
 
+function renderBranchUpdateCompletionCommand(input: BranchUpdateMonitorPromptInput): string {
+  const attemptRecord = input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`;
+  return `node ${shellQuotePrompt(`${input.automationDir}/pr-branch-update-complete.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --attempt-record ${shellQuotePrompt(attemptRecord)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-label ${shellQuotePrompt(input.reviewLabel)} --in-progress-label ${shellQuotePrompt(input.inProgressLabel)} --blocked-label ${shellQuotePrompt(input.blockedLabel)}${input.reviewClaim ? ` --review-claim ${shellQuotePrompt(JSON.stringify(input.reviewClaim))}` : ""}`;
+}
+
 function renderBranchUpdateMonitorPrompt(input: BranchUpdateMonitorPromptInput): string {
   return `Deterministic driver launched one branch-update worker for PR #${input.prNumber}. Monitor only this attempt; never launch or select an agent, push a branch, review the PR, or merge it.
 
@@ -159,13 +166,15 @@ Attempt binding:
 - Existing PR branch: ${input.branch}
 - Expected PR head: ${input.expectedHeadOid}
 - Selected base head: ${input.expectedBaseOid}
-- Keep ${input.reviewLabel} and ${input.inProgressLabel} while the update is running.
+- The branch-update request is already consumed; ${input.inProgressLabel} is the active claim state while the update runs.
 
 ${renderPromisePollingRules(input, "pull-request", false)}
 
 Terminal handling:
-- status=complete, reason=branch_update_pushed: re-read the PR and confirm its head changed, run \`${renderAttemptPersistence(input)}\`, then run \`${renderWorkspaceCompletion(input)}\` only after result_persisted. Do not change labels; normal PR review resumes on the next automation cycle.
-- status=complete, reason=stale_head: run \`${renderWorkspaceCompletion(input)}\`; it closes only after confirming the PR head changed and makes no comment or label change. Keep both review labels so the next cycle re-evaluates the new head.
+- status=complete, reason=branch_update_pushed: run this deterministic completion handler exactly once and follow its result:
+  \`${renderBranchUpdateCompletionCommand(input)}\`
+  It re-observes the pushed head under the active claim and replaces ${input.inProgressLabel} with a new ${input.reviewLabel} request. Only after it reports branch_update_review_requested, run \`${renderAttemptPersistence(input)}\` and then \`${renderWorkspaceCompletion(input)}\` after result_persisted.
+- status=complete, reason=stale_head: run \`${renderWorkspaceCompletion(input)}\`; it closes only after confirming the PR head changed and makes no comment or label change. Keep the active claim state so the next cycle re-evaluates the new head.
 - status=blocked: retain the workspace and report a concise failure with the evidence needed for a later claim-authorized workflow. Do not comment or change labels.
 - Any malformed completion or unsafe/inconclusive update result is a failed update: retain the workspace and report it; never guess success or mutate GitHub state.
 

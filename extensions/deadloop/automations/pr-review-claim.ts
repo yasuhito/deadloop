@@ -393,7 +393,7 @@ function validateActiveReviewClaim(
   return classifyActiveReviewClaim(pr, events, comments, restHeaders, contract, liveTarget).kind === "authorized";
 }
 
-function classifyRepairAuthorityTransition(
+function classifyPushedHeadAuthorityTransition(
   pr: JsonObject,
   events: JsonObject[],
   comments: JsonObject[],
@@ -411,7 +411,7 @@ function classifyRepairAuthorityTransition(
   return classifyBoundReviewClaim(pr, events, comments, restHeaders, contract, liveTarget, repairedHead);
 }
 
-function validateRepairAuthorityTransition(
+function validatePushedHeadAuthorityTransition(
   pr: JsonObject,
   events: JsonObject[],
   comments: JsonObject[],
@@ -420,7 +420,7 @@ function validateRepairAuthorityTransition(
   liveTarget: LiveReviewTarget,
   transition: { originalHeadOid?: unknown; headOid?: unknown },
 ): boolean {
-  return classifyRepairAuthorityTransition(pr, events, comments, restHeaders, contract, liveTarget, transition).kind === "authorized";
+  return classifyPushedHeadAuthorityTransition(pr, events, comments, restHeaders, contract, liveTarget, transition).kind === "authorized";
 }
 
 type TimeBlockObservation = ReviewClaimValidation & { comments: JsonObject[]; labels: string[] };
@@ -544,7 +544,7 @@ module.exports = {
   activeReviewRequest,
   assertClaimMatchesCurrentConfiguration,
   classifyActiveReviewClaim,
-  classifyRepairAuthorityTransition,
+  classifyPushedHeadAuthorityTransition,
   classifyReviewClaimTimeStatus,
   claimContractMatchesConfiguration,
   parseGithubRestDate,
@@ -556,6 +556,6 @@ module.exports = {
   savedReviewClaimContract,
   selectReviewClaimWinner,
   validateActiveReviewClaim,
-  validateRepairAuthorityTransition,
+  validatePushedHeadAuthorityTransition,
   visiblyBlockReviewClaimTimeFailure,
 };
