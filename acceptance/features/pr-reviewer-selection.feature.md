@@ -96,6 +96,12 @@ This prevents duplicate and early reviews of pull requests that are being prepar
 * When deadloop selects and processes the review target
 * Then deadloop starts the Reviewer for normal review
 
+## Scenario: Keep a repair-blocked pull request stopped for a human
+
+* Given The repair dispatcher blocked a pull request with its own Agent request
+* When deadloop selects and processes the review target
+* Then deadloop skips pull request #14 as blocked
+
 ## Scenario: Keep skipping a blocked pull request whose Agent request predates its block
 
 * Given A blocked pull request has only an Agent request that predates its block

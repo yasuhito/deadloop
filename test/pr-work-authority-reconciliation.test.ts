@@ -8,7 +8,6 @@ const {
   applyPrWorkAuthorityReconciliation,
   postBlockRequestIsEligible,
   reconcilePrWorkAuthority,
-  recoveryComment,
   requestAfterInvalidationCutoff,
 } = require("../src/pr-work-authority-reconciliation.ts");
 
@@ -65,14 +64,8 @@ function twoBlockCycles(request: { id: string; created_at: string }) {
   });
   const requestEvent = { ...request, event: "labeled", actor: { login: "human" }, label: { name: "agent:review" } };
   return {
-    pr: base.pr,
     request: requestEvent,
     events: [blockedEvent("30", "2026-08-01T10:01:00Z"), requestEvent, blockedEvent("32", "2026-08-01T10:03:00Z")],
-    comments: ["30", "32"].map((cutoffEventId) => ({
-      author: { login: "deadloop-bot" },
-      body: recoveryComment(base.pr.number, base.pr.headRefOid, "claim_expired", cutoffEventId),
-    })),
-    authorizedLogins: ["deadloop-bot"],
     blockedLabel: "agent:blocked",
   };
 }
@@ -87,11 +80,41 @@ function blockedOnAnEarlierRevision(options: { request?: { id: string; created_a
     event: "labeled", actor: { login: "human" }, label: { name: "agent:review" },
   };
   return {
-    pr: base.pr,
     request,
     events: options.unauthenticated ? [request] : [cutoff, request],
-    comments: [{ author: { login: "deadloop-bot" }, body: recoveryComment(base.pr.number, "b".repeat(40), "claim_expired", "30") }],
-    authorizedLogins: ["deadloop-bot"],
+    blockedLabel: "agent:blocked",
+  };
+}
+
+// The repair dispatcher stops a PR by adding agent:review and agent:blocked in one label move, so
+// both land on the same GitHub timestamp. An older reconciler block precedes it.
+// A person can stop a pull request by adding agent:blocked by hand. That block explains nothing and
+// belongs to no Automation host, and it still has to outrank the requests that came before it.
+function personBlockedAfterRequest(options: { request?: { id: string; created_at: string }; onlyPersonBlock?: boolean } = {}) {
+  const automationBlock = { id: "50", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } };
+  const personBlock = { id: "52", event: "labeled", created_at: "2026-08-01T10:05:00Z", actor: { login: "human" }, label: { name: "agent:blocked" } };
+  const request = {
+    ...(options.request || { id: "51", created_at: "2026-08-01T10:02:00Z" }),
+    event: "labeled", actor: { login: "human" }, label: { name: "agent:review" },
+  };
+  return {
+    request,
+    events: options.onlyPersonBlock ? [personBlock, request] : [automationBlock, request, personBlock],
+    blockedLabel: "agent:blocked",
+  };
+}
+
+function repairBlockedInOneOperation(options: { request?: { id: string; created_at: string } } = {}) {
+  const blockedAt = "2026-08-01T10:03:00Z";
+  const reconcilerBlock = { id: "30", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } };
+  const repairBlock = { id: "42", event: "labeled", created_at: blockedAt, actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } };
+  const request = {
+    ...(options.request || { id: "43", created_at: blockedAt }),
+    event: "labeled", actor: { login: "deadloop-bot" }, label: { name: "agent:review" },
+  };
+  return {
+    request,
+    events: [reconcilerBlock, repairBlock, request],
     blockedLabel: "agent:blocked",
   };
 }
@@ -167,24 +190,36 @@ describe("PR work-authority reconciliation", () => {
     )).toBe(true);
   });
 
-  it("requires a bound recovery marker before selecting a post-block request", () => {
+  it("selects a post-block request that follows a block deadloop never explained", () => {
     const cutoff = { id: "30", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } };
     const request = { id: "31", event: "labeled", created_at: "2026-08-01T10:02:00Z", actor: { login: "human" }, label: { name: "agent:review" } };
-    expect(postBlockRequestIsEligible({ pr: base.pr, request, events: [cutoff, request], comments: [], authorizedLogins: ["deadloop-bot"], blockedLabel: "agent:blocked" })).toBe(false);
+    expect(postBlockRequestIsEligible({ request, events: [cutoff, request], blockedLabel: "agent:blocked" })).toBe(true);
   });
 
-  it("selects a post-block request bound by the recovery marker", () => {
-    const cutoff = { id: "30", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } };
-    const request = { id: "31", event: "labeled", created_at: "2026-08-01T10:02:00Z", actor: { login: "human" }, label: { name: "agent:review" } };
-    const comments = [{ author: { login: "deadloop-bot" }, body: recoveryComment(base.pr.number, base.pr.headRefOid, "claim_expired", "30") }];
-    expect(postBlockRequestIsEligible({ pr: base.pr, request, events: [cutoff, request], comments, authorizedLogins: ["deadloop-bot"], blockedLabel: "agent:blocked" })).toBe(true);
+  it("rejects a request the same operation added while blocking the PR", () => {
+    expect(postBlockRequestIsEligible(repairBlockedInOneOperation())).toBe(false);
+  });
+
+  it("rejects a request that predates the newest block even when only an older one is explained", () => {
+    expect(postBlockRequestIsEligible(repairBlockedInOneOperation({ request: { id: "41", created_at: "2026-08-01T10:02:00Z" } }))).toBe(false);
+  });
+
+  it("rejects a request that predates a block a person applied", () => {
+    expect(postBlockRequestIsEligible(personBlockedAfterRequest())).toBe(false);
+  });
+
+  it("selects a request added after a block a person applied", () => {
+    expect(postBlockRequestIsEligible(personBlockedAfterRequest({ onlyPersonBlock: true, request: { id: "53", created_at: "2026-08-01T10:06:00Z" } }))).toBe(true);
+  });
+
+  it("selects a request added after a block carrying no recovery marker", () => {
+    expect(postBlockRequestIsEligible(repairBlockedInOneOperation({ request: { id: "44", created_at: "2026-08-01T10:05:00Z" } }))).toBe(true);
   });
 
   it("validates a post-block request with a configured blocked label", () => {
     const cutoff = { id: "40", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "custom:blocked" } };
     const request = { id: "41", event: "labeled", created_at: "2026-08-01T10:02:00Z", actor: { login: "human" }, label: { name: "agent:review" } };
-    const comments = [{ author: { login: "deadloop-bot" }, body: recoveryComment(base.pr.number, base.pr.headRefOid, "claim_expired", "40") }];
-    expect(postBlockRequestIsEligible({ pr: base.pr, request, events: [cutoff, request], comments, authorizedLogins: ["deadloop-bot"], blockedLabel: "custom:blocked" })).toBe(true);
+    expect(postBlockRequestIsEligible({ request, events: [cutoff, request], blockedLabel: "custom:blocked" })).toBe(true);
   });
 
   it("rejects a request that follows only an obsolete blocked cutoff", () => {

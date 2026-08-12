@@ -128,8 +128,13 @@ function compareGithubEvents(left: JsonObject, right: JsonObject): number {
   return time || eventId(left).localeCompare(eventId(right), undefined, { numeric: true });
 }
 
+/**
+ * One label move can add a request label and the blocked label together, and GitHub stamps both
+ * with the same second. A request no later than the block was part of that block rather than an
+ * answer to it, so only a strictly later request survives the cutoff.
+ */
 function requestAfterInvalidationCutoff(request: JsonObject, cutoff: JsonObject): boolean {
-  return Boolean(eventId(request) && eventId(cutoff)) && compareGithubEvents(request, cutoff) > 0;
+  return Boolean(eventId(request) && eventId(cutoff)) && eventTime(request) > eventTime(cutoff);
 }
 
 function eventActor(event: JsonObject): string {
@@ -144,14 +149,21 @@ function eventAction(event: JsonObject): string {
   return String(event.event || "").toLowerCase();
 }
 
-function authenticatedBlockedCutoff(
+/**
+ * The newest block the pull request reached. Eligibility counts a block whoever applied it: a
+ * cutoff only ever denies work, so a person stopping a pull request by hand has to outrank the
+ * requests before it just as an Automation host does. Binding expiry invalidation instead needs a
+ * block deadloop itself made, so that caller names the Automation host.
+ */
+function latestBlockedEvent(
   events: JsonObject[],
-  automationLogin: string,
   blockedLabel: string,
+  automationLogin?: string,
 ): JsonObject | null {
+  const owner = automationLogin?.toLowerCase();
   return events.filter((event) => eventAction(event) === "labeled"
     && eventLabel(event) === blockedLabel
-    && eventActor(event) === automationLogin.toLowerCase()
+    && (owner === undefined || eventActor(event) === owner)
     && eventId(event))
     .sort(compareGithubEvents)
     .at(-1) || null;
@@ -236,7 +248,7 @@ async function applyPrWorkAuthorityReconciliation(
       && eventActor(event) === operations.automationLogin.toLowerCase());
     const cutoff = labelsChange || recordedTimelineEventIds
       ? newBlockedEvents.length === 1 ? newBlockedEvents[0] : null
-      : authenticatedBlockedCutoff(events, operations.automationLogin, input.blockedLabel);
+      : latestBlockedEvent(events, input.blockedLabel, operations.automationLogin);
     if (!cutoff) return { action: "blocked_cutoff_unproven", cleanup: "preserve_workspace" };
     cutoffEventId = eventId(cutoff);
     const body = recoveryComment(input.pr.number, input.pr.headRefOid, decision.reason, cutoffEventId);
@@ -273,36 +285,20 @@ function parseRecoveryMarker(body: unknown): JsonObject | null {
 }
 
 function postBlockRequestIsEligible(input: {
-  pr: { number: number; headRefOid: string };
   request: JsonObject;
   events: JsonObject[];
-  comments: JsonObject[];
-  authorizedLogins: string[];
   blockedLabel: string;
 }): boolean {
-  const authorized = new Set(input.authorizedLogins.map((login) => login.toLowerCase()));
-  const cutoffs: JsonObject[] = [];
-  for (const comment of input.comments) {
-    const author = String(comment.author?.login || comment.user?.login || "").toLowerCase();
-    const marker = parseRecoveryMarker(comment.body);
-    if (!authorized.has(author) || !marker || Number(marker.number) !== input.pr.number) continue;
-    // A marker records the revision its block covered, but every block this PR ever reached still
-    // orders the requests that follow it. Counting only markers on the current head would leave a
-    // PR whose author pushed a fix with no cutoff at all, and a request that can never be selected.
-    const cutoff = input.events.find((event) => eventId(event) === String(marker.cutoffEventId || "")
-      && eventAction(event) === "labeled" && eventLabel(event) === input.blockedLabel && eventActor(event) === author);
-    if (cutoff) cutoffs.push(cutoff);
-  }
-  // Repeated block cycles leave several bound markers. Only the latest authenticated blocked
-  // transition still authorizes work: an earlier cutoff was itself invalidated by the later one.
-  const latest = cutoffs.sort(compareGithubEvents).at(-1);
-  return latest !== undefined && requestAfterInvalidationCutoff(input.request, latest);
+  // Counting only blocks deadloop explained would let the repair path's own request label carry a
+  // pull request past the stop that path just asked a person to resolve, and would leave a block
+  // nobody explained impossible to recover from at all. The timeline is fully paginated, so a
+  // blocked pull request with no blocked event is evidence this host cannot trust.
+  const cutoff = latestBlockedEvent(input.events, input.blockedLabel);
+  return cutoff !== null && requestAfterInvalidationCutoff(input.request, cutoff);
 }
 
 module.exports = {
   applyPrWorkAuthorityReconciliation,
-  authenticatedBlockedCutoff,
-  compareGithubEvents,
   parseRecoveryMarker,
   postBlockRequestIsEligible,
   reconcilePrWorkAuthority,

@@ -130,19 +130,14 @@ function exposePostBlockReviewRequests(
   env: ReturnType<typeof envConfig>,
   github: ReturnType<typeof githubOperations>,
 ): JsonObject[] {
-  const authorized = new Set(env.authorizedAutomationLogins.map((login) => login.toLowerCase()));
   return prs.map((pr) => {
     const names = new Set(labelNames(pr));
     if (!names.has(env.blockedLabel) || !names.has(env.reviewLabel)) return pr;
     const events = github.listPrTimelineEvents(env.githubRepo, Number(pr.number || 0));
     const latestRequest = activeReviewRequest(events, env.reviewLabel);
-    const comments = github.listPrComments(env.githubRepo, Number(pr.number || 0));
     if (!latestRequest || !postBlockRequestIsEligible({
-      pr: { number: Number(pr.number || 0), headRefOid: String(pr.headRefOid || "") },
       request: latestRequest,
       events,
-      comments,
-      authorizedLogins: [...authorized],
       blockedLabel: env.blockedLabel,
     })) return pr;
     return { ...pr, labels: labelNames(pr).filter((label) => label !== env.blockedLabel).map((name) => ({ name })) };

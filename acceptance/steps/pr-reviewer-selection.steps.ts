@@ -116,6 +116,10 @@ Given("A blocked pull request has a new Agent request after its author pushed a 
   setFixture(this, "precheck-blocked-request-after-push.json");
 });
 
+Given("The repair dispatcher blocked a pull request with its own Agent request", function (this: SelectionWorld) {
+  setFixture(this, "precheck-repair-blocked-request.json");
+});
+
 Given("A blocked pull request has only an Agent request that predates its block", function (this: SelectionWorld) {
   setFixture(this, "precheck-blocked-request-before-block.json");
 });
