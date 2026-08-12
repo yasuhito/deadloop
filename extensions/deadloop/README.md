@@ -6,11 +6,7 @@ Read the root `README.md` and `docs/public-package-setup.md` for normal setup.
 
 ## Local configuration
 
-Configuration lookup order:
-
-1. `DEADLOOP_CONFIG`
-2. `~/.pi/agent/deadloop/projects.json`
-3. this directory's `projects.json` for local development only
+Normal configuration is read from `~/.pi/agent/deadloop/projects.json`, with this directory's `projects.json` retained only as a local-development fallback. `DEADLOOP_CONFIG` is an internal transport used to pass the already selected path to child automation processes; it is not a supported operator setting.
 
 Do not commit `projects.json`; it contains local paths and rollout choices.
 

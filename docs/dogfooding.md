@@ -81,8 +81,6 @@ cd /home/yasuhito/Work/deadloop
 pi -e /home/yasuhito/Work/deadloop
 ```
 
-別の設定ファイルを使う場合だけ `DEADLOOP_CONFIG=/path/to/projects.json` を指定します。
-
 ## 必要なラベル
 
 最初に GitHub 側へラベルを作成します。

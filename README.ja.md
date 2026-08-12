@@ -184,7 +184,6 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 運用者向けの環境変数:
 
 ```bash
-DEADLOOP_CONFIG=/path/to/projects.json pi
 DEADLOOP_PROJECTS=my-project pi
 DEADLOOP=off pi
 DEADLOOP_AUTOMATIONS=off pi

@@ -87,7 +87,7 @@ Repo policy may set only shared, reviewable policy keys: `workerAgent`, `workerM
 
 Per-launch prompts and promise reports live under `~/.pi/agent/deadloop/runs/`, not in the target worktree. The configured project check runs through deadloop's isolation wrapper: untracked `.deadloop` and `.pi-subagents` directories are temporarily hidden, and restoration is attempted on every exit path. A restoration failure retains and reports the quarantine and temporary worktree for inspection. Tracked files are never hidden; validation fails closed if either runtime directory contains one.
 
-By default deadloop reads `~/.pi/agent/deadloop/projects.json`. Use `DEADLOOP_CONFIG=/path/to/projects.json` only when you intentionally want a different config file.
+deadloop reads local project settings from `~/.pi/agent/deadloop/projects.json`.
 
 ## 3. Standard labels
 

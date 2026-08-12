@@ -184,7 +184,6 @@ Run these commands from the Pi session in the target repository:
 Operator environment variables:
 
 ```bash
-DEADLOOP_CONFIG=/path/to/projects.json pi
 DEADLOOP_PROJECTS=my-project pi
 DEADLOOP=off pi
 DEADLOOP_AUTOMATIONS=off pi
