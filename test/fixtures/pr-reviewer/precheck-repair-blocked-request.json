@@ -48,14 +48,6 @@
           "name": "agent:review"
         }
       }
-    ],
-    "comments": [
-      {
-        "author": {
-          "login": "deadloop-bot"
-        },
-        "body": "deadloop blocked this PR because the active claim expired. No old completion report may update the PR; inspect the retained attempt evidence, then add a new Agent request after resolving the blocker.\n\n<!-- deadloop:work-authority-block v1=eyJudW1iZXIiOjE0LCJoZWFkIjoiMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMiIsInJlYXNvbiI6ImNsYWltX2V4cGlyZWQiLCJjdXRvZmZFdmVudElkIjoiMzAifQ -->"
-      }
     ]
   }
 ]
