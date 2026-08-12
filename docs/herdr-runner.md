@@ -1,19 +1,14 @@
 # Herdr runner
 
-deadloop v0 uses stable Herdr 0.7.5 or newer as its default runner.
+deadloop v0 uses stable Herdr 0.8.0 or newer as its default runner.
 
-## Compatibility gate
+## Version gate
 
-The automation host runs a global compatibility preflight at startup and before every scheduler tick. It completes before candidate selection and before any claim, label, comment, worktree, workspace, or agent mutation.
+The Automation host checks Herdr at startup and before every tick, before candidate selection or any side effect.
 
-The gate requires:
+The gate requires exact stable client and server versions of 0.8.0 or newer. It rejects prereleases, malformed output, older versions, and an unreachable server.
 
-- exact `herdr <semver>` client output;
-- exact stable client and server versions at least 0.7.5;
-- `compatible: yes` from `herdr status server`;
-- no `protocol_mismatch`.
-
-Prereleases, malformed output, an unreachable server, and protocol mismatches fail closed. A compatible local client with an unreachable server has one recovery-only exception: reconciliation may replace an existing `agent:in-progress` state with `agent:blocked` and a readable explanation. This exception cannot select work or launch, comment on completion, push, ready, or merge; all other mutations still require the full compatibility gate. `/deadloop-doctor` reports the same condition without changing Herdr. Quiet active automations before running `herdr update --handoff`.
+A supported local client with an unreachable server has one recovery-only exception: reconciliation may replace an existing `agent:in-progress` state with `agent:blocked` and a readable explanation. This exception cannot select work or launch, comment on completion, push, ready, or merge. All other mutations require the version gate. `/deadloop-doctor` reports the same condition without changing Herdr. Quiet active automations before running `herdr update --handoff`.
 
 ## Attempt workspace lifecycle
 
@@ -49,11 +44,11 @@ A promise file is transport, not cleanup authority. Only a strong V1 report boun
 
 After confirmation, deadloop records `github_persisted`, runs only `herdr workspace close`, confirms the workspace is absent, confirms the linked worktree and branch remain, and records `workspace_closed`. A close timeout or ambiguous result remains cleanup pending and never replays a push, PR creation, comment, label transition, review, or merge.
 
-Blocked, human-required, legacy, malformed, missing, launch-failed, and ownership-ambiguous attempts remain visible. GitHub `agent:in-progress` is reconciled with its bound claim and runtime owner before candidate selection. Expired or unverifiable ownership is made visible as `agent:blocked`; a safely owned stopped workspace may be closed while its linked worktree, report, logs, and journal remain as evidence. Ambiguous ownership is preserved. Restart reconciliation is idempotent, and a local journal without matching GitHub work authority does not suppress a later GitHub request.
+Blocked, human-required, malformed, missing, launch-failed, and ownership-ambiguous attempts remain visible. GitHub `agent:in-progress` is reconciled with its bound claim and runtime owner before candidate selection. Expired or unverifiable ownership is made visible as `agent:blocked`; a safely owned stopped workspace may be closed while its linked worktree, report, logs, and journal remain as evidence. Ambiguous ownership is preserved. Restart reconciliation is idempotent, and a local journal without matching GitHub work authority does not suppress a later GitHub request.
 
 A launch-failed Worker or reviewer attempt can be explicitly abandoned only through `/deadloop-abandon-attempt <attempt-id>`, and only when doctor and the operation can independently prove the unchanged GitHub claim and revision, a clean retained worktree, one exact one-tab/one-pane attempt workspace, no other owning attempt, and no agent in the recorded pane or launch-unique name. The guarded operation closes only that workspace, records `abandoned` evidence without discarding the launch error, confirms the linked worktree remains, and then requeues the target. Immediately before closing, it writes a bound `workspace_close_started` receipt beside the original journal. If a previous invocation stopped after the close, a retry may continue only when that receipt matches and both the recorded workspace and any workspace for the same checkout are absent. Missing or changed evidence stops with manual-review guidance and no label-only recovery command. A requeued Worker starts a new attempt by opening the exact retained abandoned checkout in a fresh workspace; it never tries to create a duplicate linked worktree.
 
-Workspace closure never invokes worktree removal. After the workspace is closed, linked-worktree removal remains restricted to the merged/closed-PR safety gate, including dirty-worktree and closed-unmerged-head protection. Because Herdr 0.7.5 accepts only an open workspace ID for `worktree remove`, the runner verifies one exact closed path/branch identity and uses `git worktree remove <path>` without fabricating a workspace ID.
+Workspace closure never invokes worktree removal. After the workspace is closed, linked-worktree removal remains restricted to the merged/closed-PR safety gate, including dirty-worktree and closed-unmerged-head protection. The runner verifies one exact closed path/branch identity and uses `git worktree remove <path>` without fabricating a workspace ID.
 
 ## Runner boundary
 

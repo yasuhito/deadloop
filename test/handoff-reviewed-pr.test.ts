@@ -12,6 +12,7 @@ const livePr = {
 };
 const approvedReview = {
   status: "complete",
+  evidenceStrength: "strong",
   promise: { status: "complete", outcome: "approved", reviewedHead: expectedHead, findings: [] },
 };
 
@@ -29,7 +30,7 @@ function runHandoff(
     {
       projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1,
       pr: "24", expectedHead, reviewPromise: "/state/promise.json", historyObservation: "/state/history.json",
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked", humanLabel: "ready-for-human",
     },
     {
@@ -57,7 +58,7 @@ describe("reviewed PR human handoff", () => {
       result: { action: "stale_history" },
       mutation: [
         "gh", "pr", "edit", "24", "-R", "owner/repo",
-        "--remove-label", "agent:in-progress", "--remove-label", "agent:reviewing", "--add-label", "agent:review",
+        "--remove-label", "agent:in-progress", "--add-label", "agent:review",
       ],
     });
   });
@@ -67,7 +68,7 @@ describe("reviewed PR human handoff", () => {
 
     expect(run.commands.at(-1)).toEqual([
       "gh", "pr", "edit", "24", "-R", "owner/repo",
-      "--remove-label", "agent:in-progress", "--remove-label", "agent:review", "--remove-label", "agent:reviewing",
+      "--remove-label", "agent:in-progress", "--remove-label", "agent:review",
       "--add-label", "ready-for-human",
     ]);
   });
@@ -84,34 +85,4 @@ describe("reviewed PR human handoff", () => {
     })).toThrow("the active review claim state is no longer present");
   });
 
-  it("preserves validated legacy complete promises when accepted history is genuinely absent", () => {
-    const commands: string[][] = [];
-    const result = handoffReviewedPr(
-      {
-        projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1,
-        pr: "24", expectedHead, reviewPromise: "/state/promise.json", historyObservation: "/definitely/absent/history.json",
-        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress",
-        blockedLabel: "agent:blocked", humanLabel: "ready-for-human",
-      },
-      {
-        withLock: (_project: unknown, operation: (_enabled: unknown, recheck: () => void) => unknown) => operation({}, () => {}),
-        validateReviewPromise: () => ({
-          status: "complete",
-          evidenceStrength: "legacy-weak",
-          promise: { status: "complete", reason: "", summary: "Legacy approval" },
-        }),
-        run: (args: string[]) => {
-          commands.push(args);
-          return args[2] === "view"
-            ? { status: 0, stdout: JSON.stringify(livePr), stderr: "" }
-            : { status: 0, stdout: "", stderr: "" };
-        },
-      },
-    );
-
-    expect({ action: result.action, mutation: commands.at(-1)?.slice(0, 3) }).toEqual({
-      action: "handed_off",
-      mutation: ["gh", "pr", "edit"],
-    });
-  });
 });

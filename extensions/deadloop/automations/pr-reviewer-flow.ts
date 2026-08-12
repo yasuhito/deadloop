@@ -15,7 +15,6 @@ type PrReviewerFlowEnv = {
   automationLogin: string;
   stateDir: string;
   reviewLabel: string;
-  reviewingLabel: string;
   inProgressLabel: string;
   humanLabel: string;
   blockedLabel: string;
@@ -43,7 +42,6 @@ function decisionConfig(env: PrReviewerFlowEnv): JsonObject {
   if (Number.isNaN(now.getTime())) throw new Error("DEADLOOP_NOW must be an ISO-8601 timestamp");
   return defaultDecisionConfig({
     reviewLabel: env.reviewLabel,
-    reviewingLabel: env.reviewingLabel,
     inProgressLabel: env.inProgressLabel || "agent:in-progress",
     humanLabel: env.humanLabel,
     blockedLabel: env.blockedLabel,

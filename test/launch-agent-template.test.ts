@@ -29,7 +29,7 @@ function issueCoordinatorWorkerPrompt(): string {
 // command that names the agent binary directly, which the launcher replaced.
 const rawLaunchBranch = /agent start[^\n]*--\s+(pi|claude)\b/;
 
-describe("agent launch template migration", () => {
+describe("agent launch template", () => {
   it("launches workers deterministically before issue coordinator monitoring", () => {
     expect(issueCoordinatorWorkerResult().driverAction).toBe("worker_monitor_request");
   });

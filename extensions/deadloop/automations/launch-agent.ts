@@ -22,7 +22,7 @@ const { execFileSync } = require("node:child_process") as typeof import("node:ch
 const { buildNativeAgentArgv, isAgentKind, AGENT_KINDS, AGENT_PROFILES } = require("../../../src/agent-profiles.cjs");
 const { readClaudeConfig, evaluateWorkspaceTrust } = require("../../../src/agent-trust.cjs");
 const { createHerdrRunner } = require("../../../src/herdr-runner.ts");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 
 const FLAG_KEYS = ["agent", "name", "cwd", "model", "level", "uuid", "prompt-file", "pane", "repo-path"] as const;
 
@@ -55,16 +55,16 @@ function main(
   argv: string[] = process.argv.slice(2),
   options: {
     runner?: { startAgent: (input: { name: string; kind: string; rootPaneId: string; nativeAgentArgv: string[] }) => string };
-    compatibilityPreflight?: () => unknown;
+    herdrPreflight?: () => unknown;
     readClaudeConfig?: () => unknown;
     writeOutput?: boolean;
   } = {},
 ): string {
   try {
-    if (options.compatibilityPreflight) options.compatibilityPreflight();
-    else if (!options.runner) runHerdrCompatibilityPreflight();
+    if (options.herdrPreflight) options.herdrPreflight();
+    else if (!options.runner) runHerdrPreflight();
   } catch (error) {
-    fail({ error: "herdr_incompatible", message: error instanceof Error ? error.message : String(error) });
+    fail({ error: "herdr_unsupported", message: error instanceof Error ? error.message : String(error) });
   }
 
   let args: Record<string, string>;

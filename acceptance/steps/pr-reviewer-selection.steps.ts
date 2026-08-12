@@ -185,7 +185,7 @@ Given("Another agent has started the review after selection.", function (this: S
   const firstDecision = selectPrForReview(this.prs, config);
   const selected = this.prs.find((pr) => pr.number === firstDecision.number);
   if (!selected) throw new Error("selected pull request is missing");
-  selected.labels = [...(selected.labels as unknown[]), { name: "agent:reviewing" }];
+  selected.labels = [...(selected.labels as unknown[]), { name: "agent:in-progress" }];
   const agentName = `dl-r-${firstDecision.number}-111111111111`;
   this.agents = { result: { agents: [{ name: agentName, agent_status: "working" }] } };
   this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: firstDecision.number }, phase: "agent_started", agentName }];

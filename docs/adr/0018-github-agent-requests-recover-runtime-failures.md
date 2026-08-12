@@ -16,7 +16,7 @@ For every locally launched role, deadloop revalidates the exact target revision 
 
 GitHub Agent requests are the recovery interface. Adding a new role-appropriate request such as `agent:implement`, `agent:review`, or `agent:update-branch` while work is blocked asks deadloop to reconcile the retained attempt and start a new attempt. Deadloop preserves both `agent:blocked` and the queued request until it proves the old agent stopped, the retained workspace is owned by that attempt, the target revision and request remain current, and the new claim succeeds. Closing or merging the target permits the existing terminal cleanup path. Without either event, the retained attempt and workspace remain available for investigation.
 
-After label-driven reconciliation covers every failure path, deadloop removes `/deadloop-abandon-attempt` rather than retaining a second workflow-control interface. Doctor remains read-only and shows the GitHub command that adds the appropriate Agent request. Pre-existing retained attempts are handled once by an instructed agent that verifies each target, posts a failure comment, and applies `agent:blocked`; deadloop does not add permanent legacy-migration branches for them.
+After label-driven reconciliation covers every failure path, deadloop removes `/deadloop-abandon-attempt` rather than retaining a second workflow-control interface. Doctor remains read-only and shows the GitHub command that adds the appropriate Agent request.
 
 ## Consequences
 

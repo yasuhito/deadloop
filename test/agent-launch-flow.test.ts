@@ -73,7 +73,7 @@ function operations(_root: string, role: "worker" | "reviewer", calls: string[])
   };
 }
 
-describe("0.7.5 エージェント起動フロー", () => {
+describe("0.8.0 エージェント起動フロー", () => {
   it("外部の要求状態を変える前に準備済み試行記録を残す", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
     try {
@@ -270,7 +270,7 @@ describe("0.7.5 エージェント起動フロー", () => {
       const launchInput = input(root, "reviewer");
       const ops: any = operations(root, "reviewer", []);
       let observations = 0;
-      ops.runner.listAgents = () => ++observations === 1 ? [] : [{ name: require("../src/herdr-agent-name.cjs").deriveHerdr075AgentName({ repository: "owner/repo", role: "reviewer", target: 44, launchUuid: "launch-reviewer" }), paneId: "pane-other", cwd: "/wt/review", status: "working" }];
+      ops.runner.listAgents = () => ++observations === 1 ? [] : [{ name: require("../src/herdr-agent-name.cjs").deriveHerdrAgentName({ repository: "owner/repo", role: "reviewer", target: 44, launchUuid: "launch-reviewer" }), paneId: "pane-other", cwd: "/wt/review", status: "working" }];
       prepareAgentLaunchFlow(launchInput, ops);
       recordAgentLaunchGithubClaimed(launchInput);
       expect(() => launchAgentFlow(launchInput, ops)).toThrow(/recorded root pane/);

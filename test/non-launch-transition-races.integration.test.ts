@@ -38,8 +38,8 @@ function runRace(kind: "issue" | "pr") {
   const readyPr = { ...initialPr, isDraft: false };
   writeFileSync(path.join(bin, "node"), `#!/bin/sh\ncase "$1" in *cleanup-completed-worker-worktrees.ts) printf '{"candidates":[]}\\n' ;; *) exec ${JSON.stringify(process.execPath)} "$@" ;; esac\n`);
   writeFileSync(path.join(bin, "herdr"), `#!/bin/sh
-if [ "$1" = "--version" ]; then printf 'herdr 0.7.5\\n'
-elif [ "$1 $2" = "status server" ]; then printf 'version: 0.7.5\\ncompatible: yes\\n'
+if [ "$1" = "--version" ]; then printf 'herdr 0.8.0\\n'
+elif [ "$1 $2" = "status server" ]; then printf 'version: 0.8.0\\n'
 else printf '{"result":{"agents":[]}}\\n'
 fi
 `);

@@ -12,7 +12,7 @@ function namedFunction(source: string, name: string): string {
   return source.slice(start, end === -1 ? undefined : end);
 }
 
-describe("Herdr 0.7.5 activation boundary", () => {
+describe("Herdr 0.8.0 activation boundary", () => {
   it("activates the Worker role through the selected disposable launch flow", () => {
     expect(namedFunction(issueDriver, "launchIssueWorker")).toContain("launchAgentFlow");
   });
@@ -29,7 +29,7 @@ describe("Herdr 0.7.5 activation boundary", () => {
     expect(namedFunction(repairDriver, "dispatch")).toContain("launchRepair(");
   });
 
-  it("keeps the startup compatibility gate selected", () => {
-    expect(namedFunction(extension, "startScheduler")).toContain("compatibilityPreflight()");
+  it("keeps the startup preflight selected", () => {
+    expect(namedFunction(extension, "startScheduler")).toContain("preflight()");
   });
 });

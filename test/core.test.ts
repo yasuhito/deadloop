@@ -115,7 +115,6 @@ describe("deterministic extension core", () => {
         inProgress: "agent:in-progress",
         blocked: "agent:blocked",
         review: "agent:review",
-        reviewing: "agent:reviewing",
         human: "ready-for-human",
         needsInfo: "needs-info",
         wontfix: "wontfix",

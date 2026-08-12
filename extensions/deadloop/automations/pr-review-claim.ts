@@ -79,7 +79,7 @@ function normalizedClaimAuthority(binding: ReviewClaimBinding): { durationSecond
 function normalizedActiveState(binding: ReviewClaimBinding): ReviewClaimActiveState | null {
   if (binding.activeState && typeof binding.activeState === "object" && !Array.isArray(binding.activeState)
     && JSON.stringify(Object.keys(binding.activeState).sort()) === JSON.stringify(ACTIVE_STATE_KEYS)
-    && stringArray(binding.activeState.managedLabels) && binding.activeState.managedLabels.length === 6
+    && stringArray(binding.activeState.managedLabels) && binding.activeState.managedLabels.length === 5
     && typeof binding.activeState.requestLabel === "string" && binding.activeState.requestLabel.length > 0
     && binding.activeState.managedLabels.includes(binding.activeState.requestLabel)
     && stringArray(binding.activeState.requiredLabels) && binding.activeState.requiredLabels.length === 1
@@ -130,7 +130,7 @@ function parseReviewClaim(body: unknown): JsonObject | null {
       || !Number.isFinite(value.authority.durationSeconds) || value.authority.durationSeconds <= 0
       || !value.activeState || typeof value.activeState !== "object" || Array.isArray(value.activeState)
       || JSON.stringify(Object.keys(value.activeState).sort()) !== JSON.stringify(ACTIVE_STATE_KEYS)
-      || !stringArray(value.activeState.managedLabels) || value.activeState.managedLabels.length !== 6
+      || !stringArray(value.activeState.managedLabels) || value.activeState.managedLabels.length !== 5
       || typeof value.activeState.requestLabel !== "string" || !value.activeState.managedLabels.includes(value.activeState.requestLabel)
       || !stringArray(value.activeState.requiredLabels) || value.activeState.requiredLabels.length !== 1
       || !value.activeState.requiredLabels.every((label: string) => value.activeState.managedLabels.includes(label))) return null;
@@ -185,12 +185,11 @@ function consistentSavedClaimContract(contract: JsonObject): boolean {
   const authority = normalizedClaimAuthority(binding);
   const activeState = normalizedActiveState(binding);
   if (!authority || !activeState) return false;
-  const [requestLabel, reviewingLabel, , , inProgressLabel, blockedLabel] = activeState.managedLabels;
+  const [requestLabel, , , inProgressLabel, blockedLabel] = activeState.managedLabels;
   return typeof contract.authoritySeconds === "number"
     && contract.authoritySeconds === authority.durationSeconds
     && contract.reviewLabel === activeState.requestLabel
     && contract.reviewLabel === requestLabel
-    && contract.reviewingLabel === reviewingLabel
     && contract.inProgressLabel === inProgressLabel
     && contract.blockedLabel === blockedLabel
     && stableJson(activeState.requiredLabels) === stableJson([contract.inProgressLabel])

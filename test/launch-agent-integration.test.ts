@@ -32,8 +32,8 @@ beforeEach(() => {
   const fakeHerdr = [
     "#!/usr/bin/env node",
     "const args = process.argv.slice(2);",
-    'if (args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");',
-    'else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");',
+    'if (args[0] === "--version") process.stdout.write("herdr 0.8.0\\n");',
+    'else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.8.0\\n");',
     "else {",
     '  const fs = require("node:fs");',
     `  const attemptsFile = ${JSON.stringify(attemptsOut)};`,

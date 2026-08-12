@@ -26,7 +26,7 @@ export type AutomationExecutionSupply = {
 };
 
 export type AutomationRunnerDeps = {
-  compatibilityPreflight?: () => void | Promise<void>;
+  herdrPreflight?: () => void | Promise<void>;
   enabledAt?: () => number;
   isEnabled?: () => boolean;
   isIdle?: () => boolean;
@@ -376,7 +376,7 @@ export async function runScheduledAutomation(
   deps: AutomationRunnerDeps,
 ): Promise<void> {
   // This is deliberately before state setup, precheck, candidate selection, or any mutation-capable driver.
-  await deps.compatibilityPreflight?.();
+  await deps.herdrPreflight?.();
   // Execution supply is fixed before any state setup, precheck, candidate selection,
   // or mutation-capable driver. A provisioning failure therefore starts nothing.
   const supply = await deps.prepareExecutionSupply();

@@ -17,7 +17,7 @@ const trustedCumulativeComments = cumulativeRepairFixture.comments.map((comment:
 
 const tempDirs: string[] = [];
 const activeReviewState = {
-  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
   requestLabel: "agent:review",
   requiredLabels: ["agent:in-progress"],
 };
@@ -30,7 +30,7 @@ function reviewClaimEnvironment(head: string, targetNumber = 243, repository = "
   return {
     DEADLOOP_REVIEW_CLAIM: JSON.stringify({
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     }),
     TEST_REVIEW_CLAIM_COMMENT: JSON.stringify({ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }),
   };
@@ -46,11 +46,11 @@ function executable(file: string, content: string): void {
   fs.chmodSync(file, 0o755);
 }
 
-function compatibleHerdr(bin: string): void {
+function supportedHerdr(bin: string): void {
   executable(path.join(bin, "herdr"), `#!/usr/bin/env node
 const args = process.argv.slice(2);
-if (args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");
-else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
+if (args[0] === "--version") process.stdout.write("herdr 0.8.0\\n");
+else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.8.0\\n");
 else if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result:{worktrees:[]}}));
 else if (args[0] === "agent" && args[1] === "list") process.stdout.write(JSON.stringify({result:{agents:[]}}));
 `);
@@ -208,8 +208,8 @@ if (args[0] === "-C" && args[2] === "worktree" && args[3] === "list") {
 const fs = require("node:fs");
 fs.appendFileSync(process.env.TEST_HERDR_LOG, process.argv.slice(2).join(" ") + "\\n");
 const args = process.argv.slice(2);
-if (args[0] === "--version") { process.stdout.write("herdr 0.7.5\\n"); process.exit(0); }
-if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: 0.7.5\\ncompatible: yes\\n"); process.exit(0); }
+if (args[0] === "--version") { process.stdout.write("herdr 0.8.0\\n"); process.exit(0); }
+if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: 0.8.0\\n"); process.exit(0); }
 if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result:{worktrees:[{path:process.env.TEST_WORKTREE,branch:"agent/issue-243"}]}}));
 else if (args[0] === "worktree" && args[1] === "open") process.stdout.write(JSON.stringify({result:{type:"worktree_opened",already_open:false,workspace:{workspace_id:"workspace-1"},tab:{tab_id:"tab-1",workspace_id:"workspace-1"},root_pane:{pane_id:"pane-1",tab_id:"tab-1",workspace_id:"workspace-1",cwd:process.env.TEST_WORKTREE},worktree:{path:process.env.TEST_WORKTREE}}}));
 else if (args[0] === "workspace" && args[1] === "list") process.stdout.write(JSON.stringify({result:{workspaces:[]}}));
@@ -275,7 +275,7 @@ else process.stdout.write(JSON.stringify({ok:true}));
   };
 }
 
-function runDispatch(enabled: boolean, compatible = true): { output: Record<string, any>; events: string[] } {
+function runDispatch(enabled: boolean, supported = true): { output: Record<string, any>; events: string[] } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-repair-"));
   tempDirs.push(root);
   const bin = path.join(root, "bin");
@@ -340,8 +340,8 @@ process.exit(0);
     `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "--version") { process.stdout.write("herdr ${compatible ? "0.7.5" : "0.7.4"}\\n"); process.exit(0); }
-if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: ${compatible ? "0.7.5" : "0.7.4"}\\ncompatible: yes\\n"); process.exit(0); }
+if (args[0] === "--version") { process.stdout.write("herdr ${supported ? "0.8.0" : "0.7.9"}\\n"); process.exit(0); }
+if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: ${supported ? "0.8.0" : "0.7.9"}\\\n"); process.exit(0); }
 if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result:{worktrees:[{path:process.env.TEST_WORKTREE,branch:"agent/issue-243"}]}}));
 else if (args[0] === "worktree" && args[1] === "open") process.stdout.write(JSON.stringify({result:{type:"worktree_opened",already_open:false,workspace:{workspace_id:"workspace-1"},tab:{tab_id:"tab-1",workspace_id:"workspace-1"},root_pane:{pane_id:"pane-1",tab_id:"tab-1",workspace_id:"workspace-1",cwd:process.env.TEST_WORKTREE},worktree:{path:process.env.TEST_WORKTREE}}}));
 else if (args[0] === "workspace" && args[1] === "list") process.stdout.write(JSON.stringify({result:{workspaces:[]}}));
@@ -438,7 +438,7 @@ if (args[0] === "pr" && args[1] === "view") {
     headRefOid: changed && process.env.TEST_MODE === "head_change" ? "${"b".repeat(40)}" : "${"a".repeat(40)}",
     isCrossRepository: false,
     labels: changed && process.env.TEST_MODE === "label_change"
-      ? [{name:"agent:review"},{name:"agent:reviewing"},{name:"agent:blocked"}]
+      ? [{name:"agent:review"},{name:"agent:in-progress"},{name:"agent:blocked"}]
       : [{name:"agent:in-progress"}],
     comments: [],
   }));
@@ -470,7 +470,7 @@ if (args.includes("get-url")) process.stdout.write("https://github.com/owner/rep
 else if (args.includes("rev-parse")) process.stdout.write("${"a".repeat(40)}\\n");
 else if (args.includes("show")) process.exit(1);
 `);
-  compatibleHerdr(bin);
+  supportedHerdr(bin);
 
   const result = spawnSync("node", [
     "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
@@ -529,7 +529,7 @@ else if (args[0] === "pr" && args[1] === "comment") {
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
 `);
-  compatibleHerdr(bin);
+  supportedHerdr(bin);
   const args = [
     "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
     "--promise", promise, "--attempt-record", attempt, "--pr", "243", "--expected-head", "a".repeat(40), "--branch", "agent/issue-243",
@@ -573,8 +573,8 @@ function runV1ChangesRequestedTwice(options: {
   const worktreeRoot = path.join(root, options.customConfiguration ? "custom repair checkouts" : "worktrees");
   const worktree = path.join(worktreeRoot, "agent-issue-243");
   const labels = options.customConfiguration
-    ? { review: "custom:review", reviewing: "custom:reviewing", blocked: "custom:blocked", human: "custom:human" }
-    : { review: "agent:review", reviewing: "agent:reviewing", blocked: "agent:blocked", human: "ready-for-human" };
+    ? { review: "custom:review", blocked: "custom:blocked", human: "custom:human" }
+    : { review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" };
   const liveLabels = [
     { name: "agent:in-progress" },
     ...(options.customConfiguration ? [{ name: "ready-for-human" }] : []),
@@ -636,13 +636,13 @@ function runV1ChangesRequestedTwice(options: {
     binding: {
       ...baseReviewClaim.binding,
       activeState: {
-        managedLabels: [labels.review, labels.reviewing, "agent:implement", "agent:update-branch", "agent:in-progress", labels.blocked],
+        managedLabels: [labels.review, "agent:implement", "agent:update-branch", "agent:in-progress", labels.blocked],
         requestLabel: labels.review,
         requiredLabels: ["agent:in-progress"],
       },
     },
     reviewLabel: labels.review,
-    reviewingLabel: labels.reviewing,
+
     blockedLabel: labels.blocked,
   };
   const findings = [{ title: "Lint contract", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
@@ -683,8 +683,8 @@ else if(a[0]==="api") process.stdout.write(JSON.stringify([[]]));
 `);
   executable(path.join(bin, "herdr"), `#!/usr/bin/env node
 const fs=require("node:fs");const a=process.argv.slice(2);const f=process.env.RUNTIME;const s=JSON.parse(fs.readFileSync(f,"utf8"));
-if(a[0]==="--version") process.stdout.write("herdr 0.7.5\\n");
-else if(a[0]==="status") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
+if(a[0]==="--version") process.stdout.write("herdr 0.8.0\\n");
+else if(a[0]==="status") process.stdout.write("version: 0.8.0\\n");
 else if(a[0]==="workspace"&&a[1]==="list") process.stdout.write(JSON.stringify({result:{workspaces:s.workspace?[{workspace_id:s.workspace,pane_count:1,tab_count:1,worktree:{checkout_path:process.env.WORKTREE}}]:[]}}));
 else if(a[0]==="workspace"&&a[1]==="close"){s.workspace=null;fs.writeFileSync(f,JSON.stringify(s));}
 else if(a[0]==="workspace"&&a[1]==="rename") process.stdout.write("renamed");
@@ -710,7 +710,6 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: repo, DEADLOOP_WORKTREE_ROOT: worktreeRoot,
     DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
-    DEADLOOP_REVIEW_LABEL: labels.review, DEADLOOP_REVIEWING_LABEL: labels.reviewing,
     DEADLOOP_BLOCKED_LABEL: labels.blocked, DEADLOOP_HUMAN_LABEL: labels.human,
     HEAD: head, COMMENTS: comments, GH_VIEW_COUNT: ghViewCount,
     INJECT_LIMIT_RACE: options.injectCumulativeLimitRace ? "1" : "0",
@@ -724,7 +723,7 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
           worktreeRoot, githubRepo: "owner/repo", stateDir: state, enabledAt: 1,
           projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
           checkCommand: "npm test", humanLabel: labels.human, reviewLabel: labels.review,
-          reviewingLabel: labels.reviewing, blockedLabel: labels.blocked,
+          blockedLabel: labels.blocked,
         });
         const command = prompt.match(/run the deterministic dispatcher[^`]*:\n  `([^`]+)`/)?.[1];
         if (!command) throw new Error("rendered dispatcher command was not found");
@@ -750,7 +749,7 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     dispatcherArgsForwarded: !options.renderedCommand || [
       `--worktree-root '${worktreeRoot}'`,
       `--review-label ${labels.review}`,
-      `--reviewing-label ${labels.reviewing}`,
+      `--in-progress-label agent:in-progress`,
       `--blocked-label ${labels.blocked}`,
       `--human-label ${labels.human}`,
     ].every((argument) => dispatcherCommand.includes(argument)),
@@ -814,7 +813,7 @@ else {fs.appendFileSync(process.env.MUTATIONS,a.join(" ")+"\\n");}
   executable(path.join(bin, "git"), `#!/usr/bin/env node
 const a=process.argv.slice(2);if(a.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
 `);
-  compatibleHerdr(bin);
+  supportedHerdr(bin);
   const result = spawnSync("node", [
     "extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attempt,
     "--pr", "243", "--expected-head", head, "--branch", "agent/issue-243",
@@ -844,13 +843,6 @@ describe("review repair dispatch integration", () => {
       { labels: [{ name: "agent:review" }] },
       { inProgressLabel: "agent:in-progress", reviewClaim: null },
     )).toThrow("active review claim is required");
-  });
-
-  it("rejects legacy review labels as repair authority", () => {
-    expect(() => requireReviewClaimForManagedPr(
-      { labels: [{ name: "agent:review" }, { name: "agent:reviewing" }] },
-      { inProgressLabel: "agent:in-progress", reviewClaim: { binding: {} } },
-    )).toThrow("in-progress");
   });
 
   it("rejects repair mutation when in-progress state is absent", () => {
@@ -898,7 +890,7 @@ describe("review repair dispatch integration", () => {
       action: "review_stale_history",
       mutations: [
         expect.stringContaining("pr comment 243"),
-        expect.stringContaining("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review"),
+        expect.stringContaining("--remove-label agent:in-progress --add-label agent:review"),
       ],
     });
   });
@@ -988,7 +980,7 @@ describe("review repair dispatch integration", () => {
       promptFile: path.join(runDir, "prompt.md"), promiseFile: promise, phase: "report_received", lastSuccessfulPhase: "report_received",
       reviewClaim: savedClaim,
     }));
-    compatibleHerdr(bin);
+    supportedHerdr(bin);
     executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
@@ -1005,7 +997,7 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
       projectId: "demo", repoPath: root, worktreeRoot: path.join(root, "worktrees"), githubRepo: "owner/repo", stateDir: state, enabledAt: 7,
       projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
       checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review",
-      reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+      blockedLabel: "agent:blocked",
     });
     const command = prompt.match(/run the deterministic dispatcher[^`]*:\n  `([^`]+)`/)?.[1];
     if (!command) throw new Error("rendered dispatcher command was not found");
@@ -1145,11 +1137,11 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
   it("requeues the active claim when review requires a human", () => {
     expect(blockedClaimMove({
       inProgressLabel: "agent:in-progress",
-      reviewingLabel: "agent:reviewing",
+
       reviewLabel: "agent:review",
       blockedLabel: "agent:blocked",
     })).toEqual({
-      remove: ["agent:in-progress", "agent:reviewing"],
+      remove: ["agent:in-progress"],
       add: ["agent:review", "agent:blocked"],
     });
   });
@@ -1233,8 +1225,8 @@ process.exit(0);
       `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "--version") { process.stdout.write("herdr 0.7.5\\n"); process.exit(0); }
-if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: 0.7.5\\ncompatible: yes\\n"); process.exit(0); }
+if (args[0] === "--version") { process.stdout.write("herdr 0.8.0\\n"); process.exit(0); }
+if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: 0.8.0\\n"); process.exit(0); }
 if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result:{worktrees:[{path:process.env.TEST_WORKTREE,branch:"agent/issue-243"}]}}));
 else if (args[0] === "worktree" && args[1] === "open") process.stdout.write(JSON.stringify({result:{type:"worktree_opened",already_open:false,workspace:{workspace_id:"workspace-1"},tab:{tab_id:"tab-1",workspace_id:"workspace-1"},root_pane:{pane_id:"pane-1",tab_id:"tab-1",workspace_id:"workspace-1",cwd:process.env.TEST_WORKTREE},worktree:{path:process.env.TEST_WORKTREE}}}));
 else if (args[0] === "workspace" && args[1] === "list") process.stdout.write(JSON.stringify({result:{workspaces:[]}}));
@@ -1342,8 +1334,8 @@ process.exit(0);
       `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "--version") { process.stdout.write("herdr 0.7.5\\n"); process.exit(0); }
-if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: 0.7.5\\ncompatible: yes\\n"); process.exit(0); }
+if (args[0] === "--version") { process.stdout.write("herdr 0.8.0\\n"); process.exit(0); }
+if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: 0.8.0\\n"); process.exit(0); }
 const started = fs.existsSync(process.env.AGENT_STARTED);
 if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result:{worktrees:[{path:process.env.TEST_WORKTREE,branch:"agent/issue-243"}]}}));
 else if (args[0] === "worktree" && args[1] === "open") process.stdout.write(JSON.stringify({result:{type:"worktree_opened",already_open:false,workspace:{workspace_id:"workspace-1"},tab:{tab_id:"tab-1",workspace_id:"workspace-1"},root_pane:{pane_id:"pane-1",tab_id:"tab-1",workspace_id:"workspace-1",cwd:process.env.TEST_WORKTREE},worktree:{path:process.env.TEST_WORKTREE}}}));
@@ -1464,8 +1456,8 @@ else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.str
       `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "--version") { process.stdout.write("herdr 0.7.5\\n"); process.exit(0); }
-if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: 0.7.5\\ncompatible: yes\\n"); process.exit(0); }
+if (args[0] === "--version") { process.stdout.write("herdr 0.8.0\\n"); process.exit(0); }
+if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: 0.8.0\\n"); process.exit(0); }
 if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result:{worktrees:[{branch:"agent/issue-243",path:process.env.TEST_WORKTREE}]}}));
 else if (args[0] === "agent" && args[1] === "list") process.stdout.write(JSON.stringify({result:{agents:[{terminal_id:"terminal-1",name:${JSON.stringify("dl-rr-243-123456789abc")},agent_status:"working",cwd:process.env.TEST_WORKTREE,pane_id:"pane-1"}]}}));
 else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.env.LAUNCH_ATTEMPTED, "yes");
@@ -1552,8 +1544,8 @@ else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.str
     executable(path.join(bin, "herdr"), `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "--version") { process.stdout.write("herdr 0.7.5\\n"); process.exit(0); }
-if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: 0.7.5\\ncompatible: yes\\n"); process.exit(0); }
+if (args[0] === "--version") { process.stdout.write("herdr 0.8.0\\n"); process.exit(0); }
+if (args[0] === "status" && args[1] === "server") { process.stdout.write("version: 0.8.0\\n"); process.exit(0); }
 if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result:{worktrees:[]}}));
 else if (args[0] === "agent" && args[1] === "list") process.stdout.write(JSON.stringify({result:{agents:[]}}));
 else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.env.HERDR_CALLED, "yes");
@@ -1601,92 +1593,4 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
     });
   });
 
-  it("does not perform a legacy reviewing-label mutation before repair launch", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-repair-label-failure-"));
-    tempDirs.push(root);
-    const bin = path.join(root, "bin");
-    const state = path.join(root, "config", "deadloop");
-    enableProject(state, root);
-    const promise = path.join(root, "review-promise.json");
-    const editCount = path.join(root, "edit-count");
-    const editLog = path.join(root, "edit-log");
-    const herdrCalled = path.join(root, "herdr-called");
-    fs.mkdirSync(bin);
-    fs.writeFileSync(
-      promise,
-      JSON.stringify({
-        status: "complete",
-        outcome: "changes_requested",
-        reason: "",
-        summary: "A lint contract finding needs repair.",
-        findings: [{ title: "Lint contract", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }],
-      }),
-    );
-
-    executable(
-      path.join(bin, "gh"),
-      `#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
-  number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:[]
-}));
-else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
-if (args[0] === "pr" && args[1] === "edit") {
-  fs.appendFileSync(process.env.EDIT_LOG, args.join(" ") + "\\n");
-  const count = fs.existsSync(process.env.EDIT_COUNT) ? Number(fs.readFileSync(process.env.EDIT_COUNT, "utf8")) : 0;
-  fs.writeFileSync(process.env.EDIT_COUNT, String(count + 1));
-  if (count === 0) process.exit(1);
-}
-`,
-    );
-    executable(
-      path.join(bin, "herdr"),
-      `#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-if (args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");
-else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
-else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.env.HERDR_CALLED, "yes");
-`,
-    );
-
-    const result = spawnSync(
-      "node",
-      [
-        "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
-        "--promise",
-        promise,
-        "--attempt-record",
-        writeSavedReviewerAuthority(state, promise, "a".repeat(40), 243, "owner/repo", root),
-        "--pr",
-        "243",
-        "--expected-head",
-        "a".repeat(40),
-        "--branch",
-        "agent/issue-243",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          ...reviewClaimEnvironment("a".repeat(40)),
-          PATH: `${bin}:${process.env.PATH}`,
-          DEADLOOP_PROJECT_ID: "demo",
-          DEADLOOP_REPO_PATH: root,
-          DEADLOOP_WORKTREE_ROOT: path.join(root, "worktrees"),
-          DEADLOOP_GITHUB_REPO: "owner/repo",
-          PI_CODING_AGENT_DIR: path.dirname(state),
-          DEADLOOP_ENABLED_AT: "1",
-          DEADLOOP_STATE_DIR: state,
-          EDIT_COUNT: editCount,
-          EDIT_LOG: editLog,
-          HERDR_CALLED: herdrCalled,
-        },
-      },
-    );
-    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-    expect(fs.readFileSync(editLog, "utf8")).not.toContain("--add-label agent:reviewing");
-  });
 });
