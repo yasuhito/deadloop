@@ -9,6 +9,7 @@ const {
   renderRepairMarker,
   renderTechnicalFailureMarker,
   repairAttempts,
+  reviewOutcomeFingerprint,
   reviewResultFingerprint,
   selectRepairAttempt,
   technicalFailureCount,
@@ -298,6 +299,17 @@ describe("automatic PR review repair", () => {
     const fingerprint = reviewResultFingerprint(findings);
 
     expect(renderRepairMarker(head, fingerprint)).toContain(`head=${head} review=${fingerprint}`);
+  });
+
+  it("separates approved results that differ only by their advisory observations", () => {
+    const withAdvisory = reviewOutcomeFingerprint("approved", "", "Reviewed.", [], [{ title: "Naming", body: "Rename it" }]);
+
+    expect(reviewOutcomeFingerprint("approved", "", "Reviewed.", [], [])).not.toBe(withAdvisory);
+  });
+
+  it("keeps the changes-requested fingerprint equal to its repair attempt key", () => {
+    expect(reviewOutcomeFingerprint("changes_requested", "", "Repair it.", findings, [{ title: "Naming", body: "Rename it" }]))
+      .toBe(reviewResultFingerprint(findings));
   });
 
   it("does not relaunch an already-recorded exact repair attempt", () => {

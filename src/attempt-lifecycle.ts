@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { RequiredVerificationContract } from "./required-verification";
+import type { PriorRequiredFindingDisposition } from "./reviewer-outcome-contract";
+
+const { isPriorRequiredFindingDisposition } = require("./reviewer-outcome-contract.ts");
 
 export const ATTEMPT_RECORD_FILE = "attempt.json";
 const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
@@ -53,6 +56,9 @@ export type ReviewerFinding = {
   severity?: "blocker" | "major" | "minor";
 };
 
+/** An optional improvement the reviewer leaves behind; never part of the repair contract. */
+export type ReviewerAdvisory = Omit<ReviewerFinding, "severity">;
+
 export type ValidationCheck = { command: string; result: "passed" };
 export type RepairOutcome = { title: string; summary: string; paths: string[] };
 export type BlockedCompletionResult = {
@@ -77,7 +83,12 @@ export type CompletionReportV1 = {
       result: {
         outcome: "approved" | "changes_requested" | "human_required";
         reviewedHead: string;
+        /** Required findings. They are the entire automatic-repair contract. */
         findings?: ReviewerFinding[];
+        /** Advisory observations. They never reach automatic repair. */
+        advisories?: ReviewerAdvisory[];
+        /** How the reviewer disposed of the required findings raised before this review. */
+        priorRequiredFindings?: PriorRequiredFindingDisposition;
       };
       evidence: { reviewed: string[] };
     }
@@ -698,6 +709,18 @@ function validateCompleteResult(report: CompletionReportEnvelope): void {
     }
     if (result.outcome === "changes_requested" && (!Array.isArray(result.findings) || result.findings.length === 0)) {
       throw new Error("Reviewer changes_requested requires findings with severity");
+    }
+    if (result.outcome === "approved" && Array.isArray(result.findings) && result.findings.length > 0) {
+      throw new Error("Reviewer approved requires no required findings");
+    }
+    if (result.advisories !== undefined && (!Array.isArray(result.advisories) || !result.advisories.every((advisory) => validFinding(advisory, false)))) {
+      throw new Error("Reviewer completion has an invalid advisory observation");
+    }
+    if (result.priorRequiredFindings !== undefined && !isPriorRequiredFindingDisposition(result.priorRequiredFindings)) {
+      throw new Error("Reviewer completion has an invalid priorRequiredFindings disposition");
+    }
+    if (result.outcome === "changes_requested" && result.priorRequiredFindings === undefined) {
+      throw new Error("Reviewer changes_requested requires a priorRequiredFindings disposition");
     }
     if (!nonEmptyStringArray(evidence.reviewed)) throw new Error("Reviewer completion requires review evidence");
     return;

@@ -22,6 +22,7 @@ const {
 } = require("./pr-review-comments.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.ts");
+const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.ts");
 const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
@@ -678,7 +679,8 @@ function dispatch(args: JsonObject): DriverResult {
   const persistenceMarker = rawReport?.schemaVersion === 1
     ? renderAttemptPersistenceMarker(attemptRecord, rawReport, {
         findings: rawReport.role === "reviewer" ? rawReport.result?.findings || [] : [],
-        boundedRepairAttemptMarked: rawReport.role === "reviewer" && rawReport.result?.outcome === "changes_requested",
+        boundedRepairAttemptMarked: rawReport.role === "reviewer"
+          && decideReviewTransition(rawReport.result || {}).transition === "repair",
       })
     : "";
   const expectedHead = String(args.expectedHead).toLowerCase();
@@ -754,17 +756,24 @@ function dispatch(args: JsonObject): DriverResult {
 
   const outcome = String(promise.outcome || "approved");
   const findings = (promise.findings || []) as JsonObject[];
-  const reviewFingerprint = reviewOutcomeFingerprint(outcome, promise.reason || "", promise.summary || "", findings);
+  const advisories = (promise.advisories || []) as JsonObject[];
+  const priorRequiredFindings = promise.priorRequiredFindings;
+  // The reviewer owns the semantic judgment; this picks the one allowed transition.
+  const review = decideReviewTransition({ outcome, priorRequiredFindings });
+  const reviewFingerprint = reviewOutcomeFingerprint(outcome, promise.reason || "", promise.summary || "", findings, advisories);
   const commentInput = {
     headOid: expectedHead,
     reason: promise.reason || "",
     summary: promise.summary || "",
     findings,
+    advisories,
+    priorRequiredFindings,
+    transitionReason: review.reason,
     reviewFingerprint,
     blockedLabel: env.blockedLabel,
   };
 
-  if (outcome === "approved") {
+  if (review.transition === "approve") {
     if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
@@ -814,7 +823,7 @@ function dispatch(args: JsonObject): DriverResult {
     }
     return driverResult("done", `PR #${prNumber} review completed without actionable findings`, { driverAction: "review_approved" });
   }
-  if (outcome === "human_required") {
+  if (review.transition === "human_required") {
     if (historyFile && fs.existsSync(historyFile)) {
       const freshness = releaseStaleReviewHistory(prNumber, env, historyFile, expectedHead);
       if (freshness.stale) {
@@ -841,7 +850,7 @@ function dispatch(args: JsonObject): DriverResult {
             throw new StaleLaunchError(`PR #${prNumber} review history changed before human handoff`);
           }
         }
-        if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, outcome)) {
+        if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, "human_required")) {
           comment = renderHumanRequiredComment(commentInput);
           const output = guardedGithub.commentPr(env.githubRepo, prNumber, comment);
           if (expectedHistory) {
@@ -871,7 +880,11 @@ function dispatch(args: JsonObject): DriverResult {
         driverAction: "review_stale_history", historyComparison: freshness.comparison,
       });
     }
-    return driverResult("done", `PR #${prNumber} review requires a human`, { driverAction: "review_human_blocked", comment });
+    return driverResult("done", `PR #${prNumber} review requires a human`, {
+      driverAction: "review_human_blocked",
+      reason: review.reason,
+      comment,
+    });
   }
 
   const worktree = inspectRepairWorktree(env.repoPath, branch);

@@ -631,8 +631,30 @@ describe("PR reviewer deterministic driver", () => {
 
   it("gives human_required reviewers an exact valid V1 result and evidence shape", () => {
     expect(readFileSync(driverScript, "utf8")).toContain(
-      'result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:[]}, and evidence={reviewed:["decision boundary and supporting evidence"]}',
+      'result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:<required findings, may be empty>,advisories:<advisory observations, may be empty>,priorRequiredFindings:"persisted|regressed|mixed|all_resolved|none"}',
     );
+  });
+
+  it("separates required findings from advisory observations", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain(
+      "advisories are optional observations that are published for humans and never repaired",
+    );
+  });
+
+  it("asks the reviewer to report how the earlier required findings stand", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain(
+      "priorRequiredFindings states how the required findings raised by earlier reviews of this PR stand",
+    );
+  });
+
+  it("allows automatic repair only with reported repair progress", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain(
+      'Only "none" or "all_resolved" may accompany changes_requested',
+    );
+  });
+
+  it("forbids a required finding on an approved result", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain("approved requires an empty findings list");
   });
 
   it("fails closed on a merge conflict before branch-update side effects", () => {

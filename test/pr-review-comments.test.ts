@@ -17,12 +17,20 @@ function fixture(name: string) {
   return JSON.parse(fs.readFileSync(path.join("test/fixtures/pr-review-comments", name), "utf8"));
 }
 
+/** The comment text a human reads, without the HTML markers deadloop reads. */
+function visibleText(comment: string): string {
+  return comment.replace(/<!--[\s\S]*?-->/g, "");
+}
+
 describe("PR review public comments", () => {
   it("renders every changes-requested finding from the fixture", () => {
     expect(renderChangesRequestedComment(fixture("changes-requested.json"))).toBe(`## Review result: changes required
 
 - Reviewed commit: \`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\`
+- Earlier required findings: Every earlier required finding is resolved.
 - Conclusion: The changes below must be addressed before this PR can proceed.
+
+## Required findings
 
 ### Unsafe fallback — blocker
 - File: \`src/review.ts:17\`
@@ -59,6 +67,117 @@ Exactly one bounded automatic repair will now start and will change only the fin
         reviewFingerprint: "1".repeat(20),
       }),
     ).toContain("The reviewed head is approved. The configured handoff or merge safety checks can continue.");
+  });
+
+  it("renders advisory observations on an approved result", () => {
+    expect(
+      renderApprovedReviewComment({
+        headOid: "a".repeat(40),
+        summary: "No required correction remains.",
+        advisories: [{ title: "Clearer name", body: "The helper name could describe its job.", path: "src/a.ts" }],
+        reviewFingerprint: "1".repeat(20),
+      }),
+    ).toContain("### Clearer name");
+  });
+
+  it("marks advisory observations as outside automatic repair", () => {
+    expect(
+      renderApprovedReviewComment({
+        headOid: "a".repeat(40),
+        summary: "No required correction remains.",
+        advisories: [{ title: "Clearer name", body: "The helper name could describe its job." }],
+        reviewFingerprint: "1".repeat(20),
+      }),
+    ).toContain("Automatic repair never changes code for them");
+  });
+
+  it("omits the advisory section when the review left no observations", () => {
+    expect(
+      renderApprovedReviewComment({
+        headOid: "a".repeat(40),
+        summary: "No required correction remains.",
+        reviewFingerprint: "1".repeat(20),
+      }),
+    ).not.toContain("Advisory observations");
+  });
+
+  it("renders advisory observations beside required findings", () => {
+    expect(
+      renderChangesRequestedComment({
+        ...fixture("changes-requested.json"),
+        advisories: [{ title: "Clearer name", body: "The helper name could describe its job." }],
+      }),
+    ).toContain("## Advisory observations");
+  });
+
+  it("explains a persisted earlier finding on the human-required comment", () => {
+    expect(
+      renderHumanRequiredComment({
+        headOid: "a".repeat(40),
+        priorRequiredFindings: "persisted",
+        transitionReason: "prior_required_findings_persist",
+        findings: [{ title: "Unsafe fallback", body: "The fallback approves a failed review.", severity: "blocker" }],
+        summary: "The same defect remains after the previous repair.",
+        reviewFingerprint: "2".repeat(20),
+      }),
+    ).toContain("At least one earlier required finding is still unresolved.");
+  });
+
+  it("explains why automatic repair did not start", () => {
+    expect(
+      renderHumanRequiredComment({
+        headOid: "a".repeat(40),
+        priorRequiredFindings: "regressed",
+        transitionReason: "resolved_finding_regressed",
+        findings: [{ title: "Unsafe fallback", body: "The fallback approves a failed review.", severity: "blocker" }],
+        summary: "A resolved defect came back.",
+        reviewFingerprint: "2".repeat(20),
+      }),
+    ).toContain("a previously resolved required finding came back");
+  });
+
+  it("renders the current required findings on the human-required comment", () => {
+    expect(
+      renderHumanRequiredComment({
+        headOid: "a".repeat(40),
+        priorRequiredFindings: "mixed",
+        transitionReason: "prior_and_new_required_findings_mixed",
+        findings: [{ title: "Unsafe fallback", body: "The fallback approves a failed review.", severity: "blocker" }],
+        summary: "Earlier and new defects are mixed.",
+        reviewFingerprint: "2".repeat(20),
+      }),
+    ).toContain("### Unsafe fallback — blocker");
+  });
+
+  it("explains a missing repair-progress judgment", () => {
+    expect(
+      renderHumanRequiredComment({
+        headOid: "a".repeat(40),
+        transitionReason: "repair_progress_not_reported",
+        findings: [{ title: "Unsafe fallback", body: "The fallback approves a failed review.", severity: "blocker" }],
+        summary: "The review did not describe the earlier findings.",
+        reviewFingerprint: "2".repeat(20),
+      }),
+    ).toContain("did not report, in the required form, how the earlier required findings stand");
+  });
+
+  it("keeps machine-facing identifiers out of the visible changes-requested text", () => {
+    const input = fixture("changes-requested.json");
+
+    expect(visibleText(renderChangesRequestedComment(input))).not.toContain(input.reviewFingerprint);
+  });
+
+  it("keeps machine-facing identifiers out of the visible human-required text", () => {
+    const input = {
+      headOid: "a".repeat(40),
+      priorRequiredFindings: "persisted",
+      transitionReason: "prior_required_findings_persist",
+      findings: [{ title: "Unsafe fallback", body: "The fallback approves a failed review.", severity: "blocker" }],
+      summary: "The same defect remains.",
+      reviewFingerprint: "2".repeat(20),
+    };
+
+    expect(visibleText(renderHumanRequiredComment(input))).not.toContain(input.reviewFingerprint);
   });
 
   it("renders human-required recovery guidance", () => {
