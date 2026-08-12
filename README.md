@@ -115,8 +115,6 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 `projects.json` contains local paths and rollout choices. Do not commit it. Prefer the repository-owned `deadloop.json` for shared, reviewable policy.
 
-See the [setup guide](docs/public-package-setup.md) for all settings and detailed enablement behavior.
-
 ## Safety controls
 
 `autoMerge` controls whether deadloop merges reviewed PRs automatically.
@@ -183,7 +181,6 @@ See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for details.
 
 ## Documentation
 
-- Setup guide: [docs/public-package-setup.md](docs/public-package-setup.md)
 - Herdr runner details: [docs/herdr-runner.md](docs/herdr-runner.md)
 
 ## Verify this repository

@@ -2,7 +2,7 @@
 
 This directory contains the Pi extension implementation for **deadloop**.
 
-Read the root `README.md` and `docs/public-package-setup.md` for normal setup.
+Read the root `README.md` for normal setup.
 
 ## Local configuration
 

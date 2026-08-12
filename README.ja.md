@@ -115,8 +115,6 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 `projects.json` にはローカルのパスや運用設定が含まれます。リポジトリにはコミットしないでください。共有してレビューする方針は、リポジトリ内の `deadloop.json` に記載することを推奨します。
 
-すべての設定項目と有効化の詳しい動作は、[設定ガイド](docs/public-package-setup.md)を参照してください。
-
 ## 安全装置
 
 `autoMerge` は、レビュー済みの PR を deadloop が自動的にマージするかを制御します。
@@ -183,7 +181,6 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 
 ## ドキュメント
 
-- 設定ガイド: [docs/public-package-setup.md](docs/public-package-setup.md)
 - Herdr runner の詳細: [docs/herdr-runner.md](docs/herdr-runner.md)
 
 ## このリポジトリを検証する

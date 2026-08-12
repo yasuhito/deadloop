@@ -14,9 +14,6 @@ For public users, use the same safe rollout model:
 2. **PR reviewer without auto-merge** — add `pr-reviewer` only after issue coordination is reliable. Keep `autoMerge: false` so reviewed PRs are handed to `ready-for-human`.
 3. **Conditional auto-merge** — consider `autoMerge: true` only after branch protection, CI, review expectations, manual approval/dry-run practices, and stop conditions are proven.
 
-See [public-package-setup.md](public-package-setup.md) for the first-time setup checklist.
-
-
 1. **Phase 1: 実装 PR 作成まで**
    - `issue-coordinator` だけを有効にする。
    - エージェントに渡せる Issue を拾い、Herdr worktree の Pi 作業エージェントに実装させる。
