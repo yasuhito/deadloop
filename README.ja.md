@@ -200,6 +200,7 @@ pi
 /deadloop-status
 /deadloop-doctor
 /deadloop-abandon-attempt <attempt-id>  # doctor に表示された場合のみ
+/deadloop-complete-github-state-migration updated-hosts-stopped  # GitHub 状態移行を配備した後の一度限りの確認
 ```
 
 運用者向けの環境変数:

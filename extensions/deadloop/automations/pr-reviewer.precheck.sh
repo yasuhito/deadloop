@@ -8,6 +8,7 @@ project_id="${DEADLOOP_PROJECT_ID:-}"
 state_dir="${DEADLOOP_STATE_DIR:-${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}/deadloop}"
 review_label="${DEADLOOP_REVIEW_LABEL:-agent:review}"
 reviewing_label="${DEADLOOP_REVIEWING_LABEL:-agent:reviewing}"
+in_progress_label="${DEADLOOP_IN_PROGRESS_LABEL:-agent:in-progress}"
 human_label="${DEADLOOP_HUMAN_LABEL:-ready-for-human}"
 blocked_label="${DEADLOOP_BLOCKED_LABEL:-agent:blocked}"
 auto_merge="${DEADLOOP_AUTO_MERGE:-0}"
@@ -23,9 +24,9 @@ gh pr list -R "${repo}" --state open --limit 100 \
   --json number,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,labels,statusCheckRollup,comments,reviewRequests \
   > "${prs_json}"
 
-# A stale `agent:reviewing` claim is reclaimed unless its reviewer agent is still
-# working, so pass the live Herdr agent list as a safety check. If Herdr is
-# unreachable, fall back to an empty list and let the reclaim proceed.
+# A retained GitHub claim is not reselected while its attempt still owns work,
+# so pass the live Herdr agent list as a safety check. If Herdr is unreachable,
+# fall back to an empty list and let reconciliation decide the next safe state.
 herdr agent list > "${agents_json}" 2>/dev/null || printf '{"result":{"agents":[]}}' > "${agents_json}"
 
 args=(
@@ -36,6 +37,7 @@ args=(
   --github-repo "${repo}"
   --review-label "${review_label}"
   --reviewing-label "${reviewing_label}"
+  --in-progress-label "${in_progress_label}"
   --human-label "${human_label}"
   --blocked-label "${blocked_label}"
   --auto-merge "${auto_merge}"

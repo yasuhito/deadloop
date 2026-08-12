@@ -23,6 +23,7 @@ const {
   shellQuote,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { postBlockRequestIsEligible } = require("../../../src/pr-work-authority-reconciliation.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
@@ -116,6 +117,31 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
 
 function livePrs(repo: string): JsonObject[] {
   return githubOperations().listOpenPrs(repo);
+}
+
+function exposePostBlockReviewRequests(
+  prs: JsonObject[],
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+): JsonObject[] {
+  const authorized = new Set(env.authorizedAutomationLogins.map((login) => login.toLowerCase()));
+  const github = fixture ? fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations> : githubOperations();
+  return prs.map((pr) => {
+    const names = new Set(labelNames(pr));
+    if (!names.has(env.blockedLabel) || !names.has(env.reviewLabel)) return pr;
+    const events = github.listPrTimelineEvents(env.githubRepo, Number(pr.number || 0));
+    const latestRequest = activeReviewRequest(events, env.reviewLabel);
+    const comments = github.listPrComments(env.githubRepo, Number(pr.number || 0));
+    if (!latestRequest || !postBlockRequestIsEligible({
+      pr: { number: Number(pr.number || 0), headRefOid: String(pr.headRefOid || "") },
+      request: latestRequest,
+      events,
+      comments,
+      authorizedLogins: [...authorized],
+      blockedLabel: env.blockedLabel,
+    })) return pr;
+    return { ...pr, labels: labelNames(pr).filter((label) => label !== env.blockedLabel).map((name) => ({ name })) };
+  });
 }
 
 function liveAgents(): any {
@@ -1149,7 +1175,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
           assertReviewHistoryUnchanged(env, number, history);
           return;
         }
-        const livePlan = planPrReviewerAction(livePrs(env.githubRepo), liveAgents(), env);
+        const livePlan = planPrReviewerAction(exposePostBlockReviewRequests(livePrs(env.githubRepo), env, null), liveAgents(), env);
         if (livePlan.kind !== "review_required") throw new StaleLaunchError(`PR #${number} is no longer eligible for reviewer launch`);
         assertSameLaunchTarget(pr, livePlan.pr, "pr");
         assertReviewHistoryUnchanged(env, number, history);
@@ -1174,7 +1200,7 @@ function drive(fixturePath: string | undefined): DriverResult {
   const fixture = loadFixture(fixturePath);
   const configuredEnv = envConfig();
   if (!configuredEnv.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
-  const prs = fixture ? fixture.prs || [] : livePrs(configuredEnv.githubRepo);
+  const observedPrs = fixture ? fixture.prs || [] : livePrs(configuredEnv.githubRepo);
   const automationLogin = fixture
     ? String(fixture.automationLogin || "deadloop-bot")
     : configuredEnv.automationLogin || runText(["gh", "api", "user", "--jq", ".login"]).trim();
@@ -1192,6 +1218,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     return driverResult("error", "authenticated GitHub identity is not listed in automationLogins", { driverAction: "configuration_error" });
   }
   const env = { ...configuredEnv, automationLogin, authorizedAutomationLogins, githubRepositoryId };
+  const prs = exposePostBlockReviewRequests(observedPrs, env, fixture);
   const agents = fixture ? fixture.agents || { result: { agents: [] } } : liveAgents();
   const plan = planPrReviewerAction(prs, agents, env);
 
@@ -1427,4 +1454,4 @@ function main(): void {
 if (require.main === module) main();
 
 module.exports = {
-  resolveAuthorizedAutomationLogins, assertAuthenticatedReviewIdentity, assertTrustedReviewIdentity, blockUnverifiableClaim, claimReviewRequest, envConfig, launchBranchUpdate, launchClaimedPrReviewerFlow, reauthorizeClaimedReview };
+  resolveAuthorizedAutomationLogins, assertAuthenticatedReviewIdentity, assertTrustedReviewIdentity, blockUnverifiableClaim, claimReviewRequest, envConfig, exposePostBlockReviewRequests, launchBranchUpdate, launchClaimedPrReviewerFlow, reauthorizeClaimedReview };

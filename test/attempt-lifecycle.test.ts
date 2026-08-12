@@ -7,6 +7,7 @@ import {
   attemptRecordPath,
   createPreparedAttempt,
   readAttemptRecord,
+  releasePersistedAttemptAuthority,
   transitionAttempt,
   transitionPersistedAttempt,
   validateCompletionReportBinding,
@@ -446,5 +447,11 @@ describe("attempt lifecycle contract", () => {
     const record = preparedAttempt();
 
     expect(JSON.parse(readFileSync(attemptRecordPath(path.dirname(record.promptFile)), "utf8"))).toEqual(record);
+  });
+
+  it("releases local ownership after GitHub authority is lost", () => {
+    const record = preparedAttempt();
+
+    expect(releasePersistedAttemptAuthority(path.dirname(record.promptFile), "2026-08-01T10:00:00Z", "cutoff-1").phase).toBe("authority_released");
   });
 });
