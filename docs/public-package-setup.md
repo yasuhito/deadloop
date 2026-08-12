@@ -131,7 +131,7 @@ Use the standard `pr-reviewer` only after Phase 1 is reliable. Keep:
 
 With auto-merge disabled, the reviewer automation starts a review agent session, requests fixes when needed, and hands the PR to `ready-for-human` instead of merging. External review requests are disabled by default; enable `externalReview` only in repositories where the external service is installed and allowed.
 
-During the current GitHub-claim bootstrap, branch-update mutations stop without side effects until #241 implements the `agent:update-branch` handoff. External-review mutations likewise stop until they are connected under an active review claim. Enabling `externalReview` does not bypass this restriction. The existing branch-update contracts—normal merge rather than rebase, required verification, exact-head authorization, and non-force push—remain mandatory and have not been removed.
+Automatic branch updates are currently unavailable. deadloop detects merge conflicts but does not update the branch until #241 connects the `agent:update-branch` request to its worker. External-review mutations are also currently unavailable; enabling `externalReview` does not make them available. The existing branch-update contracts—normal merge rather than rebase, required verification, exact-head authorization, and non-force push—remain mandatory.
 
 ### Phase 3: Consider auto-merge
 
