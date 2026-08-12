@@ -1,0 +1,61 @@
+[
+  {
+    "number": 14,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefOid": "3333333333333333333333333333333333333333",
+    "isDraft": false,
+    "labels": [
+      {
+        "name": "agent:review"
+      },
+      {
+        "name": "agent:blocked"
+      }
+    ],
+    "statusCheckRollup": [],
+    "reviewRequests": [],
+    "timelineEvents": [
+      {
+        "id": "30",
+        "event": "labeled",
+        "created_at": "2026-07-03T00:00:00Z",
+        "actor": {
+          "login": "deadloop-bot"
+        },
+        "label": {
+          "name": "agent:blocked"
+        }
+      },
+      {
+        "id": "42",
+        "event": "labeled",
+        "created_at": "2026-07-03T02:00:00Z",
+        "actor": {
+          "login": "deadloop-bot"
+        },
+        "label": {
+          "name": "agent:blocked"
+        }
+      },
+      {
+        "id": "43",
+        "event": "labeled",
+        "created_at": "2026-07-03T02:00:00Z",
+        "actor": {
+          "login": "deadloop-bot"
+        },
+        "label": {
+          "name": "agent:review"
+        }
+      }
+    ],
+    "comments": [
+      {
+        "author": {
+          "login": "deadloop-bot"
+        },
+        "body": "deadloop blocked this PR because the active claim expired. No old completion report may update the PR; inspect the retained attempt evidence, then add a new Agent request after resolving the blocker.\n\n<!-- deadloop:work-authority-block v1=eyJudW1iZXIiOjE0LCJoZWFkIjoiMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMiIsInJlYXNvbiI6ImNsYWltX2V4cGlyZWQiLCJjdXRvZmZFdmVudElkIjoiMzAifQ -->"
+      }
+    ]
+  }
+]

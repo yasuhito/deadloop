@@ -96,6 +96,27 @@ function blockedOnAnEarlierRevision(options: { request?: { id: string; created_a
   };
 }
 
+// The repair dispatcher stops a PR by adding agent:review and agent:blocked in one label move, so
+// both land on the same GitHub timestamp and it explains itself without a work-authority marker.
+// An older reconciler block on the same PR leaves the only marker.
+function repairBlockedInOneOperation(options: { request?: { id: string; created_at: string } } = {}) {
+  const blockedAt = "2026-08-01T10:03:00Z";
+  const reconcilerBlock = { id: "30", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } };
+  const repairBlock = { id: "42", event: "labeled", created_at: blockedAt, actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } };
+  const request = {
+    ...(options.request || { id: "43", created_at: blockedAt }),
+    event: "labeled", actor: { login: "deadloop-bot" }, label: { name: "agent:review" },
+  };
+  return {
+    pr: base.pr,
+    request,
+    events: [reconcilerBlock, repairBlock, request],
+    comments: [{ author: { login: "deadloop-bot" }, body: recoveryComment(base.pr.number, base.pr.headRefOid, "claim_expired", "30") }],
+    authorizedLogins: ["deadloop-bot"],
+    blockedLabel: "agent:blocked",
+  };
+}
+
 describe("PR work-authority reconciliation", () => {
   it("keeps a live matching claim unchanged", () => {
     expect(reconcilePrWorkAuthority(base).action).toBe("keep_active");
@@ -167,10 +188,22 @@ describe("PR work-authority reconciliation", () => {
     )).toBe(true);
   });
 
-  it("requires a bound recovery marker before selecting a post-block request", () => {
+  it("selects a post-block request that follows a block deadloop never explained", () => {
     const cutoff = { id: "30", event: "labeled", created_at: "2026-08-01T10:01:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } };
     const request = { id: "31", event: "labeled", created_at: "2026-08-01T10:02:00Z", actor: { login: "human" }, label: { name: "agent:review" } };
-    expect(postBlockRequestIsEligible({ pr: base.pr, request, events: [cutoff, request], comments: [], authorizedLogins: ["deadloop-bot"], blockedLabel: "agent:blocked" })).toBe(false);
+    expect(postBlockRequestIsEligible({ pr: base.pr, request, events: [cutoff, request], comments: [], authorizedLogins: ["deadloop-bot"], blockedLabel: "agent:blocked" })).toBe(true);
+  });
+
+  it("rejects a request the same operation added while blocking the PR", () => {
+    expect(postBlockRequestIsEligible(repairBlockedInOneOperation())).toBe(false);
+  });
+
+  it("rejects a request that predates the newest block even when only an older one is explained", () => {
+    expect(postBlockRequestIsEligible(repairBlockedInOneOperation({ request: { id: "41", created_at: "2026-08-01T10:02:00Z" } }))).toBe(false);
+  });
+
+  it("selects a request added after a block carrying no recovery marker", () => {
+    expect(postBlockRequestIsEligible(repairBlockedInOneOperation({ request: { id: "44", created_at: "2026-08-01T10:05:00Z" } }))).toBe(true);
   });
 
   it("selects a post-block request bound by the recovery marker", () => {

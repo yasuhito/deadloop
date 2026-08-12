@@ -136,12 +136,10 @@ function exposePostBlockReviewRequests(
     if (!names.has(env.blockedLabel) || !names.has(env.reviewLabel)) return pr;
     const events = github.listPrTimelineEvents(env.githubRepo, Number(pr.number || 0));
     const latestRequest = activeReviewRequest(events, env.reviewLabel);
-    const comments = github.listPrComments(env.githubRepo, Number(pr.number || 0));
     if (!latestRequest || !postBlockRequestIsEligible({
       pr: { number: Number(pr.number || 0), headRefOid: String(pr.headRefOid || "") },
       request: latestRequest,
       events,
-      comments,
       authorizedLogins: [...authorized],
       blockedLabel: env.blockedLabel,
     })) return pr;
