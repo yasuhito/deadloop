@@ -53,7 +53,7 @@ That is enough to start. During enablement, deadloop runs `npm run check`, creat
 You start the loop by labeling an Issue. deadloop owns the implementation and review transitions, then either hands the approved PR to a human or merges it according to policy.
 
 ```mermaid
-flowchart LR
+flowchart TD
     I["Issue queued<br/>ready-for-agent + agent:implement"]
     W["Implementation<br/>ready-for-agent + agent:in-progress"]
     R["PR review requested<br/>agent:review"]
@@ -73,9 +73,9 @@ flowchart LR
     V -. problem .-> B
 ```
 
-`ready-for-agent` marks an Issue as eligible, while `agent:implement` requests implementation. Remove `agent:implement` before deadloop claims the Issue to cancel that request. The remaining labels are normally managed by deadloop.
-
-`agent:blocked` stops the loop when deadloop needs help. Fix the cause reported in the Issue or PR comment, then follow its recovery instructions before requesting work again.
+1. **Request implementation** — `ready-for-agent` marks an Issue as eligible. `agent:implement` requests implementation. Remove `agent:implement` before deadloop claims the Issue to cancel the request.
+2. **Let deadloop work** — deadloop replaces the request label with `agent:in-progress`, creates a PR with `agent:review`, and repeats review and repair as needed.
+3. **Finish or intervene** — An approved PR moves to `ready-for-human` when automatic merge is off, or is merged when it is on. `agent:blocked` stops the loop when deadloop needs help; fix the cause reported in the Issue or PR comment, then follow its recovery instructions.
 
 ## Advanced configuration
 

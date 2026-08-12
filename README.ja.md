@@ -53,7 +53,7 @@ pi install git:github.com/yasuhito/deadloop
 Issue にラベルを付けると、ループが始まります。実装中とレビュー中の状態は deadloop が管理し、承認後は方針に従って PR を人間へ引き渡すか、自動でマージします。
 
 ```mermaid
-flowchart LR
+flowchart TD
     I["実装待ちの Issue<br/>ready-for-agent + agent:implement"]
     W["実装中<br/>ready-for-agent + agent:in-progress"]
     R["PR のレビュー待ち<br/>agent:review"]
@@ -73,9 +73,9 @@ flowchart LR
     V -. 問題発生 .-> B
 ```
 
-`ready-for-agent` は、エージェントが対応できる Issue であることを示します。`agent:implement` は実装を依頼するラベルです。deadloop が Issue を取得する前に `agent:implement` を外すと、その依頼を取り消せます。以降のラベルは通常、deadloop が管理します。
-
-`agent:blocked` が付くとループは止まります。Issue または PR のコメントに記載された原因を解消し、案内された復旧手順に従ってから、必要な作業を再依頼してください。
+1. **実装を依頼する** — `ready-for-agent` は、エージェントが対応できる Issue であることを示します。`agent:implement` を付けると実装を依頼できます。deadloop が Issue を取得する前に `agent:implement` を外すと、依頼を取り消せます。
+2. **deadloop に任せる** — deadloop は依頼ラベルを `agent:in-progress` に置き換え、`agent:review` を付けた PR を作成します。必要に応じて、レビューと修正を繰り返します。
+3. **完了または対応する** — 承認された PR は、自動マージが無効なら `ready-for-human` に移り、有効ならマージされます。`agent:blocked` が付くとループは止まります。Issue または PR のコメントに記載された原因を解消し、案内された復旧手順に従ってください。
 
 ## 詳細設定
 
