@@ -1478,14 +1478,15 @@ function registerReportCommand(pi, name, description, customType, buildReport) {
   });
 }
 
-async function reconcilePrWorkAuthority(pi, project): Promise<boolean> {
-  if (pi.testing && typeof pi.testing.reconcilePrWorkAuthority !== "function") return true;
+// A caller that cannot reconcile must be able to say why, so the outcome carries its own reason
+// instead of leaving one in the debug log. Only an explicit override may replace the reconciliation.
+async function reconcilePrWorkAuthority(pi, project): Promise<{ reconciled: boolean; reason: string }> {
   if (typeof pi.testing?.reconcilePrWorkAuthority === "function") {
     return await pi.testing.reconcilePrWorkAuthority(project);
   }
   const labels = projectLabels(project);
   const enabled = findEnabledProject(loadEnablementState(), project);
-  if (!enabled?.automationLogin) return false;
+  if (!enabled?.automationLogin) return { reconciled: false, reason: "the enabled record names no Automation host login" };
   const result = await execJson(pi, "node", [
     path.join(AUTOMATION_DIR, "reconcile-pr-work-authority.ts"),
     "--project-id", project.id,
@@ -1501,10 +1502,11 @@ async function reconcilePrWorkAuthority(pi, project): Promise<boolean> {
     "--blocked-label", labels.blocked,
   ], null, { timeout: 90_000 });
   if (!result || result.action === "error") {
-    debugLog("PR work-authority reconciliation failed", result?.summary || result?.error || "no result");
-    return false;
+    const reason = String(result?.summary || result?.error || "the reconciliation driver returned no result");
+    debugLog("PR work-authority reconciliation failed", reason);
+    return { reconciled: false, reason };
   }
-  return true;
+  return { reconciled: true, reason: "" };
 }
 
 async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> {
@@ -1723,10 +1725,12 @@ export default function (pi) {
     } catch (error) {
       // Recovery-only exception: a compatible local client may reflect an unreachable runtime
       // as agent:blocked. No candidate, launch, completion, push, ready, or merge path is opened.
+      let unreconciled = "";
       if (herdrServerIsUnreachableWithCompatibleClient() && isProjectEnabled(schedulerRun.project)) {
-        await reconcilePrWorkAuthority(pi, schedulerRun.project);
+        const authority = await reconcilePrWorkAuthority(pi, schedulerRun.project);
+        if (!authority.reconciled) unreconciled = `; PR work authority stayed unreconciled: ${authority.reason}`;
       }
-      setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}`);
+      setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}${unreconciled}`);
       return;
     }
 
@@ -1766,9 +1770,9 @@ export default function (pi) {
     let completedSafely = false;
     try {
       // GitHub work authority is reconciled before local cleanup, pending handoffs, or candidate selection.
-      const authorityReconciled = await reconcilePrWorkAuthority(pi, project);
-      if (!authorityReconciled) {
-        setLooperStatus(ctx, "skipped: PR work authority could not be reconciled safely");
+      const authority = await reconcilePrWorkAuthority(pi, project);
+      if (!authority.reconciled) {
+        setLooperStatus(ctx, `skipped: PR work authority could not be reconciled safely: ${authority.reason}`);
         completedSafely = true;
         return;
       }

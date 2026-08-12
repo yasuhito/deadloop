@@ -278,12 +278,17 @@ function postBlockRequestIsEligible(input: {
 }): boolean {
   const authorized = new Set(input.authorizedLogins.map((login) => login.toLowerCase()));
   const cutoffs: JsonObject[] = [];
+  let boundToCurrentHead = false;
+  let boundToAnEarlierRevision = false;
   for (const comment of input.comments) {
     const author = String(comment.author?.login || comment.user?.login || "").toLowerCase();
     const marker = parseRecoveryMarker(comment.body);
-    if (!authorized.has(author) || !marker
-      || Number(marker.number) !== input.pr.number
-      || String(marker.head || "").toLowerCase() !== input.pr.headRefOid.toLowerCase()) continue;
+    if (!authorized.has(author) || !marker || Number(marker.number) !== input.pr.number) continue;
+    if (String(marker.head || "").toLowerCase() !== input.pr.headRefOid.toLowerCase()) {
+      boundToAnEarlierRevision = true;
+      continue;
+    }
+    boundToCurrentHead = true;
     const cutoff = input.events.find((event) => eventId(event) === String(marker.cutoffEventId || "")
       && eventAction(event) === "labeled" && eventLabel(event) === input.blockedLabel && eventActor(event) === author);
     if (cutoff) cutoffs.push(cutoff);
@@ -292,7 +297,12 @@ function postBlockRequestIsEligible(input: {
   // authenticated blocked transition still authorizes work: an earlier cutoff was
   // itself invalidated by the later one.
   const latest = cutoffs.sort(compareGithubEvents).at(-1);
-  return latest !== undefined && requestAfterInvalidationCutoff(input.request, latest);
+  if (latest) return requestAfterInvalidationCutoff(input.request, latest);
+  // A cutoff denies work on the one revision it was bound to. When every marker names an earlier
+  // revision, the author replaced the blocked revision and this request targets one no cutoff
+  // covers, so nothing denies it. A marker on the current head whose blocked event cannot be
+  // authenticated, and a blocked label carrying no marker at all, both stay denied.
+  return boundToAnEarlierRevision && !boundToCurrentHead;
 }
 
 module.exports = {

@@ -77,6 +77,22 @@ function twoBlockCycles(request: { id: string; created_at: string }) {
   };
 }
 
+// deadloop blocked the PR while its head was an earlier revision, so the only recovery marker is
+// bound to that revision. Passing markerHead keeps the marker on the current head instead, leaving
+// its blocked event unauthenticated because no matching timeline event exists.
+function blockedOnAnEarlierRevision(options: { markerHead?: string } = {}) {
+  const blockedHead = options.markerHead || "b".repeat(40);
+  const request = { id: "31", event: "labeled", created_at: "2026-08-01T10:02:00Z", actor: { login: "human" }, label: { name: "agent:review" } };
+  return {
+    pr: base.pr,
+    request,
+    events: [request],
+    comments: [{ author: { login: "deadloop-bot" }, body: recoveryComment(base.pr.number, blockedHead, "claim_expired", "30") }],
+    authorizedLogins: ["deadloop-bot"],
+    blockedLabel: "agent:blocked",
+  };
+}
+
 describe("PR work-authority reconciliation", () => {
   it("keeps a live matching claim unchanged", () => {
     expect(reconcilePrWorkAuthority(base).action).toBe("keep_active");
@@ -174,6 +190,14 @@ describe("PR work-authority reconciliation", () => {
 
   it("selects a request that follows the latest blocked cutoff", () => {
     expect(postBlockRequestIsEligible(twoBlockCycles({ id: "33", created_at: "2026-08-01T10:04:00Z" }))).toBe(true);
+  });
+
+  it("selects a post-block request once the author pushed a revision the block never covered", () => {
+    expect(postBlockRequestIsEligible(blockedOnAnEarlierRevision())).toBe(true);
+  });
+
+  it("rejects a post-block request while its bound blocked event stays unauthenticated", () => {
+    expect(postBlockRequestIsEligible(blockedOnAnEarlierRevision({ markerHead: base.pr.headRefOid }))).toBe(false);
   });
 
   it("does not let report_received imply active work", () => {
