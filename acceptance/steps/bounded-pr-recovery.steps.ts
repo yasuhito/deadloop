@@ -135,7 +135,18 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     };
     fs.writeFileSync(promise, JSON.stringify(blocked
       ? { ...reportBase, status: "blocked", result: { reason: "reviewer failed", explanation: "Technical review failure.", recovery: "Retry the review." } }
-      : { ...reportBase, status: "complete", result: { outcome: "changes_requested", reviewedHead: currentHead, findings } }));
+      : {
+        ...reportBase,
+        status: "complete",
+        result: {
+          outcome: "changes_requested",
+          reviewedHead: currentHead,
+          findings,
+          // The repeated-repair case keeps reporting repair progress, so the
+          // fingerprint guard stays the thing that stops the second repair.
+          priorRequiredFindings: testCase === "repeated-repair" ? "all_resolved" : "none",
+        },
+      }));
     fs.writeFileSync(attemptRecord, JSON.stringify({
       attemptId: "reviewer", launchUuid: "reviewer", project: "demo", repository: "owner/repo", role: "reviewer",
       target: { kind: "pull-request", number: 31 }, inputRevision: { head: currentHead }, branch,

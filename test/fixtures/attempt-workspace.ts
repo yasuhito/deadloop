@@ -6,6 +6,9 @@ import type {
   WorkerGithubObservation,
   WriterGithubObservation,
 } from "../../src/attempt-workspace-lifecycle";
+import type { PriorRequiredFindingDisposition } from "../../src/reviewer-outcome-contract";
+
+const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.ts");
 
 export const INPUT_HEAD = "a".repeat(40);
 export const BASE_HEAD = "b".repeat(40);
@@ -109,13 +112,15 @@ export function workerFixture() {
   return { record, report, github, context: { workerReviewLabel: "agent:review" } };
 }
 
-export function reviewerFixture(outcome: "approved" | "changes_requested" | "human_required" = "approved") {
+export function reviewerFixture(
+  outcome: "approved" | "changes_requested" | "human_required" = "approved",
+  priorRequiredFindings: PriorRequiredFindingDisposition = "all_resolved",
+) {
   const findings = outcome === "changes_requested"
     ? [{ title: "Bug", body: "Fix it", path: "src/a.ts", line: 1, severity: "major" as const }]
     : [];
-  const expectedLabels = outcome === "changes_requested"
-    ? ["agent:review", "agent:in-progress"]
-    : ["ready-for-human"];
+  const repairs = decideReviewTransition({ outcome, priorRequiredFindings }).transition === "repair";
+  const expectedLabels = repairs ? ["agent:review", "agent:in-progress"] : ["ready-for-human"];
   const context = { reviewerExpectedLabels: expectedLabels } satisfies CompletionDecisionContext;
   const github = {
     kind: "confirmed",
@@ -130,7 +135,7 @@ export function reviewerFixture(outcome: "approved" | "changes_requested" | "hum
       headSha: INPUT_HEAD,
       marker: marker("reviewer", pullRequestTarget, outcome),
       findings,
-      boundedRepairAttemptMarked: outcome === "changes_requested",
+      boundedRepairAttemptMarked: repairs,
     },
   } satisfies ReviewerGithubObservation;
   return {
@@ -138,7 +143,12 @@ export function reviewerFixture(outcome: "approved" | "changes_requested" | "hum
     report: {
       ...commonReport,
       role: "reviewer" as const,
-      result: { outcome, reviewedHead: INPUT_HEAD, findings },
+      result: {
+        outcome,
+        reviewedHead: INPUT_HEAD,
+        findings,
+        ...(outcome === "changes_requested" ? { priorRequiredFindings } : {}),
+      },
       evidence: { reviewed: ["diff"] },
     },
     github,

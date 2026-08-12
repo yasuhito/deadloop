@@ -32,6 +32,20 @@ function withTempFile(content: string, callback: (filePath: string) => void) {
 const inputHead = "a".repeat(40);
 const outputHead = "b".repeat(40);
 
+function reviewerReport(result: Record<string, unknown>) {
+  return JSON.stringify({
+    schemaVersion: 1,
+    attemptId: "a",
+    role: "reviewer",
+    target: { repository: "octo/demo", kind: "pull-request", number: 1 },
+    inputRevision: { head: inputHead },
+    status: "complete",
+    summary: "reviewed",
+    result: { reviewedHead: inputHead, ...result },
+    evidence: { reviewed: ["diff"] },
+  });
+}
+
 function workerReport(attemptId = "expected") {
   return {
     schemaVersion: 1,
@@ -106,6 +120,64 @@ describe("extract worker promise helper", () => {
       '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"complete","summary":"reviewed","result":{"outcome":"changes_requested","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","findings":[{"title":"Bug","body":"Fix it"}]},"evidence":{"reviewed":["diff"]}}',
       (filePath) => {
         expect(runPromise(filePath).error).toBe("changes_requested_requires_finding_severity");
+      },
+    );
+  });
+
+  it("rejects a V1 approved result that still carries a required finding", () => {
+    withTempFile(
+      reviewerReport({ outcome: "approved", findings: [{ title: "Bug", body: "Fix it", severity: "major" }] }),
+      (filePath) => {
+        expect(runPromise(filePath).error).toBe("approved_requires_no_findings");
+      },
+    );
+  });
+
+  it("accepts a V1 approved result with advisory observations", () => {
+    withTempFile(
+      reviewerReport({ outcome: "approved", findings: [], advisories: [{ title: "Naming", body: "A clearer name would help" }] }),
+      (filePath) => {
+        expect(runPromise(filePath).promise.advisories).toHaveLength(1);
+      },
+    );
+  });
+
+  it("rejects malformed V1 advisory observations", () => {
+    withTempFile(
+      reviewerReport({ outcome: "approved", findings: [], advisories: [{ title: "Naming", body: "" }] }),
+      (filePath) => {
+        expect(runPromise(filePath).error).toBe("invalid_reviewer_advisories");
+      },
+    );
+  });
+
+  it("rejects V1 changes_requested without a prior-finding disposition", () => {
+    withTempFile(
+      reviewerReport({ outcome: "changes_requested", findings: [{ title: "Bug", body: "Fix it", severity: "major" }] }),
+      (filePath) => {
+        expect(runPromise(filePath).error).toBe("changes_requested_requires_prior_finding_disposition");
+      },
+    );
+  });
+
+  it("rejects an unknown V1 prior-finding disposition", () => {
+    withTempFile(
+      reviewerReport({ outcome: "approved", findings: [], priorRequiredFindings: "probably_fine" }),
+      (filePath) => {
+        expect(runPromise(filePath).error).toBe("invalid_prior_finding_disposition");
+      },
+    );
+  });
+
+  it("accepts a V1 changes_requested result that reports repair progress", () => {
+    withTempFile(
+      reviewerReport({
+        outcome: "changes_requested",
+        findings: [{ title: "Bug", body: "Fix it", severity: "major" }],
+        priorRequiredFindings: "all_resolved",
+      }),
+      (filePath) => {
+        expect(runPromise(filePath).promise.priorRequiredFindings).toBe("all_resolved");
       },
     );
   });

@@ -1,6 +1,7 @@
 {
   "headOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "outcome": "changes_requested",
+  "priorRequiredFindings": "all_resolved",
   "reason": "",
   "summary": "Two defects require correction.",
   "findings": [

@@ -51,12 +51,56 @@ function reviewMarker(input: JsonObject): string {
   return `<!-- deadloop:review-result head=${String(input.headOid).toLowerCase()} review=${String(input.reviewFingerprint).toLowerCase()} outcome=${input.outcome} -->`;
 }
 
+/** Reads back the reviewer's disposition of the required findings raised earlier. */
+const PRIOR_REQUIRED_FINDING_PROSE: Record<string, string> = {
+  none: "No required finding existed before this review.",
+  all_resolved: "Every earlier required finding is resolved.",
+  persisted: "At least one earlier required finding is still unresolved.",
+  regressed: "A previously resolved required finding came back.",
+  mixed: "Earlier unresolved required findings stand next to new ones.",
+};
+
+/** Explains, in prose, why deadloop handed the result to a human instead of repairing it. */
+const HUMAN_HANDOFF_PROSE: Record<string, string> = {
+  reviewer_human_required: "The reviewer could not decide or repair this result inside the pull request.",
+  prior_required_findings_persist: "Automatic repair did not start because an earlier required finding is still unresolved.",
+  resolved_finding_regressed: "Automatic repair did not start because a previously resolved required finding came back.",
+  prior_and_new_required_findings_mixed:
+    "Automatic repair did not start because earlier unresolved required findings stand next to new ones.",
+  repair_progress_not_reported:
+    "Automatic repair did not start because the review did not report, in the required form, how the earlier required findings stand.",
+};
+
+function findingLocation(entry: JsonObject): string {
+  const path = publicRepoPath(entry.path);
+  return entry.line && path !== "Not specified" ? `${path}:${entry.line}` : path;
+}
+
+function renderRequiredFindings(input: JsonObject): string {
+  return (input.findings || [])
+    .map(
+      (finding: JsonObject) =>
+        `### ${publicText(finding.title, "Review finding")} — ${finding.severity || "unspecified"}\n- File: ${code(findingLocation(finding))}\n- Reason: ${publicText(finding.body, "The detailed evidence contained internal runtime information and was omitted.")}`,
+    )
+    .join("\n\n");
+}
+
+/** Advisory observations are shown for context only; they never reach automatic repair. */
+function renderAdvisorySection(input: JsonObject): string {
+  const advisories = (input.advisories || []).map(
+    (advisory: JsonObject) =>
+      `### ${publicText(advisory.title, "Advisory observation")}\n- File: ${code(findingLocation(advisory))}\n- Note: ${publicText(advisory.body, "The detailed note contained internal runtime information and was omitted.")}`,
+  );
+  if (!advisories.length) return "";
+  return `\n## Advisory observations\nThese are optional. Automatic repair never changes code for them.\n\n${advisories.join("\n\n")}\n`;
+}
+
+function renderPriorFindingLine(input: JsonObject): string {
+  const prose = PRIOR_REQUIRED_FINDING_PROSE[String(input.priorRequiredFindings || "")];
+  return prose ? `\n- Earlier required findings: ${prose}` : "";
+}
+
 function renderChangesRequestedComment(input: JsonObject): string {
-  const findings = (input.findings || []).map((finding: JsonObject) => {
-    const path = publicRepoPath(finding.path);
-    const location = finding.line && path !== "Not specified" ? `${path}:${finding.line}` : path;
-    return `### ${publicText(finding.title, "Review finding")} — ${finding.severity || "unspecified"}\n- File: ${code(location)}\n- Reason: ${publicText(finding.body, "The detailed evidence contained internal runtime information and was omitted.")}`;
-  });
   const marker = renderRepairMarker(input.headOid, input.reviewFingerprint);
   const nextStep = input.repairUnavailable
     ? input.repairUnavailableReason === "cumulative_repair_limit"
@@ -68,11 +112,13 @@ function renderChangesRequestedComment(input: JsonObject): string {
   const nextHeading = input.repairUnavailable ? "Recovery steps" : "Next step";
   return `## Review result: changes required
 
-- Reviewed commit: ${code(input.headOid)}
+- Reviewed commit: ${code(input.headOid)}${renderPriorFindingLine(input)}
 - Conclusion: The changes below must be addressed before this PR can proceed.
 
-${findings.join("\n\n")}
+## Required findings
 
+${renderRequiredFindings(input)}
+${renderAdvisorySection(input)}
 ## ${nextHeading}
 ${nextStep}
 
@@ -84,7 +130,7 @@ function renderApprovedReviewComment(input: JsonObject): string {
 
 - Reviewed commit: ${code(input.headOid)}
 - Reason: ${publicText(input.summary || input.reason, "No actionable defects were found.")}
-
+${renderAdvisorySection(input)}
 ## Next step
 The reviewed head is approved. The configured handoff or merge safety checks can continue.
 
@@ -92,12 +138,19 @@ ${reviewMarker({ ...input, outcome: "approved" })}`;
 }
 
 function renderHumanRequiredComment(input: JsonObject): string {
+  // The reviewer's own explanation is its summary; the reported result carries
+  // no human-authored reason, so the transition supplies this sentence.
+  const handoff = HUMAN_HANDOFF_PROSE[String(input.transitionReason || "")]
+    || "The reviewer could not safely decide or repair this result.";
+  const requiredFindings = (input.findings || []).length
+    ? `\n## Required findings\n\n${renderRequiredFindings(input)}\n`
+    : "";
   return `## Review result: human decision required
 
-- Reviewed commit: ${code(input.headOid)}
-- Reason: ${publicText(input.reason, "The reviewer could not safely decide or repair this result.")}
+- Reviewed commit: ${code(input.headOid)}${renderPriorFindingLine(input)}
+- Reason: ${handoff}
 - Context: ${publicText(input.summary, "Review the findings and choose the safe next action.")}
-
+${requiredFindings}${renderAdvisorySection(input)}
 ## Recovery steps
 Resolve the decision above, push a new commit if code changes are needed, then remove ${code(input.blockedLabel || "agent:blocked")} so the new head can be reviewed.
 

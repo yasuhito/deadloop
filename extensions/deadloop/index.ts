@@ -40,6 +40,7 @@ const {
   workspaceProof,
 } = require("./automations/abandon-launch-failed-attempt.ts");
 const { readAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
+const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.ts");
 const {
   defaultIssueDecisionConfig,
   issueBlockedByNumbers,
@@ -1554,15 +1555,13 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         validateCompletionReportBinding(record, report);
       } catch { continue; }
       if (report.status !== "complete") continue;
-      if (report.role === "reviewer" && report.result?.outcome === "human_required") continue;
+      if (report.role === "reviewer" && decideReviewTransition(report.result || {}).transition === "human_required") continue;
     }
     const reviewerAutoMerge = record.autoMergePolicy ?? project.autoMerge;
     const expectedLabels = report?.role === "reviewer"
-      ? report.result?.outcome === "changes_requested"
+      ? decideReviewTransition(report.result || {}).transition === "repair" || reviewerAutoMerge
         ? [labels.review, labels.inProgress]
-        : reviewerAutoMerge
-          ? [labels.review, labels.inProgress]
-          : [labels.human]
+        : [labels.human]
       : [];
     const args = [
       path.join(AUTOMATION_DIR, "complete-attempt-workspace.ts"),

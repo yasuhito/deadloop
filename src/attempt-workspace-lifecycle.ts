@@ -7,6 +7,8 @@ import {
   validateCompletionReportBinding,
 } from "./attempt-lifecycle";
 
+const { decideReviewTransition } = require("./reviewer-outcome-contract.ts");
+
 export type RetentionReason =
   | "active_attempt"
   | "blocked"
@@ -253,7 +255,8 @@ export function reviewerCompletionPersisted(
   expectedLabels: readonly string[],
   managedLabels: readonly string[] = expectedLabels,
 ): boolean {
-  if (report.result.outcome === "human_required") return false;
+  const transition = decideReviewTransition(report.result).transition;
+  if (transition === "human_required") return false;
   if (!boundToRecord(github, record) || !sameSha(github.headSha, record.inputRevision.head)) return false;
   const managed = new Set(managedLabels);
   if (!sameStringSet(github.labels.filter((label) => managed.has(label)), expectedLabels)) return false;
@@ -266,7 +269,7 @@ export function reviewerCompletionPersisted(
   ) {
     return false;
   }
-  if (report.result.outcome === "changes_requested") {
+  if (transition === "repair") {
     return persistence.boundedRepairAttemptMarked && sameFindings(persistence.findings, report.result.findings ?? []);
   }
   return true;
@@ -392,7 +395,7 @@ export function evaluateCompletionPersistence(input: {
       return { action: "preserve", reason: "invalid_report" };
     }
   }
-  if (report.role === "reviewer" && report.result.outcome === "human_required") {
+  if (report.role === "reviewer" && decideReviewTransition(report.result).transition === "human_required") {
     return { action: "preserve", reason: "human_required" };
   }
   if (input.github.kind === "uncertain") {

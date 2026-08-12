@@ -345,6 +345,25 @@ describe("attempt completion persistence decisions", () => {
     });
   });
 
+  it("preserves changes requested while a prior required finding persists", () => {
+    const fixture = reviewerFixture("changes_requested", "persisted");
+
+    expect(decide(fixture.record, fixture.report, fixture.github, fixture.context)).toEqual({
+      action: "preserve",
+      reason: "human_required",
+    });
+  });
+
+  it("preserves changes requested that reports no repair progress", () => {
+    const fixture = reviewerFixture("changes_requested");
+    const report = { ...fixture.report, result: { ...fixture.report.result, priorRequiredFindings: undefined } };
+
+    expect(decide(fixture.record, report, fixture.github, fixture.context)).toEqual({
+      action: "preserve",
+      reason: "invalid_report",
+    });
+  });
+
   it("preserves a blocked reviewer result", () => {
     const fixture = reviewerFixture();
 

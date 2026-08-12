@@ -75,7 +75,18 @@ function writeSavedReviewerAuthority(
   };
   const report = raw.status === "blocked"
     ? { ...base, status: "blocked", result: { reason: String(raw.reason || "reviewer failed"), explanation: String(raw.summary || "reviewer failed"), recovery: "Retry the review." } }
-    : { ...base, status: "complete", result: { outcome: String(raw.outcome || "changes_requested"), reviewedHead: head, findings: Array.isArray(raw.findings) ? raw.findings : [] } };
+    : {
+      ...base,
+      status: "complete",
+      result: {
+        outcome: String(raw.outcome || "changes_requested"),
+        reviewedHead: head,
+        findings: Array.isArray(raw.findings) ? raw.findings : [],
+        ...(String(raw.outcome || "changes_requested") === "changes_requested"
+          ? { priorRequiredFindings: String(raw.priorRequiredFindings || "all_resolved") }
+          : {}),
+      },
+    };
   fs.writeFileSync(promise, JSON.stringify(report));
   const reviewClaim = JSON.parse(reviewClaimEnvironment(head, targetNumber, repository).DEADLOOP_REVIEW_CLAIM);
   fs.writeFileSync(attempt, JSON.stringify({
@@ -301,7 +312,7 @@ function runDispatch(enabled: boolean, supported = true): { output: Record<strin
   fs.writeFileSync(promise, JSON.stringify({
     schemaVersion: 1, attemptId: "reviewer", role: "reviewer", status: "complete",
     target: { repository: "owner/repo", kind: "pull-request", number: 243 }, inputRevision: { head: "a".repeat(40) },
-    summary: "A lint contract finding needs repair.", result: { outcome: "changes_requested", reviewedHead: "a".repeat(40), findings },
+    summary: "A lint contract finding needs repair.", result: { outcome: "changes_requested", reviewedHead: "a".repeat(40), findings, priorRequiredFindings: "none" },
     evidence: { reviewed: ["diff"] },
   }));
   fs.writeFileSync(attempt, JSON.stringify({
@@ -557,10 +568,12 @@ function runV1ChangesRequestedTwice(options: {
   dateUnavailable?: boolean;
   editedClaim?: boolean;
   expireAfterObservations?: boolean;
+  advisories?: Record<string, unknown>[];
 } = {}): {
   launches: number;
   actions: string[];
   reviewerPhase: string;
+  repairPrompt: string;
   repairWorktreePath: string;
   labelsPreserved: string[];
   dispatcherArgsForwarded: boolean;
@@ -649,7 +662,11 @@ function runV1ChangesRequestedTwice(options: {
   fs.writeFileSync(promise, JSON.stringify({
     schemaVersion: 1, attemptId: "reviewer-attempt", role: "reviewer",
     target: { repository: "owner/repo", kind: "pull-request", number: 243 }, inputRevision: { head },
-    status: "complete", summary: "One exact finding", result: { outcome: "changes_requested", reviewedHead: head, findings },
+    status: "complete", summary: "One exact finding",
+    result: {
+      outcome: "changes_requested", reviewedHead: head, findings, priorRequiredFindings: "none",
+      ...(options.advisories ? { advisories: options.advisories } : {}),
+    },
     evidence: { reviewed: ["diff"] },
   }));
   fs.writeFileSync(attempt, JSON.stringify({
@@ -744,6 +761,9 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     launches: JSON.parse(fs.readFileSync(runtime, "utf8")).launches,
     actions: outputs.map((output) => output.driverAction),
     reviewerPhase: JSON.parse(fs.readFileSync(attempt, "utf8")).phase,
+    repairPrompt: repairAttempt?.promptFile && fs.existsSync(repairAttempt.promptFile)
+      ? fs.readFileSync(repairAttempt.promptFile, "utf8")
+      : "",
     repairWorktreePath: String(repairAttempt?.worktreePath || ""),
     labelsPreserved: outputs[0]?.labelsPreserved || [],
     dispatcherArgsForwarded: !options.renderedCommand || [
@@ -902,6 +922,24 @@ describe("review repair dispatch integration", () => {
       action: "review_stale_history",
       mutations: [expect.stringContaining("pr comment 243")],
     });
+  });
+
+  it("keeps advisory observations out of the bounded repair contract", () => {
+    const result = runV1ChangesRequestedTwice({
+      attempts: 1,
+      advisories: [{ title: "Clearer helper name", body: "The helper name could describe its job." }],
+    });
+
+    expect(result.repairPrompt).not.toContain("Clearer helper name");
+  });
+
+  it("keeps the required finding inside the bounded repair contract", () => {
+    const result = runV1ChangesRequestedTwice({
+      attempts: 1,
+      advisories: [{ title: "Clearer helper name", body: "The helper name could describe its job." }],
+    });
+
+    expect(result.repairPrompt).toContain("Lint contract");
   });
 
   it("reports only in-progress as the managed state preserved for repair", () => {

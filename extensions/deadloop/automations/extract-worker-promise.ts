@@ -9,6 +9,9 @@ type PromiseValidation = Record<string, any>;
 
 const VALID_PROMISE_STATUSES = new Set(["complete", "blocked"]);
 const VALID_FINDING_SEVERITIES = new Set(["blocker", "major", "minor"]);
+// Mirrors PriorRequiredFindingDisposition in src/reviewer-outcome-contract.ts.
+// This helper stays dependency-free so it can validate a promise on its own.
+const VALID_PRIOR_FINDING_DISPOSITIONS = new Set(["none", "all_resolved", "persisted", "regressed", "mixed"]);
 const SUCCESSFUL_ATTEMPT_PHASES = new Set([
   "prepared",
   "github_claimed",
@@ -136,6 +139,18 @@ function validV1Report(promise: PromiseValidation): string | undefined {
     if (promise.result.outcome === "changes_requested" && (!Array.isArray(promise.result.findings) || !promise.result.findings.length)) return "changes_requested_requires_findings";
     if (promise.result.outcome === "changes_requested" && promise.result.findings.some((finding: PromiseValidation) => !VALID_FINDING_SEVERITIES.has(finding.severity))) {
       return "changes_requested_requires_finding_severity";
+    }
+    if (promise.result.outcome === "approved" && Array.isArray(promise.result.findings) && promise.result.findings.length) {
+      return "approved_requires_no_findings";
+    }
+    if (promise.result.advisories !== undefined && (!Array.isArray(promise.result.advisories) || !promise.result.advisories.every(validFinding))) {
+      return "invalid_reviewer_advisories";
+    }
+    if (promise.result.priorRequiredFindings !== undefined && !VALID_PRIOR_FINDING_DISPOSITIONS.has(promise.result.priorRequiredFindings)) {
+      return "invalid_prior_finding_disposition";
+    }
+    if (promise.result.outcome === "changes_requested" && promise.result.priorRequiredFindings === undefined) {
+      return "changes_requested_requires_prior_finding_disposition";
     }
     return validStringList(promise.evidence.reviewed) ? undefined : "reviewer_requires_evidence";
   }
