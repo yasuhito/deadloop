@@ -118,6 +118,13 @@ function livePrs(repo: string): JsonObject[] {
   return githubOperations().listOpenPrs(repo);
 }
 
+function driverGithubOperations(
+  fixture: JsonObject | null,
+  recheck: () => void = () => {},
+): ReturnType<typeof githubOperations> {
+  return fixture ? fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations> : githubOperations(recheck);
+}
+
 function exposePostBlockReviewRequests(
   prs: JsonObject[],
   env: ReturnType<typeof envConfig>,
@@ -147,12 +154,17 @@ function exposePostBlockReviewRequests(
  * against this, so a PR recovered from `agent:blocked` must reach both sides through the same
  * exposure. A PR that stopped being recovery-eligible keeps the label here and fails the comparison.
  */
-function liveRevalidatedPr(
-  github: ReturnType<typeof githubOperations>,
-  env: ReturnType<typeof envConfig>,
+function liveExposedPr(
   number: string | number,
+  env: ReturnType<typeof envConfig>,
+  github: ReturnType<typeof githubOperations>,
 ): JsonObject {
   return exposePostBlockReviewRequests([github.getPr(env.githubRepo, number)], env, github)[0];
+}
+
+function liveExposedPrs(env: ReturnType<typeof envConfig>): JsonObject[] {
+  const github = githubOperations();
+  return exposePostBlockReviewRequests(github.listOpenPrs(env.githubRepo), env, github);
 }
 
 function liveAgents(): any {
@@ -285,7 +297,7 @@ function launchWithAdapters(
   operations?: SelectedLaunchOperations,
 ): JsonObject {
   const mutate = (recheck: () => void) => mutateWorkflowState(
-    fixture ? fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations> : githubOperations(recheck),
+    driverGithubOperations(fixture, recheck),
   );
   if (fixture && !operations?.agentLaunchOps) {
     revalidate();
@@ -491,7 +503,7 @@ function applyPrTransition(
   try {
     return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
       const github = githubOperations(recheck);
-      const live = liveRevalidatedPr(github, env, pr.number);
+      const live = liveExposedPr(pr.number, env, github);
       if (String(live.state || "").toUpperCase() !== "OPEN") throw new StaleLaunchError(`PR #${pr.number} is no longer open`);
       assertSameLaunchTarget(pr, live, "pr");
       const livePlan = planPrReviewerAction([live], liveAgents(), env);
@@ -586,7 +598,7 @@ function launchBranchUpdate(
     },
     () => {
       if (fixture) return;
-      const livePlan = planPrReviewerAction(exposePostBlockReviewRequests(livePrs(env.githubRepo), env, githubOperations()), liveAgents(), env);
+      const livePlan = planPrReviewerAction(liveExposedPrs(env), liveAgents(), env);
       if (!("pr" in livePlan)) throw new StaleLaunchError(`PR #${number} is no longer eligible`);
       assertSameLaunchTarget(pr, livePlan.pr, "pr");
       const liveDecision = branchUpdateDecision(livePlan.pr, env, null);
@@ -968,7 +980,7 @@ function claimReviewRequest(
   };
   const posted = github.createPrComment(env.githubRepo, number, renderReviewClaimComment(binding));
   claim.commentId = String(posted.id || posted.databaseId);
-  const live = liveRevalidatedPr(github, env, number);
+  const live = liveExposedPr(number, env, github);
   assertSameLaunchTarget(pr, live, "pr");
   const refreshedRequest = currentReviewRequest(github, env, number);
   if (String(refreshedRequest.id || refreshedRequest.node_id || "") !== requestEventId) {
@@ -1002,7 +1014,7 @@ function claimReviewRequest(
 
   // Re-fetch immediately before the one full-label mutation so unrelated
   // labels and the latest request generation come from the freshest snapshot.
-  const beforeTransition = liveRevalidatedPr(github, env, number);
+  const beforeTransition = liveExposedPr(number, env, github);
   assertSameLaunchTarget(live, beforeTransition, "pr");
   const beforeTransitionEvents = github.listPrTimelineEvents(env.githubRepo, number);
   const beforeTransitionEventIds = new Set(beforeTransitionEvents.map((event: JsonObject) => String(event.id || event.node_id || "")));
@@ -1183,7 +1195,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
           assertReviewHistoryUnchanged(env, number, history);
           return;
         }
-        const livePlan = planPrReviewerAction(exposePostBlockReviewRequests(livePrs(env.githubRepo), env, githubOperations()), liveAgents(), env);
+        const livePlan = planPrReviewerAction(liveExposedPrs(env), liveAgents(), env);
         if (livePlan.kind !== "review_required") throw new StaleLaunchError(`PR #${number} is no longer eligible for reviewer launch`);
         assertSameLaunchTarget(pr, livePlan.pr, "pr");
         assertReviewHistoryUnchanged(env, number, history);
@@ -1226,8 +1238,7 @@ function drive(fixturePath: string | undefined): DriverResult {
     return driverResult("error", "authenticated GitHub identity is not listed in automationLogins", { driverAction: "configuration_error" });
   }
   const env = { ...configuredEnv, automationLogin, authorizedAutomationLogins, githubRepositoryId };
-  const prs = exposePostBlockReviewRequests(observedPrs, env,
-    fixture ? fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations> : githubOperations());
+  const prs = exposePostBlockReviewRequests(observedPrs, env, driverGithubOperations(fixture));
   const agents = fixture ? fixture.agents || { result: { agents: [] } } : liveAgents();
   const plan = planPrReviewerAction(prs, agents, env);
 

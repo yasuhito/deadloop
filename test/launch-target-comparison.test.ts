@@ -18,7 +18,7 @@ function revalidate(live: Record<string, unknown>): () => void {
   return () => assertSameLaunchTarget(selected, { ...selected, ...live }, "pr");
 }
 
-describe("launch target revalidation", () => {
+describe("launch target comparison", () => {
   it("accepts an unchanged target", () => {
     expect(revalidate({})).not.toThrow();
   });

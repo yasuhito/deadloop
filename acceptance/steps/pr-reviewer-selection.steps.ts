@@ -245,10 +245,6 @@ Then("deadloop waits for external review without mutation", function (this: Sele
   }, { action: "wait", comments: 0, labels: 0, starts: 0 });
 });
 
-Then("deadloop stops skipping pull request #14 as blocked", function (this: SelectionWorld) {
-  assert.equal(this.driverResult?.prNumber, 14);
-});
-
 Then("deadloop skips pull request #14 as blocked", function (this: SelectionWorld) {
   assert.deepEqual(this.driverResult?.decision?.skipped, [{ number: 14, reason: "blocked" }]);
 });
