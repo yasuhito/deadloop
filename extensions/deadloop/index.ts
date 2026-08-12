@@ -1637,51 +1637,6 @@ export default function (pi) {
     "deadloop-doctor",
     buildLiveDoctorReport,
   );
-  pi.registerCommand("deadloop-complete-github-state-migration", {
-    description: "Confirm the GitHub-state deployment gate after every old Automation host is updated or stopped",
-    handler: async (args, ctx) => {
-      if (String(args || "").trim() !== "updated-hosts-stopped") {
-        displayCommandResult(
-          pi,
-          ctx,
-          "deadloop-complete-github-state-migration",
-          "Usage: /deadloop-complete-github-state-migration updated-hosts-stopped\nRun this only after the GitHub-state reconciliation changes are deployed and every old Automation host is updated or stopped.",
-        );
-        return;
-      }
-      try {
-        const data = await collectLiveSnapshotData(pi, ctx.cwd);
-        const project = data.selectedProject;
-        if (!project) throw new Error("deadloop is not enabled for the current repository");
-        if (!ownsSchedulerLock(project)) throw new Error("the current Automation host does not own the repository scheduler lock");
-        const enabled = assertEnabled({ repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt });
-        const login = childProcess.spawnSync("gh", ["api", "user", "--jq", ".login"], { encoding: "utf8", timeout: 10_000 });
-        if (login.status !== 0 || String(login.stdout || "").trim().toLowerCase() !== String(enabled.automationLogin || "").toLowerCase()) {
-          throw new Error("the authenticated GitHub login does not match the enabled Automation host");
-        }
-        const trustedFeature = gitOutput(project.repoPath, ["show", `${project.baseBranch}:src/pr-work-authority-reconciliation.ts`]);
-        if (!trustedFeature.includes("GITHUB_STATE_RECONCILIATION_VERSION = 1")) {
-          throw new Error("the trusted base does not contain the GitHub-state reconciliation feature marker");
-        }
-        const retained = retainedAttemptClaimSnapshot(project);
-        if (retained.ownershipAmbiguous) throw new Error("retained attempt ownership is ambiguous");
-        const targetPrs = [...new Set(retained.claims
-          .filter((target) => target?.kind === "pull-request" && Number.isSafeInteger(Number(target.number)) && Number(target.number) > 0)
-          .map((target) => Number(target.number)))].sort((left, right) => left - right);
-        writeJsonFile(path.join(STATE_DIR, "github-state-migration-v1.json"), {
-          schemaVersion: 1,
-          repository: project.githubRepo,
-          repositoryId: enabled.githubRepositoryId,
-          confirmation: "updated-hosts-stopped",
-          targetPrs,
-          confirmedAt: new Date().toISOString(),
-        });
-        displayCommandResult(pi, ctx, "deadloop-complete-github-state-migration", "Deployment gate recorded. The next reconciliation will inspect retained workspaces before migrating PR requests.");
-      } catch (error) {
-        displayCommandResult(pi, ctx, "deadloop-complete-github-state-migration", `Migration gate was not recorded: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
-  });
   pi.registerCommand("deadloop-abandon-attempt", {
     description: "Safely abandon one proven launch-failed attempt and requeue its unchanged Issue or PR",
     handler: async (args, ctx) => {

@@ -159,7 +159,6 @@ Run these commands from the Pi session in the target repository:
 /deadloop-status
 /deadloop-doctor
 /deadloop-abandon-attempt <attempt-id>  # only when doctor presents it
-/deadloop-complete-github-state-migration updated-hosts-stopped  # one-time GitHub-state deployment gate
 ```
 
 Operator environment variables:

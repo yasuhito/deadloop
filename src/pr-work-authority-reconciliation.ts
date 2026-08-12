@@ -1,5 +1,4 @@
 type JsonObject = Record<string, any>;
-const GITHUB_STATE_RECONCILIATION_VERSION = 1;
 
 type ClaimObservation =
   | { kind: "authorized" }
@@ -296,25 +295,10 @@ function postBlockRequestIsEligible(input: {
   return latest !== undefined && requestAfterInvalidationCutoff(input.request, latest);
 }
 
-function migrationDecision(input: {
-  deployed: boolean;
-  conflicting: boolean;
-  targeted?: boolean;
-}): { action: "not_applicable" | "keep_blocked" | "request"; requestLabel?: "agent:review" | "agent:update-branch" } {
-  if (!input.deployed) return { action: "keep_blocked" };
-  if (input.targeted !== true) return { action: "not_applicable" };
-  return {
-    action: "request",
-    requestLabel: input.conflicting ? "agent:update-branch" : "agent:review",
-  };
-}
-
 module.exports = {
-  GITHUB_STATE_RECONCILIATION_VERSION,
   applyPrWorkAuthorityReconciliation,
   authenticatedBlockedCutoff,
   compareGithubEvents,
-  migrationDecision,
   parseRecoveryMarker,
   postBlockRequestIsEligible,
   reconcilePrWorkAuthority,
