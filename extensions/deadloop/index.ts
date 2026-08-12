@@ -23,8 +23,8 @@ import {
   templateValues,
 } from "../../src/core";
 import { buildDoctorSnapshot, formatDoctorReport, herdr075DoctorFinding } from "../../src/doctor";
-import { compatibilityDiagnosticData, parseHerdr075Compatibility } from "../../src/herdr-075-compat";
-import { runHerdrCompatibilityPreflight } from "../../src/herdr-preflight";
+import { compatibilityDiagnosticData } from "../../src/herdr-075-compat";
+import { herdrServerIsUnreachableWithCompatibleClient, runHerdrCompatibilityPreflight } from "../../src/herdr-preflight";
 import { discoverVerificationCandidates } from "../../src/required-verification";
 import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } from "../../src/status";
 import { readClaudeConfig } from "../../src/agent-trust.cjs";
@@ -169,18 +169,6 @@ function readConfigText() {
     if (error?.code === "ENOENT") return { text: "{}", configPath };
     throw error;
   }
-}
-
-function herdrServerIsUnreachableWithCompatibleClient(): boolean {
-  const client = childProcess.spawnSync("herdr", ["--version"], { encoding: "utf8", timeout: 10_000 });
-  if (client.status !== 0 || client.error) return false;
-  try {
-    parseHerdr075Compatibility(String(client.stdout || ""), "version: 0.7.5\ncompatible: yes\n");
-  } catch { return false; }
-  const server = childProcess.spawnSync("herdr", ["status", "server"], { encoding: "utf8", timeout: 10_000 });
-  if (server.status === 0 && !server.error) return false;
-  const failure = `${server.error?.message || ""}\n${server.stderr || ""}\n${server.stdout || ""}`.toLowerCase();
-  return /connection refused|cannot connect|failed to connect|unreachable|timed? out|no such file|no such socket|socket.*not found/.test(failure);
 }
 
 function herdrCompatibilityPreflight() {

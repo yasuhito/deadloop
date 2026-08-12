@@ -56,7 +56,11 @@ function replaceReconciledLabels(github: any, repository: string, number: number
   const desired = reconciledLabelReplacement(current, next, managedLabels);
   github.replacePrLabels(repository, number, desired);
   const observed = labels({ labels: github.listPrLabels(repository, number) });
-  if (!sameStringSet(observed.filter((label) => managed.has(label)), desired.filter((label) => managed.has(label)))) {
+  // A full replacement carries the unrelated labels the preceding read saw. Checking only the
+  // managed ones would let this mutation drop somebody else's label without anybody noticing.
+  const preserved = desired.filter((label) => !managed.has(label));
+  if (!sameStringSet(observed.filter((label) => managed.has(label)), desired.filter((label) => managed.has(label)))
+    || !preserved.every((label) => observed.includes(label))) {
     throw new Error("PR label recovery postcondition was not reached");
   }
   return observed;
@@ -299,7 +303,7 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       catch { runtime = { kind: "unreachable" }; }
     }
 
-    const input = { pr: { ...pr, labels: labels(pr) }, claim, runtime, requestLabels, inProgressLabel, blockedLabel, journalPhase: record?.phase };
+    const input = { pr: { ...pr, labels: labels(pr) }, claim, runtime, requestLabels, inProgressLabel, blockedLabel };
     let blockStarted: { reason: string; timelineEventIds: string[] } | undefined;
     try {
       const receipt = JSON.parse(fs.readFileSync(recoveryFile, "utf8"));
