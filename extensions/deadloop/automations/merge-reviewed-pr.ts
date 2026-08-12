@@ -186,6 +186,30 @@ function assertReviewHistoryFresh(args: MergeArgs, ops: MergeOps): void {
   }
 }
 
+/**
+ * A Worker PR is a draft until a review approves it, and GitHub refuses to merge a draft. The
+ * approved head therefore becomes ready inside the same guarded run that merges it, while the
+ * claim and the in-progress label stay in place: readiness is a step of the merge, not a handoff.
+ */
+function markReadyForMerge(args: MergeArgs, ops: MergeOps): void {
+  const result = ops.run([
+    "gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,isDraft,headRefOid",
+  ], MAX_GUARDED_OPERATION_MS);
+  if (result.status !== 0) throw new Error((result.stderr || result.stdout || "PR draft state could not be read").trim());
+  let pr: { state?: unknown; isDraft?: unknown; headRefOid?: unknown };
+  try {
+    pr = JSON.parse(result.stdout || "{}");
+  } catch {
+    throw new Error("PR state response was invalid; automatic merge stopped");
+  }
+  if (pr.state !== "OPEN") throw new Error("PR is no longer open; automatic merge stopped");
+  if (pr.headRefOid !== args.expectedHead) throw new Error("PR head changed; automatic merge stopped");
+  if (pr.isDraft === false) return;
+  if (pr.isDraft !== true) throw new Error("PR draft state is unknown; automatic merge stopped");
+  const ready = ops.run(["gh", "pr", "ready", args.pr, "-R", args.githubRepo], MAX_GUARDED_OPERATION_MS);
+  if (ready.status !== 0) throw new Error((ready.stderr || ready.stdout || "approved PR could not be marked ready").trim());
+}
+
 function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
   const result = ops.run([
     "gh", "pr", "view", args.pr, "-R", args.githubRepo,
@@ -213,7 +237,6 @@ function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
       : [],
   );
   if (pr.state !== "OPEN") throw new Error("PR is no longer open; automatic merge stopped");
-  if (pr.isDraft !== false) throw new Error("PR is draft or its draft state is unknown; automatic merge stopped");
   if (pr.headRefOid !== args.expectedHead) throw new Error("PR head changed; automatic merge stopped");
   if (pr.mergeable !== "MERGEABLE") throw new Error("PR mergeability is not confirmed; automatic merge stopped");
   if (pr.mergeStateStatus !== "CLEAN") throw new Error("PR merge state is not clean; automatic merge stopped");
@@ -336,6 +359,7 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     assertReviewHistoryFresh(args, ops);
     assertCurrentPrEligible(args, ops);
     reauthorizeClaim();
+    markReadyForMerge(args, ops);
     const result = ops.run([
       "gh", "pr", "merge", args.pr, "-R", args.githubRepo,
       "--squash", "--delete-branch", "--match-head-commit", args.expectedHead,
