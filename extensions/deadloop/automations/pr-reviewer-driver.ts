@@ -1392,8 +1392,11 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   if (plan.kind === "repair_required") {
-    return driverResult("skip", `PR #${plan.decision.number} has a repair request; the repair dispatcher owns its launch`, {
-      driverAction: "review_repair_request_pending", prNumber: plan.decision.number, decision: plan.decision,
+    // The repair worker is still launched by the review-result dispatcher under the review claim,
+    // so no launcher consumes this request yet. Stopping without mutating anything keeps the pull
+    // request recoverable: removing the label returns it to the review request behind it.
+    return driverResult("skip", `PR #${plan.decision.number} carries ${env.implementLabel}, which no launcher consumes yet; remove it to return the PR to review`, {
+      driverAction: "review_repair_request_unclaimed", prNumber: plan.decision.number, decision: plan.decision,
       ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
     });
   }
