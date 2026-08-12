@@ -135,7 +135,7 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     };
     fs.writeFileSync(promise, JSON.stringify(blocked
       ? { ...reportBase, status: "blocked", result: { reason: "reviewer failed", explanation: "Technical review failure.", recovery: "Retry the review." } }
-      : { ...reportBase, status: "complete", result: { outcome: "changes_requested", reviewedHead: currentHead, findings } }));
+      : { ...reportBase, status: "complete", result: { outcome: "changes_requested", reviewedHead: currentHead, requiredFindings: findings, advisoryObservations: [], priorFindingDisposition: { status: "none", summary: "No prior required findings." }, repairProgress: "initial_required_findings" } }));
     fs.writeFileSync(attemptRecord, JSON.stringify({
       attemptId: "reviewer", launchUuid: "reviewer", project: "demo", repository: "owner/repo", role: "reviewer",
       target: { kind: "pull-request", number: 31 }, inputRevision: { head: currentHead }, branch,

@@ -49,13 +49,13 @@ const cases: Array<[string, unknown]> = [
   ["valid reviewer", {
     ...common,
     role: "reviewer",
-    result: { outcome: "changes_requested", reviewedHead: head, findings: [{ title: "Bug", body: "Fix it", severity: "major" }] },
+    result: { outcome: "changes_requested", reviewedHead: head, requiredFindings: [{ title: "Bug", body: "Fix it", severity: "major" }], advisoryObservations: [], priorFindingDisposition: { status: "none", summary: "No prior required findings." }, repairProgress: "initial_required_findings" },
     evidence: { reviewed: ["diff"] },
   }],
   ["reviewer finding without severity", {
     ...common,
     role: "reviewer",
-    result: { outcome: "changes_requested", reviewedHead: head, findings: [{ title: "Bug", body: "Fix it" }] },
+    result: { outcome: "changes_requested", reviewedHead: head, requiredFindings: [{ title: "Bug", body: "Fix it" }], advisoryObservations: [], priorFindingDisposition: { status: "none", summary: "No prior required findings." }, repairProgress: "initial_required_findings" },
     evidence: { reviewed: ["diff"] },
   }],
   ["valid stale repair", {
@@ -122,21 +122,21 @@ const cases: Array<[string, unknown]> = [
     ...common,
     attemptId: "   ",
     role: "reviewer",
-    result: { outcome: "approved", reviewedHead: head, findings: [] },
+    result: { outcome: "approved", reviewedHead: head, requiredFindings: [], advisoryObservations: [], priorFindingDisposition: { status: "none", summary: "No prior required findings." } },
     evidence: { reviewed: ["diff"] },
   }],
   ["symbolic input revision", {
     ...common,
     role: "reviewer",
     inputRevision: { head: "origin/main" },
-    result: { outcome: "approved", reviewedHead: "origin/main", findings: [] },
+    result: { outcome: "approved", reviewedHead: "origin/main", requiredFindings: [], advisoryObservations: [], priorFindingDisposition: { status: "none", summary: "No prior required findings." } },
     evidence: { reviewed: ["diff"] },
   }],
   ["case-insensitive reviewed SHA", {
     ...common,
     role: "reviewer",
     inputRevision: { head: head.toUpperCase() },
-    result: { outcome: "approved", reviewedHead: head, findings: [] },
+    result: { outcome: "approved", reviewedHead: head, requiredFindings: [], advisoryObservations: [], priorFindingDisposition: { status: "none", summary: "No prior required findings." } },
     evidence: { reviewed: ["diff"] },
   }],
   ["symbolic Worker output revision", {
@@ -149,7 +149,7 @@ const cases: Array<[string, unknown]> = [
   ["symbolic reviewed revision", {
     ...common,
     role: "reviewer",
-    result: { outcome: "approved", reviewedHead: "HEAD", findings: [] },
+    result: { outcome: "approved", reviewedHead: "HEAD", requiredFindings: [], advisoryObservations: [], priorFindingDisposition: { status: "none", summary: "No prior required findings." } },
     evidence: { reviewed: ["diff"] },
   }],
   ["symbolic stale finalizer revision", {

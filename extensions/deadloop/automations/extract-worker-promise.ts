@@ -4,11 +4,11 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
+const { reviewerOutcomeValidationError } = require("../../../src/reviewer-outcome-contract.cjs") as typeof import("../../../src/reviewer-outcome-contract");
 
 type PromiseValidation = Record<string, any>;
 
 const VALID_PROMISE_STATUSES = new Set(["complete", "blocked"]);
-const VALID_FINDING_SEVERITIES = new Set(["blocker", "major", "minor"]);
 const SUCCESSFUL_ATTEMPT_PHASES = new Set([
   "prepared",
   "github_claimed",
@@ -19,17 +19,6 @@ const SUCCESSFUL_ATTEMPT_PHASES = new Set([
   "workspace_closed",
 ]);
 const ATTEMPT_ROLES = new Set(["worker", "reviewer", "review-repair", "branch-update"]);
-
-function validFinding(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const finding = value as PromiseValidation;
-  if (typeof finding.title !== "string" || !finding.title.trim()) return false;
-  if (typeof finding.body !== "string" || !finding.body.trim()) return false;
-  if (finding.path !== undefined && (typeof finding.path !== "string" || !finding.path.trim())) return false;
-  if (finding.line !== undefined && (!Number.isInteger(finding.line) || finding.line < 1)) return false;
-  if (finding.severity !== undefined && !VALID_FINDING_SEVERITIES.has(finding.severity)) return false;
-  return true;
-}
 
 function validRepair(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -132,11 +121,8 @@ function validV1Report(promise: PromiseValidation): string | undefined {
   if (promise.role === "reviewer") {
     if (!["approved", "changes_requested", "human_required"].includes(promise.result.outcome)) return "invalid_reviewer_outcome";
     if (!validCommitSha(promise.result.reviewedHead) || !sameText(promise.result.reviewedHead, promise.inputRevision.head)) return "invalid_reviewed_head";
-    if (promise.result.findings !== undefined && (!Array.isArray(promise.result.findings) || !promise.result.findings.every(validFinding))) return "invalid_reviewer_findings";
-    if (promise.result.outcome === "changes_requested" && (!Array.isArray(promise.result.findings) || !promise.result.findings.length)) return "changes_requested_requires_findings";
-    if (promise.result.outcome === "changes_requested" && promise.result.findings.some((finding: PromiseValidation) => !VALID_FINDING_SEVERITIES.has(finding.severity))) {
-      return "changes_requested_requires_finding_severity";
-    }
+    const outcomeError = reviewerOutcomeValidationError(promise.result);
+    if (outcomeError) return outcomeError;
     return validStringList(promise.evidence.reviewed) ? undefined : "reviewer_requires_evidence";
   }
   if (promise.role === "review-repair") {
@@ -157,6 +143,7 @@ function normalizeV1Report(promise: PromiseValidation): PromiseValidation {
     ...promise,
     ...result,
     ...(result.outcome ? { reason: result.outcome } : {}),
+    ...(Array.isArray(result.requiredFindings) ? { findings: result.requiredFindings } : {}),
     ...(Array.isArray(result.repairs) ? { repairs: result.repairs } : {}),
     ...(Array.isArray(evidence.validations) ? { checks: evidence.validations } : {}),
   };

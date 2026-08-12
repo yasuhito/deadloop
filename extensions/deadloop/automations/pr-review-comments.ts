@@ -51,27 +51,44 @@ function reviewMarker(input: JsonObject): string {
   return `<!-- deadloop:review-result head=${String(input.headOid).toLowerCase()} review=${String(input.reviewFingerprint).toLowerCase()} outcome=${input.outcome} -->`;
 }
 
+function renderReviewItems(items: JsonObject[], emptyText: string): string {
+  if (!items.length) return emptyText;
+  return items.map((item: JsonObject) => {
+    const path = publicRepoPath(item.path);
+    const location = item.line && path !== "Not specified" ? `${path}:${item.line}` : path;
+    const severity = item.severity ? ` — ${item.severity}` : "";
+    return `### ${publicText(item.title, "Review observation")}${severity}\n- File: ${code(location)}\n- Reason: ${publicText(item.body, "The detailed evidence contained internal runtime information and was omitted.")}`;
+  }).join("\n\n");
+}
+
+function priorDisposition(input: JsonObject): string {
+  return publicText(input.priorFindingDisposition?.summary, "No prior required findings were reported.");
+}
+
 function renderChangesRequestedComment(input: JsonObject): string {
-  const findings = (input.findings || []).map((finding: JsonObject) => {
-    const path = publicRepoPath(finding.path);
-    const location = finding.line && path !== "Not specified" ? `${path}:${finding.line}` : path;
-    return `### ${publicText(finding.title, "Review finding")} — ${finding.severity || "unspecified"}\n- File: ${code(location)}\n- Reason: ${publicText(finding.body, "The detailed evidence contained internal runtime information and was omitted.")}`;
-  });
+  const findings = renderReviewItems(input.findings || [], "No current required findings were reported.");
+  const advisories = renderReviewItems(input.advisoryObservations || [], "None.");
   const marker = renderRepairMarker(input.headOid, input.reviewFingerprint);
   const nextStep = input.repairUnavailable
-    ? input.repairUnavailableReason === "cumulative_repair_limit"
-      ? "This PR reached the cumulative limit of three automatic repair attempts. Automatic repair will not run again; inspect the current head, correct the branch without rewriting history, push a new commit, then remove `agent:blocked`."
-      : "The same findings remained after their one bounded automatic repair attempt. Automatic repair will not run again; inspect the current head, correct the branch without rewriting history, push a new commit, then remove `agent:blocked`."
+    ? input.repairUnavailableReason === "repair_progress_not_reported"
+      ? "Automatic repair will not start because the review did not explicitly confirm repair progress. Inspect the history comparison and request a fresh review or resolve the findings manually."
+      : input.repairUnavailableReason === "cumulative_repair_limit"
+        ? "This PR reached the current cumulative automatic-repair limit. Inspect the current head and resolve the findings manually."
+        : "Automatic repair will not start for this result. Inspect the current head and resolve the findings manually."
     : input.repairAlreadyStarted
-      ? "This review result already used its one bounded automatic repair attempt. The repair will not be launched again."
-      : "Exactly one bounded automatic repair will now start and will change only the findings listed above. The updated head will be reviewed again after a successful push.";
+      ? "Automatic repair already started for this review result and will not be launched twice."
+      : "Automatic repair will address only the required findings above. The updated head will receive a fresh review after a successful push.";
   const nextHeading = input.repairUnavailable ? "Recovery steps" : "Next step";
   return `## Review result: changes required
 
 - Reviewed commit: ${code(input.headOid)}
-- Conclusion: The changes below must be addressed before this PR can proceed.
+- Prior required findings: ${priorDisposition(input)}
 
-${findings.join("\n\n")}
+## Current required findings
+${findings}
+
+## Advisory observations
+${advisories}
 
 ## ${nextHeading}
 ${nextStep}
@@ -80,10 +97,18 @@ ${reviewMarker({ ...input, outcome: "changes_requested" })}${input.repairUnavail
 }
 
 function renderApprovedReviewComment(input: JsonObject): string {
+  const advisories = renderReviewItems(input.advisoryObservations || [], "None.");
   return `## Review result: approved
 
 - Reviewed commit: ${code(input.headOid)}
-- Reason: ${publicText(input.summary || input.reason, "No actionable defects were found.")}
+- Prior required findings: ${priorDisposition(input)}
+- Reason: ${publicText(input.summary || input.reason, "No required defects were found.")}
+
+## Current required findings
+None.
+
+## Advisory observations
+${advisories}
 
 ## Next step
 The reviewed head is approved. The configured handoff or merge safety checks can continue.
@@ -92,11 +117,19 @@ ${reviewMarker({ ...input, outcome: "approved" })}`;
 }
 
 function renderHumanRequiredComment(input: JsonObject): string {
+  const findings = renderReviewItems(input.findings || [], "None reported.");
+  const advisories = renderReviewItems(input.advisoryObservations || [], "None.");
   return `## Review result: human decision required
 
 - Reviewed commit: ${code(input.headOid)}
-- Reason: ${publicText(input.reason, "The reviewer could not safely decide or repair this result.")}
-- Context: ${publicText(input.summary, "Review the findings and choose the safe next action.")}
+- Prior required findings: ${priorDisposition(input)}
+- Context: ${publicText(input.summary, "Review the evidence and choose the safe next action.")}
+
+## Current required findings
+${findings}
+
+## Advisory observations
+${advisories}
 
 ## Recovery steps
 Resolve the decision above, push a new commit if code changes are needed, then remove ${code(input.blockedLabel || "agent:blocked")} so the new head can be reviewed.

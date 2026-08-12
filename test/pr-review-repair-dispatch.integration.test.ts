@@ -73,9 +73,24 @@ function writeSavedReviewerAuthority(
     target: { repository, kind: "pull-request", number: targetNumber }, inputRevision: { head },
     summary: String(raw.summary || "review result"), evidence: { reviewed: ["PR diff"] },
   };
+  const outcome = String(raw.outcome || "changes_requested");
+  const requiredFindings = Array.isArray(raw.findings) ? raw.findings : [];
   const report = raw.status === "blocked"
     ? { ...base, status: "blocked", result: { reason: String(raw.reason || "reviewer failed"), explanation: String(raw.summary || "reviewer failed"), recovery: "Retry the review." } }
-    : { ...base, status: "complete", result: { outcome: String(raw.outcome || "changes_requested"), reviewedHead: head, findings: Array.isArray(raw.findings) ? raw.findings : [] } };
+    : {
+        ...base,
+        status: "complete",
+        result: {
+          outcome,
+          reviewedHead: head,
+          requiredFindings,
+          advisoryObservations: [],
+          priorFindingDisposition: outcome === "human_required"
+            ? { status: "human_judgment", summary: "A human decision is required." }
+            : { status: "none", summary: "No prior required findings." },
+          ...(outcome === "changes_requested" ? { repairProgress: "initial_required_findings" } : {}),
+        },
+      };
   fs.writeFileSync(promise, JSON.stringify(report));
   const reviewClaim = JSON.parse(reviewClaimEnvironment(head, targetNumber, repository).DEADLOOP_REVIEW_CLAIM);
   fs.writeFileSync(attempt, JSON.stringify({
@@ -301,7 +316,7 @@ function runDispatch(enabled: boolean, supported = true): { output: Record<strin
   fs.writeFileSync(promise, JSON.stringify({
     schemaVersion: 1, attemptId: "reviewer", role: "reviewer", status: "complete",
     target: { repository: "owner/repo", kind: "pull-request", number: 243 }, inputRevision: { head: "a".repeat(40) },
-    summary: "A lint contract finding needs repair.", result: { outcome: "changes_requested", reviewedHead: "a".repeat(40), findings },
+    summary: "A lint contract finding needs repair.", result: { outcome: "changes_requested", reviewedHead: "a".repeat(40), requiredFindings: findings, advisoryObservations: [], priorFindingDisposition: { status: "none", summary: "No prior required findings." }, repairProgress: "initial_required_findings" },
     evidence: { reviewed: ["diff"] },
   }));
   fs.writeFileSync(attempt, JSON.stringify({
@@ -649,7 +664,7 @@ function runV1ChangesRequestedTwice(options: {
   fs.writeFileSync(promise, JSON.stringify({
     schemaVersion: 1, attemptId: "reviewer-attempt", role: "reviewer",
     target: { repository: "owner/repo", kind: "pull-request", number: 243 }, inputRevision: { head },
-    status: "complete", summary: "One exact finding", result: { outcome: "changes_requested", reviewedHead: head, findings },
+    status: "complete", summary: "One exact finding", result: { outcome: "changes_requested", reviewedHead: head, requiredFindings: findings, advisoryObservations: [], priorFindingDisposition: { status: "none", summary: "No prior required findings." }, repairProgress: "initial_required_findings" },
     evidence: { reviewed: ["diff"] },
   }));
   fs.writeFileSync(attempt, JSON.stringify({
@@ -789,7 +804,7 @@ function runHumanRequiredHistoryRace(options: { blockDuringRelease?: boolean } =
     schemaVersion: 1, attemptId: "reviewer-attempt", role: "reviewer",
     target: { repository: "owner/repo", kind: "pull-request", number: 243 }, inputRevision: { head },
     status: "complete", summary: "A human decision is required.",
-    result: { outcome: "human_required", reviewedHead: head, findings: [] }, evidence: { reviewed: ["diff"] },
+    result: { outcome: "human_required", reviewedHead: head, requiredFindings: [], advisoryObservations: [], priorFindingDisposition: { status: "human_judgment", summary: "A human decision is required." } }, evidence: { reviewed: ["diff"] },
   }));
   fs.writeFileSync(attempt, JSON.stringify({
     attemptId: "reviewer-attempt", launchUuid: "reviewer-run", project: "demo", repository: "owner/repo",
@@ -971,7 +986,7 @@ describe("review repair dispatch integration", () => {
       schemaVersion: 1, attemptId: "reviewer", role: "reviewer", status: "complete",
       target: { kind: "pull-request", number: 143, repository: "owner/repo" },
       inputRevision: { head: "a".repeat(40) }, summary: "approved",
-      result: { outcome: "approved", reviewedHead: "a".repeat(40) }, evidence: { reviewed: ["diff"] },
+      result: { outcome: "approved", reviewedHead: "a".repeat(40), requiredFindings: [], advisoryObservations: [], priorFindingDisposition: { status: "none", summary: "No prior required findings." } }, evidence: { reviewed: ["diff"] },
     }));
     fs.writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
       attemptId: "reviewer", launchUuid: "launch", project: "demo", repository: "owner/repo",

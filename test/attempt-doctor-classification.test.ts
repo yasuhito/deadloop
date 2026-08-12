@@ -63,7 +63,7 @@ describe("attempt workspace doctor classifications", () => {
     expect(classify(fixture.record, report, [{ workspaceId: fixture.record.workspaceId, worktreePath: fixture.record.worktreePath }])).toContain("blocked");
   });
   it("classifies a human-required review", () => {
-    const fixture = reviewerFixture("approved"); const report = { ...fixture.report, result: { ...fixture.report.result, outcome: "human_required" } };
+    const fixture = reviewerFixture("approved"); const report = { ...fixture.report, result: { ...fixture.report.result, outcome: "human_required", priorFindingDisposition: { status: "human_judgment" as const, summary: "A human decision is required." } } };
     expect(classify(fixture.record, report, [{ workspaceId: fixture.record.workspaceId, worktreePath: fixture.record.worktreePath }])).toContain("human_required");
   });
   it("classifies malformed report JSON", () => {

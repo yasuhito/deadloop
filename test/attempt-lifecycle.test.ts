@@ -52,7 +52,13 @@ function matchingReport() {
     inputRevision: { head: "a".repeat(40), base: "b".repeat(40) },
     status: "complete" as const,
     summary: "Approved.",
-    result: { outcome: "approved", reviewedHead: "a".repeat(40), findings: [] },
+    result: {
+      outcome: "approved",
+      reviewedHead: "a".repeat(40),
+      requiredFindings: [],
+      advisoryObservations: [],
+      priorFindingDisposition: { status: "none", summary: "No prior required findings." },
+    },
     evidence: { reviewed: ["PR diff"] },
   };
 }
@@ -276,7 +282,7 @@ describe("attempt lifecycle contract", () => {
 
     expect(() => validateCompletionReportV1({
       ...report,
-      result: { ...report.result, outcome: "changes_requested", findings: [{ title: "Bug", body: "", severity: "major" }] },
+      result: { ...report.result, outcome: "changes_requested", requiredFindings: [{ title: "Bug", body: "", severity: "major" }], repairProgress: "initial_required_findings" },
     })).toThrow("finding");
   });
 
@@ -285,8 +291,8 @@ describe("attempt lifecycle contract", () => {
 
     expect(() => validateCompletionReportV1({
       ...report,
-      result: { ...report.result, outcome: "changes_requested", findings: [{ title: "Bug", body: "Fix it" }] },
-    })).toThrow("severity");
+      result: { ...report.result, outcome: "changes_requested", requiredFindings: [{ title: "Bug", body: "Fix it" }], repairProgress: "initial_required_findings" },
+    })).toThrow("invalid_required_findings");
   });
 
   it("rejects malformed Worker validation evidence", () => {

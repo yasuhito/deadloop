@@ -267,7 +267,7 @@ export function reviewerCompletionPersisted(
     return false;
   }
   if (report.result.outcome === "changes_requested") {
-    return persistence.boundedRepairAttemptMarked && sameFindings(persistence.findings, report.result.findings ?? []);
+    return persistence.boundedRepairAttemptMarked && sameFindings(persistence.findings, report.result.requiredFindings);
   }
   return true;
 }

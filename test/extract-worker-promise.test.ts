@@ -85,7 +85,7 @@ describe("extract worker promise helper", () => {
 
   it("normalizes a V1 reviewer result for the existing review workflow", () => {
     withTempFile(
-      '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"complete","summary":"reviewed","result":{"outcome":"approved","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","findings":[]},"evidence":{"reviewed":["diff"]}}',
+      '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"complete","summary":"reviewed","result":{"outcome":"approved","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","requiredFindings":[],"advisoryObservations":[],"priorFindingDisposition":{"status":"none","summary":"No prior required findings."}},"evidence":{"reviewed":["diff"]}}',
       (filePath) => {
         expect(runPromise(filePath).promise.outcome).toBe("approved");
       },
@@ -94,18 +94,18 @@ describe("extract worker promise helper", () => {
 
   it("rejects malformed V1 reviewer findings", () => {
     withTempFile(
-      '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"complete","summary":"reviewed","result":{"outcome":"changes_requested","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","findings":[{"title":"Bug","body":"","severity":"major"}]},"evidence":{"reviewed":["diff"]}}',
+      '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"complete","summary":"reviewed","result":{"outcome":"changes_requested","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","requiredFindings":[{"title":"Bug","body":"","severity":"major"}],"advisoryObservations":[],"priorFindingDisposition":{"status":"none","summary":"No prior required findings."},"repairProgress":"initial_required_findings"},"evidence":{"reviewed":["diff"]}}',
       (filePath) => {
-        expect(runPromise(filePath).error).toBe("invalid_reviewer_findings");
+        expect(runPromise(filePath).error).toBe("invalid_required_findings");
       },
     );
   });
 
   it("rejects V1 changes_requested findings without severity", () => {
     withTempFile(
-      '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"complete","summary":"reviewed","result":{"outcome":"changes_requested","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","findings":[{"title":"Bug","body":"Fix it"}]},"evidence":{"reviewed":["diff"]}}',
+      '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"complete","summary":"reviewed","result":{"outcome":"changes_requested","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","requiredFindings":[{"title":"Bug","body":"Fix it"}],"advisoryObservations":[],"priorFindingDisposition":{"status":"none","summary":"No prior required findings."},"repairProgress":"initial_required_findings"},"evidence":{"reviewed":["diff"]}}',
       (filePath) => {
-        expect(runPromise(filePath).error).toBe("changes_requested_requires_finding_severity");
+        expect(runPromise(filePath).error).toBe("invalid_required_findings");
       },
     );
   });

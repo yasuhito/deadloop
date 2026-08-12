@@ -7,6 +7,7 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { validatePromise } = require("./extract-worker-promise.ts");
+const { reviewRepairEligible } = require("../../../src/reviewer-outcome-contract.cjs") as typeof import("../../../src/reviewer-outcome-contract");
 const {
   decideTechnicalReviewFailure,
   renderTechnicalFailureMarker,
@@ -677,7 +678,7 @@ function dispatch(args: JsonObject): DriverResult {
   }
   const persistenceMarker = rawReport?.schemaVersion === 1
     ? renderAttemptPersistenceMarker(attemptRecord, rawReport, {
-        findings: rawReport.role === "reviewer" ? rawReport.result?.findings || [] : [],
+        findings: rawReport.role === "reviewer" ? rawReport.result?.requiredFindings || [] : [],
         boundedRepairAttemptMarked: rawReport.role === "reviewer" && rawReport.result?.outcome === "changes_requested",
       })
     : "";
@@ -753,13 +754,17 @@ function dispatch(args: JsonObject): DriverResult {
   }
 
   const outcome = String(promise.outcome || "approved");
-  const findings = (promise.findings || []) as JsonObject[];
+  const findings = (promise.requiredFindings || []) as JsonObject[];
+  const advisoryObservations = (promise.advisoryObservations || []) as JsonObject[];
   const reviewFingerprint = reviewOutcomeFingerprint(outcome, promise.reason || "", promise.summary || "", findings);
   const commentInput = {
     headOid: expectedHead,
     reason: promise.reason || "",
     summary: promise.summary || "",
     findings,
+    advisoryObservations,
+    priorFindingDisposition: promise.priorFindingDisposition,
+    repairProgress: promise.repairProgress,
     reviewFingerprint,
     blockedLabel: env.blockedLabel,
   };
@@ -872,6 +877,30 @@ function dispatch(args: JsonObject): DriverResult {
       });
     }
     return driverResult("done", `PR #${prNumber} review requires a human`, { driverAction: "review_human_blocked", comment });
+  }
+
+  if (!reviewRepairEligible(promise)) {
+    let comment = "Review result comment already exists.";
+    const staleComparison = withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
+      if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, outcome)) {
+        comment = renderChangesRequestedComment({
+          ...commentInput,
+          repairUnavailable: true,
+          repairUnavailableReason: "repair_progress_not_reported",
+        });
+        guardedGithub.commentPr(env.githubRepo, prNumber, comment);
+      }
+      const labels = labelNames(livePr.labels);
+      if (labels.includes(env.inProgressLabel)
+        || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
+      }
+    }, historyFile);
+    if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before missing-progress block");
+    return driverResult("done", `PR #${prNumber} did not report repair progress; marked blocked`, {
+      driverAction: "review_repair_progress_required",
+      comment,
+    });
   }
 
   const worktree = inspectRepairWorktree(env.repoPath, branch);

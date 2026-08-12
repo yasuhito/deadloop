@@ -22,8 +22,9 @@ describe("PR review public comments", () => {
     expect(renderChangesRequestedComment(fixture("changes-requested.json"))).toBe(`## Review result: changes required
 
 - Reviewed commit: \`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\`
-- Conclusion: The changes below must be addressed before this PR can proceed.
+- Prior required findings: There were no prior required findings.
 
+## Current required findings
 ### Unsafe fallback — blocker
 - File: \`src/review.ts:17\`
 - Reason: The fallback can approve a failed review.
@@ -32,16 +33,19 @@ describe("PR review public comments", () => {
 - File: \`src/promise.ts\`
 - Reason: The repair report is accepted without checking its fields.
 
+## Advisory observations
+None.
+
 ## Next step
-Exactly one bounded automatic repair will now start and will change only the findings listed above. The updated head will be reviewed again after a successful push.
+Automatic repair will address only the required findings above. The updated head will receive a fresh review after a successful push.
 
 <!-- deadloop:review-result head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=1234567890abcdef1234 outcome=changes_requested -->
 <!-- deadloop:review-repair-attempt key=90e33b980e83cbff65a4 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=1234567890abcdef1234 -->`);
   });
 
-  it("explains that one bounded repair starts", () => {
+  it("explains that automatic repair receives only required findings", () => {
     expect(renderChangesRequestedComment(fixture("changes-requested.json"))).toContain(
-      "one bounded automatic repair will now start",
+      "Automatic repair will address only the required findings above",
     );
   });
 
@@ -49,6 +53,23 @@ Exactly one bounded automatic repair will now start and will change only the fin
     expect(renderChangesRequestedComment(fixture("changes-requested.json"))).toContain(
       "<!-- deadloop:review-repair-attempt",
     );
+  });
+
+  it("renders advisory observations on an approved review", () => {
+    expect(renderApprovedReviewComment({
+      headOid: "a".repeat(40),
+      summary: "No required defects were found.",
+      advisoryObservations: [{ title: "Naming", body: "A clearer name would help." }],
+      priorFindingDisposition: { status: "none", summary: "No prior required findings." },
+      reviewFingerprint: "1".repeat(20),
+    })).toContain("A clearer name would help.");
+  });
+
+  it("does not display machine-facing finding IDs", () => {
+    expect(renderChangesRequestedComment({
+      ...fixture("changes-requested.json"),
+      findings: [{ title: "Race", body: "Fix the stale push.", severity: "major", id: "finding-123" }],
+    })).not.toContain("finding-123");
   });
 
   it("renders an approved head, reason, and next action", () => {

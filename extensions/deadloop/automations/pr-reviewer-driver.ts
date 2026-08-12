@@ -368,11 +368,14 @@ Promise report:
 - Before stopping, write JSON to the promise file: \`${promiseFile.replace(/`/g, "\\`")}\`.
 - Every report must include this exact V1 identity: ${reportBase}.
 - Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
-- If no actionable defect remains, write a V1 report with a three-sentence summary, status="complete", result={outcome:"approved",reviewedHead:"${String(pr.headRefOid || "")}",findings:[]}, and evidence={reviewed:["diff and configured checks"]}.
-- If actionable defects exist, include a three-sentence summary and use result={outcome:"changes_requested",reviewedHead:"${String(pr.headRefOid || "")}",findings:[{title:"concise defect",body:"bounded required correction and evidence",path:"optional/repo/path",line:1,severity:"blocker|major|minor"}]} with non-empty evidence.reviewed.
-- Use outcome=human_required only when a product/spec/safety decision cannot be repaired within the PR. Include a three-sentence summary and write result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:[]}, and evidence={reviewed:["decision boundary and supporting evidence"]}.
+- Separate requiredFindings from advisoryObservations. Both contain {title,body,path?,line?,severity?}; every required finding must include severity="blocker|major|minor". Advisory observations are optional suggestions and never enter the repair contract.
+- Always include priorFindingDisposition={status,summary}. Use status=none when there were no prior required findings, all_resolved when all were resolved, persisted when one remains, regressed when a resolved finding returned, mixed when prior and new required findings coexist, or human_judgment when product/spec/safety judgment is necessary.
+- If no required defect remains, use outcome="approved", requiredFindings=[], advisoryObservations=[...], and prior status none|all_resolved. Approval may contain advisory observations.
+- If all current required findings are new and there were no prior required findings, use outcome="changes_requested" and repairProgress="initial_required_findings". If all prior required findings resolved and every current required finding is new, instead use repairProgress="all_prior_resolved_current_findings_new".
+- Use outcome="human_required" with prior status persisted|regressed|mixed|human_judgment when a prior finding persists, a resolved finding regresses, prior and new findings are mixed, or human judgment is necessary. Do not report repairProgress for human_required.
+- A prior advisory observation that becomes required after later changes is a new required finding. Make the semantic comparison from the native PR history; do not invent finding IDs, text fingerprints, or a finding ledger.
 - For blocked reports include a three-sentence summary, result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
-- Findings are the repair worker's entire contract. Include only verified, actionable defects; #243-style lint or repository-contract failures are changes_requested, not blocked.
+- Required findings are the repair worker's entire contract. Include only verified, actionable defects; #243-style lint or repository-contract failures are changes_requested, not blocked.
 - The reason, summary, finding titles/bodies, and finding paths can be published in a PR comment. Keep them human-readable and never include prompts, promise paths, absolute/local paths, internal agent names, or other runtime details.
 - Always write the promise file, even on failure. Do not exit silently.`;
 }

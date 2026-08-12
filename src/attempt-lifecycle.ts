@@ -2,6 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { RequiredVerificationContract } from "./required-verification";
+import {
+  type PriorFindingDisposition,
+  type RepairProgress,
+  type ReviewItem,
+  reviewerOutcomeValidationError,
+} from "./reviewer-outcome-contract";
 
 export const ATTEMPT_RECORD_FILE = "attempt.json";
 const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
@@ -45,13 +51,7 @@ export type AttemptIdentity = {
   inputRevision: InputRevision;
 };
 
-export type ReviewerFinding = {
-  title: string;
-  body: string;
-  path?: string;
-  line?: number;
-  severity?: "blocker" | "major" | "minor";
-};
+export type ReviewerFinding = ReviewItem;
 
 export type ValidationCheck = { command: string; result: "passed" };
 export type RepairOutcome = { title: string; summary: string; paths: string[] };
@@ -77,7 +77,10 @@ export type CompletionReportV1 = {
       result: {
         outcome: "approved" | "changes_requested" | "human_required";
         reviewedHead: string;
-        findings?: ReviewerFinding[];
+        requiredFindings: ReviewerFinding[];
+        advisoryObservations: ReviewerFinding[];
+        priorFindingDisposition: PriorFindingDisposition;
+        repairProgress?: RepairProgress;
       };
       evidence: { reviewed: string[] };
     }
@@ -595,21 +598,8 @@ function validateBlockedResult(result: unknown): void {
   }
 }
 
-const FINDING_SEVERITIES = new Set(["blocker", "major", "minor"]);
-
 function nonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === "string" && Boolean(entry.trim()));
-}
-
-function validFinding(value: unknown, severityRequired: boolean): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const finding = value as Record<string, unknown>;
-  if (typeof finding.title !== "string" || !finding.title.trim()) return false;
-  if (typeof finding.body !== "string" || !finding.body.trim()) return false;
-  if (finding.path !== undefined && (typeof finding.path !== "string" || !finding.path.trim())) return false;
-  if (finding.line !== undefined && (!Number.isInteger(finding.line) || (finding.line as number) < 1)) return false;
-  if (severityRequired && !FINDING_SEVERITIES.has(finding.severity as string)) return false;
-  return finding.severity === undefined || FINDING_SEVERITIES.has(finding.severity as string);
 }
 
 function validCheck(value: unknown): boolean {
@@ -692,13 +682,8 @@ function validateCompleteResult(report: CompletionReportEnvelope): void {
     }
     requiredCommitSha(result, "reviewedHead");
     if (!sameText(result.reviewedHead, report.inputRevision.head)) throw new Error("Reviewer completion reviewedHead does not match input revision");
-    if (result.findings !== undefined && (!Array.isArray(result.findings) || !result.findings.every((finding) => validFinding(finding, result.outcome === "changes_requested")))) {
-      const suffix = result.outcome === "changes_requested" ? " with severity" : "";
-      throw new Error(`Reviewer completion has an invalid finding${suffix}`);
-    }
-    if (result.outcome === "changes_requested" && (!Array.isArray(result.findings) || result.findings.length === 0)) {
-      throw new Error("Reviewer changes_requested requires findings with severity");
-    }
+    const outcomeError = reviewerOutcomeValidationError(result);
+    if (outcomeError) throw new Error(`Reviewer completion violates outcome contract: ${outcomeError}`);
     if (!nonEmptyStringArray(evidence.reviewed)) throw new Error("Reviewer completion requires review evidence");
     return;
   }

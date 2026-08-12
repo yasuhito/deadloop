@@ -138,7 +138,16 @@ export function reviewerFixture(outcome: "approved" | "changes_requested" | "hum
     report: {
       ...commonReport,
       role: "reviewer" as const,
-      result: { outcome, reviewedHead: INPUT_HEAD, findings },
+      result: {
+        outcome,
+        reviewedHead: INPUT_HEAD,
+        requiredFindings: findings,
+        advisoryObservations: [],
+        priorFindingDisposition: outcome === "human_required"
+          ? { status: "human_judgment" as const, summary: "A human decision is required." }
+          : { status: "none" as const, summary: "No prior required findings." },
+        ...(outcome === "changes_requested" ? { repairProgress: "initial_required_findings" as const } : {}),
+      },
       evidence: { reviewed: ["diff"] },
     },
     github,

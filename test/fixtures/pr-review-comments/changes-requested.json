@@ -3,6 +3,11 @@
   "outcome": "changes_requested",
   "reason": "",
   "summary": "Two defects require correction.",
+  "priorFindingDisposition": {
+    "status": "none",
+    "summary": "There were no prior required findings."
+  },
+  "advisoryObservations": [],
   "findings": [
     {
       "title": "Unsafe fallback",

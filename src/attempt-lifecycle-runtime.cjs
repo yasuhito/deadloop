@@ -124,6 +124,23 @@ function finding(value, severityRequired) {
   const validSeverity = ["blocker", "major", "minor"].includes(value.severity);
   return (!severityRequired || validSeverity) && (value.severity === undefined || validSeverity);
 }
+function reviewerOutcomeError(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !["approved", "changes_requested", "human_required"].includes(value.outcome)) return "invalid_reviewer_outcome";
+  if (!Array.isArray(value.requiredFindings) || !value.requiredFindings.every(item => finding(item, true))) return "invalid_required_findings";
+  if (!Array.isArray(value.advisoryObservations) || !value.advisoryObservations.every(item => finding(item, false))) return "invalid_advisory_observations";
+  const disposition = value.priorFindingDisposition;
+  if (!disposition || typeof disposition !== "object" || Array.isArray(disposition) || !["none", "all_resolved", "persisted", "regressed", "mixed", "human_judgment"].includes(disposition.status) || typeof disposition.summary !== "string" || !disposition.summary.trim()) return "invalid_prior_finding_disposition";
+  if (value.outcome === "approved" && value.requiredFindings.length) return "approved_requires_zero_required_findings";
+  if (value.outcome === "changes_requested" && !value.requiredFindings.length) return "changes_requested_requires_required_findings";
+  const human = ["persisted", "regressed", "mixed", "human_judgment"].includes(disposition.status);
+  if (value.outcome === "human_required") return !human ? "human_required_requires_human_disposition" : value.repairProgress !== undefined ? "human_required_forbids_repair_progress" : undefined;
+  if (human) return "prior_disposition_requires_human_required";
+  if (value.repairProgress === undefined) return undefined;
+  if (value.outcome !== "changes_requested") return "repair_progress_requires_changes_requested";
+  if (value.repairProgress === "initial_required_findings" && disposition.status === "none") return undefined;
+  if (value.repairProgress === "all_prior_resolved_current_findings_new" && disposition.status === "all_resolved") return undefined;
+  return "repair_progress_disposition_mismatch";
+}
 function repair(value) { return value && typeof value === "object" && !Array.isArray(value) && typeof value.title === "string" && value.title.trim() && typeof value.summary === "string" && value.summary.trim() && stringArray(value.paths); }
 function requiredString(value, name) { if (typeof value[name] !== "string" || !value[name].trim()) throw new Error(`${name} must be a non-empty string`); }
 function requiredSha(value, name) { if (typeof value[name] !== "string" || !/^[0-9a-f]{40}$/i.test(value[name])) throw new Error(`${name} must be a full 40-hex commit SHA`); }
@@ -144,8 +161,7 @@ function validateComplete(report) {
   if (report.role === "reviewer") {
     if (!["approved", "changes_requested", "human_required"].includes(result.outcome)) throw new Error("Reviewer completion outcome is invalid");
     requiredSha(result, "reviewedHead"); if (!sameText(result.reviewedHead, report.inputRevision.head)) throw new Error("Reviewer completion reviewedHead does not match input revision");
-    if (result.findings !== undefined && (!Array.isArray(result.findings) || !result.findings.every((item) => finding(item, result.outcome === "changes_requested")))) throw new Error("Reviewer completion has an invalid finding");
-    if (result.outcome === "changes_requested" && (!Array.isArray(result.findings) || !result.findings.length)) throw new Error("Reviewer changes_requested requires findings with severity");
+    const outcomeError = reviewerOutcomeError(result); if (outcomeError) throw new Error(`Reviewer completion violates outcome contract: ${outcomeError}`);
     if (!stringArray(evidence.reviewed)) throw new Error("Reviewer completion requires review evidence"); return;
   }
   requiredSha(result, "outputRevision"); const finalizer = validateFinalizer(report, evidence);
