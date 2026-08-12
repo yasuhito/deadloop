@@ -8,7 +8,7 @@
       "headRefOid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "updatedAt": "2026-07-07T23:00:00Z",
       "isDraft": false,
-      "labels": [{ "name": "agent:review" }, { "name": "agent:reviewing" }],
+      "labels": [{ "name": "agent:review" }, { "name": "agent:in-progress" }],
       "statusCheckRollup": [],
       "comments": [
         {

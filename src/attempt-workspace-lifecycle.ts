@@ -13,17 +13,15 @@ export type RetentionReason =
   | "human_required"
   | "missing_report"
   | "invalid_report"
-  | "legacy_report"
   | "github_persistence_not_confirmed"
   | "launch_failed"
   | "cleanup_pending"
   | "ownership_mismatch"
   | "newer_live_owner"
-  | "herdr_incompatible";
+  | "herdr_unsupported";
 
 export type AttemptReportObservation =
   | { kind: "missing" }
-  | { kind: "legacy"; promisePath: string; report: unknown }
   | { kind: "v1"; promisePath: string; report: unknown };
 
 export type RunnerUncertaintyReason = "timeout" | "protocol_error" | "malformed_response" | "unreachable" | "ambiguous";
@@ -362,7 +360,7 @@ function rolePredicate(
 
 /**
  * Validates the launch-unique path and the V1 report against the durable record before consulting
- * the role predicate. Legacy transport can never reach a closing decision.
+ * the role predicate.
  */
 export function evaluateCompletionPersistence(input: {
   record: AttemptRecord;
@@ -381,7 +379,6 @@ export function evaluateCompletionPersistence(input: {
   if (input.report.promisePath !== input.record.promiseFile) {
     return { action: "preserve", reason: "ownership_mismatch" };
   }
-  if (input.report.kind === "legacy") return { action: "preserve", reason: "legacy_report" };
 
   let report: CompletionReportV1;
   try {
@@ -695,13 +692,12 @@ const DOCTOR_TITLES: Record<RetentionReason, string> = {
   human_required: "human-required outcome",
   missing_report: "missing completion report",
   invalid_report: "malformed or mismatched completion report",
-  legacy_report: "legacy completion report",
   github_persistence_not_confirmed: "GitHub persistence not confirmed",
   launch_failed: "launch failed after partial mutation",
   cleanup_pending: "cleanup pending after confirmed persistence",
   ownership_mismatch: "workspace ownership mismatch",
   newer_live_owner: "newer live attempt owns the checkout",
-  herdr_incompatible: "unsupported or protocol-incompatible Herdr",
+  herdr_unsupported: "unsupported or unsupported Herdr",
 };
 
 /** Data-only diagnostic; callers may render it, but no destructive operation is exposed. */

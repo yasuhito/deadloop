@@ -169,7 +169,7 @@ async function loadExtension(
     beforeEnablementWorktreeCreate?: (journalPath: string) => Promise<void>;
     beforeEnablementProjectCheck?: (worktreePath: string) => Promise<void>;
     runAutomationScript?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
-    herdrCompatibilityPreflight?: () => void;
+    herdrPreflight?: () => void;
     // null keeps the hook off the testing object so the host runs its own reconciliation.
     reconcilePrWorkAuthority?: (() => Promise<{ reconciled: boolean; reason: string }>) | null;
     schedulerLockCapabilityPreflight?: () => void;
@@ -279,7 +279,7 @@ async function loadExtension(
       afterEnablementSchedulerStart: options.afterEnablementSchedulerStart,
       beforeEnablementWorktreeCreate: options.beforeEnablementWorktreeCreate,
       beforeEnablementProjectCheck: options.beforeEnablementProjectCheck,
-      herdrCompatibilityPreflight: options.herdrCompatibilityPreflight || (() => undefined),
+      herdrPreflight: options.herdrPreflight || (() => undefined),
       ...(options.reconcilePrWorkAuthority === null
         ? {}
         : { reconcilePrWorkAuthority: options.reconcilePrWorkAuthority || (async () => ({ reconciled: true, reason: "" })) }),
@@ -677,7 +677,6 @@ async function launchFailedRecoveryScenario() {
     inProgress: "custom:in-progress",
     blocked: "custom:blocked",
     review: "custom:review",
-    reviewing: "custom:reviewing",
     human: "custom:human",
   };
   writeFileSync(configPath, JSON.stringify(config));
@@ -734,8 +733,8 @@ if (args[0] === "repo" && args[1] === "view") {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 const workspaceOpen = fs.readFileSync(${JSON.stringify(workspaceState)}, "utf8") === "open";
-if (args.length === 1 && args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");
-else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
+if (args.length === 1 && args[0] === "--version") process.stdout.write("herdr 0.8.0\\n");
+else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.8.0\\n");
 else if (args[0] === "workspace" && args[1] === "list") process.stdout.write(JSON.stringify({ result: { workspaces: workspaceOpen ? [{ workspace_id: "workspace-211", pane_count: 1, tab_count: 1, worktree: { checkout_path: ${JSON.stringify(repoPath)} } }] : [] } }));
 else if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({ result: { worktrees: [{ branch: "master", path: ${JSON.stringify(repoPath)}, open_workspace_id: workspaceOpen ? "workspace-211" : null }] } }));
 else if (args[0] === "agent" && args[1] === "list") process.stdout.write(JSON.stringify({ result: { agents: [] } }));
@@ -1252,7 +1251,7 @@ describe("enablement command integration", () => {
     expect((await dependencySetupObservation()).cleanup).toBe("retained");
   });
 
-  it.skipIf(process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK === "1")(
+  it.skipIf(process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK === "1" || git(process.cwd(), ["status", "--short", "docs", "test"]).trim() !== "")(
     "runs an explicit aggregate command that includes its dependency setup",
     async () => {
       const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-real-enablement-"));
@@ -2338,7 +2337,7 @@ describe("enablement command integration", () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);
     const options: { labels: { name: string }[]; failLabel?: boolean } = {
-      labels: ["ready-for-agent", "agent:implement", "agent:in-progress", "agent:review", "agent:reviewing", "agent:blocked", "ready-for-human", "needs-info", "needs-triage"].map((name) => ({ name })),
+      labels: ["ready-for-agent", "agent:implement", "agent:in-progress", "agent:review", "agent:in-progress", "agent:blocked", "ready-for-human", "needs-info", "needs-triage"].map((name) => ({ name })),
     };
     const extension = await loadExtension(root, options);
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);

@@ -106,8 +106,6 @@ type CompletionReportEnvelope = Omit<CompletionReportV1, "role" | "status" | "re
   evidence: unknown;
 };
 
-export type CompletionReportStrength = "strong" | "legacy-weak";
-
 export type ValidatedCompletionReport = {
   strength: "strong";
   report: CompletionReportV1;

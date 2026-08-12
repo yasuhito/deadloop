@@ -261,7 +261,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
 
   const openPrs = input.openPrs || [];
   const reviewTarget = openPrs.filter((pr) => labelsOf(pr).has(project.labels.review));
-  const reviewing = openPrs.filter((pr) => labelsOf(pr).has(project.labels.reviewing));
+  const reviewing = openPrs.filter((pr) => labelsOf(pr).has(project.labels.inProgress));
 
   const workerWorktrees = (input.worktrees || []).filter((worktree) => isWorkerWorktree(worktree, project));
   const cleanupCandidates = selectCleanupCandidates(

@@ -25,7 +25,7 @@ const {
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { postBlockRequestIsEligible } = require("../../../src/pr-work-authority-reconciliation.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 const {
   comparePrHistoryObservations,
@@ -103,7 +103,6 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     branchUpdateRemote: source.DEADLOOP_BRANCH_UPDATE_REMOTE || "origin",
     reviewRepairRemote: source.DEADLOOP_REVIEW_REPAIR_REMOTE || "origin",
     reviewLabel: source.DEADLOOP_REVIEW_LABEL || "agent:review",
-    reviewingLabel: source.DEADLOOP_REVIEWING_LABEL || "agent:reviewing",
     inProgressLabel: source.DEADLOOP_IN_PROGRESS_LABEL || "agent:in-progress",
     humanLabel: source.DEADLOOP_HUMAN_LABEL || "ready-for-human",
     blockedLabel: source.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
@@ -506,7 +505,7 @@ function applyBranchUpdateBlocked(
   const comment = branchUpdateBlockedComment(pr, env, reason);
   const applied = applyPrTransition(pr, env, fixture, stillApplicable, (github, live) => {
     github.commentPr(env.githubRepo, Number(live.number || 0), comment);
-    github.movePrLabels(env.githubRepo, Number(live.number || 0), { remove: env.reviewingLabel, add: env.blockedLabel });
+    github.movePrLabels(env.githubRepo, Number(live.number || 0), { remove: env.inProgressLabel, add: env.blockedLabel });
   });
   return { comment, applied };
 }
@@ -571,7 +570,7 @@ function launchBranchUpdate(
     plan.input,
     (github) => {
       github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
-      github.movePrLabels(env.githubRepo, number, { add: env.reviewingLabel });
+      github.movePrLabels(env.githubRepo, number, { add: env.inProgressLabel });
     },
     () => {
       if (fixture) return;
@@ -902,7 +901,6 @@ function reauthorizeClaimedReview(
 function reviewClaimManagedLabels(env: ReturnType<typeof envConfig>): string[] {
   return [
     env.reviewLabel,
-    env.reviewingLabel,
     env.implementLabel,
     "agent:update-branch",
     env.inProgressLabel,
@@ -946,7 +944,6 @@ function claimReviewRequest(
     cleanupGraceSeconds: env.claimCleanupGraceSeconds,
     authoritySeconds,
     reviewLabel: env.reviewLabel,
-    reviewingLabel: env.reviewingLabel,
     inProgressLabel: env.inProgressLabel,
     blockedLabel: env.blockedLabel,
   };
@@ -1089,7 +1086,6 @@ function claimReviewRequest(
   if (JSON.stringify([...finalLiveLabels].sort()) !== JSON.stringify(expectedLabels)
     || !finalLiveLabels.has(env.inProgressLabel)
     || finalLiveLabels.has(env.reviewLabel)
-    || finalLiveLabels.has(env.reviewingLabel)
     || finalLiveLabels.has(env.blockedLabel)) {
     throw new StaleLaunchError(`PR #${number} review claim label transition did not persist`);
   }
@@ -1195,7 +1191,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
 
 function drive(fixturePath: string | undefined): DriverResult {
   if (!fixturePath) {
-    runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
+    runHerdrPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   }
   const fixture = loadFixture(fixturePath);
   const configuredEnv = envConfig();
@@ -1320,8 +1316,8 @@ function drive(fixturePath: string | undefined): DriverResult {
         githubRepo: env.githubRepo,
         stateDir: env.stateDir,
         enabledAt: env.enabledAt,
-        reviewingLabel: env.reviewingLabel,
         reviewLabel: env.reviewLabel,
+        inProgressLabel: env.inProgressLabel,
         blockedLabel: env.blockedLabel,
       };
       return driverResult("needs_llm", `Launched branch-update worker for PR #${plan.decision.number}`, {
@@ -1329,7 +1325,7 @@ function drive(fixturePath: string | undefined): DriverResult {
         prNumber: plan.decision.number,
         branchUpdate: updateDecision,
         marker,
-        labelsPreserved: [env.reviewLabel, env.reviewingLabel],
+        labelsPreserved: [env.reviewLabel, env.inProgressLabel],
         launch,
         monitorHandoff: { kind: "branch-update", input: monitorInput },
         prompt: renderBranchUpdateMonitorPrompt(monitorInput),
@@ -1423,7 +1419,6 @@ function drive(fixturePath: string | undefined): DriverResult {
     autoMerge: env.autoMerge,
     humanLabel: env.humanLabel,
     reviewLabel: env.reviewLabel,
-    reviewingLabel: env.reviewingLabel,
     inProgressLabel: env.inProgressLabel,
     blockedLabel: env.blockedLabel,
     reviewClaim: launch.claim,

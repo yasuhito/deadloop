@@ -34,7 +34,7 @@
     "updatedAt": "2026-07-04T00:00:00Z",
     "headRefOid": "1313131313131313131313131313131313131313",
     "isDraft": false,
-    "labels": [{ "name": "agent:review" }, { "name": "agent:reviewing" }],
+    "labels": [{ "name": "agent:review" }, { "name": "agent:in-progress" }],
     "statusCheckRollup": [],
     "comments": [],
     "reviewRequests": []

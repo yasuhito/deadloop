@@ -9,7 +9,7 @@ const { publicText, renderRepairSuccessComment, repairResultCommentExists } = re
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
@@ -32,7 +32,7 @@ function parseArgs(argv: string[]): JsonObject {
     if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs");
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
-  for (const name of ["promise", "attemptRecord", "projectId", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "reviewingLabel", "inProgressLabel", "blockedLabel", "reviewClaim"]) {
+  for (const name of ["promise", "attemptRecord", "projectId", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "inProgressLabel", "blockedLabel", "reviewClaim"]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
   return values;
@@ -76,7 +76,7 @@ function completion(args: JsonObject): DriverResult {
     throw new Error("active review claim must be valid JSON before repair completion");
   }
   const runner = createCommandRunner();
-  runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
+  runHerdrPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
   const location = canonicalAttemptLocation(args);
   const record = readAttemptRecord(location.runDir);
   assertAttemptProjectBinding(record, args);
@@ -86,7 +86,7 @@ function completion(args: JsonObject): DriverResult {
     projectId: String(args.projectId),
     targetNumber: Number(args.pr),
   });
-  for (const field of ["reviewLabel", "reviewingLabel", "inProgressLabel", "blockedLabel"] as const) {
+  for (const field of ["reviewLabel", "inProgressLabel", "blockedLabel"] as const) {
     if (String(reviewClaim[field] || "") !== String(args[field] || "")) {
       throw new Error(`${field} does not exactly match the saved review claim contract`);
     }
@@ -236,7 +236,7 @@ function completion(args: JsonObject): DriverResult {
     if (successfulReceipt) {
       if (repairResultCommentExists(comments, String(args.attemptKey), receiptHead, enabledLogin)) {
         github.movePrLabels(String(args.githubRepo), String(args.pr), {
-          remove: [String(args.inProgressLabel), String(args.reviewingLabel)], add: String(args.reviewLabel),
+          remove: String(args.inProgressLabel), add: String(args.reviewLabel),
         });
         return driverResult("done", `PR #${args.pr} repair result was already posted; re-review is pending`, { driverAction: "repair_result_duplicate" });
       }
@@ -254,7 +254,7 @@ function completion(args: JsonObject): DriverResult {
       })}${marker ? `\n${marker}` : ""}`;
       github.commentPr(String(args.githubRepo), String(args.pr), comment);
       github.movePrLabels(String(args.githubRepo), String(args.pr), {
-        remove: [String(args.inProgressLabel), String(args.reviewingLabel)], add: String(args.reviewLabel),
+        remove: String(args.inProgressLabel), add: String(args.reviewLabel),
       });
       return driverResult("done", `PR #${args.pr} repair result posted; re-review is pending`, { driverAction: "repair_result_posted", comment });
     }
@@ -262,7 +262,7 @@ function completion(args: JsonObject): DriverResult {
     const stopMarker = `<!-- deadloop:review-repair-stop key=${String(args.attemptKey).toLowerCase()} -->`;
     if (comments.some((comment) => String(comment?.body || "").includes(stopMarker))) {
       github.movePrLabels(String(args.githubRepo), String(args.pr), {
-        remove: [String(args.inProgressLabel), String(args.reviewingLabel)],
+        remove: String(args.inProgressLabel),
         add: [String(args.reviewLabel), String(args.blockedLabel)],
       });
       return driverResult("done", `PR #${args.pr} repair stop was already posted`, { driverAction: "repair_stop_duplicate" });
@@ -272,7 +272,7 @@ function completion(args: JsonObject): DriverResult {
     const comment = recoveryComment(args, reason, summary);
     github.commentPr(String(args.githubRepo), String(args.pr), comment);
     github.movePrLabels(String(args.githubRepo), String(args.pr), {
-      remove: [String(args.inProgressLabel), String(args.reviewingLabel)],
+      remove: String(args.inProgressLabel),
       add: [String(args.reviewLabel), String(args.blockedLabel)],
     });
     return driverResult("done", `PR #${args.pr} repair requires human recovery`, { driverAction: "repair_human_blocked", comment });

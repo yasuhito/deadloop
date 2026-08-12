@@ -35,7 +35,6 @@ describe("direct Node runtime parity", () => {
 
   it.each([
     ["missing report", (input: any) => ({ ...input, report: { kind: "missing" } })],
-    ["legacy report", (input: any) => ({ ...input, report: { kind: "legacy", promisePath: input.record.promiseFile, report: {} } })],
     ["malformed report", (input: any) => ({ ...input, report: { ...input.report, report: { schemaVersion: 1 } } })],
     ["blocked evidence", (input: any) => ({ ...input, report: { ...input.report, report: { ...input.report.report, status: "blocked", result: { reason: "stop", explanation: "blocked" }, evidence: [] } } })],
     ["attempt identity", (input: any) => ({ ...input, report: { ...input.report, report: { ...input.report.report, attemptId: "other" } } })],

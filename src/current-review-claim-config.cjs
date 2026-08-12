@@ -134,7 +134,7 @@ function loadCurrentReviewClaimConfiguration(stateDir, enabled, authenticatedLog
     reviewerMaxRuntimeSeconds: reviewer.maxRuntimeSeconds,
     cleanupGraceSeconds: reviewer.shutdownGraceSeconds,
     authoritySeconds: reviewer.maxRuntimeSeconds + reviewer.shutdownGraceSeconds,
-    managedLabels: [labels.review, labels.reviewing, labels.implement, "agent:update-branch", labels.inProgress, labels.blocked],
+    managedLabels: [labels.review, labels.implement, "agent:update-branch", labels.inProgress, labels.blocked],
     requestLabel: labels.review,
     requiredLabels: [labels.inProgress],
     repositoryId: enabled.githubRepositoryId,

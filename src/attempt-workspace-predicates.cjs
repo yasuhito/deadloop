@@ -11,7 +11,6 @@ function evaluateCompletionPersistence(input){
  if((record.role==="worker"&&record.target?.kind!=="issue")||(record.role!=="worker"&&record.target?.kind!=="pull-request"))return{action:"preserve",reason:"invalid_report"};
  if(report.kind==="missing")return{action:"preserve",reason:input.attemptActive?"active_attempt":"missing_report"};
  if(report.promisePath!==record.promiseFile)return{action:"preserve",reason:"ownership_mismatch"};
- if(report.kind==="legacy")return{action:"preserve",reason:"legacy_report"};
  if(report.kind!=="v1")return{action:"preserve",reason:"invalid_report"};
  let r;try{r=require("./attempt-lifecycle-runtime.cjs").validateCompletionReportBinding(record,report.report).report;}catch{return{action:"preserve",reason:"invalid_report"};}
  if(r.status==="blocked")return{action:"preserve",reason:"blocked"};

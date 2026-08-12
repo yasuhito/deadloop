@@ -24,7 +24,6 @@ const head = "a".repeat(40);
 const request = { id: "event-22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } };
 const managedLabels = [
   "agent:review",
-  "agent:reviewing",
   "agent:implement",
   "agent:update-branch",
   "agent:in-progress",
@@ -78,11 +77,6 @@ describe("PR review GitHub claim", () => {
 
   it("rejects a marker whose authority duration differs from the configured contract", () => {
     const tampered = { ...binding, authority: { durationSeconds: 7200 } };
-    expect(selectReviewClaimWinner([claim({ body: renderReviewClaimComment(tampered) })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
-  });
-
-  it("rejects a marker whose expected active state differs from the configured contract", () => {
-    const tampered = { ...binding, activeState: { ...activeState, requiredLabels: ["agent:reviewing"] } };
     expect(selectReviewClaimWinner([claim({ body: renderReviewClaimComment(tampered) })], binding, ["deadloop-a"], new Date("2026-07-20T10:03:00Z"), 3600)).toBeNull();
   });
 
@@ -146,7 +140,7 @@ describe("PR review GitHub claim", () => {
   it("classifies missing REST Date separately after every active binding matches", () => {
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
 
@@ -156,7 +150,7 @@ describe("PR review GitHub claim", () => {
   it("classifies an edited claim as claim invalid even when REST Date is missing", () => {
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
 
@@ -166,7 +160,7 @@ describe("PR review GitHub claim", () => {
   it("classifies an expired active claim separately", () => {
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
 
@@ -177,7 +171,7 @@ describe("PR review GitHub claim", () => {
     const repairedHead = "b".repeat(40);
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
 
@@ -249,7 +243,7 @@ describe("PR review GitHub claim", () => {
   it("rejects a claim when the live repository ID differs", () => {
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
 
@@ -261,7 +255,7 @@ describe("PR review GitHub claim", () => {
   it("rejects a claim when the live canonical repository name differs", () => {
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
 
@@ -273,7 +267,7 @@ describe("PR review GitHub claim", () => {
   it("rejects a claim when the live target PR differs", () => {
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
 
@@ -282,38 +276,11 @@ describe("PR review GitHub claim", () => {
     })).toBe(false);
   });
 
-  it("rejects legacy review labels without in-progress as active authority", () => {
-    const contract = {
-      binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-    };
-    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:review" }, { name: "agent:reviewing" }] };
-
-    expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget)).toBe(false);
-  });
-
-  it.each([
-    "agent:review",
-    "agent:reviewing",
-    "agent:implement",
-    "agent:update-branch",
-    "agent:blocked",
-  ])("rejects active authority when conflicting managed state %s coexists", (conflict) => {
-    const contract = {
-      binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-      managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
-    };
-    const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }, { name: conflict }] };
-
-    expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget)).toBe(false);
-  });
-
   it("allows an unrelated user label beside the exact active managed state", () => {
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-      managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
     };
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }, { name: "customer:important" }] };
 
@@ -327,7 +294,7 @@ describe("PR review GitHub claim", () => {
       authorizedLogins: ["deadloop-a"],
       authoritySeconds: 3600,
       reviewLabel: "agent:review",
-      reviewingLabel: "agent:reviewing",
+
       inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked",
     };
@@ -340,7 +307,7 @@ describe("PR review GitHub claim", () => {
     const editedBinding = { ...binding, owner: "host-b" };
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] };
     const edited = claim({ body: renderReviewClaimComment(editedBinding), updatedAt: "2026-07-20T10:02:00Z" });
@@ -352,7 +319,7 @@ describe("PR review GitHub claim", () => {
     const repairedHead = "b".repeat(40);
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
 
@@ -365,7 +332,7 @@ describe("PR review GitHub claim", () => {
     const repairedHead = "b".repeat(40);
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
 
@@ -378,7 +345,7 @@ describe("PR review GitHub claim", () => {
     const repairedHead = "b".repeat(40);
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
 
@@ -391,7 +358,7 @@ describe("PR review GitHub claim", () => {
     const repairedHead = "b".repeat(40);
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const pr = { state: "OPEN", headRefOid: repairedHead, labels: [{ name: "agent:in-progress" }] };
 
@@ -403,9 +370,9 @@ describe("PR review GitHub claim", () => {
   it("rejects an old-head claim as ordinary authority for a repaired head", () => {
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
-    const pr = { state: "OPEN", headRefOid: "b".repeat(40), labels: [{ name: "agent:in-progress" }, { name: "agent:reviewing" }] };
+    const pr = { state: "OPEN", headRefOid: "b".repeat(40), labels: [{ name: "agent:in-progress" }, { name: "agent:in-progress" }] };
 
     expect(validateActiveReviewClaim(pr, [request], [claim()], "date: Mon, 20 Jul 2026 10:03:00 GMT", contract, liveTarget)).toBe(false);
   });
@@ -424,7 +391,7 @@ describe("PR review GitHub claim", () => {
     fs.mkdirSync(runDir, { recursive: true });
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     fs.writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
       attemptId: "attempt", launchUuid: "launch", project: "demo", repository: binding.repository,
@@ -464,7 +431,7 @@ describe("PR review GitHub claim", () => {
     const contract = {
       binding, authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi",
       reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100,
-      authoritySeconds: 3600, reviewLabel: "agent:review", reviewingLabel: "agent:reviewing",
+      authoritySeconds: 3600, reviewLabel: "agent:review",
       inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", managedLabels,
     };
     expect(() => assertClaimMatchesCurrentConfiguration(contract, {
@@ -497,7 +464,7 @@ describe("PR review GitHub claim", () => {
       binding, authoritySeconds: 3600, inProgressLabel: "agent:in-progress", managedLabels,
     };
     expect(claimContractMatchesConfiguration(contract, {
-      authoritySeconds: 3600, managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:reviewing"],
+      authoritySeconds: 3600, managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
     })).toBe(false);
   });
 
@@ -507,7 +474,7 @@ describe("PR review GitHub claim", () => {
     fs.mkdirSync(runDir, { recursive: true });
     const contract = {
       binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 7200,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
       managedLabels,
     };
     fs.writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({

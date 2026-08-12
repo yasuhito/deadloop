@@ -1,6 +1,6 @@
 # Runtime lifecycle implementation tickets
 
-> **Superseded:** The reviewer-tab replacement and `closeTab` work below is historical. The selected contract is [Disposable Herdr workspace lifecycle](herdr-attempt-workspace-lifecycle-spec.md): every attempt gets a fresh workspace and launch-unique agent, and successful cleanup closes the workspace rather than replacing a tab or same-name agent. Project-check isolation and safe merged/closed-worktree cleanup requirements remain applicable.
+> **Superseded:** The reviewer-tab replacement and `closeTab` work below is historical. The selected contract is [ADR 0013](adr/0013-disposable-herdr-attempt-workspaces.md): every attempt gets a fresh workspace and launch-unique agent, and successful cleanup closes the workspace rather than replacing a tab or same-name agent. Project-check isolation and safe merged/closed-worktree cleanup requirements remain applicable.
 
 ## Ticket 1 — Safely replace completed reviewers
 

@@ -30,14 +30,14 @@ const claimBinding = {
   repositoryId: "repo-id", repository: "owner/repo", targetNumber: 42, requestEventId: "10", role: "reviewer",
   revision: "a".repeat(40), owner: "host:1", authority: { durationSeconds: 60 },
   activeState: {
-    managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+    managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
     requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
   },
 };
 const reviewClaim = {
   binding: claimBinding, commentId: "100", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot",
   reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 55, cleanupGraceSeconds: 5, authoritySeconds: 60,
-  reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
 };
 const claimComment = {
   id: "100", author: { login: "deadloop-bot" }, createdAt: "2026-08-01T10:00:01Z", updatedAt: "2026-08-01T10:00:01Z",

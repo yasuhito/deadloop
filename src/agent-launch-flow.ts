@@ -7,7 +7,7 @@ const {
   transitionPersistedAttempt,
   writeAttemptRecordAtomically,
 } = require("./attempt-lifecycle-runtime.cjs");
-const { deriveHerdr075AgentName } = require("./herdr-agent-name.cjs");
+const { deriveHerdrAgentName } = require("./herdr-agent-name.cjs");
 const { createHerdrRunner } = require("./herdr-runner.ts");
 const { writeWorkerContractSnapshot } = require("./worker-required-verification-runtime.cjs");
 
@@ -76,7 +76,7 @@ function launchPaths(input: AgentLaunchFlowInput): PreparedLaunch {
   const runDir = path.join(input.stateDir, "runs", path.basename(input.uuid));
   const promptFile = path.join(runDir, `${input.promptFilePrefix}.md`);
   const promiseFile = path.join(runDir, "promise.json");
-  const agentName = deriveHerdr075AgentName({
+  const agentName = deriveHerdrAgentName({
     repository: input.repository,
     role: input.role,
     target: input.target.number,

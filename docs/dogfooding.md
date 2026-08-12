@@ -87,7 +87,6 @@ gh label create ready-for-agent --repo yasuhito/deadloop --color 0e8a16 || true
 gh label create agent:implement --repo yasuhito/deadloop --color 1d76db || true
 gh label create agent:in-progress --repo yasuhito/deadloop --color fbca04 || true
 gh label create agent:review --repo yasuhito/deadloop --color 5319e7 || true
-gh label create agent:reviewing --repo yasuhito/deadloop --color c2e0c6 || true
 gh label create agent:blocked --repo yasuhito/deadloop --color b60205 || true
 gh label create ready-for-human --repo yasuhito/deadloop --color d93f0b || true
 gh label create needs-info --repo yasuhito/deadloop --color fef2c0 || true
