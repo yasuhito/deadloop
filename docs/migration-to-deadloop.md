@@ -28,16 +28,6 @@ Pi commands:
 /deadloop-doctor
 ```
 
-Operator environment variables:
-
-```bash
-DEADLOOP_CONFIG=/path/to/projects.json pi
-DEADLOOP_PROJECTS=my-project pi
-DEADLOOP=off pi
-DEADLOOP_AUTOMATIONS=off pi
-DEADLOOP_DEBUG=1 pi
-```
-
 Trusted repository policy file:
 
 ```text

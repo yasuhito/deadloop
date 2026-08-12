@@ -214,7 +214,7 @@
 |---:|---|---|---|---|---|
 | T074 | `test/core.test.ts` | `identifies a linked worktree whose common git directory belongs to another checkout` | **Vitest継続** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
 | T075 | `test/core.test.ts` | `does not identify a primary checkout as a linked worktree` | **Vitest継続** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | 内部状態、純粋な計画関数、または低レベルの呼出順を直接検査しており、公開結果へ書き換えるまではVitestで維持する。 |
-| T076 | `test/core.test.ts` | `uses DEADLOOP_CONFIG before default config paths` | **Cucumber候補** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
+| T076 | `test/core.test.ts` | `uses DEADLOOP_CONFIG before default config paths` | **Vitest継続** | 選択済みの設定パスを子の自動処理へ渡す内部契約 | 公開設定ではなく、内部プロセス間の受け渡しを純粋関数で固定する局所テストである。 |
 | T077 | `test/core.test.ts` | `uses the deadloop user state config before package-local config` | **Cucumber候補** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 | T078 | `test/core.test.ts` | `falls back to package-local config when user state config is missing` | **Cucumber候補** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |
 | T079 | `test/core.test.ts` | `normalizes project configuration defaults from public config fields` | **Cucumber候補** | 公開設定の既定値・優先順位・スケジュール・安全設定を決定論的に解釈すること | GitHub状態、実行結果、表示、または破壊操作の可否として外部観測できる。移行時は内部名を本文へ出さず、この1保証だけを1つの Then と1 assertionで表す。 |

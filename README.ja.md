@@ -53,14 +53,20 @@ pi install git:github.com/yasuhito/deadloop
 Issue にラベルを付けると、ループが始まります。実装中とレビュー中の状態は deadloop が管理し、承認後は方針に従って PR を人間へ引き渡すか、自動でマージします。
 
 ```mermaid
-flowchart LR
-    I["実装待ちの Issue<br/>ready-for-agent + agent:implement"]
-    W["実装中<br/>ready-for-agent + agent:in-progress"]
-    R["PR のレビュー待ち<br/>agent:review"]
-    V["レビューと修正<br/>agent:in-progress"]
-    H["人間へ引き渡し<br/>ready-for-human"]
+flowchart TD
+    I["`**実装待ちの Issue**
+    ready-for-agent + agent:implement`"]
+    W["`**実装中**
+    ready-for-agent + agent:in-progress`"]
+    R["`**PR のレビュー待ち**
+    agent:review`"]
+    V["`**レビューと修正**
+    agent:in-progress`"]
+    H["`**人間へ引き渡し**
+    ready-for-human`"]
     M["マージ済み"]
-    B["対応が必要<br/>agent:blocked"]
+    B["`**対応が必要**
+    agent:blocked`"]
 
     I -->|deadloop が Issue を取得| W
     W -->|PR を作成| R
@@ -73,9 +79,21 @@ flowchart LR
     V -. 問題発生 .-> B
 ```
 
-`ready-for-agent` は、エージェントが対応できる Issue であることを示します。`agent:implement` は実装を依頼するラベルです。deadloop が Issue を取得する前に `agent:implement` を外すと、その依頼を取り消せます。以降のラベルは通常、deadloop が管理します。
+1. **実装を依頼する** — `ready-for-agent` は、エージェントが対応できる Issue であることを示します。`agent:implement` を付けると実装を依頼できます。deadloop が Issue を取得する前に `agent:implement` を外すと、依頼を取り消せます。
+2. **deadloop に任せる** — deadloop は依頼ラベルを `agent:in-progress` に置き換え、`agent:review` を付けた PR を作成します。必要に応じて、レビューと修正を繰り返します。
+3. **完了または対応する** — 承認された PR は、自動マージが無効なら `ready-for-human` に移り、有効ならマージされます。`agent:blocked` が付くとループは止まります。Issue または PR のコメントに記載された原因を解消し、案内された復旧手順に従ってください。
 
-`agent:blocked` が付くとループは止まります。Issue または PR のコメントに記載された原因を解消し、案内された復旧手順に従ってから、必要な作業を再依頼してください。
+## 運用コマンド
+
+対象リポジトリで起動した Pi セッションから、次のコマンドを実行できます。
+
+| コマンド | 用途 |
+| --- | --- |
+| `/deadloop-enable` | リポジトリを検証し、deadloop が新しい作業を開始できるようにします。 |
+| `/deadloop-disable` | 新しい作業の開始を止めます。実行中の試行は完了することがあります。 |
+| `/deadloop-status` | deadloop が有効かどうかと、現在の状態の概要を表示します。 |
+| `/deadloop-doctor` | 設定や保持された試行を変更せずに診断します。 |
+| `/deadloop-abandon-attempt <attempt-id>` | doctor に表示された場合だけ、保持された試行を安全に放棄します。 |
 
 ## 詳細設定
 
@@ -97,8 +115,6 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 `projects.json` にはローカルのパスや運用設定が含まれます。リポジトリにはコミットしないでください。共有してレビューする方針は、リポジトリ内の `deadloop.json` に記載することを推奨します。
 
-すべての設定項目と有効化の詳しい動作は、[設定ガイド](docs/public-package-setup.md)を参照してください。
-
 ## 安全装置
 
 `autoMerge` は、レビュー済みの PR を deadloop が自動的にマージするかを制御します。
@@ -111,9 +127,9 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 ## マージ競合の自動修復
 
-現在の GitHub claim 導入期間中は、ブランチ更新の変更処理を副作用なしで停止します。#241 で追跡する `agent:update-branch` への引き渡しが実装されるまで利用できません。既存の非 force、先頭コミットの厳密一致、必須検証、通常 merge の安全契約は引き続き必要であり、この一時停止によって廃止されるものではありません。
+ブランチの自動更新は、現在利用できません。deadloop はマージ競合を検出しますが、`agent:update-branch` ラベルによる依頼を作業エージェントへ接続する #241 が完了するまでは、ブランチを更新しません。非 force、先頭コミットの厳密一致、必須検証、通常 merge の安全契約は引き続き必要です。
 
-以下のブランチ更新動作は、維持する安全契約の説明であり、現在到達できる変更経路の説明ではありません。
+以下は、今後この処理を接続するときの安全契約であり、現在実行できる動作の説明ではありません。
 
 作業エージェントは、選択された基準コミットを既存の PR ブランチへマージします。rebase は行いません。
 
@@ -160,34 +176,11 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 ## 段階的に導入する
 
 1. **Issue の調整のみ** — 慎重に導入したい場合は、ここから始めます。PR のレビューとマージは人間が行います。
-2. **PR の自動レビュー** — 標準の PR レビューを `autoMerge: false` で使用します。レビュー済み PR は `ready-for-human` に移して人間へ引き渡します。現在の導入期間中は、有効なレビュー claim 配下へ接続されるまで外部レビューの変更処理も副作用なしで停止します。`externalReview` を有効にしても、この停止を回避しません。
+2. **PR の自動レビュー** — 標準の PR レビューを `autoMerge: false` で使用します。レビュー済み PR は `ready-for-human` に移して人間へ引き渡します。外部レビューの変更処理は現在利用できません。`externalReview` を有効にしても利用可能にはなりません。
 3. **任意の自動マージ** — ブランチ保護、CI、レビュー要件、dry-run または人間による承認手順、停止条件が十分に実証されてから、`autoMerge: true` を検討してください。
-
-## 運用コマンド
-
-対象リポジトリで起動した Pi セッションから、次のコマンドを実行できます。
-
-```text
-/deadloop-enable
-/deadloop-disable
-/deadloop-status
-/deadloop-doctor
-/deadloop-abandon-attempt <attempt-id>  # doctor に表示された場合のみ
-```
-
-運用者向けの環境変数:
-
-```bash
-DEADLOOP_CONFIG=/path/to/projects.json pi
-DEADLOOP_PROJECTS=my-project pi
-DEADLOOP=off pi
-DEADLOOP_AUTOMATIONS=off pi
-DEADLOOP_DEBUG=1 pi
-```
 
 ## ドキュメント
 
-- 設定ガイド: [docs/public-package-setup.md](docs/public-package-setup.md)
 - Herdr runner の詳細: [docs/herdr-runner.md](docs/herdr-runner.md)
 
 ## このリポジトリを検証する

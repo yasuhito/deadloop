@@ -12,7 +12,7 @@ This record tracks the Cucumber migration for Issue #127. The existing Vitest te
 | T053 | Reclassified to focused Vitest coverage in `test/blocked-report-format.test.ts`; this is a static prompt-file contract |
 | T054 | `現行の状態表示コマンドを登録する` |
 | T055 | Processed as a deletion candidate; removed the history-only old-command-alias test after confirming T054 covers the current `/deadloop-status` command |
-| T056 | Processed as a deletion candidate; removed the history-only old-environment-variable test after confirming T076 covers current `DEADLOOP_CONFIG` precedence |
+| T056 | Processed as a deletion candidate; the configuration-path environment variable is no longer a public operator interface |
 | T057 | Processed as a deletion candidate; removed the history-only wording test while retaining `docs/migration-to-deadloop.md` as the user-facing migration record |
 | T380 | `実装待ちの Issue がない場合はそのことを表示する` |
 | Issue #127 target display | `対象の Issue を表示する` |

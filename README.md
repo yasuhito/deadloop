@@ -53,14 +53,20 @@ That is enough to start. During enablement, deadloop runs `npm run check`, creat
 You start the loop by labeling an Issue. deadloop owns the implementation and review transitions, then either hands the approved PR to a human or merges it according to policy.
 
 ```mermaid
-flowchart LR
-    I["Issue queued<br/>ready-for-agent + agent:implement"]
-    W["Implementation<br/>ready-for-agent + agent:in-progress"]
-    R["PR review requested<br/>agent:review"]
-    V["Review and repair<br/>agent:in-progress"]
-    H["Human handoff<br/>ready-for-human"]
+flowchart TD
+    I["`**Issue queued**
+    ready-for-agent + agent:implement`"]
+    W["`**Implementation**
+    ready-for-agent + agent:in-progress`"]
+    R["`**PR review requested**
+    agent:review`"]
+    V["`**Review and repair**
+    agent:in-progress`"]
+    H["`**Human handoff**
+    ready-for-human`"]
     M["Merged"]
-    B["Needs attention<br/>agent:blocked"]
+    B["`**Needs attention**
+    agent:blocked`"]
 
     I -->|deadloop claims Issue| W
     W -->|PR created| R
@@ -73,9 +79,21 @@ flowchart LR
     V -. problem .-> B
 ```
 
-`ready-for-agent` marks an Issue as eligible, while `agent:implement` requests implementation. Remove `agent:implement` before deadloop claims the Issue to cancel that request. The remaining labels are normally managed by deadloop.
+1. **Request implementation** — `ready-for-agent` marks an Issue as eligible. `agent:implement` requests implementation. Remove `agent:implement` before deadloop claims the Issue to cancel the request.
+2. **Let deadloop work** — deadloop replaces the request label with `agent:in-progress`, creates a PR with `agent:review`, and repeats review and repair as needed.
+3. **Finish or intervene** — An approved PR moves to `ready-for-human` when automatic merge is off, or is merged when it is on. `agent:blocked` stops the loop when deadloop needs help; fix the cause reported in the Issue or PR comment, then follow its recovery instructions.
 
-`agent:blocked` stops the loop when deadloop needs help. Fix the cause reported in the Issue or PR comment, then follow its recovery instructions before requesting work again.
+## Operator commands
+
+Run these commands from the Pi session in the target repository:
+
+| Command | Purpose |
+| --- | --- |
+| `/deadloop-enable` | Verify the repository and enable new deadloop work. |
+| `/deadloop-disable` | Stop new work from starting; running attempts may finish. |
+| `/deadloop-status` | Show whether deadloop is enabled and summarize its current state. |
+| `/deadloop-doctor` | Diagnose configuration and retained attempts without changing them. |
+| `/deadloop-abandon-attempt <attempt-id>` | Safely abandon a retained attempt only when doctor presents this command. |
 
 ## Advanced configuration
 
@@ -97,8 +115,6 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 `projects.json` contains local paths and rollout choices. Do not commit it. Prefer the repository-owned `deadloop.json` for shared, reviewable policy.
 
-See the [setup guide](docs/public-package-setup.md) for all settings and detailed enablement behavior.
-
 ## Safety controls
 
 `autoMerge` controls whether deadloop merges reviewed PRs automatically.
@@ -111,9 +127,9 @@ Start with `false`. Enable `true` only after verifying branch protection, CI, pe
 
 ## Merge-conflict recovery
 
-During the current GitHub-claim bootstrap, branch-update mutations stop without side effects. They remain unavailable until the `agent:update-branch` handoff tracked by #241 is implemented. The existing non-force, exact-head, required-verification, and normal-merge safety contracts remain required; this temporary stop does not remove them.
+Automatic branch updates are currently unavailable. deadloop detects merge conflicts but does not update the branch until #241 connects the `agent:update-branch` request to its worker. The existing non-force, exact-head, required-verification, and normal-merge safety contracts remain required.
 
-The guarded branch-update behavior below describes the retained safety contract, not a currently reachable mutation path.
+The behavior below describes the safety contract for that future connection, not behavior that can currently run.
 
 The worker merges the selected base commit into the existing PR branch. It never rebases.
 
@@ -160,34 +176,11 @@ See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for details.
 ## Roll out in phases
 
 1. **Issue coordination only** — Start here for a slow rollout. Humans still review and merge PRs.
-2. **Automated PR review** — Use the standard PR reviewer with `autoMerge: false`. Reviewed PRs move to `ready-for-human`. During the current bootstrap, external-review mutations stop without side effects until they are connected under an active review claim; enabling `externalReview` does not bypass that stop.
+2. **Automated PR review** — Use the standard PR reviewer with `autoMerge: false`. Reviewed PRs move to `ready-for-human`. External-review mutations are currently unavailable; enabling `externalReview` does not make them available.
 3. **Optional auto-merge** — Consider `autoMerge: true` only after proving branch protection, CI, review expectations, dry-run or manual approval practices, and stop conditions.
-
-## Operator commands
-
-Run these commands from the Pi session in the target repository:
-
-```text
-/deadloop-enable
-/deadloop-disable
-/deadloop-status
-/deadloop-doctor
-/deadloop-abandon-attempt <attempt-id>  # only when doctor presents it
-```
-
-Operator environment variables:
-
-```bash
-DEADLOOP_CONFIG=/path/to/projects.json pi
-DEADLOOP_PROJECTS=my-project pi
-DEADLOOP=off pi
-DEADLOOP_AUTOMATIONS=off pi
-DEADLOOP_DEBUG=1 pi
-```
 
 ## Documentation
 
-- Setup guide: [docs/public-package-setup.md](docs/public-package-setup.md)
 - Herdr runner details: [docs/herdr-runner.md](docs/herdr-runner.md)
 
 ## Verify this repository

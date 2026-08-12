@@ -2,17 +2,9 @@
 
 A deadloop user can observe which configuration source was selected, how an agent is launched, and whether dangerous automation is enabled.
 
-## Scenario: Use the configuration file specified by an environment variable in status
-
-* Given Environment, user, and bundled scopes contain different configuration
-* And `DEADLOOP_CONFIG` selects the environment configuration
-* When deadloop status is requested
-* Then Status shows the environment configuration file
-
 ## Scenario: Prefer user configuration over bundled configuration in status
 
-* Given Environment, user, and bundled scopes contain different configuration
-* And `DEADLOOP_CONFIG` is not specified
+* Given User and bundled scopes contain different configuration
 * When deadloop status is requested
 * Then Status shows the user configuration file
 

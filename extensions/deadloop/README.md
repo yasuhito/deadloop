@@ -2,15 +2,11 @@
 
 This directory contains the Pi extension implementation for **deadloop**.
 
-Read the root `README.md` and `docs/public-package-setup.md` for normal setup.
+Read the root `README.md` for normal setup.
 
 ## Local configuration
 
-Configuration lookup order:
-
-1. `DEADLOOP_CONFIG`
-2. `~/.pi/agent/deadloop/projects.json`
-3. this directory's `projects.json` for local development only
+Normal configuration is read from `~/.pi/agent/deadloop/projects.json`, with this directory's `projects.json` retained only as a local-development fallback. `DEADLOOP_CONFIG` is an internal transport used to pass the already selected path to child automation processes; it is not a supported operator setting.
 
 Do not commit `projects.json`; it contains local paths and rollout choices.
 
@@ -54,7 +50,7 @@ Each automation may define a `driverFile`. Drivers run after precheck and before
 - `pr-review-repair-finalize.ts` is the repair worker's only push path. It runs configured checks for every repair, then conditionally updates the verified selected branch only while its head equals the validated commit. It writes a finalizer receipt outside the worktree.
 - `pr-review-comments.ts` renders idempotent human-readable review and repair-result comments. `pr-review-repair-complete.ts` posts repair success only when the structured worker promise, finalizer receipt, and live new head agree. Repair dispatch preserves the original request generation and active claim under `agent:in-progress`; it never adds `agent:reviewing`. Successful completion records the repaired-head authority transition, removes any legacy `agent:reviewing`, and replaces `agent:in-progress` with a fresh `agent:review`; the next selection records `repair_rereview`. Conflict recovery carries that provenance to its updated head, while an abandoned active claim still records `stale_reclaim`.
 - `merge-reviewed-pr.ts` accepts only a validated reviewer approval bound to the expected head, then immediately re-fetches the PR and requires successful reported CI checks plus confirmed clean mergeability before its head-guarded mutation. Missing, pending, failed, or ambiguous gates stop automatic merge.
-- During the current GitHub-claim bootstrap, branch-update mutations stop without side effects until #241 supplies the `agent:update-branch` handoff. External-review mutations also stop until they are connected under an active review claim. The retained branch-update finalizer continues to define non-force, exact-head, normal-merge, and required-verification safety; the temporary stop does not retire those contracts.
+- Automatic branch updates are currently unavailable. Merge-conflict detection does not update a branch until #241 connects the `agent:update-branch` request to its worker. External-review mutations are also unavailable even when `externalReview` is enabled. The retained branch-update finalizer continues to define non-force, exact-head, normal-merge, and required-verification safety.
 - `ci-fallback-decision.ts`, `worker-watch-decision.ts`, and related helpers keep deterministic checks out of prompts.
 
 ## Runner boundary
