@@ -22,6 +22,7 @@ type ReviewDecisionConfig = {
   projectId: string;
   automationLogin: string;
   servedRoles: string[];
+  defersBlockedRecovery: boolean;
   now: Date;
 };
 
@@ -45,6 +46,11 @@ function defaultDecisionConfig(overrides: Partial<ReviewDecisionConfig> = {}): R
     // driver serves no `review-repair` request. A pull request waiting on one is skipped whole,
     // never downgraded to the review request queued behind it.
     servedRoles: ["branch-update", "reviewer"],
+    // Whether a request post-dates the block that stopped a pull request is a timeline question.
+    // A caller that reads labels only cannot answer it, so it sets this and leaves a blocked pull
+    // request carrying a request to the caller that can. A gate must never skip work its authority
+    // would take.
+    defersBlockedRecovery: false,
     now: new Date(),
     ...overrides,
   };
@@ -272,7 +278,7 @@ function selectPrRequestTarget(
       skipped.push(skipForPrReviewer("missing_candidate_label", pr));
       continue;
     }
-    if (labels.has(config.blockedLabel)) {
+    if (labels.has(config.blockedLabel) && !config.defersBlockedRecovery) {
       skipped.push(skipForPrReviewer("blocked", pr));
       continue;
     }
@@ -379,6 +385,7 @@ function cliConfig(args: AnyRecord): ReviewDecisionConfig {
     updateBranchLabel: args.updateBranchLabel || "agent:update-branch",
     inProgressLabel: args.inProgressLabel || "agent:in-progress",
     blockedLabel: args.blockedLabel || "agent:blocked",
+    defersBlockedRecovery: parseBoolForPrReviewer(args.defersBlockedRecovery),
     autoMerge: parseBoolForPrReviewer(args.autoMerge),
     externalReviewEnabled: parseBoolForPrReviewer(args.externalReviewEnabled),
     externalReviewWaitSeconds: parseWaitSecondsForPrReviewer(args.externalReviewWaitSeconds),
