@@ -667,7 +667,7 @@ function dispatch(args: JsonObject): DriverResult {
   const rawReport = JSON.parse(fs.readFileSync(String(args.promise), "utf8"));
   const attemptRecord = readAttemptRecord(path.dirname(String(args.attemptRecord)));
   const configuredClaimFields = {
-    reviewLabel: env.reviewLabel,
+    requestLabel: env.reviewLabel,
     inProgressLabel: env.inProgressLabel,
     blockedLabel: env.blockedLabel,
   };

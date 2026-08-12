@@ -203,8 +203,8 @@ function recordAgentLaunchGithubClaimed(input: AgentLaunchFlowInput): AttemptRec
   if (!samePreparedIdentity(existing, preparedRecordInput(input, prepared))) {
     throw new Error("attempt run directory identity does not match this claim");
   }
-  if (existing.role === "reviewer" && !existing.reviewClaim) {
-    throw new Error("reviewer GitHub claim cannot be recorded without an immutable review claim contract");
+  if (["reviewer", "branch-update"].includes(String(existing.role)) && !existing.reviewClaim) {
+    throw new Error(`${existing.role} GitHub claim cannot be recorded without an immutable review claim contract`);
   }
   if (existing.phase === "github_claimed") return existing;
   if (existing.phase !== "prepared") throw new Error(`attempt phase ${existing.phase} cannot record a GitHub claim`);

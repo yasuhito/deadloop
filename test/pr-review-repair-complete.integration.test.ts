@@ -84,7 +84,7 @@ function runCompletion(options: {
   };
   const reviewClaim = {
     binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-    reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: options.editedClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
   const outcome = String(options.promise.reason || "");
@@ -242,7 +242,7 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   };
   const reviewClaim = {
     binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-    reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const checks = [{ command: "npm test", result: "passed" }];
   const receipt = { action: "pushed", reason: "repair_pushed", originalHeadOid: oldHead, headOid: newHead, checks };

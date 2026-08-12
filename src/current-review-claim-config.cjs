@@ -117,7 +117,18 @@ function resolveCanonicalProject(stateDir, enabled) {
   return authorizeAutomationLogin(implicit.projects[0], enabled.automationLogin);
 }
 
-function loadCurrentReviewClaimConfiguration(stateDir, enabled, authenticatedLogin) {
+/** The request label each PR role consumes, taken from current configuration. */
+function requestLabelForRole(labels, role) {
+  const byRole = {
+    reviewer: labels.review,
+    "review-repair": labels.implement,
+    "branch-update": labels.updateBranch,
+  };
+  if (!byRole[role]) throw new Error(`current configuration has no request label for the ${role} role`);
+  return byRole[role];
+}
+
+function loadCurrentReviewClaimConfiguration(stateDir, enabled, authenticatedLogin, role = "reviewer") {
   const project = resolveCanonicalProject(stateDir, enabled);
   if (project.enabled === false) throw new Error("current project configuration disables this repository");
   const reviewers = project.automations.filter((automation) => automation.driverFile === "pr-reviewer-driver.ts");
@@ -134,8 +145,8 @@ function loadCurrentReviewClaimConfiguration(stateDir, enabled, authenticatedLog
     reviewerMaxRuntimeSeconds: reviewer.maxRuntimeSeconds,
     cleanupGraceSeconds: reviewer.shutdownGraceSeconds,
     authoritySeconds: reviewer.maxRuntimeSeconds + reviewer.shutdownGraceSeconds,
-    managedLabels: [labels.review, labels.implement, "agent:update-branch", labels.inProgress, labels.blocked],
-    requestLabel: labels.review,
+    managedLabels: [labels.review, labels.implement, labels.updateBranch, labels.inProgress, labels.blocked],
+    requestLabel: requestLabelForRole(labels, role),
     requiredLabels: [labels.inProgress],
     repositoryId: enabled.githubRepositoryId,
     repository: enabled.githubRepo,
@@ -148,5 +159,6 @@ function loadCurrentReviewClaimConfiguration(stateDir, enabled, authenticatedLog
 module.exports = {
   POLICY_COMMAND_TIMEOUT_MS,
   loadCurrentReviewClaimConfiguration,
+  requestLabelForRole,
   resolveCanonicalProject,
 };

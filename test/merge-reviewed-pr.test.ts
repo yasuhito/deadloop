@@ -55,7 +55,7 @@ function runMerge(options: {
       authority: { durationSeconds: 3600 }, activeState: activeReviewState,
     },
     commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-    reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   let action: number;
   try {

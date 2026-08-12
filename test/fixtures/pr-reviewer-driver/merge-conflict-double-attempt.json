@@ -11,10 +11,7 @@
       "isDraft": false,
       "labels": [
         {
-          "name": "agent:review"
-        },
-        {
-          "name": "agent:in-progress"
+          "name": "agent:update-branch"
         }
       ],
       "statusCheckRollup": [],
@@ -25,7 +22,17 @@
       ],
       "reviewRequests": [],
       "mergeable": "CONFLICTING",
-      "mergeStateStatus": "DIRTY"
+      "mergeStateStatus": "DIRTY",
+      "timelineEvents": [
+        {
+          "id": "branch-update-31",
+          "event": "labeled",
+          "created_at": "2026-07-07T23:59:00Z",
+          "label": {
+            "name": "agent:update-branch"
+          }
+        }
+      ]
     }
   ],
   "agents": {

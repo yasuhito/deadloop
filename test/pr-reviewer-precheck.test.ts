@@ -112,8 +112,8 @@ describe("PR reviewer precheck", () => {
     expect(runPrecheck("precheck-ready-for-human.json", { autoMerge: false })).toBe(1);
   });
 
-  it("selects ready-for-human-only PRs when auto merge is enabled", () => {
-    expect(runPrecheck("precheck-ready-for-human.json", { autoMerge: true })).toBe(0);
+  it("skips ready-for-human-only PRs when auto merge is enabled", () => {
+    expect(runPrecheck("precheck-ready-for-human.json", { autoMerge: true })).toBe(1);
   });
 
   it("skips PRs while checks are pending", () => {

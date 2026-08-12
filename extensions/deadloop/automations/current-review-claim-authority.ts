@@ -16,7 +16,8 @@ function assertCurrentReviewClaimAuthority(
   authenticatedLogin: string,
   load = loadCurrentReviewClaimConfiguration,
 ): Record<string, unknown> {
-  const current = load(stateDir, enabled, authenticatedLogin);
+  const role = String((claim.binding as Record<string, unknown> | undefined)?.role || "reviewer");
+  const current = load(stateDir, enabled, authenticatedLogin, role);
   assertClaimMatchesCurrentConfiguration(claim, current);
   return current;
 }

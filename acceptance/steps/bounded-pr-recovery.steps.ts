@@ -29,7 +29,7 @@ const reviewClaim = {
   binding: reviewClaimBinding, commentId: "101", authorizedLogins: ["deadloop-bot"],
   automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400,
   cleanupGraceSeconds: 300, authoritySeconds: 86700,
-  reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
 };
 
 type RecoveryWorld = {
@@ -440,14 +440,21 @@ When("deadloop completes conflict recovery", function (this: RecoveryWorld) {
   this.result = branchUpdateFinalizer(this.commands, head, this.case === "cross-repository-branch-update");
 });
 
-Then("deadloop leaves the conflicted pull request untouched before claim", function (this: RecoveryWorld) {
+Then("deadloop requests a branch update instead of recovering from local state", function (this: RecoveryWorld) {
   const effects = adapterEffects(this.result) || {};
   assert.deepEqual({
     action: this.result?.driverAction,
-    comments: effects.githubComments?.length ?? 0,
-    labels: effects.labelReplacements?.length ?? 0,
     starts: effects.herdrStarts?.length ?? 0,
-  }, { action: "branch_update_claim_required", comments: 0, labels: 0, starts: 0 });
+    requested: (effects.labels?.["31"] ?? []).includes("agent:update-branch"),
+  }, { action: "branch_update_requested", starts: 0, requested: true });
+});
+
+Then("deadloop blocks the repeated conflict-recovery request", function (this: RecoveryWorld) {
+  assert.equal(this.result?.driverAction, "branch_update_attempt_exhausted");
+});
+
+Then("deadloop leaves recovery guidance for the repeated conflict-recovery request", function (this: RecoveryWorld) {
+  assert.match(String(this.result?.comment || ""), /Recovery steps/);
 });
 
 Then("deadloop does not start another dedicated conflict-recovery attempt", function (this: RecoveryWorld) {

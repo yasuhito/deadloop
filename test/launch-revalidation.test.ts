@@ -29,7 +29,7 @@ describe("guarded launch revalidation wiring", () => {
   });
 
   it("revalidates PR eligibility inside the reviewer launch guard", () => {
-    expect(launchPrReviewer).toMatch(/launchWithAdapters[\s\S]*planPrReviewerAction/);
+    expect(launchPrReviewer).toMatch(/launchWithAdapters[\s\S]*planPrRequestAction/);
   });
 
   it("revalidates the exact head, base, and attempt marker inside the branch-update launch guard", () => {

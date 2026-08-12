@@ -34,8 +34,8 @@ function runRace(kind: "issue" | "pr") {
 
   const initialIssue = { number: 10, title: "Missing contract", body: "## Agent Brief\nDo something.", url: "https://github.com/owner/repo/issues/10", state: "OPEN", labels: [{ name: "ready-for-agent" }, { name: "agent:implement" }] };
   const completedIssue = { ...initialIssue, body: "## Agent Brief\nDo something.\n## Acceptance criteria\nDone." };
-  const initialPr = { number: 23, title: "Draft PR", url: "https://github.com/owner/repo/pull/23", state: "OPEN", headRefName: "agent/issue-23-draft", headRefOid: "draftsha", isCrossRepository: false, isDraft: true, mergeStateStatus: "CLEAN", labels: [{ name: "agent:review" }], statusCheckRollup: [], comments: [], reviewRequests: [] };
-  const readyPr = { ...initialPr, isDraft: false };
+  const initialPr = { number: 23, title: "Conflicted PR", url: "https://github.com/owner/repo/pull/23", state: "OPEN", headRefName: "agent/issue-23-draft", headRefOid: "draftsha", isCrossRepository: false, isDraft: true, mergeable: "CONFLICTING", mergeStateStatus: "DIRTY", labels: [{ name: "agent:review" }], statusCheckRollup: [], comments: [], reviewRequests: [] };
+  const readyPr = { ...initialPr, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" };
   writeFileSync(path.join(bin, "node"), `#!/bin/sh\ncase "$1" in *cleanup-completed-worker-worktrees.ts) printf '{"candidates":[]}\\n' ;; *) exec ${JSON.stringify(process.execPath)} "$@" ;; esac\n`);
   writeFileSync(path.join(bin, "herdr"), `#!/bin/sh
 if [ "$1" = "--version" ]; then printf 'herdr 0.8.0\\n'
@@ -86,7 +86,7 @@ describe("non-launch transition revalidation", () => {
     expect(runRace("issue")).toEqual({ action: "contract_missing_stale", mutated: false });
   });
 
-  it("does not block a draft PR that becomes ready before mutation", () => {
-    expect(runRace("pr")).toEqual({ action: "draft_unclaimed", mutated: false });
+  it("does not request a branch update for a PR whose conflict clears before mutation", () => {
+    expect(runRace("pr")).toEqual({ action: "branch_update_request_stale", mutated: false });
   });
 });

@@ -39,7 +39,7 @@ const reviewClaimBinding = {
 };
 const reviewClaim = {
   binding: reviewClaimBinding, commentId: "101", authorizedLogins: [automationLogin], automationLogin, reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-  reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
 };
 const findings = [
   {
