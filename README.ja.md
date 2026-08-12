@@ -54,13 +54,13 @@ Issue にラベルを付けると、ループが始まります。実装中と�
 
 ```mermaid
 flowchart TD
-    I["実装待ちの Issue<br/>ready-for-agent + agent:implement"]
-    W["実装中<br/>ready-for-agent + agent:in-progress"]
-    R["PR のレビュー待ち<br/>agent:review"]
-    V["レビューと修正<br/>agent:in-progress"]
-    H["人間へ引き渡し<br/>ready-for-human"]
+    I["実装待ちの Issue<br>ready-for-agent + agent:implement"]
+    W["実装中<br>ready-for-agent + agent:in-progress"]
+    R["PR のレビュー待ち<br>agent:review"]
+    V["レビューと修正<br>agent:in-progress"]
+    H["人間へ引き渡し<br>ready-for-human"]
     M["マージ済み"]
-    B["対応が必要<br/>agent:blocked"]
+    B["対応が必要<br>agent:blocked"]
 
     I -->|deadloop が Issue を取得| W
     W -->|PR を作成| R

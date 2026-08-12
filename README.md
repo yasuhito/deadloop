@@ -54,13 +54,13 @@ You start the loop by labeling an Issue. deadloop owns the implementation and re
 
 ```mermaid
 flowchart TD
-    I["Issue queued<br/>ready-for-agent + agent:implement"]
-    W["Implementation<br/>ready-for-agent + agent:in-progress"]
-    R["PR review requested<br/>agent:review"]
-    V["Review and repair<br/>agent:in-progress"]
-    H["Human handoff<br/>ready-for-human"]
+    I["Issue queued<br>ready-for-agent + agent:implement"]
+    W["Implementation<br>ready-for-agent + agent:in-progress"]
+    R["PR review requested<br>agent:review"]
+    V["Review and repair<br>agent:in-progress"]
+    H["Human handoff<br>ready-for-human"]
     M["Merged"]
-    B["Needs attention<br/>agent:blocked"]
+    B["Needs attention<br>agent:blocked"]
 
     I -->|deadloop claims Issue| W
     W -->|PR created| R
