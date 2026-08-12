@@ -17,6 +17,14 @@ export type AutomationState = {
   automations: Record<string, Record<string, unknown>>;
 };
 
+export type AutomationExecutionSupply = {
+  codeIdentity: string;
+  lockHash: string;
+  packageRoot: string;
+  automationDir: string;
+  dependencyRoot: string;
+};
+
 export type AutomationRunnerDeps = {
   compatibilityPreflight?: () => void | Promise<void>;
   enabledAt?: () => number;
@@ -24,22 +32,31 @@ export type AutomationRunnerDeps = {
   isIdle?: () => boolean;
   notify?: (message: string, level: "info" | "warning" | "error") => void;
   now: () => number;
-  readPrompt: (project: NormalizedProject, automation: NormalizedAutomation, promptFile: string) => string;
+  prepareExecutionSupply: () => AutomationExecutionSupply | Promise<AutomationExecutionSupply>;
+  readPrompt: (
+    project: NormalizedProject,
+    automation: NormalizedAutomation,
+    promptFile: string,
+    supply: AutomationExecutionSupply,
+  ) => string;
   revalidatePendingDriverHandoff?: (handoff: Record<string, unknown>) => boolean;
   resolveAutomationFileInDir: (
     kind: "precheck" | "prompt" | "driver",
     automation: NormalizedAutomation,
     requested: string | undefined,
+    supply: AutomationExecutionSupply,
   ) => AutomationFileResolution;
   runDriver: (
     project: NormalizedProject,
     automation: NormalizedAutomation,
     driverFile: string,
+    supply: AutomationExecutionSupply,
   ) => Promise<AutomationExecResult>;
   runPrecheck: (
     project: NormalizedProject,
     automation: NormalizedAutomation,
     precheckFile: string,
+    supply: AutomationExecutionSupply,
   ) => Promise<AutomationExecResult>;
   saveState: (state: AutomationState) => void;
   sendUserMessage: (prompt: string) => void;
@@ -241,10 +258,11 @@ async function runConfiguredDriver(
   entry: Record<string, unknown>,
   state: AutomationState,
   deps: AutomationRunnerDeps,
+  supply: AutomationExecutionSupply,
 ): Promise<boolean> {
   if (!automation.driverFile) return false;
 
-  const driver = deps.resolveAutomationFileInDir("driver", automation, automation.driverFile);
+  const driver = deps.resolveAutomationFileInDir("driver", automation, automation.driverFile, supply);
   if (!driver.found) {
     recordDriverFailure(entry, "driver_file_missing", `driver file not found: ${automation.driverFile}`, deps, state);
     deps.notify?.(`deadloop driver file missing: ${automation.name}`, "warning");
@@ -260,7 +278,7 @@ async function runConfiguredDriver(
 
   let result: AutomationExecResult;
   try {
-    result = await deps.runDriver(project, automation, driver.resolved);
+    result = await deps.runDriver(project, automation, driver.resolved, supply);
   } catch (error) {
     recordDriverFailure(entry, "driver_error", error instanceof Error ? error.message : String(error), deps, state);
     deps.notify?.(`deadloop driver failed: ${automation.name}`, "warning");
@@ -359,6 +377,9 @@ export async function runScheduledAutomation(
 ): Promise<void> {
   // This is deliberately before state setup, precheck, candidate selection, or any mutation-capable driver.
   await deps.compatibilityPreflight?.();
+  // Execution supply is fixed before any state setup, precheck, candidate selection,
+  // or mutation-capable driver. A provisioning failure therefore starts nothing.
+  const supply = await deps.prepareExecutionSupply();
   const key = automationStateKey(project, automation);
   const entry = state.automations[key] || {};
   state.automations[key] = entry;
@@ -371,7 +392,7 @@ export async function runScheduledAutomation(
   entry.schedule = automation.schedule;
   deps.saveState(state);
 
-  const precheck = deps.resolveAutomationFileInDir("precheck", automation, automation.precheckFile);
+  const precheck = deps.resolveAutomationFileInDir("precheck", automation, automation.precheckFile, supply);
   if (!precheck.found) {
     recordAutomationResult(entry, "precheck_file_missing");
     entry.lastError = `precheck file not found: ${automation.precheckFile}`;
@@ -385,7 +406,7 @@ export async function runScheduledAutomation(
 
   let result: AutomationExecResult;
   try {
-    result = await deps.runPrecheck(project, automation, precheck.resolved);
+    result = await deps.runPrecheck(project, automation, precheck.resolved, supply);
   } catch (error) {
     recordAutomationResult(entry, "precheck_error");
     entry.lastError = error instanceof Error ? error.message : String(error);
@@ -417,9 +438,9 @@ export async function runScheduledAutomation(
     return;
   }
 
-  if (await runConfiguredDriver(project, automation, entry, state, deps)) return;
+  if (await runConfiguredDriver(project, automation, entry, state, deps, supply)) return;
 
-  const promptResolution = deps.resolveAutomationFileInDir("prompt", automation, automation.promptFile);
+  const promptResolution = deps.resolveAutomationFileInDir("prompt", automation, automation.promptFile, supply);
   if (!promptResolution.found) {
     recordAutomationResult(entry, "prompt_file_missing");
     entry.lastError = `prompt file not found: ${automation.promptFile}`;
@@ -437,7 +458,7 @@ export async function runScheduledAutomation(
   }
 
   try {
-    const prompt = deps.readPrompt(project, automation, promptResolution.resolved);
+    const prompt = deps.readPrompt(project, automation, promptResolution.resolved, supply);
     const queued = deps.sendUserMessageIfEnabled
       ? deps.sendUserMessageIfEnabled(prompt)
       : (deps.sendUserMessage(prompt), true);

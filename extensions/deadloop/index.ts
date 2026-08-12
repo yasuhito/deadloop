@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { reconcileAndSelectDueAutomation } from "../../src/automation-scheduler";
+import { ensureCodeSnapshot } from "../../src/code-snapshot";
 import {
   DEFAULT_TIMEZONE,
   REPO_POLICY_FILE,
@@ -123,6 +124,11 @@ const CODE_FRESHNESS_SOURCE_PATHS = [
   path.resolve(__dirname, "../../src/automation-runner.ts"),
 ];
 const AUTOMATION_DIR = path.join(EXTENSION_DIR, "automations");
+const PACKAGE_ROOT = path.resolve(__dirname, "../..");
+const LOADED_CODE_IDENTITY = gitOutput(PACKAGE_ROOT, ["rev-parse", "HEAD^{commit}"]);
+if (!/^[0-9a-f]{40}$/i.test(LOADED_CODE_IDENTITY)) {
+  throw new Error("deadloop could not resolve its load-time code identity");
+}
 
 function currentConfigPath() {
   return resolveConfigPath({
@@ -695,12 +701,14 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`;
 }
 
-function resolveAutomationFileInDir(_kind, _automation, requested) {
-  return resolveAutomationFile(requested, (fileName) => fs.existsSync(path.join(AUTOMATION_DIR, fileName)));
+function resolveAutomationFileInDir(_kind, _automation, requested, supply) {
+  const automationDir = supply.automationDir;
+  return resolveAutomationFile(requested, (fileName) => fs.existsSync(path.join(automationDir, fileName)));
 }
 
-async function runAutomationScript(pi, project, automation, automationFile) {
-  const scriptPath = path.join(AUTOMATION_DIR, automationFile);
+async function runAutomationScript(pi, project, automation, automationFile, supply) {
+  const automationDir = supply.automationDir;
+  const scriptPath = path.join(automationDir, automationFile);
   const env = {
     ...automationEnvironment(project, automation),
     DEADLOOP_STATE_DIR: STATE_DIR,
@@ -715,9 +723,10 @@ async function runAutomationScript(pi, project, automation, automationFile) {
   });
 }
 
-function readPrompt(project, automation, promptFile) {
-  const template = fs.readFileSync(path.join(AUTOMATION_DIR, promptFile), "utf8");
-  return renderTemplate(template, templateValues(project, automation, AUTOMATION_DIR));
+function readPrompt(project, automation, promptFile, supply) {
+  const automationDir = supply.automationDir;
+  const template = fs.readFileSync(path.join(automationDir, promptFile), "utf8");
+  return renderTemplate(template, templateValues(project, automation, automationDir));
 }
 
 async function execJson(pi, command, args, fallback, options: { timeout?: number } = {}) {
@@ -1410,13 +1419,23 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
       } catch {}
     },
     now: () => Date.now(),
+    prepareExecutionSupply: () => {
+      try {
+        return ensureCodeSnapshot({ packageRoot: PACKAGE_ROOT, stateDir: STATE_DIR, codeIdentity: LOADED_CODE_IDENTITY });
+      } catch (error) {
+        // A stop nobody can see is indistinguishable from an idle host, so publish the reason
+        // before the throw stops this automation short of precheck and every driver.
+        setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
+    },
     readPrompt,
     revalidatePendingDriverHandoff: revalidatePendingIssueHandoff,
     resolveAutomationFileInDir,
-    runDriver: async (driverProject, driverAutomation, driverFile) =>
-      await runAutomationScript(pi, driverProject, driverAutomation, driverFile),
-    runPrecheck: async (precheckProject, precheckAutomation, precheckFile) =>
-      await runAutomationScript(pi, precheckProject, precheckAutomation, precheckFile),
+    runDriver: async (driverProject, driverAutomation, driverFile, supply) =>
+      await runAutomationScript(pi, driverProject, driverAutomation, driverFile, supply),
+    runPrecheck: async (precheckProject, precheckAutomation, precheckFile, supply) =>
+      await runAutomationScript(pi, precheckProject, precheckAutomation, precheckFile, supply),
     saveState: (state) => {
       if (isCurrentSchedulerRun()) saveState(state, ownedAutomationKeys);
     },

@@ -61,6 +61,7 @@ describe("Herdr 0.7.5 activation", () => {
       await runScheduledAutomation(project, project.automations[0], 1, { automations: {} }, {
         compatibilityPreflight: () => { calls.push("compatibility"); throw new Error("unsupported"); },
         now: () => 1,
+        prepareExecutionSupply: () => ({ codeIdentity: "a".repeat(40), lockHash: "b".repeat(64), packageRoot: "/snapshot", automationDir: "/snapshot/automations", dependencyRoot: "/dependencies" }),
         readPrompt: () => "",
         resolveAutomationFileInDir: () => ({ requested: "", resolved: "", found: true }),
         runDriver: async () => (calls.push("driver"), { code: 0 }),

@@ -36,7 +36,15 @@ const retainedExtensionShutdowns: Array<() => Promise<void>> = [];
 // stable path lets every extension factory get fresh closure state without paying
 // for a transformed module reload; fixtureRepository replaces all files per test.
 const repositoryTemplates = new Map<boolean, string>();
-const fixtureParent = mkdtempSync(path.join(os.tmpdir(), "deadloop-enablement-suite-"));
+// Execution-supply dependencies are intentionally hard-linked, so the package
+// checkout and Automation host state must share a filesystem in this suite.
+const fixtureParent = mkdtempSync(path.join(path.dirname(process.cwd()), ".deadloop-enablement-suite-"));
+// The first scheduled automation provisions its code snapshot and its pinned
+// dependencies before any driver runs. A wait for driver evidence must outlast
+// that setup, and the test timeout must in turn outlast the wait; equal budgets
+// leave a failed wait no room to report its own assertion.
+const SCHEDULED_DRIVER_WAIT_MS = 25_000;
+const SCHEDULED_DRIVER_TIMEOUT_MS = SCHEDULED_DRIVER_WAIT_MS + 5_000;
 const enabledSafetyFields = {
   githubRepositoryId: "R_demo",
   automationLogin: "deadloop-bot",
@@ -367,7 +375,10 @@ afterEach(async () => {
   else process.env.DEADLOOP = originalDeadloop;
   if (originalDeadloopAutomations === undefined) delete process.env.DEADLOOP_AUTOMATIONS;
   else process.env.DEADLOOP_AUTOMATIONS = originalDeadloopAutomations;
-  for (const sandbox of sandboxes.splice(0)) rmSync(sandbox, { recursive: true, force: true });
+  for (const sandbox of sandboxes.splice(0)) {
+    execFileSync("chmod", ["-R", "u+w", sandbox]);
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 async function explicitNpmCommandWithoutLockfileObservation(): Promise<string | undefined> {
@@ -1131,12 +1142,13 @@ describe("enablement command integration", () => {
     });
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-    for (let attempt = 0; attempt < 100 && !reviewerCommand; attempt += 1) {
+    const deadline = Date.now() + SCHEDULED_DRIVER_WAIT_MS;
+    while (!reviewerCommand && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     expect(reviewerCommand).toContain("DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS='deadloop-bot'");
-  });
+  }, SCHEDULED_DRIVER_TIMEOUT_MS);
 
   it("records prepared verification worktree intent before creation", async () => {
     expect((await ownedWorktreeIntentObservation()).state).toBe("prepared");

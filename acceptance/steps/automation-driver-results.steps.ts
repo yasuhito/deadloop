@@ -67,6 +67,7 @@ When("deadloop runs the automation", async function (this: DriverWorld) {
   await runScheduledAutomation(this.project, this.automation, 123, { automations: {} }, {
     isIdle: () => true,
     now: () => 456,
+    prepareExecutionSupply: () => ({ codeIdentity: "a".repeat(40), lockHash: "b".repeat(64), packageRoot: "/snapshot", automationDir: "/snapshot/automations", dependencyRoot: "/dependencies" }),
     readPrompt: () => "normal prompt",
     resolveAutomationFileInDir: (_kind, _automation, requested) => ({
       requested: requested || "",

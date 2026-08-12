@@ -426,6 +426,7 @@ When("deadloop starts an automation cycle", async function (this: World) {
   try {
     await runScheduledAutomation(project, project.automations[0], 1, { automations: {} }, {
       compatibilityPreflight: () => { throw new Error("Herdr is unsupported"); }, now: () => 1,
+      prepareExecutionSupply: () => ({ codeIdentity: "a".repeat(40), lockHash: "b".repeat(64), packageRoot: "/snapshot", automationDir: "/snapshot/automations", dependencyRoot: "/dependencies" }),
       readPrompt: () => "", resolveAutomationFileInDir: () => ({ requested: "", resolved: "", found: false }),
       runDriver: async () => (this.mutationCount!++, { code: 0 }), runPrecheck: async () => (this.mutationCount!++, { code: 0 }),
       saveState: () => { this.mutationCount!++; }, sendUserMessage: () => { this.mutationCount!++; },
