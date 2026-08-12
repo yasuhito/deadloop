@@ -8,7 +8,6 @@ const path = require("node:path") as typeof import("node:path");
 type PromiseValidation = Record<string, any>;
 
 const VALID_PROMISE_STATUSES = new Set(["complete", "blocked"]);
-const VALID_REVIEW_OUTCOMES = new Set(["approved", "changes_requested", "human_required"]);
 const VALID_FINDING_SEVERITIES = new Set(["blocker", "major", "minor"]);
 const SUCCESSFUL_ATTEMPT_PHASES = new Set([
   "prepared",
@@ -224,59 +223,25 @@ function validatePromise(filePath: string, attemptRecordFile?: string): PromiseV
 
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return invalidPromise(filePath, "not_object");
   const promise = payload as PromiseValidation;
-  if (promise.schemaVersion !== undefined) {
-    if (promise.schemaVersion !== 1) return invalidPromise(filePath, "unknown_schema_version");
-    const error = validV1Report(promise);
-    if (error) return invalidPromise(filePath, error);
-    const recordFile = attemptRecordFile || path.join(path.dirname(filePath), "attempt.json");
-    const normalized = normalizeV1Report(promise);
-    if (!fs.existsSync(recordFile)) return { status: promise.status, file: filePath, promise: normalized, evidenceStrength: "unbound-v1" };
-    try {
-      const record = JSON.parse(fs.readFileSync(recordFile, "utf8"));
-      if (!validCanonicalAttemptRecord(record)) return invalidPromise(filePath, "invalid_attempt_record");
-      if (path.resolve(record.promiseFile) !== path.resolve(filePath)) {
-        return invalidPromise(filePath, "attempt_promise_file_mismatch");
-      }
-      if (!reportMatchesRecord(promise, record)) return invalidPromise(filePath, "attempt_binding_mismatch");
-      return { status: promise.status, file: filePath, promise: normalized, evidenceStrength: "strong", attemptRecord: recordFile };
-    } catch (error) {
-      return invalidPromise(filePath, `invalid_attempt_record: ${error instanceof Error ? error.message : String(error)}`);
+  if (promise.schemaVersion !== 1) return invalidPromise(filePath, "unknown_schema_version");
+  const error = validV1Report(promise);
+  if (error) return invalidPromise(filePath, error);
+  const recordFile = attemptRecordFile || path.join(path.dirname(filePath), "attempt.json");
+  const normalized = normalizeV1Report(promise);
+  if (!fs.existsSync(recordFile)) {
+    return { status: promise.status, file: filePath, promise: normalized, evidenceStrength: "unbound-v1" };
+  }
+  try {
+    const record = JSON.parse(fs.readFileSync(recordFile, "utf8"));
+    if (!validCanonicalAttemptRecord(record)) return invalidPromise(filePath, "invalid_attempt_record");
+    if (path.resolve(record.promiseFile) !== path.resolve(filePath)) {
+      return invalidPromise(filePath, "attempt_promise_file_mismatch");
     }
+    if (!reportMatchesRecord(promise, record)) return invalidPromise(filePath, "attempt_binding_mismatch");
+    return { status: promise.status, file: filePath, promise: normalized, evidenceStrength: "strong", attemptRecord: recordFile };
+  } catch (error) {
+    return invalidPromise(filePath, `invalid_attempt_record: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const status = promise.status;
-  if (!VALID_PROMISE_STATUSES.has(status)) return invalidPromise(filePath, "invalid_status");
-  if (typeof promise.reason !== "string") return invalidPromise(filePath, "invalid_reason");
-  if (typeof promise.summary !== "string") return invalidPromise(filePath, "invalid_summary");
-  if (promise.outcome !== undefined && !VALID_REVIEW_OUTCOMES.has(promise.outcome)) {
-    return invalidPromise(filePath, "invalid_outcome");
-  }
-  if (promise.findings !== undefined && (!Array.isArray(promise.findings) || !promise.findings.every(validFinding))) {
-    return invalidPromise(filePath, "invalid_findings");
-  }
-  if (promise.outcome === "changes_requested" && (!Array.isArray(promise.findings) || promise.findings.length === 0)) {
-    return invalidPromise(filePath, "changes_requested_requires_findings");
-  }
-  if (
-    promise.outcome === "changes_requested" &&
-    promise.findings.some((finding: PromiseValidation) => !VALID_FINDING_SEVERITIES.has(finding.severity))
-  ) {
-    return invalidPromise(filePath, "changes_requested_requires_finding_severity");
-  }
-  if (status === "blocked" && promise.outcome !== undefined) return invalidPromise(filePath, "blocked_has_outcome");
-  if (
-    promise.reason === "repair_pushed" &&
-    (!Array.isArray(promise.repairs) || promise.repairs.length === 0 || !promise.repairs.every(validRepair))
-  ) {
-    return invalidPromise(filePath, "repair_pushed_requires_repairs");
-  }
-  if (
-    promise.reason === "repair_pushed" &&
-    (!Array.isArray(promise.checks) || promise.checks.length === 0 || !promise.checks.every(validCheck))
-  ) {
-    return invalidPromise(filePath, "repair_pushed_requires_passed_checks");
-  }
-
-  return { status, file: filePath, promise, evidenceStrength: "legacy-weak" };
 }
 
 function requiredPromiseArg(argv: string[], index: number, flag: string): string {

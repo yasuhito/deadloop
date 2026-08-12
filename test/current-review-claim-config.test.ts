@@ -62,7 +62,7 @@ describe("current review claim configuration", () => {
     const value = fixture({ labels: { review: "local:review" } }, { labels: { blocked: "policy:blocked" } });
 
     expect(loadCurrentReviewClaimConfiguration(value.stateDir, value.enabled, "deadloop-bot").managedLabels).toEqual([
-      "local:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "policy:blocked",
+      "local:review", "agent:implement", "agent:update-branch", "agent:in-progress", "policy:blocked",
     ]);
   });
 

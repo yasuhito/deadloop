@@ -22,9 +22,9 @@ import {
   sanitizeId,
   templateValues,
 } from "../../src/core";
-import { buildDoctorSnapshot, formatDoctorReport, herdr075DoctorFinding } from "../../src/doctor";
-import { compatibilityDiagnosticData } from "../../src/herdr-075-compat";
-import { herdrServerIsUnreachableWithCompatibleClient, runHerdrCompatibilityPreflight } from "../../src/herdr-preflight";
+import { buildDoctorSnapshot, formatDoctorReport, herdrDoctorFinding } from "../../src/doctor";
+import { herdrVersionDiagnosticData, parseHerdrVersions } from "../../src/herdr-version";
+import { herdrServerIsUnreachableWithSupportedClient, runHerdrPreflight } from "../../src/herdr-preflight";
 import { discoverVerificationCandidates } from "../../src/required-verification";
 import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } from "../../src/status";
 import { readClaudeConfig } from "../../src/agent-trust.cjs";
@@ -171,8 +171,8 @@ function readConfigText() {
   }
 }
 
-function herdrCompatibilityPreflight() {
-  return runHerdrCompatibilityPreflight({
+function herdrPreflight() {
+  return runHerdrPreflight({
     run: (command, args) => {
       const result = childProcess.spawnSync(command, args, {
         encoding: "utf8",
@@ -979,7 +979,7 @@ function launchFailedRecoveryGuidance(record, runDir, project, workspaces, agent
     const pr = (evidence?.openPrs || []).find((item) => Number(item.number) === record.target.number);
     const labels = labelNames(pr);
     if (!pr || pr.headRefName !== record.branch || String(pr.headRefOid || "").toLowerCase() !== record.inputRevision.head.toLowerCase()
-      || !labels.has(configured.review) || !labels.has(configured.reviewing)
+      || !labels.has(configured.review) || !labels.has(configured.inProgress)
       || labels.has(configured.blocked) || labels.has(configured.human)) {
       return refuse("the pull request no longer has the exact safe launch claim and head");
     }
@@ -1018,7 +1018,7 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
     let record;
     try { record = readAttemptRecord(runDir); }
     catch (error) {
-      if (fs.existsSync(attemptRecord)) findings.push(herdr075DoctorFinding(
+      if (fs.existsSync(attemptRecord)) findings.push(herdrDoctorFinding(
         "malformed_journal",
         `attempt journal ${attemptRecord} is malformed: ${error instanceof Error ? error.message : String(error)}; manual review required before changing any claim label`,
       ));
@@ -1026,13 +1026,13 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
     }
     if (record.project !== project?.id || record.repository !== project?.githubRepo
       || releasesAttemptOwnership(record.phase)) continue;
-    let status: import("../../src/doctor").Herdr075DoctorStatus = "missing_report";
+    let status: import("../../src/doctor").HerdrDoctorStatus = "missing_report";
     let detail = `attempt ${record.attemptId} (${record.role}) is retained at phase ${record.phase}`;
     if (record.phase === "launch_failed") {
       status = "launch_failed";
       const guidance = launchFailedRecoveryGuidance(record, runDir, project, workspaces, agents, evidence);
       detail = `${detail}; ${guidance.detail}`;
-      findings.push(herdr075DoctorFinding(status, detail, guidance.commands));
+      findings.push(herdrDoctorFinding(status, detail, guidance.commands));
       continue;
     }
     else if (record.phase === "github_persisted") status = "cleanup_pending";
@@ -1043,7 +1043,7 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
           || path.resolve(owned[0].worktreePath) !== path.resolve(record.worktreePath)) {
           status = "ownership_mismatch";
           detail = `attempt ${record.attemptId} cannot prove ownership of workspace ${record.workspaceId}`;
-          findings.push(herdr075DoctorFinding(status, detail));
+          findings.push(herdrDoctorFinding(status, detail));
           continue;
         }
       }
@@ -1056,21 +1056,23 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
         try { report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8")); }
         catch {
           status = "malformed_report";
-          findings.push(herdr075DoctorFinding(status, detail));
+          findings.push(herdrDoctorFinding(status, detail));
           continue;
         }
-        if (report?.schemaVersion !== 1) status = "legacy_report";
-        else {
-          try { report = validateCompletionReportBinding(record, report).report; }
-          catch { status = "malformed_report"; findings.push(herdr075DoctorFinding(status, detail)); continue; }
-          if (report.status === "blocked") status = "blocked";
-          else if (report.role === "reviewer" && report.result?.outcome === "human_required") status = "human_required";
-          else if (["agent_started", "report_received"].includes(record.phase)) status = "persistence_unconfirmed";
-          else status = "active";
+        if (report?.schemaVersion !== 1) {
+          status = "malformed_report";
+          findings.push(herdrDoctorFinding(status, detail));
+          continue;
         }
+        try { report = validateCompletionReportBinding(record, report).report; }
+        catch { status = "malformed_report"; findings.push(herdrDoctorFinding(status, detail)); continue; }
+        if (report.status === "blocked") status = "blocked";
+        else if (report.role === "reviewer" && report.result?.outcome === "human_required") status = "human_required";
+        else if (["agent_started", "report_received"].includes(record.phase)) status = "persistence_unconfirmed";
+        else status = "active";
       }
     }
-    findings.push(herdr075DoctorFinding(status, detail));
+    findings.push(herdrDoctorFinding(status, detail));
   }
   return findings;
 }
@@ -1152,11 +1154,11 @@ async function buildLiveDoctorReport(pi, cwd) {
     data,
   ));
   try {
-    herdrCompatibilityPreflight();
+    herdrPreflight();
   } catch (error) {
-    snapshot.findings.unshift(herdr075DoctorFinding(
-      "incompatible",
-      compatibilityDiagnosticData({ probeFailure: error instanceof Error ? error.message : String(error) }),
+    snapshot.findings.unshift(herdrDoctorFinding(
+      "unsupported",
+      herdrVersionDiagnosticData({ probeFailure: error instanceof Error ? error.message : String(error) }),
     ));
   }
   const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
@@ -1172,7 +1174,6 @@ const STANDARD_LABELS = [
   ["needs-triage", "f9d0c4"],
   ["agent:explore", "0052cc"],
   ["agent:review", "5319e7"],
-  ["agent:reviewing", "c2e0c6"],
   ["agent:update-branch", "006b75"],
   ["agent:in-progress", "fbca04"],
   ["agent:blocked", "b60205"],
@@ -1301,7 +1302,6 @@ async function detectProjectIdentity(pi, cwd) {
     repoPath,
     githubRepo,
     githubRepositoryId,
-    githubAliases: [...new Set(identities)],
     baseBranch,
     id,
     worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", id),
@@ -1530,7 +1530,6 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         "--implement-label", labels.implement,
         "--in-progress-label", labels.inProgress,
         "--review-label", labels.review,
-        "--reviewing-label", labels.reviewing,
         "--blocked-label", labels.blocked,
       ], null);
       if (claimResult?.action === "error") debugLog("prepared attempt claim reconciliation blocked", claimResult.reason || claimResult.driverAction);
@@ -1554,9 +1553,9 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
     const reviewerAutoMerge = record.autoMergePolicy ?? project.autoMerge;
     const expectedLabels = report?.role === "reviewer"
       ? report.result?.outcome === "changes_requested"
-        ? [labels.review, labels.reviewing]
+        ? [labels.review, labels.inProgress]
         : reviewerAutoMerge
-          ? [labels.review, labels.reviewing]
+          ? [labels.review, labels.inProgress]
           : [labels.human]
       : [];
     const args = [
@@ -1572,7 +1571,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       "--worker-review-label", labels.review,
       "--auto-merge", reviewerAutoMerge ? "true" : "false",
       ...expectedLabels.flatMap((label) => ["--expected-label", label]),
-      ...[labels.review, labels.reviewing, labels.blocked, labels.human]
+      ...[labels.review, labels.inProgress, labels.blocked, labels.human]
         .flatMap((label) => ["--managed-label", label]),
     ];
     const result = await execJson(pi, "node", args, null);
@@ -1608,9 +1607,9 @@ function displayCommandResult(pi, ctx, customType, content) {
 }
 
 export default function (pi) {
-  const compatibilityPreflight = typeof pi.testing?.herdrCompatibilityPreflight === "function"
-    ? () => pi.testing.herdrCompatibilityPreflight()
-    : herdrCompatibilityPreflight;
+  const preflight = typeof pi.testing?.herdrPreflight === "function"
+    ? () => pi.testing.herdrPreflight()
+    : herdrPreflight;
   registerReportCommand(
     pi,
     "deadloop-status",
@@ -1651,7 +1650,6 @@ export default function (pi) {
           "--implement-label", labels.implement,
           "--in-progress-label", labels.inProgress,
           "--review-label", labels.review,
-          "--reviewing-label", labels.reviewing,
           "--blocked-label", labels.blocked,
           "--human-label", labels.human,
         ];
@@ -1707,11 +1705,11 @@ export default function (pi) {
 
     // Global fail-closed gate: no candidate selection or workflow/runner mutation may happen first.
     try {
-      compatibilityPreflight();
+      preflight();
     } catch (error) {
-      // Recovery-only exception: a compatible local client may reflect an unreachable runtime
+      // Recovery-only exception: a supported local client may reflect an unreachable runtime
       // as agent:blocked. No candidate, launch, completion, push, ready, or merge path is opened.
-      if (herdrServerIsUnreachableWithCompatibleClient() && isProjectEnabled(schedulerRun.project)) {
+      if (herdrServerIsUnreachableWithSupportedClient() && isProjectEnabled(schedulerRun.project)) {
         await reconcilePrWorkAuthority(pi, schedulerRun.project);
       }
       setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}`);
@@ -1879,7 +1877,7 @@ export default function (pi) {
       return { started: false, reason: "scheduler startup is suppressed by DEADLOOP_AUTOMATIONS=off" };
     }
     try {
-      compatibilityPreflight();
+      preflight();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       setLooperStatus(ctx, `skipped: ${reason}`);

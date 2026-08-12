@@ -114,7 +114,7 @@ export function reviewerFixture(outcome: "approved" | "changes_requested" | "hum
     ? [{ title: "Bug", body: "Fix it", path: "src/a.ts", line: 1, severity: "major" as const }]
     : [];
   const expectedLabels = outcome === "changes_requested"
-    ? ["agent:review", "agent:reviewing"]
+    ? ["agent:review", "agent:in-progress"]
     : ["ready-for-human"];
   const context = { reviewerExpectedLabels: expectedLabels } satisfies CompletionDecisionContext;
   const github = {

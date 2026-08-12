@@ -81,37 +81,6 @@ describe("PR reviewer stale reviewing reclaim", () => {
     ).reason).toBe("stale_reclaim");
   });
 
-  it("does not infer ownership from a legacy reviewer agent name", () => {
-    expect(runSelect("precheck-reviewing.json", { agents: "agents-reviewer-working.json" }).selected).toBe(true);
-  });
-
-  it("does not infer ownership from a legacy branch-update agent name", () => {
-    expect(runSelect("precheck-reviewing.json", { agents: "agents-branch-update-working.json" }).selected).toBe(true);
-  });
-
-  it.each([
-    ["reviewer", "working", "dl-r-13-111111111111"],
-    ["reviewer", "idle", "dl-r-13-111111111111"],
-    ["reviewer", "done", "dl-r-13-111111111111"],
-    ["review-repair", "working", "dl-x-13-222222222222"],
-    ["review-repair", "idle", "dl-x-13-222222222222"],
-    ["review-repair", "done", "dl-x-13-222222222222"],
-    ["branch-update", "working", "dl-u-13-333333333333"],
-    ["branch-update", "idle", "dl-u-13-333333333333"],
-    ["branch-update", "done", "dl-u-13-333333333333"],
-  ])("suppresses reselection for a retained %s journal when its agent is %s", (role, agentStatus, agentName) => {
-    const { defaultDecisionConfig, selectPrForReview, workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
-    const attempts = [{
-      project: "demo", repository: "owner/repo", role,
-      target: { kind: "pull-request", number: 13 }, phase: "agent_started", agentName,
-    }];
-    const owners = workingReviewerPrNumbers(
-      { result: { agents: [{ name: agentName, agent_status: agentStatus }] } }, "demo", attempts, "owner/repo",
-    );
-    const prs = require("./fixtures/pr-reviewer/precheck-reviewing.json");
-    expect(selectPrForReview(prs, defaultDecisionConfig(), owners).selected).toBe(false);
-  });
-
   it("suppresses a queued review while its retained in-progress owner is active", () => {
     const { defaultDecisionConfig, selectPrForReview } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
     const prs = [{

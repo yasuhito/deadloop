@@ -45,7 +45,6 @@ export type LabelConfig = {
   inProgress?: string;
   blocked?: string;
   review?: string;
-  reviewing?: string;
   human?: string;
   needsInfo?: string;
   wontfix?: string;
@@ -114,7 +113,6 @@ export type NormalizedExternalReviewConfig = {
 
 export type RawProject = {
   id?: string;
-  enabled?: boolean;
   repoPath?: string;
   githubRepo?: string;
   baseBranch?: string;
@@ -254,7 +252,6 @@ export function normalizeLabels(labels: LabelConfig = {}): NormalizedLabels {
     inProgress: labels.inProgress || "agent:in-progress",
     blocked: labels.blocked || "agent:blocked",
     review: labels.review || "agent:review",
-    reviewing: labels.reviewing || "agent:reviewing",
     human: labels.human || "ready-for-human",
     needsInfo: labels.needsInfo || "needs-info",
     wontfix: labels.wontfix || "wontfix",
@@ -325,7 +322,6 @@ const REPO_POLICY_LABEL_KEYS = new Set([
   "inProgress",
   "blocked",
   "review",
-  "reviewing",
   "human",
   "needsInfo",
   "wontfix",
@@ -795,7 +791,6 @@ function automationRuntimeValues(
     inProgressLabel: project.labels.inProgress,
     blockedLabel: project.labels.blocked,
     reviewLabel: project.labels.review,
-    reviewingLabel: project.labels.reviewing,
     humanLabel: project.labels.human,
     needsInfoLabel: project.labels.needsInfo,
     wontfixLabel: project.labels.wontfix,
@@ -863,7 +858,6 @@ export function automationEnvironment(
     DEADLOOP_IN_PROGRESS_LABEL: envText(values.inProgressLabel),
     DEADLOOP_BLOCKED_LABEL: envText(values.blockedLabel),
     DEADLOOP_REVIEW_LABEL: envText(values.reviewLabel),
-    DEADLOOP_REVIEWING_LABEL: envText(values.reviewingLabel),
     DEADLOOP_HUMAN_LABEL: envText(values.humanLabel),
     DEADLOOP_NEEDS_INFO_LABEL: envText(values.needsInfoLabel),
     DEADLOOP_WONTFIX_LABEL: envText(values.wontfixLabel),

@@ -8,7 +8,7 @@ const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { createHerdrRunner, normalizeHerdrWorktreeRecord } = require("../../../src/herdr-runner.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 
 type CleanupRecord = Record<string, any>;
 
@@ -410,9 +410,9 @@ function main(argv: string[] = process.argv.slice(2)): number {
     return 0;
   }
 
-  // Direct apply is mutation-capable, so compatibility must be proven before GitHub reads,
+  // Direct apply is mutation-capable, so the Herdr preflight must pass before GitHub reads,
   // planning, artifact deletion, or Herdr worktree removal.
-  if (args.apply) runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runCleanupText([command, ...commandArgs]) });
+  if (args.apply) runHerdrPreflight({ run: (command: string, commandArgs: string[]) => runCleanupText([command, ...commandArgs]) });
 
   let result: CleanupRecord;
   if (args.fixture) {

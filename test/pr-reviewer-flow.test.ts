@@ -16,7 +16,7 @@ function env(overrides: Record<string, unknown> = {}) {
     projectId: "demo",
     automationLogin: "deadloop-bot",
     reviewLabel: "agent:review",
-    reviewingLabel: "agent:reviewing",
+
     humanLabel: "ready-for-human",
     blockedLabel: "agent:blocked",
     autoMerge: false,

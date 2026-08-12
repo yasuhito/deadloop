@@ -8,7 +8,7 @@ Accepted
 
 Before starting normal PR review, deadloop compares the selected PR head with the freshly fetched configured base head. If merging those exact commits conflicts, it starts one dedicated branch-update worker in the existing PR branch worktree. The worker merges the base into the PR branch; rebasing and history rewriting are prohibited.
 
-An HTML comment records a deterministic key derived from the exact PR-head/base-head pair. That pair gets at most one update attempt; a change to either commit creates a new key and may be tried once. `agent:review` is retained and `agent:reviewing` is retained or added while the update runs. No branch-update label is introduced.
+An HTML comment records a deterministic key derived from the exact PR-head/base-head pair. That pair gets at most one update attempt; a change to either commit creates a new key and may be tried once. `agent:review` is retained and the active `agent:in-progress` claim is retained while the update runs. No branch-update label is introduced.
 
 The worker may push only through the deterministic finalizer. The finalizer requires the updated commit to contain both selected commits, runs the configured project check, requires a clean worktree, immediately re-reads the open same-repository PR head, and updates only the driver-selected existing branch with a normal non-force fast-forward push after verifying that the destination still equals the selected PR head. A changed, rewound, or deleted PR head returns `stale_head` without updating, commenting, or changing labels.
 

@@ -11,7 +11,6 @@ type AnyRecord = Record<string, any>;
 
 type ReviewDecisionConfig = {
   reviewLabel: string;
-  reviewingLabel: string;
   inProgressLabel: string;
   humanLabel: string;
   blockedLabel: string;
@@ -30,7 +29,6 @@ const REPAIR_RESULT_MARKER_RE = /<!--\s*deadloop:review-repair-result\s+key=[0-9
 function defaultDecisionConfig(overrides: Partial<ReviewDecisionConfig> = {}): ReviewDecisionConfig {
   return {
     reviewLabel: "agent:review",
-    reviewingLabel: "agent:reviewing",
     inProgressLabel: "agent:in-progress",
     humanLabel: "ready-for-human",
     blockedLabel: "agent:blocked",
@@ -254,17 +252,16 @@ function selectPrForReview(
       skipped.push(skipForPrReviewer("blocked", pr));
       continue;
     }
-    const hasReviewingLabel = labels.has(config.reviewingLabel);
     const hasInProgressLabel = labels.has(config.inProgressLabel);
     // A retained journal suppresses work only while GitHub still exposes its
     // active claim. An ordinary queued request without that claim stays eligible.
-    if ((hasReviewingLabel || hasInProgressLabel) && workingReviewerPrs.has(prNumberForPrReviewer(pr))) {
+    if (hasInProgressLabel && workingReviewerPrs.has(prNumberForPrReviewer(pr))) {
       skipped.push(skipForPrReviewer("reviewer_working", pr));
       continue;
     }
     const currentHeadWasClaimed = claimedReviewerHeadKeys.has(reviewerClaimKey(prNumberForPrReviewer(pr), String(pr.headRefOid || "")));
-    const repairRereview = hasRepairRereviewProvenance(pr, config.automationLogin) && (!hasReviewingLabel || !currentHeadWasClaimed);
-    const staleReclaim = hasReviewingLabel && !repairRereview;
+    const repairRereview = hasRepairRereviewProvenance(pr, config.automationLogin) && !currentHeadWasClaimed;
+    const staleReclaim = hasInProgressLabel && !repairRereview;
     if (pr.isDraft) {
       return { selected: true, number: pr.number, action: "draft_gate", reason: "draft", staleReclaim, skipped };
     }
@@ -345,7 +342,6 @@ function cliConfig(args: AnyRecord): ReviewDecisionConfig {
   if (!now) throw new Error("--now must be an ISO-8601 timestamp");
   return defaultDecisionConfig({
     reviewLabel: args.reviewLabel || "agent:review",
-    reviewingLabel: args.reviewingLabel || "agent:reviewing",
     inProgressLabel: args.inProgressLabel || "agent:in-progress",
     humanLabel: args.humanLabel || "ready-for-human",
     blockedLabel: args.blockedLabel || "agent:blocked",

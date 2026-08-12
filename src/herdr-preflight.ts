@@ -1,15 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
-
 import {
-  type Herdr075CompatibilityObservation,
-  compatibilityDiagnosticData,
-  formatCompatibilityDiagnostic,
-  parseHerdr075Compatibility,
-} from "./herdr-075-compat";
+  type HerdrVersionObservation,
+  formatHerdrVersionDiagnostic,
+  herdrVersionDiagnosticData,
+  parseHerdrVersions,
+} from "./herdr-version";
 
-export type HerdrPreflightOps = {
-  run(command: string, args: string[]): string;
-};
+export type HerdrPreflightOps = { run(command: string, args: string[]): string };
 
 export type HerdrProbeResult = {
   status: number | null;
@@ -38,23 +35,23 @@ function spawnProbe(command: string, args: string[]): HerdrProbeResult {
 }
 
 /**
- * Whether a compatible local client sees no reachable runtime server. The caller may then expose
+ * Whether a supported local client sees no reachable runtime server. The caller may then expose
  * the stopped work on GitHub; it opens no candidate, launch, completion, push, ready, or merge path.
  */
-export function herdrServerIsUnreachableWithCompatibleClient(
+export function herdrServerIsUnreachableWithSupportedClient(
   ops: HerdrReachabilityOps = { probe: spawnProbe },
 ): boolean {
   const client = ops.probe("herdr", ["--version"]);
   if (client.status !== 0 || client.errorMessage) return false;
   try {
-    parseHerdr075Compatibility(client.stdout, "version: 0.7.5\ncompatible: yes\n");
+    parseHerdrVersions(client.stdout, "version: 0.8.0\n");
   } catch { return false; }
   const server = ops.probe("herdr", ["status", "server"]);
   if (server.status === 0 && !server.errorMessage) return false;
   return UNREACHABLE_SERVER.test(`${server.errorMessage}\n${server.stderr}\n${server.stdout}`.toLowerCase());
 }
 
-export function runHerdrCompatibilityPreflight(
+export function runHerdrPreflight(
   ops: HerdrPreflightOps = {
     run: (command, args) => execFileSync(command, args, { encoding: "utf8", timeout: 10_000 }),
   },
@@ -64,18 +61,13 @@ export function runHerdrCompatibilityPreflight(
   try {
     clientText = ops.run("herdr", ["--version"]);
     serverText = ops.run("herdr", ["status", "server"]);
-    return parseHerdr075Compatibility(clientText, serverText);
+    return parseHerdrVersions(clientText, serverText);
   } catch (error) {
-    let observation: Herdr075CompatibilityObservation;
-    try {
-      const client = /^herdr (\S+)$/.exec(clientText.trim())?.[1];
-      const server = /^version: (\S+)$/m.exec(serverText)?.[1];
-      observation = client && server
-        ? { clientVersion: client, serverVersion: server }
-        : { probeFailure: error instanceof Error ? error.message : String(error) };
-    } catch {
-      observation = { probeFailure: "unknown compatibility probe failure" };
-    }
-    throw new Error(formatCompatibilityDiagnostic(compatibilityDiagnosticData(observation)), { cause: error });
+    const client = /^herdr (\S+)$/.exec(clientText.trim())?.[1];
+    const server = /^version: (\S+)$/m.exec(serverText)?.[1];
+    const observation: HerdrVersionObservation = client && server
+      ? { clientVersion: client, serverVersion: server }
+      : { probeFailure: error instanceof Error ? error.message : String(error) };
+    throw new Error(formatHerdrVersionDiagnostic(herdrVersionDiagnosticData(observation)), { cause: error });
   }
 }

@@ -17,7 +17,7 @@ const repairedHead = "cccccccccccccccccccccccccccccccccccccccc";
 const branch = "agent/issue-31";
 const findings = [{ title: "Lint contract failure", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
 const activeReviewState = {
-  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
   requestLabel: "agent:review",
   requiredLabels: ["agent:in-progress"],
 };
@@ -29,7 +29,7 @@ const reviewClaim = {
   binding: reviewClaimBinding, commentId: "101", authorizedLogins: ["deadloop-bot"],
   automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400,
   cleanupGraceSeconds: 300, authoritySeconds: 86700,
-  reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
 };
 
 type RecoveryWorld = {
@@ -205,8 +205,8 @@ else if (args.includes("show") && args.some(arg => arg.endsWith(":deadloop.json"
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TEST_HERDR_LOG, args.join(" ") + "\\n");
-if (args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");
-else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
+if (args[0] === "--version") process.stdout.write("herdr 0.8.0\\n");
+else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.8.0\\n");
 else if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result: {worktrees: [{path: process.env.TEST_WORKTREE, branch: "agent/issue-31"}]}}));
 else if (args[0] === "worktree" && args[1] === "open") process.stdout.write(JSON.stringify({result: {type: "worktree_opened", already_open: false, workspace: {workspace_id: "workspace-1"}, tab: {tab_id: "tab-1", workspace_id: "workspace-1"}, root_pane: {pane_id: "pane-1", tab_id: "tab-1", workspace_id: "workspace-1", cwd: process.env.TEST_WORKTREE}, worktree: {path: process.env.TEST_WORKTREE}}}));
 else if (args[0] === "workspace" && args[1] === "list") process.stdout.write(JSON.stringify({result: {workspaces: []}}));
@@ -455,7 +455,7 @@ Then("The selection reason after conflict recovery is repair re-review", functio
 
 Then("deadloop preserves the review state", function (this: RecoveryWorld) {
   const labels = adapterEffects(this.result)?.labels?.["31"] ?? this.result?.observedLabels;
-  assert.deepEqual(labels, this.case === "conflict" ? ["agent:review", "agent:reviewing"] : ["agent:in-progress"]);
+  assert.deepEqual(labels, this.case === "conflict" ? ["agent:review", "agent:in-progress"] : ["agent:in-progress"]);
 });
 
 Then("deadloop starts a dedicated repair attempt", function (this: RecoveryWorld) {

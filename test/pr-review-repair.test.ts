@@ -28,7 +28,7 @@ const cumulativeComments = cumulativeRepairFixture.comments.map((comment: Record
 }));
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const activeReviewState = {
-  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
   requestLabel: "agent:review",
   requiredLabels: ["agent:in-progress"],
 };
@@ -38,7 +38,7 @@ const reviewClaimBinding = {
 };
 const reviewClaim = {
   binding: reviewClaimBinding, commentId: "101", authorizedLogins: [automationLogin], automationLogin, reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-  reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
 };
 const findings = [
   {
@@ -264,7 +264,7 @@ function prompt() {
     workerModel: "",
     remote: "origin",
     reviewLabel: "agent:review",
-    reviewingLabel: "agent:reviewing",
+
     blockedLabel: "agent:blocked",
     automationDir: "/automation",
   });

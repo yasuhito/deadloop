@@ -14,7 +14,7 @@
           "name": "agent:review"
         },
         {
-          "name": "agent:reviewing"
+          "name": "agent:in-progress"
         }
       ],
       "statusCheckRollup": [],

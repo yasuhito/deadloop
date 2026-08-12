@@ -82,7 +82,6 @@ function runPrecheck(
         DEADLOOP_PROJECT_ID: options.projectId || "demo",
         DEADLOOP_AUTO_MERGE: options.autoMerge ? "1" : "0",
         DEADLOOP_REVIEW_LABEL: "agent:review",
-        DEADLOOP_REVIEWING_LABEL: "agent:reviewing",
         DEADLOOP_HUMAN_LABEL: "ready-for-human",
         DEADLOOP_BLOCKED_LABEL: "agent:blocked",
         DEADLOOP_EXTERNAL_REVIEW_ENABLED: options.externalReview ? "1" : "0",
@@ -185,10 +184,6 @@ describe("PR reviewer precheck", () => {
 
   it("reclaims a stale reviewing PR when no reviewer agent is running", () => {
     expect(runPrecheck("precheck-reviewing.json", { agentsFixture: "agents-empty.json" })).toBe(0);
-  });
-
-  it("does not treat an unjournaled legacy reviewer name as live ownership", () => {
-    expect(runPrecheck("precheck-reviewing.json", { agentsFixture: "agents-reviewer-working.json" })).toBe(0);
   });
 
   it("skips PRs with the blocked label", () => {

@@ -26,7 +26,7 @@ This installs the deadloop extension and its setup skill together.
 
 ## Configure
 
-You need an authenticated `gh` CLI and a running compatible [Herdr](https://herdr.dev/) server.
+You need an authenticated `gh` CLI and a running [Herdr](https://herdr.dev/) 0.8.0 or newer server.
 
 1. Start Pi from the repository's normal Git checkout:
 
@@ -149,7 +149,7 @@ See [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) for the safety contr
 
 When the built-in reviewer reports structured actionable findings, deadloop can start one bounded repair worker on the existing PR branch.
 
-During repair, deadloop preserves the active `agent:in-progress` claim without adding another workflow label. It does not create a new `agent:review` request generation until repair completion, and it removes any legacy `agent:reviewing` label when leaving the repair state.
+During repair, deadloop preserves the active `agent:in-progress` claim without adding another workflow label. It does not create a new `agent:review` request generation until repair completion.
 
 The worker receives only the findings.
 
