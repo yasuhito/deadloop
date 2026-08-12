@@ -10,17 +10,13 @@
 
 ## インストール
 
-Pi パッケージをインストールして有効化します。
+Pi パッケージをインストールします。
 
 ```bash
 pi install git:github.com/yasuhito/deadloop
 ```
 
-対話形式の設定案内が必要な場合は、任意でセットアップスキルもインストールします。
-
-```bash
-npx skills@latest add yasuhito/deadloop
-```
+このコマンドで、deadloop の拡張と設定用スキルがまとめてインストールされます。
 
 ## 現在の状態
 
