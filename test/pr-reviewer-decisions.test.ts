@@ -53,6 +53,18 @@ describe("pull request request-target selection", () => {
     expect(selectPrRequestTarget([pr(7, ["agent:review", "agent:blocked"])], config).selected).toBe(false);
   });
 
+  it("defers a blocked pull request carrying a request to the authority that reads the timeline", () => {
+    const deferring = defaultDecisionConfig({ defersBlockedRecovery: true });
+
+    expect(selectPrRequestTarget([pr(7, ["agent:review", "agent:blocked"])], deferring).selected).toBe(true);
+  });
+
+  it("still skips a blocked pull request carrying no request when blocked requests may recover", () => {
+    const deferring = defaultDecisionConfig({ defersBlockedRecovery: true });
+
+    expect(selectPrRequestTarget([pr(7, ["agent:blocked"])], deferring).selected).toBe(false);
+  });
+
   it("selects a branch update while checks are still running", () => {
     const conflicted = pr(7, ["agent:update-branch"], { statusCheckRollup: [{ status: "IN_PROGRESS" }] });
 

@@ -33,7 +33,10 @@ function runExternalReviewGate(fixtureName: string, now = "2026-07-04T00:30:00Z"
 
 function runPrecheck(
   fixtureName: string,
-  options: { autoMerge?: boolean; externalReview?: boolean; now?: string; projectId?: string; agentsFixture?: string } = {},
+  options: {
+    autoMerge?: boolean; externalReview?: boolean; now?: string; projectId?: string;
+    agentsFixture?: string; implementLabel?: string; updateBranchLabel?: string;
+  } = {},
 ): number | null {
   const tempRoot = mkdtempSync(path.join(tmpdir(), "deadloop-precheck-"));
   try {
@@ -82,7 +85,8 @@ function runPrecheck(
         DEADLOOP_PROJECT_ID: options.projectId || "demo",
         DEADLOOP_AUTO_MERGE: options.autoMerge ? "1" : "0",
         DEADLOOP_REVIEW_LABEL: "agent:review",
-        DEADLOOP_HUMAN_LABEL: "ready-for-human",
+        DEADLOOP_IMPLEMENT_LABEL: options.implementLabel || "agent:implement",
+        DEADLOOP_UPDATE_BRANCH_LABEL: options.updateBranchLabel || "agent:update-branch",
         DEADLOOP_BLOCKED_LABEL: "agent:blocked",
         DEADLOOP_EXTERNAL_REVIEW_ENABLED: options.externalReview ? "1" : "0",
         DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS: "1800",
@@ -114,6 +118,18 @@ describe("PR reviewer precheck", () => {
 
   it("skips ready-for-human-only PRs when auto merge is enabled", () => {
     expect(runPrecheck("precheck-ready-for-human.json", { autoMerge: true })).toBe(1);
+  });
+
+  it("skips a blocked PR that carries no Agent request", () => {
+    expect(runPrecheck("precheck-blocked-without-request.json")).toBe(1);
+  });
+
+  it("forwards the configured update-branch label so its request is still a candidate", () => {
+    expect(runPrecheck("precheck-renamed-update-branch.json", { updateBranchLabel: "custom:update-branch" })).toBe(0);
+  });
+
+  it("forwards the configured implement label so its request still outranks a review request", () => {
+    expect(runPrecheck("precheck-renamed-implement.json", { implementLabel: "custom:implement" })).toBe(1);
   });
 
   it("skips PRs while checks are pending", () => {
@@ -186,7 +202,7 @@ describe("PR reviewer precheck", () => {
     expect(runPrecheck("precheck-reviewing.json", { agentsFixture: "agents-empty.json" })).toBe(0);
   });
 
-  it("skips PRs with the blocked label", () => {
-    expect(runPrecheck("precheck-blocked.json")).toBe(1);
+  it("defers a blocked PR that still carries an Agent request to the driver", () => {
+    expect(runPrecheck("precheck-blocked.json")).toBe(0);
   });
 });
