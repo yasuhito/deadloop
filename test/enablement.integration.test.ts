@@ -316,10 +316,7 @@ async function invoke(handler: CommandHandler, cwd: string, schedulerState: Pick
   await handler("", { cwd, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined }, ...schedulerState });
 }
 
-// Passing null leaves the reconciliation hook off the testing object, so the host runs its own
-// reconciliation and fails on the unstubbed driver command. The scheduler must then hold and
-// publish the blocker rather than continue to candidate selection.
-async function unreconciledAuthorityStatus(): Promise<string> {
+function reviewerFixtureRepository(): { root: string; repoPath: string } {
   const { root, repoPath } = fixtureRepository();
   writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({
     checkCommand: "true",
@@ -334,6 +331,14 @@ async function unreconciledAuthorityStatus(): Promise<string> {
   git(repoPath, ["add", "deadloop.json"]);
   git(repoPath, ["commit", "--quiet", "-m", "configure reviewer fixture"]);
   git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+  return { root, repoPath };
+}
+
+// Passing null leaves the reconciliation hook off the testing object, so the host runs its own
+// reconciliation and fails on the unstubbed driver command. The scheduler must then hold and
+// publish the blocker rather than continue to candidate selection.
+async function unreconciledAuthorityStatus(): Promise<string> {
+  const { root, repoPath } = reviewerFixtureRepository();
   const statuses: string[] = [];
   const extension = await loadExtension(root, {
     authenticatedLogin: "Deadloop-Bot",
@@ -1159,20 +1164,7 @@ describe("enablement command integration", () => {
   });
 
   it("passes the default enablement identity to the reviewer driver environment", async () => {
-    const { root, repoPath } = fixtureRepository();
-    writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({
-      checkCommand: "true",
-      automations: [{
-        id: "demo:pr-reviewer",
-        name: "demo PR reviewer",
-        promptFile: "pr-reviewer.prompt.md",
-        precheckFile: "pr-reviewer.precheck.sh",
-        driverFile: "pr-reviewer-driver.ts",
-      }],
-    }));
-    git(repoPath, ["add", "deadloop.json"]);
-    git(repoPath, ["commit", "--quiet", "-m", "configure reviewer fixture"]);
-    git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+    const { root, repoPath } = reviewerFixtureRepository();
     let reviewerCommand = "";
     const extension = await loadExtension(root, {
       authenticatedLogin: "Deadloop-Bot",

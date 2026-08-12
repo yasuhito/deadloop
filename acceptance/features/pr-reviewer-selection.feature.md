@@ -90,6 +90,18 @@ This prevents duplicate and early reviews of pull requests that are being prepar
 * When deadloop selects and processes the review target
 * Then deadloop does not start the Reviewer
 
+## Scenario: Reconsider a blocked pull request whose author pushed past the block
+
+* Given A blocked pull request has a new Agent request after its author pushed a fix
+* When deadloop selects and processes the review target
+* Then deadloop stops skipping pull request #14 as blocked
+
+## Scenario: Keep skipping a blocked pull request whose Agent request predates its block
+
+* Given A blocked pull request has only an Agent request that predates its block
+* When deadloop selects and processes the review target
+* Then deadloop skips pull request #14 as blocked
+
 ## Scenario: Do not post draft recovery state before an active claim
 
 * Given There is a draft pull request

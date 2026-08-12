@@ -1478,6 +1478,10 @@ function registerReportCommand(pi, name, description, customType, buildReport) {
   });
 }
 
+function unreconciledAuthorityStatus(authority: { reconciled: boolean; reason: string }): string {
+  return authority.reconciled ? "" : `PR work authority could not be reconciled safely: ${authority.reason}`;
+}
+
 // A caller that cannot reconcile must be able to say why, so the outcome carries its own reason
 // instead of leaving one in the debug log. Only an explicit override may replace the reconciliation.
 async function reconcilePrWorkAuthority(pi, project): Promise<{ reconciled: boolean; reason: string }> {
@@ -1725,12 +1729,12 @@ export default function (pi) {
     } catch (error) {
       // Recovery-only exception: a compatible local client may reflect an unreachable runtime
       // as agent:blocked. No candidate, launch, completion, push, ready, or merge path is opened.
-      let unreconciled = "";
+      let recoveryStatus = "";
       if (herdrServerIsUnreachableWithCompatibleClient() && isProjectEnabled(schedulerRun.project)) {
-        const authority = await reconcilePrWorkAuthority(pi, schedulerRun.project);
-        if (!authority.reconciled) unreconciled = `; PR work authority stayed unreconciled: ${authority.reason}`;
+        const status = unreconciledAuthorityStatus(await reconcilePrWorkAuthority(pi, schedulerRun.project));
+        if (status) recoveryStatus = `; ${status}`;
       }
-      setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}${unreconciled}`);
+      setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}${recoveryStatus}`);
       return;
     }
 
@@ -1770,9 +1774,9 @@ export default function (pi) {
     let completedSafely = false;
     try {
       // GitHub work authority is reconciled before local cleanup, pending handoffs, or candidate selection.
-      const authority = await reconcilePrWorkAuthority(pi, project);
-      if (!authority.reconciled) {
-        setLooperStatus(ctx, `skipped: PR work authority could not be reconciled safely: ${authority.reason}`);
+      const authorityStatus = unreconciledAuthorityStatus(await reconcilePrWorkAuthority(pi, project));
+      if (authorityStatus) {
+        setLooperStatus(ctx, `skipped: ${authorityStatus}`);
         completedSafely = true;
         return;
       }
