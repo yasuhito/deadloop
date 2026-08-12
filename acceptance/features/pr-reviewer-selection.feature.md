@@ -90,11 +90,11 @@ This prevents duplicate and early reviews of pull requests that are being prepar
 * When deadloop selects and processes the review target
 * Then deadloop does not start the Reviewer
 
-## Scenario: Reconsider a blocked pull request whose author pushed past the block
+## Scenario: Recover a blocked pull request whose author pushed past the block
 
 * Given A blocked pull request has a new Agent request after its author pushed a fix
 * When deadloop selects and processes the review target
-* Then deadloop stops skipping pull request #14 as blocked
+* Then deadloop starts the Reviewer for normal review
 
 ## Scenario: Keep skipping a blocked pull request whose Agent request predates its block
 
