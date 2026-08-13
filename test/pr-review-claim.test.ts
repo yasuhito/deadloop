@@ -407,6 +407,50 @@ describe("PR review GitHub claim", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
+  it.each([
+    ["reviewer", "reviewer"],
+    ["review repair", "review-repair"],
+    ["branch update", "branch-update"],
+  ] as const)("returns the saved claim contract a %s attempt holds", (_name, role) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-claim-role-"));
+    const runDir = path.join(root, "runs", "attempt");
+    fs.mkdirSync(runDir, { recursive: true });
+    const contract = {
+      binding, commentId: "101", authorizedLogins: ["deadloop-a"], automationLogin: "deadloop-a", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
+      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    };
+    fs.writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+      attemptId: "attempt", launchUuid: "launch", project: "demo", repository: binding.repository,
+      role, target: { kind: "pull-request", number: 24 }, inputRevision: { head },
+      branch: "feature", worktreePath: "/worktree", agentName: "agent", workspaceLabel: role,
+      promptFile: "/prompt", promiseFile: "/promise", phase: "agent_started", lastSuccessfulPhase: "agent_started",
+      reviewClaim: contract,
+    }));
+    try {
+      expect(savedReviewClaimContract(path.join(runDir, "attempt.json"), contract, {
+        stateDir: root, githubRepo: binding.repository, projectId: "demo", targetNumber: 24,
+      })).toEqual(contract);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("rejects a role that never holds a saved claim contract", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-claim-worker-"));
+    const runDir = path.join(root, "runs", "attempt");
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+      attemptId: "attempt", launchUuid: "launch", project: "demo", repository: binding.repository,
+      role: "worker", target: { kind: "pull-request", number: 24 }, inputRevision: { head },
+      branch: "feature", worktreePath: "/worktree", agentName: "worker", workspaceLabel: "worker",
+      promptFile: "/prompt", promiseFile: "/promise", phase: "agent_started", lastSuccessfulPhase: "agent_started",
+      reviewClaim: { binding },
+    }));
+    try {
+      expect(() => savedReviewClaimContract(path.join(runDir, "attempt.json"), undefined, {
+        stateDir: root, githubRepo: binding.repository, projectId: "demo", targetNumber: 24,
+      })).toThrow("saved active work claim is missing");
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("rejects an arbitrary attempt.json outside the canonical runs directory", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-claim-path-"));
     const arbitrary = path.join(root, "attempt.json");
