@@ -12,7 +12,6 @@ const { decideReviewTransition } = require("./reviewer-outcome-contract.ts");
 export type RetentionReason =
   | "active_attempt"
   | "blocked"
-  | "human_required"
   | "missing_report"
   | "invalid_report"
   | "github_persistence_not_confirmed"
@@ -81,6 +80,7 @@ export type ReviewerGithubObservation = BoundGithubObservation & {
   role: "reviewer";
   headSha: string;
   labels: string[];
+  draft: boolean;
   reviewPersistence?: BoundGithubObservation & {
     headSha: string;
     marker: CompletionMarker;
@@ -247,7 +247,18 @@ export function workerCompletionPersisted(
   );
 }
 
-/** Pure reviewer rows, including the non-closing human-required outcome. */
+/**
+ * Pure reviewer rows.
+ *
+ * A human-required outcome is a completed review like any other: the review ran, its result is
+ * recorded on the pull request, and what is left belongs to a person. It closes on the same proof
+ * the other outcomes need, and the state that proof describes is its caller's expected label set —
+ * for a human handoff, one that keeps no agent workflow label at all.
+ *
+ * A handoff has two halves, and the empty expected set names only one of them. A pull request left
+ * as a draft is not handed over however few labels it carries, so an expected set that waits on no
+ * agent request has to see the draft gone as well.
+ */
 export function reviewerCompletionPersisted(
   record: AttemptRecord,
   report: ReviewerReport,
@@ -256,10 +267,10 @@ export function reviewerCompletionPersisted(
   managedLabels: readonly string[] = expectedLabels,
 ): boolean {
   const transition = decideReviewTransition(report.result).transition;
-  if (transition === "human_required") return false;
   if (!boundToRecord(github, record) || !sameSha(github.headSha, record.inputRevision.head)) return false;
   const managed = new Set(managedLabels);
   if (!sameStringSet(github.labels.filter((label) => managed.has(label)), expectedLabels)) return false;
+  if (expectedLabels.length === 0 && github.draft) return false;
   const persistence = github.reviewPersistence;
   if (
     !persistence ||
@@ -394,9 +405,6 @@ export function evaluateCompletionPersistence(input: {
     if (!input.record.outputRevision || !sameSha(input.record.outputRevision, report.result.outputRevision)) {
       return { action: "preserve", reason: "invalid_report" };
     }
-  }
-  if (report.role === "reviewer" && decideReviewTransition(report.result).transition === "human_required") {
-    return { action: "preserve", reason: "human_required" };
   }
   if (input.github.kind === "uncertain") {
     return { action: "preserve", reason: "github_persistence_not_confirmed" };
@@ -692,7 +700,6 @@ export type AttemptWorkspaceDoctorFinding = {
 const DOCTOR_TITLES: Record<RetentionReason, string> = {
   active_attempt: "active attempt",
   blocked: "intentionally retained blocker",
-  human_required: "human-required outcome",
   missing_report: "missing completion report",
   invalid_report: "malformed or mismatched completion report",
   github_persistence_not_confirmed: "GitHub persistence not confirmed",

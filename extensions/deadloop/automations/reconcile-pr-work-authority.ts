@@ -10,6 +10,7 @@ const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-aut
 const { canonicalPath, canonicalPathContains } = require("../../../src/attempt-runtime-observation.ts");
 const { classifyActiveReviewClaim, classifyPushedHeadAuthorityTransition, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
 const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
+const { provenAttemptCompletion } = require("./attempt-completion-proof.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -176,10 +177,14 @@ function runtimeForAttempt(runner: any, record: JsonObject, projectRepo = ""): {
   return { kind: "stopped_owned" };
 }
 
-/** Every role that finishes by pushing, and the handler that turns its push into the next request. */
+/** Every role whose completion is still owed to GitHub, and the handler that owes it. */
 const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonObject, runDir: string) => JsonObject }> = {
   "branch-update": {
     module: "./pr-branch-update-complete.ts",
+    args: () => ({}),
+  },
+  reviewer: {
+    module: "./pr-review-complete.ts",
     args: () => ({}),
   },
   "review-repair": {
@@ -194,12 +199,13 @@ const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonO
 };
 
 /**
- * Finishes a stopped attempt that proved it pushed the pull request's current head.
+ * Finishes a stopped attempt that proved it completed against the pull request's current head.
  *
  * An agent stops the moment it writes its completion report, so "the runtime says stopped" and "the
  * work was abandoned" are indistinguishable from the runtime alone. The attempt's own evidence
- * tells them apart: a finalizer receipt and a report bound to the attempt journal, both naming the
- * live head, prove the work succeeded and only its handoff is still owed.
+ * tells them apart, in whichever way its role proves one: a writing role by the finalizer receipt
+ * for its push, a review by its own report bound to the attempt journal. Either way the proof names
+ * the live head, so the work succeeded and only its handoff is still owed.
  *
  * Driving that handoff here rather than waiting for it removes the last authority only one session
  * held. Completion was reachable solely from the monitor prompt, so an agent that finished while
@@ -217,13 +223,19 @@ function completeProvenStoppedAttempt(
   record: JsonObject,
   pr: JsonObject,
   args: JsonObject,
-  workflowLabels: { reviewLabel: string; inProgressLabel: string; blockedLabel: string },
+  workflowLabels: {
+    reviewLabel: string;
+    implementLabel: string;
+    updateBranchLabel: string;
+    inProgressLabel: string;
+    blockedLabel: string;
+  },
   ops: { complete?: (role: string, handlerArgs: JsonObject) => JsonObject } = {},
 ): { kind: "completed"; result: JsonObject } | { kind: "refused"; reason: string } | null {
   const runDir = String(record.runDir || "");
-  const transition = provenPushedHeadTransition(runDir, record);
-  if (!transition) return null;
-  if (transition.headOid !== String(pr.headRefOid || "").toLowerCase()) return null;
+  const completion = provenAttemptCompletion(runDir, record);
+  if (!completion) return null;
+  if (completion.currentHeadOid !== String(pr.headRefOid || "").toLowerCase()) return null;
   const role = String(record.role || "");
   const handler = COMPLETION_HANDLERS[role];
   if (!handler) return null;
@@ -236,8 +248,10 @@ function completeProvenStoppedAttempt(
     stateDir: String(args.stateDir || ""),
     enabledAt: Number(args.enabledAt),
     pr: Number(pr.number),
-    expectedHead: transition.originalHeadOid,
+    expectedHead: completion.expectedHead,
     reviewLabel: workflowLabels.reviewLabel,
+    implementLabel: workflowLabels.implementLabel,
+    updateBranchLabel: workflowLabels.updateBranchLabel,
     inProgressLabel: workflowLabels.inProgressLabel,
     blockedLabel: workflowLabels.blockedLabel,
     reviewClaim: record.reviewClaim,
@@ -403,12 +417,16 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       catch { runtime = { kind: "unreachable" }; }
     }
 
-    // A stopped owner that left proof of a completed push is finished, not abandoned. Handing it
-    // over here is what keeps a successful attempt from being blocked for stopping on success.
+    // A stopped owner that left proof of a completed attempt is finished, not abandoned. Handing
+    // it over here is what keeps a successful attempt from being blocked for stopping on success.
     if (record && runtime.kind === "stopped_owned") {
-      const completed = completeProvenStoppedAttempt(
-        record, pr, args, { reviewLabel: args.reviewLabel || "agent:review", inProgressLabel, blockedLabel },
-      );
+      const completed = completeProvenStoppedAttempt(record, pr, args, {
+        reviewLabel: args.reviewLabel || "agent:review",
+        implementLabel: args.implementLabel || "agent:implement",
+        updateBranchLabel: args.updateBranchLabel || "agent:update-branch",
+        inProgressLabel,
+        blockedLabel,
+      });
       if (completed?.kind === "completed") {
         results.push({ number, action: "completed_proven_attempt", attemptId: record.attemptId, result: completed.result });
         continue;

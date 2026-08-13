@@ -8,7 +8,7 @@ const runtime = require("../src/attempt-workspace-predicates.cjs");
 const lifecycleRuntime = require("../src/attempt-lifecycle-runtime.cjs");
 import { readAttemptRecord, transitionAttempt, validateCompletionReportBinding } from "../src/attempt-lifecycle";
 
-const fixtures = [workerFixture(), reviewerFixture("approved"), reviewerFixture("changes_requested"), reviewerFixture("changes_requested", "persisted"), reviewerFixture("changes_requested", "regressed"), reviewerFixture("changes_requested", "mixed"), reviewerFixture("changes_requested", "none"), repairFixture(), repairFixture("stale_head"), branchUpdateFixture(), branchUpdateFixture("stale_head")];
+const fixtures = [workerFixture(), reviewerFixture("approved"), reviewerFixture("human_required"), reviewerFixture("changes_requested"), reviewerFixture("changes_requested", "persisted"), reviewerFixture("changes_requested", "regressed"), reviewerFixture("changes_requested", "mixed"), reviewerFixture("changes_requested", "none"), repairFixture(), repairFixture("stale_head"), branchUpdateFixture(), branchUpdateFixture("stale_head")];
 
 describe("direct Node runtime parity", () => {
   it.each(fixtures.map((fixture, index) => [index, fixture] as const))("matches the typed completion predicate for fixture %s", (_index, fixture) => {

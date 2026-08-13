@@ -67,7 +67,7 @@ function envConfig(args: JsonObject = {}) {
     repoPath: configValue(args, "repoPath", process.env.DEADLOOP_REPO_PATH, "."),
     worktreeRoot: configValue(args, "worktreeRoot", process.env.DEADLOOP_WORKTREE_ROOT, path.join(os.homedir(), ".herdr", "worktrees", configValue(args, "projectId", process.env.DEADLOOP_PROJECT_ID, "project"))),
     githubRepo: configValue(args, "githubRepo", process.env.DEADLOOP_GITHUB_REPO, ""),
-    enabledAt: Number(process.env.DEADLOOP_ENABLED_AT),
+    enabledAt: Number(configValue(args, "enabledAt", process.env.DEADLOOP_ENABLED_AT, "")),
     stateDir: configValue(
       args,
       "stateDir",
@@ -115,7 +115,7 @@ function readLivePr(repo: string, prNumber: string, runner = commandRunner): Jso
     "-R",
     repo,
     "--json",
-    "number,state,headRefName,headRefOid,isCrossRepository,labels,comments",
+    "number,state,isDraft,headRefName,headRefOid,isCrossRepository,labels,comments",
   ]);
   if (!Array.isArray(pr.comments) || pr.comments.length < 100) return pr;
   const pages = runner.runJson([
@@ -325,6 +325,20 @@ function blockedClaimMove(env: ReturnType<typeof envConfig>) {
   return {
     remove: [env.inProgressLabel],
     add: [env.reviewLabel, env.blockedLabel],
+  };
+}
+
+/**
+ * Every agent workflow label, which a human handoff keeps none of.
+ *
+ * A blocked pull request is one deadloop could not finish safely; it keeps a request visible so the
+ * loop can resume. A completed review that needs a person is the opposite: the checking deadloop
+ * owns is done, so no agent request may remain waiting on it.
+ */
+function humanHandoffLabelMove(env: ReturnType<typeof envConfig>) {
+  return {
+    remove: [env.reviewLabel, env.implementLabel, env.updateBranchLabel, env.inProgressLabel, env.blockedLabel],
+    add: [],
   };
 }
 
@@ -868,10 +882,13 @@ function dispatch(args: JsonObject): DriverResult {
           }
           writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
         }
+        // The draft leaves first. A failed label removal then shows a ready pull request whose
+        // requests are still visible, which the loop can retry; the reverse would strand a draft
+        // nobody is waiting on.
+        if (livePr.isDraft === true) guardedGithub.markPrReady(env.githubRepo, prNumber);
         const labels = labelNames(livePr.labels);
-        if (labels.includes(env.inProgressLabel)
-          || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
-          guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
+        if (humanHandoffLabelMove(env).remove.some((label) => labels.includes(label))) {
+          guardedGithub.movePrLabels(env.githubRepo, prNumber, humanHandoffLabelMove(env));
         }
       });
     } catch (error) {
@@ -881,8 +898,8 @@ function dispatch(args: JsonObject): DriverResult {
         driverAction: "review_stale_history", historyComparison: freshness.comparison,
       });
     }
-    return driverResult("done", `PR #${prNumber} review requires a human`, {
-      driverAction: "review_human_blocked",
+    return driverResult("done", `PR #${prNumber} review was handed to a human`, {
+      driverAction: "review_human_handoff",
       reason: review.reason,
       comment,
     });

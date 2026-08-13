@@ -34,7 +34,7 @@ When `action=needs_llm`, stay inside the driver-selected path.
 - Use CI fallback only through the conservative helper decision; never guess around failed checks.
 - If a reviewer is already launched, monitor its promise file; do not relaunch.
 - The deterministic driver opens one fresh Herdr workspace for each reviewer or branch-update attempt and starts the agent in its returned root pane. Do not create tabs, split panes, reuse a terminal, or launch an agent yourself.
-- A successful V1-backed attempt is closed only by `complete-attempt-workspace.ts` after its role-specific GitHub result is confirmed. Keep blocked, human-required, malformed, launch-failed, or ambiguous attempts visible.
+- A successful V1-backed attempt is closed only by `complete-attempt-workspace.ts` after its role-specific GitHub result is confirmed. Keep blocked, malformed, launch-failed, or ambiguous attempts visible.
 - Treat the promise file as the only completion authority.
 - Break polling immediately when the promise status is `complete` or `blocked`; Herdr status is only a hint.
 

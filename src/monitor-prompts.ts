@@ -248,7 +248,7 @@ Completion handling:
 - For every validated completion, including approved reports, run the deterministic dispatcher so it can record the public review result exactly once:
   \`${renderReviewerDispatcherCommand(input)}\`
 - Follow the dispatcher's returned repair or human-block action. When it returns driverAction=review_approved, continue the approved path below; do not stop merely because comment recording is done.
-- The dispatcher keeps ${input.inProgressLabel} as the active repair state. It adds ${input.blockedLabel} only for human-required or bounded failure paths.
+- The dispatcher keeps ${input.inProgressLabel} as the active repair state. A human-required result is a completed review: the dispatcher records it, marks a draft ready, and removes every agent workflow label, so no request is left waiting. It adds ${input.blockedLabel} only for bounded failure paths, where deadloop could not finish safely.
 - For outcome=approved, re-check GitHub PR state, reviews, and checks before changing labels.
 - Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork. A local fallback may support human handoff, but it does not authorize automatic merge while GitHub reports missing, pending, failed, or ambiguous checks.
 - The deterministic policy for this monitor is \`autoMerge=${input.autoMerge ? "true" : "false"}\`; do not infer or change it during monitoring or restart cleanup.

@@ -18,6 +18,8 @@ afterEach(() => {
 
 const workflowLabels = {
   reviewLabel: "agent:review",
+  implementLabel: "agent:implement",
+  updateBranchLabel: "agent:update-branch",
   inProgressLabel: "agent:in-progress",
   blockedLabel: "agent:blocked",
 };
@@ -67,6 +69,41 @@ function stoppedAttempt(overrides: { role?: string; reason?: string; receipt?: u
     evidence: { finalizer, validations: checks },
   });
   if (overrides.receipt !== null) write("finalizer-result.json", overrides.receipt ?? finalizer);
+  return record;
+}
+
+/** A review that stopped after writing its report. It pushes nothing, so it leaves no receipt. */
+function stoppedReview(outcome = "human_required") {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-complete-stopped-review-"));
+  roots.push(runDir);
+  const record = {
+    attemptId: "attempt-31", launchUuid: "launch-31", project: "demo", repository: "owner/repo",
+    role: "reviewer", target: { kind: "pull-request", number: 31 },
+    inputRevision: { head: startHead }, branch: "agent/issue-31",
+    worktreePath: runDir, agentName: "dl-r-31-abcdef123456", workspaceLabel: "reviewer",
+    promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
+    phase: "agent_started", lastSuccessfulPhase: "agent_started",
+    reviewClaim: { binding: { repository: "owner/repo", targetNumber: 31 }, authoritySeconds: 3600 },
+    runDir,
+  };
+  const write = (name: string, value: unknown) => fs.writeFileSync(path.join(runDir, name), JSON.stringify(value));
+  write("attempt.json", record);
+  write("promise.json", {
+    schemaVersion: 1,
+    attemptId: record.attemptId,
+    role: "reviewer",
+    status: "complete",
+    target: { kind: "pull-request", number: 31, repository: "owner/repo" },
+    inputRevision: record.inputRevision,
+    summary: "two required findings need a person",
+    result: {
+      outcome,
+      reviewedHead: startHead,
+      findings: [{ title: "Race", body: "Re-observe the head", path: "src/a.ts", line: 1, severity: "major" }],
+      ...(outcome === "changes_requested" ? { priorRequiredFindings: "all_resolved" } : {}),
+    },
+    evidence: { reviewed: ["the exact diff"] },
+  });
   return record;
 }
 
@@ -131,6 +168,24 @@ describe("completing a proven stopped attempt", () => {
 
   it("completes nothing once the pull request moved past the proven head", () => {
     expect(complete(stoppedAttempt(), "d".repeat(40))).toBeNull();
+  });
+
+  it("completes a stopped review that proved it read the pull request's head", () => {
+    const calls: any[] = [];
+    complete(stoppedReview(), startHead, calls);
+
+    expect(calls[0].role).toBe("reviewer");
+  });
+
+  it("hands a stopped review the head it reported reviewing", () => {
+    const calls: any[] = [];
+    complete(stoppedReview(), startHead, calls);
+
+    expect(calls[0].handlerArgs.expectedHead).toBe(startHead);
+  });
+
+  it("completes no review once the pull request moved past the reviewed head", () => {
+    expect(complete(stoppedReview(), pushedHead)).toBeNull();
   });
 
   it("refuses rather than completing when the completion handler fails", () => {

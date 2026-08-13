@@ -1068,7 +1068,6 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
         try { report = validateCompletionReportBinding(record, report).report; }
         catch { status = "malformed_report"; findings.push(herdrDoctorFinding(status, detail)); continue; }
         if (report.status === "blocked") status = "blocked";
-        else if (report.role === "reviewer" && report.result?.outcome === "human_required") status = "human_required";
         else if (["agent_started", "report_received"].includes(record.phase)) status = "persistence_unconfirmed";
         else status = "active";
       }
@@ -1555,13 +1554,15 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         validateCompletionReportBinding(record, report);
       } catch { continue; }
       if (report.status !== "complete") continue;
-      if (report.role === "reviewer" && decideReviewTransition(report.result || {}).transition === "human_required") continue;
     }
     const reviewerAutoMerge = record.autoMergePolicy ?? project.autoMerge;
+    // A review that neither repairs nor merges hands its pull request to a person, and that state
+    // carries no agent workflow label. The human handoff label classifies Issues, so expecting it
+    // on a pull request would describe a state nothing ever writes.
     const expectedLabels = report?.role === "reviewer"
       ? decideReviewTransition(report.result || {}).transition === "repair" || reviewerAutoMerge
         ? [labels.review, labels.inProgress]
-        : [labels.human]
+        : []
       : [];
     const args = [
       path.join(AUTOMATION_DIR, "complete-attempt-workspace.ts"),
