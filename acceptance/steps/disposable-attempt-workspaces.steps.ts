@@ -131,6 +131,7 @@ When("deadloop starts the agent", function (this: World) {
   });
   this.result = launchIssueWorkerFlow({ number: 12, title: "one workspace" }, env, {
     mkdirSync: fs.mkdirSync,
+    alignCheckout: () => {},
     runner,
     runText: (args: string[]) => {
       if (args[0] === "herdr" && (args[1] === "tab" || args[1] === "pane")) this.layoutObservation!.extraLayoutActions.push(args.join(" "));
@@ -193,6 +194,7 @@ When("deadloop starts the requeued Worker", function (this: World) {
   });
   this.result = launchIssueWorkerFlow({ number: 12, title: "renamed issue" }, env, {
     mkdirSync: fs.mkdirSync,
+    alignCheckout: () => {},
     runner,
     runText: (args: string[]) => {
       const nameIndex = args.indexOf("--name");
@@ -289,6 +291,7 @@ function roleLaunchOps(root: string, workspaceId: string, onOpenWorktree?: () =>
   let launchedName = "";
   return {
     mkdirSync: fs.mkdirSync,
+    alignCheckout: () => {},
     runner: {
       createWorktree: () => { throw new Error("existing PR roles must open their linked worktree"); },
       openWorktree: () => {
