@@ -80,9 +80,19 @@ function complete(record: any, headRefOid: string, calls: any[] = []) {
   );
 }
 
+function refusal() {
+  return completeProvenStoppedAttempt(
+    stoppedAttempt(),
+    { number: 31, headRefOid: pushedHead },
+    reconcilerArgs,
+    workflowLabels,
+    { complete: () => { throw new Error("authority lost"); } },
+  );
+}
+
 describe("completing a proven stopped attempt", () => {
   it("returns the completion handler's result for a proven branch update", () => {
-    expect(complete(stoppedAttempt(), pushedHead)).toEqual({ status: "done" });
+    expect(complete(stoppedAttempt(), pushedHead)).toEqual({ kind: "completed", result: { status: "done" } });
   });
 
   it("hands the completion handler the head the attempt started from", () => {
@@ -123,16 +133,11 @@ describe("completing a proven stopped attempt", () => {
     expect(complete(stoppedAttempt(), "d".repeat(40))).toBeNull();
   });
 
-  it("completes nothing when the completion handler fails", () => {
-    const record = stoppedAttempt();
-    const result = completeProvenStoppedAttempt(
-      record,
-      { number: 31, headRefOid: pushedHead },
-      reconcilerArgs,
-      workflowLabels,
-      { complete: () => { throw new Error("authority lost"); } },
-    );
+  it("refuses rather than completing when the completion handler fails", () => {
+    expect(refusal().kind).toBe("refused");
+  });
 
-    expect(result).toBeNull();
+  it("carries the completion handler's own reason out of a refusal", () => {
+    expect(refusal().reason).toBe("authority lost");
   });
 });

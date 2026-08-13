@@ -1485,24 +1485,15 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
         };
         assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
         if (claim) {
-          const github = githubOperations();
-          const live = reauthorizeClaimedReview(
-            github, pr, env, claim, undefined, enabledRepositoryIdentity,
-            (currentClaim) => {
-              const authenticated = assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
-              return assertCurrentReviewClaimAuthority(currentClaim, env.stateDir, enabledRepositoryIdentity, authenticated);
-            },
-          );
-          const labels = new Set(labelNames(live));
-          const managedLabels = reviewClaimManagedLabels(env).filter((label) => labels.has(label));
-          if (managedLabels.length !== 1 || managedLabels[0] !== env.inProgressLabel) {
-            throw new StaleLaunchError(`PR #${number} no longer has the exact claimed review state`);
+          // Everything past the claim runs on a request this launch already consumed, so a failure
+          // here leaves GitHub changed. The caller has to say so instead of reporting an untouched
+          // workflow, which is the same mark the branch-update launch carries.
+          try {
+            reauthorizeClaimedReviewerLaunch(pr, env, number, claim, history, enabledAutomationLogin, enabledRepositoryIdentity);
+          } catch (error) {
+            if (error instanceof Error) (error as Error & { claimed?: boolean }).claimed = true;
+            throw error;
           }
-          const request = currentReviewRequest(github, env, number, env.reviewLabel);
-          if (String(request.id || request.node_id || "") !== claim.binding.requestEventId) {
-            throw new StaleLaunchError(`PR #${number} review request changed before reviewer launch`);
-          }
-          assertReviewHistoryUnchanged(env, number, history);
           return;
         }
         const livePlan = planPrRequestAction(liveExposedPrs(env), liveAgents(), env);
@@ -1521,6 +1512,48 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
     throw error;
   }
   return { reviewerName, headRefName, reason, claim, ...launch, ...(fixture ? { simulated: true } : {}) };
+}
+
+/**
+ * What a stopped reviewer launch tells its reader.
+ *
+ * The stale check that stopped the launch names itself, and only it can say which state moved.
+ * Replacing it with one summary loses both the reason and the difference between a launch that
+ * touched nothing and one whose own claim already consumed the request.
+ */
+function staleReviewerLaunchSummary(error: unknown, requestConsumed: boolean): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  return `${reason}; ${requestConsumed ? "the request was already consumed" : "no workflow state was mutated"}`;
+}
+
+/** The checks a reviewer launch must still pass once its own claim consumed the request. */
+function reauthorizeClaimedReviewerLaunch(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  number: number,
+  claim: JsonObject,
+  history: JsonObject | null,
+  enabledAutomationLogin: string,
+  enabledRepositoryIdentity: { repoPath?: string; baseBranch?: string; githubRepositoryId?: string; githubRepo?: string; automationLogin?: string },
+): void {
+  const github = githubOperations();
+  const live = reauthorizeClaimedReview(
+    github, pr, env, claim, undefined, enabledRepositoryIdentity,
+    (currentClaim) => {
+      const authenticated = assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
+      return assertCurrentReviewClaimAuthority(currentClaim, env.stateDir, enabledRepositoryIdentity, authenticated);
+    },
+  );
+  const labels = new Set(labelNames(live));
+  const managedLabels = reviewClaimManagedLabels(env).filter((label) => labels.has(label));
+  if (managedLabels.length !== 1 || managedLabels[0] !== env.inProgressLabel) {
+    throw new StaleLaunchError(`PR #${number} no longer has the exact claimed review state`);
+  }
+  const request = currentReviewRequest(github, env, number, env.reviewLabel);
+  if (String(request.id || request.node_id || "") !== claim.binding.requestEventId) {
+    throw new StaleLaunchError(`PR #${number} review request changed before reviewer launch`);
+  }
+  assertReviewHistoryUnchanged(env, number, history);
 }
 
 function drive(fixturePath: string | undefined): DriverResult {
@@ -1767,9 +1800,11 @@ function reviewOnlyDrive(
     launch = launchPrReviewer(pr, env, fixture, reason);
   } catch (error) {
     if (isStaleLaunchError(error)) {
-      return driverResult("skip", `PR #${decision.number} changed before reviewer launch; no workflow state was mutated`, {
+      const claimed = Boolean((error as Error & { claimed?: boolean }).claimed);
+      return driverResult("skip", staleReviewerLaunchSummary(error, claimed), {
         driverAction: "reviewer_launch_stale",
         prNumber: decision.number,
+        requestConsumed: claimed,
       });
     }
     throw error;
@@ -1832,4 +1867,4 @@ function main(): void {
 if (require.main === module) main();
 
 module.exports = {
-  resolveAuthorizedAutomationLogins, assertAuthenticatedReviewIdentity, takeWorkAuthorityFromRetainedAttempts, assertBranchUpdateClaimHeld, assertBranchUpdateRequestSelectable, assertTrustedReviewIdentity, blockUnverifiableClaim, branchUpdateLaunchPlan, claimReviewRequest, envConfig, exposePostBlockReviewRequests, launchBranchUpdate, launchClaimedPrReviewerFlow, reauthorizeClaimedReview };
+  resolveAuthorizedAutomationLogins, staleReviewerLaunchSummary, assertAuthenticatedReviewIdentity, takeWorkAuthorityFromRetainedAttempts, assertBranchUpdateClaimHeld, assertBranchUpdateRequestSelectable, assertTrustedReviewIdentity, blockUnverifiableClaim, branchUpdateLaunchPlan, claimReviewRequest, envConfig, exposePostBlockReviewRequests, launchBranchUpdate, launchClaimedPrReviewerFlow, reauthorizeClaimedReview };

@@ -207,9 +207,11 @@ const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonO
  * and re-authorizes under the enablement lock against the exact head, so holding the evidence is
  * the only thing driving it requires.
  *
- * A handler that refuses returns null, which leaves the ordinary reconciliation to block the pull
- * request with a readable reason. That is the safe direction: an attempt that pushed but cannot
- * hand over is a state a person has to see.
+ * Returns null when the attempt proves nothing to finish, `completed` when the handoff ran, and
+ * `refused` with the handler's own reason when it could not. A refusal leaves the ordinary
+ * reconciliation to block the pull request, which is the safe direction, but the reason travels
+ * with it: an attempt that pushed and then could not hand over must not read as one that never
+ * pushed.
  */
 function completeProvenStoppedAttempt(
   record: JsonObject,
@@ -217,7 +219,7 @@ function completeProvenStoppedAttempt(
   args: JsonObject,
   workflowLabels: { reviewLabel: string; inProgressLabel: string; blockedLabel: string },
   ops: { complete?: (role: string, handlerArgs: JsonObject) => JsonObject } = {},
-): JsonObject | null {
+): { kind: "completed"; result: JsonObject } | { kind: "refused"; reason: string } | null {
   const runDir = String(record.runDir || "");
   const transition = provenPushedHeadTransition(runDir, record);
   if (!transition) return null;
@@ -244,9 +246,13 @@ function completeProvenStoppedAttempt(
   const complete = ops.complete
     || ((_role: string, values: JsonObject) => require(handler.module).completion(values));
   try {
-    return complete(role, handlerArgs);
-  } catch {
-    return null;
+    return { kind: "completed", result: complete(role, handlerArgs) };
+  } catch (error) {
+    // A refusal keeps the pull request on the ordinary blocking path, but the reason has to travel
+    // with it. Without one, an attempt that pushed and then could not hand over looks identical to
+    // an attempt that never pushed, and neither the operator nor the next change can tell them
+    // apart from the recorded stop alone.
+    return { kind: "refused", reason: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -403,9 +409,12 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       const completed = completeProvenStoppedAttempt(
         record, pr, args, { reviewLabel: args.reviewLabel || "agent:review", inProgressLabel, blockedLabel },
       );
-      if (completed) {
-        results.push({ number, action: "completed_proven_attempt", attemptId: record.attemptId, result: completed });
+      if (completed?.kind === "completed") {
+        results.push({ number, action: "completed_proven_attempt", attemptId: record.attemptId, result: completed.result });
         continue;
+      }
+      if (completed?.kind === "refused") {
+        results.push({ number, action: "completion_refused", attemptId: record.attemptId, reason: completed.reason });
       }
     }
 
@@ -498,7 +507,13 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     });
     results.push({ prNumber: number, ...result });
   }
-  return driverResult("done", `reconciled ${results.length} active PR work state(s)`, { driverAction: "pr_work_authority_reconciled", results });
+  // A refused handoff has to reach the summary, not only the structured results. Callers keep the
+  // summary and drop the rest, so a reason left there alone would never be read by anybody.
+  const refused = results.filter((entry) => entry.action === "completion_refused")
+    .map((entry) => `#${entry.number} ${entry.reason}`);
+  const summary = `reconciled ${results.length} active PR work state(s)`
+    + (refused.length ? `; ${refused.length} proven completion(s) refused: ${refused.join("; ")}` : "");
+  return driverResult("done", summary, { driverAction: "pr_work_authority_reconciled", results });
 }
 
 async function main(): Promise<void> {

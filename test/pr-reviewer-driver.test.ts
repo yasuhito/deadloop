@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+const { staleReviewerLaunchSummary } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
 const driverScript = "extensions/deadloop/automations/pr-reviewer-driver.ts";
 const {
   assertTrustedReviewIdentity,
@@ -586,6 +587,28 @@ describe("PR reviewer deterministic driver", () => {
 
   it("launches no reviewer after the atomic label result mismatches", () => {
     expect(runDriverFixture("review-claim-post-mismatch.json").driverAction).toBe("reviewer_launch_stale");
+  });
+
+  it("reports an untouched workflow when the launch stops before claiming the request", () => {
+    expect(runDriverFixture("review-claim-loser.json").summary).toContain("no workflow state was mutated");
+  });
+
+  it("carries the stale reason out of a launch that stopped before claiming the request", () => {
+    expect(runDriverFixture("review-claim-loser.json").summary).toMatch(/PR #52 .+/);
+  });
+
+  it("carries the stale reason out of a launch that stopped at its claim transition", () => {
+    expect(runDriverFixture("review-claim-post-mismatch.json").summary).toContain("claim label transition");
+  });
+
+  it("reports the consumed request when the stale launch already claimed it", () => {
+    expect(staleReviewerLaunchSummary(new Error("PR #53 no longer has the exact claimed review state"), true))
+      .toBe("PR #53 no longer has the exact claimed review state; the request was already consumed");
+  });
+
+  it("reports an untouched workflow when the stale launch never claimed the request", () => {
+    expect(staleReviewerLaunchSummary(new Error("PR #52 is no longer eligible for reviewer launch"), false))
+      .toBe("PR #52 is no longer eligible for reviewer launch; no workflow state was mutated");
   });
 
   it("reports the deterministic reviewer promise path outside the worktree", () => {
