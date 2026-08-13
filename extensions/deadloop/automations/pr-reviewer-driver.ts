@@ -31,6 +31,7 @@ const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 const {
+  advancePrHistoryAfterDeterministicComment,
   comparePrHistoryObservations,
   observePrHistory,
   writePrHistoryObservation,
@@ -1425,12 +1426,38 @@ function claimReviewRequest(
   return { ...claim, labels: [...finalLiveLabels] };
 }
 
-function assertReviewHistoryUnchanged(env: ReturnType<typeof envConfig>, number: number, history: JsonObject | null): void {
-  if (!history) return;
+/**
+ * The review history a launch bound itself to is still the one on GitHub.
+ *
+ * A claim posts a comment, and conversation comments are part of that history, so a launch that
+ * observed the history before claiming would always find it changed afterwards by its own comment.
+ * `createdComment` names that comment, and the deterministic advance accepts exactly it — a
+ * different author, a different body, a second addition, or any other part of the history moving
+ * all stay stale.
+ */
+function assertReviewHistoryUnchanged(
+  env: ReturnType<typeof envConfig>,
+  number: number,
+  history: JsonObject | null,
+  claimCommentId?: string,
+): JsonObject | null {
+  if (!history) return history;
   const currentHistory = observePrHistory(env.githubRepo, number, commandRunner);
-  if (comparePrHistoryObservations(history, currentHistory).kind !== "unchanged") {
+  // The claim's own comment is read out of the observation this check already holds, so the two
+  // sides of the advance describe the same moment. Fetching it separately would compare a history
+  // against a comment from a different read.
+  const createdComment = claimCommentId
+    ? currentHistory.history.conversationComments.find((comment: JsonObject) => String(comment.id) === String(claimCommentId))
+    : undefined;
+  const advancement = createdComment
+    ? advancePrHistoryAfterDeterministicComment(history, currentHistory, createdComment)
+    : (comparePrHistoryObservations(history, currentHistory).kind === "unchanged"
+      ? { kind: "accepted" as const, observation: currentHistory }
+      : { kind: "stale" as const });
+  if (advancement.kind !== "accepted") {
     throw new StaleLaunchError(`PR #${number} review history changed before reviewer launch`);
   }
+  return advancement.observation;
 }
 
 function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
@@ -1543,7 +1570,10 @@ function reauthorizeClaimedReviewerLaunch(
   if (String(request.id || request.node_id || "") !== claim.binding.requestEventId) {
     throw new StaleLaunchError(`PR #${number} review request changed before reviewer launch`);
   }
-  assertReviewHistoryUnchanged(env, number, history);
+  // The claim posted one comment, so the history this launch bound itself to has moved by exactly
+  // that comment. Naming it lets the deterministic advance accept it and nothing else; leaving it
+  // unnamed would make every launch fail on its own claim.
+  assertReviewHistoryUnchanged(env, number, history, String(claim.commentId || ""));
 }
 
 function drive(fixturePath: string | undefined): DriverResult {

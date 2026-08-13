@@ -115,7 +115,10 @@ Given("A blocked pull request has a completed Reviewer and its head changed afte
     updatedAt: "2026-07-13T00:00:00Z",
     isDraft: false,
     statusCheckRollup: [],
-    comments: [],
+    comments: [{
+      id: 7700, created_at: "2026-07-12T00:00:00Z", updated_at: "2026-07-12T00:00:00Z",
+      user: { login: "yasuhito" }, body: "An earlier conversation comment.",
+    }],
     reviewRequests: [],
     labels: [{ name: "agent:review" }, { name: "agent:blocked" }],
   }]));
@@ -148,8 +151,10 @@ if (args[0] === "pr" && args[1] === "list") {
   let input = ""; process.stdin.on("data", (chunk) => input += chunk); process.stdin.on("end", () => {
     const state = prs(); state[0].labels = JSON.parse(input).labels.map((name) => ({name})); save(state); process.stdout.write(JSON.stringify(state[0].labels));
   });
-} else if (args[0] === "api" && args.some((arg) => arg.endsWith("/comments"))) {
+} else if (args[0] === "api" && args.some((arg) => arg.includes("/issues/44/comments"))) {
   process.stdout.write(JSON.stringify([prs()[0].comments]));
+} else if (args[0] === "api" && args.some((arg) => arg.includes("/pulls/44/comments"))) {
+  process.stdout.write(JSON.stringify([[]]));
 } else if (args[0] === "api" && args.includes("graphql")) {
   const pr = prs()[0];
   process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:pr.headRefOid}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
