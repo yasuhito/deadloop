@@ -27,6 +27,13 @@ Two proofs qualify, and each requires the execution runtime to report the attemp
 
 A stopped runtime alone never qualifies: a live attempt that paused looks the same.
 
+The runtime reports an attempt stopped when its workspace closed through the normal path and left a
+close receipt, and also when it wrote its completion report, its worktree is still present, and no
+workspace or agent related to it remains. An agent that finishes its report and then loses its
+workspace without closing it is the ordinary shape of the failures this decision recovers from;
+requiring the receipt alone would leave every such attempt permanently unprovable, which is the
+state PRs #227, #228, and #229 are in.
+
 Deadloop releases work authority only while a new Agent request is waiting. Without a request, a retained attempt keeps its authority until the pull request closes. This keeps the release a step of taking over work rather than an unrequested discard of local state.
 
 A release posts no comment. It is not a stop and asks nothing of a person, and the claim comment that follows it shows on GitHub that the pull request moved. The attempt journal and its worktree stay as evidence; only the authority claim is dropped.
