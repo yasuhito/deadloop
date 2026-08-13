@@ -120,7 +120,9 @@ export function reviewerFixture(
     ? [{ title: "Bug", body: "Fix it", path: "src/a.ts", line: 1, severity: "major" as const }]
     : [];
   const repairs = decideReviewTransition({ outcome, priorRequiredFindings }).transition === "repair";
-  const expectedLabels = repairs ? ["agent:review", "agent:in-progress"] : ["ready-for-human"];
+  // A review that is not repairing hands the pull request to a person, which keeps no agent
+  // workflow label at all. The human handoff label belongs to Issues, never to a pull request.
+  const expectedLabels = repairs ? ["agent:review", "agent:in-progress"] : [];
   const context = { reviewerExpectedLabels: expectedLabels } satisfies CompletionDecisionContext;
   const github = {
     kind: "confirmed",

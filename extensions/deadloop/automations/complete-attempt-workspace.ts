@@ -252,7 +252,10 @@ function completeLocked(
       assertWorktreeBelongsToProject(commandRunner, record, args);
       record = recordPersistedCompletionReport(runDir, report);
     }
-    if (report.status === "blocked" || (report.role === "reviewer" && report.status === "complete" && report.result.outcome === "human_required")) {
+    // A stop without a completion report keeps its workspace for inspection. A completed review
+    // that asks for a person does not: its result is on the pull request and the handoff is what
+    // the person acts on, so leaving the workspace open would only block the next attempt.
+    if (report.status === "blocked") {
       return driverResult("done", "attempt workspace retained for inspection", { driverAction: "workspace_retained" });
     }
 

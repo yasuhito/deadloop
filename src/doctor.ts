@@ -106,7 +106,6 @@ export type DoctorFinding = {
 export type HerdrDoctorStatus =
   | "active"
   | "blocked"
-  | "human_required"
   | "missing_report"
   | "malformed_report"
   | "malformed_journal"

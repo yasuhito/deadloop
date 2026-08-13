@@ -19,7 +19,6 @@ function evaluateCompletionPersistence(input){
  if(r.status==="blocked")return{action:"preserve",reason:"blocked"};
  if(r.role!=="reviewer"&&(!record.outputRevision||!sha(record.outputRevision,r.result.outputRevision)))return{action:"preserve",reason:"invalid_report"};
  const reviewTransition=r.role==="reviewer"?transition(r.result):undefined;
- if(reviewTransition==="human_required")return{action:"preserve",reason:"human_required"};
  if(github.kind!=="confirmed"||github.role!==r.role||!bound(github,record))return{action:"preserve",reason:"github_persistence_not_confirmed"};
  let ok=false;
  if(r.role==="worker"){

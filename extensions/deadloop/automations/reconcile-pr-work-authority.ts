@@ -10,6 +10,7 @@ const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-aut
 const { canonicalPath, canonicalPathContains } = require("../../../src/attempt-runtime-observation.ts");
 const { classifyActiveReviewClaim, classifyPushedHeadAuthorityTransition, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
 const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
+const { provenAttemptCompletion } = require("./attempt-completion-proof.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -182,6 +183,10 @@ const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonO
     module: "./pr-branch-update-complete.ts",
     args: () => ({}),
   },
+  reviewer: {
+    module: "./pr-review-complete.ts",
+    args: () => ({}),
+  },
   "review-repair": {
     module: "./pr-review-repair-complete.ts",
     args: (record, runDir) => ({
@@ -217,13 +222,19 @@ function completeProvenStoppedAttempt(
   record: JsonObject,
   pr: JsonObject,
   args: JsonObject,
-  workflowLabels: { reviewLabel: string; inProgressLabel: string; blockedLabel: string },
+  workflowLabels: {
+    reviewLabel: string;
+    implementLabel: string;
+    updateBranchLabel: string;
+    inProgressLabel: string;
+    blockedLabel: string;
+  },
   ops: { complete?: (role: string, handlerArgs: JsonObject) => JsonObject } = {},
 ): { kind: "completed"; result: JsonObject } | { kind: "refused"; reason: string } | null {
   const runDir = String(record.runDir || "");
-  const transition = provenPushedHeadTransition(runDir, record);
-  if (!transition) return null;
-  if (transition.headOid !== String(pr.headRefOid || "").toLowerCase()) return null;
+  const completion = provenAttemptCompletion(runDir, record);
+  if (!completion) return null;
+  if (completion.currentHeadOid !== String(pr.headRefOid || "").toLowerCase()) return null;
   const role = String(record.role || "");
   const handler = COMPLETION_HANDLERS[role];
   if (!handler) return null;
@@ -236,8 +247,10 @@ function completeProvenStoppedAttempt(
     stateDir: String(args.stateDir || ""),
     enabledAt: Number(args.enabledAt),
     pr: Number(pr.number),
-    expectedHead: transition.originalHeadOid,
+    expectedHead: completion.expectedHead,
     reviewLabel: workflowLabels.reviewLabel,
+    implementLabel: workflowLabels.implementLabel,
+    updateBranchLabel: workflowLabels.updateBranchLabel,
     inProgressLabel: workflowLabels.inProgressLabel,
     blockedLabel: workflowLabels.blockedLabel,
     reviewClaim: record.reviewClaim,
@@ -406,9 +419,13 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     // A stopped owner that left proof of a completed push is finished, not abandoned. Handing it
     // over here is what keeps a successful attempt from being blocked for stopping on success.
     if (record && runtime.kind === "stopped_owned") {
-      const completed = completeProvenStoppedAttempt(
-        record, pr, args, { reviewLabel: args.reviewLabel || "agent:review", inProgressLabel, blockedLabel },
-      );
+      const completed = completeProvenStoppedAttempt(record, pr, args, {
+        reviewLabel: args.reviewLabel || "agent:review",
+        implementLabel: args.implementLabel || "agent:implement",
+        updateBranchLabel: args.updateBranchLabel || "agent:update-branch",
+        inProgressLabel,
+        blockedLabel,
+      });
       if (completed?.kind === "completed") {
         results.push({ number, action: "completed_proven_attempt", attemptId: record.attemptId, result: completed.result });
         continue;

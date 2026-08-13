@@ -17,7 +17,7 @@ GitHub state and promise reports are authoritative. Herdr `agent_status` is life
 
 The selected lifecycle is defined by [ADR 0013](adr/0013-disposable-herdr-attempt-workspaces.md).
 
-Every reviewer attempt now receives a launch-unique agent name and a fresh Herdr workspace containing only its first tab and root pane. A successful approved or changes-requested V1 attempt closes that workspace only after exact-head GitHub persistence; a human-required, blocked, malformed, launch-failed, or ambiguous attempt remains visible. A review repair starts only after the reviewer workspace is closed and opens the same linked worktree in another fresh workspace.
+Every reviewer attempt now receives a launch-unique agent name and a fresh Herdr workspace containing only its first tab and root pane. A successful V1 attempt closes that workspace only after exact-head GitHub persistence, including a human-required review once its handoff is recorded; a blocked, malformed, launch-failed, or ambiguous attempt remains visible. A review repair starts only after the reviewer workspace is closed and opens the same linked worktree in another fresh workspace.
 
 No selected path closes a completed same-name agent, creates a replacement tab, or reuses a reviewer terminal. The successful-automation `failureStreak` and `lastError` recovery rule remains in force.
 
