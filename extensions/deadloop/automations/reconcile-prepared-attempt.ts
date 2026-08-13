@@ -33,12 +33,13 @@ function labelNames(item: JsonObject): Set<string> {
 
 function hasExactClaim(record: JsonObject, item: JsonObject, args: JsonObject): boolean {
   const labels = labelNames(item);
-  if (record.role === "worker") {
+  if (record.role === "worker" || record.role === "explorer") {
+    const requestLabel = String(record.reviewClaim?.requestLabel || (record.role === "explorer" ? args.exploreLabel : args.implementLabel));
     return String(item.state || "").toUpperCase() === "OPEN"
-      && labels.has(String(args.readyLabel))
       && labels.has(String(args.inProgressLabel))
-      && !labels.has(String(args.implementLabel))
-      && !labels.has(String(args.blockedLabel));
+      && !labels.has(requestLabel)
+      && !labels.has(String(args.blockedLabel))
+      && (record.role === "worker" && !record.reviewClaim || Boolean(record.reviewClaim?.binding?.requestEventId));
   }
   const exactPullRequest = String(item.state || "").toUpperCase() === "OPEN"
     && String(item.headRefName || "") === String(record.branch)
@@ -68,8 +69,8 @@ function reconcileLocked(args: JsonObject, runner: ReturnType<typeof createComma
   if (record.phase !== "prepared") {
     return driverResult("done", `attempt is already ${record.phase}`, { driverAction: "claim_already_reconciled" });
   }
-  const item = record.role === "worker"
-    ? runner.runJson(["gh", "issue", "view", String(record.target.number), "-R", record.repository, "--json", "number,state,labels"])
+  const item = record.target.kind === "issue"
+    ? runner.runJson(["gh", "issue", "view", String(record.target.number), "-R", record.repository, "--json", "number,state,labels,comments"])
     : runner.runJson(["gh", "pr", "view", String(record.target.number), "-R", record.repository,
       "--json", "number,state,headRefName,headRefOid,labels,comments"]);
   if (!hasExactClaim(record, item, args)) {

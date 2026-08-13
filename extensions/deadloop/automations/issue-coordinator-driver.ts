@@ -102,7 +102,7 @@ function applyIssueTransition(
 function applyContractMissing(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): boolean {
   return applyIssueTransition(issue, "contract_missing", env, fixture, (github, live) => {
     const number = String(live.number);
-    github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.blockedLabel });
+    github.moveIssueLabels(env.githubRepo, number, { remove: env.inProgressLabel, add: env.blockedLabel });
     github.commentIssue(env.githubRepo, number, gateMissingContractComment(live));
   });
 }
@@ -119,7 +119,7 @@ function blockedComment(_issue: JsonObject, env: ReturnType<typeof envConfig>): 
 function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comment: string, fixture: JsonObject | null): boolean {
   return applyIssueTransition(issue, "planning_blocked", env, fixture, (github, live) => {
     const number = String(live.number);
-    github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.blockedLabel });
+    github.moveIssueLabels(env.githubRepo, number, { remove: env.inProgressLabel, add: env.blockedLabel });
     github.commentIssue(env.githubRepo, number, comment);
   });
 }

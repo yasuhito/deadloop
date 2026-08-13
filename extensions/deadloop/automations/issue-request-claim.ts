@@ -68,10 +68,15 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function sharedRequestBinding(value: JsonObject): JsonObject {
+  const { owner: _owner, ...shared } = value;
+  return shared;
+}
+
 function selectIssueClaimWinner(
   comments: JsonObject[], binding: IssueClaimBinding, authorizedLogins: string[], now: Date,
 ): JsonObject | null {
-  const expected = claimPayload(binding);
+  const expected = sharedRequestBinding(claimPayload(binding));
   const authorized = new Set(authorizedLogins.map((login) => login.toLowerCase()));
   const valid = comments.filter((comment) => {
     const marker = parseIssueClaim(comment.body);
@@ -79,7 +84,9 @@ function selectIssueClaimWinner(
     const updated = Date.parse(String(comment.updatedAt || comment.updated_at || ""));
     return Boolean(commentId(comment)) && Number.isFinite(created) && created === updated
       && created <= now.getTime() && now.getTime() < created + binding.authority.durationSeconds * 1000
-      && authorized.has(commentLogin(comment)) && stableJson(marker) === stableJson(expected);
+      && authorized.has(commentLogin(comment)) && marker !== null
+      && stableJson(sharedRequestBinding(marker)) === stableJson(expected)
+      && typeof marker.owner === "string" && Boolean(marker.owner);
   });
   valid.sort((left, right) => commentTime(left) - commentTime(right)
     || commentId(left).localeCompare(commentId(right), undefined, { numeric: true }));

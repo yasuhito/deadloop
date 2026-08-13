@@ -25,10 +25,10 @@ describe("Issue request claim", () => {
     expect(parseIssueClaim(renderIssueClaimComment(binding)).requestEventId).toBe("event-2");
   });
 
-  it("selects the earliest authorized remote claim", () => {
+  it("selects the earliest authorized remote claim from the local binding", () => {
     const earlier = comment(1, { ...binding, owner: "host-b" }, "2026-07-08T00:00:01Z");
     const own = comment(2, binding, "2026-07-08T00:00:02Z");
-    expect(selectIssueClaimWinner([own, earlier], { ...binding, owner: "host-b" }, ["bot"], new Date("2026-07-08T00:00:03Z")).id).toBe(1);
+    expect(selectIssueClaimWinner([own, earlier], binding, ["bot"], new Date("2026-07-08T00:00:03Z")).id).toBe(1);
   });
 
   it("rejects an expired claim at the exact boundary", () => {
