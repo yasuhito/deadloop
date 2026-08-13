@@ -664,6 +664,78 @@ function branchUpdateLaunchPlan(
   };
 }
 
+type BranchUpdateTargetObservation = {
+  livePrs?: () => JsonObject[];
+  agents?: () => JsonObject;
+  decisionFor?: (live: JsonObject) => JsonObject;
+  reauthorize?: () => JsonObject;
+};
+
+function assertBranchUpdateTargetUnchanged(
+  live: JsonObject,
+  headOid: string,
+  baseOid: string,
+  decisionFor: (candidate: JsonObject) => JsonObject,
+): void {
+  const decision = decisionFor(live);
+  if (decision.action !== "delegate_worker"
+    || String(decision.headOid || "") !== headOid
+    || String(decision.baseOid || "") !== baseOid) {
+    throw new StaleLaunchError(`PR #${Number(live.number || 0)} branch-update target changed before launch`);
+  }
+}
+
+/** Before the claim: the waiting request must still select this pull request for a branch update. */
+function assertBranchUpdateRequestSelectable(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  headOid: string,
+  baseOid: string,
+  observe: BranchUpdateTargetObservation = {},
+): void {
+  const number = Number(pr.number || 0);
+  const livePlan = planPrRequestAction(
+    (observe.livePrs || (() => liveExposedPrs(env)))(),
+    (observe.agents || liveAgents)(),
+    env,
+  );
+  if (!("pr" in livePlan)) throw new StaleLaunchError(`PR #${number} is no longer eligible`);
+  assertSameLaunchTarget(pr, livePlan.pr, "pr");
+  const decisionFor = observe.decisionFor || ((live: JsonObject) => branchUpdateDecision(live, env, null));
+  assertBranchUpdateTargetUnchanged(livePlan.pr, headOid, baseOid, decisionFor);
+  if (branchUpdateAttemptExists(livePlan.pr.comments || [], headOid, baseOid)) {
+    throw new StaleLaunchError(`PR #${number} branch-update target changed before launch`);
+  }
+}
+
+/**
+ * After the claim: the request label is consumed, so the active claim state is what proves the
+ * target. The attempt marker this launch just published belongs to this attempt, so a repeated
+ * attempt is no longer a stop condition here.
+ */
+function assertBranchUpdateClaimHeld(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  headOid: string,
+  baseOid: string,
+  claim: JsonObject,
+  observe: BranchUpdateTargetObservation = {},
+): void {
+  const number = Number(pr.number || 0);
+  const live = (observe.reauthorize
+    || (() => reauthorizeClaimedReview(githubOperations(), pr, env, claim, undefined, {
+      githubRepositoryId: env.githubRepositoryId,
+      githubRepo: env.githubRepo,
+    })))();
+  const labels = new Set(labelNames(live));
+  const managed = reviewClaimManagedLabels(env).filter((label) => labels.has(label));
+  if (managed.length !== 1 || managed[0] !== env.inProgressLabel) {
+    throw new StaleLaunchError(`PR #${number} no longer has the exact claimed branch-update state`);
+  }
+  const decisionFor = observe.decisionFor || ((candidate: JsonObject) => branchUpdateDecision(candidate, env, null));
+  assertBranchUpdateTargetUnchanged(live, headOid, baseOid, decisionFor);
+}
+
 function launchBranchUpdate(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -698,16 +770,20 @@ function launchBranchUpdate(
         githubRepo: enabled?.githubRepo,
         automationLogin: enabled?.automationLogin,
       };
-      const livePlan = planPrRequestAction(liveExposedPrs(env), liveAgents(), env);
-      if (!("pr" in livePlan)) throw new StaleLaunchError(`PR #${number} is no longer eligible`);
-      assertSameLaunchTarget(pr, livePlan.pr, "pr");
-      const liveDecision = branchUpdateDecision(livePlan.pr, env, null);
-      if (
-        liveDecision.action !== "delegate_worker"
-        || String(liveDecision.headOid || "") !== headOid
-        || String(liveDecision.baseOid || "") !== baseOid
-        || branchUpdateAttemptExists(livePlan.pr.comments || [], headOid, baseOid)
-      ) throw new StaleLaunchError(`PR #${number} branch-update target changed before launch`);
+      // Revalidation runs on both sides of the claim. Before it, the waiting request proves the
+      // target; after it, the request is consumed and only the claim can, so asking for the request
+      // label again would make this launch fail on its own transition.
+      if (!claim) {
+        assertBranchUpdateRequestSelectable(pr, env, headOid, baseOid);
+        return;
+      }
+      try {
+        assertBranchUpdateClaimHeld(pr, env, headOid, baseOid, claim);
+      } catch (error) {
+        // Mark the failure so the caller can say the request was already consumed.
+        if (error instanceof Error) (error as Error & { claimed?: boolean }).claimed = true;
+        throw error;
+      }
     },
     operations,
   );
@@ -1505,8 +1581,13 @@ function drive(fixturePath: string | undefined): DriverResult {
       });
     } catch (error) {
       if (isStaleLaunchError(error)) {
-        return driverResult("skip", `PR #${plan.decision.number} changed before branch-update launch; no workflow state was mutated`, {
-          driverAction: "branch_update_launch_stale",
+        // A stale launch after the claim already consumed the request, so reporting an untouched
+        // pull request would send a person looking for state that is no longer there.
+        const consumed = Boolean((error as Error & { claimed?: boolean }).claimed);
+        return driverResult("skip", consumed
+          ? `PR #${plan.decision.number} changed after its branch-update request was claimed; the claim and ${env.inProgressLabel} remain for reconciliation`
+          : `PR #${plan.decision.number} changed before branch-update launch; no workflow state was mutated`, {
+          driverAction: consumed ? "branch_update_launch_stale_after_claim" : "branch_update_launch_stale",
           prNumber: plan.decision.number,
         });
       }
@@ -1632,4 +1713,4 @@ function main(): void {
 if (require.main === module) main();
 
 module.exports = {
-  resolveAuthorizedAutomationLogins, assertAuthenticatedReviewIdentity, assertTrustedReviewIdentity, blockUnverifiableClaim, claimReviewRequest, envConfig, exposePostBlockReviewRequests, launchBranchUpdate, launchClaimedPrReviewerFlow, reauthorizeClaimedReview };
+  resolveAuthorizedAutomationLogins, assertAuthenticatedReviewIdentity, assertBranchUpdateClaimHeld, assertBranchUpdateRequestSelectable, assertTrustedReviewIdentity, blockUnverifiableClaim, claimReviewRequest, envConfig, exposePostBlockReviewRequests, launchBranchUpdate, launchClaimedPrReviewerFlow, reauthorizeClaimedReview };
