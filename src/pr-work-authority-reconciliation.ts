@@ -37,6 +37,44 @@ type ReconciliationDecision =
       invalidatesRequests: boolean;
     };
 
+/** One retained attempt, reduced to the evidence that decides whether it still holds authority. */
+type RetainedAttempt = {
+  attemptId: string;
+  /** The execution runtime proved this attempt is not running. */
+  stopped: boolean;
+  /** The revision the attempt was launched against. */
+  revision: string;
+  /** The Agent request event the attempt's saved claim consumed, absent when it saved no claim. */
+  claimRequestEventId?: string;
+};
+
+/**
+ * The retained attempts a waiting Agent request may take work authority from.
+ *
+ * An attempt keeps its authority unless deadloop can prove it cannot act on the current work. Two
+ * proofs qualify, and both need the runtime to have stopped it: a revision that is no longer the
+ * pull request's head, which every exact-head guard makes unusable, or a saved claim naming an
+ * Agent request that a newer one has replaced. A stopped runtime on its own proves nothing, because
+ * a live attempt that paused looks the same.
+ *
+ * Only the claim of a won request calls this, which is how "only while a request waits" is kept:
+ * there is no other caller, and no other moment at which authority moves.
+ */
+function releasableRetainedAttempts(input: {
+  attempts: RetainedAttempt[];
+  currentHead: string;
+  currentRequestEventId: string;
+}): string[] {
+  const currentHead = String(input.currentHead || "").toLowerCase();
+  return input.attempts.filter((attempt) => {
+    if (!attempt.stopped) return false;
+    const revisionSuperseded = Boolean(currentHead) && String(attempt.revision || "").toLowerCase() !== currentHead;
+    const requestSuperseded = Boolean(attempt.claimRequestEventId)
+      && String(attempt.claimRequestEventId) !== String(input.currentRequestEventId || "");
+    return revisionSuperseded || requestSuperseded;
+  }).map((attempt) => attempt.attemptId);
+}
+
 function labelNames(labels: Array<string | { name?: string }>): string[] {
   return labels.map((label) => typeof label === "string" ? label : String(label.name || "")).filter(Boolean);
 }
@@ -303,5 +341,6 @@ module.exports = {
   postBlockRequestIsEligible,
   reconcilePrWorkAuthority,
   recoveryComment,
+  releasableRetainedAttempts,
   requestAfterInvalidationCutoff,
 };

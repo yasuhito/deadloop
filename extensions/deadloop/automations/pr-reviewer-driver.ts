@@ -24,7 +24,9 @@ const {
   shellQuote,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
-const { postBlockRequestIsEligible } = require("../../../src/pr-work-authority-reconciliation.ts");
+const { postBlockRequestIsEligible, releasableRetainedAttempts } = require("../../../src/pr-work-authority-reconciliation.ts");
+const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { checkoutIsIdle, worktreeIsRetained } = require("../../../src/attempt-runtime-observation.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
@@ -1120,6 +1122,99 @@ function reviewClaimManagedLabels(env: ReturnType<typeof envConfig>): string[] {
   ];
 }
 
+
+type WorkAuthorityTakeover = {
+  stateDir: string;
+  projectId: string;
+  projectRepo: string;
+  githubRepo: string;
+  prNumber: number;
+  currentHead: string;
+  currentRequestEventId: string;
+};
+
+function retainedAttemptsForPr(input: WorkAuthorityTakeover): Array<{ runDir: string; record: JsonObject }> {
+  const runsRoot = path.join(input.stateDir, "runs");
+  let entries: string[];
+  try { entries = fs.readdirSync(runsRoot); } catch { return []; }
+  const retained: Array<{ runDir: string; record: JsonObject }> = [];
+  for (const entry of entries) {
+    const runDir = path.join(runsRoot, entry);
+    if (!fs.existsSync(path.join(runDir, "attempt.json"))) continue;
+    let record: JsonObject;
+    // A journal this host cannot parse proves nothing, so it keeps whatever authority it claims and
+    // the reconciler still stops the pull request for a person to read.
+    try { record = readAttemptRecord(runDir); } catch { continue; }
+    if (record.project !== input.projectId || record.repository !== input.githubRepo) continue;
+    if (record.target?.kind !== "pull-request" || Number(record.target?.number) !== input.prNumber) continue;
+    if (releasesAttemptOwnership(record.phase)) continue;
+    retained.push({ runDir, record: { ...record, runDir } });
+  }
+  return retained;
+}
+
+/**
+ * Take work authority from the retained attempts that provably cannot act on the current work, as
+ * part of winning a new Agent request. See ADR 0019. Only the authority claim is dropped: the
+ * journal and its worktree stay as evidence, and nothing is published to GitHub.
+ */
+function takeWorkAuthorityFromRetainedAttempts(
+  input: WorkAuthorityTakeover,
+  observe: { stoppedFor?: (record: JsonObject) => boolean } = {},
+): string[] {
+  const retained = retainedAttemptsForPr(input);
+  if (retained.length === 0) return [];
+  const stoppedFor = observe.stoppedFor
+    || ((record: JsonObject) => attemptStoppedForTakeover(record, input.projectRepo));
+  const releasable = new Set(releasableRetainedAttempts({
+    attempts: retained.map(({ record }) => ({
+      attemptId: String(record.attemptId),
+      stopped: stoppedFor(record),
+      revision: String(record.inputRevision?.head || ""),
+      ...(record.reviewClaim?.binding?.requestEventId
+        ? { claimRequestEventId: String(record.reviewClaim.binding.requestEventId) }
+        : {}),
+    })),
+    currentHead: input.currentHead,
+    currentRequestEventId: input.currentRequestEventId,
+  }));
+  const released: string[] = [];
+  for (const { runDir, record } of retained) {
+    if (!releasable.has(String(record.attemptId))) continue;
+    releasePersistedAttemptAuthority(runDir, new Date().toISOString());
+    released.push(String(record.attemptId));
+  }
+  return released;
+}
+
+/**
+ * The proof ADR 0019 requires before a new Agent request may take work authority: the attempt
+ * finished what it could do, its evidence is still on disk, and nothing occupies its checkout. An
+ * attempt that lost both its workspace and its worktree proves nothing and keeps its authority.
+ */
+function attemptStoppedForTakeover(record: JsonObject, projectRepo: string): boolean {
+  if (!validAuthorityCloseReceipt(record) && !reportedCompletion(record)) return false;
+  try {
+    const runner = herdrRunner();
+    return worktreeIsRetained(runner, record, projectRepo) && checkoutIsIdle(runner, record);
+  } catch {
+    // An unreachable runtime cannot prove the attempt stopped, so its authority stands.
+    return false;
+  }
+}
+
+function reportedCompletion(record: JsonObject): boolean {
+  return ["report_received", "github_persisted"].includes(String(record.phase || ""));
+}
+
+function validAuthorityCloseReceipt(record: JsonObject): boolean {
+  try {
+    const receipt = JSON.parse(fs.readFileSync(path.join(String(record.runDir || ""), "authority-release-started.json"), "utf8"));
+    return receipt?.schemaVersion === 1 && receipt?.attemptId === record.attemptId
+      && receipt?.workspaceId === record.workspaceId && receipt?.worktreePath === record.worktreePath;
+  } catch { return false; }
+}
+
 function claimReviewRequest(
   github: ReturnType<typeof githubOperations>,
   pr: JsonObject,
@@ -1313,6 +1408,18 @@ function claimReviewRequest(
     if (finalWinner) restorePreemptedReviewRequest(github, pr, env, claim, authenticate, authorizeCurrent);
     throw new StaleLaunchError(`PR #${number} review claim changed after label transition`);
   }
+  // Winning the request is the moment work authority moves. Take it from the retained attempts that
+  // provably cannot act on this head, before this attempt writes a journal of its own. The result
+  // stays out of the claim contract, which is persisted verbatim in the attempt journal.
+  takeWorkAuthorityFromRetainedAttempts({
+    stateDir: env.stateDir,
+    projectId: env.projectId,
+    projectRepo: env.repoPath,
+    githubRepo: env.githubRepo,
+    prNumber: number,
+    currentHead: String(pr.headRefOid || ""),
+    currentRequestEventId: requestEventId,
+  });
   return { ...claim, labels: [...finalLiveLabels] };
 }
 
@@ -1713,4 +1820,4 @@ function main(): void {
 if (require.main === module) main();
 
 module.exports = {
-  resolveAuthorizedAutomationLogins, assertAuthenticatedReviewIdentity, assertBranchUpdateClaimHeld, assertBranchUpdateRequestSelectable, assertTrustedReviewIdentity, blockUnverifiableClaim, claimReviewRequest, envConfig, exposePostBlockReviewRequests, launchBranchUpdate, launchClaimedPrReviewerFlow, reauthorizeClaimedReview };
+  resolveAuthorizedAutomationLogins, assertAuthenticatedReviewIdentity, takeWorkAuthorityFromRetainedAttempts, assertBranchUpdateClaimHeld, assertBranchUpdateRequestSelectable, assertTrustedReviewIdentity, blockUnverifiableClaim, claimReviewRequest, envConfig, exposePostBlockReviewRequests, launchBranchUpdate, launchClaimedPrReviewerFlow, reauthorizeClaimedReview };

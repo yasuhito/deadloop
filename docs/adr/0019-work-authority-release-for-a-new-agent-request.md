@@ -36,6 +36,12 @@ state PRs #227, #228, and #229 are in.
 
 Deadloop releases work authority only while a new Agent request is waiting. Without a request, a retained attempt keeps its authority until the pull request closes. This keeps the release a step of taking over work rather than an unrequested discard of local state.
 
+The release happens where that takeover happens: in the claim, once the request has been won and
+before the new attempt's journal exists. The reconciler is not the place. It observes only pull
+requests already carrying the active claim state, by which point the request it would look for has
+been consumed, so it never sees the waiting request this decision depends on. Releasing in the claim
+also means the reconciler never observes the ambiguous state that blocked PRs #227, #228, and #229.
+
 A release posts no comment. It is not a stop and asks nothing of a person, and the claim comment that follows it shows on GitHub that the pull request moved. The attempt journal and its worktree stay as evidence; only the authority claim is dropped.
 
 Evidence that proves nothing still blocks. A pull request whose retained attempts cannot all be resolved by the two proofs, and one whose journal cannot be parsed, keep the existing `agent:blocked` transition with its explanation.
