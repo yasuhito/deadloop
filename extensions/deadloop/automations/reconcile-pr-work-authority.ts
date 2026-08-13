@@ -176,6 +176,80 @@ function runtimeForAttempt(runner: any, record: JsonObject, projectRepo = ""): {
   return { kind: "stopped_owned" };
 }
 
+/** Every role that finishes by pushing, and the handler that turns its push into the next request. */
+const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonObject, runDir: string) => JsonObject }> = {
+  "branch-update": {
+    module: "./pr-branch-update-complete.ts",
+    args: () => ({}),
+  },
+  "review-repair": {
+    module: "./pr-review-repair-complete.ts",
+    args: (record, runDir) => ({
+      result: path.join(runDir, "finalizer-result.json"),
+      contract: path.join(runDir, "review-contract.json"),
+      branch: String(record.branch || ""),
+      attemptKey: String(record.attemptId || ""),
+    }),
+  },
+};
+
+/**
+ * Finishes a stopped attempt that proved it pushed the pull request's current head.
+ *
+ * An agent stops the moment it writes its completion report, so "the runtime says stopped" and "the
+ * work was abandoned" are indistinguishable from the runtime alone. The attempt's own evidence
+ * tells them apart: a finalizer receipt and a report bound to the attempt journal, both naming the
+ * live head, prove the work succeeded and only its handoff is still owed.
+ *
+ * Driving that handoff here rather than waiting for it removes the last authority only one session
+ * held. Completion was reachable solely from the monitor prompt, so an agent that finished while
+ * its monitor was gone left a pull request nobody would ever hand over. The handler is idempotent
+ * and re-authorizes under the enablement lock against the exact head, so holding the evidence is
+ * the only thing driving it requires.
+ *
+ * A handler that refuses returns null, which leaves the ordinary reconciliation to block the pull
+ * request with a readable reason. That is the safe direction: an attempt that pushed but cannot
+ * hand over is a state a person has to see.
+ */
+function completeProvenStoppedAttempt(
+  record: JsonObject,
+  pr: JsonObject,
+  args: JsonObject,
+  workflowLabels: { reviewLabel: string; inProgressLabel: string; blockedLabel: string },
+  ops: { complete?: (role: string, handlerArgs: JsonObject) => JsonObject } = {},
+): JsonObject | null {
+  const runDir = String(record.runDir || "");
+  const transition = provenPushedHeadTransition(runDir, record);
+  if (!transition) return null;
+  if (transition.headOid !== String(pr.headRefOid || "").toLowerCase()) return null;
+  const role = String(record.role || "");
+  const handler = COMPLETION_HANDLERS[role];
+  if (!handler) return null;
+  const handlerArgs = {
+    promise: String(record.promiseFile || ""),
+    attemptRecord: path.join(runDir, "attempt.json"),
+    projectId: String(args.projectId || ""),
+    projectRepo: String(args.projectRepo || ""),
+    githubRepo: String(args.githubRepo || ""),
+    stateDir: String(args.stateDir || ""),
+    enabledAt: Number(args.enabledAt),
+    pr: Number(pr.number),
+    expectedHead: transition.originalHeadOid,
+    reviewLabel: workflowLabels.reviewLabel,
+    inProgressLabel: workflowLabels.inProgressLabel,
+    blockedLabel: workflowLabels.blockedLabel,
+    reviewClaim: record.reviewClaim,
+    ...handler.args(record, runDir),
+  };
+  const complete = ops.complete
+    || ((_role: string, values: JsonObject) => require(handler.module).completion(values));
+  try {
+    return complete(role, handlerArgs);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The head change an attempt proved it produced and still holds, or null when it proved none.
  *
@@ -323,6 +397,18 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       catch { runtime = { kind: "unreachable" }; }
     }
 
+    // A stopped owner that left proof of a completed push is finished, not abandoned. Handing it
+    // over here is what keeps a successful attempt from being blocked for stopping on success.
+    if (record && runtime.kind === "stopped_owned") {
+      const completed = completeProvenStoppedAttempt(
+        record, pr, args, { reviewLabel: args.reviewLabel || "agent:review", inProgressLabel, blockedLabel },
+      );
+      if (completed) {
+        results.push({ number, action: "completed_proven_attempt", attemptId: record.attemptId, result: completed });
+        continue;
+      }
+    }
+
     const input = { pr: { ...pr, labels: labels(pr) }, claim, runtime, requestLabels, inProgressLabel, blockedLabel };
     let blockStarted: { reason: string; timelineEventIds: string[] } | undefined;
     try {
@@ -424,6 +510,7 @@ if (require.main === module) void main();
 module.exports = {
   claimCommentSnapshot,
   classifyClaim,
+  completeProvenStoppedAttempt,
   latestConfiguredRequest,
   loadAttempts,
   moveReconciledLabels,
