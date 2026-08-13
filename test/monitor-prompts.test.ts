@@ -93,9 +93,9 @@ describe("monitor prompts", () => {
       workerAgent: "pi",
       workerModel: "",
       remote: "origin",
-      humanLabel: "ready-for-human",
+      implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch",
       reviewLabel: "agent:review",
-      reviewingLabel: "agent:reviewing",
+
       blockedLabel: "agent:blocked",
     });
 
@@ -107,29 +107,30 @@ describe("monitor prompts", () => {
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/runs/one/promise.json", actorName: "reviewer", projectId: "demo", repoPath: "/repo",
       githubRepo: "owner/repo", stateDir: "/state", autoMerge: false, checkCommand: "npm test",
-      humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+      implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", inProgressLabel: "agent:in-progress",
+      reviewLabel: "agent:review", blockedLabel: "agent:blocked", worktreeRoot: "/worktrees",
     });
     expect(prompt).toContain("Legacy complete promises are inspection-only evidence: do not dispatch, comment, change labels, or report successful handoff for them");
   });
 
-  it("routes human handoff through accepted-history revalidation", () => {
+  it("routes ready handoff through accepted-history revalidation", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/runs/one/promise.json", actorName: "reviewer", projectId: "demo", repoPath: "/repo",
       githubRepo: "owner/repo", stateDir: "/state", enabledAt: 123, autoMerge: false, checkCommand: "npm test",
-      humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+      implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", reviewLabel: "agent:review", blockedLabel: "agent:blocked",
     });
     expect(prompt).toContain("handoff-reviewed-pr.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/runs/one/promise.json --history-observation /state/runs/one/pr-review-history-accepted.json");
   });
 
-  it("renders human-handoff completion labels when automatic merge is disabled", () => {
+  it("renders no completion label when automatic merge is disabled", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/runs/one/promise.json", actorName: "reviewer", projectId: "demo", repoPath: "/repo",
       githubRepo: "owner/repo", stateDir: "/state", autoMerge: false, checkCommand: "npm test",
-      humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+      implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", reviewLabel: "agent:review", blockedLabel: "agent:blocked",
     });
-    expect(prompt).toMatch(/complete-attempt-workspace\.ts[^`]+--expected-label ready-for-human(?![^`]+--expected-label)/);
+    expect(prompt.split("After an approved result")[1]?.split("`")[1] || "").not.toContain("--expected-label");
   });
 
   it("renders in-progress claim completion label when automatic merge is enabled", () => {
@@ -137,7 +138,7 @@ describe("monitor prompts", () => {
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/runs/one/promise.json", actorName: "reviewer", projectId: "demo", repoPath: "/repo",
       githubRepo: "owner/repo", stateDir: "/state", autoMerge: true, checkCommand: "npm test",
-      humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing",
+      implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", reviewLabel: "agent:review",
       inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     });
     expect(prompt).toMatch(/complete-attempt-workspace\.ts[^`]+--expected-label agent:in-progress(?![^`]+--expected-label)/);
@@ -161,13 +162,12 @@ describe("monitor prompts", () => {
       workerAgent: "claude",
       workerModel: "model with spaces",
       remote: "fork remote",
-      humanLabel: "ready-for-human",
+      implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch",
       reviewLabel: "custom review",
-      reviewingLabel: "custom reviewing",
-      blockedLabel: "custom blocked",
+            blockedLabel: "custom blocked",
     });
 
-    expect(prompt).toContain("--github-repo owner/repo --repo-path '/repo path' --worktree-root '/custom worktrees' --project-id 'demo project' --state-dir '/state dir' --check-command 'npm run test -- --grep '\"'\"'repair'\"'\"'' --worker-agent claude --worker-model 'model with spaces' --remote 'fork remote' --review-label 'custom review' --reviewing-label 'custom reviewing' --blocked-label 'custom blocked' --human-label ready-for-human");
+    expect(prompt).toContain("--github-repo owner/repo --repo-path '/repo path' --worktree-root '/custom worktrees' --project-id 'demo project' --state-dir '/state dir' --check-command 'npm run test -- --grep '\"'\"'repair'\"'\"'' --worker-agent claude --worker-model 'model with spaces' --remote 'fork remote' --review-label 'custom review' --blocked-label 'custom blocked' --implement-label agent:implement --update-branch-label agent:update-branch");
   });
 
   it("renders the reviewer dispatcher with its complete authorization context", () => {
@@ -176,7 +176,7 @@ describe("monitor prompts", () => {
       promiseFile: "/state/promise.json", actorName: "reviewer", projectId: "demo", repoPath: "/repo path",
       worktreeRoot: "/custom worktrees", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 123, projectCheckCommand: "npm test",
       workerAgent: "pi", workerModel: "model", repairRemote: "origin", checkCommand: "npm test",
-      humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+      implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", reviewLabel: "agent:review", blockedLabel: "agent:blocked",
     });
 
     expect(prompt).toContain("DEADLOOP_WORKTREE_ROOT='/custom worktrees' DEADLOOP_STATE_DIR=/state");
@@ -196,29 +196,29 @@ describe("monitor prompts", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
-      checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+      checkCommand: "npm test", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", reviewLabel: "agent:review", blockedLabel: "agent:blocked",
     });
 
     expect(prompt).toContain("Never pass merge, push, branch deletion, `gh api`, or arbitrary commands through `guarded-operation.ts`");
   });
 
-  it("binds human handoff to the reviewed PR head and approval evidence", () => {
+  it("binds ready handoff to the reviewed PR head and approval evidence", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
-      enabledAt: 123, autoMerge: false, checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review",
-      reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+      enabledAt: 123, autoMerge: false, checkCommand: "npm test", reviewLabel: "agent:review",
+      implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("handoff-reviewed-pr.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --history-observation /state/pr-review-history-accepted.json --review-label agent:review --reviewing-label agent:reviewing --in-progress-label agent:in-progress --blocked-label agent:blocked --human-label ready-for-human");
+    expect(prompt).toContain("handoff-reviewed-pr.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --history-observation /state/pr-review-history-accepted.json --review-label agent:review --implement-label agent:implement --update-branch-label agent:update-branch --in-progress-label agent:in-progress --blocked-label agent:blocked");
   });
 
   it("binds auto-merge to the reviewed PR head", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
-      enabledAt: 123, checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review",
-      reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+      enabledAt: 123, checkCommand: "npm test", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", reviewLabel: "agent:review",
+      blockedLabel: "agent:blocked",
     });
 
     expect(prompt).toContain("merge-reviewed-pr.ts --attempt-record /state/attempt.json --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --history-observation /state/pr-review-history-accepted.json --in-progress-label agent:in-progress --blocked-label agent:blocked");
@@ -227,7 +227,7 @@ describe("monitor prompts", () => {
   it("prohibits branch-update monitor mutations without an active review claim", () => {    const prompt = renderBranchUpdateMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), expectedBaseOid: "b".repeat(40), branch: "agent/issue-24",
       automationDir: "/automation", promiseFile: "/state/promise.json", actorName: "branch-update worker",
-      repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+      repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state", reviewLabel: "agent:review", blockedLabel: "agent:blocked",
     });
 
     expect(prompt).toContain("no active review-claim contract");
@@ -237,7 +237,7 @@ describe("monitor prompts", () => {
     const prompt = renderRepairMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
       promiseFile: "/state/promise.json", actorName: "review-repair worker", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked",
+      reviewLabel: "agent:review", blockedLabel: "agent:blocked",
     });
 
     expect(prompt).toContain("if it reports that deadloop is disabled, stop without that mutation");
@@ -254,7 +254,7 @@ describe("monitor prompts", () => {
       promiseFile: "/state/repair-promise.json",
       actorName: "review-repair worker",
       reviewLabel: "agent:review",
-      reviewingLabel: "agent:reviewing",
+
       blockedLabel: "agent:blocked",
     });
 

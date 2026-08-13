@@ -6,7 +6,7 @@ import path from "node:path";
 import { Given, Then, When } from "@cucumber/cucumber";
 import { runPrReviewerDriverFixture } from "../support/pr-reviewer-driver";
 
-const { defaultDecisionConfig, selectPrForReview, workingReviewerPrNumbers } = require("../../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+const { defaultDecisionConfig, selectPrRequestTarget, workingReviewerPrNumbers } = require("../../extensions/deadloop/automations/pr-reviewer-decisions.ts");
 
 type PullRequest = Record<string, unknown>;
 type GithubEffect = {
@@ -18,6 +18,8 @@ type GithubEffect = {
 type DriverResult = {
   driverAction?: string;
   comment?: string;
+  prNumber?: number;
+  decision?: { skipped?: Array<{ number?: number; reason?: string }> };
   githubEffects?: GithubEffect[];
   testAdapterEffects?: { herdrStarts?: unknown[]; githubComments?: unknown[]; labelReplacements?: unknown[] };
 };
@@ -110,6 +112,18 @@ Given("There is a blocked pull request", function (this: SelectionWorld) {
   setFixture(this, "precheck-blocked.json");
 });
 
+Given("A blocked pull request has a new Agent request after its author pushed a fix", function (this: SelectionWorld) {
+  setFixture(this, "precheck-blocked-request-after-push.json");
+});
+
+Given("The repair dispatcher blocked a pull request with its own Agent request", function (this: SelectionWorld) {
+  setFixture(this, "precheck-repair-blocked-request.json");
+});
+
+Given("A blocked pull request has only an Agent request that predates its block", function (this: SelectionWorld) {
+  setFixture(this, "precheck-blocked-request-before-block.json");
+});
+
 Given("Reviewable and unreviewable pull requests are both available", function (this: SelectionWorld) {
   setFixture(this, "precheck-mixed-candidates.json");
   this.agents = { result: { agents: [{ name: "dl-r-13-111111111111", agent_status: "working" }] } };
@@ -144,7 +158,7 @@ When("deadloop searches for review target", function (this: SelectionWorld) {
     projectId: "demo",
     automationLogin: "deadloop-bot",
   });
-  this.decision = selectPrForReview(readFixture(this.fixtureName), config, workingReviewerPrNumbers(agents, config.projectId, this.attempts || [], "owner/repo"));
+  this.decision = selectPrRequestTarget(readFixture(this.fixtureName), config, workingReviewerPrNumbers(agents, config.projectId, this.attempts || [], "owner/repo"));
 });
 
 When("deadloop decides how to handle external reviews", function (this: SelectionWorld) {
@@ -182,10 +196,10 @@ Given("Another agent has started the review after selection.", function (this: S
   if (!this.fixtureName) throw new Error("review state is missing");
   const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo", automationLogin: "deadloop-bot" });
   this.prs = readFixture(this.fixtureName);
-  const firstDecision = selectPrForReview(this.prs, config);
+  const firstDecision = selectPrRequestTarget(this.prs, config);
   const selected = this.prs.find((pr) => pr.number === firstDecision.number);
   if (!selected) throw new Error("selected pull request is missing");
-  selected.labels = [...(selected.labels as unknown[]), { name: "agent:reviewing" }];
+  selected.labels = [...(selected.labels as unknown[]), { name: "agent:in-progress" }];
   const agentName = `dl-r-${firstDecision.number}-111111111111`;
   this.agents = { result: { agents: [{ name: agentName, agent_status: "working" }] } };
   this.attempts = [{ project: "demo", repository: "owner/repo", role: "reviewer", target: { kind: "pull-request", number: firstDecision.number }, phase: "agent_started", agentName }];
@@ -194,7 +208,7 @@ Given("Another agent has started the review after selection.", function (this: S
 When("The next selection cycle begins", function (this: SelectionWorld) {
   if (!this.prs || !this.agents) throw new Error("review state is missing");
   const config = defaultDecisionConfig({ now: fixedNow, projectId: "demo", automationLogin: "deadloop-bot" });
-  this.decision = selectPrForReview(this.prs, config, workingReviewerPrNumbers(this.agents, config.projectId, this.attempts || [], "owner/repo"));
+  this.decision = selectPrRequestTarget(this.prs, config, workingReviewerPrNumbers(this.agents, config.projectId, this.attempts || [], "owner/repo"));
 });
 
 Then("deadloop selects pull request #{int} for review", function (this: SelectionWorld, number: number) {
@@ -235,15 +249,18 @@ Then("deadloop waits for external review without mutation", function (this: Sele
   }, { action: "wait", comments: 0, labels: 0, starts: 0 });
 });
 
+Then("deadloop skips pull request #14 as blocked", function (this: SelectionWorld) {
+  assert.deepEqual(this.driverResult?.decision?.skipped, [{ number: 14, reason: "blocked" }]);
+});
+
 Then("deadloop starts the Reviewer for normal review", function (this: SelectionWorld) {
   assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length, 1);
 });
 
-Then("deadloop leaves the draft pull request untouched before claim", function (this: SelectionWorld) {
+Then("deadloop claims the draft pull request's review request", function (this: SelectionWorld) {
   assert.deepEqual({
     action: this.driverResult?.driverAction,
-    comments: this.driverResult?.testAdapterEffects?.githubComments?.length ?? 0,
     labels: this.driverResult?.testAdapterEffects?.labelReplacements?.length ?? 0,
     starts: this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0,
-  }, { action: "draft_unclaimed", comments: 0, labels: 0, starts: 0 });
+  }, { action: "reviewer_monitor_request", labels: 1, starts: 1 });
 });

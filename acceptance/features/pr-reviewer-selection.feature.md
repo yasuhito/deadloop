@@ -16,12 +16,12 @@ This prevents duplicate and early reviews of pull requests that are being prepar
 * When deadloop searches for review target
 * Then No review target is selected
 
-## Scenario: If automatic merge is enabled, select a pull request that is ready for human review.
+## Scenario: Do not select a pull request handed to a human when automatic merge is enabled.
 
 * Given There is a pull request ready for human review.
 * And automatic merge is enabled
 * When deadloop searches for review target
-* Then deadloop selects pull request #42 for review
+* Then No review target is selected
 
 ## Scenario: Do not select a pull request that only has labels that are not subject to review.
 
@@ -84,17 +84,35 @@ This prevents duplicate and early reviews of pull requests that are being prepar
 * When deadloop decides how to handle external reviews
 * Then deadloop starts the Reviewer for normal review
 
-## Scenario: Do not start review for a draft pull request
+## Scenario: Review a draft pull request that carries a review request
 
 * Given There is a draft pull request
 * When deadloop selects and processes the review target
-* Then deadloop does not start the Reviewer
+* Then deadloop starts the Reviewer for normal review
 
-## Scenario: Do not post draft recovery state before an active claim
+## Scenario: Recover a blocked pull request whose author pushed past the block
+
+* Given A blocked pull request has a new Agent request after its author pushed a fix
+* When deadloop selects and processes the review target
+* Then deadloop starts the Reviewer for normal review
+
+## Scenario: Keep a repair-blocked pull request stopped for a human
+
+* Given The repair dispatcher blocked a pull request with its own Agent request
+* When deadloop selects and processes the review target
+* Then deadloop skips pull request #14 as blocked
+
+## Scenario: Keep skipping a blocked pull request whose Agent request predates its block
+
+* Given A blocked pull request has only an Agent request that predates its block
+* When deadloop selects and processes the review target
+* Then deadloop skips pull request #14 as blocked
+
+## Scenario: Claim the review request of a draft pull request
 
 * Given There is a draft pull request
 * When deadloop tries to start a review
-* Then deadloop leaves the draft pull request untouched before claim
+* Then deadloop claims the draft pull request's review request
 
 ## Scenario: Reclaim a stale review claim and select its pull request
 

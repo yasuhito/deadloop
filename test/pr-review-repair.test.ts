@@ -9,6 +9,7 @@ const {
   renderRepairMarker,
   renderTechnicalFailureMarker,
   repairAttempts,
+  reviewOutcomeFingerprint,
   reviewResultFingerprint,
   selectRepairAttempt,
   technicalFailureCount,
@@ -28,7 +29,7 @@ const cumulativeComments = cumulativeRepairFixture.comments.map((comment: Record
 }));
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const activeReviewState = {
-  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
   requestLabel: "agent:review",
   requiredLabels: ["agent:in-progress"],
 };
@@ -38,7 +39,7 @@ const reviewClaimBinding = {
 };
 const reviewClaim = {
   binding: reviewClaimBinding, commentId: "101", authorizedLogins: [automationLogin], automationLogin, reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-  reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
 };
 const findings = [
   {
@@ -264,7 +265,7 @@ function prompt() {
     workerModel: "",
     remote: "origin",
     reviewLabel: "agent:review",
-    reviewingLabel: "agent:reviewing",
+
     blockedLabel: "agent:blocked",
     automationDir: "/automation",
   });
@@ -298,6 +299,17 @@ describe("automatic PR review repair", () => {
     const fingerprint = reviewResultFingerprint(findings);
 
     expect(renderRepairMarker(head, fingerprint)).toContain(`head=${head} review=${fingerprint}`);
+  });
+
+  it("separates approved results that differ only by their advisory observations", () => {
+    const withAdvisory = reviewOutcomeFingerprint("approved", "", "Reviewed.", [], [{ title: "Naming", body: "Rename it" }]);
+
+    expect(reviewOutcomeFingerprint("approved", "", "Reviewed.", [], [])).not.toBe(withAdvisory);
+  });
+
+  it("keeps the changes-requested fingerprint equal to its repair attempt key", () => {
+    expect(reviewOutcomeFingerprint("changes_requested", "", "Repair it.", findings, [{ title: "Naming", body: "Rename it" }]))
+      .toBe(reviewResultFingerprint(findings));
   });
 
   it("does not relaunch an already-recorded exact repair attempt", () => {

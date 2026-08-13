@@ -1,4 +1,6 @@
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+
+import type { PrRequestRole } from "../../../src/pr-request-selection";
 const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
 const CLAIM_MARKER_RE = /<!--\s*deadloop:review-claim\s+v1=([A-Za-z0-9_-]+)\s*-->/g;
@@ -32,7 +34,7 @@ type ReviewClaimBinding = {
   repository: string;
   targetNumber: number;
   requestEventId: string;
-  role: "reviewer";
+  role: PrRequestRole;
   revision: string;
   owner: string;
   authority: { durationSeconds: number };
@@ -49,10 +51,10 @@ function eventTime(event: JsonObject): number {
   return Date.parse(String(event.created_at || event.createdAt || ""));
 }
 
-function activeReviewRequest(events: JsonObject[], reviewLabel = "agent:review"): JsonObject | null {
+function activeReviewRequest(events: JsonObject[], requestLabel = "agent:review"): JsonObject | null {
   const matching = events.filter((event) =>
     String(event.event || "").toLowerCase() === "labeled"
-    && String(event.label?.name || "") === reviewLabel
+    && String(event.label?.name || "") === requestLabel
     && String(event.id || event.node_id || ""),
   );
   matching.sort((left, right) => {
@@ -79,7 +81,7 @@ function normalizedClaimAuthority(binding: ReviewClaimBinding): { durationSecond
 function normalizedActiveState(binding: ReviewClaimBinding): ReviewClaimActiveState | null {
   if (binding.activeState && typeof binding.activeState === "object" && !Array.isArray(binding.activeState)
     && JSON.stringify(Object.keys(binding.activeState).sort()) === JSON.stringify(ACTIVE_STATE_KEYS)
-    && stringArray(binding.activeState.managedLabels) && binding.activeState.managedLabels.length === 6
+    && stringArray(binding.activeState.managedLabels) && binding.activeState.managedLabels.length === 5
     && typeof binding.activeState.requestLabel === "string" && binding.activeState.requestLabel.length > 0
     && binding.activeState.managedLabels.includes(binding.activeState.requestLabel)
     && stringArray(binding.activeState.requiredLabels) && binding.activeState.requiredLabels.length === 1
@@ -130,7 +132,7 @@ function parseReviewClaim(body: unknown): JsonObject | null {
       || !Number.isFinite(value.authority.durationSeconds) || value.authority.durationSeconds <= 0
       || !value.activeState || typeof value.activeState !== "object" || Array.isArray(value.activeState)
       || JSON.stringify(Object.keys(value.activeState).sort()) !== JSON.stringify(ACTIVE_STATE_KEYS)
-      || !stringArray(value.activeState.managedLabels) || value.activeState.managedLabels.length !== 6
+      || !stringArray(value.activeState.managedLabels) || value.activeState.managedLabels.length !== 5
       || typeof value.activeState.requestLabel !== "string" || !value.activeState.managedLabels.includes(value.activeState.requestLabel)
       || !stringArray(value.activeState.requiredLabels) || value.activeState.requiredLabels.length !== 1
       || !value.activeState.requiredLabels.every((label: string) => value.activeState.managedLabels.includes(label))) return null;
@@ -185,14 +187,17 @@ function consistentSavedClaimContract(contract: JsonObject): boolean {
   const authority = normalizedClaimAuthority(binding);
   const activeState = normalizedActiveState(binding);
   if (!authority || !activeState) return false;
-  const [requestLabel, reviewingLabel, , , inProgressLabel, blockedLabel] = activeState.managedLabels;
+  // Every role shares one managed-label set, so the claim's own request label is
+  // identified by name rather than by its position inside that set.
+  const managed = new Set(activeState.managedLabels);
   return typeof contract.authoritySeconds === "number"
     && contract.authoritySeconds === authority.durationSeconds
-    && contract.reviewLabel === activeState.requestLabel
-    && contract.reviewLabel === requestLabel
-    && contract.reviewingLabel === reviewingLabel
-    && contract.inProgressLabel === inProgressLabel
-    && contract.blockedLabel === blockedLabel
+    && contract.requestLabel === activeState.requestLabel
+    && managed.has(String(contract.inProgressLabel))
+    && managed.has(String(contract.blockedLabel))
+    && contract.inProgressLabel !== contract.blockedLabel
+    && contract.requestLabel !== contract.inProgressLabel
+    && contract.requestLabel !== contract.blockedLabel
     && stableJson(activeState.requiredLabels) === stableJson([contract.inProgressLabel])
     && (contract.managedLabels === undefined
       || stableJson(contract.managedLabels) === stableJson(activeState.managedLabels));
@@ -333,6 +338,35 @@ function classifyBoundReviewClaim(
     : { kind: "binding_mismatch" };
 }
 
+function classifyReviewClaimTimeStatus(
+  pr: JsonObject,
+  events: JsonObject[],
+  comments: JsonObject[],
+  restHeaders: unknown,
+  contract: JsonObject,
+  liveTarget: LiveReviewTarget,
+): ReviewClaimValidation {
+  if (!consistentSavedClaimContract(contract)) return { kind: "claim_invalid" };
+  if (!matchesLiveReviewTarget(contract, liveTarget)) return { kind: "binding_mismatch" };
+  const configuredState = normalizedActiveState(contract.binding as ReviewClaimBinding);
+  if (!configuredState) return { kind: "binding_mismatch" };
+  const request = events.find((event) => String(event.id || event.node_id || "") === String(contract.binding?.requestEventId || "")
+    && String(event.event || "").toLowerCase() === "labeled"
+    && String(event.label?.name || "") === configuredState.requestLabel);
+  const claimComment = comments.find((comment) => serverCommentId(comment) === String(contract.commentId || ""));
+  if (!request || !claimComment || !reviewClaimCommentMatchesContract(claimComment, contract)) return { kind: "claim_invalid" };
+  if (String(pr.state || "").toUpperCase() !== "OPEN"
+    || String(pr.headRefOid || "").toLowerCase() !== String(contract.binding?.revision || "").toLowerCase()
+    || serverCommentId(earliestBoundClaimWithoutTime(comments, contract) || {}) !== String(contract.commentId || "")) {
+    return { kind: "binding_mismatch" };
+  }
+  const serverNow = parseGithubRestDate(restHeaders, new Date(Math.max(eventTime(request), commentTime(claimComment))));
+  if (!serverNow) return { kind: "server_time_unverifiable" };
+  return serverNow.getTime() >= commentTime(claimComment) + Number(contract.authoritySeconds) * 1000
+    ? { kind: "expired" }
+    : { kind: "authorized" };
+}
+
 function classifyActiveReviewClaim(
   pr: JsonObject,
   events: JsonObject[],
@@ -358,7 +392,7 @@ function validateActiveReviewClaim(
   return classifyActiveReviewClaim(pr, events, comments, restHeaders, contract, liveTarget).kind === "authorized";
 }
 
-function classifyRepairAuthorityTransition(
+function classifyPushedHeadAuthorityTransition(
   pr: JsonObject,
   events: JsonObject[],
   comments: JsonObject[],
@@ -376,7 +410,7 @@ function classifyRepairAuthorityTransition(
   return classifyBoundReviewClaim(pr, events, comments, restHeaders, contract, liveTarget, repairedHead);
 }
 
-function validateRepairAuthorityTransition(
+function validatePushedHeadAuthorityTransition(
   pr: JsonObject,
   events: JsonObject[],
   comments: JsonObject[],
@@ -385,7 +419,7 @@ function validateRepairAuthorityTransition(
   liveTarget: LiveReviewTarget,
   transition: { originalHeadOid?: unknown; headOid?: unknown },
 ): boolean {
-  return classifyRepairAuthorityTransition(pr, events, comments, restHeaders, contract, liveTarget, transition).kind === "authorized";
+  return classifyPushedHeadAuthorityTransition(pr, events, comments, restHeaders, contract, liveTarget, transition).kind === "authorized";
 }
 
 type TimeBlockObservation = ReviewClaimValidation & { comments: JsonObject[]; labels: string[] };
@@ -509,7 +543,8 @@ module.exports = {
   activeReviewRequest,
   assertClaimMatchesCurrentConfiguration,
   classifyActiveReviewClaim,
-  classifyRepairAuthorityTransition,
+  classifyPushedHeadAuthorityTransition,
+  classifyReviewClaimTimeStatus,
   claimContractMatchesConfiguration,
   parseGithubRestDate,
   parseReviewClaim,
@@ -520,6 +555,6 @@ module.exports = {
   savedReviewClaimContract,
   selectReviewClaimWinner,
   validateActiveReviewClaim,
-  validateRepairAuthorityTransition,
+  validatePushedHeadAuthorityTransition,
   visiblyBlockReviewClaimTimeFailure,
 };

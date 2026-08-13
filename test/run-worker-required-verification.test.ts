@@ -8,16 +8,21 @@ const { assertCleanOutput, run, runWorkerProjectCheck } = require("../extensions
 const { inspectUnresolvedProjectCheckFailures } = require("../src/project-check.ts");
 const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 const roots: string[] = [];
-function verificationAttempt() {
+function verificationAttempt(source: "repo_policy" | "default" = "repo_policy") {
   const fixture = repository();
   const stateDir = `${fixture.root}-state`; roots.push(stateDir);
   const runDir = path.join(stateDir, "runs", "attempt-1"); mkdirSync(runDir, { recursive: true });
   const trusted = `${fixture.root}-trusted.git`; roots.push(trusted); execFileSync("git", ["init", "--bare", "--quiet", trusted]);
-  writeFileSync(path.join(fixture.root, "deadloop.json"), '{"checkCommand":"true"}\n'); execFileSync("git", ["-C", fixture.root, "add", "."]); execFileSync("git", ["-C", fixture.root, "commit", "--quiet", "-m", "policy"]);
+  if (source === "repo_policy") {
+    writeFileSync(path.join(fixture.root, "deadloop.json"), '{"checkCommand":"true"}\n');
+    execFileSync("git", ["-C", fixture.root, "add", "."]);
+    execFileSync("git", ["-C", fixture.root, "commit", "--quiet", "-m", "policy"]);
+  }
   execFileSync("git", ["-C", fixture.root, "remote", "add", "trusted", trusted]); execFileSync("git", ["-C", fixture.root, "push", "--quiet", "trusted", "HEAD:main"]);
   const head = execFileSync("git", ["-C", fixture.root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const promiseFile = path.join(runDir, "promise.json");
-  const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command: "true", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head }, branch: "agent/issue-1", baseBranch: "trusted/main", worktreePath: fixture.root, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile, phase: "agent_started", lastSuccessfulPhase: "agent_started" };
+  const command = source === "default" ? "npm run check" : "true";
+  const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command, source: { kind: source, location: source === "default" ? "deadloop" : "deadloop.json" }, baseRevision: head }, branch: "agent/issue-1", baseBranch: "trusted/main", worktreePath: fixture.root, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile, phase: "agent_started", lastSuccessfulPhase: "agent_started" };
   writeWorkerContractSnapshot(runDir, attempt);
   writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt));
   writeFileSync(promiseFile, JSON.stringify({ schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head }, status: "complete", summary: "done", result: { outputRevision: head }, evidence: { validations: ["additional check"] } }));
@@ -86,6 +91,26 @@ describe("Worker required-verification checkout binding", () => {
       async (input: { signal?: AbortSignal }) => ({ code: 130, stdout: "", stderr: "", timedOut: false, interrupted: input.signal?.aborted, signal: "SIGTERM" }),
     );
     expect(result.check.interrupted).toBe(true);
+  });
+
+  it("accepts the built-in default when current policy has no override", async () => {
+    const fixture = verificationAttempt("default");
+    let command = "";
+
+    await run(fixture.args, undefined, async (input: { command: string }) => {
+      command = input.command;
+      return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
+    }, () => ({}));
+
+    expect(command).toBe("npm run check");
+  });
+
+  it("rejects a local override added after a default-backed launch", async () => {
+    const fixture = verificationAttempt("default");
+    writeFileSync(path.join(fixture.args.stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "true" }] }));
+
+    await expect(run(fixture.args, undefined, async () => ({ check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } }), () => ({})))
+      .rejects.toThrow("stale_policy");
   });
 
   it("reruns verification when a passed attempt-local record already exists", async () => {

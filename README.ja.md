@@ -10,17 +10,13 @@
 
 ## インストール
 
-Pi パッケージをインストールして有効化します。
+Pi パッケージをインストールします。
 
 ```bash
 pi install git:github.com/yasuhito/deadloop
 ```
 
-対話形式の設定案内が必要な場合は、任意でセットアップスキルもインストールします。
-
-```bash
-npx skills@latest add yasuhito/deadloop
-```
+このコマンドで、deadloop の拡張と設定用スキルがまとめてインストールされます。
 
 ## 現在の状態
 
@@ -30,49 +26,90 @@ npx skills@latest add yasuhito/deadloop
 
 ## 設定
 
-### リポジトリを有効化する
+認証済みの `gh` CLI と、起動中の [Herdr](https://herdr.dev/) 0.8.0 以上のサーバーを用意してください。
 
-通常の Git チェックアウトから、ローカルのスケジューラーを明示的に有効化します。
+1. 通常の Git チェックアウトから Pi を起動します。
 
-```text
-/deadloop-enable
+   ```bash
+   cd /absolute/path/to/your/repo
+   pi
+   ```
+
+2. deadloop を有効化します。
+
+   ```text
+   /deadloop-enable
+   ```
+
+3. deadloop に任せる Issue に、次のラベルを両方付けます。
+
+   - `ready-for-agent`
+   - `agent:implement`
+
+これだけで利用を開始できます。有効化すると、deadloop は `npm run check` を実行し、不足している標準ラベルを作成して、自動マージを無効にした状態で動き始めます。リポジトリに `npm run check` スクリプトがない場合は、[詳細設定](#詳細設定)に従って `deadloop.json` に別の `checkCommand` を指定してください。
+
+## ラベルでループを制御する
+
+Issue にラベルを付けると、ループが始まります。実装中とレビュー中の状態は deadloop が管理し、承認後は方針に従って PR を人間へ引き渡すか、自動でマージします。
+
+```mermaid
+flowchart TD
+    I["`**実装待ちの Issue**
+    ready-for-agent + agent:implement`"]
+    W["`**実装中**
+    ready-for-agent + agent:in-progress`"]
+    R["`**PR のレビュー待ち**
+    draft PR + agent:review`"]
+    V["`**レビューと修正**
+    agent:in-progress`"]
+    U["`**branch 更新待ち**
+    agent:update-branch`"]
+    H["`**人間へ引き渡し**
+    ready の PR、agent 系ラベルなし`"]
+    M["マージ済み"]
+    B["`**対応が必要**
+    agent:blocked`"]
+
+    I -->|deadloop が Issue を取得| W
+    W -->|draft PR を作成| R
+    R -->|deadloop がレビューを取得| V
+    V -->|修正を push| R
+    V -->|マージ競合| U
+    U -->|branch を更新| R
+    V -->|承認・autoMerge 無効| H
+    V -->|承認・autoMerge 有効| M
+    H -->|人間がマージ| M
+    W -. 問題発生 .-> B
+    V -. 問題発生 .-> B
 ```
 
-deadloop は、チェックアウト先、GitHub リポジトリ、基準ブランチ、Herdr の既定のワークツリー保存先を自動的に取得します。
+1. **実装を依頼する** — `ready-for-agent` は、エージェントが対応できる Issue であることを示します。`agent:implement` を付けると実装を依頼できます。deadloop が Issue を取得する前に `agent:implement` を外すと、依頼を取り消せます。
+2. **deadloop に任せる** — deadloop は依頼ラベルを `agent:in-progress` に置き換え、`agent:review` を付けた draft PR を作成します。必要に応じて、レビューと修正を繰り返します。PR の作業は要求ラベルだけが待ち行列になり、`agent:update-branch`、`agent:implement`、`agent:review` の順に一度に 1 件ずつ処理されます。
+3. **完了または対応する** — 承認された PR は、自動マージが無効なら ready へ変わり agent 系ワークフローラベルが外れます。有効ならマージされます。`ready-for-human` は Issue の分類用ラベルであり、PR には付きません。`agent:blocked` が付くとループは止まります。Issue または PR のコメントに記載された原因を解消し、案内された復旧手順に従ってください。
 
-実行許可は `~/.pi/agent/deadloop/` 配下のローカル状態に保存されます。`deadloop.json` や `projects.json` が存在するだけでは、自動処理を開始しません。
+## 運用コマンド
 
-### 事前確認を通過する
+対象リポジトリで起動した Pi セッションから、次のコマンドを実行できます。
 
-自動処理を有効化する前に、`/deadloop-enable` は信頼済み基準コミットから、所有権を記録した一時 Git ワークツリーを作ります。通常のチェックアウトにある未コミット変更を混ぜずに、その中で明示された必須検証コマンドを実行します。
+| コマンド | 用途 |
+| --- | --- |
+| `/deadloop-enable` | リポジトリを検証し、deadloop が新しい作業を開始できるようにします。 |
+| `/deadloop-disable` | 新しい作業の開始を止めます。実行中の試行は完了することがあります。 |
+| `/deadloop-status` | deadloop が有効かどうかと、現在の状態の概要を表示します。 |
+| `/deadloop-doctor` | 設定や保持された試行を変更せずに診断します。 |
+| `/deadloop-abandon-attempt <attempt-id>` | doctor に表示された場合だけ、保持された試行を安全に放棄します。 |
 
-検証が失敗すると、自動処理は無効のままです。コマンドは保存したログの場所を表示します。この事前確認では、Herdr の実行場所もエージェントも作りません。
+## 詳細設定
 
-再度有効化するときは、リポジトリ、コミット、コマンド、情報源、基準コミットがすべて一致する成功記録だけを再利用します。
+既定の検証コマンドは `npm run check` です。別のコマンドを使う場合は、リポジトリの基準ブランチへ `deadloop.json` をコミットします。
 
-事前確認では、終了結果にかかわらず、生成された実行成果物の復元を試みます。復元に失敗した場合は、隔離先と一時ワークツリーを保全し、両方の場所を記録して `/deadloop-doctor` で表示します。
+```json
+{
+  "checkCommand": "your verification command"
+}
+```
 
-### GitHub の権限とラベルを確認する
-
-事前確認に成功すると、`/deadloop-enable` は GitHub への書き込み権限と認証済み GitHub ログインを確認します。そのログインを明示的に許可した自動処理用の識別情報としてローカルの実行許可へ保存し、不足している標準ラベルだけを作成します。認証済みログインを確認できない場合は有効化しません。
-
-### 最初は自動マージを無効にする
-
-新規に有効化したリポジトリは、必ず `autoMerge: false` で始まります。
-
-有効化時に既存の `autoMerge: true` が見つかった場合も、自動マージは無効のままです。危険性を理解して有効にするには、リポジトリの有効化後に設定を `false` から `true` へ明示的に変更してください。
-
-この確認結果は、無効化してから再び有効化した場合も維持されます。自動マージを使うまでは、`autoMerge` を `false` のままにしてください。
-
-### リポジトリを無効化または再有効化する
-
-`/deadloop-disable` はスケジューリングを停止します。実行中のエージェントは停止せず、GitHub の状態、ワークツリー、実行成果物も削除しません。
-
-旧版から更新した場合は、リポジトリごとに再度有効化してください。
-
-### 必要な場合だけローカル設定を上書きする
-
-`autoMerge`、ワークツリー保存先、信頼済みの同一運用環境に属する別の自動処理ホスト用の追加 `automationLogins` などを変更する場合だけ、設定例を Pi のローカル状態へコピーします。`automationLogins` には、識別情報と管理者を自分で確認した GitHub ログインだけを追加してください。設定例では誰も許可していません。
+標準の設定では、ローカル設定ファイルは不要です。`autoMerge`、ワークツリー保存先、信頼済みの別の自動処理ホストなどを上書きする場合だけ作成します。
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop
@@ -80,21 +117,7 @@ cp ~/.pi/agent/git/github.com/yasuhito/deadloop/extensions/deadloop/projects.exa
 $EDITOR ~/.pi/agent/deadloop/projects.json
 ```
 
-`projects.json` にはローカルのパスや運用設定が含まれます。リポジトリにはコミットしないでください。
-
-### 必須検証コマンドを定義する
-
-リポジトリが所有する集約検証コマンドは、可能な限り信頼済みの `deadloop.json` に定義します。たとえば、`"checkCommand": "npm run check"` と指定します。
-
-ローカル値は、意図的に上書きする場合だけ使ってください。
-
-`/deadloop-status` と `/deadloop-doctor` は、実効必須検証コマンド、その情報源、信頼済み基準コミット、上書き情報を表示します。
-
-必須検証を解決できない場合、doctor は非権威の候補を表示します。候補は `package.json` の検証用スクリプトと、GitHub Actions の個々の `run` ステップから探します。
-
-doctor は、各候補の情報源、作業ディレクトリ、明示された実行コンテキストを保ちます。候補を必須検証へ昇格したり、複数の候補を一つのコマンドへ合成したりはしません。
-
-すべての設定項目は [設定ガイド](docs/public-package-setup.md) を参照してください。
+`projects.json` にはローカルのパスや運用設定が含まれます。リポジトリにはコミットしないでください。共有してレビューする方針は、リポジトリ内の `deadloop.json` に記載することを推奨します。
 
 ## 安全装置
 
@@ -108,34 +131,11 @@ doctor は、各候補の情報源、作業ディレクトリ、明示された�
 
 最初は `false` に設定してください。ブランチ保護、CI、権限、停止条件を確認してから `true` にします。
 
-## ラベルを作成する
-
-リポジトリごとに、標準ラベルを一度作成します。
-
-```bash
-gh label create ready-for-agent --repo owner/repo --color 0e8a16 || true
-gh label create ready-for-human --repo owner/repo --color d93f0b || true
-gh label create wontfix --repo owner/repo --color ffffff || true
-gh label create needs-info --repo owner/repo --color fef2c0 || true
-gh label create needs-triage --repo owner/repo --color f9d0c4 || true
-gh label create agent:explore --repo owner/repo --color 0052cc || true
-gh label create agent:implement --repo owner/repo --color 1d76db || true
-gh label create agent:review --repo owner/repo --color 5319e7 || true
-gh label create agent:reviewing --repo owner/repo --color c2e0c6 || true
-gh label create agent:update-branch --repo owner/repo --color 006b75 || true
-gh label create agent:in-progress --repo owner/repo --color fbca04 || true
-gh label create agent:blocked --repo owner/repo --color b60205 || true
-```
-
-Issue は、`ready-for-agent` と `agent:implement` の両方が付いている場合に限り処理対象になります。
-
-`agent:reviewing` は、古い作業状態とブランチ更新経路向けの互換ラベルとして残します。レビュー要求の取得と修正の認証には `agent:in-progress` が必要で、新しいレビュー処理は `agent:reviewing` を追加しません。
-
 ## マージ競合の自動修復
 
-現在の GitHub claim 導入期間中は、ブランチ更新の変更処理を副作用なしで停止します。#241 で追跡する `agent:update-branch` への引き渡しが実装されるまで利用できません。既存の非 force、先頭コミットの厳密一致、必須検証、通常 merge の安全契約は引き続き必要であり、この一時停止によって廃止されるものではありません。
+ブランチの自動更新は、現在利用できません。deadloop はマージ競合を検出しますが、`agent:update-branch` ラベルによる依頼を作業エージェントへ接続する #241 が完了するまでは、ブランチを更新しません。非 force、先頭コミットの厳密一致、必須検証、通常 merge の安全契約は引き続き必要です。
 
-以下のブランチ更新動作は、維持する安全契約の説明であり、現在到達できる変更経路の説明ではありません。
+以下は、今後この処理を接続するときの安全契約であり、現在実行できる動作の説明ではありません。
 
 作業エージェントは、選択された基準コミットを既存の PR ブランチへマージします。rebase は行いません。
 
@@ -155,7 +155,7 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 
 組み込みのレビューエージェントが構造化された修正可能な指摘を返すと、deadloop は既存の PR ブランチで、一度だけ専用の修正用作業エージェントを起動できます。
 
-修正中は、有効な取得を示す `agent:in-progress` を維持し、別の作業状態ラベルは追加しません。修正完了までは新しい `agent:review` 要求を作らず、修正状態から移るときに古い `agent:reviewing` があれば除去します。
+修正中は、有効な取得を示す `agent:in-progress` を維持し、別の作業状態ラベルは追加しません。修正完了までは新しい `agent:review` 要求を作りません。
 
 作業エージェントには、指摘事項だけを渡します。
 
@@ -182,41 +182,11 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 ## 段階的に導入する
 
 1. **Issue の調整のみ** — 慎重に導入したい場合は、ここから始めます。PR のレビューとマージは人間が行います。
-2. **PR の自動レビュー** — 標準の PR レビューを `autoMerge: false` で使用します。レビュー済み PR は `ready-for-human` に移して人間へ引き渡します。現在の導入期間中は、有効なレビュー claim 配下へ接続されるまで外部レビューの変更処理も副作用なしで停止します。`externalReview` を有効にしても、この停止を回避しません。
+2. **PR の自動レビュー** — 標準の PR レビューを `autoMerge: false` で使用します。承認された PR は ready になり agent 系ワークフローラベルが残らないので、そこから先は人間が引き取ります。外部レビューの変更処理は現在利用できません。`externalReview` を有効にしても利用可能にはなりません。
 3. **任意の自動マージ** — ブランチ保護、CI、レビュー要件、dry-run または人間による承認手順、停止条件が十分に実証されてから、`autoMerge: true` を検討してください。
-
-## 実行
-
-対象リポジトリ内で Pi を起動します。
-
-```bash
-cd /absolute/path/to/target/repo
-pi
-```
-
-利用できるコマンド:
-
-```text
-/deadloop-enable
-/deadloop-disable
-/deadloop-status
-/deadloop-doctor
-/deadloop-abandon-attempt <attempt-id>  # doctor に表示された場合のみ
-```
-
-運用者向けの環境変数:
-
-```bash
-DEADLOOP_CONFIG=/path/to/projects.json pi
-DEADLOOP_PROJECTS=my-project pi
-DEADLOOP=off pi
-DEADLOOP_AUTOMATIONS=off pi
-DEADLOOP_DEBUG=1 pi
-```
 
 ## ドキュメント
 
-- 設定ガイド: [docs/public-package-setup.md](docs/public-package-setup.md)
 - Herdr runner の詳細: [docs/herdr-runner.md](docs/herdr-runner.md)
 
 ## このリポジトリを検証する

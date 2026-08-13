@@ -127,7 +127,7 @@ When("deadloop completes approval processing for the current pull request", func
                 mergeable: "MERGEABLE",
                 mergeStateStatus: "CLEAN",
                 statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
-                labels: [{ name: "agent:review" }, { name: "agent:reviewing" }],
+                labels: [{ name: "agent:review" }, { name: "agent:in-progress" }],
               }),
               stderr: "",
             };

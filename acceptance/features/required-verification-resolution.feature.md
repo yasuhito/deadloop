@@ -1,6 +1,6 @@
 # Feature: Show the required verification contract alongside existing configuration
 
-Users can keep existing string-based verification paths while seeing the required verification contract resolved from local configuration and trusted shared policy, or the reason it is blocked.
+Users get `npm run check` by default while retaining explicit local and trusted shared-policy overrides, with the effective required-verification contract visible to operators.
 
 ## Scenario: Local required verification takes precedence over shared policy
 
@@ -20,11 +20,11 @@ Users can keep existing string-based verification paths while seeing the require
 * When required verification is resolved
 * Then The blocked reason is `source_conflict`
 
-## Scenario: Block when no source is available
+## Scenario: Use the built-in command when no override is available
 
-* Given No required verification source is available
+* Given No required verification override is available
 * When required verification is resolved
-* Then The blocked reason is `no_source`
+* Then The effective command is the built-in `npm run check`
 
 ## Scenario: Block an explicitly empty command because it has no target
 

@@ -73,6 +73,7 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
   };
   const ops = {
     mkdirSync: fs.mkdirSync,
+    alignCheckout: () => {},
     runner,
     runText: (command: string[]) => {
       if (command[0] === "git") return `${"a".repeat(40)}\n`;
@@ -116,6 +117,12 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
         DEADLOOP_STATE_DIR: sandbox,
         DEADLOOP_WORKTREE_ROOT: sandbox,
         DEADLOOP_GITHUB_REPO: project.githubRepo || "owner/repo",
+        DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({
+          repository: project.githubRepo || "owner/repo",
+          command: project.checkCommand,
+          source: { kind: "local", location: "acceptance-fixture" },
+          baseRevision: "a".repeat(40),
+        }),
       });
       launchClaimedPrReviewerFlow(
         { number: 24, headRefName: "agent/configuration-observation", headRefOid: "a".repeat(40) },

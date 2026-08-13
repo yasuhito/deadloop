@@ -140,6 +140,14 @@ describe("enablement required-verification records", () => {
     expect(fs.readFileSync(scenario.countPath, "utf8")).toBe("x");
   });
 
+  it("reuses a successful record for the built-in default source", async () => {
+    const scenario = fixture();
+    const contract = { ...scenario.contract, source: { kind: "default" as const, location: "deadloop" } };
+    await scenario.run(contract);
+
+    expect((await scenario.run(contract)).reused).toBe(true);
+  });
+
   it("reruns verification when the command binding changes", async () => {
     const scenario = fixture();
     await scenario.run();

@@ -21,7 +21,6 @@ type ConfigurationWorld = {
   workerLaunch?: string[];
 };
 
-const environmentPath = "/environment/projects.json";
 const userPath = "/state/projects.json";
 const extensionPath = "/extension/projects.json";
 
@@ -30,20 +29,11 @@ function local(world: ConfigurationWorld, project: RawProject): void {
   world.files = { [userPath]: project };
 }
 
-Given("Environment, user, and bundled scopes contain different configuration", function (this: ConfigurationWorld) {
+Given("User and bundled scopes contain different configuration", function (this: ConfigurationWorld) {
   this.files = {
-    [environmentPath]: { workerModel: "environment-model" },
     [userPath]: { workerModel: "user-model" },
     [extensionPath]: { workerModel: "extension-model" },
   };
-});
-
-Given("`DEADLOOP_CONFIG` selects the environment configuration", function (this: ConfigurationWorld) {
-  this.env = { DEADLOOP_CONFIG: environmentPath };
-});
-
-Given("`DEADLOOP_CONFIG` is not specified", function (this: ConfigurationWorld) {
-  this.env = {};
 });
 
 Given("Only bundled configuration is available", function (this: ConfigurationWorld) {
@@ -131,10 +121,6 @@ When("A Reviewer launch is requested", function (this: ConfigurationWorld) {
 
 When("CI fallback permission is determined from public configuration", function (this: ConfigurationWorld) {
   this.ciFallbackDecision = observeCiFallbackDecision(projectFor(this));
-});
-
-Then("Status shows the environment configuration file", function (this: ConfigurationWorld) {
-  assert.match(this.status ?? "", /config: local=\/environment\/projects\.json/);
 });
 
 Then("Status shows the user configuration file", function (this: ConfigurationWorld) {

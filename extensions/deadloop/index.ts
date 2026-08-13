@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { reconcileAndSelectDueAutomation } from "../../src/automation-scheduler";
+import { ensureCodeSnapshot } from "../../src/code-snapshot";
 import {
   DEFAULT_TIMEZONE,
   REPO_POLICY_FILE,
@@ -21,9 +22,9 @@ import {
   sanitizeId,
   templateValues,
 } from "../../src/core";
-import { buildDoctorSnapshot, formatDoctorReport, herdr075DoctorFinding } from "../../src/doctor";
-import { compatibilityDiagnosticData } from "../../src/herdr-075-compat";
-import { runHerdrCompatibilityPreflight } from "../../src/herdr-preflight";
+import { buildDoctorSnapshot, formatDoctorReport, herdrDoctorFinding } from "../../src/doctor";
+import { herdrVersionDiagnosticData, parseHerdrVersions } from "../../src/herdr-version";
+import { herdrServerIsUnreachableWithSupportedClient, runHerdrPreflight } from "../../src/herdr-preflight";
 import { discoverVerificationCandidates } from "../../src/required-verification";
 import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } from "../../src/status";
 import { readClaudeConfig } from "../../src/agent-trust.cjs";
@@ -39,6 +40,7 @@ const {
   workspaceProof,
 } = require("./automations/abandon-launch-failed-attempt.ts");
 const { readAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
+const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.ts");
 const {
   defaultIssueDecisionConfig,
   issueBlockedByNumbers,
@@ -123,6 +125,11 @@ const CODE_FRESHNESS_SOURCE_PATHS = [
   path.resolve(__dirname, "../../src/automation-runner.ts"),
 ];
 const AUTOMATION_DIR = path.join(EXTENSION_DIR, "automations");
+const PACKAGE_ROOT = path.resolve(__dirname, "../..");
+const LOADED_CODE_IDENTITY = gitOutput(PACKAGE_ROOT, ["rev-parse", "HEAD^{commit}"]);
+if (!/^[0-9a-f]{40}$/i.test(LOADED_CODE_IDENTITY)) {
+  throw new Error("deadloop could not resolve its load-time code identity");
+}
 
 function currentConfigPath() {
   return resolveConfigPath({
@@ -165,8 +172,8 @@ function readConfigText() {
   }
 }
 
-function herdrCompatibilityPreflight() {
-  return runHerdrCompatibilityPreflight({
+function herdrPreflight() {
+  return runHerdrPreflight({
     run: (command, args) => {
       const result = childProcess.spawnSync(command, args, {
         encoding: "utf8",
@@ -683,12 +690,14 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`;
 }
 
-function resolveAutomationFileInDir(_kind, _automation, requested) {
-  return resolveAutomationFile(requested, (fileName) => fs.existsSync(path.join(AUTOMATION_DIR, fileName)));
+function resolveAutomationFileInDir(_kind, _automation, requested, supply) {
+  const automationDir = supply.automationDir;
+  return resolveAutomationFile(requested, (fileName) => fs.existsSync(path.join(automationDir, fileName)));
 }
 
-async function runAutomationScript(pi, project, automation, automationFile) {
-  const scriptPath = path.join(AUTOMATION_DIR, automationFile);
+async function runAutomationScript(pi, project, automation, automationFile, supply) {
+  const automationDir = supply.automationDir;
+  const scriptPath = path.join(automationDir, automationFile);
   const env = {
     ...automationEnvironment(project, automation),
     DEADLOOP_STATE_DIR: STATE_DIR,
@@ -703,9 +712,10 @@ async function runAutomationScript(pi, project, automation, automationFile) {
   });
 }
 
-function readPrompt(project, automation, promptFile) {
-  const template = fs.readFileSync(path.join(AUTOMATION_DIR, promptFile), "utf8");
-  return renderTemplate(template, templateValues(project, automation, AUTOMATION_DIR));
+function readPrompt(project, automation, promptFile, supply) {
+  const automationDir = supply.automationDir;
+  const template = fs.readFileSync(path.join(automationDir, promptFile), "utf8");
+  return renderTemplate(template, templateValues(project, automation, automationDir));
 }
 
 async function execJson(pi, command, args, fallback, options: { timeout?: number } = {}) {
@@ -970,7 +980,7 @@ function launchFailedRecoveryGuidance(record, runDir, project, workspaces, agent
     const pr = (evidence?.openPrs || []).find((item) => Number(item.number) === record.target.number);
     const labels = labelNames(pr);
     if (!pr || pr.headRefName !== record.branch || String(pr.headRefOid || "").toLowerCase() !== record.inputRevision.head.toLowerCase()
-      || !labels.has(configured.review) || !labels.has(configured.reviewing)
+      || !labels.has(configured.review) || !labels.has(configured.inProgress)
       || labels.has(configured.blocked) || labels.has(configured.human)) {
       return refuse("the pull request no longer has the exact safe launch claim and head");
     }
@@ -1009,7 +1019,7 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
     let record;
     try { record = readAttemptRecord(runDir); }
     catch (error) {
-      if (fs.existsSync(attemptRecord)) findings.push(herdr075DoctorFinding(
+      if (fs.existsSync(attemptRecord)) findings.push(herdrDoctorFinding(
         "malformed_journal",
         `attempt journal ${attemptRecord} is malformed: ${error instanceof Error ? error.message : String(error)}; manual review required before changing any claim label`,
       ));
@@ -1017,13 +1027,13 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
     }
     if (record.project !== project?.id || record.repository !== project?.githubRepo
       || releasesAttemptOwnership(record.phase)) continue;
-    let status: import("../../src/doctor").Herdr075DoctorStatus = "missing_report";
+    let status: import("../../src/doctor").HerdrDoctorStatus = "missing_report";
     let detail = `attempt ${record.attemptId} (${record.role}) is retained at phase ${record.phase}`;
     if (record.phase === "launch_failed") {
       status = "launch_failed";
       const guidance = launchFailedRecoveryGuidance(record, runDir, project, workspaces, agents, evidence);
       detail = `${detail}; ${guidance.detail}`;
-      findings.push(herdr075DoctorFinding(status, detail, guidance.commands));
+      findings.push(herdrDoctorFinding(status, detail, guidance.commands));
       continue;
     }
     else if (record.phase === "github_persisted") status = "cleanup_pending";
@@ -1034,7 +1044,7 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
           || path.resolve(owned[0].worktreePath) !== path.resolve(record.worktreePath)) {
           status = "ownership_mismatch";
           detail = `attempt ${record.attemptId} cannot prove ownership of workspace ${record.workspaceId}`;
-          findings.push(herdr075DoctorFinding(status, detail));
+          findings.push(herdrDoctorFinding(status, detail));
           continue;
         }
       }
@@ -1047,21 +1057,23 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
         try { report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8")); }
         catch {
           status = "malformed_report";
-          findings.push(herdr075DoctorFinding(status, detail));
+          findings.push(herdrDoctorFinding(status, detail));
           continue;
         }
-        if (report?.schemaVersion !== 1) status = "legacy_report";
-        else {
-          try { report = validateCompletionReportBinding(record, report).report; }
-          catch { status = "malformed_report"; findings.push(herdr075DoctorFinding(status, detail)); continue; }
-          if (report.status === "blocked") status = "blocked";
-          else if (report.role === "reviewer" && report.result?.outcome === "human_required") status = "human_required";
-          else if (["agent_started", "report_received"].includes(record.phase)) status = "persistence_unconfirmed";
-          else status = "active";
+        if (report?.schemaVersion !== 1) {
+          status = "malformed_report";
+          findings.push(herdrDoctorFinding(status, detail));
+          continue;
         }
+        try { report = validateCompletionReportBinding(record, report).report; }
+        catch { status = "malformed_report"; findings.push(herdrDoctorFinding(status, detail)); continue; }
+        if (report.status === "blocked") status = "blocked";
+        else if (report.role === "reviewer" && report.result?.outcome === "human_required") status = "human_required";
+        else if (["agent_started", "report_received"].includes(record.phase)) status = "persistence_unconfirmed";
+        else status = "active";
       }
     }
-    findings.push(herdr075DoctorFinding(status, detail));
+    findings.push(herdrDoctorFinding(status, detail));
   }
   return findings;
 }
@@ -1143,11 +1155,11 @@ async function buildLiveDoctorReport(pi, cwd) {
     data,
   ));
   try {
-    herdrCompatibilityPreflight();
+    herdrPreflight();
   } catch (error) {
-    snapshot.findings.unshift(herdr075DoctorFinding(
-      "incompatible",
-      compatibilityDiagnosticData({ probeFailure: error instanceof Error ? error.message : String(error) }),
+    snapshot.findings.unshift(herdrDoctorFinding(
+      "unsupported",
+      herdrVersionDiagnosticData({ probeFailure: error instanceof Error ? error.message : String(error) }),
     ));
   }
   const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
@@ -1163,7 +1175,6 @@ const STANDARD_LABELS = [
   ["needs-triage", "f9d0c4"],
   ["agent:explore", "0052cc"],
   ["agent:review", "5319e7"],
-  ["agent:reviewing", "c2e0c6"],
   ["agent:update-branch", "006b75"],
   ["agent:in-progress", "fbca04"],
   ["agent:blocked", "b60205"],
@@ -1292,7 +1303,6 @@ async function detectProjectIdentity(pi, cwd) {
     repoPath,
     githubRepo,
     githubRepositoryId,
-    githubAliases: [...new Set(identities)],
     baseBranch,
     id,
     worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", id),
@@ -1398,13 +1408,23 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
       } catch {}
     },
     now: () => Date.now(),
+    prepareExecutionSupply: () => {
+      try {
+        return ensureCodeSnapshot({ packageRoot: PACKAGE_ROOT, stateDir: STATE_DIR, codeIdentity: LOADED_CODE_IDENTITY });
+      } catch (error) {
+        // A stop nobody can see is indistinguishable from an idle host, so publish the reason
+        // before the throw stops this automation short of precheck and every driver.
+        setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
+    },
     readPrompt,
     revalidatePendingDriverHandoff: revalidatePendingIssueHandoff,
     resolveAutomationFileInDir,
-    runDriver: async (driverProject, driverAutomation, driverFile) =>
-      await runAutomationScript(pi, driverProject, driverAutomation, driverFile),
-    runPrecheck: async (precheckProject, precheckAutomation, precheckFile) =>
-      await runAutomationScript(pi, precheckProject, precheckAutomation, precheckFile),
+    runDriver: async (driverProject, driverAutomation, driverFile, supply) =>
+      await runAutomationScript(pi, driverProject, driverAutomation, driverFile, supply),
+    runPrecheck: async (precheckProject, precheckAutomation, precheckFile, supply) =>
+      await runAutomationScript(pi, precheckProject, precheckAutomation, precheckFile, supply),
     saveState: (state) => {
       if (isCurrentSchedulerRun()) saveState(state, ownedAutomationKeys);
     },
@@ -1447,6 +1467,41 @@ function registerReportCommand(pi, name, description, customType, buildReport) {
   });
 }
 
+function unreconciledAuthorityStatus(authority: { reconciled: boolean; reason: string }): string {
+  return authority.reconciled ? "" : `PR work authority could not be reconciled safely: ${authority.reason}`;
+}
+
+// A caller that cannot reconcile must be able to say why, so the outcome carries its own reason
+// instead of leaving one in the debug log. Only an explicit override may replace the reconciliation.
+async function reconcilePrWorkAuthority(pi, project): Promise<{ reconciled: boolean; reason: string }> {
+  if (typeof pi.testing?.reconcilePrWorkAuthority === "function") {
+    return await pi.testing.reconcilePrWorkAuthority(project);
+  }
+  const labels = projectLabels(project);
+  const enabled = findEnabledProject(loadEnablementState(), project);
+  if (!enabled?.automationLogin) return { reconciled: false, reason: "the enabled record names no Automation host login" };
+  const result = await execJson(pi, "node", [
+    path.join(AUTOMATION_DIR, "reconcile-pr-work-authority.ts"),
+    "--project-id", project.id,
+    "--project-repo", project.repoPath,
+    "--github-repo", project.githubRepo,
+    "--state-dir", STATE_DIR,
+    "--enabled-at", String(project.enabledAt),
+    "--automation-login", enabled.automationLogin,
+    "--review-label", labels.review,
+    "--implement-label", labels.implement,
+    "--update-branch-label", "agent:update-branch",
+    "--in-progress-label", labels.inProgress,
+    "--blocked-label", labels.blocked,
+  ], null, { timeout: 90_000 });
+  if (!result || result.action === "error") {
+    const reason = String(result?.summary || result?.error || "the reconciliation driver returned no result");
+    debugLog("PR work-authority reconciliation failed", reason);
+    return { reconciled: false, reason };
+  }
+  return { reconciled: true, reason: "" };
+}
+
 async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> {
   const runsDir = path.join(STATE_DIR, "runs");
   let runs: string[];
@@ -1482,7 +1537,6 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         "--implement-label", labels.implement,
         "--in-progress-label", labels.inProgress,
         "--review-label", labels.review,
-        "--reviewing-label", labels.reviewing,
         "--blocked-label", labels.blocked,
       ], null);
       if (claimResult?.action === "error") debugLog("prepared attempt claim reconciliation blocked", claimResult.reason || claimResult.driverAction);
@@ -1501,15 +1555,13 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         validateCompletionReportBinding(record, report);
       } catch { continue; }
       if (report.status !== "complete") continue;
-      if (report.role === "reviewer" && report.result?.outcome === "human_required") continue;
+      if (report.role === "reviewer" && decideReviewTransition(report.result || {}).transition === "human_required") continue;
     }
     const reviewerAutoMerge = record.autoMergePolicy ?? project.autoMerge;
     const expectedLabels = report?.role === "reviewer"
-      ? report.result?.outcome === "changes_requested"
-        ? [labels.review, labels.reviewing]
-        : reviewerAutoMerge
-          ? [labels.review, labels.reviewing]
-          : [labels.human]
+      ? decideReviewTransition(report.result || {}).transition === "repair" || reviewerAutoMerge
+        ? [labels.review, labels.inProgress]
+        : [labels.human]
       : [];
     const args = [
       path.join(AUTOMATION_DIR, "complete-attempt-workspace.ts"),
@@ -1524,7 +1576,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       "--worker-review-label", labels.review,
       "--auto-merge", reviewerAutoMerge ? "true" : "false",
       ...expectedLabels.flatMap((label) => ["--expected-label", label]),
-      ...[labels.review, labels.reviewing, labels.blocked, labels.human]
+      ...[labels.review, labels.inProgress, labels.blocked, labels.human]
         .flatMap((label) => ["--managed-label", label]),
     ];
     const result = await execJson(pi, "node", args, null);
@@ -1533,7 +1585,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
   return safeToSchedule;
 }
 
-export { reconcilePersistedAttemptJournals, retainedAttemptClaimSnapshot, retainedAttemptDoctorFindings };
+export { reconcilePersistedAttemptJournals, reconcilePrWorkAuthority, retainedAttemptClaimSnapshot, retainedAttemptDoctorFindings };
 
 function attemptRecordForId(project, attemptId) {
   const runsDir = path.join(STATE_DIR, "runs");
@@ -1560,9 +1612,9 @@ function displayCommandResult(pi, ctx, customType, content) {
 }
 
 export default function (pi) {
-  const compatibilityPreflight = typeof pi.testing?.herdrCompatibilityPreflight === "function"
-    ? () => pi.testing.herdrCompatibilityPreflight()
-    : herdrCompatibilityPreflight;
+  const preflight = typeof pi.testing?.herdrPreflight === "function"
+    ? () => pi.testing.herdrPreflight()
+    : herdrPreflight;
   registerReportCommand(
     pi,
     "deadloop-status",
@@ -1603,7 +1655,6 @@ export default function (pi) {
           "--implement-label", labels.implement,
           "--in-progress-label", labels.inProgress,
           "--review-label", labels.review,
-          "--reviewing-label", labels.reviewing,
           "--blocked-label", labels.blocked,
           "--human-label", labels.human,
         ];
@@ -1659,9 +1710,16 @@ export default function (pi) {
 
     // Global fail-closed gate: no candidate selection or workflow/runner mutation may happen first.
     try {
-      compatibilityPreflight();
+      preflight();
     } catch (error) {
-      setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}`);
+      // Recovery-only exception: a supported local client may reflect an unreachable runtime
+      // as agent:blocked. No candidate, launch, completion, push, ready, or merge path is opened.
+      let recoveryStatus = "";
+      if (herdrServerIsUnreachableWithSupportedClient() && isProjectEnabled(schedulerRun.project)) {
+        const status = unreconciledAuthorityStatus(await reconcilePrWorkAuthority(pi, schedulerRun.project));
+        if (status) recoveryStatus = `; ${status}`;
+      }
+      setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}${recoveryStatus}`);
       return;
     }
 
@@ -1700,6 +1758,13 @@ export default function (pi) {
     running = true;
     let completedSafely = false;
     try {
+      // GitHub work authority is reconciled before local cleanup, pending handoffs, or candidate selection.
+      const authorityStatus = unreconciledAuthorityStatus(await reconcilePrWorkAuthority(pi, project));
+      if (authorityStatus) {
+        setLooperStatus(ctx, `skipped: ${authorityStatus}`);
+        completedSafely = true;
+        return;
+      }
       // Restart reconciliation is idempotent and runs before pending handoffs or candidate selection.
       const safeToSchedule = await reconcilePersistedAttemptJournals(pi, project);
       if (!safeToSchedule) {
@@ -1819,7 +1884,7 @@ export default function (pi) {
       return { started: false, reason: "scheduler startup is suppressed by DEADLOOP_AUTOMATIONS=off" };
     }
     try {
-      compatibilityPreflight();
+      preflight();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       setLooperStatus(ctx, `skipped: ${reason}`);

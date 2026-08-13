@@ -14,7 +14,7 @@ function input(root: string, role: "worker" | "reviewer" = "worker") {
   return {
     worktree: role === "worker"
       ? { mode: "create" as const, branch: "agent/issue-1", baseBranch: "origin/main" }
-      : { mode: "open" as const, branch: "feature/review", baseBranch: "origin/release" },
+      : { mode: "open" as const, branch: "feature/review", remote: "origin" },
     repoPath: "/repo",
     automationDir: "/automation",
     stateDir: root,
@@ -51,6 +51,7 @@ function operations(_root: string, role: "worker" | "reviewer", calls: string[])
   let launchedName = "";
   return {
     mkdirSync: () => {},
+    alignCheckout: () => {},
     runner: {
       createWorktree: () => ({ workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1", worktreePath }),
       openWorktree: () => ({ workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1", worktreePath }),
@@ -73,7 +74,7 @@ function operations(_root: string, role: "worker" | "reviewer", calls: string[])
   };
 }
 
-describe("0.7.5 エージェント起動フロー", () => {
+describe("0.8.0 エージェント起動フロー", () => {
   it("外部の要求状態を変える前に準備済み試行記録を残す", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
     try {
@@ -119,11 +120,11 @@ describe("0.7.5 エージェント起動フロー", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("Reviewer の必須検証契約に設定済み基準ブランチを固定する", () => {
+  it("Reviewer の必須検証契約に選択済み基準 revision を固定する", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
     try {
       const prepared = prepareAgentLaunchFlow(input(root, "reviewer"), operations(root, "reviewer", []));
-      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).baseBranch).toBe("origin/release");
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).requiredVerification.baseRevision).toBe("a".repeat(40));
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -286,7 +287,7 @@ describe("0.7.5 エージェント起動フロー", () => {
       const launchInput = input(root, "reviewer");
       const ops: any = operations(root, "reviewer", []);
       let observations = 0;
-      ops.runner.listAgents = () => ++observations === 1 ? [] : [{ name: require("../src/herdr-agent-name.cjs").deriveHerdr075AgentName({ repository: "owner/repo", role: "reviewer", target: 44, launchUuid: "launch-reviewer" }), paneId: "pane-other", cwd: "/wt/review", status: "working" }];
+      ops.runner.listAgents = () => ++observations === 1 ? [] : [{ name: require("../src/herdr-agent-name.cjs").deriveHerdrAgentName({ repository: "owner/repo", role: "reviewer", target: 44, launchUuid: "launch-reviewer" }), paneId: "pane-other", cwd: "/wt/review", status: "working" }];
       prepareAgentLaunchFlow(launchInput, ops);
       recordAgentLaunchGithubClaimed(launchInput);
       expect(() => launchAgentFlow(launchInput, ops)).toThrow(/recorded root pane/);
@@ -324,7 +325,7 @@ describe("0.7.5 エージェント起動フロー", () => {
         const base = input(root, roles[index] === "worker" ? "worker" : "reviewer");
         const launchInput: any = {
           ...base, uuid: `chain-${roles[index]}`, role: roles[index], project: "demo", intendedWorktreePath: "/wt/shared",
-          worktree: index === 0 ? { mode: "create", branch: "feature/shared", baseBranch: "origin/main" } : { mode: "open", branch: "feature/shared" },
+          worktree: index === 0 ? { mode: "create", branch: "feature/shared", baseBranch: "origin/main" } : { mode: "open", branch: "feature/shared", remote: "origin" },
           target: index === 0 ? { kind: "issue", number: 1 } : { kind: "pull-request", number: 44 }, resolveWorktreeHead: false,
         };
         const ops: any = operations(root, roles[index] === "worker" ? "worker" : "reviewer", []);
@@ -357,6 +358,59 @@ describe("0.7.5 エージェント起動フロー", () => {
         "rename",
         expect.stringContaining("--pane pane-1"),
       ]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe("opened checkout alignment at launch", () => {
+  it("aligns an opened pull-request checkout to the recorded input revision", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-align-"));
+    try {
+      const launchInput = input(root, "reviewer");
+      const ops: any = operations(root, "reviewer", []);
+      const aligned: any[] = [];
+      ops.alignCheckout = (value: any) => aligned.push(value);
+      ops.runner.listWorktrees = () => [{ path: "/wt/review", branch: "feature/review" }];
+      prepareAgentLaunchFlow(launchInput, ops);
+      recordAgentLaunchGithubClaimed(launchInput);
+      launchAgentFlow(launchInput, ops);
+
+      expect(aligned).toEqual([{
+        worktreePath: "/wt/review", expectedHead: "a".repeat(40), remote: "origin", branch: "feature/review",
+      }]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("leaves a resumed issue Worker checkout alone, because its input revision is the base head", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-align-issue-"));
+    try {
+      const launchInput: any = {
+        ...input(root, "worker"),
+        worktree: { mode: "open", branch: "agent/issue-1" },
+        resolveWorktreeHead: false,
+      };
+      const ops: any = operations(root, "worker", []);
+      const aligned: any[] = [];
+      ops.alignCheckout = (value: any) => aligned.push(value);
+      ops.runner.listWorktrees = () => [{ path: "/wt/worker", branch: "agent/issue-1" }];
+      prepareAgentLaunchFlow(launchInput, ops);
+      recordAgentLaunchGithubClaimed(launchInput);
+      launchAgentFlow(launchInput, ops);
+
+      expect(aligned).toEqual([]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("refuses to open a pull-request checkout without the configured remote", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-align-remote-"));
+    try {
+      const launchInput: any = { ...input(root, "reviewer"), worktree: { mode: "open", branch: "feature/review" } };
+      const ops: any = operations(root, "reviewer", []);
+      ops.runner.listWorktrees = () => [{ path: "/wt/review", branch: "feature/review" }];
+      prepareAgentLaunchFlow(launchInput, ops);
+      recordAgentLaunchGithubClaimed(launchInput);
+
+      expect(() => launchAgentFlow(launchInput, ops)).toThrow("requires the configured remote");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

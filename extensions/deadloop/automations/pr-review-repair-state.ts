@@ -24,10 +24,23 @@ function reviewResultFingerprint(findings: JsonObject[]): string {
   return createHash("sha256").update(`${JSON.stringify(canonical)}\n`).digest("hex").slice(0, 20);
 }
 
-function reviewOutcomeFingerprint(outcome: string, reason: string, summary: string, findings: JsonObject[] = []): string {
+function reviewOutcomeFingerprint(
+  outcome: string,
+  reason: string,
+  summary: string,
+  findings: JsonObject[] = [],
+  advisories: JsonObject[] = [],
+): string {
+  // changes_requested shares its fingerprint with the repair attempt key, which
+  // selectRepairAttempt recomputes from findings alone.
   if (outcome === "changes_requested") return reviewResultFingerprint(findings);
   return createHash("sha256")
-    .update(`${JSON.stringify({ outcome, reason: reason.trim(), summary: summary.trim() })}\n`)
+    .update(`${JSON.stringify({
+      outcome,
+      reason: reason.trim(),
+      summary: summary.trim(),
+      advisories: advisories.map(normalizedFinding),
+    })}\n`)
     .digest("hex")
     .slice(0, 20);
 }

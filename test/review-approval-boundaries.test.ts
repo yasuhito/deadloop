@@ -7,6 +7,7 @@ const head = "a".repeat(40);
 const acceptedHistory = { repository: "owner/repo", pullRequestNumber: 24, revision: "accepted", history: {} };
 const approvedReview = {
   status: "complete",
+  evidenceStrength: "strong",
   promise: { status: "complete", outcome: "approved", reviewedHead: head, findings: [] },
 };
 const args = {
@@ -19,10 +20,10 @@ const args = {
   reviewPromise: "/state/runs/reviewer/promise.json",
   historyObservation: "/state/runs/reviewer/pr-review-history-accepted.json",
   reviewLabel: "agent:review",
-  reviewingLabel: "agent:reviewing",
+  implementLabel: "agent:implement",
+  updateBranchLabel: "agent:update-branch",
   inProgressLabel: "agent:in-progress",
   blockedLabel: "agent:blocked",
-  humanLabel: "ready-for-human",
 };
 
 function runHandoff(options: {
@@ -63,9 +64,9 @@ function runHandoff(options: {
           };
         }
         edits += 1;
-        if (command.includes("--add-label") && command.at(-1) === "ready-for-human") {
+        if (command.includes("--remove-label")) {
           if (options.headChangesDuringLabelMutation) liveHead = "b".repeat(40);
-          labels = ["ready-for-human"];
+          labels = [];
         } else {
           labels = ["agent:in-progress"];
         }
@@ -104,7 +105,7 @@ describe("review approval persistence boundary", () => {
   });
 });
 
-describe("reviewed PR human-handoff boundary", () => {
+describe("reviewed PR ready-handoff boundary", () => {
   it("rejects a missing host verification record before changing labels", () => {
     expect(handoffMutationCount({ verificationError: "required verification record is missing" })).toBe(0);
   });

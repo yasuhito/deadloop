@@ -15,9 +15,9 @@ import {
   resolveActiveProject,
 } from "./status";
 import {
-  type Herdr075CompatibilityDiagnostic,
-  formatCompatibilityDiagnostic,
-} from "./herdr-075-compat";
+  type HerdrVersionDiagnostic,
+  formatHerdrVersionDiagnostic,
+} from "./herdr-version";
 
 const STALE_IN_PROGRESS_MS = 24 * 60 * 60 * 1000;
 const MAX_COMMENT_SUMMARY_LENGTH = 180;
@@ -93,7 +93,7 @@ export type DoctorFindingType =
   | "coordinator_stalled"
   | "workspace_trust"
   | "retained_attempt_workspace"
-  | "herdr_incompatible";
+  | "herdr_unsupported";
 
 export type DoctorFinding = {
   id: string;
@@ -103,39 +103,38 @@ export type DoctorFinding = {
   commands: string[];
 };
 
-export type Herdr075DoctorStatus =
+export type HerdrDoctorStatus =
   | "active"
   | "blocked"
   | "human_required"
   | "missing_report"
   | "malformed_report"
-  | "legacy_report"
   | "malformed_journal"
   | "persistence_unconfirmed"
   | "launch_failed"
   | "cleanup_pending"
   | "ownership_mismatch"
-  | "incompatible";
+  | "unsupported";
 
 /** Read-only Herdr attempt lifecycle diagnostic data. */
-export function herdr075DoctorFinding(
-  status: Exclude<Herdr075DoctorStatus, "incompatible">,
+export function herdrDoctorFinding(
+  status: Exclude<HerdrDoctorStatus, "unsupported">,
   detail: string,
   commands?: string[],
 ): DoctorFinding;
-export function herdr075DoctorFinding(status: "incompatible", detail: Herdr075CompatibilityDiagnostic): DoctorFinding;
-export function herdr075DoctorFinding(
-  status: Herdr075DoctorStatus,
-  detail: string | Herdr075CompatibilityDiagnostic,
+export function herdrDoctorFinding(status: "unsupported", detail: HerdrVersionDiagnostic): DoctorFinding;
+export function herdrDoctorFinding(
+  status: HerdrDoctorStatus,
+  detail: string | HerdrVersionDiagnostic,
   commands: string[] = [],
 ): DoctorFinding {
-  const incompatible = status === "incompatible";
+  const unsupported = status === "unsupported";
   return {
-    id: `herdr-075-${status}`,
-    type: incompatible ? "herdr_incompatible" : "retained_attempt_workspace",
-    title: incompatible ? "unsupported or protocol-incompatible Herdr" : `retained attempt workspace: ${status}`,
-    summary: typeof detail === "string" ? detail : formatCompatibilityDiagnostic(detail),
-    commands: incompatible ? ["herdr update --handoff"] : commands,
+    id: `herdr-${status}`,
+    type: unsupported ? "herdr_unsupported" : "retained_attempt_workspace",
+    title: unsupported ? "unsupported Herdr version" : `retained attempt workspace: ${status}`,
+    summary: typeof detail === "string" ? detail : formatHerdrVersionDiagnostic(detail),
+    commands: unsupported ? ["herdr update --handoff"] : commands,
   };
 }
 
@@ -404,7 +403,7 @@ function buildStuckReviewClaimFindings(
 ): DoctorFinding[] {
   const repo = project.githubRepo || "<repo>";
   return openPrs
-    .filter((pr) => labelsOf(pr).has(project.labels.reviewing))
+    .filter((pr) => labelsOf(pr).has(project.labels.inProgress))
     .filter((pr) => !retainedClaims.has(`pull-request:${pr.number}`))
     .filter((pr) => {
       const reviewerName = `${project.id}-pr-${pr.number ?? "?"}-reviewer`;
@@ -415,8 +414,8 @@ function buildStuckReviewClaimFindings(
       id: `stuck-review-claim-${pr.number ?? "unknown"}`,
       type: "stuck_claim" as const,
       title: `stuck reviewing claim: ${issueRef(pr)}`,
-      summary: `${project.labels.reviewing} is present, but the matching reviewer agent is not working in Herdr. This may be a stale interrupted review run.`,
-      commands: [`gh pr edit ${pr.number ?? "<number>"} -R ${shellArg(repo)} --remove-label ${shellArg(project.labels.reviewing)}`],
+      summary: `${project.labels.inProgress} is present, but the matching reviewer agent is not working in Herdr. This may be a stale interrupted review run.`,
+      commands: [`gh pr edit ${pr.number ?? "<number>"} -R ${shellArg(repo)} --remove-label ${shellArg(project.labels.inProgress)}`],
     }));
 }
 
@@ -639,9 +638,6 @@ export function formatDoctorReport(snapshot: DoctorSnapshot): string {
     `config: ${formatConfigSource(snapshot.project)}`,
     formatRequiredVerification(snapshot.project.requiredVerification),
     ...(snapshot.verificationCandidates ? formatVerificationCandidates(snapshot.verificationCandidates) : []),
-    ...(snapshot.project.requiredVerification.status === "blocked" && snapshot.project.requiredVerification.reason === "no_source"
-      ? ["recovery: add a repository-owned aggregate checkCommand to trusted deadloop.json; use a local override only for a non-shareable exception"]
-      : []),
     "",
   ];
 

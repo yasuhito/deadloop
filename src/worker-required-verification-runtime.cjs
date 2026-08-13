@@ -8,6 +8,7 @@ const authenticatedRecords = new WeakSet();
 const HOST_VERIFICATION_EVIDENCE_DIRECTORY = "required-verification-evidence";
 const HOST_WORKER_CONTRACT_DIRECTORY = "worker-contract-snapshots";
 const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
+const DEFAULT_REQUIRED_VERIFICATION_SOURCE = { kind: "default", location: "deadloop", command: "npm run check" };
 function nonEmpty(value) { return typeof value === "string" && Boolean(value.trim()); }
 function validSha(value) { return nonEmpty(value) && /^[0-9a-f]{40}$/i.test(value); }
 function sanitizeId(value) {
@@ -17,7 +18,7 @@ function assertContract(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("required verification persisted contract is missing");
   if (!nonEmpty(value.command)) throw new Error("required verification blocked: zero_targets");
   if (!nonEmpty(value.repository) || !validSha(value.baseRevision)) throw new Error("required verification persisted contract binding is invalid");
-  if (!value.source || typeof value.source !== "object" || !["local", "repo_policy"].includes(value.source.kind) || !nonEmpty(value.source.location)) throw new Error("required verification persisted contract source is invalid");
+  if (!value.source || typeof value.source !== "object" || !["local", "repo_policy", "default"].includes(value.source.kind) || !nonEmpty(value.source.location)) throw new Error("required verification persisted contract source is invalid");
 }
 function requiredVerificationBinding(contract, targetCommit) {
   assertContract(contract); if (!validSha(targetCommit)) throw new Error("required verification target commit is invalid");
@@ -182,8 +183,8 @@ function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repo
     : [];
   const sourcesConflict = (sources) => new Set(sources.map((source) => source.command)).size > 1;
   if (sourcesConflict(localSources) || sourcesConflict(sharedSources)) throw new Error("required verification blocked: stale_policy; current policy is conflicted");
-  const selected = localSources[0] || sharedSources[0];
-  if (!selected || typeof selected.command !== "string" || !selected.command.trim()) throw new Error("required verification blocked: stale_policy; current policy is unresolved");
+  const selected = localSources[0] || sharedSources[0] || DEFAULT_REQUIRED_VERIFICATION_SOURCE;
+  if (typeof selected.command !== "string" || !selected.command.trim()) throw new Error("required verification blocked: stale_policy; current policy is unresolved");
   const replaced = localSources.length ? sharedSources[0] : undefined;
   const current = {
     repository: attempt.repository,

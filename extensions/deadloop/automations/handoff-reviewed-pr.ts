@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Hand one approved PR to a human only while its accepted review history is
-// current and the reviewed head, fixed verification contract, host record, and
-// current policy remain authorized. The label mutation is serialized with
-// /deadloop-disable through the enablement lock.
+// Hand one approved PR back to people only while its accepted review history is current: the draft
+// becomes ready and every agent workflow label is removed, so GitHub shows a pull request no Agent
+// request is waiting on. The mutation is serialized with /deadloop-disable through the enablement
+// lock, and the ready transition runs first so a failed label removal leaves the requests visible
+// instead of stranding a silently unlabelled draft.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const fs = require("node:fs") as typeof import("node:fs");
@@ -35,10 +36,10 @@ type HandoffArgs = {
   reviewPromise: string;
   historyObservation: string;
   reviewLabel: string;
-  reviewingLabel: string;
+  implementLabel: string;
+  updateBranchLabel: string;
   inProgressLabel: string;
   blockedLabel: string;
-  humanLabel: string;
 };
 type EnabledProject = { githubRepositoryId?: string };
 type CommandResult = { status: number; stdout: string; stderr: string };
@@ -69,21 +70,16 @@ function commandError(result: CommandResult, fallback: string): string {
   return (result.stderr || result.stdout || fallback).trim();
 }
 
-function assertApproved(args: HandoffArgs, ops: HandoffOps): { legacyApproval: boolean } {
+function assertApproved(args: HandoffArgs, ops: HandoffOps): void {
   const validation = ops.validateReviewPromise?.(args.reviewPromise) || validatePromise(args.reviewPromise);
   const promise = validation.promise;
-  const legacyApproval = validation.evidenceStrength === "legacy-weak"
-    && promise?.status === "complete"
-    && (promise.outcome === undefined || promise.outcome === "approved")
-    && (promise.findings === undefined || Array.isArray(promise.findings) && promise.findings.length === 0);
-  if (validation.status !== "complete" || !promise || promise.status !== "complete") {
-    throw new Error("validated reviewer approval is missing; human handoff stopped");
+  if (validation.evidenceStrength !== "strong" || validation.status !== "complete" || !promise || promise.status !== "complete") {
+    throw new Error("validated reviewer approval is missing; ready handoff stopped");
   }
-  if (!legacyApproval && (promise.outcome !== "approved" || promise.reviewedHead !== args.expectedHead
-    || !Array.isArray(promise.findings) || promise.findings.length !== 0)) {
-    throw new Error("reviewer approval is not bound to the expected head; human handoff stopped");
+  if (promise.outcome !== "approved" || promise.reviewedHead !== args.expectedHead
+    || !Array.isArray(promise.findings) || promise.findings.length !== 0) {
+    throw new Error("reviewer approval is not bound to the expected head; ready handoff stopped");
   }
-  return { legacyApproval };
 }
 
 function assertRequiredVerificationApproved(args: HandoffArgs, enabled: EnabledProject): void {
@@ -103,7 +99,7 @@ function assertRequiredVerificationApproved(args: HandoffArgs, enabled: EnabledP
     contract,
   );
   if (report.result.reviewedHead !== args.expectedHead) {
-    throw new Error("required verification reviewed head changed; human handoff stopped");
+    throw new Error("required verification reviewed head changed; ready handoff stopped");
   }
 }
 
@@ -123,7 +119,7 @@ function currentHistory(args: HandoffArgs, ops: HandoffOps): JsonObject {
 function releaseStaleClaim(args: HandoffArgs, ops: HandoffOps): HandoffResult {
   const result = ops.run([
     "gh", "pr", "edit", args.pr, "-R", args.githubRepo,
-    "--remove-label", args.inProgressLabel, "--remove-label", args.reviewingLabel, "--add-label", args.reviewLabel,
+    "--remove-label", args.inProgressLabel, "--add-label", args.reviewLabel,
   ], MAX_GUARDED_OPERATION_MS);
   if (result.status !== 0) throw new Error(commandError(result, "stale review claim could not be released"));
   return { action: "stale_history" };
@@ -133,7 +129,11 @@ function compareAcceptedHistory(args: HandoffArgs, ops: HandoffOps, expected: Js
   return comparePrHistoryObservations(expected, currentHistory(args, ops)).kind === "unchanged";
 }
 
-type CurrentPr = { state?: unknown; isDraft?: unknown; headRefOid?: unknown; labels: Set<string> };
+function agentWorkflowLabels(args: HandoffArgs): string[] {
+  return [args.reviewLabel, args.implementLabel, args.updateBranchLabel, args.inProgressLabel, args.blockedLabel];
+}
+
+type CurrentPr = JsonObject & { labels: Set<string> };
 
 function readCurrentPr(args: HandoffArgs, ops: HandoffOps): CurrentPr {
   const result = ops.run([
@@ -141,50 +141,38 @@ function readCurrentPr(args: HandoffArgs, ops: HandoffOps): CurrentPr {
     "--json", "state,isDraft,headRefOid,labels",
   ], MAX_GUARDED_OPERATION_MS);
   if (result.status !== 0) throw new Error(commandError(result, "PR state could not be revalidated"));
-  let value: { state?: unknown; isDraft?: unknown; headRefOid?: unknown; labels?: unknown };
-  try {
-    value = JSON.parse(result.stdout || "{}");
-  } catch {
-    throw new Error("PR state response was invalid; human handoff stopped");
-  }
-  const labels = new Set(Array.isArray(value.labels)
-    ? value.labels.map((label: unknown) => label && typeof label === "object" ? (label as { name?: unknown }).name : undefined)
-      .filter((name): name is string => typeof name === "string")
-    : []);
-  return { ...value, labels };
+  let pr: JsonObject;
+  try { pr = JSON.parse(result.stdout || "{}"); } catch { throw new Error("PR state response was invalid; ready handoff stopped"); }
+  const labels = new Set(Array.isArray(pr.labels) ? pr.labels.map((label) => label?.name).filter((name) => typeof name === "string") : []);
+  return { ...pr, labels };
 }
 
-function assertEligiblePr(args: HandoffArgs, ops: HandoffOps): void {
+function assertEligiblePr(args: HandoffArgs, ops: HandoffOps): CurrentPr {
   const pr = readCurrentPr(args, ops);
-  if (pr.state !== "OPEN" || pr.isDraft !== false || pr.headRefOid !== args.expectedHead) {
-    throw new Error("PR is no longer eligible for human handoff");
+  if (pr.state !== "OPEN" || pr.headRefOid !== args.expectedHead) {
+    throw new Error("PR is no longer eligible for ready handoff");
   }
   if (!pr.labels.has(args.inProgressLabel) || pr.labels.has(args.blockedLabel)) {
-    throw new Error("the active review claim state is no longer present; human handoff stopped");
+    throw new Error("the active review claim state is no longer present; ready handoff stopped");
   }
+  return pr;
 }
 
 function assertHandoffApplied(args: HandoffArgs, ops: HandoffOps): void {
   const pr = readCurrentPr(args, ops);
-  if (pr.headRefOid !== args.expectedHead
-    || !pr.labels.has(args.humanLabel)
-    || pr.labels.has(args.inProgressLabel)
-    || pr.labels.has(args.reviewLabel)
-    || pr.labels.has(args.reviewingLabel)
-    || pr.labels.has(args.blockedLabel)) {
-    throw new Error("human handoff postcondition changed");
+  if (pr.state !== "OPEN" || pr.isDraft !== false || pr.headRefOid !== args.expectedHead
+    || agentWorkflowLabels(args).some((label) => pr.labels.has(label))) {
+    throw new Error("ready handoff postcondition changed");
   }
 }
 
 function restoreReviewState(args: HandoffArgs, ops: HandoffOps): void {
   const result = ops.run([
     "gh", "pr", "edit", args.pr, "-R", args.githubRepo,
-    "--remove-label", args.humanLabel,
     "--add-label", args.inProgressLabel,
   ], MAX_GUARDED_OPERATION_MS);
   if (result.status !== 0) throw new Error(commandError(result, "review-state restoration failed"));
-  const pr = readCurrentPr(args, ops);
-  if (pr.labels.has(args.humanLabel) || !pr.labels.has(args.inProgressLabel)) {
+  if (!readCurrentPr(args, ops).labels.has(args.inProgressLabel)) {
     throw new Error("review-state restoration could not be confirmed");
   }
 }
@@ -193,13 +181,11 @@ function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRu
   const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
   const operation = (enabled: EnabledProject, recheck: () => void): HandoffResult => {
     const autoMergeEnabled = ops.isAutoMergeEnabled || currentAutoMergeEnabled;
-    if (autoMergeEnabled(args)) throw new Error("autoMerge is currently enabled; human handoff stopped");
-    const { legacyApproval } = assertApproved(args, ops);
+    if (autoMergeEnabled(args)) throw new Error("autoMerge is currently enabled; ready handoff stopped");
+    assertApproved(args, ops);
     const assertVerification = ops.assertReviewVerification || assertRequiredVerificationApproved;
-    if (!legacyApproval) assertVerification(args, enabled);
-    const expected = legacyApproval
-      ? undefined
-      : ops.readHistory?.(args.historyObservation) || readPrHistoryObservation(args.historyObservation);
+    assertVerification(args, enabled);
+    const expected = ops.readHistory?.(args.historyObservation) || readPrHistoryObservation(args.historyObservation);
     if (expected && !compareAcceptedHistory(args, ops, expected)) {
       recheck();
       return releaseStaleClaim(args, ops);
@@ -210,21 +196,25 @@ function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRu
       recheck();
       return releaseStaleClaim(args, ops);
     }
+    const eligible = assertEligiblePr(args, ops);
+    assertVerification(args, enabled);
     assertEligiblePr(args, ops);
-    if (!legacyApproval) assertVerification(args, enabled);
-    if (autoMergeEnabled(args)) throw new Error("autoMerge is currently enabled; human handoff stopped");
+    if (autoMergeEnabled(args)) throw new Error("autoMerge is currently enabled; ready handoff stopped");
     recheck();
+    if (eligible.isDraft === true) {
+      const ready = ops.run(["gh", "pr", "ready", args.pr, "-R", args.githubRepo], MAX_GUARDED_OPERATION_MS);
+      if (ready.status !== 0) throw new Error(commandError(ready, "reviewed PR could not be marked ready"));
+    }
     const result = ops.run([
       "gh", "pr", "edit", args.pr, "-R", args.githubRepo,
-      "--remove-label", args.inProgressLabel, "--remove-label", args.reviewLabel, "--remove-label", args.reviewingLabel,
-      "--add-label", args.humanLabel,
+      ...agentWorkflowLabels(args).flatMap((label) => ["--remove-label", label]),
     ], MAX_GUARDED_OPERATION_MS);
-    if (result.status !== 0) throw new Error(commandError(result, "reviewed PR human handoff failed"));
+    if (result.status !== 0) throw new Error(commandError(result, "reviewed PR ready handoff failed"));
     try {
       assertHandoffApplied(args, ops);
     } catch (error) {
       restoreReviewState(args, ops);
-      throw new Error(`human handoff stopped and review state restored: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`ready handoff stopped and review state restored: ${error instanceof Error ? error.message : String(error)}`);
     }
     return { action: "handed_off" };
   };
@@ -240,9 +230,9 @@ function parseArgs(argv: string[]): HandoffArgs {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  const required = ["projectRepo", "githubRepo", "stateDir", "pr", "expectedHead", "reviewPromise", "historyObservation", "reviewLabel", "reviewingLabel", "inProgressLabel", "blockedLabel", "humanLabel"];
-  if (required.some((name) => !values[name]) || !Number.isFinite(enabledAt)) throw new Error("required human handoff arguments are missing");
-  return { ...values, enabledAt } as unknown as HandoffArgs;
+  const required = ["projectRepo", "githubRepo", "stateDir", "pr", "expectedHead", "reviewPromise", "historyObservation", "reviewLabel", "implementLabel", "updateBranchLabel", "inProgressLabel", "blockedLabel"];
+  if (required.some((name) => !values[name]) || !Number.isFinite(enabledAt)) throw new Error("required ready handoff arguments are missing");
+  return { ...values, enabledAt } as HandoffArgs;
 }
 
 function main(): void {

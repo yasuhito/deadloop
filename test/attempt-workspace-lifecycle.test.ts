@@ -224,7 +224,7 @@ describe("attempt completion persistence decisions", () => {
     const github = { ...fixture.github, labels: [...expectedLabels, "team:platform"] };
     const context = {
       reviewerExpectedLabels: expectedLabels,
-      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:in-progress", "agent:blocked", "ready-for-human"],
+      reviewerManagedLabels: ["agent:review", "agent:in-progress", "agent:in-progress", "agent:blocked", "ready-for-human"],
     };
 
     expect(decide(fixture.record, fixture.report, github, context)).toEqual({ action: "close" });
@@ -238,7 +238,7 @@ describe("attempt completion persistence decisions", () => {
     const github = { ...fixture.github, labels: [...expectedLabels, conflictingLabel, "team:platform"] };
     const context = {
       reviewerExpectedLabels: expectedLabels,
-      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:in-progress", "agent:blocked", "ready-for-human"],
+      reviewerManagedLabels: ["agent:review", "agent:in-progress", "agent:in-progress", "agent:blocked", "ready-for-human"],
     };
 
     expect(decide(fixture.record, fixture.report, github, context)).toEqual({
@@ -254,7 +254,7 @@ describe("attempt completion persistence decisions", () => {
     const fixture = reviewerFixture("approved");
     const context = {
       reviewerExpectedLabels: expectedLabels,
-      reviewerManagedLabels: ["agent:review", "agent:reviewing", "agent:in-progress", "agent:blocked", "ready-for-human"],
+      reviewerManagedLabels: ["agent:review", "agent:in-progress", "agent:in-progress", "agent:blocked", "ready-for-human"],
     };
     expect(evaluateSelectedRuntimePersistence({
       record: fixture.record,
@@ -342,6 +342,25 @@ describe("attempt completion persistence decisions", () => {
     expect(decide(fixture.record, fixture.report, fixture.github)).toEqual({
       action: "preserve",
       reason: "human_required",
+    });
+  });
+
+  it("preserves changes requested while a prior required finding persists", () => {
+    const fixture = reviewerFixture("changes_requested", "persisted");
+
+    expect(decide(fixture.record, fixture.report, fixture.github, fixture.context)).toEqual({
+      action: "preserve",
+      reason: "human_required",
+    });
+  });
+
+  it("preserves changes requested that reports no repair progress", () => {
+    const fixture = reviewerFixture("changes_requested");
+    const report = { ...fixture.report, result: { ...fixture.report.result, priorRequiredFindings: undefined } };
+
+    expect(decide(fixture.record, report, fixture.github, fixture.context)).toEqual({
+      action: "preserve",
+      reason: "invalid_report",
     });
   });
 
@@ -476,18 +495,6 @@ describe("attempt completion persistence decisions", () => {
       action: "preserve",
       reason: "github_persistence_not_confirmed",
     });
-  });
-
-  it("preserves every legacy completion report unconditionally", () => {
-    const fixture = workerFixture();
-
-    expect(
-      evaluateCompletionPersistence({
-        record: fixture.record,
-        report: { kind: "legacy", promisePath: fixture.record.promiseFile, report: { status: "complete" } },
-        github: fixture.github,
-      }),
-    ).toEqual({ action: "preserve", reason: "legacy_report" });
   });
 
   it("requires the launch-unique promise path", () => {
@@ -973,13 +980,12 @@ describe("typed uncertainty and doctor findings", () => {
     "human_required",
     "missing_report",
     "invalid_report",
-    "legacy_report",
     "github_persistence_not_confirmed",
     "launch_failed",
     "cleanup_pending",
     "ownership_mismatch",
     "newer_live_owner",
-    "herdr_incompatible",
+    "herdr_unsupported",
   ] satisfies RetentionReason[])("returns a read-only doctor finding for %s", (reason) => {
     expect(doctorFindingForRetention(reason, "attempt-1").readOnly).toBe(true);
   });

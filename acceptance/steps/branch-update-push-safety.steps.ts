@@ -193,8 +193,8 @@ Given("The worktree has not been trusted", function (this: SafetyWorld) {
     path.join(binDir, "herdr"),
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
-if (args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");
-else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
+if (args[0] === "--version") process.stdout.write("herdr 0.8.0\\n");
+else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.8.0\\n");
 else require("node:fs").writeFileSync(${JSON.stringify(this.trustLaunchMarker)}, "started");
 `,
     { mode: 0o755 },
