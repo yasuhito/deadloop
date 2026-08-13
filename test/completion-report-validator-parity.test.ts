@@ -49,7 +49,53 @@ const cases: Array<[string, unknown]> = [
   ["valid reviewer", {
     ...common,
     role: "reviewer",
+    result: {
+      outcome: "changes_requested",
+      reviewedHead: head,
+      findings: [{ title: "Bug", body: "Fix it", severity: "major" }],
+      priorRequiredFindings: "all_resolved",
+    },
+    evidence: { reviewed: ["diff"] },
+  }],
+  ["changes_requested without a prior-finding disposition", {
+    ...common,
+    role: "reviewer",
     result: { outcome: "changes_requested", reviewedHead: head, findings: [{ title: "Bug", body: "Fix it", severity: "major" }] },
+    evidence: { reviewed: ["diff"] },
+  }],
+  ["changes_requested with a persisted prior finding", {
+    ...common,
+    role: "reviewer",
+    result: {
+      outcome: "changes_requested",
+      reviewedHead: head,
+      findings: [{ title: "Bug", body: "Fix it", severity: "major" }],
+      priorRequiredFindings: "persisted",
+    },
+    evidence: { reviewed: ["diff"] },
+  }],
+  ["approved reviewer result carrying a required finding", {
+    ...common,
+    role: "reviewer",
+    result: { outcome: "approved", reviewedHead: head, findings: [{ title: "Bug", body: "Fix it", severity: "major" }] },
+    evidence: { reviewed: ["diff"] },
+  }],
+  ["approved reviewer result with advisory observations", {
+    ...common,
+    role: "reviewer",
+    result: { outcome: "approved", reviewedHead: head, findings: [], advisories: [{ title: "Naming", body: "A clearer name would help" }] },
+    evidence: { reviewed: ["diff"] },
+  }],
+  ["reviewer result with a malformed advisory observation", {
+    ...common,
+    role: "reviewer",
+    result: { outcome: "approved", reviewedHead: head, findings: [], advisories: [{ title: "Naming", body: "" }] },
+    evidence: { reviewed: ["diff"] },
+  }],
+  ["reviewer result with an unknown prior-finding disposition", {
+    ...common,
+    role: "reviewer",
+    result: { outcome: "approved", reviewedHead: head, findings: [], priorRequiredFindings: "probably_fine" },
     evidence: { reviewed: ["diff"] },
   }],
   ["reviewer finding without severity", {

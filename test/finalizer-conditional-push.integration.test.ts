@@ -15,7 +15,7 @@ const sandboxes: string[] = [];
 const branch = "agent/issue-1";
 const ref = `refs/heads/${branch}`;
 const activeReviewState = {
-  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
   requestLabel: "agent:review",
   requiredLabels: ["agent:in-progress"],
 };
@@ -95,7 +95,7 @@ function runRace(finalizer: "repair" | "branch-update", race: "advance" | "delet
   };
   const reviewClaim = {
     binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const common = {
     repo,
@@ -141,12 +141,15 @@ afterEach(() => {
 });
 
 describe("finalizer exact-head pushes against real remotes", () => {
-  it("atomically writes a blocked receipt when finalizer argument validation fails", () => {
+  it.each([
+    ["review repair", "pr-review-repair-finalize.ts"],
+    ["branch update", "pr-branch-update-finalize.ts"],
+  ] as const)("atomically writes a blocked receipt when %s finalizer argument validation fails", (_name, script) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-finalizer-receipt-"));
     sandboxes.push(root);
     const resultFile = path.join(root, "result.json");
     const result = spawnSync("node", [
-      "extensions/deadloop/automations/pr-review-repair-finalize.ts",
+      `extensions/deadloop/automations/${script}`,
       "--expected-head", "a".repeat(40), "--result-file", resultFile,
     ], { cwd: process.cwd(), encoding: "utf8" });
 
@@ -187,7 +190,7 @@ process.exit(result.status ?? 1);
     };
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     const gh = path.join(bin, "gh");
     writeFileSync(gh, `#!/usr/bin/env node
@@ -220,7 +223,7 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
       projectId: "demo", repoPath: repo, githubRepo: "owner/repo", stateDir, checkCommand: "true",
       baseBranch: expectedHead, requiredVerification: contract,
       workerAgent: "pi", workerModel: "", remote: "origin", reviewLabel: "agent:review",
-      reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", inProgressLabel: "agent:in-progress",
+      blockedLabel: "agent:blocked", inProgressLabel: "agent:in-progress",
       reviewClaim, automationDir, enabledAt: 1,
     });
     const command = rendered.match(/permitted non-force push to the exact branch:\n  (.+)\n- Never edit labels/)?.[1];

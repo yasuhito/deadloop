@@ -17,7 +17,7 @@ const repairedHead = "cccccccccccccccccccccccccccccccccccccccc";
 const branch = "agent/issue-31";
 const findings = [{ title: "Lint contract failure", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
 const activeReviewState = {
-  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
   requestLabel: "agent:review",
   requiredLabels: ["agent:in-progress"],
 };
@@ -29,7 +29,7 @@ const reviewClaim = {
   binding: reviewClaimBinding, commentId: "101", authorizedLogins: ["deadloop-bot"],
   automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400,
   cleanupGraceSeconds: 300, authoritySeconds: 86700,
-  reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+  requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
 };
 
 type RecoveryWorld = {
@@ -135,7 +135,18 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     };
     fs.writeFileSync(promise, JSON.stringify(blocked
       ? { ...reportBase, status: "blocked", result: { reason: "reviewer failed", explanation: "Technical review failure.", recovery: "Retry the review." } }
-      : { ...reportBase, status: "complete", result: { outcome: "changes_requested", reviewedHead: currentHead, findings } }));
+      : {
+        ...reportBase,
+        status: "complete",
+        result: {
+          outcome: "changes_requested",
+          reviewedHead: currentHead,
+          findings,
+          // The repeated-repair case keeps reporting repair progress, so the
+          // fingerprint guard stays the thing that stops the second repair.
+          priorRequiredFindings: testCase === "repeated-repair" ? "all_resolved" : "none",
+        },
+      }));
     fs.writeFileSync(attemptRecord, JSON.stringify({
       attemptId: "reviewer", launchUuid: "reviewer", project: "demo", repository: "owner/repo", role: "reviewer",
       target: { kind: "pull-request", number: 31 }, inputRevision: { head: currentHead }, branch,
@@ -195,6 +206,8 @@ else {
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+// The checkout already carries the expected head, so alignment finds nothing to do.
+else if (args.includes("rev-parse") && args.includes("HEAD")) process.stdout.write("${currentHead}\\n");
 else if (args.includes("rev-parse") && args.some(arg => arg.endsWith("^{commit}"))) process.stdout.write("${"f".repeat(40)}\\n");
 else if (args.includes("show") && args.some(arg => arg.endsWith(":deadloop.json"))) process.exit(1);
 `,
@@ -205,8 +218,8 @@ else if (args.includes("show") && args.some(arg => arg.endsWith(":deadloop.json"
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TEST_HERDR_LOG, args.join(" ") + "\\n");
-if (args[0] === "--version") process.stdout.write("herdr 0.7.5\\n");
-else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
+if (args[0] === "--version") process.stdout.write("herdr 0.8.0\\n");
+else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.8.0\\n");
 else if (args[0] === "worktree" && args[1] === "list") process.stdout.write(JSON.stringify({result: {worktrees: [{path: process.env.TEST_WORKTREE, branch: "agent/issue-31"}]}}));
 else if (args[0] === "worktree" && args[1] === "open") process.stdout.write(JSON.stringify({result: {type: "worktree_opened", already_open: false, workspace: {workspace_id: "workspace-1"}, tab: {tab_id: "tab-1", workspace_id: "workspace-1"}, root_pane: {pane_id: "pane-1", tab_id: "tab-1", workspace_id: "workspace-1", cwd: process.env.TEST_WORKTREE}, worktree: {path: process.env.TEST_WORKTREE}}}));
 else if (args[0] === "workspace" && args[1] === "list") process.stdout.write(JSON.stringify({result: {workspaces: []}}));
@@ -434,14 +447,21 @@ When("deadloop completes conflict recovery", function (this: RecoveryWorld) {
   this.result = branchUpdateFinalizer(this.commands, head, this.case === "cross-repository-branch-update");
 });
 
-Then("deadloop leaves the conflicted pull request untouched before claim", function (this: RecoveryWorld) {
+Then("deadloop requests a branch update instead of recovering from local state", function (this: RecoveryWorld) {
   const effects = adapterEffects(this.result) || {};
   assert.deepEqual({
     action: this.result?.driverAction,
-    comments: effects.githubComments?.length ?? 0,
-    labels: effects.labelReplacements?.length ?? 0,
     starts: effects.herdrStarts?.length ?? 0,
-  }, { action: "branch_update_claim_required", comments: 0, labels: 0, starts: 0 });
+    requested: (effects.labels?.["31"] ?? []).includes("agent:update-branch"),
+  }, { action: "branch_update_requested", starts: 0, requested: true });
+});
+
+Then("deadloop blocks the repeated conflict-recovery request", function (this: RecoveryWorld) {
+  assert.equal(this.result?.driverAction, "branch_update_attempt_exhausted");
+});
+
+Then("deadloop leaves recovery guidance for the repeated conflict-recovery request", function (this: RecoveryWorld) {
+  assert.match(String(this.result?.comment || ""), /Recovery steps/);
 });
 
 Then("deadloop does not start another dedicated conflict-recovery attempt", function (this: RecoveryWorld) {
@@ -460,7 +480,7 @@ Then("The selection reason after conflict recovery is repair re-review", functio
 
 Then("deadloop preserves the review state", function (this: RecoveryWorld) {
   const labels = adapterEffects(this.result)?.labels?.["31"] ?? this.result?.observedLabels;
-  assert.deepEqual(labels, this.case === "conflict" ? ["agent:review", "agent:reviewing"] : ["agent:in-progress"]);
+  assert.deepEqual(labels, this.case === "conflict" ? ["agent:review", "agent:in-progress"] : ["agent:in-progress"]);
 });
 
 Then("deadloop starts a dedicated repair attempt", function (this: RecoveryWorld) {

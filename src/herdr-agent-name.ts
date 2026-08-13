@@ -11,7 +11,7 @@ const ROLE_CODES: Record<AttemptRole, string> = {
 const MAX_TARGET = 2_147_483_647;
 const AGENT_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 
-export type Herdr075AgentNameInput = {
+export type HerdrAgentNameInput = {
   repository: string;
   role: AttemptRole;
   target: number;
@@ -25,7 +25,7 @@ function requiredText(value: string, field: string): string {
   return value;
 }
 
-export function deriveHerdr075AgentName(input: Herdr075AgentNameInput): string {
+export function deriveHerdrAgentName(input: HerdrAgentNameInput): string {
   requiredText(input.repository, "repository");
   requiredText(input.launchUuid, "launch UUID");
   if (!Number.isInteger(input.target) || input.target < 1 || input.target > MAX_TARGET) {

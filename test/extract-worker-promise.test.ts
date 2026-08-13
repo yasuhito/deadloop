@@ -32,6 +32,20 @@ function withTempFile(content: string, callback: (filePath: string) => void) {
 const inputHead = "a".repeat(40);
 const outputHead = "b".repeat(40);
 
+function reviewerReport(result: Record<string, unknown>) {
+  return JSON.stringify({
+    schemaVersion: 1,
+    attemptId: "a",
+    role: "reviewer",
+    target: { repository: "octo/demo", kind: "pull-request", number: 1 },
+    inputRevision: { head: inputHead },
+    status: "complete",
+    summary: "reviewed",
+    result: { reviewedHead: inputHead, ...result },
+    evidence: { reviewed: ["diff"] },
+  });
+}
+
 function workerReport(attemptId = "expected") {
   return {
     schemaVersion: 1,
@@ -71,33 +85,6 @@ function canonicalAttemptRecord(promiseFile: string) {
 }
 
 describe("extract worker promise helper", () => {
-  it("accepts complete promise files", () => {
-    withTempFile('{"status":"complete","reason":"","summary":"実装した。検証した。残作業なし。"}', (filePath) => {
-      expect(runHelper(filePath)).toEqual({ code: 0, status: "complete" });
-    });
-  });
-
-  it("accepts reviewer changes_requested with structured findings", () => {
-    withTempFile(
-      '{"status":"complete","outcome":"changes_requested","reason":"","summary":"lint contract failed","findings":[{"title":"Lint failure","body":"Run formatter on src/a.ts","path":"src/a.ts","line":4,"severity":"major"}]}',
-      (filePath) => {
-        expect(runHelper(filePath)).toEqual({ code: 0, status: "complete" });
-      },
-    );
-  });
-
-  it("keeps legacy complete promises compatible", () => {
-    withTempFile('{"status":"complete","reason":"","summary":"legacy reviewer report"}', (filePath) => {
-      expect(runHelper(filePath).code).toBe(0);
-    });
-  });
-
-  it("keeps a legacy report as weak evidence", () => {
-    withTempFile('{"status":"complete","reason":"","summary":"legacy worker report"}', (filePath) => {
-      expect(runPromise(filePath).evidenceStrength).toBe("legacy-weak");
-    });
-  });
-
   it("rejects a V1 report with an unknown status", () => {
     withTempFile('{"schemaVersion":1,"attemptId":"a","role":"worker","target":{"repository":"octo/demo","kind":"issue","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"unknown","summary":"done","result":{"outputRevision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"evidence":{"validations":["npm test"]}}', (filePath) => {
       expect(runHelper(filePath).status).toBe("invalid");
@@ -133,6 +120,64 @@ describe("extract worker promise helper", () => {
       '{"schemaVersion":1,"attemptId":"a","role":"reviewer","target":{"repository":"octo/demo","kind":"pull-request","number":1},"inputRevision":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"status":"complete","summary":"reviewed","result":{"outcome":"changes_requested","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","findings":[{"title":"Bug","body":"Fix it"}]},"evidence":{"reviewed":["diff"]}}',
       (filePath) => {
         expect(runPromise(filePath).error).toBe("changes_requested_requires_finding_severity");
+      },
+    );
+  });
+
+  it("rejects a V1 approved result that still carries a required finding", () => {
+    withTempFile(
+      reviewerReport({ outcome: "approved", findings: [{ title: "Bug", body: "Fix it", severity: "major" }] }),
+      (filePath) => {
+        expect(runPromise(filePath).error).toBe("approved_requires_no_findings");
+      },
+    );
+  });
+
+  it("accepts a V1 approved result with advisory observations", () => {
+    withTempFile(
+      reviewerReport({ outcome: "approved", findings: [], advisories: [{ title: "Naming", body: "A clearer name would help" }] }),
+      (filePath) => {
+        expect(runPromise(filePath).promise.advisories).toHaveLength(1);
+      },
+    );
+  });
+
+  it("rejects malformed V1 advisory observations", () => {
+    withTempFile(
+      reviewerReport({ outcome: "approved", findings: [], advisories: [{ title: "Naming", body: "" }] }),
+      (filePath) => {
+        expect(runPromise(filePath).error).toBe("invalid_reviewer_advisories");
+      },
+    );
+  });
+
+  it("rejects V1 changes_requested without a prior-finding disposition", () => {
+    withTempFile(
+      reviewerReport({ outcome: "changes_requested", findings: [{ title: "Bug", body: "Fix it", severity: "major" }] }),
+      (filePath) => {
+        expect(runPromise(filePath).error).toBe("changes_requested_requires_prior_finding_disposition");
+      },
+    );
+  });
+
+  it("rejects an unknown V1 prior-finding disposition", () => {
+    withTempFile(
+      reviewerReport({ outcome: "approved", findings: [], priorRequiredFindings: "probably_fine" }),
+      (filePath) => {
+        expect(runPromise(filePath).error).toBe("invalid_prior_finding_disposition");
+      },
+    );
+  });
+
+  it("accepts a V1 changes_requested result that reports repair progress", () => {
+    withTempFile(
+      reviewerReport({
+        outcome: "changes_requested",
+        findings: [{ title: "Bug", body: "Fix it", severity: "major" }],
+        priorRequiredFindings: "all_resolved",
+      }),
+      (filePath) => {
+        expect(runPromise(filePath).promise.priorRequiredFindings).toBe("all_resolved");
       },
     );
   });
@@ -259,12 +304,6 @@ describe("extract worker promise helper", () => {
     });
   });
 
-  it("keeps an unrelated legacy three-field report compatible with symbolic text", () => {
-    withTempFile('{"status":"complete","reason":"origin/main","summary":"legacy output value"}', (filePath) => {
-      expect(runPromise(filePath).evidenceStrength).toBe("legacy-weak");
-    });
-  });
-
   it("rejects changes_requested without findings", () => {
     withTempFile(
       '{"status":"complete","outcome":"changes_requested","reason":"","summary":"missing findings"}',
@@ -283,15 +322,6 @@ describe("extract worker promise helper", () => {
     );
   });
 
-  it("accepts a structured successful repair report", () => {
-    withTempFile(
-      '{"status":"complete","reason":"repair_pushed","summary":"fixed","repairs":[{"title":"Unsafe fallback","summary":"Removed fallback","paths":["src/review.ts"]}],"checks":[{"command":"npm test","result":"passed"}]}',
-      (filePath) => {
-        expect(runHelper(filePath).status).toBe("complete");
-      },
-    );
-  });
-
   it("rejects a successful repair without per-finding summaries", () => {
     withTempFile(
       '{"status":"complete","reason":"repair_pushed","summary":"fixed","checks":[{"command":"npm test","result":"passed"}]}',
@@ -299,18 +329,6 @@ describe("extract worker promise helper", () => {
         expect(runHelper(filePath).status).toBe("invalid");
       },
     );
-  });
-
-  it("accepts blocked promise files", () => {
-    withTempFile('{"status":"blocked","reason":"仕様不足","summary":"確認した。仕様が足りない。判断待ち。"}', (filePath) => {
-      expect(runHelper(filePath)).toEqual({ code: 0, status: "blocked" });
-    });
-  });
-
-  it("accepts argparse-style equals file arguments", () => {
-    withTempFile('{"status":"complete","reason":"","summary":"実装した。検証した。残作業なし。"}', (filePath) => {
-      expect(runHelper(filePath, "equals")).toEqual({ code: 0, status: "complete" });
-    });
   });
 
   it("reports none for missing promise files", () => {

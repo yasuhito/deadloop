@@ -131,6 +131,7 @@ When("deadloop starts the agent", function (this: World) {
   });
   this.result = launchIssueWorkerFlow({ number: 12, title: "one workspace" }, env, {
     mkdirSync: fs.mkdirSync,
+    alignCheckout: () => {},
     runner,
     runText: (args: string[]) => {
       if (args[0] === "herdr" && (args[1] === "tab" || args[1] === "pane")) this.layoutObservation!.extraLayoutActions.push(args.join(" "));
@@ -193,6 +194,7 @@ When("deadloop starts the requeued Worker", function (this: World) {
   });
   this.result = launchIssueWorkerFlow({ number: 12, title: "renamed issue" }, env, {
     mkdirSync: fs.mkdirSync,
+    alignCheckout: () => {},
     runner,
     runText: (args: string[]) => {
       const nameIndex = args.indexOf("--name");
@@ -289,6 +291,7 @@ function roleLaunchOps(root: string, workspaceId: string, onOpenWorktree?: () =>
   let launchedName = "";
   return {
     mkdirSync: fs.mkdirSync,
+    alignCheckout: () => {},
     runner: {
       createWorktree: () => { throw new Error("existing PR roles must open their linked worktree"); },
       openWorktree: () => {
@@ -359,8 +362,14 @@ function launchBranchUpdateBoundary(workspaceId: string) {
       DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: repoPath, DEADLOOP_GITHUB_REPO: "owner/repo",
       DEADLOOP_WORKTREE_ROOT: worktreeRoot, DEADLOOP_STATE_DIR: stateDir, DEADLOOP_ENABLED_AT: String(enabledAt),
       DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "a".repeat(40) }),
+      DEADLOOP_GITHUB_REPOSITORY_ID: "R_fixture", DEADLOOP_AUTOMATION_LOGIN: "deadloop-bot",
+      DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
     });
-    const pr = { number: 12, headRefName: "agent/issue-12", headRefOid: inputHead, labels: [] };
+    const pr = {
+      number: 12, headRefName: "agent/issue-12", headRefOid: inputHead,
+      labels: [{ name: "agent:update-branch" }], comments: [],
+      timelineEvents: [{ id: "branch-update-12", event: "labeled", created_at: "2026-07-07T23:59:00Z", label: { name: "agent:update-branch" } }],
+    };
     let enablementGuardObserved = false;
     const operations = roleLaunchOps(worktreeRoot, workspaceId, () => {
       enablementGuardObserved = fs.existsSync(path.join(stateDir, "enabled-projects.json.lock"));
@@ -368,7 +377,7 @@ function launchBranchUpdateBoundary(workspaceId: string) {
     const launched = launchBranchUpdate(
       pr,
       env,
-      { prs: [pr] },
+      { prs: [pr], githubRepositoryId: "R_fixture", githubRepo: "owner/repo", automationLogin: "deadloop-bot" },
       { headOid: inputHead, baseOid: "c".repeat(40) },
       { agentLaunchOps: operations },
     );
@@ -427,7 +436,8 @@ When("deadloop starts an automation cycle", async function (this: World) {
   const project = normalizeProject({ id: "demo", repoPath: "/repo", githubRepo: "owner/repo", automations: [{ id: "a", name: "a" }] });
   try {
     await runScheduledAutomation(project, project.automations[0], 1, { automations: {} }, {
-      compatibilityPreflight: () => { throw new Error("Herdr is unsupported"); }, now: () => 1,
+      herdrPreflight: () => { throw new Error("Herdr is unsupported"); }, now: () => 1,
+      prepareExecutionSupply: () => ({ codeIdentity: "a".repeat(40), lockHash: "b".repeat(64), packageRoot: "/snapshot", automationDir: "/snapshot/automations", dependencyRoot: "/dependencies" }),
       readPrompt: () => "", resolveAutomationFileInDir: () => ({ requested: "", resolved: "", found: false }),
       runDriver: async () => (this.mutationCount!++, { code: 0 }), runPrecheck: async () => (this.mutationCount!++, { code: 0 }),
       saveState: () => { this.mutationCount!++; }, sendUserMessage: () => { this.mutationCount!++; },

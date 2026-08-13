@@ -5,7 +5,7 @@ const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertLocallyEnabled } = require("../../../src/enabled-operation.cjs");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
 const { authorizeFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
@@ -47,7 +47,7 @@ function canonicalAttemptRunDir(args: JsonObject): { attemptRecord: string; runD
 }
 function persist(args: JsonObject) {
   const runner = createCommandRunner();
-  runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
+  runHerdrPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
   const { attemptRecord, runDir } = canonicalAttemptLocation(args);
   const record = readAttemptRecord(runDir);
   assertAttemptProjectBinding(record, args);

@@ -1,7 +1,7 @@
 const {
   defaultDecisionConfig,
   externalReviewGate: decideExternalReviewGate,
-  selectPrForReview,
+  selectPrRequestTarget,
   attemptJournalsForPrReviewer,
   workingReviewerPrNumbers,
   claimedReviewerHeads,
@@ -9,14 +9,15 @@ const {
 
 type JsonObject = Record<string, any>;
 
-type PrReviewerFlowEnv = {
+type PrRequestFlowEnv = {
   projectId: string;
   githubRepo: string;
   automationLogin: string;
   stateDir: string;
   reviewLabel: string;
-  reviewingLabel: string;
-  humanLabel: string;
+  implementLabel: string;
+  updateBranchLabel: string;
+  inProgressLabel: string;
   blockedLabel: string;
   autoMerge: boolean;
   externalReviewEnabled: boolean;
@@ -24,15 +25,15 @@ type PrReviewerFlowEnv = {
   now: string;
 };
 
-type PrReviewerPlan =
+type PrRequestPlan =
   | { kind: "skip_no_candidate"; summary: string; driverAction: "no_candidate"; decision: JsonObject }
   | { kind: "skip_wait"; summary: string; driverAction: "wait"; decision: JsonObject }
-  | { kind: "draft_gate"; decision: JsonObject; pr: JsonObject }
+  | { kind: "branch_update_required"; decision: JsonObject; pr: JsonObject }
   | { kind: "external_review_request"; decision: JsonObject; pr: JsonObject; gate: JsonObject }
   | { kind: "external_review_wait"; decision: JsonObject; pr: JsonObject; gate: JsonObject }
   | { kind: "review_required"; decision: JsonObject; pr: JsonObject; gate: JsonObject; reason: string };
 
-function decisionConfig(env: PrReviewerFlowEnv): JsonObject {
+function decisionConfig(env: PrRequestFlowEnv): JsonObject {
   const externalReviewWaitSeconds = Number(env.externalReviewWaitSeconds || 1800);
   if (!Number.isFinite(externalReviewWaitSeconds) || externalReviewWaitSeconds < 0) {
     throw new Error("DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS must be a non-negative number");
@@ -42,8 +43,9 @@ function decisionConfig(env: PrReviewerFlowEnv): JsonObject {
   if (Number.isNaN(now.getTime())) throw new Error("DEADLOOP_NOW must be an ISO-8601 timestamp");
   return defaultDecisionConfig({
     reviewLabel: env.reviewLabel,
-    reviewingLabel: env.reviewingLabel,
-    humanLabel: env.humanLabel,
+    implementLabel: env.implementLabel || "agent:implement",
+    updateBranchLabel: env.updateBranchLabel || "agent:update-branch",
+    inProgressLabel: env.inProgressLabel || "agent:in-progress",
     blockedLabel: env.blockedLabel,
     autoMerge: env.autoMerge,
     externalReviewEnabled: env.externalReviewEnabled,
@@ -63,10 +65,10 @@ function selectedPr(prs: JsonObject[], number: number): JsonObject {
   return prs.find((pr) => Number(pr.number) === number) || { number };
 }
 
-function planPrReviewerAction(prs: JsonObject[], _agents: JsonObject, env: PrReviewerFlowEnv): PrReviewerPlan {
+function planPrRequestAction(prs: JsonObject[], _agents: JsonObject, env: PrRequestFlowEnv): PrRequestPlan {
   const config = decisionConfig(env);
   const attempts = env.stateDir ? attemptJournalsForPrReviewer(env.stateDir) : [];
-  const decision = selectPrForReview(
+  const decision = selectPrRequestTarget(
     prs,
     config,
     workingReviewerPrNumbers(_agents, env.projectId, attempts, env.githubRepo || ""),
@@ -86,7 +88,7 @@ function planPrReviewerAction(prs: JsonObject[], _agents: JsonObject, env: PrRev
   }
 
   const pr = selectedPr(prs, Number(decision.number));
-  if (decision.action === "draft_gate") return { kind: "draft_gate", decision, pr };
+  if (decision.role === "branch-update") return { kind: "branch_update_required", decision, pr };
 
   if (!env.externalReviewEnabled) {
     return {
@@ -111,4 +113,4 @@ function planPrReviewerAction(prs: JsonObject[], _agents: JsonObject, env: PrRev
   };
 }
 
-module.exports = { planPrReviewerAction, decisionConfig };
+module.exports = { planPrRequestAction, decisionConfig };

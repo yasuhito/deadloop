@@ -1,0 +1,53 @@
+[
+  {
+    "number": 14,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefOid": "3333333333333333333333333333333333333333",
+    "isDraft": false,
+    "labels": [
+      {
+        "name": "agent:review"
+      },
+      {
+        "name": "agent:blocked"
+      }
+    ],
+    "statusCheckRollup": [],
+    "reviewRequests": [],
+    "timelineEvents": [
+      {
+        "id": "30",
+        "event": "labeled",
+        "created_at": "2026-07-03T00:00:00Z",
+        "actor": {
+          "login": "deadloop-bot"
+        },
+        "label": {
+          "name": "agent:blocked"
+        }
+      },
+      {
+        "id": "42",
+        "event": "labeled",
+        "created_at": "2026-07-03T02:00:00Z",
+        "actor": {
+          "login": "deadloop-bot"
+        },
+        "label": {
+          "name": "agent:blocked"
+        }
+      },
+      {
+        "id": "43",
+        "event": "labeled",
+        "created_at": "2026-07-03T02:00:00Z",
+        "actor": {
+          "login": "deadloop-bot"
+        },
+        "label": {
+          "name": "agent:review"
+        }
+      }
+    ]
+  }
+]

@@ -10,17 +10,13 @@ English | [日本語](README.ja.md)
 
 ## Install
 
-Install and activate the Pi package:
+Install the Pi package:
 
 ```bash
 pi install git:github.com/yasuhito/deadloop
 ```
 
-Optionally install the setup skill for guided configuration:
-
-```bash
-npx skills@latest add yasuhito/deadloop
-```
+This installs the deadloop extension and its setup skill together.
 
 ## Current status
 
@@ -30,49 +26,90 @@ npx skills@latest add yasuhito/deadloop
 
 ## Configure
 
-### Enable a repository
+You need an authenticated `gh` CLI and a running [Herdr](https://herdr.dev/) 0.8.0 or newer server.
 
-From a normal Git checkout, explicitly enable the local scheduler:
+1. Start Pi from the repository's normal Git checkout:
 
-```text
-/deadloop-enable
+   ```bash
+   cd /absolute/path/to/your/repo
+   pi
+   ```
+
+2. Enable deadloop:
+
+   ```text
+   /deadloop-enable
+   ```
+
+3. To send an Issue to deadloop, add both labels:
+
+   - `ready-for-agent`
+   - `agent:implement`
+
+That is enough to start. During enablement, deadloop runs `npm run check`, creates any missing standard labels, and leaves automatic merge off. If the repository does not provide an `npm run check` script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
+
+## Control the loop with labels
+
+You start the loop by labeling an Issue. deadloop owns the implementation and review transitions, then either hands the approved PR to a human or merges it according to policy.
+
+```mermaid
+flowchart TD
+    I["`**Issue queued**
+    ready-for-agent + agent:implement`"]
+    W["`**Implementation**
+    ready-for-agent + agent:in-progress`"]
+    R["`**PR review requested**
+    draft PR + agent:review`"]
+    V["`**Review and repair**
+    agent:in-progress`"]
+    U["`**Branch update requested**
+    agent:update-branch`"]
+    H["`**Ready for people**
+    ready PR, no agent label`"]
+    M["Merged"]
+    B["`**Needs attention**
+    agent:blocked`"]
+
+    I -->|deadloop claims Issue| W
+    W -->|draft PR created| R
+    R -->|deadloop claims review| V
+    V -->|changes pushed| R
+    V -->|merge conflict| U
+    U -->|branch updated| R
+    V -->|approved; autoMerge off| H
+    V -->|approved; autoMerge on| M
+    H -->|human merges| M
+    W -. problem .-> B
+    V -. problem .-> B
 ```
 
-deadloop infers the checkout path, GitHub repository, base branch, and default Herdr worktree root.
+1. **Request implementation** — `ready-for-agent` marks an Issue as eligible. `agent:implement` requests implementation. Remove `agent:implement` before deadloop claims the Issue to cancel the request.
+2. **Let deadloop work** — deadloop replaces the request label with `agent:in-progress`, creates a draft PR with `agent:review`, and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
+3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help; fix the cause reported in the Issue or PR comment, then follow its recovery instructions.
 
-Enablement is local state under `~/.pi/agent/deadloop/`. Neither `deadloop.json` nor `projects.json` starts automation by itself.
+## Operator commands
 
-### Pass the preflight check
+Run these commands from the Pi session in the target repository:
 
-Before enabling automation, `/deadloop-enable` creates a journaled temporary Git worktree at the trusted base revision. It runs the explicit required-verification command there, isolated from uncommitted changes in the normal checkout.
+| Command | Purpose |
+| --- | --- |
+| `/deadloop-enable` | Verify the repository and enable new deadloop work. |
+| `/deadloop-disable` | Stop new work from starting; running attempts may finish. |
+| `/deadloop-status` | Show whether deadloop is enabled and summarize its current state. |
+| `/deadloop-doctor` | Diagnose configuration and retained attempts without changing them. |
+| `/deadloop-abandon-attempt <attempt-id>` | Safely abandon a retained attempt only when doctor presents this command. |
 
-If verification fails, automation remains disabled and the command reports the durable log path. This preflight does not create a Herdr workspace or start an agent.
+## Advanced configuration
 
-A later enable reuses a successful preflight only when the repository, commit, command, source identity, and base revision all match exactly.
+The default verification command is `npm run check`. To use another command, commit `deadloop.json` to the repository's base branch:
 
-The preflight tries to restore generated runtime artifacts on every exit. If restoration fails, deadloop preserves the quarantine and temporary worktree, records their paths, and reports them through `/deadloop-doctor`.
+```json
+{
+  "checkCommand": "your verification command"
+}
+```
 
-### Confirm GitHub access and labels
-
-After the preflight succeeds, `/deadloop-enable` verifies GitHub write access and resolves the authenticated GitHub login. It stores that login in local enablement state as an explicit authorized automation identity, then creates only the standard labels that are missing. Enablement fails if the authenticated login cannot be verified.
-
-### Keep automatic merge off initially
-
-A newly enabled repository always starts with `autoMerge: false`.
-
-If deadloop finds an existing `autoMerge: true` during enablement, automatic merge remains off. To acknowledge the risk, explicitly change the setting from `false` to `true` after enabling the repository.
-
-This acknowledgement survives disable and re-enable. Keep `autoMerge` set to `false` until you intend to enable automatic merge.
-
-### Disable or re-enable a repository
-
-Use `/deadloop-disable` to stop scheduling. It does not stop active agents or remove GitHub state, worktrees, or run artifacts.
-
-Re-enable each repository after upgrading from an older release.
-
-### Add local overrides only when needed
-
-Copy the example into Pi's local state only when you need overrides such as `autoMerge`, a custom `worktreeRoot`, or additional `automationLogins` for other Automation hosts in the same trusted fleet. Add only GitHub logins whose identity and control you have verified; the example intentionally authorizes none:
+The default setup does not require a local configuration file. Create one only when you need overrides such as `autoMerge`, a custom `worktreeRoot`, or additional trusted automation hosts:
 
 ```bash
 mkdir -p ~/.pi/agent/deadloop
@@ -80,21 +117,7 @@ cp ~/.pi/agent/git/github.com/yasuhito/deadloop/extensions/deadloop/projects.exa
 $EDITOR ~/.pi/agent/deadloop/projects.json
 ```
 
-`projects.json` contains local paths and rollout choices. Do not commit it.
-
-### Define the required verification command
-
-Whenever possible, define the repository-owned aggregate verification command in trusted `deadloop.json`. For example, use `"checkCommand": "npm run check"`.
-
-Use a local value only as an intentional override.
-
-`/deadloop-status` and `/deadloop-doctor` show the effective required-verification command, its source, the trusted base revision, and any override information.
-
-When deadloop cannot resolve required verification, doctor lists non-authoritative candidates. It finds them in `package.json` verification scripts and individual GitHub Actions `run` steps.
-
-Doctor preserves each candidate's source, working directory, and explicit execution context. It never promotes a candidate or combines candidates into one command.
-
-See the [setup guide](docs/public-package-setup.md) for every available setting.
+`projects.json` contains local paths and rollout choices. Do not commit it. Prefer the repository-owned `deadloop.json` for shared, reviewable policy.
 
 ## Safety controls
 
@@ -106,34 +129,11 @@ With `true`, deadloop squash-merges PRs that pass its safety checks and deletes 
 
 Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
 
-## Create labels
-
-Create the standard labels once per repository:
-
-```bash
-gh label create ready-for-agent --repo owner/repo --color 0e8a16 || true
-gh label create ready-for-human --repo owner/repo --color d93f0b || true
-gh label create wontfix --repo owner/repo --color ffffff || true
-gh label create needs-info --repo owner/repo --color fef2c0 || true
-gh label create needs-triage --repo owner/repo --color f9d0c4 || true
-gh label create agent:explore --repo owner/repo --color 0052cc || true
-gh label create agent:implement --repo owner/repo --color 1d76db || true
-gh label create agent:review --repo owner/repo --color 5319e7 || true
-gh label create agent:reviewing --repo owner/repo --color c2e0c6 || true
-gh label create agent:update-branch --repo owner/repo --color 006b75 || true
-gh label create agent:in-progress --repo owner/repo --color fbca04 || true
-gh label create agent:blocked --repo owner/repo --color b60205 || true
-```
-
-An issue is eligible only when it has both `ready-for-agent` and `agent:implement`.
-
-`agent:reviewing` remains a compatibility label for older workflow state and branch-update paths. Review claims and repair authorization require `agent:in-progress`; new review flows never add `agent:reviewing`.
-
 ## Merge-conflict recovery
 
-During the current GitHub-claim bootstrap, branch-update mutations stop without side effects. They remain unavailable until the `agent:update-branch` handoff tracked by #241 is implemented. The existing non-force, exact-head, required-verification, and normal-merge safety contracts remain required; this temporary stop does not remove them.
+Automatic branch updates are currently unavailable. deadloop detects merge conflicts but does not update the branch until #241 connects the `agent:update-branch` request to its worker. The existing non-force, exact-head, required-verification, and normal-merge safety contracts remain required.
 
-The guarded branch-update behavior below describes the retained safety contract, not a currently reachable mutation path.
+The behavior below describes the safety contract for that future connection, not behavior that can currently run.
 
 The worker merges the selected base commit into the existing PR branch. It never rebases.
 
@@ -153,7 +153,7 @@ See [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) for the safety contr
 
 When the built-in reviewer reports structured actionable findings, deadloop can start one bounded repair worker on the existing PR branch.
 
-During repair, deadloop preserves the active `agent:in-progress` claim without adding another workflow label. It does not create a new `agent:review` request generation until repair completion, and it removes any legacy `agent:reviewing` label when leaving the repair state.
+During repair, deadloop preserves the active `agent:in-progress` claim without adding another workflow label. It does not create a new `agent:review` request generation until repair completion.
 
 The worker receives only the findings.
 
@@ -180,41 +180,11 @@ See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for details.
 ## Roll out in phases
 
 1. **Issue coordination only** — Start here for a slow rollout. Humans still review and merge PRs.
-2. **Automated PR review** — Use the standard PR reviewer with `autoMerge: false`. Reviewed PRs move to `ready-for-human`. During the current bootstrap, external-review mutations stop without side effects until they are connected under an active review claim; enabling `externalReview` does not bypass that stop.
+2. **Automated PR review** — Use the standard PR reviewer with `autoMerge: false`. Approved PRs become ready with no agent workflow label left, so people take them from there. External-review mutations are currently unavailable; enabling `externalReview` does not make them available.
 3. **Optional auto-merge** — Consider `autoMerge: true` only after proving branch protection, CI, review expectations, dry-run or manual approval practices, and stop conditions.
-
-## Run
-
-Start Pi inside the target repository:
-
-```bash
-cd /absolute/path/to/target/repo
-pi
-```
-
-Useful commands:
-
-```text
-/deadloop-enable
-/deadloop-disable
-/deadloop-status
-/deadloop-doctor
-/deadloop-abandon-attempt <attempt-id>  # only when doctor presents it
-```
-
-Operator environment variables:
-
-```bash
-DEADLOOP_CONFIG=/path/to/projects.json pi
-DEADLOOP_PROJECTS=my-project pi
-DEADLOOP=off pi
-DEADLOOP_AUTOMATIONS=off pi
-DEADLOOP_DEBUG=1 pi
-```
 
 ## Documentation
 
-- Setup guide: [docs/public-package-setup.md](docs/public-package-setup.md)
 - Herdr runner details: [docs/herdr-runner.md](docs/herdr-runner.md)
 
 ## Verify this repository

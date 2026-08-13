@@ -96,9 +96,9 @@ function buildNativeArgv(ctx) {
 }
 
 /**
- * Build argv after Herdr's `--` separator. Herdr 0.7.5 selects the executable
+ * Build argv after Herdr's `--` separator. Herdr selects the executable
  * through `agent start --kind`, so this intentionally excludes profile.command.
- * Compatibility tests and non-Herdr callers may still use buildAgentArgv below.
+ * Non-Herdr callers may still use buildAgentArgv below.
  * @param {LaunchContext} ctx
  * @returns {string[]}
  */

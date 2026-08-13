@@ -22,6 +22,7 @@ const {
 } = require("./pr-review-comments.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.ts");
+const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.ts");
 const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
@@ -30,7 +31,7 @@ const {
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
@@ -81,9 +82,9 @@ function envConfig(args: JsonObject = {}) {
     workerModel: configValue(args, "workerModel", process.env.DEADLOOP_WORKER_MODEL, ""),
     remote: configValue(args, "remote", process.env.DEADLOOP_REVIEW_REPAIR_REMOTE, "origin"),
     reviewLabel: configValue(args, "reviewLabel", process.env.DEADLOOP_REVIEW_LABEL, "agent:review"),
-    reviewingLabel: configValue(args, "reviewingLabel", process.env.DEADLOOP_REVIEWING_LABEL, "agent:reviewing"),
     blockedLabel: configValue(args, "blockedLabel", process.env.DEADLOOP_BLOCKED_LABEL, "agent:blocked"),
-    humanLabel: configValue(args, "humanLabel", process.env.DEADLOOP_HUMAN_LABEL, "ready-for-human"),
+    implementLabel: configValue(args, "implementLabel", process.env.DEADLOOP_IMPLEMENT_LABEL, "agent:implement"),
+    updateBranchLabel: configValue(args, "updateBranchLabel", process.env.DEADLOOP_UPDATE_BRANCH_LABEL, "agent:update-branch"),
     inProgressLabel: configValue(args, "inProgressLabel", process.env.DEADLOOP_IN_PROGRESS_LABEL, "agent:in-progress"),
     reviewClaim: (() => {
       const value = configValue(args, "reviewClaim", process.env.DEADLOOP_REVIEW_CLAIM, "");
@@ -269,7 +270,7 @@ function withRevalidatedPrMutation(
       const comparison = comparePrHistoryObservations(expectedHistory, currentHistory);
       if (comparison.kind !== "unchanged") {
         staleComparison = comparison;
-        guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel, env.reviewingLabel], add: env.reviewLabel });
+        guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel], add: env.reviewLabel });
         return;
       }
     }
@@ -296,7 +297,7 @@ function releaseObservedStaleReviewHistory(
     const livePr = readLivePr(env.githubRepo, prNumber);
     if (!claimedPrStillReleasable(livePr, env, expectedHead)) return;
     const guardedGithub = createGithubOperations(commandRunner, recheck);
-    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel, env.reviewingLabel], add: env.reviewLabel });
+    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel], add: env.reviewLabel });
   });
   return { stale: true, comparison };
 }
@@ -318,14 +319,14 @@ function releaseStaleReviewHistory(
     const livePr = readLivePr(env.githubRepo, prNumber);
     if (!claimedPrStillReleasable(livePr, env, expectedHead)) return;
     const guardedGithub = createGithubOperations(commandRunner, recheck);
-    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel, env.reviewingLabel], add: env.reviewLabel });
+    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel], add: env.reviewLabel });
   });
   return { stale, comparison };
 }
 
 function blockedClaimMove(env: ReturnType<typeof envConfig>) {
   return {
-    remove: [env.inProgressLabel, env.reviewingLabel],
+    remove: [env.inProgressLabel],
     add: [env.reviewLabel, env.blockedLabel],
   };
 }
@@ -543,7 +544,7 @@ function repairLaunchInput(
   uuid: string,
 ) {
   return {
-    worktree: { mode: "open" as const, branch, baseBranch: env.baseBranch },
+    worktree: { mode: "open" as const, branch, baseBranch: env.baseBranch, remote: env.remote },
     repoPath: env.repoPath,
     automationDir: env.automationDir,
     stateDir: env.stateDir,
@@ -653,7 +654,7 @@ function persistedReviewBody(
 }
 
 function dispatch(args: JsonObject): DriverResult {
-  runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
+  runHerdrPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   const env = envConfig(args);
   if (!env.githubRepo) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
   const prNumber = String(args.pr);
@@ -673,8 +674,7 @@ function dispatch(args: JsonObject): DriverResult {
   const rawReport = JSON.parse(fs.readFileSync(String(args.promise), "utf8"));
   const attemptRecord = readAttemptRecord(path.dirname(String(args.attemptRecord)));
   const configuredClaimFields = {
-    reviewLabel: env.reviewLabel,
-    reviewingLabel: env.reviewingLabel,
+    requestLabel: env.reviewLabel,
     inProgressLabel: env.inProgressLabel,
     blockedLabel: env.blockedLabel,
   };
@@ -686,7 +686,8 @@ function dispatch(args: JsonObject): DriverResult {
   const persistenceMarker = rawReport?.schemaVersion === 1
     ? renderAttemptPersistenceMarker(attemptRecord, rawReport, {
         findings: rawReport.role === "reviewer" ? rawReport.result?.findings || [] : [],
-        boundedRepairAttemptMarked: rawReport.role === "reviewer" && rawReport.result?.outcome === "changes_requested",
+        boundedRepairAttemptMarked: rawReport.role === "reviewer"
+          && decideReviewTransition(rawReport.result || {}).transition === "repair",
       })
     : "";
   const expectedHead = String(args.expectedHead).toLowerCase();
@@ -721,7 +722,7 @@ function dispatch(args: JsonObject): DriverResult {
         driverAction: "review_stale_history",
         historyComparison: freshness.comparison,
         labelsPreserved: [env.reviewLabel],
-        labelsRemoved: [env.inProgressLabel, env.reviewingLabel],
+        labelsRemoved: [env.inProgressLabel],
       });
     }
   }
@@ -744,7 +745,7 @@ function dispatch(args: JsonObject): DriverResult {
           `Reviewer technical failure will be retried once for this head: ${publicText(promise.reason, "technical review failure")}\n\n${renderTechnicalFailureMarker(expectedHead)}`,
         );
         guardedGithub.movePrLabels(env.githubRepo, prNumber, {
-          remove: [env.inProgressLabel, env.reviewingLabel], add: env.reviewLabel,
+          remove: [env.inProgressLabel], add: env.reviewLabel,
         });
       }, historyFile);
       if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before technical retry");
@@ -762,17 +763,24 @@ function dispatch(args: JsonObject): DriverResult {
 
   const outcome = String(promise.outcome || "approved");
   const findings = (promise.findings || []) as JsonObject[];
-  const reviewFingerprint = reviewOutcomeFingerprint(outcome, promise.reason || "", promise.summary || "", findings);
+  const advisories = (promise.advisories || []) as JsonObject[];
+  const priorRequiredFindings = promise.priorRequiredFindings;
+  // The reviewer owns the semantic judgment; this picks the one allowed transition.
+  const review = decideReviewTransition({ outcome, priorRequiredFindings });
+  const reviewFingerprint = reviewOutcomeFingerprint(outcome, promise.reason || "", promise.summary || "", findings, advisories);
   const commentInput = {
     headOid: expectedHead,
     reason: promise.reason || "",
     summary: promise.summary || "",
     findings,
+    advisories,
+    priorRequiredFindings,
+    transitionReason: review.reason,
     reviewFingerprint,
     blockedLabel: env.blockedLabel,
   };
 
-  if (outcome === "approved") {
+  if (review.transition === "approve") {
     if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
@@ -822,7 +830,7 @@ function dispatch(args: JsonObject): DriverResult {
     }
     return driverResult("done", `PR #${prNumber} review completed without actionable findings`, { driverAction: "review_approved" });
   }
-  if (outcome === "human_required") {
+  if (review.transition === "human_required") {
     if (historyFile && fs.existsSync(historyFile)) {
       const freshness = releaseStaleReviewHistory(prNumber, env, historyFile, expectedHead);
       if (freshness.stale) {
@@ -849,7 +857,7 @@ function dispatch(args: JsonObject): DriverResult {
             throw new StaleLaunchError(`PR #${prNumber} review history changed before human handoff`);
           }
         }
-        if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, outcome)) {
+        if (!reviewCommentExists(livePr.comments || [], expectedHead, reviewFingerprint, "human_required")) {
           comment = renderHumanRequiredComment(commentInput);
           const output = guardedGithub.commentPr(env.githubRepo, prNumber, comment);
           if (expectedHistory) {
@@ -867,7 +875,7 @@ function dispatch(args: JsonObject): DriverResult {
           writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
         }
         const labels = labelNames(livePr.labels);
-        if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
+        if (labels.includes(env.inProgressLabel)
           || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
           guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
         }
@@ -879,7 +887,11 @@ function dispatch(args: JsonObject): DriverResult {
         driverAction: "review_stale_history", historyComparison: freshness.comparison,
       });
     }
-    return driverResult("done", `PR #${prNumber} review requires a human`, { driverAction: "review_human_blocked", comment });
+    return driverResult("done", `PR #${prNumber} review requires a human`, {
+      driverAction: "review_human_blocked",
+      reason: review.reason,
+      comment,
+    });
   }
 
   const worktree = inspectRepairWorktree(env.repoPath, branch);
@@ -1041,7 +1053,7 @@ function dispatch(args: JsonObject): DriverResult {
         prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
         promiseFile: recoveredLaunch.promiseFile, attemptRecordFile: path.join(path.dirname(recoveredLaunch.promiseFile), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
         repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
-        reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
+        reviewLabel: env.reviewLabel, inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
         reviewClaim: env.reviewClaim,
         attemptKey: selection.key,
       };
@@ -1060,7 +1072,7 @@ function dispatch(args: JsonObject): DriverResult {
       comment = block.comment;
     } else {
       const labels = labelNames(refreshedPr.labels);
-      if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
+      if (labels.includes(env.inProgressLabel)
         || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
         const staleComparison = withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env)), historyFile);
         if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before interrupted-dispatch block");
@@ -1081,7 +1093,7 @@ function dispatch(args: JsonObject): DriverResult {
         guardedGithub.commentPr(env.githubRepo, prNumber, comment);
       }
       const labels = labelNames(livePr.labels);
-      if (labels.includes(env.inProgressLabel) || labels.includes(env.reviewingLabel)
+      if (labels.includes(env.inProgressLabel)
         || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
         guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
       }
@@ -1154,12 +1166,11 @@ function dispatch(args: JsonObject): DriverResult {
       "--state-dir", env.stateDir,
       "--enabled-at", String(env.enabledAt),
       "--expected-label", env.inProgressLabel,
-      ...(labelNames(refreshedPr.labels).includes(env.reviewingLabel) ? ["--expected-label", env.reviewingLabel] : []),
-      "--managed-label", env.inProgressLabel,
       "--managed-label", env.reviewLabel,
-      "--managed-label", env.reviewingLabel,
+      "--managed-label", env.inProgressLabel,
       "--managed-label", env.blockedLabel,
-      "--managed-label", env.humanLabel,
+      "--managed-label", env.implementLabel,
+      "--managed-label", env.updateBranchLabel,
     ]);
     if (closed?.driverAction !== "workspace_closed") throw new Error("reviewer workspace was not closed before repair launch");
   }
@@ -1305,7 +1316,7 @@ function dispatch(args: JsonObject): DriverResult {
     prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
     promiseFile: launch.promiseFile, attemptRecordFile: launch.attemptRecordFile || path.join(path.dirname(String(launch.promiseFile)), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
     repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
-    reviewLabel: env.reviewLabel, reviewingLabel: env.reviewingLabel, inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
+    reviewLabel: env.reviewLabel, inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
     reviewClaim: env.reviewClaim,
     attemptKey: selection.key,
   };

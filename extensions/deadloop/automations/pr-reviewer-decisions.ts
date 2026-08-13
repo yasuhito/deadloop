@@ -6,19 +6,23 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { readAttemptRecord, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers } = require("../../../src/attempt-persistence-marker.cjs");
+const { selectPrRequest } = require("../../../src/pr-request-selection.ts");
 
 type AnyRecord = Record<string, any>;
 
 type ReviewDecisionConfig = {
   reviewLabel: string;
-  reviewingLabel: string;
-  humanLabel: string;
+  implementLabel: string;
+  updateBranchLabel: string;
+  inProgressLabel: string;
   blockedLabel: string;
   autoMerge: boolean;
   externalReviewEnabled: boolean;
   externalReviewWaitSeconds: number;
   projectId: string;
   automationLogin: string;
+  servedRoles: string[];
+  defersBlockedRecovery: boolean;
   now: Date;
 };
 
@@ -29,14 +33,24 @@ const REPAIR_RESULT_MARKER_RE = /<!--\s*deadloop:review-repair-result\s+key=[0-9
 function defaultDecisionConfig(overrides: Partial<ReviewDecisionConfig> = {}): ReviewDecisionConfig {
   return {
     reviewLabel: "agent:review",
-    reviewingLabel: "agent:reviewing",
-    humanLabel: "ready-for-human",
+    implementLabel: "agent:implement",
+    updateBranchLabel: "agent:update-branch",
+    inProgressLabel: "agent:in-progress",
     blockedLabel: "agent:blocked",
     autoMerge: false,
     externalReviewEnabled: false,
     externalReviewWaitSeconds: 1800,
     projectId: "",
     automationLogin: "",
+    // The review-result dispatcher still owns the repair launch under the review claim, so this
+    // driver serves no `review-repair` request. A pull request waiting on one is skipped whole,
+    // never downgraded to the review request queued behind it.
+    servedRoles: ["branch-update", "reviewer"],
+    // Whether a request post-dates the block that stopped a pull request is a timeline question.
+    // A caller that reads labels only cannot answer it, so it sets this and leaves a blocked pull
+    // request carrying a request to the caller that can. A gate must never skip work its authority
+    // would take.
+    defersBlockedRecovery: false,
     now: new Date(),
     ...overrides,
   };
@@ -233,38 +247,66 @@ function skipForPrReviewer(reason: string, pr: AnyRecord): AnyRecord {
   return { number: pr.number, reason };
 }
 
-function selectPrForReview(
+const REQUEST_ROLE_ACTIONS: Record<string, string> = {
+  "branch-update": "branch_update",
+  "review-repair": "review_repair",
+  reviewer: "review",
+};
+
+function requestLabelsOf(config: ReviewDecisionConfig): AnyRecord {
+  return { updateBranch: config.updateBranchLabel, implement: config.implementLabel, review: config.reviewLabel };
+}
+
+/**
+ * Picks the one pending Agent request to consume next. Lowest PR number first,
+ * and inside a pull request the fixed request order. Only the review role waits
+ * for CI and external review: a conflicted head and an unrepaired head are both
+ * states no check result can make reviewable.
+ */
+function selectPrRequestTarget(
   prs: AnyRecord[],
   config: ReviewDecisionConfig = defaultDecisionConfig(),
   workingReviewerPrs: Set<number> = new Set(),
   claimedReviewerHeadKeys: Set<string> = new Set(),
 ): AnyRecord {
-  const candidateLabels = config.autoMerge ? new Set([config.reviewLabel, config.humanLabel]) : new Set([config.reviewLabel]);
   const skipped: AnyRecord[] = [];
 
   for (const pr of [...prs].sort((left, right) => prNumberForPrReviewer(left) - prNumberForPrReviewer(right))) {
     const labels = labelNamesForPrReviewer(pr);
-    if (![...candidateLabels].some((label) => labels.has(label))) {
+    const request = selectPrRequest(labels, requestLabelsOf(config));
+    if (!request) {
       skipped.push(skipForPrReviewer("missing_candidate_label", pr));
       continue;
     }
-    if (labels.has(config.blockedLabel)) {
+    if (labels.has(config.blockedLabel) && !config.defersBlockedRecovery) {
       skipped.push(skipForPrReviewer("blocked", pr));
       continue;
     }
-    const hasReviewingLabel = labels.has(config.reviewingLabel);
-    // Legacy in-flight work remains a migration/reconciliation concern, but a
-    // local journal alone cannot suppress a fresh GitHub request.
-    if (hasReviewingLabel && workingReviewerPrs.has(prNumberForPrReviewer(pr))) {
+    if (!config.servedRoles.includes(request.role)) {
+      skipped.push(skipForPrReviewer("unserved_request", pr));
+      continue;
+    }
+    const hasInProgressLabel = labels.has(config.inProgressLabel);
+    // A retained journal suppresses work only while GitHub still exposes its
+    // active claim. An ordinary queued request without that claim stays eligible.
+    if (hasInProgressLabel && workingReviewerPrs.has(prNumberForPrReviewer(pr))) {
       skipped.push(skipForPrReviewer("reviewer_working", pr));
       continue;
     }
-    const currentHeadWasClaimed = claimedReviewerHeadKeys.has(reviewerClaimKey(prNumberForPrReviewer(pr), String(pr.headRefOid || "")));
-    const repairRereview = hasRepairRereviewProvenance(pr, config.automationLogin) && (!hasReviewingLabel || !currentHeadWasClaimed);
-    const staleReclaim = hasReviewingLabel && !repairRereview;
-    if (pr.isDraft) {
-      return { selected: true, number: pr.number, action: "draft_gate", reason: "draft", staleReclaim, skipped };
+    const selection = {
+      selected: true,
+      number: pr.number,
+      role: request.role,
+      requestLabel: request.label,
+      action: REQUEST_ROLE_ACTIONS[request.role],
+      skipped,
+    };
+    if (request.role !== "reviewer") {
+      return { ...selection, reason: hasInProgressLabel ? "stale_reclaim" : "selectable", staleReclaim: hasInProgressLabel };
     }
+    const currentHeadWasClaimed = claimedReviewerHeadKeys.has(reviewerClaimKey(prNumberForPrReviewer(pr), String(pr.headRefOid || "")));
+    const repairRereview = hasRepairRereviewProvenance(pr, config.automationLogin) && !currentHeadWasClaimed;
+    const staleReclaim = hasInProgressLabel && !repairRereview;
     if (config.externalReviewEnabled && hasCopilotReviewRequest(pr) && !externalReviewWaitIsStale(pr, config)) {
       skipped.push(skipForPrReviewer("external_review_wait", pr));
       continue;
@@ -278,12 +320,9 @@ function selectPrForReview(
       continue;
     }
     return {
-      selected: true,
-      number: pr.number,
-      action: "review",
+      ...selection,
       reason: staleReclaim ? "stale_reclaim" : repairRereview ? "repair_rereview" : "selectable",
       staleReclaim,
-      skipped,
     };
   }
 
@@ -342,9 +381,11 @@ function cliConfig(args: AnyRecord): ReviewDecisionConfig {
   if (!now) throw new Error("--now must be an ISO-8601 timestamp");
   return defaultDecisionConfig({
     reviewLabel: args.reviewLabel || "agent:review",
-    reviewingLabel: args.reviewingLabel || "agent:reviewing",
-    humanLabel: args.humanLabel || "ready-for-human",
+    implementLabel: args.implementLabel || "agent:implement",
+    updateBranchLabel: args.updateBranchLabel || "agent:update-branch",
+    inProgressLabel: args.inProgressLabel || "agent:in-progress",
     blockedLabel: args.blockedLabel || "agent:blocked",
+    defersBlockedRecovery: parseBoolForPrReviewer(args.defersBlockedRecovery),
     autoMerge: parseBoolForPrReviewer(args.autoMerge),
     externalReviewEnabled: parseBoolForPrReviewer(args.externalReviewEnabled),
     externalReviewWaitSeconds: parseWaitSecondsForPrReviewer(args.externalReviewWaitSeconds),
@@ -363,7 +404,7 @@ function main(argv: string[] = process.argv.slice(2)): number {
   const attempts = args.stateDir ? attemptJournalsForPrReviewer(args.stateDir) : [];
   const decision = args.mode === "external-review-gate"
     ? externalReviewGate(loadPr(args.input), config)
-    : selectPrForReview(
+    : selectPrRequestTarget(
       loadPrs(args.input),
       config,
       workingReviewerPrNumbers(loadAgents(args.agents), config.projectId, attempts, args.githubRepo || ""),
@@ -385,7 +426,7 @@ if (require.main === module) {
 module.exports = {
   defaultDecisionConfig,
   externalReviewGate,
-  selectPrForReview,
+  selectPrRequestTarget,
   attemptJournalsForPrReviewer,
   workingReviewerPrNumbers,
   claimedReviewerHeads,

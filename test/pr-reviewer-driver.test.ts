@@ -78,10 +78,10 @@ describe("PR reviewer deterministic driver", () => {
     try {
       claimReviewRequest(github, pr, {
         githubRepositoryId: "R_repo", githubRepo: "owner/repo", claimOwner: "host-a",
-        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", implementLabel: "agent:implement",
+        reviewLabel: "agent:review", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch",
         inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", automationLogin: "deadloop-bot",
         authorizedAutomationLogins: ["deadloop-bot"], reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
-      }, () => "other-bot");
+      }, "reviewer", () => "other-bot");
     } catch {}
 
     expect(labelMutations).toBe(0);
@@ -90,7 +90,7 @@ describe("PR reviewer deterministic driver", () => {
   it.each([
     ["runtime shortening", { reviewerMaxRuntimeSeconds: 3400, authoritySeconds: 3500 }],
     ["grace shortening", { cleanupGraceSeconds: 90, authoritySeconds: 3590 }],
-    ["managed label change", { managedLabels: ["agent:review-v2", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"] }],
+    ["managed label change", { managedLabels: ["agent:review-v2", "agent:in-progress", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"] }],
     ["authorized identity change", { authorizedLogins: ["other-bot"] }],
     ["authenticated login change", { authenticatedLogin: "other-bot" }],
     ["enablement change", { repositoryId: "R_reenabled" }],
@@ -119,16 +119,16 @@ describe("PR reviewer deterministic driver", () => {
       try {
         claimReviewRequest(github, pr, {
           githubRepositoryId: "R_repo", githubRepo: "owner/repo", claimOwner: "host-a",
-          reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", implementLabel: "agent:implement",
+          reviewLabel: "agent:review", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch",
           inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", automationLogin: "deadloop-bot",
           authorizedAutomationLogins: ["deadloop-bot"], reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
-        }, () => "deadloop-bot", (claim: Record<string, unknown>) => {
+        }, "reviewer", () => "deadloop-bot", (claim: Record<string, unknown>) => {
           authorityChecks += 1;
           assertClaimMatchesCurrentConfiguration(claim, {
             reviewerMaxRuntimeSeconds: 3500,
             cleanupGraceSeconds: 100,
             authoritySeconds: 3600,
-            managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+            managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
             requestLabel: "agent:review",
             requiredLabels: ["agent:in-progress"],
             repositoryId: "R_repo",
@@ -165,10 +165,10 @@ describe("PR reviewer deterministic driver", () => {
     try {
       claimReviewRequest(github, pr, {
         githubRepositoryId: "R_repo", githubRepo: "owner/repo", claimOwner: "host-a",
-        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", implementLabel: "agent:implement",
+        reviewLabel: "agent:review", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch",
         inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", automationLogin: "deadloop-bot",
         authorizedAutomationLogins: ["deadloop-bot"], reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
-      }, () => "deadloop-bot");
+      }, "reviewer", () => "deadloop-bot");
     } catch {}
     return { blockComments, labelMutations };
   }
@@ -186,7 +186,7 @@ describe("PR reviewer deterministic driver", () => {
     const pr = { number: 24, state: "OPEN", headRefName: "feature", headRefOid: head, labels: [{ name: "agent:review" }, { name: "customer:keep" }] };
     let commented = false;
     let labelMutations = 0;
-    const managedLabels = ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"];
+    const managedLabels = ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"];
     const binding = {
       repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "old",
       role: "reviewer", revision: head, owner: "host-a", authority: { durationSeconds: 3600 },
@@ -194,7 +194,7 @@ describe("PR reviewer deterministic driver", () => {
     };
     const claim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress",
+      requestLabel: "agent:review", inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked", managedLabels,
     };
     const comments = [{
@@ -212,8 +212,8 @@ describe("PR reviewer deterministic driver", () => {
     };
 
     blockUnverifiableClaim(github, pr, {
-      githubRepo: "owner/repo", githubRepositoryId: "R_repo", reviewLabel: "agent:review", reviewingLabel: "agent:reviewing",
-      implementLabel: "agent:implement", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      githubRepo: "owner/repo", githubRepositoryId: "R_repo", reviewLabel: "agent:review",
+      implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     }, "server time unavailable", "old", claim);
 
     expect(labelMutations).toBe(0);
@@ -238,7 +238,7 @@ describe("PR reviewer deterministic driver", () => {
     authorizedLogins = ["deadloop-bot"],
   ) {
     const head = "a".repeat(40);
-    const managedLabels = ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"];
+    const managedLabels = ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"];
     const binding = {
       repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "event-22",
       role: "reviewer", revision: head, owner: "host-a", authority: { durationSeconds: 3600 },
@@ -272,7 +272,7 @@ describe("PR reviewer deterministic driver", () => {
     };
     const claim = {
       binding, commentId: "101", authorizedLogins, automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress",
+      requestLabel: "agent:review", inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked", managedLabels, labels: ["agent:in-progress"],
     };
     mutate?.(comments, binding);
@@ -281,8 +281,8 @@ describe("PR reviewer deterministic driver", () => {
     try {
       reauthorizeClaimedReview(github, pr, {
         githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot",
-        authorizedAutomationLogins: authorizedLogins, reviewLabel: "agent:review", reviewingLabel: "agent:reviewing",
-        implementLabel: "agent:implement", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+        authorizedAutomationLogins: authorizedLogins, reviewLabel: "agent:review",
+        implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
         reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
       }, claim, () => "deadloop-bot", { githubRepositoryId: "R_repo", githubRepo: "owner/repo" }, authorizeCurrent);
     } catch (caught) { error = caught instanceof Error ? caught.message : String(caught); }
@@ -398,10 +398,6 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("external-review-request.json").launch.claim.labels).not.toContain("agent:review");
   });
 
-  it("does not write the retired reviewing label", () => {
-    expect(runDriverFixture("external-review-request.json").launch.claim.labels).not.toContain("agent:reviewing");
-  });
-
   function transitionRaceScenario(options: {
     newGeneration?: boolean;
     initialUserLabel?: boolean;
@@ -461,15 +457,16 @@ describe("PR reviewer deterministic driver", () => {
     try {
       claimReviewRequest(github, pr, {
         githubRepositoryId: "R_repo", githubRepo: "owner/repo", claimOwner: "host-a",
-        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", implementLabel: "agent:implement",
+        reviewLabel: "agent:review", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch",
         inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", automationLogin: "deadloop-bot",
         authorizedAutomationLogins: ["deadloop-bot"], reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
-      }, () => "deadloop-bot");
+      }, "reviewer", () => "deadloop-bot");
     } catch (error) {
       rejection = error instanceof Error ? error.message : String(error);
     }
     return { labels: pr.labels.map(({ name }) => name), recoveryMoves, rejection };
   }
+
 
   it("preserves an unrelated label added during replacement without a new request generation", () => {
     expect(transitionRaceScenario({ newGeneration: false }).labels).toContain("customer:urgent");
@@ -571,10 +568,10 @@ describe("PR reviewer deterministic driver", () => {
     try {
       claimReviewRequest(github, pr, {
         githubRepositoryId: "R_repo", githubRepo: "owner/repo", claimOwner: "host-b",
-        reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", implementLabel: "agent:implement",
+        reviewLabel: "agent:review", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch",
         inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", automationLogin: "deadloop-b",
         authorizedAutomationLogins: ["deadloop-a", "deadloop-b"], reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, claimCleanupGraceSeconds: 100,
-      }, () => "deadloop-b", () => ({ authorizedLogins: ["deadloop-a", "deadloop-b"] }));
+      }, "reviewer", () => "deadloop-b", () => ({ authorizedLogins: ["deadloop-a", "deadloop-b"] }));
     } catch {}
     return { labels: pr.labels.map(({ name }) => name), replacements };
   }
@@ -635,26 +632,48 @@ describe("PR reviewer deterministic driver", () => {
 
   it("gives human_required reviewers an exact valid V1 result and evidence shape", () => {
     expect(readFileSync(driverScript, "utf8")).toContain(
-      'result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:[]}, and evidence={reviewed:["decision boundary and supporting evidence"]}',
+      'result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:<required findings, may be empty>,advisories:<advisory observations, may be empty>,priorRequiredFindings:"persisted|regressed|mixed|all_resolved|none"}',
     );
   });
 
-  it("fails closed on a merge conflict before branch-update side effects", () => {
-    expect(runDriverFixture("merge-conflict.json").driverAction).toBe("branch_update_claim_required");
+  it("separates required findings from advisory observations", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain(
+      "advisories are optional observations that are published for humans and never repaired",
+    );
+  });
+
+  it("asks the reviewer to report how the earlier required findings stand", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain(
+      "priorRequiredFindings states how the required findings raised by earlier reviews of this PR stand",
+    );
+  });
+
+  it("allows automatic repair only with reported repair progress", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain(
+      'Only "none" or "all_resolved" may accompany changes_requested',
+    );
+  });
+
+  it("forbids a required finding on an approved result", () => {
+    expect(readFileSync(driverScript, "utf8")).toContain("approved requires an empty findings list");
+  });
+
+  it("turns a merge conflict into a branch-update request", () => {
+    expect(runDriverFixture("merge-conflict.json").driverAction).toBe("branch_update_requested");
   });
 
   it("does not launch a reviewer for a conflicting head", () => {
     expect(runDriverFixture("merge-conflict.json").launch).toBeUndefined();
   });
 
-  it("creates no branch-update workspace before a migrated claim exists", () => {
+  it("launches no agent from the review request of a conflicting head", () => {
     expect(runDriverFixture("merge-conflict.json").testAdapterEffects.herdrStarts).toHaveLength(0);
   });
 
   it("persists a custom base branch in the branch-update worktree request", () => {
     const plan = branchUpdateLaunchPlan(
       { number: 31, headRefName: "agent/issue-31", headRefOid: "a".repeat(40) },
-      { projectId: "demo", baseBranch: "origin/develop", repoPath: "/repo", automationDir: "/automation", stateDir: "/state", worktreeRoot: "/worktrees", githubRepo: "owner/repo", branchUpdateAgent: "pi", branchUpdateModel: "", requiredVerification: {} },
+      { projectId: "demo", baseBranch: "origin/develop", repoPath: "/repo", automationDir: "/automation", stateDir: "/state", worktreeRoot: "/worktrees", githubRepo: "owner/repo", branchUpdateAgent: "pi", branchUpdateModel: "", branchUpdateRemote: "origin", requiredVerification: {} },
       { headOid: "a".repeat(40), baseOid: "b".repeat(40) },
       "launch-uuid",
     );
@@ -662,12 +681,12 @@ describe("PR reviewer deterministic driver", () => {
     expect(plan.input.worktree.baseBranch).toBe("origin/develop");
   });
 
-  it("creates no branch-update journal handoff before a migrated claim exists", () => {
+  it("creates no branch-update journal handoff from the review request before a migrated claim exists", () => {
     expect(runDriverFixture("merge-conflict.json").monitorHandoff).toBeUndefined();
   });
 
-  it("does not mutate GitHub while branch update lacks a claim protocol", () => {
-    expect(runDriverFixture("merge-conflict.json").testAdapterEffects.githubComments).toHaveLength(0);
+  it("leaves the branch-update request label on a conflicting head", () => {
+    expect(runDriverFixture("merge-conflict.json").testAdapterEffects.labels["31"]).toContain("agent:update-branch");
   });
 
   it("describes the finalizer non-force push without allowing direct force-push", () => {
@@ -685,10 +704,6 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("merge-conflict-updated.json").driverAction).toBe("reviewer_monitor_request");
   });
 
-  it("does not inspect an old branch-update attempt before claim migration", () => {
-    expect(runDriverFixture("merge-conflict-double-attempt.json").driverAction).toBe("branch_update_claim_required");
-  });
-
   it("reports the deterministic reviewer name", () => {
     expect(runDriverFixture("fallback-review.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).launch.reviewerName).toBe("demo-pr-24-reviewer");
   });
@@ -697,8 +712,8 @@ describe("PR reviewer deterministic driver", () => {
     expect(runDriverFixture("external-review-request.json", { DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1" }).driverAction).toBe("external_review_unclaimed");
   });
 
-  it("stops a draft gate before pre-claim GitHub mutation", () => {
-    expect(runDriverFixture("draft-pr.json").testAdapterEffects.githubComments).toHaveLength(0);
+  it("reviews a draft pull request that carries a review request", () => {
+    expect(runDriverFixture("draft-pr.json").driverAction).toBe("reviewer_monitor_request");
   });
 
   it("reports the selection decision while waiting for external review", () => {

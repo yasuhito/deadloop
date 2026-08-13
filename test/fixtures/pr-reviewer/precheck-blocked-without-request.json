@@ -1,0 +1,18 @@
+[
+  {
+    "number": 227,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefName": "agent/issue-201-issue",
+    "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "isCrossRepository": false,
+    "isDraft": false,
+    "labels": [
+      {
+        "name": "agent:blocked"
+      }
+    ],
+    "statusCheckRollup": [],
+    "comments": [],
+    "reviewRequests": []
+  }
+]

@@ -12,6 +12,10 @@ function foundFile(requested: string | undefined): AutomationFileResolution {
   return { requested: name, resolved: name, found: name.length > 0 };
 }
 
+function executionSupply() {
+  return { codeIdentity: "a".repeat(40), lockHash: "b".repeat(64), packageRoot: "/snapshot", automationDir: "/snapshot/automations", dependencyRoot: "/dependencies" };
+}
+
 async function exerciseDriver(
   stdout: string,
   options: {
@@ -40,6 +44,7 @@ async function exerciseDriver(
     isIdle: () => true,
     notify: () => undefined,
     now: () => 456,
+    prepareExecutionSupply: executionSupply,
     readPrompt: () => "full prompt",
     resolveAutomationFileInDir: (_kind, _automation, requested) => foundFile(requested),
     runDriver: async () => {
@@ -348,6 +353,7 @@ describe("deterministic automation driver runner", () => {
     await runScheduledAutomation(project, project.automations[0], 123, state, {
       isEnabled: () => true,
       now: () => 456,
+      prepareExecutionSupply: executionSupply,
       readPrompt: () => "full prompt",
       resolveAutomationFileInDir: (_kind, _automation, requested) => foundFile(requested),
       runDriver: async () => ({ code: 99, stdout: "should not run", stderr: "" }),
@@ -358,6 +364,32 @@ describe("deterministic automation driver runner", () => {
     });
 
     expect(sent).toEqual([]);
+  });
+
+  it("does not start precheck when execution supply cannot be fixed", async () => {
+    const project = normalizeProject({
+      id: "demo",
+      automations: [{ id: "demo:auto", name: "auto", precheckFile: "precheck.sh", promptFile: "full.md" }],
+    });
+    let precheckStarted = false;
+
+    let message = "";
+    try {
+      await runScheduledAutomation(project, project.automations[0], 123, { automations: {} }, {
+        now: () => 456,
+        prepareExecutionSupply: () => { throw new Error("dependency snapshot unavailable"); },
+        readPrompt: () => "full prompt",
+        resolveAutomationFileInDir: (_kind, _automation, requested) => foundFile(requested),
+        runDriver: async () => ({ code: 0 }),
+        runPrecheck: async () => { precheckStarted = true; return { code: 0 }; },
+        saveState: () => undefined,
+        sendUserMessage: () => undefined,
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect({ message, precheckStarted }).toEqual({ message: "dependency snapshot unavailable", precheckStarted: false });
   });
 
   it("does not dispatch a prompt after enablement is removed during precheck", async () => {
@@ -372,6 +404,7 @@ describe("deterministic automation driver runner", () => {
     await runScheduledAutomation(project, project.automations[0], 123, state, {
       isEnabled: () => enabled,
       now: () => 456,
+      prepareExecutionSupply: executionSupply,
       readPrompt: () => "full prompt",
       resolveAutomationFileInDir: (_kind, _automation, requested) => foundFile(requested),
       runDriver: async () => ({ code: 99, stdout: "should not run", stderr: "" }),

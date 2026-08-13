@@ -117,7 +117,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isRequiredVerificationContract(value: unknown): value is RequiredVerificationContract {
   if (!isRecord(value) || typeof value.repository !== "string" || typeof value.command !== "string"
     || typeof value.baseRevision !== "string" || !isRecord(value.source)
-    || !["local", "repo_policy"].includes(String(value.source.kind)) || typeof value.source.location !== "string") return false;
+    || !["local", "repo_policy", "default"].includes(String(value.source.kind)) || typeof value.source.location !== "string") return false;
   if (value.override === undefined) return true;
   return isRecord(value.override) && typeof value.override.command === "string" && isRecord(value.override.source)
     && ["local", "repo_policy"].includes(String(value.override.source.kind))

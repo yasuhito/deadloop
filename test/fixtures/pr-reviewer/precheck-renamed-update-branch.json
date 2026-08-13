@@ -1,0 +1,18 @@
+[
+  {
+    "number": 31,
+    "updatedAt": "2026-07-04T00:00:00Z",
+    "headRefName": "agent/issue-31",
+    "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "isCrossRepository": false,
+    "isDraft": false,
+    "labels": [
+      {
+        "name": "custom:update-branch"
+      }
+    ],
+    "statusCheckRollup": [],
+    "comments": [],
+    "reviewRequests": []
+  }
+]

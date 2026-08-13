@@ -8,7 +8,7 @@ const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { createHerdrRunner, normalizeHerdrWorktreeRecord } = require("../../../src/herdr-runner.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 
 type CleanupRecord = Record<string, any>;
 
@@ -17,13 +17,11 @@ type CleanupConfig = {
   repoPath: string;
   worktreeRoot: string;
   reviewLabel: string;
-  humanLabel: string;
   stateDir?: string;
   enabledAt?: number;
 };
 
 const DEFAULT_REVIEW_LABEL = "agent:review";
-const DEFAULT_HUMAN_LABEL = "ready-for-human";
 
 function runCleanupText(args: string[], options: { cwd?: string; check?: boolean } = {}): string {
   const result = spawnSync(args[0], args.slice(1), {
@@ -81,7 +79,7 @@ function isClosedPrForCleanup(pr: CleanupRecord): boolean {
 
 function isPiLooperPrForCleanup(pr: CleanupRecord, config: CleanupConfig): boolean {
   const branch = String(pr.headRefName || "");
-  return branch.startsWith("agent/issue-") || [config.reviewLabel, config.humanLabel].some((label) => labelsOfCleanup(pr).has(label));
+  return branch.startsWith("agent/issue-") || labelsOfCleanup(pr).has(config.reviewLabel);
 }
 
 function expandHomeForCleanup(value: string): string {
@@ -242,7 +240,6 @@ function cleanupConfigFromEnv(): CleanupConfig {
     repoPath: process.env.DEADLOOP_REPO_PATH || "",
     worktreeRoot: process.env.DEADLOOP_WORKTREE_ROOT || "",
     reviewLabel: process.env.DEADLOOP_REVIEW_LABEL || DEFAULT_REVIEW_LABEL,
-    humanLabel: process.env.DEADLOOP_HUMAN_LABEL || DEFAULT_HUMAN_LABEL,
     stateDir: process.env.DEADLOOP_STATE_DIR,
     enabledAt: process.env.DEADLOOP_ENABLED_AT === undefined ? undefined : Number(process.env.DEADLOOP_ENABLED_AT),
   };
@@ -254,7 +251,6 @@ function cleanupConfigFromFixture(data: CleanupRecord): CleanupConfig {
     repoPath: String(data.repoPath || "/repo"),
     worktreeRoot: String(data.worktreeRoot || ""),
     reviewLabel: String(data.reviewLabel || DEFAULT_REVIEW_LABEL),
-    humanLabel: String(data.humanLabel || DEFAULT_HUMAN_LABEL),
   };
 }
 
@@ -410,9 +406,9 @@ function main(argv: string[] = process.argv.slice(2)): number {
     return 0;
   }
 
-  // Direct apply is mutation-capable, so compatibility must be proven before GitHub reads,
+  // Direct apply is mutation-capable, so the Herdr preflight must pass before GitHub reads,
   // planning, artifact deletion, or Herdr worktree removal.
-  if (args.apply) runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runCleanupText([command, ...commandArgs]) });
+  if (args.apply) runHerdrPreflight({ run: (command: string, commandArgs: string[]) => runCleanupText([command, ...commandArgs]) });
 
   let result: CleanupRecord;
   if (args.fixture) {

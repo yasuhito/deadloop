@@ -43,7 +43,7 @@ Given("The same local precedence contains different required verification values
   this.localSources = [local("npm test", "/first"), local("npm run check", "/second")];
 });
 
-Given("No required verification source is available", function (this: VerificationWorld) {
+Given("No required verification override is available", function (this: VerificationWorld) {
   this.localSources = [];
   this.sharedSources = [];
 });
@@ -90,6 +90,13 @@ Then("The effective command is `npm run local-check`", function (this: Verificat
 
 Then("The effective command is `true`", function (this: VerificationWorld) {
   assert.equal(contract(this).command, "true");
+});
+
+Then("The effective command is the built-in `npm run check`", function (this: VerificationWorld) {
+  assert.deepEqual({ command: contract(this).command, source: contract(this).source }, {
+    command: "npm run check",
+    source: { kind: "default", location: "deadloop" },
+  });
 });
 
 Then("The shared-policy value remains in the override information", function (this: VerificationWorld) {
