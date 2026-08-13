@@ -470,6 +470,17 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/**
+ * The roles whose attempt journal carries a saved claim contract.
+ *
+ * This is deliberately wider than the roles that claim a request at launch. A reviewer and a branch
+ * update each win their own request, while a review repair inherits the reviewer's contract, and all
+ * three hold it afterwards. Reading the completion side off the launch side would drop the repair;
+ * naming only the review roles, as this guard once did, drops the branch update and makes its
+ * completion handler unable to run at all.
+ */
+const CLAIM_HOLDING_ATTEMPT_ROLES = new Set(["reviewer", "review-repair", "branch-update"]);
+
 type SavedClaimAuthority = {
   stateDir: string;
   githubRepo?: string;
@@ -480,9 +491,9 @@ type SavedClaimAuthority = {
 function savedReviewClaimContract(attemptRecordFile: string, supplied: unknown, authority: SavedClaimAuthority): JsonObject {
   const location = canonicalAttemptLocation({ stateDir: authority.stateDir, attemptRecord: attemptRecordFile });
   const record = readAttemptRecord(location.runDir);
-  if ((record.role !== "reviewer" && record.role !== "review-repair")
+  if (!CLAIM_HOLDING_ATTEMPT_ROLES.has(String(record.role))
     || record.target.kind !== "pull-request" || !record.reviewClaim) {
-    throw new Error("saved active review claim is missing from the PR attempt record");
+    throw new Error("saved active work claim is missing from the PR attempt record");
   }
   const contract = record.reviewClaim as JsonObject;
   if (!consistentSavedClaimContract(contract)) {
