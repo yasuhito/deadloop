@@ -130,6 +130,19 @@ function closeReceiptPath(record: JsonObject): string {
   return path.join(record.runDir, "authority-release-started.json");
 }
 
+/**
+ * An attempt that stopped between its GitHub claim and its first workspace.
+ *
+ * The launch is what opens the workspace, so a launch that failed before one exists left no runtime
+ * state at all: nothing to observe, nothing to close, and no way for the attempt to reach the pull
+ * request again. A launch failure that already held a workspace is the opposite case and keeps its
+ * ownership, because that workspace still has to be accounted for.
+ */
+function releasableUnlaunchedAttempt(record: JsonObject): boolean {
+  return record.phase === "launch_failed" && record.lastSuccessfulPhase !== "workspace_opened"
+    && !record.workspaceId && !record.tabId && !record.rootPaneId;
+}
+
 function validCloseReceipt(record: JsonObject): boolean {
   try {
     const receipt = JSON.parse(fs.readFileSync(closeReceiptPath(record), "utf8"));
@@ -379,11 +392,27 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
   const runner = createHerdrRunnerFromCommandRunner(commandRunner);
   const results: JsonObject[] = [];
 
+  // A pull request deadloop still holds an attempt journal for is one it owes an answer on, whether
+  // or not a request label survives. Selecting on the in-progress label alone made a pull request
+  // invisible the moment reconciliation blocked it, which is exactly when it needs looking at.
+  const attemptedPrNumbers = new Set(attempts.valid
+    .filter((attempt) => attempt.target?.kind === "pull-request")
+    .map((attempt) => Number(attempt.target.number)));
   for (const pr of prs.filter((candidate: JsonObject) => labels(candidate).includes(inProgressLabel)
+    || attemptedPrNumbers.has(Number(candidate.number))
     || fs.existsSync(recoveryReceiptPath(args.stateDir, String(repositoryIdentity.id || ""), Number(candidate.number))))) {
     const number = Number(pr.number);
     const recoveryFile = recoveryReceiptPath(args.stateDir, String(repositoryIdentity.id || ""), number);
-    const matching = attempts.valid.filter((attempt) => attempt.target?.kind === "pull-request" && Number(attempt.target.number) === number);
+    const claimed = attempts.valid.filter((attempt) => attempt.target?.kind === "pull-request" && Number(attempt.target.number) === number);
+    // A launch that failed before its first workspace left nothing for the runtime to hold. Such an
+    // attempt can never act on the pull request and has no workspace to close, so counting it as an
+    // owner only makes the pull request ambiguous for good. Releasing it here writes that into its
+    // journal, which keeps the failure and its launch error as evidence while the claim on it ends.
+    const matching = claimed.filter((attempt) => !releasableUnlaunchedAttempt(attempt));
+    for (const attempt of claimed.filter(releasableUnlaunchedAttempt)) {
+      releasePersistedAttemptAuthority(attempt.runDir, new Date().toISOString(), undefined, "never_launched");
+      results.push({ number, action: "released_unlaunched_attempt", attemptId: attempt.attemptId });
+    }
     if (matching.length === 0 && fs.existsSync(recoveryFile)) {
       try {
         const receipt = JSON.parse(fs.readFileSync(recoveryFile, "utf8"));
