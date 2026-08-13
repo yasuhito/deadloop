@@ -270,7 +270,7 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
 }
 
 type DriverLaunchInput = {
-  worktree: { mode: "open"; branch: string };
+  worktree: { mode: "open"; branch: string; remote: string };
   repoPath: string;
   automationDir: string;
   stateDir: string;
@@ -646,7 +646,7 @@ function branchUpdateLaunchPlan(
     retryKey: key,
     marker: renderBranchUpdateMarker(headOid, baseOid),
     input: {
-      worktree: { mode: "open", branch },
+      worktree: { mode: "open", branch, remote: env.branchUpdateRemote },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
       stateDir: env.stateDir,
@@ -809,7 +809,7 @@ function prReviewerLaunchPlan(
     reviewerName,
     headRefName,
     input: {
-      worktree: { mode: "open", branch: headRefName },
+      worktree: { mode: "open", branch: headRefName, remote: env.branchUpdateRemote },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
       stateDir: env.stateDir,

@@ -343,6 +343,8 @@ else fs.appendFileSync(process.env.EVENT_LOG, "github-mutation\\n");
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+// The repair checkout already carries the expected head, so alignment finds nothing to do.
+else if (args.includes("rev-parse") && args.includes("HEAD")) process.stdout.write("${"a".repeat(40)}\\n");
 process.exit(0);
 `,
   );
@@ -1257,6 +1259,8 @@ else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.str
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+// The repair checkout already carries the expected head, so alignment finds nothing to do.
+else if (args.includes("rev-parse") && args.includes("HEAD")) process.stdout.write("${"a".repeat(40)}\\n");
 process.exit(0);
 `,
     );
@@ -1367,6 +1371,8 @@ else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.str
     executable(path.join(bin, "git"), `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+// The repair checkout already carries the expected head, so alignment finds nothing to do.
+else if (args.includes("rev-parse") && args.includes("HEAD")) process.stdout.write("${"a".repeat(40)}\\n");
 process.exit(0);
 `);
     executable(

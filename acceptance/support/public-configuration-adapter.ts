@@ -73,6 +73,7 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
   };
   const ops = {
     mkdirSync: fs.mkdirSync,
+    alignCheckout: () => {},
     runner,
     runText: (command: string[]) => {
       if (command[0] === "git") return `${"a".repeat(40)}\n`;

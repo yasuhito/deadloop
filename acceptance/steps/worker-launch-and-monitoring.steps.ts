@@ -79,6 +79,7 @@ function launchWorker(world: WorkerWorld): void {
       };
     const ops = {
         mkdirSync: () => {},
+        alignCheckout: () => {},
         runner,
         runText: (args) => {
           if (args.includes("rev-parse")) return `${"f".repeat(40)}\n`;

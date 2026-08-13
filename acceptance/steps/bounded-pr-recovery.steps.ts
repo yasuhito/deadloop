@@ -206,6 +206,8 @@ else {
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+// The checkout already carries the expected head, so alignment finds nothing to do.
+else if (args.includes("rev-parse") && args.includes("HEAD")) process.stdout.write("${currentHead}\\n");
 else if (args.includes("rev-parse") && args.some(arg => arg.endsWith("^{commit}"))) process.stdout.write("${"f".repeat(40)}\\n");
 else if (args.includes("show") && args.some(arg => arg.endsWith(":deadloop.json"))) process.exit(1);
 `,

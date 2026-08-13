@@ -539,7 +539,7 @@ function repairLaunchInput(
   uuid: string,
 ) {
   return {
-    worktree: { mode: "open" as const, branch },
+    worktree: { mode: "open" as const, branch, remote: env.remote },
     repoPath: env.repoPath,
     automationDir: env.automationDir,
     stateDir: env.stateDir,
