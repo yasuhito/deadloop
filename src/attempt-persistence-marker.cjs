@@ -5,7 +5,7 @@ function renderAttemptPersistenceMarker(record, report, extra = {}) {
   const payload = {
     attemptId: record.attemptId, role: record.role, repository: record.repository, target: record.target,
     inputRevision: record.inputRevision, outcome: report.status === "blocked" ? "blocked" : record.role === "worker" ? "complete" : report.result.outcome,
-    ...(report.status === "complete" && record.role !== "reviewer" ? { outputRevision: report.result.outputRevision } : {}),
+    ...(report.status === "complete" && ["worker", "review-repair", "branch-update"].includes(record.role) ? { outputRevision: report.result.outputRevision } : {}),
     ...extra,
   };
   return `<!-- ${PREFIX} data=${encode(payload)} -->`;

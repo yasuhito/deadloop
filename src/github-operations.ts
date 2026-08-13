@@ -43,8 +43,35 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
     getIssue(repo: string, issueNumber: string | number): JsonObject {
       return commandRunner.runJson([
         "gh", "issue", "view", String(issueNumber), "-R", repo,
-        "--json", "number,title,body,labels,updatedAt,url,state",
+        "--json", "number,title,body,labels,updatedAt,url,state,comments",
       ]);
+    },
+
+    listIssueLabels(repo: string, issueNumber: string | number): JsonObject[] {
+      const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${issueNumber}/labels`]);
+      return Array.isArray(pages) ? pages.flat() : [];
+    },
+
+    listIssueTimelineEvents(repo: string, issueNumber: string | number): JsonObject[] {
+      const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${issueNumber}/events`]);
+      return Array.isArray(pages) ? pages.flat() : [];
+    },
+
+    listIssueComments(repo: string, issueNumber: string | number): JsonObject[] {
+      const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${issueNumber}/comments`]);
+      return Array.isArray(pages) ? pages.flat() : [];
+    },
+
+    createIssueComment(repo: string, issueNumber: string | number, body: string): JsonObject {
+      beforeMutation();
+      return commandRunner.runJson(["gh", "api", "--method", "POST", `repos/${repo}/issues/${issueNumber}/comments`, "-f", `body=${body}`]);
+    },
+
+    replaceIssueLabels(repo: string, issueNumber: string | number, labels: string[]): JsonObject {
+      beforeMutation();
+      return commandRunner.runJson(["gh", "api", "--method", "PUT", `repos/${repo}/issues/${issueNumber}/labels`, "--input", "-"], {
+        input: JSON.stringify({ labels }),
+      });
     },
 
     moveIssueLabels(repo: string, issueNumber: string | number, move: LabelMove): void {

@@ -1,7 +1,7 @@
-# Feature: Select only an Issue that is ready to start
+# Feature: Select an explicit Issue Agent request
 
-deadloop checks public labels, dependencies, and Issue state and selects only an Issue that can be started safely.
-This prevents duplicate work on an Issue that is closed, unprepared, in progress, blocked, or has unfinished dependencies.
+deadloop selects `agent:explore` or `agent:implement` without requiring the `ready-for-agent` triage label.
+It still prevents duplicate work on a closed or in-progress Issue and keeps implementation dependencies gated.
 
 ## Scenario: Select a prepared Issue for work
 
@@ -15,23 +15,17 @@ This prevents duplicate work on an Issue that is closed, unprepared, in progress
 * When deadloop searches for a work target
 * Then The closed Issue is not selected for work
 
-## Scenario: Do not select an unprepared Issue for work
+## Scenario: Select implementation without the triage label
 
 * Given An unprepared Issue lacks required public labels
 * When deadloop selects a work target
-* Then The unprepared Issue is not selected for work
+* Then Issue #3 is selected for work
 
 ## Scenario: Do not select an Issue already in progress
 
 * Given An Issue in progress has the `agent:in-progress` label
 * When deadloop selects a work target
 * Then The Issue in progress is not selected for work
-
-## Scenario: Do not select a blocked Issue for work
-
-* Given A blocked Issue has the `agent:blocked` label
-* When deadloop selects a work target
-* Then The blocked Issue is not selected for work
 
 ## Scenario Outline: Do not select an Issue with an unfinished dependency in its body
 

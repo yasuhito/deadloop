@@ -201,7 +201,7 @@ function prepareAgentLaunchFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlo
  * Roles whose attempt journal must carry the GitHub request claim they consumed. Their prepared
  * identity includes that claim, so the claim has to exist before the journal is written.
  */
-const CLAIM_BOUND_AGENT_ROLES = ["reviewer", "branch-update"];
+const CLAIM_BOUND_AGENT_ROLES = ["explorer", "reviewer", "branch-update"];
 
 function recordAgentLaunchGithubClaimed(input: AgentLaunchFlowInput): AttemptRecord {
   const prepared = launchPaths(input);

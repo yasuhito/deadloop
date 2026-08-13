@@ -1,0 +1,37 @@
+import { describe, expect, it } from "vitest";
+
+const { activeIssueRequest, parseIssueClaim, renderIssueClaimComment, selectIssueClaimWinner } = require("../extensions/deadloop/automations/issue-request-claim.ts");
+
+const binding = {
+  repositoryId: "R_1", repository: "owner/repo", targetNumber: 42, requestEventId: "event-2",
+  role: "explorer", revision: "2026-07-08T00:00:00Z", owner: "host-a",
+  authority: { durationSeconds: 300 },
+  activeState: { managedLabels: ["agent:explore", "agent:implement", "agent:in-progress", "agent:blocked"], requestLabel: "agent:explore", requiredLabels: ["agent:in-progress"] },
+};
+
+function comment(id: number, ownerBinding = binding, createdAt = "2026-07-08T00:00:00Z") {
+  return { id, createdAt, updatedAt: createdAt, author: { login: "bot" }, body: renderIssueClaimComment(ownerBinding) };
+}
+
+describe("Issue request claim", () => {
+  it("selects the latest request generation", () => {
+    expect(activeIssueRequest([
+      { id: "event-1", event: "labeled", created_at: "2026-07-07T00:00:00Z", label: { name: "agent:explore" } },
+      { id: "event-2", event: "labeled", created_at: "2026-07-08T00:00:00Z", label: { name: "agent:explore" } },
+    ], "agent:explore").id).toBe("event-2");
+  });
+
+  it("round-trips the issue claim marker", () => {
+    expect(parseIssueClaim(renderIssueClaimComment(binding)).requestEventId).toBe("event-2");
+  });
+
+  it("selects the earliest authorized remote claim", () => {
+    const earlier = comment(1, { ...binding, owner: "host-b" }, "2026-07-08T00:00:01Z");
+    const own = comment(2, binding, "2026-07-08T00:00:02Z");
+    expect(selectIssueClaimWinner([own, earlier], { ...binding, owner: "host-b" }, ["bot"], new Date("2026-07-08T00:00:03Z")).id).toBe(1);
+  });
+
+  it("rejects an expired claim at the exact boundary", () => {
+    expect(selectIssueClaimWinner([comment(1)], binding, ["bot"], new Date("2026-07-08T00:05:00Z"))).toBeNull();
+  });
+});

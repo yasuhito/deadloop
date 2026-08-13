@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-const { DEPENDENCY_QUERY_TIMEOUT_MS, remainingIssueDecisionTimeout } = require("../extensions/deadloop/automations/issue-coordinator-decisions.ts");
+const { DEPENDENCY_QUERY_TIMEOUT_MS, defaultIssueDecisionConfig, remainingIssueDecisionTimeout, selectIssueForImplementation } = require("../extensions/deadloop/automations/issue-coordinator-decisions.ts");
 const decisionScript = "extensions/deadloop/automations/issue-coordinator-decisions.ts";
 
 function runDecision(args: string[]) {
@@ -10,6 +10,33 @@ function runDecision(args: string[]) {
 }
 
 describe("issue coordinator selection", () => {
+  const decide = (issues: Record<string, unknown>[]) => selectIssueForImplementation(
+    issues, defaultIssueDecisionConfig(), () => new Set(), () => "CLOSED",
+  );
+
+  it("selects implementation without ready-for-agent", () => {
+    expect(decide([{ number: 1, labels: [{ name: "agent:implement" }] }]).role).toBe("worker");
+  });
+
+  it("selects explore before implementation when both are requested", () => {
+    expect(decide([{ number: 1, labels: [{ name: "agent:implement" }, { name: "agent:explore" }] }]).role).toBe("explorer");
+  });
+
+  it("selects repository exploration before an earlier implementation request", () => {
+    expect(decide([
+      { number: 1, labels: [{ name: "agent:implement" }] },
+      { number: 2, labels: [{ name: "agent:explore" }] },
+    ]).number).toBe(2);
+  });
+
+  it("does not make exploration wait for an open implementation dependency", () => {
+    const decision = selectIssueForImplementation(
+      [{ number: 1, body: "Blocked by #2", labels: [{ name: "agent:explore" }] }],
+      defaultIssueDecisionConfig(), () => new Set(), () => "OPEN",
+    );
+    expect(decision.role).toBe("explorer");
+  });
+
   it("shows CLI help without requiring a repo", () => {
     expect(runDecision(["--help"]).status).toBe(0);
   });

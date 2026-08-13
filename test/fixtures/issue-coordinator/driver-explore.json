@@ -1,0 +1,13 @@
+{
+  "issues": [
+    {
+      "number": 13,
+      "title": "Investigate behavior",
+      "body": "No implementation contract is required for exploration.",
+      "url": "https://github.com/owner/repo/issues/13",
+      "labels": [{ "name": "agent:explore" }]
+    }
+  ],
+  "dependencyStates": {},
+  "cleanup": { "candidates": [] }
+}

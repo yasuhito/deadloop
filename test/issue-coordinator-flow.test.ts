@@ -18,6 +18,10 @@ describe("Issue coordinator use-case flow", () => {
     expect(planIssueCoordinatorAction(data.issues, { selected: false }).kind).toBe("skip_no_candidate");
   });
 
+  it("plans exploration without requiring an implementation contract", () => {
+    expect(planIssueCoordinatorAction([{ number: 9, body: "" }], { selected: true, number: 9, role: "explorer" }).kind).toBe("explorer_required");
+  });
+
   it("plans contract-missing before Worker launch", () => {
     const data = fixture("driver-contract-missing.json");
 

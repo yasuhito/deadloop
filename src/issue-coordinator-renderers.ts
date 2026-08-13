@@ -21,6 +21,16 @@ type IssueBlockedCommentInput = {
   branch?: string;
 };
 
+type IssueExplorerPromptInput = {
+  issueNumber: number;
+  issueTitle: string;
+  issueUrl: string;
+  githubRepo: string;
+  workerInstructions: string;
+  promiseFile: string;
+  reportIdentity: { attemptId: string; inputRevision: { head: string } };
+};
+
 type IssueWorkerPromptInput = {
   launchReason: string;
   issueNumber: number;
@@ -138,6 +148,36 @@ gh issue edit ${issue} -R ${shellQuoteForRenderer(input.githubRepo)} --remove-la
 \`\`\``;
 }
 
+function renderIssueExplorerPrompt(input: IssueExplorerPromptInput): string {
+  const reportBase = JSON.stringify({
+    schemaVersion: 1,
+    attemptId: input.reportIdentity.attemptId,
+    role: "explorer",
+    target: { repository: input.githubRepo, kind: "issue", number: input.issueNumber },
+    inputRevision: input.reportIdentity.inputRevision,
+  });
+  return `Explore Issue #${input.issueNumber}: ${oneLineForRenderer(input.issueTitle)}
+
+Target:
+- GitHub repo: ${input.githubRepo}
+- Issue URL: ${input.issueUrl}
+
+Read the Issue body and all comments, CONTEXT.md when present, relevant ADRs and repository standards, source, tests, and useful git history. ${oneLineForRenderer(input.workerInstructions)}
+You may run read-only inspection and verification commands such as focused tests, typecheck, git log, and git blame.
+
+Hard limits:
+- Do not edit, create, delete, rename, or format repository files.
+- Do not commit, push, create or edit a PR, edit labels, close issues, or post GitHub comments.
+- Do not run destructive commands. The Automation host alone validates and posts the result.
+
+Promise report:
+- Write one JSON object to \`${markdownCode(input.promiseFile)}\` before stopping.
+- Start with this exact identity: \`${markdownCode(reportBase)}\`.
+- On success add \`"status":"complete"\`, a concise \`summary\`, \`"result":{"difficulty":"low|medium|high","relevantFiles":["path"],"verifiedClaims":["claim"],"disprovedClaims":[],"openQuestions":[],"approach":"optional approach"}\`, and \`"evidence":{"commands":["command and result"]}\`.
+- On failure add \`"status":"blocked"\`, \`summary\`, \`"result":{"reason":"typed_reason_code","explanation":"what failed","recovery":"safe next step"}\`, and \`"evidence":{}\`.
+- Always write the promise file; do not exit silently.`;
+}
+
 function renderIssueWorkerPrompt(input: IssueWorkerPromptInput): string {
   const issueTitle = oneLineForRenderer(input.issueTitle);
   const validationCommand = input.validationCommand || (input.automationDir
@@ -194,4 +234,4 @@ function pathForProjectCheck(automationDir: string): string {
   return `${automationDir.replace(/\/$/, "")}/run-project-check.ts`;
 }
 
-module.exports = { renderIssueBlockedComment, renderIssuePlanningComment, renderIssueWorkerPrompt };
+module.exports = { renderIssueBlockedComment, renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt };

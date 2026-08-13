@@ -7,8 +7,8 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
-const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
-const { renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
+const { renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
+const { activeIssueRequest, renderIssueClaimComment, selectIssueClaimWinner } = require("./issue-request-claim.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
@@ -89,7 +89,8 @@ function applyIssueTransition(
       if (livePlan.kind !== expectedKind || Number(livePlan.issue.number) !== Number(issue.number)) {
         throw new StaleLaunchError(`Issue #${issue.number} transition changed`);
       }
-      mutate(github, live);
+      claimIssueRequest(github, live, env, "worker", _enabled as { automationLogin?: string; githubRepositoryId?: string });
+      mutate(github, github.getIssue(env.githubRepo, issue.number));
       return true;
     });
   } catch (error) {
@@ -101,7 +102,7 @@ function applyIssueTransition(
 function applyContractMissing(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): boolean {
   return applyIssueTransition(issue, "contract_missing", env, fixture, (github, live) => {
     const number = String(live.number);
-    github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.needsTriageLabel });
+    github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.blockedLabel });
     github.commentIssue(env.githubRepo, number, gateMissingContractComment(live));
   });
 }
@@ -121,6 +122,81 @@ function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comm
     github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.blockedLabel });
     github.commentIssue(env.githubRepo, number, comment);
   });
+}
+
+function issueLabelNames(issue: JsonObject): string[] {
+  return (issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")).filter(Boolean);
+}
+
+function claimIssueRequest(
+  github: ReturnType<typeof githubOperations>, issue: JsonObject, env: ReturnType<typeof envConfig>,
+  role: "explorer" | "worker", enabledIdentity: { automationLogin?: string; githubRepositoryId?: string } = {},
+): JsonObject {
+  const number = Number(issue.number);
+  const requestLabel = role === "explorer" ? env.exploreLabel : env.implementLabel;
+  const repositoryId = enabledIdentity.githubRepositoryId || env.githubRepositoryId;
+  const automationLogin = String(enabledIdentity.automationLogin || env.automationLogin).trim().toLowerCase();
+  const authorizedLogins = [...new Set([...env.authorizedAutomationLogins, automationLogin].filter(Boolean))];
+  const repository = github.getRepositoryIdentity(env.githubRepo);
+  if (!repositoryId || String(repository.id) !== repositoryId) throw new Error("Issue claim repository identity is unavailable or changed");
+  const events = github.listIssueTimelineEvents(env.githubRepo, number);
+  const request = activeIssueRequest(events, requestLabel);
+  if (!request) throw new StaleLaunchError(`Issue #${number} has no ${requestLabel} request event`);
+  const labelsBeforeClaim = new Set(issueLabelNames(issue));
+  if (labelsBeforeClaim.has(env.blockedLabel)) {
+    const blocks = events.filter((event: JsonObject) => String(event.event || "").toLowerCase() === "labeled"
+      && String(event.label?.name || "") === env.blockedLabel);
+    blocks.sort((left: JsonObject, right: JsonObject) => Date.parse(String(left.created_at || left.createdAt || ""))
+      - Date.parse(String(right.created_at || right.createdAt || "")));
+    const latestBlock = blocks.at(-1);
+    const requestTime = Date.parse(String(request.created_at || request.createdAt || ""));
+    const blockTime = Date.parse(String(latestBlock?.created_at || latestBlock?.createdAt || ""));
+    if (!latestBlock || !Number.isFinite(requestTime) || !Number.isFinite(blockTime) || requestTime <= blockTime) {
+      throw new StaleLaunchError(`Issue #${number} request does not follow the latest block`);
+    }
+  }
+  const authenticated = runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
+  if (!authenticated || authenticated !== automationLogin || !authorizedLogins.includes(authenticated)) {
+    throw new Error("authenticated GitHub identity is not authorized to claim Issue requests");
+  }
+  const authoritySeconds = env.requestMaxRuntimeSeconds + env.claimCleanupGraceSeconds;
+  const managedLabels = [env.exploreLabel, env.implementLabel, env.inProgressLabel, env.blockedLabel];
+  const binding = {
+    repositoryId, repository: env.githubRepo, targetNumber: number,
+    requestEventId: String(request.id || request.node_id), role,
+    revision: String(issue.updatedAt || request.created_at || request.createdAt), owner: env.claimOwner,
+    authority: { durationSeconds: authoritySeconds },
+    activeState: { managedLabels, requestLabel, requiredLabels: [env.inProgressLabel] },
+  };
+  const posted = github.createIssueComment(env.githubRepo, number, renderIssueClaimComment(binding));
+  const comments = github.listIssueComments(env.githubRepo, number);
+  const own = comments.find((comment: JsonObject) => String(comment.id || comment.databaseId) === String(posted.id || posted.databaseId));
+  const dateHeader = github.readRestResponseHeaders(env.githubRepo);
+  const dateValue = [...String(dateHeader).matchAll(/^date:\s*(.+)$/gim)].at(-1)?.[1]?.trim();
+  const serverNow = new Date(dateValue || "");
+  if (!own || Number.isNaN(serverNow.getTime())) throw new Error("Issue claim GitHub evidence is unverifiable");
+  const winner = selectIssueClaimWinner(comments, binding, authorizedLogins, serverNow);
+  if (String(winner?.id || winner?.databaseId || "") !== String(posted.id || posted.databaseId || "")) {
+    throw new Error(`Issue #${number} ${requestLabel} request was claimed by another Automation host`);
+  }
+  const before = github.getIssue(env.githubRepo, number);
+  assertSameLaunchTarget(issue, before, "issue");
+  const labels = issueLabelNames({ labels: github.listIssueLabels(env.githubRepo, number) });
+  const next = labels.filter((label) => label !== requestLabel && label !== env.blockedLabel && label !== env.inProgressLabel);
+  next.push(env.inProgressLabel);
+  github.replaceIssueLabels(env.githubRepo, number, next);
+  const after = github.getIssue(env.githubRepo, number);
+  const afterLabels = new Set(issueLabelNames(after));
+  const latestRequest = activeIssueRequest(github.listIssueTimelineEvents(env.githubRepo, number), requestLabel);
+  if (String(latestRequest?.id || latestRequest?.node_id || "") !== binding.requestEventId
+    || !afterLabels.has(env.inProgressLabel) || afterLabels.has(requestLabel)) {
+    throw new StaleLaunchError(`Issue #${number} request claim did not persist exactly`);
+  }
+  return {
+    binding, commentId: String(posted.id || posted.databaseId), authorizedLogins,
+    automationLogin, authoritySeconds, requestLabel,
+    inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
+  };
 }
 
 function slugForBranch(value: unknown): string {
@@ -232,6 +308,7 @@ function issueWorkerLaunchPlan(
   baseHead: string,
   recovery: AbandonedWorkerCheckout | null = null,
   verificationBaseHead: string = baseHead,
+  issueClaim?: JsonObject,
 ) {
   const number = Number(issue.number || 0);
   const workerName = `${env.projectId}-issue-${number}-worker`;
@@ -259,6 +336,7 @@ function issueWorkerLaunchPlan(
       target: { kind: "issue" as const, number },
       inputRevision: { head: baseHead },
       requiredVerification: requiredVerificationContract(env, verificationBaseHead),
+      ...(issueClaim ? { reviewClaim: issueClaim } : {}),
       intendedWorktreePath,
       resolveWorktreeHead: true,
       renderPrompt: ({ promiseFile, worktreePath, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
@@ -332,6 +410,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
   const baseHead = recovery?.inputHead || currentBaseHead;
   const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery, currentBaseHead);
+  let claim: JsonObject | undefined;
   const { workerName, branch } = plan;
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
 
@@ -356,28 +435,35 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   const launch = withEnabledDriverLaunch(
     env,
     (recheck: () => void, enabled: { githubRepositoryId?: string }) => {
+      if (!claim) {
+        claim = claimIssueRequest(githubOperations(recheck), issue, env, "worker", enabled);
+        plan.input.reviewClaim = claim;
+        return;
+      }
       assertPreparedWorkerContractCurrent(plan.input, env, enabled.githubRepositoryId);
-      githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel });
+      const live = githubOperations(recheck).getIssue(env.githubRepo, number);
+      if (!issueLabelNames(live).includes(env.inProgressLabel)) throw new StaleLaunchError("Issue implementation claim is no longer active");
     },
     (recheck: () => void) => launchAgentFlow(
       plan.input,
       { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
     ),
     {
-      prepareAttempt: () => prepareAgentLaunchFlow(
-        plan.input,
-        { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync },
-      ),
+      prepareAttempt: () => {
+        prepareAgentLaunchFlow(plan.input, { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync });
+        assertPreparedWorkerContractCurrent(plan.input, env);
+      },
       recordClaim: () => recordAgentLaunchGithubClaimed(plan.input),
+      claimBeforePrepare: true,
       revalidate: () => {
-        const deadline = issueDecisionDeadline();
         const liveIssue = githubOperations().getIssue(env.githubRepo, number);
-        const livePlan = planIssueCoordinatorAction(
-          [liveIssue],
-          decisionForIssues(undefined, [liveIssue], env.githubRepo, env, deadline),
-        );
-        if (livePlan.kind !== "worker_required") throw new StaleLaunchError("selected issue is no longer eligible");
-        assertSameLaunchTarget(issue, livePlan.issue, "issue");
+        if (claim) {
+          if (!issueLabelNames(liveIssue).includes(env.inProgressLabel)) throw new StaleLaunchError("selected issue claim is no longer active");
+        } else {
+          const livePlan = planIssueCoordinatorAction([liveIssue], decisionForIssues(undefined, [liveIssue], env.githubRepo, env));
+          if (livePlan.kind !== "worker_required") throw new StaleLaunchError("selected issue is no longer eligible");
+        }
+        assertSameLaunchTarget(issue, liveIssue, "issue");
         assertWorkerLaunchBaseCurrent(env, currentBaseHead, runText);
         if (recovery) assertRecoverableWorkerCheckout(recovery, env, { runner, runText });
       },
@@ -386,11 +472,78 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   return { workerName, branch, ...launch };
 }
 
+function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
+  const number = Number(issue.number);
+  const uuid = fixture ? "fixture-explorer-uuid" : randomUUID();
+  const baseHead = fixture ? "e".repeat(40) : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  const branch = `agent/explore-${number}-${uuid.slice(0, 8)}`;
+  const intendedWorktreePath = path.join(env.worktreeRoot, branch.replace(/\//g, "-"));
+  let claim: JsonObject | undefined = fixture
+    ? { binding: { requestEventId: `fixture-explore-${number}` }, requestLabel: env.exploreLabel }
+    : undefined;
+  const input = {
+    worktree: { mode: "create" as const, branch, baseBranch: env.baseBranch }, repoPath: env.repoPath,
+    automationDir: env.automationDir, stateDir: env.stateDir, workspaceLabel: `${env.projectId}-issue-${number}-explorer`,
+    agent: env.workerAgent, model: env.workerModel, level: "medium", uuid, promptFilePrefix: "explorer-prompt",
+    project: env.projectId, repository: env.githubRepo, role: "explorer" as const,
+    target: { kind: "issue" as const, number }, inputRevision: { head: baseHead }, intendedWorktreePath,
+    resolveWorktreeHead: true, ...(claim ? { reviewClaim: claim } : {}),
+    renderPrompt: ({ promiseFile, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => renderIssueExplorerPrompt({
+      issueNumber: number, issueTitle: String(issue.title || ""), issueUrl: String(issue.url || ""), githubRepo: env.githubRepo,
+      workerInstructions: env.workerInstructions, promiseFile,
+      reportIdentity: { attemptId: uuid, inputRevision: { head: String(worktreeHead || baseHead) } },
+    }),
+  };
+  if (fixture) {
+    const promiseFile = `${env.stateDir}/runs/${uuid}/promise.json`;
+    return { branch, worktreePath: intendedWorktreePath, promiseFile, attemptRecordFile: `${env.stateDir}/runs/${uuid}/attempt.json`,
+      instructions: input.renderPrompt({ promiseFile, worktreePath: intendedWorktreePath, worktreeHead: baseHead }), simulated: true, reviewClaim: claim };
+  }
+  const runner = herdrRunner();
+  const launch = withEnabledDriverLaunch(
+    env,
+    (recheck: () => void, enabled: { automationLogin?: string; githubRepositoryId?: string }) => {
+      claim = claimIssueRequest(githubOperations(recheck), issue, env, "explorer", enabled);
+      input.reviewClaim = claim;
+    },
+    (recheck: () => void) => launchAgentFlow(input, {
+      mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck,
+    }),
+    {
+      claimBeforePrepare: true,
+      revalidate: () => {
+        const live = githubOperations().getIssue(env.githubRepo, number);
+        if (claim) {
+          if (!issueLabelNames(live).includes(env.inProgressLabel)) throw new StaleLaunchError("exploration claim is no longer active");
+        } else {
+          const plan = planIssueCoordinatorAction([live], decisionForIssues(undefined, [live], env.githubRepo, env));
+          if (plan.kind !== "explorer_required") throw new StaleLaunchError("Issue is no longer eligible for exploration");
+        }
+        assertSameLaunchTarget(issue, live, "issue");
+      },
+      prepareAttempt: () => prepareAgentLaunchFlow(input, { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync }),
+      recordClaim: () => recordAgentLaunchGithubClaimed(input),
+    },
+  );
+  return { branch, reviewClaim: claim, ...launch };
+}
+
+function renderExplorerMonitorPrompt(issue: JsonObject, launch: JsonObject, env: ReturnType<typeof envConfig>): string {
+  const command = `node ${path.join(env.automationDir, "complete-issue-exploration.ts")} --attempt-record ${launch.attemptRecordFile} --project-id ${env.projectId} --project-repo ${env.repoPath} --github-repo ${env.githubRepo} --state-dir ${env.stateDir} --enabled-at ${env.enabledAt} --explore-label ${env.exploreLabel} --in-progress-label ${env.inProgressLabel} --blocked-label ${env.blockedLabel}`;
+  return `Deterministic driver launched a read-only explorer for Issue #${issue.number}. Do not launch another agent or mutate GitHub directly.\n\nMonitor only ${launch.promiseFile} with extract-worker-promise.ts. Break immediately on complete or blocked. Then run this deterministic host completion command exactly once:\n\`${command}\`\n\nThe completion host rejects any changed repository HEAD or dirty file, posts one human-readable result on success, and moves failures to ${env.blockedLabel}.`;
+}
+
 function envConfig(source: NodeJS.ProcessEnv = process.env) {
   return {
     projectId: source.DEADLOOP_PROJECT_ID || "project",
     repoPath: source.DEADLOOP_REPO_PATH || ".",
     githubRepo: source.DEADLOOP_GITHUB_REPO || "",
+    githubRepositoryId: source.DEADLOOP_GITHUB_REPOSITORY_ID || "",
+    automationLogin: (source.DEADLOOP_AUTOMATION_LOGIN || "").trim().toLowerCase(),
+    authorizedAutomationLogins: (source.DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS || "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean),
+    claimOwner: source.DEADLOOP_CLAIM_OWNER || `${os.hostname()}:${process.pid}`,
+    requestMaxRuntimeSeconds: Number(source.DEADLOOP_REQUEST_MAX_RUNTIME_SECONDS || 86_400),
+    claimCleanupGraceSeconds: Number(source.DEADLOOP_CLAIM_CLEANUP_GRACE_SECONDS || 300),
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
@@ -406,6 +559,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     workerAgent: source.DEADLOOP_WORKER_AGENT || "pi",
     workerModel: source.DEADLOOP_WORKER_MODEL || "",
     readyLabel: source.DEADLOOP_READY_LABEL || "ready-for-agent",
+    exploreLabel: source.DEADLOOP_EXPLORE_LABEL || "agent:explore",
     implementLabel: source.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
     inProgressLabel: source.DEADLOOP_IN_PROGRESS_LABEL || "agent:in-progress",
     blockedLabel: source.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
@@ -441,13 +595,25 @@ function drive(fixturePath: string | undefined): DriverResult {
   if (issuePlan.kind === "skip_no_candidate") return driverResult("skip", "No target issue", { driverAction: "no_candidate", decision });
 
   const issue = issuePlan.issue;
+  if (issuePlan.kind === "explorer_required") {
+    let launch: JsonObject;
+    try { launch = launchIssueExplorer(issue, env, fixture); }
+    catch (error) {
+      if (isStaleLaunchError(error)) return driverResult("skip", `Issue #${issue.number} changed before exploration launch`, { driverAction: "explorer_launch_stale" });
+      throw error;
+    }
+    return driverResult("needs_llm", `Launched read-only explorer for Issue #${issue.number}`, {
+      driverAction: "explorer_monitor_request", issueNumber: issue.number, launch,
+      prompt: renderExplorerMonitorPrompt(issue, launch, env),
+    });
+  }
   if (issuePlan.kind === "contract_missing") {
     if (!applyContractMissing(issue, env, fixture)) {
       return driverResult("skip", `Issue #${issue.number} changed before the contract gate; no workflow state was mutated`, {
         driverAction: "contract_missing_stale", issueNumber: issue.number,
       });
     }
-    return driverResult("done", `Issue #${issue.number} is missing its contract; moved it to needs-triage`, {
+    return driverResult("done", `Issue #${issue.number} is missing its contract; marked it blocked`, {
       driverAction: "contract_missing",
       issueNumber: issue.number,
       comment: gateMissingContractComment(issue),

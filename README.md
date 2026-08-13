@@ -41,12 +41,9 @@ You need an authenticated `gh` CLI and a running [Herdr](https://herdr.dev/) 0.8
    /deadloop-enable
    ```
 
-3. To send an Issue to deadloop, add both labels:
+3. To send an Issue to deadloop, add `agent:implement`.
 
-   - `ready-for-agent`
-   - `agent:implement`
-
-That is enough to start. During enablement, deadloop runs `npm run check`, creates any missing standard labels, and leaves automatic merge off. If the repository does not provide an `npm run check` script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
+`ready-for-agent` is optional triage information, not an execution gate. To request read-only investigation before implementation, add `agent:explore`; when both requests are present, deadloop explores first and posts the result to the Issue before implementation starts. During enablement, deadloop runs `npm run check`, creates any missing standard labels, and leaves automatic merge off. If the repository does not provide an `npm run check` script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
 
 ## Control the loop with labels
 
@@ -55,9 +52,11 @@ You start the loop by labeling an Issue. deadloop owns the implementation and re
 ```mermaid
 flowchart TD
     I["`**Issue queued**
-    ready-for-agent + agent:implement`"]
+    agent:explore or agent:implement`"]
+    E["`**Read-only exploration**
+    agent:in-progress`"]
     W["`**Implementation**
-    ready-for-agent + agent:in-progress`"]
+    agent:in-progress`"]
     R["`**PR review requested**
     draft PR + agent:review`"]
     V["`**Review and repair**
@@ -70,7 +69,9 @@ flowchart TD
     B["`**Needs attention**
     agent:blocked`"]
 
-    I -->|deadloop claims Issue| W
+    I -->|explore requested| E
+    E -->|result comment persisted| I
+    I -->|implement requested| W
     W -->|draft PR created| R
     R -->|deadloop claims review| V
     V -->|changes pushed| R
@@ -83,7 +84,7 @@ flowchart TD
     V -. problem .-> B
 ```
 
-1. **Request implementation** — `ready-for-agent` marks an Issue as eligible. `agent:implement` requests implementation. Remove `agent:implement` before deadloop claims the Issue to cancel the request.
+1. **Request Issue work** — `agent:explore` requests a read-only investigation and `agent:implement` requests implementation. `ready-for-agent` only records triage readiness. Each request label is a one-shot event; remove it before deadloop claims it to cancel, or add it again after completion or a block to create a new request generation.
 2. **Let deadloop work** — deadloop replaces the request label with `agent:in-progress`, creates a draft PR with `agent:review`, and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
 3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help; fix the cause reported in the Issue or PR comment, then follow its recovery instructions.
 

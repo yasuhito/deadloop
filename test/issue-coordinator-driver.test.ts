@@ -140,6 +140,18 @@ exit 2
     }
   });
 
+  it("launches the read-only explorer path", () => {
+    expect(runDriverFixture("driver-explore.json").driverAction).toBe("explorer_monitor_request");
+  });
+
+  it("forbids repository edits in the explorer prompt", () => {
+    expect(runDriverFixture("driver-explore.json").launch.instructions).toContain("Do not edit, create, delete, rename, or format repository files");
+  });
+
+  it("forbids direct GitHub mutation in the explorer prompt", () => {
+    expect(runDriverFixture("driver-explore.json").launch.instructions).toContain("The Automation host alone validates and posts the result");
+  });
+
   it("reports the deterministic Worker name", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });

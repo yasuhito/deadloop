@@ -41,10 +41,9 @@ pi install git:github.com/yasuhito/deadloop
    /deadloop-enable
    ```
 
-3. deadloop に任せる Issue に、次のラベルを両方付けます。
+3. deadloop に任せる Issue に `agent:implement` を付けます。
 
-   - `ready-for-agent`
-   - `agent:implement`
+`ready-for-agent` は任意の整理情報であり、実行条件ではありません。実装前に読み取り専用の調査を依頼する場合は `agent:explore` を付けます。両方がある場合、deadloop は先に調査し、結果を Issue に投稿してから実装を始めます。
 
 これだけで利用を開始できます。有効化すると、deadloop は `npm run check` を実行し、不足している標準ラベルを作成して、自動マージを無効にした状態で動き始めます。リポジトリに `npm run check` スクリプトがない場合は、[詳細設定](#詳細設定)に従って `deadloop.json` に別の `checkCommand` を指定してください。
 
@@ -54,10 +53,12 @@ Issue にラベルを付けると、ループが始まります。実装中と�
 
 ```mermaid
 flowchart TD
-    I["`**実装待ちの Issue**
-    ready-for-agent + agent:implement`"]
+    I["`**依頼待ちの Issue**
+    agent:explore または agent:implement`"]
+    E["`**読み取り専用の調査**
+    agent:in-progress`"]
     W["`**実装中**
-    ready-for-agent + agent:in-progress`"]
+    agent:in-progress`"]
     R["`**PR のレビュー待ち**
     draft PR + agent:review`"]
     V["`**レビューと修正**
@@ -70,7 +71,9 @@ flowchart TD
     B["`**対応が必要**
     agent:blocked`"]
 
-    I -->|deadloop が Issue を取得| W
+    I -->|調査を依頼| E
+    E -->|結果コメントを保存| I
+    I -->|実装を依頼| W
     W -->|draft PR を作成| R
     R -->|deadloop がレビューを取得| V
     V -->|修正を push| R
@@ -83,7 +86,7 @@ flowchart TD
     V -. 問題発生 .-> B
 ```
 
-1. **実装を依頼する** — `ready-for-agent` は、エージェントが対応できる Issue であることを示します。`agent:implement` を付けると実装を依頼できます。deadloop が Issue を取得する前に `agent:implement` を外すと、依頼を取り消せます。
+1. **Issue の作業を依頼する** — `agent:explore` は読み取り専用の調査、`agent:implement` は実装を依頼します。`ready-for-agent` は整理用の情報にすぎません。各要求ラベルは一度だけ処理されます。取得前に外せば取り消せ、完了または停止後に付け直すと新しい依頼になります。
 2. **deadloop に任せる** — deadloop は依頼ラベルを `agent:in-progress` に置き換え、`agent:review` を付けた draft PR を作成します。必要に応じて、レビューと修正を繰り返します。PR の作業は要求ラベルだけが待ち行列になり、`agent:update-branch`、`agent:implement`、`agent:review` の順に一度に 1 件ずつ処理されます。
 3. **完了または対応する** — 承認された PR は、自動マージが無効なら ready へ変わり agent 系ワークフローラベルが外れます。有効ならマージされます。`ready-for-human` は Issue の分類用ラベルであり、PR には付きません。`agent:blocked` が付くとループは止まります。Issue または PR のコメントに記載された原因を解消し、案内された復旧手順に従ってください。
 

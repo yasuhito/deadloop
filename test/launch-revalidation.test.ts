@@ -21,7 +21,7 @@ describe("guarded launch revalidation wiring", () => {
   });
 
   it("bounds launch revalidation to the exact selected issue", () => {
-    expect(issueDriver).toMatch(/revalidate:[\s\S]*issueDecisionDeadline\(\)[\s\S]*getIssue\(env\.githubRepo, number\)/);
+    expect(issueDriver).toMatch(/revalidate:[\s\S]*getIssue\(env\.githubRepo, number\)[\s\S]*assertSameLaunchTarget\(issue, liveIssue/);
   });
 
   it("passes launch revalidation through the non-replaceable guarded reviewer launch boundary", () => {

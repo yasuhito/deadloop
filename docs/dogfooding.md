@@ -84,6 +84,7 @@ pi -e /home/yasuhito/Work/deadloop
 
 ```bash
 gh label create ready-for-agent --repo yasuhito/deadloop --color 0e8a16 || true
+gh label create agent:explore --repo yasuhito/deadloop --color 0e8a16 || true
 gh label create agent:implement --repo yasuhito/deadloop --color 1d76db || true
 gh label create agent:in-progress --repo yasuhito/deadloop --color fbca04 || true
 gh label create agent:review --repo yasuhito/deadloop --color 5319e7 || true
@@ -96,10 +97,7 @@ gh label create needs-triage --repo yasuhito/deadloop --color f9d0c4 || true
 
 ## 試験運用用 Issue の書き方
 
-Issue coordinator が拾うには、Issue に次の両方のラベルを付けます。
-
-- `ready-for-agent`
-- `agent:implement`
+実装を依頼するには、Issue に `agent:implement` を付けます。`ready-for-agent` は整理情報であり、実行条件ではありません。読み取り専用の調査は `agent:explore` で依頼できます。両方がある場合は調査が先に処理されます。
 
 Issue 本文には、少なくとも `## Agent Brief` または `## What to build` と、`## Acceptance criteria` または `## 受け入れ条件` を含めます。詳しい Gate 条件は README の「エージェントに渡せる Issue の書き方」と `extensions/deadloop/automations/issue-coordinator.prompt.md` の `### 3. Gate` 節に合わせます。
 

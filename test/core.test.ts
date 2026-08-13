@@ -111,6 +111,7 @@ describe("deterministic extension core", () => {
       automationLogins: [],
       labels: {
         ready: "agent-ready",
+        explore: "agent:explore",
         implement: "agent:implement",
         updateBranch: "agent:update-branch",
         inProgress: "agent:in-progress",
@@ -251,6 +252,11 @@ describe("deterministic extension core", () => {
       DEADLOOP_READY_LABEL: "ready-for-agent",
       DEADLOOP_AUTOMATION_ID: "demo:issue",
     });
+  });
+
+  it("passes the authorized automation identity to Issue claims", () => {
+    const project = normalizeProject({ githubRepo: "owner/repo", automationLogins: ["deadloop-bot"] });
+    expect(automationEnvironment(project, project.automations[0]).DEADLOOP_AUTOMATION_LOGIN).toBe("deadloop-bot");
   });
 
   it("passes the selected projects.json path to completion automations", () => {

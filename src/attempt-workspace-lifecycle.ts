@@ -390,8 +390,8 @@ export function evaluateCompletionPersistence(input: {
     return { action: "preserve", reason: "invalid_report" };
   }
   if (report.status === "blocked") return { action: "preserve", reason: "blocked" };
-  if (report.role !== "reviewer") {
-    if (!input.record.outputRevision || !sameSha(input.record.outputRevision, report.result.outputRevision)) {
+  if (["worker", "review-repair", "branch-update"].includes(report.role)) {
+    if (!input.record.outputRevision || !sameSha(input.record.outputRevision, (report.result as { outputRevision: string }).outputRevision)) {
       return { action: "preserve", reason: "invalid_report" };
     }
   }
