@@ -3,7 +3,6 @@ const { createHash } = require("node:crypto") as typeof import("node:crypto");
 type JsonObject = Record<string, any>;
 
 const REPAIR_MARKER_RE = /<!--\s*deadloop:review-repair-attempt\s+key=([0-9a-f]+)\s+head=([0-9a-f]+)\s+review=([0-9a-f]+)(?:\s+findings=([1-9][0-9]*))?\s*-->/gi;
-const MAX_CUMULATIVE_REPAIR_ATTEMPTS = 3;
 const TECHNICAL_MARKER_RE = /<!--\s*deadloop:review-technical-failure\s+head=([0-9a-f]+)\s*-->/gi;
 
 function normalizedFinding(finding: JsonObject): JsonObject {
@@ -79,30 +78,9 @@ function selectRepairAttempt(comments: JsonObject[], headOid: string, findings: 
   const key = repairAttemptKey(headOid, reviewFingerprint);
   const attempts = repairAttempts(comments, authorLogin);
   if (attempts.some((attempt) => attempt.key === key)) {
-    return {
-      action: "already_attempted",
-      reason: "duplicate_dispatch",
-      key,
-      reviewFingerprint,
-      attempts: attempts.length,
-      limit: MAX_CUMULATIVE_REPAIR_ATTEMPTS,
-      cumulativeLimitExceeded: attempts.length > MAX_CUMULATIVE_REPAIR_ATTEMPTS,
-    };
+    return { action: "already_attempted", reason: "duplicate_dispatch", key, reviewFingerprint };
   }
-  if (attempts.some((attempt) => attempt.reviewFingerprint === reviewFingerprint)) {
-    return { action: "human_required", reason: "repeated_findings", key, reviewFingerprint };
-  }
-  if (attempts.length >= MAX_CUMULATIVE_REPAIR_ATTEMPTS) {
-    return {
-      action: "human_required",
-      reason: "cumulative_repair_limit",
-      key,
-      reviewFingerprint,
-      attempts: attempts.length,
-      limit: MAX_CUMULATIVE_REPAIR_ATTEMPTS,
-    };
-  }
-  return { action: "launch_repair", reason: "actionable_findings", key, reviewFingerprint };
+  return { action: "launch_repair", reason: "repair_progress_reported", key, reviewFingerprint };
 }
 
 function decideTechnicalReviewFailure(comments: JsonObject[], headOid: string): JsonObject {

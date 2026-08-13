@@ -103,12 +103,10 @@ function renderPriorFindingLine(input: JsonObject): string {
 function renderChangesRequestedComment(input: JsonObject): string {
   const marker = renderRepairMarker(input.headOid, input.reviewFingerprint);
   const nextStep = input.repairUnavailable
-    ? input.repairUnavailableReason === "cumulative_repair_limit"
-      ? "This PR reached the cumulative limit of three automatic repair attempts. Automatic repair will not run again; inspect the current head, correct the branch without rewriting history, push a new commit, then remove `agent:blocked`."
-      : "The same findings remained after their one bounded automatic repair attempt. Automatic repair will not run again; inspect the current head, correct the branch without rewriting history, push a new commit, then remove `agent:blocked`."
+    ? "Automatic repair is unavailable for this exact review result; inspect the current head, correct the branch without rewriting history, push a new commit, then remove `agent:blocked`."
     : input.repairAlreadyStarted
-      ? "This review result already used its one bounded automatic repair attempt. The repair will not be launched again."
-      : "Exactly one bounded automatic repair will now start and will change only the findings listed above. The updated head will be reviewed again after a successful push.";
+      ? "This exact review result already started its one automatic repair. The repair will not be launched again."
+      : "Exactly one automatic repair for this review result will now start and will change only the findings listed above. The updated head will be reviewed again after a successful push.";
   const nextHeading = input.repairUnavailable ? "Recovery steps" : "Next step";
   return `## Review result: changes required
 

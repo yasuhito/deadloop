@@ -142,9 +142,9 @@ function repairDispatch(testCase: string): Record<string, unknown> {
           outcome: "changes_requested",
           reviewedHead: currentHead,
           findings,
-          // The repeated-repair case keeps reporting repair progress, so the
-          // fingerprint guard stays the thing that stops the second repair.
-          priorRequiredFindings: testCase === "repeated-repair" ? "all_resolved" : "none",
+          // A persisted prior finding requires human handling before repair
+          // selection; the historical marker remains evidence only.
+          priorRequiredFindings: testCase === "repeated-repair" ? "persisted" : "none",
         },
       }));
     fs.writeFileSync(attemptRecord, JSON.stringify({

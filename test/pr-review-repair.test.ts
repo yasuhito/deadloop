@@ -254,8 +254,8 @@ function finalizeWhileDisabled() {
   return { error, commands };
 }
 
-function prompt() {
-  return repairWorkerPrompt("243", "agent/issue-243", head, findings, "attempt-key", "/state/promise.json", "/worktree", {
+function prompt(requiredFindings = findings) {
+  return repairWorkerPrompt("243", "agent/issue-243", head, requiredFindings, "attempt-key", "/state/promise.json", "/worktree", {
     projectId: "demo",
     repoPath: "/repo",
     githubRepo: "owner/repo",
@@ -319,17 +319,17 @@ describe("automatic PR review repair", () => {
     expect(selectRepairAttempt(comments, head, findings, automationLogin).action).toBe("already_attempted");
   });
 
-  it("requires a human when the same findings recur after repair", () => {
+  it("launches repair when progress-qualified findings resemble an earlier result on another head", () => {
     const fingerprint = reviewResultFingerprint(findings);
     const comments = [{ body: renderRepairMarker(head, fingerprint), author: { login: automationLogin } }];
 
-    expect(selectRepairAttempt(comments, "b".repeat(40), findings, automationLogin).reason).toBe("repeated_findings");
+    expect(selectRepairAttempt(comments, "b".repeat(40), findings, automationLogin).action).toBe("launch_repair");
   });
 
-  it("launches the third cumulative repair attempt", () => {
+  it("launches the fourth progress-qualified repair attempt", () => {
     expect(
       selectRepairAttempt(
-        cumulativeComments.slice(0, 2),
+        cumulativeComments,
         cumulativeRepairFixture.nextHead,
         cumulativeRepairFixture.nextFindings,
         automationLogin,
@@ -337,18 +337,23 @@ describe("automatic PR review repair", () => {
     ).toBe("launch_repair");
   });
 
-  it("requires a human after three cumulative repair attempts", () => {
+  it("launches a later progress-qualified repair regardless of historical attempt count", () => {
+    const historicalComments = Array.from({ length: 20 }, (_, index) => ({
+      body: renderRepairMarker(String(index + 1).padStart(40, "0"), String(index + 1).padStart(20, "0")),
+      author: { login: automationLogin },
+    }));
+
     expect(
       selectRepairAttempt(
-        cumulativeComments,
+        historicalComments,
         cumulativeRepairFixture.nextHead,
         cumulativeRepairFixture.nextFindings,
         automationLogin,
-      ).reason,
-    ).toBe("cumulative_repair_limit");
+      ).action,
+    ).toBe("launch_repair");
   });
 
-  it("flags duplicate recovery after the cumulative limit is exceeded", () => {
+  it("does not relaunch an exact result even after many historical attempts", () => {
     const fingerprint = reviewResultFingerprint(cumulativeRepairFixture.nextFindings);
     const comments = [
       ...cumulativeComments,
@@ -359,9 +364,8 @@ describe("automatic PR review repair", () => {
     ];
 
     expect(
-      selectRepairAttempt(comments, cumulativeRepairFixture.nextHead, cumulativeRepairFixture.nextFindings, automationLogin)
-        .cumulativeLimitExceeded,
-    ).toBe(true);
+      selectRepairAttempt(comments, cumulativeRepairFixture.nextHead, cumulativeRepairFixture.nextFindings, automationLogin).action,
+    ).toBe("already_attempted");
   });
 
   it("does not count repair markers from untrusted authors", () => {
@@ -375,7 +379,7 @@ describe("automatic PR review repair", () => {
     ).toBe("launch_repair");
   });
 
-  it("counts trusted repair markers beyond the first GitHub comment page", () => {
+  it("does not treat historical repair markers beyond the first GitHub comment page as a limit", () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({ body: `comment ${index}` }));
     const apiComments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
       ...comment,
@@ -389,8 +393,8 @@ describe("automatic PR review repair", () => {
     const pr = readLivePr("owner/repo", "243", runner);
 
     expect(
-      selectRepairAttempt(pr.comments, cumulativeRepairFixture.nextHead, cumulativeRepairFixture.nextFindings, automationLogin).reason,
-    ).toBe("cumulative_repair_limit");
+      selectRepairAttempt(pr.comments, cumulativeRepairFixture.nextHead, cumulativeRepairFixture.nextFindings, automationLogin).action,
+    ).toBe("launch_repair");
   });
 
   it("retries the first technical reviewer failure without human blocking", () => {
@@ -409,8 +413,15 @@ describe("automatic PR review repair", () => {
     expect(technicalFailureCount(comments, "b".repeat(40))).toBe(0);
   });
 
-  it("passes #243-style lint findings as the repair worker's bounded contract", () => {
+  it("passes #243-style lint findings as the repair worker's required contract", () => {
     expect(prompt()).toContain('"title": "Lint contract failure"');
+  });
+
+  it("passes all current required findings together in one repair contract", () => {
+    const second = { title: "Missing guard", body: "Reject stale input", path: "src/b.ts", line: 8, severity: "blocker" };
+    const contract = prompt([...findings, second]).match(/Required findings contract:\n```json\n([\s\S]*?)\n```/)?.[1] || "[]";
+
+    expect(JSON.parse(contract).map((finding: Record<string, unknown>) => finding.title)).toEqual(["Lint contract failure", "Missing guard"]);
   });
 
   it("forbids scope widening in the repair worker prompt", () => {
