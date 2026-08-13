@@ -9,7 +9,7 @@ const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwne
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.ts");
 const { canonicalPath, canonicalPathContains } = require("../../../src/attempt-runtime-observation.ts");
 const { classifyActiveReviewClaim, classifyPushedHeadAuthorityTransition, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
-const { validatePromise } = require("./extract-worker-promise.ts");
+const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -176,26 +176,17 @@ function runtimeForAttempt(runner: any, record: JsonObject, projectRepo = ""): {
   return { kind: "stopped_owned" };
 }
 
-const PUSHED_OUTCOMES = new Set(["branch_update_pushed", "repair_pushed"]);
-
 /**
- * The head change an attempt proved it produced, or null when it proved none.
+ * The head change an attempt proved it produced and still holds, or null when it proved none.
  *
- * A writing role succeeds by moving the head its claim recorded, so success makes the claim's
- * revision stale by construction. The attempt's own validated report, bound to the attempt and
- * naming the live head, is what separates that from a head somebody else pushed.
+ * The proof itself is the finalizer receipt and the bound completion report agreeing on one push.
+ * Currency is this caller's part: a proven push the pull request has since moved past says nothing
+ * about who owns the head reconciliation is looking at now.
  */
 function pushedHeadTransition(record: JsonObject, pr: JsonObject): { originalHeadOid: string; headOid: string } | null {
-  const validation = validatePromise(String(record.promiseFile || ""));
-  const promise = validation.promise as JsonObject | undefined;
-  if (validation.status !== "complete" || !promise || promise.status !== "complete") return null;
-  if (String(promise.attemptId || "") !== String(record.attemptId || "")) return null;
-  if (String(promise.role || "") !== String(record.role || "")) return null;
-  if (!PUSHED_OUTCOMES.has(String(promise.result?.outcome || ""))) return null;
-  const pushed = String(promise.result?.outputRevision || "").toLowerCase();
-  const original = String(record.inputRevision?.head || "").toLowerCase();
-  if (!pushed || pushed !== String(pr.headRefOid || "").toLowerCase() || pushed === original) return null;
-  return { originalHeadOid: original, headOid: pushed };
+  const transition = provenPushedHeadTransition(String(record.runDir || ""), record);
+  if (!transition) return null;
+  return transition.headOid === String(pr.headRefOid || "").toLowerCase() ? transition : null;
 }
 
 function classifyClaim(

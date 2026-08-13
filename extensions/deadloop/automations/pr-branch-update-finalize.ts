@@ -4,7 +4,9 @@
 // then performs a normal fast-forward push of the immutable candidate.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
+const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { assertAuthorizedSource } = require("./guarded-push.ts");
@@ -23,6 +25,7 @@ type FinalizeArgs = {
   stateDir: string;
   enabledAt: number;
   checkCommand: string;
+  resultFile: string;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
 type EnabledProject = { githubRepo: string; githubRepositoryId: string };
@@ -195,16 +198,58 @@ function parseArgs(argv: string[]): FinalizeArgs {
     stateDir: required(values, "stateDir"),
     enabledAt: Number(required(values, "enabledAt")),
     checkCommand: required(values, "checkCommand"),
+    resultFile: required(values, "resultFile"),
   };
 }
 
-function main(): void {
+/**
+ * The push receipt, written where the completion handlers read it.
+ *
+ * Only this finalizer pushes, so only its own record can prove which head an attempt produced. The
+ * report the worker writes afterwards is its account of this file, never a substitute for it.
+ */
+function writeResult(file: string, result: JsonObject): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    const result = finalizeBranchUpdate(parseArgs(process.argv.slice(2)));
+    fs.writeFileSync(temporary, `${JSON.stringify(result)}\n`, { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporary, file);
+  } finally {
+    try { fs.unlinkSync(temporary); } catch {}
+  }
+}
+
+function argumentValue(argv: string[], flag: string): string {
+  const index = argv.indexOf(flag);
+  return index >= 0 ? String(argv[index + 1] || "") : "";
+}
+
+function main(): void {
+  const argv = process.argv.slice(2);
+  const fallbackResultFile = argumentValue(argv, "--result-file");
+  let args: FinalizeArgs | undefined;
+  try {
+    args = parseArgs(argv);
+    const result = finalizeBranchUpdate(args);
+    writeResult(args.resultFile, result);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (result.action === "blocked") process.exitCode = 3;
   } catch (error) {
-    console.error(`pr-branch-update-finalize.ts: ${error instanceof Error ? error.message : String(error)}`);
+    const message = error instanceof Error ? error.message : String(error);
+    const resultFile = args?.resultFile || fallbackResultFile;
+    if (resultFile) {
+      try {
+        writeResult(resultFile, {
+          action: "blocked",
+          reason: "finalizer_error",
+          summary: message,
+          originalHeadOid: String(args?.expectedHead || argumentValue(argv, "--expected-head")).toLowerCase(),
+        });
+      } catch (writeError) {
+        console.error(`pr-branch-update-finalize.ts: could not write result receipt: ${writeError instanceof Error ? writeError.message : String(writeError)}`);
+      }
+    }
+    console.error(`pr-branch-update-finalize.ts: ${message}`);
     process.exitCode = 2;
   }
 }
