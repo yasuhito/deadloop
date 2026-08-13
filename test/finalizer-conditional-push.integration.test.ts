@@ -13,7 +13,7 @@ const sandboxes: string[] = [];
 const branch = "agent/issue-1";
 const ref = `refs/heads/${branch}`;
 const activeReviewState = {
-  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
   requestLabel: "agent:review",
   requiredLabels: ["agent:in-progress"],
 };
@@ -88,7 +88,7 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
   };
   const reviewClaim = {
     binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const common = {
     repo,
@@ -178,7 +178,7 @@ process.exit(result.status ?? 1);
     };
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
       attemptId: "attempt", launchUuid: "launch", project: "demo", repository: "owner/repo",
@@ -203,7 +203,7 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
     const rendered = repairWorkerPrompt("1", branch, expectedHead, [{ title: "repair", body: "repair the file" }], "attempt", promiseFile, repo, {
       projectId: "demo", repoPath: repo, githubRepo: "owner/repo", stateDir, checkCommand: "true",
       workerAgent: "pi", workerModel: "", remote: "origin", reviewLabel: "agent:review",
-      reviewingLabel: "agent:reviewing", blockedLabel: "agent:blocked", inProgressLabel: "agent:in-progress",
+      blockedLabel: "agent:blocked", inProgressLabel: "agent:in-progress",
       reviewClaim, automationDir, enabledAt: 1,
     });
     const command = rendered.match(/permitted non-force push to the exact branch:\n  (.+)\n- Never edit labels/)?.[1];

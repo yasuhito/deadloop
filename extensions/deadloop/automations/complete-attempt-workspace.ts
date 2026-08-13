@@ -12,7 +12,7 @@ const {
   transitionPersistedAttempt,
 } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { parseAttemptPersistenceMarkers } = require("../../../src/attempt-persistence-marker.cjs");
 const { evaluateCompletionPersistence } = require("../../../src/attempt-workspace-predicates.cjs");
@@ -395,7 +395,7 @@ function closeCompletionStoppedWorkerAttempt(
 
 async function complete(args: JsonObject) {
   const commandRunner = createCommandRunner();
-  runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
+  runHerdrPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   const project = {
     id: String(args.projectId),
     repoPath: path.resolve(String(args.projectRepo)),

@@ -25,7 +25,7 @@ const {
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertCurrentWorkerContract, requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
@@ -509,7 +509,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
 
 function drive(fixturePath: string | undefined): DriverResult {
   if (!fixturePath) {
-    runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runText([command, ...commandArgs]) });
+    runHerdrPreflight({ run: (command: string, commandArgs: string[]) => runText([command, ...commandArgs]) });
   }
   const fixture = loadFixture(fixturePath);
   const env = envConfig(fixturePath ? { ...process.env, DEADLOOP_FIXTURE_MODE: "1" } : process.env);

@@ -21,7 +21,7 @@ const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
 const sandboxes: string[] = [];
 const activeReviewState = {
-  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
   requestLabel: "agent:review",
   requiredLabels: ["agent:in-progress"],
 };
@@ -114,7 +114,7 @@ describe("enablement mutation guards", () => {
 
   it("rejects a reused repository name after the enabled repository transfers", () => {
     const project = fixture();
-    writeState(project, { enabledAt: 1, githubAliases: ["owner/repo"] });
+    writeState(project, { enabledAt: 1 });
     writeFileSync(project.repositoryIdPath, "R_reused\n");
 
     expect(() => assertEnabled(project)).toThrow("disabled");
@@ -122,7 +122,7 @@ describe("enablement mutation guards", () => {
 
   it("rejects a reused persisted mutation namespace after the origin follows a rename", () => {
     const project = fixture();
-    writeState(project, { enabledAt: 1, githubAliases: ["owner/renamed"] });
+    writeState(project, { enabledAt: 1 });
     execFileSync("git", ["-C", project.repoPath, "remote", "set-url", "origin", "https://github.com/owner/renamed.git"]);
     writeFileSync(project.reusedNamePath, "reused\n");
 
@@ -410,7 +410,7 @@ describe("enablement mutation guards", () => {
     const claim = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     let mutated = false;
     runGuarded(
@@ -447,7 +447,7 @@ describe("enablement mutation guards", () => {
     let observationComplete = false;
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     try {
       runGuarded(
@@ -513,7 +513,7 @@ describe("enablement mutation guards", () => {
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi",
       reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     let mutated = false;
     const failures = [
@@ -554,7 +554,7 @@ describe("enablement mutation guards", () => {
     };
     const reviewClaim = {
       binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
 
     expect(() => runGuarded(

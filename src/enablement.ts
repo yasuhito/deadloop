@@ -9,7 +9,6 @@ export type EnabledProject = {
   enabledAt: number;
   disableGeneration: number;
   enableAttemptToken?: string;
-  githubAliases?: string[];
   baseBranch?: string;
   automationLogin?: string;
   firstEnableAutoMerge: boolean;
@@ -22,7 +21,7 @@ export type EnabledProject = {
 export type EnablementState = { projects: EnabledProject[] };
 
 export type ProjectIdentity = Pick<EnabledProject, "repoPath" | "githubRepo"> &
-  Partial<Pick<EnabledProject, "githubRepositoryId" | "githubAliases" | "baseBranch" | "automationLogin" | "disableGeneration">>;
+  Partial<Pick<EnabledProject, "githubRepositoryId" | "baseBranch" | "automationLogin" | "disableGeneration">>;
 
 function normalizedPath(value: string): string {
   return path.resolve(value);
@@ -63,13 +62,6 @@ export function upsertEnabledProject(
   const enabledAt = previous && previous.enabled !== false
     ? previous.enabledAt
     : Math.max(now, (previous?.enabledAt ?? 0) + 1);
-  const githubAliases = previous || identity.githubAliases
-    ? [...new Set([
-        ...(previous?.githubAliases || []),
-        ...(previous ? [previous.githubRepo] : []),
-        ...(identity.githubAliases || []),
-      ])]
-    : undefined;
   return {
     projects: [
       ...retained,
@@ -88,7 +80,6 @@ export function upsertEnabledProject(
         enabledAt,
         disableGeneration: identity.disableGeneration ?? previous?.disableGeneration ?? 0,
         ...(enableAttemptToken ? { enableAttemptToken } : {}),
-        ...(githubAliases ? { githubAliases } : {}),
         ...(identity.baseBranch ? { baseBranch: identity.baseBranch } : {}),
         ...(identity.automationLogin ? { automationLogin: identity.automationLogin.trim().toLowerCase() } : {}),
         enabled: true,

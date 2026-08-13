@@ -23,7 +23,7 @@ function setup() {
   const args = {
     attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: root, githubRepo: "owner/repo", stateDir,
     enabledAt: "1", readyLabel: "custom:ready", implementLabel: "custom:implement", inProgressLabel: "custom:claimed",
-    reviewLabel: "custom:review", reviewingLabel: "custom:reviewing", blockedLabel: "custom:blocked",
+    reviewLabel: "custom:review", blockedLabel: "custom:blocked",
   };
   return { args, runDir };
 }
@@ -54,14 +54,14 @@ describe("prepared attempt claim reconciliation", () => {
   it("rejects a reviewer claim when the selected PR head changed", () => {
     const data = setup();
     const record = { ...readAttemptRecord(data.runDir), role: "reviewer", target: { kind: "pull-request", number: 12 } };
-    const item = { state: "OPEN", headRefName: record.branch, headRefOid: "b".repeat(40), labels: [{ name: "custom:review" }, { name: "custom:reviewing" }], comments: [] };
+    const item = { state: "OPEN", headRefName: record.branch, headRefOid: "b".repeat(40), labels: [{ name: "custom:review" }, { name: "custom:claimed" }], comments: [] };
     expect(hasExactClaim(record, item, data.args)).toBe(false);
   });
 
   it("requires the exact repair-attempt marker for a review-repair claim", () => {
     const data = setup();
     const record = { ...readAttemptRecord(data.runDir), role: "review-repair", target: { kind: "pull-request", number: 12 } };
-    const item = { state: "OPEN", headRefName: record.branch, headRefOid: record.inputRevision.head, labels: [{ name: "custom:review" }, { name: "custom:reviewing" }], comments: [{ body: `<!-- deadloop:review-repair-attempt key=${record.attemptId} head=${record.inputRevision.head} review=abc -->` }] };
+    const item = { state: "OPEN", headRefName: record.branch, headRefOid: record.inputRevision.head, labels: [{ name: "custom:review" }, { name: "custom:claimed" }], comments: [{ body: `<!-- deadloop:review-repair-attempt key=${record.attemptId} head=${record.inputRevision.head} review=abc -->` }] };
     expect(hasExactClaim(record, item, data.args)).toBe(true);
   });
 

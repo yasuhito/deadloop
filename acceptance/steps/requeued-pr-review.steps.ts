@@ -173,9 +173,9 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.HERDR_TEST_LOG, JSON.stringify(args) + "\\n");
 if (args[0] === "--version") {
-  process.stdout.write("herdr 0.7.5\\n");
+  process.stdout.write("herdr 0.8.0\\n");
 } else if (args[0] === "status" && args[1] === "server") {
-  process.stdout.write("version: 0.7.5\\ncompatible: yes\\n");
+  process.stdout.write("version: 0.8.0\\n");
 } else if (args[0] === "agent" && args[1] === "list") {
   const agents = [{terminal_id:"terminal-old",name:"demo-pr-44-reviewer", agent_status:"done", cwd:process.env.HERDR_TEST_WORKTREE, pane_id:"pane-old"}];
   if (fs.existsSync(process.env.HERDR_TEST_LOG + ".agent")) agents.push(JSON.parse(fs.readFileSync(process.env.HERDR_TEST_LOG + ".agent", "utf8")));

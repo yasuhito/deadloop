@@ -7,6 +7,7 @@ import {
   attemptRecordPath,
   createPreparedAttempt,
   readAttemptRecord,
+  releasePersistedAttemptAuthority,
   transitionAttempt,
   transitionPersistedAttempt,
   validateCompletionReportBinding,
@@ -288,6 +289,51 @@ describe("attempt lifecycle contract", () => {
     })).toThrow("severity");
   });
 
+  it("rejects an approved result that still carries a required finding", () => {
+    const report = matchingReport();
+
+    expect(() => validateCompletionReportV1({
+      ...report,
+      result: { ...report.result, findings: [{ title: "Bug", body: "Fix it", severity: "major" }] },
+    })).toThrow("approved");
+  });
+
+  it("accepts an approved result with advisory observations", () => {
+    const report = matchingReport();
+
+    expect(validateCompletionReportV1({
+      ...report,
+      result: { ...report.result, advisories: [{ title: "Naming", body: "A clearer name would help" }] },
+    }).result).toHaveProperty("advisories");
+  });
+
+  it("rejects malformed advisory observations", () => {
+    const report = matchingReport();
+
+    expect(() => validateCompletionReportV1({
+      ...report,
+      result: { ...report.result, advisories: [{ title: "Naming", body: "" }] },
+    })).toThrow("advisory");
+  });
+
+  it("requires a prior-finding disposition on every changes-requested result", () => {
+    const report = matchingReport();
+
+    expect(() => validateCompletionReportV1({
+      ...report,
+      result: { ...report.result, outcome: "changes_requested", findings: [{ title: "Bug", body: "Fix it", severity: "major" }] },
+    })).toThrow("priorRequiredFindings");
+  });
+
+  it("rejects an unknown prior-finding disposition", () => {
+    const report = matchingReport();
+
+    expect(() => validateCompletionReportV1({
+      ...report,
+      result: { ...report.result, priorRequiredFindings: "probably_fine" },
+    })).toThrow("priorRequiredFindings");
+  });
+
   it("rejects malformed Worker validation evidence", () => {
     expect(() => validateCompletionReportV1({
       ...matchingReport(),
@@ -446,5 +492,11 @@ describe("attempt lifecycle contract", () => {
     const record = preparedAttempt();
 
     expect(JSON.parse(readFileSync(attemptRecordPath(path.dirname(record.promptFile)), "utf8"))).toEqual(record);
+  });
+
+  it("releases local ownership after GitHub authority is lost", () => {
+    const record = preparedAttempt();
+
+    expect(releasePersistedAttemptAuthority(path.dirname(record.promptFile), "2026-08-01T10:00:00Z", "cutoff-1").phase).toBe("authority_released");
   });
 });

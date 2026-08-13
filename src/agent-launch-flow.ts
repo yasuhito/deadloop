@@ -7,7 +7,7 @@ const {
   transitionPersistedAttempt,
   writeAttemptRecordAtomically,
 } = require("./attempt-lifecycle-runtime.cjs");
-const { deriveHerdr075AgentName } = require("./herdr-agent-name.cjs");
+const { deriveHerdrAgentName } = require("./herdr-agent-name.cjs");
 const { createHerdrRunner } = require("./herdr-runner.ts");
 const { writeWorkerContractSnapshot } = require("./worker-required-verification-runtime.cjs");
 
@@ -76,7 +76,7 @@ function launchPaths(input: AgentLaunchFlowInput): PreparedLaunch {
   const runDir = path.join(input.stateDir, "runs", path.basename(input.uuid));
   const promptFile = path.join(runDir, `${input.promptFilePrefix}.md`);
   const promiseFile = path.join(runDir, "promise.json");
-  const agentName = deriveHerdr075AgentName({
+  const agentName = deriveHerdrAgentName({
     repository: input.repository,
     role: input.role,
     target: input.target.number,
@@ -197,14 +197,20 @@ function prepareAgentLaunchFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlo
   return prepared;
 }
 
+/**
+ * Roles whose attempt journal must carry the GitHub request claim they consumed. Their prepared
+ * identity includes that claim, so the claim has to exist before the journal is written.
+ */
+const CLAIM_BOUND_AGENT_ROLES = ["reviewer", "branch-update"];
+
 function recordAgentLaunchGithubClaimed(input: AgentLaunchFlowInput): AttemptRecord {
   const prepared = launchPaths(input);
   const existing = readAttemptRecord(prepared.runDir);
   if (!samePreparedIdentity(existing, preparedRecordInput(input, prepared))) {
     throw new Error("attempt run directory identity does not match this claim");
   }
-  if (existing.role === "reviewer" && !existing.reviewClaim) {
-    throw new Error("reviewer GitHub claim cannot be recorded without an immutable review claim contract");
+  if (CLAIM_BOUND_AGENT_ROLES.includes(String(existing.role)) && !existing.reviewClaim) {
+    throw new Error(`${existing.role} GitHub claim cannot be recorded without an immutable review claim contract`);
   }
   if (existing.phase === "github_claimed") return existing;
   if (existing.phase !== "prepared") throw new Error(`attempt phase ${existing.phase} cannot record a GitHub claim`);
@@ -346,4 +352,4 @@ function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): 
   }
 }
 
-module.exports = { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed };
+module.exports = { CLAIM_BOUND_AGENT_ROLES, launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed };

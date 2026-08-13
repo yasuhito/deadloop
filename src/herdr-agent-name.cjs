@@ -2,7 +2,7 @@ const { createHash } = require("node:crypto");
 const ROLE_CODES = { worker: "w", reviewer: "r", "review-repair": "x", "branch-update": "u" };
 const MAX_TARGET = 2147483647;
 const AGENT_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
-function deriveHerdr075AgentName(input) {
+function deriveHerdrAgentName(input) {
   if (!input.repository || !input.launchUuid) throw new Error("Herdr agent identity must be non-empty");
   if (!Number.isInteger(input.target) || input.target < 1 || input.target > MAX_TARGET) {
     throw new Error(`Herdr agent target must be an integer from 1 through ${MAX_TARGET}`);
@@ -19,4 +19,4 @@ function deriveHerdr075AgentName(input) {
   }
   return name;
 }
-module.exports = { deriveHerdr075AgentName };
+module.exports = { deriveHerdrAgentName };

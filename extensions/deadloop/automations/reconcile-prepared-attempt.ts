@@ -3,7 +3,7 @@
 const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord, transitionPersistedAttempt } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
@@ -19,7 +19,7 @@ function parseArgs(argv: string[]): JsonObject {
   }
   for (const name of [
     "attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "enabledAt", "readyLabel", "implementLabel",
-    "inProgressLabel", "reviewLabel", "reviewingLabel", "blockedLabel",
+    "inProgressLabel", "reviewLabel", "blockedLabel",
   ]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
@@ -44,7 +44,7 @@ function hasExactClaim(record: JsonObject, item: JsonObject, args: JsonObject): 
     && String(item.headRefName || "") === String(record.branch)
     && String(item.headRefOid || "").toLowerCase() === String(record.inputRevision.head).toLowerCase()
     && labels.has(String(args.reviewLabel))
-    && labels.has(String(args.reviewingLabel))
+    && labels.has(String(args.inProgressLabel))
     && !labels.has(String(args.blockedLabel));
   if (!exactPullRequest) return false;
   const comments = (item.comments || []).map((comment: JsonObject) => String(comment?.body || ""));
@@ -85,7 +85,7 @@ function reconcileLocked(args: JsonObject, runner: ReturnType<typeof createComma
 
 function reconcile(args: JsonObject): JsonObject {
   const runner = createCommandRunner();
-  runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
+  runHerdrPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
   const project = {
     id: String(args.projectId), repoPath: path.resolve(String(args.projectRepo)), githubRepo: String(args.githubRepo),
     stateDir: path.resolve(String(args.stateDir)), enabledAt: Number(args.enabledAt),

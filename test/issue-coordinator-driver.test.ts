@@ -86,8 +86,8 @@ fi
 exec /usr/bin/git "$@"
 `);
     writeFileSync(path.join(binDir, "herdr"), `#!/bin/sh
-if [ "$1" = "--version" ]; then printf 'herdr 0.7.5\\n'; exit 0; fi
-if [ "$1 $2" = "status server" ]; then printf 'version: 0.7.5\\ncompatible: yes\\n'; exit 0; fi
+if [ "$1" = "--version" ]; then printf 'herdr 0.8.0\\n'; exit 0; fi
+if [ "$1 $2" = "status server" ]; then printf 'version: 0.8.0\\n'; exit 0; fi
 if [ "$1 $2" = "worktree list" ]; then
   printf '%s\\n' '{"result":{"worktrees":[{"branch":"agent/issue-1","is_linked_worktree":true,"path":"${worktree}"}]}}'
   exit 0

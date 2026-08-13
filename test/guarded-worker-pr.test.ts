@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrReadyForReview, ensureWorkerPr } = require("../extensions/deadloop/automations/guarded-worker-pr.ts");
+const { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrAwaitingReview, ensureWorkerPr } = require("../extensions/deadloop/automations/guarded-worker-pr.ts");
 
 describe("guarded Worker PR binding", () => {
   it("rejects another GitHub repository before PR creation", () => {
@@ -19,8 +19,8 @@ describe("guarded Worker PR binding", () => {
 
   it("rejects a recovered Worker PR with the wrong base branch before review", () => {
     const head = "a".repeat(40);
-    expect(() => assertWorkerPrReadyForReview(
-      { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "wrong", closingIssuesReferences: [{ number: 1 }] },
+    expect(() => assertWorkerPrAwaitingReview(
+      { state: "OPEN", isDraft: true, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "wrong", closingIssuesReferences: [{ number: 1 }] },
       { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
       head,
     )).toThrow("base branch");
@@ -28,8 +28,8 @@ describe("guarded Worker PR binding", () => {
 
   it("rejects a recovered Worker PR without its Issue closing reference before review", () => {
     const head = "a".repeat(40);
-    expect(() => assertWorkerPrReadyForReview(
-      { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [] },
+    expect(() => assertWorkerPrAwaitingReview(
+      { state: "OPEN", isDraft: true, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [] },
       { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
       head,
     )).toThrow("does not close");
@@ -56,6 +56,25 @@ describe("guarded Worker PR binding", () => {
     expect({ closed: calls.at(-1), error: error.includes("PR closed") }).toEqual({ closed: "pr close 17 -R owner/repo", error: true });
   });
 
+  it("creates the Worker PR as a draft", () => {
+    const verifiedHead = "a".repeat(40); const calls: string[][] = [];
+    const gh = (args: string[], json = false) => {
+      calls.push(args);
+      if (args[1] === "list") return [];
+      if (args[1] === "create") return "https://github.com/owner/repo/pull/17";
+      if (args[1] === "view") return { headRefOid: verifiedHead };
+      return json ? {} : "";
+    };
+    ensureWorkerPr(
+      { branch: "agent/issue-1", baseBranch: "origin/main", target: { number: 1 } },
+      verifiedHead,
+      { githubRepo: "owner/repo", title: "Task" },
+      { remoteHead: () => verifiedHead, gh, recheck: () => {}, authorize: () => {} },
+    );
+
+    expect(calls.find((call) => call[1] === "create")).toContain("--draft");
+  });
+
   it("reauthorizes after the final label recheck", () => {
     const head = "a".repeat(40); let labeled = false; let error = "";
     try {
@@ -67,7 +86,7 @@ describe("guarded Worker PR binding", () => {
         {
           recheck: () => {}, authorize: () => { throw new Error("stale_policy"); },
           gh: (args: string[]) => {
-            if (args[1] === "view") return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [{ number: 1 }] };
+            if (args[1] === "view") return { state: "OPEN", isDraft: true, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [{ number: 1 }] };
             if (args[1] === "edit") labeled = true;
           },
         },
@@ -77,8 +96,8 @@ describe("guarded Worker PR binding", () => {
   });
 
   it.each([
-    ["closed", { state: "CLOSED", isDraft: false }],
-    ["draft", { state: "OPEN", isDraft: true }],
+    ["closed", { state: "CLOSED", isDraft: true }],
+    ["ready", { state: "OPEN", isDraft: false }],
   ] as const)("does not add the review label to a %s PR", (_name, eligibility) => {
     const head = "a".repeat(40); let labeled = false;
     try {
@@ -113,7 +132,7 @@ describe("guarded Worker PR binding", () => {
           gh: (args: string[]) => {
             if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
             viewed += 1;
-            return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: viewed === 1 ? "main" : "release", closingIssuesReferences: [{ number: 1 }] };
+            return { state: "OPEN", isDraft: true, headRefName: "agent/issue-1", headRefOid: head, baseRefName: viewed === 1 ? "main" : "release", closingIssuesReferences: [{ number: 1 }] };
           },
         },
       );
@@ -134,7 +153,7 @@ describe("guarded Worker PR binding", () => {
           gh: (args: string[]) => {
             if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
             viewed += 1;
-            return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: viewed === 1 ? [{ number: 1 }] : [{ number: 2 }] };
+            return { state: "OPEN", isDraft: true, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: viewed === 1 ? [{ number: 1 }] : [{ number: 2 }] };
           },
         },
       );
@@ -154,7 +173,7 @@ describe("guarded Worker PR binding", () => {
           recheck: () => {}, authorize: () => {},
           gh: (args: string[]) => {
             if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
-            return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [{ number: 1 }], labels: [] };
+            return { state: "OPEN", isDraft: true, headRefName: "agent/issue-1", headRefOid: head, baseRefName: "main", closingIssuesReferences: [{ number: 1 }], labels: [] };
           },
         },
       );
@@ -182,7 +201,7 @@ describe("guarded Worker PR binding", () => {
           gh: (args: string[]) => {
             if (args[1] === "edit") { edits.push(args.join(" ")); return ""; }
             viewed += 1;
-            return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: viewed < 3 ? head : "b".repeat(40), baseRefName: "main", closingIssuesReferences: [{ number: 1 }], labels: [{ name: "agent:review" }] };
+            return { state: "OPEN", isDraft: true, headRefName: "agent/issue-1", headRefOid: viewed < 3 ? head : "b".repeat(40), baseRefName: "main", closingIssuesReferences: [{ number: 1 }], labels: [{ name: "agent:review" }] };
           },
         },
       );
@@ -222,7 +241,7 @@ describe("guarded Worker PR binding", () => {
         {
           recheck: () => {}, authorize: () => { current = raced; },
           gh: (args: string[]) => {
-            if (args[1] === "view") return { state: "OPEN", isDraft: false, headRefName: "agent/issue-1", headRefOid: current, baseRefName: "main", closingIssuesReferences: [{ number: 1 }] };
+            if (args[1] === "view") return { state: "OPEN", isDraft: true, headRefName: "agent/issue-1", headRefOid: current, baseRefName: "main", closingIssuesReferences: [{ number: 1 }] };
             if (args[1] === "edit") labeled = true;
           },
         },

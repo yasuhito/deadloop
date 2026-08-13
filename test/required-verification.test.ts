@@ -47,8 +47,12 @@ describe("required verification resolution", () => {
       .toMatchObject({ status: "blocked", reason: "source_conflict" });
   });
 
-  it("blocks when no explicit source exists", () => {
-    expect(resolve()).toMatchObject({ status: "blocked", reason: "no_source" });
+  it("uses npm run check when no explicit source exists", () => {
+    expect(resolved(resolve()).command).toBe("npm run check");
+  });
+
+  it("identifies the built-in default as its source", () => {
+    expect(resolved(resolve()).source).toEqual({ kind: "default", location: "deadloop" });
   });
 
   it("blocks an explicitly empty command", () => {
@@ -57,6 +61,11 @@ describe("required verification resolution", () => {
 
   it("accepts any non-empty explicit command without guessing its meaning", () => {
     expect(resolved(resolve({ sharedSources: [shared("true")] })).command).toBe("true");
+  });
+
+  it("blocks the built-in default without trusted base revision evidence", () => {
+    expect(resolve({ baseRevision: "unknown" }))
+      .toMatchObject({ status: "blocked", reason: "missing_base_revision" });
   });
 
   it("blocks a local command without trusted base revision evidence", () => {

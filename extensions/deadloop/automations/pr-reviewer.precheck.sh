@@ -7,8 +7,9 @@ repo="${DEADLOOP_GITHUB_REPO:?}"
 project_id="${DEADLOOP_PROJECT_ID:-}"
 state_dir="${DEADLOOP_STATE_DIR:-${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}/deadloop}"
 review_label="${DEADLOOP_REVIEW_LABEL:-agent:review}"
-reviewing_label="${DEADLOOP_REVIEWING_LABEL:-agent:reviewing}"
-human_label="${DEADLOOP_HUMAN_LABEL:-ready-for-human}"
+implement_label="${DEADLOOP_IMPLEMENT_LABEL:-agent:implement}"
+update_branch_label="${DEADLOOP_UPDATE_BRANCH_LABEL:-agent:update-branch}"
+in_progress_label="${DEADLOOP_IN_PROGRESS_LABEL:-agent:in-progress}"
 blocked_label="${DEADLOOP_BLOCKED_LABEL:-agent:blocked}"
 auto_merge="${DEADLOOP_AUTO_MERGE:-0}"
 external_review_enabled="${DEADLOOP_EXTERNAL_REVIEW_ENABLED:-0}"
@@ -23,9 +24,9 @@ gh pr list -R "${repo}" --state open --limit 100 \
   --json number,updatedAt,headRefName,headRefOid,isCrossRepository,isDraft,labels,statusCheckRollup,comments,reviewRequests \
   > "${prs_json}"
 
-# A stale `agent:reviewing` claim is reclaimed unless its reviewer agent is still
-# working, so pass the live Herdr agent list as a safety check. If Herdr is
-# unreachable, fall back to an empty list and let the reclaim proceed.
+# A retained GitHub claim is not reselected while its attempt still owns work,
+# so pass the live Herdr agent list as a safety check. If Herdr is unreachable,
+# fall back to an empty list and let reconciliation decide the next safe state.
 herdr agent list > "${agents_json}" 2>/dev/null || printf '{"result":{"agents":[]}}' > "${agents_json}"
 
 args=(
@@ -35,9 +36,12 @@ args=(
   --state-dir "${state_dir}"
   --github-repo "${repo}"
   --review-label "${review_label}"
-  --reviewing-label "${reviewing_label}"
-  --human-label "${human_label}"
+  --implement-label "${implement_label}"
+  --update-branch-label "${update_branch_label}"
+  --in-progress-label "${in_progress_label}"
   --blocked-label "${blocked_label}"
+  # This gate reads labels only; see defersBlockedRecovery in pr-reviewer-decisions.ts.
+  --defers-blocked-recovery 1
   --auto-merge "${auto_merge}"
   --external-review-enabled "${external_review_enabled}"
   --external-review-wait-seconds "${external_review_wait_seconds}"

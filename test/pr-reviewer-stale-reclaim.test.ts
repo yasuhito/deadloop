@@ -60,20 +60,20 @@ describe("PR reviewer stale reviewing reclaim", () => {
   });
 
   it("does not trust a copied repair result marker", () => {
-    const { defaultDecisionConfig, selectPrForReview } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const { defaultDecisionConfig, selectPrRequestTarget } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
     const prs = structuredClone(require("./fixtures/pr-reviewer/precheck-repair-rereview.json"));
     prs[0].comments[0].author.login = "attacker";
-    expect(selectPrForReview(prs, defaultDecisionConfig({ automationLogin: "deadloop-bot" })).reason).toBe("selectable");
+    expect(selectPrRequestTarget(prs, defaultDecisionConfig({ automationLogin: "deadloop-bot" })).reason).toBe("selectable");
   });
 
   it("reclaims a reviewer claim after preserved repair re-review provenance is consumed", () => {
-    const { claimedReviewerHeads, defaultDecisionConfig, selectPrForReview } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const { claimedReviewerHeads, defaultDecisionConfig, selectPrRequestTarget } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
     const prs = require("./fixtures/pr-reviewer-driver/repaired-merge-conflict-updated.json").prs;
     const attempts = [{
       project: "demo", repository: "owner/repo", role: "reviewer",
       target: { kind: "pull-request", number: 31 }, inputRevision: { head: prs[0].headRefOid },
     }];
-    expect(selectPrForReview(
+    expect(selectPrRequestTarget(
       prs,
       defaultDecisionConfig({ automationLogin: "deadloop-bot" }),
       new Set(),
@@ -81,45 +81,24 @@ describe("PR reviewer stale reviewing reclaim", () => {
     ).reason).toBe("stale_reclaim");
   });
 
-  it("does not infer ownership from a legacy reviewer agent name", () => {
-    expect(runSelect("precheck-reviewing.json", { agents: "agents-reviewer-working.json" }).selected).toBe(true);
-  });
-
-  it("does not infer ownership from a legacy branch-update agent name", () => {
-    expect(runSelect("precheck-reviewing.json", { agents: "agents-branch-update-working.json" }).selected).toBe(true);
-  });
-
-  it.each([
-    ["reviewer", "working", "dl-r-13-111111111111"],
-    ["reviewer", "idle", "dl-r-13-111111111111"],
-    ["reviewer", "done", "dl-r-13-111111111111"],
-    ["review-repair", "working", "dl-x-13-222222222222"],
-    ["review-repair", "idle", "dl-x-13-222222222222"],
-    ["review-repair", "done", "dl-x-13-222222222222"],
-    ["branch-update", "working", "dl-u-13-333333333333"],
-    ["branch-update", "idle", "dl-u-13-333333333333"],
-    ["branch-update", "done", "dl-u-13-333333333333"],
-  ])("suppresses reselection for a retained %s journal when its agent is %s", (role, agentStatus, agentName) => {
-    const { defaultDecisionConfig, selectPrForReview, workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
-    const attempts = [{
-      project: "demo", repository: "owner/repo", role,
-      target: { kind: "pull-request", number: 13 }, phase: "agent_started", agentName,
+  it("suppresses a queued review while its retained in-progress owner is active", () => {
+    const { defaultDecisionConfig, selectPrRequestTarget } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const prs = [{
+      number: 42,
+      headRefOid: "a".repeat(40),
+      labels: [{ name: "agent:review" }, { name: "agent:in-progress" }],
     }];
-    const owners = workingReviewerPrNumbers(
-      { result: { agents: [{ name: agentName, agent_status: agentStatus }] } }, "demo", attempts, "owner/repo",
-    );
-    const prs = require("./fixtures/pr-reviewer/precheck-reviewing.json");
-    expect(selectPrForReview(prs, defaultDecisionConfig(), owners).selected).toBe(false);
+    expect(selectPrRequestTarget(prs, defaultDecisionConfig(), new Set([42])).selected).toBe(false);
   });
 
   it("does not suppress an ordinary GitHub request from a retained journal alone", () => {
-    const { defaultDecisionConfig, selectPrForReview, workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const { defaultDecisionConfig, selectPrRequestTarget, workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
     const owners = workingReviewerPrNumbers({}, "demo", [{
       project: "demo", repository: "owner/repo", role: "review-repair",
       target: { kind: "pull-request", number: 7 }, phase: "report_received", agentName: "dl-x-7-222222222222",
     }], "owner/repo");
     const prs = require("./fixtures/pr-reviewer/precheck-agent-review.json");
-    expect(selectPrForReview(prs, defaultDecisionConfig(), owners).selected).toBe(true);
+    expect(selectPrRequestTarget(prs, defaultDecisionConfig(), owners).selected).toBe(true);
   });
 
   it("allows reselection only after the project-bound attempt journal reaches workspace_closed", () => {

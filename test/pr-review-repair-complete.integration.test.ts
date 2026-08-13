@@ -12,14 +12,14 @@ const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
 const key = "abcdef1234567890abcd";
 const activeReviewState = {
-  managedLabels: ["agent:review", "agent:reviewing", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
   requestLabel: "agent:review",
   requiredLabels: ["agent:in-progress"],
 };
 
 function writeCompatibleHerdr(bin: string): void {
   const herdr = path.join(bin, "herdr");
-  fs.writeFileSync(herdr, `#!/bin/sh\nif [ "$1" = "--version" ]; then printf 'herdr 0.7.5\\n'; else printf 'version: 0.7.5\\ncompatible: yes\\n'; fi\n`);
+  fs.writeFileSync(herdr, `#!/bin/sh\nif [ "$1" = "--version" ]; then printf 'herdr 0.8.0\\n'; else printf 'version: 0.8.0\\n'; fi\n`);
   fs.chmodSync(herdr, 0o755);
 }
 
@@ -84,7 +84,7 @@ function runCompletion(options: {
   };
   const reviewClaim = {
     binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: options.editedClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
   const outcome = String(options.promise.reason || "");
@@ -179,8 +179,6 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
       key,
       "--review-label",
       "agent:review",
-      "--reviewing-label",
-      "agent:reviewing",
       "--in-progress-label",
       "agent:in-progress",
       "--blocked-label",
@@ -197,8 +195,9 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
     } },
   );
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+  const output = JSON.parse(result.stdout);
   return {
-    output: JSON.parse(result.stdout),
+    output,
     posted: fs.existsSync(postedFile) ? fs.readFileSync(postedFile, "utf8") : "",
     actions: fs.existsSync(actionsFile) ? fs.readFileSync(actionsFile, "utf8") : "",
   };
@@ -243,7 +242,7 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   };
   const reviewClaim = {
     binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-    reviewLabel: "agent:review", reviewingLabel: "agent:reviewing", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const checks = [{ command: "npm test", result: "passed" }];
   const receipt = { action: "pushed", reason: "repair_pushed", originalHeadOid: oldHead, headOid: newHead, checks };
@@ -287,7 +286,7 @@ else if (args[0] === "pr" && args[1] === "comment") {
     "--promise", promiseFile, "--attempt-record", attemptFile, "--project-id", "demo",
     "--result", resultFile, "--contract", contractFile, "--project-repo", projectRepo, "--github-repo", "owner/repo", "--state-dir", stateDir,
     "--enabled-at", "1", "--pr", "24", "--branch", "agent/issue-24", "--expected-head", oldHead,
-    "--attempt-key", key, "--review-label", "agent:review", "--reviewing-label", "agent:reviewing",
+    "--attempt-key", key, "--review-label", "agent:review",
     "--in-progress-label", "agent:in-progress", "--blocked-label", "agent:blocked",
     "--review-claim", JSON.stringify(reviewClaim),
   ];
@@ -389,7 +388,7 @@ describe("review repair deterministic completion", () => {
       result: "/state/runs/one/finalizer-result.json", contract: "/state/runs/one/review-contract.json",
       projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: "1", pr: "24",
       branch: "agent/issue-24", expectedHead: oldHead, attemptKey: key, reviewLabel: "review",
-      reviewingLabel: "reviewing", inProgressLabel: "in-progress", blockedLabel: "blocked", reviewClaim: "{}",
+      inProgressLabel: "in-progress", blockedLabel: "blocked", reviewClaim: "{}",
     };
     const args = Object.entries(values).flatMap(([name, value]) => {
       const flag = `--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)}`;
@@ -427,7 +426,7 @@ describe("review repair deterministic completion", () => {
       receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
     });
 
-    expect(result.actions).toContain("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review");
+    expect(result.actions).toContain("--remove-label agent:in-progress --add-label agent:review");
   });
 
   it("turns a malformed finalizer receipt into recovery instead of an exception", () => {
@@ -447,7 +446,7 @@ describe("review repair deterministic completion", () => {
       liveHead: oldHead,
     });
 
-    expect(result.actions).toContain("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review --add-label agent:blocked");
+    expect(result.actions).toContain("--remove-label agent:in-progress --add-label agent:review --add-label agent:blocked");
   });
 
   it("does not post repair success for stale_head", () => {
@@ -534,7 +533,7 @@ describe("review repair deterministic completion", () => {
       comments: [{ body: `<!-- deadloop:review-repair-result key=${key} head=${newHead} -->`, author: { login: "deadloop-bot" } }],
     });
 
-    expect(result.actions).toContain("--remove-label agent:in-progress --remove-label agent:reviewing --add-label agent:review");
+    expect(result.actions).toContain("--remove-label agent:in-progress --add-label agent:review");
   });
 
   it("serializes concurrent completion retries to one success comment", async () => {

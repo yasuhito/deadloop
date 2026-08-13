@@ -2,11 +2,11 @@
 
 Handle review findings and conflicts safely without repeating the same change or overwriting another change.
 
-## Scenario: Fail closed before a conflict-recovery claim exists
+## Scenario: Turn a merge conflict into a branch-update request
 
 * Given A pull request has a conflict that can be recovered
 * When deadloop checks the pull request
-* Then deadloop leaves the conflicted pull request untouched before claim
+* Then deadloop requests a branch update instead of recovering from local state
 
 ## Scenario: Do not start conflict recovery twice for the same pull request head and base
 
@@ -14,23 +14,17 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop checks the pull request
 * Then deadloop does not start another dedicated conflict-recovery attempt
 
-## Scenario: Do not relabel a repeated conflict-recovery request before claim
+## Scenario: Block a repeated conflict-recovery request instead of attempting it again
 
 * Given Conflict recovery was already attempted for the same pull request head and base
 * When deadloop checks the pull request
-* Then deadloop leaves the conflicted pull request untouched before claim
+* Then deadloop blocks the repeated conflict-recovery request
 
-## Scenario: Do not comment on a repeated conflict-recovery request before claim
-
-* Given Conflict recovery was already attempted for the same pull request head and base
-* When deadloop checks the pull request
-* Then deadloop leaves the conflicted pull request untouched before claim
-
-## Scenario: Do not launch repeated conflict recovery before claim
+## Scenario: Explain a repeated conflict-recovery request on the pull request
 
 * Given Conflict recovery was already attempted for the same pull request head and base
 * When deadloop checks the pull request
-* Then deadloop leaves the conflicted pull request untouched before claim
+* Then deadloop leaves recovery guidance for the repeated conflict-recovery request
 
 ## Scenario: Return a pull request with a conflict-recovery head update to normal review
 
@@ -50,11 +44,11 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop checks the pull request
 * Then The selection reason after conflict recovery is repair re-review
 
-## Scenario: Preserve all shared state before a conflict-recovery claim
+## Scenario: Launch no agent from the review request of a conflicted pull request
 
 * Given A pull request has a conflict that can be recovered
 * When deadloop checks the pull request
-* Then deadloop leaves the conflicted pull request untouched before claim
+* Then deadloop does not start another dedicated conflict-recovery attempt
 
 ## Scenario: Start a dedicated repair attempt for the first actionable review findings
 

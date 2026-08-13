@@ -13,8 +13,8 @@ function reject(script: string, args: string[] = []) {
   const githubCalled = path.join(root, "github-called");
   const agentStarted = path.join(root, "agent-started");
   writeFileSync(path.join(bin, "herdr"), `#!/bin/sh
-if [ "$1" = "--version" ]; then printf 'herdr 0.7.4\\n'
-elif [ "$1 $2" = "status server" ]; then printf 'version: 0.7.5\\ncompatible: yes\\n'
+if [ "$1" = "--version" ]; then printf 'herdr 0.7.9\\n'
+elif [ "$1 $2" = "status server" ]; then printf 'version: 0.8.0\\n'
 elif [ "$1 $2" = "agent start" ]; then touch ${JSON.stringify(agentStarted)}
 fi
 `);
@@ -26,7 +26,7 @@ fi
   });
   const output = result.stdout.trim() ? JSON.parse(result.stdout) : {};
   return {
-    rejected: result.status !== 0 || output.driverAction === "exception" || output.error === "herdr_incompatible",
+    rejected: result.status !== 0 || output.driverAction === "exception" || output.error === "herdr_unsupported",
     githubCalled: existsSync(githubCalled), agentStarted: existsSync(agentStarted),
   };
 }
@@ -37,7 +37,7 @@ const completionArgs = [
   "--promise", "/missing/promise.json", "--result", "/missing/result.json", "--contract", "/missing/contract.json",
   "--project-repo", "/repo", "--github-repo", "owner/repo", "--state-dir", "/state", "--enabled-at", "1",
   "--pr", "1", "--branch", "feature", "--expected-head", "a".repeat(40), "--attempt-key", "key",
-  "--review-label", "review", "--reviewing-label", "reviewing", "--blocked-label", "blocked",
+  "--review-label", "review", "--blocked-label", "blocked",
 ];
 const attemptArgs = [
   "--attempt-record", "/state/runs/one/attempt.json", "--project-id", "demo", "--project-repo", "/repo", "--github-repo", "owner/repo",
