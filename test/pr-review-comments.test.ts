@@ -411,20 +411,8 @@ The new head will be reviewed again. The review queue label remains in place whi
     ).not.toContain("[Injected](https://example.com)");
   });
 
-  it("renders an unavailable exact-result repair without recording a second attempt", () => {
-    expect(renderChangesRequestedComment({ ...fixture("changes-requested.json"), repairUnavailable: true })).not.toContain(
-      "deadloop:review-repair-attempt",
-    );
-  });
-
-  it("does not tell humans that a cumulative repair limit was reached", () => {
-    expect(
-      renderChangesRequestedComment({
-        ...fixture("changes-requested.json"),
-        repairUnavailable: true,
-        repairUnavailableReason: "cumulative_repair_limit",
-      }),
-    ).not.toContain("cumulative limit");
+  it("does not tell humans that a cumulative repair limit exists", () => {
+    expect(renderChangesRequestedComment(fixture("changes-requested.json"))).not.toContain("cumulative repair limit");
   });
 
   it("requires one structured repair for every original finding", () => {

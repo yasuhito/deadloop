@@ -1039,32 +1039,6 @@ function dispatch(args: JsonObject): DriverResult {
     }
     return driverResult("done", `PR #${prNumber} repair dispatch was interrupted; marked blocked`, { driverAction: "review_repair_dispatch_interrupted", selection, comment });
   }
-  if (selection.action !== "launch_repair") {
-    let comment = "Review result comment already exists.";
-    const staleComparison = withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
-      if (!reviewCommentExists(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
-        comment = renderChangesRequestedComment({
-          ...commentInput,
-          reviewFingerprint: selection.reviewFingerprint,
-          repairUnavailable: true,
-          repairUnavailableReason: selection.reason,
-        });
-        guardedGithub.commentPr(env.githubRepo, prNumber, comment);
-      }
-      const labels = labelNames(livePr.labels);
-      if (labels.includes(env.inProgressLabel)
-        || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
-        guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
-      }
-    }, historyFile);
-    if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before non-launch repair block");
-    return driverResult("done", `PR #${prNumber} repair was unavailable; marked blocked`, {
-      driverAction: "review_repair_unavailable",
-      selection,
-      comment,
-    });
-  }
-
   if (hasAttemptRecord) {
     let persistedBody = "";
     let createdComment: { id: string; author: string; body: string } | undefined;
