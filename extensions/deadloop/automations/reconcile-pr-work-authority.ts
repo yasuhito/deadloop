@@ -8,7 +8,8 @@ const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.ts");
 const { canonicalPath, canonicalPathContains } = require("../../../src/attempt-runtime-observation.ts");
-const { classifyActiveReviewClaim, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
+const { classifyActiveReviewClaim, classifyPushedHeadAuthorityTransition, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
+const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -175,6 +176,19 @@ function runtimeForAttempt(runner: any, record: JsonObject, projectRepo = ""): {
   return { kind: "stopped_owned" };
 }
 
+/**
+ * The head change an attempt proved it produced and still holds, or null when it proved none.
+ *
+ * The proof itself is the finalizer receipt and the bound completion report agreeing on one push.
+ * Currency is this caller's part: a proven push the pull request has since moved past says nothing
+ * about who owns the head reconciliation is looking at now.
+ */
+function pushedHeadTransition(record: JsonObject, pr: JsonObject): { originalHeadOid: string; headOid: string } | null {
+  const transition = provenPushedHeadTransition(String(record.runDir || ""), record);
+  if (!transition) return null;
+  return transition.headOid === String(pr.headRefOid || "").toLowerCase() ? transition : null;
+}
+
 function classifyClaim(
   pr: JsonObject,
   events: JsonObject[],
@@ -189,6 +203,23 @@ function classifyClaim(
   const requestEventId = String(request?.id || request?.node_id || "");
   if (!record.reviewClaim) return { claim: { kind: "missing" }, requestEventId };
   const target = { repositoryId: String(repositoryIdentity.id || ""), repository: String(repositoryIdentity.nameWithOwner || repository), targetNumber: Number(pr.number) };
+  // An attempt that proved it pushed the live head keeps its authority until its completion handler
+  // runs. Without this, success would read as an unknown owner and stop the pull request.
+  const transition = pushedHeadTransition(record, pr);
+  if (transition) {
+    if (requestEventId && requestEventId !== String(record.reviewClaim.binding?.requestEventId || "")) {
+      return { claim: { kind: "superseded" }, requestEventId };
+    }
+    const transitioned = classifyPushedHeadAuthorityTransition(
+      pr, events, comments, restHeaders, record.reviewClaim, target, transition,
+    );
+    return {
+      claim: transitioned.kind === "claim_invalid" ? { kind: "malformed" }
+        : transitioned.kind === "binding_mismatch" ? { kind: "ambiguous" }
+          : transitioned,
+      requestEventId,
+    };
+  }
   const timeStatus = classifyReviewClaimTimeStatus(pr, events, comments, restHeaders, record.reviewClaim, target);
   if (timeStatus.kind !== "authorized") {
     return {
@@ -396,6 +427,7 @@ module.exports = {
   latestConfiguredRequest,
   loadAttempts,
   moveReconciledLabels,
+  pushedHeadTransition,
   reconcile,
   reconciledLabelReplacement,
   reconciliationAuthorityMatches,

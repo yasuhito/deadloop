@@ -132,12 +132,15 @@ afterEach(() => {
 });
 
 describe("finalizer exact-head pushes against real remotes", () => {
-  it("atomically writes a blocked receipt when finalizer argument validation fails", () => {
+  it.each([
+    ["review repair", "pr-review-repair-finalize.ts"],
+    ["branch update", "pr-branch-update-finalize.ts"],
+  ] as const)("atomically writes a blocked receipt when %s finalizer argument validation fails", (_name, script) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-finalizer-receipt-"));
     sandboxes.push(root);
     const resultFile = path.join(root, "result.json");
     const result = spawnSync("node", [
-      "extensions/deadloop/automations/pr-review-repair-finalize.ts",
+      `extensions/deadloop/automations/${script}`,
       "--expected-head", "a".repeat(40), "--result-file", resultFile,
     ], { cwd: process.cwd(), encoding: "utf8" });
 
