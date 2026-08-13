@@ -80,6 +80,7 @@ export type ReviewerGithubObservation = BoundGithubObservation & {
   role: "reviewer";
   headSha: string;
   labels: string[];
+  draft: boolean;
   reviewPersistence?: BoundGithubObservation & {
     headSha: string;
     marker: CompletionMarker;
@@ -253,6 +254,10 @@ export function workerCompletionPersisted(
  * recorded on the pull request, and what is left belongs to a person. It closes on the same proof
  * the other outcomes need, and the state that proof describes is its caller's expected label set —
  * for a human handoff, one that keeps no agent workflow label at all.
+ *
+ * A handoff has two halves, and the empty expected set names only one of them. A pull request left
+ * as a draft is not handed over however few labels it carries, so an expected set that waits on no
+ * agent request has to see the draft gone as well.
  */
 export function reviewerCompletionPersisted(
   record: AttemptRecord,
@@ -265,6 +270,7 @@ export function reviewerCompletionPersisted(
   if (!boundToRecord(github, record) || !sameSha(github.headSha, record.inputRevision.head)) return false;
   const managed = new Set(managedLabels);
   if (!sameStringSet(github.labels.filter((label) => managed.has(label)), expectedLabels)) return false;
+  if (expectedLabels.length === 0 && github.draft) return false;
   const persistence = github.reviewPersistence;
   if (
     !persistence ||

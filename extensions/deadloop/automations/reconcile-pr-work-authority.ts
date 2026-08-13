@@ -177,7 +177,7 @@ function runtimeForAttempt(runner: any, record: JsonObject, projectRepo = ""): {
   return { kind: "stopped_owned" };
 }
 
-/** Every role that finishes by pushing, and the handler that turns its push into the next request. */
+/** Every role whose completion is still owed to GitHub, and the handler that owes it. */
 const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonObject, runDir: string) => JsonObject }> = {
   "branch-update": {
     module: "./pr-branch-update-complete.ts",
@@ -199,12 +199,13 @@ const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonO
 };
 
 /**
- * Finishes a stopped attempt that proved it pushed the pull request's current head.
+ * Finishes a stopped attempt that proved it completed against the pull request's current head.
  *
  * An agent stops the moment it writes its completion report, so "the runtime says stopped" and "the
  * work was abandoned" are indistinguishable from the runtime alone. The attempt's own evidence
- * tells them apart: a finalizer receipt and a report bound to the attempt journal, both naming the
- * live head, prove the work succeeded and only its handoff is still owed.
+ * tells them apart, in whichever way its role proves one: a writing role by the finalizer receipt
+ * for its push, a review by its own report bound to the attempt journal. Either way the proof names
+ * the live head, so the work succeeded and only its handoff is still owed.
  *
  * Driving that handoff here rather than waiting for it removes the last authority only one session
  * held. Completion was reachable solely from the monitor prompt, so an agent that finished while
@@ -416,8 +417,8 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       catch { runtime = { kind: "unreachable" }; }
     }
 
-    // A stopped owner that left proof of a completed push is finished, not abandoned. Handing it
-    // over here is what keeps a successful attempt from being blocked for stopping on success.
+    // A stopped owner that left proof of a completed attempt is finished, not abandoned. Handing
+    // it over here is what keeps a successful attempt from being blocked for stopping on success.
     if (record && runtime.kind === "stopped_owned") {
       const completed = completeProvenStoppedAttempt(record, pr, args, {
         reviewLabel: args.reviewLabel || "agent:review",

@@ -81,7 +81,7 @@ function completionMarkerFromPersisted(marker: JsonObject | undefined) {
 function prView(runner: ReturnType<typeof createCommandRunner>, record: AttemptRecord): JsonObject {
   return runner.runJson([
     "gh", "pr", "view", String(record.target.number), "-R", record.repository,
-    "--json", "number,state,headRefName,headRefOid,baseRefName,body,labels,comments,closingIssuesReferences",
+    "--json", "number,state,isDraft,headRefName,headRefOid,baseRefName,body,labels,comments,closingIssuesReferences",
   ]);
 }
 
@@ -130,6 +130,7 @@ function reviewerObservation(record: AttemptRecord, report: CompletionReportV1, 
     target: record.target,
     headSha: String(pr.headRefOid || ""),
     labels: labelsOf(pr),
+    draft: pr.isDraft === true,
     ...(persisted ? {
       reviewPersistence: {
         repository: record.repository,

@@ -348,6 +348,21 @@ describe("attempt completion persistence decisions", () => {
     expect(decide(fixture.record, fixture.report, fixture.github, fixture.context)).toEqual({ action: "close" });
   });
 
+  it("retains a human-required reviewer result whose pull request is still a draft", () => {
+    const fixture = reviewerFixture("human_required");
+    const github = { ...fixture.github, draft: true };
+
+    expect(decide(fixture.record, fixture.report, github, fixture.context))
+      .toEqual({ action: "preserve", reason: "github_persistence_not_confirmed" });
+  });
+
+  it("closes a repairing reviewer result that keeps its pull request in draft", () => {
+    const fixture = reviewerFixture("changes_requested");
+    const github = { ...fixture.github, draft: true };
+
+    expect(decide(fixture.record, fixture.report, github, fixture.context)).toEqual({ action: "close" });
+  });
+
   it("retains a human-required reviewer result whose pull request still carries an agent request", () => {
     const fixture = reviewerFixture("human_required");
     const github = { ...fixture.github, labels: ["agent:review"] };

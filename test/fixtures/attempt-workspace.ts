@@ -131,6 +131,7 @@ export function reviewerFixture(
     target: pullRequestTarget,
     headSha: INPUT_HEAD,
     labels: [...expectedLabels],
+    draft: false,
     reviewPersistence: {
       repository: REPOSITORY,
       target: pullRequestTarget,
