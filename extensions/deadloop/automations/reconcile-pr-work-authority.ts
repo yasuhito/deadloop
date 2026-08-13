@@ -7,6 +7,7 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.ts");
+const { canonicalPath, canonicalPathContains } = require("../../../src/attempt-runtime-observation.ts");
 const { classifyActiveReviewClaim, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
 
 type JsonObject = Record<string, any>;
@@ -144,18 +145,6 @@ function latestConfiguredRequest(events: JsonObject[], currentLabels: string[], 
       const time = Date.parse(String(left.created_at || left.createdAt || "")) - Date.parse(String(right.created_at || right.createdAt || ""));
       return time || String(left.id || left.node_id).localeCompare(String(right.id || right.node_id), undefined, { numeric: true });
     }).at(-1) || null;
-}
-
-function canonicalPath(value: unknown): string {
-  const resolved = path.resolve(String(value || ""));
-  try { return fs.realpathSync(resolved); } catch { return resolved; }
-}
-
-function canonicalPathContains(root: unknown, candidate: unknown): boolean {
-  const canonicalRoot = canonicalPath(root);
-  const canonicalCandidate = canonicalPath(candidate);
-  const relative = path.relative(canonicalRoot, canonicalCandidate);
-  return relative === "" || relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 function runtimeForAttempt(runner: any, record: JsonObject, projectRepo = ""): { kind: string } {
