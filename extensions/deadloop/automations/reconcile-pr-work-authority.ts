@@ -8,7 +8,8 @@ const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.ts");
 const { canonicalPath, canonicalPathContains } = require("../../../src/attempt-runtime-observation.ts");
-const { classifyActiveReviewClaim, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
+const { classifyActiveReviewClaim, classifyPushedHeadAuthorityTransition, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
+const { validatePromise } = require("./extract-worker-promise.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -175,6 +176,28 @@ function runtimeForAttempt(runner: any, record: JsonObject, projectRepo = ""): {
   return { kind: "stopped_owned" };
 }
 
+const PUSHED_OUTCOMES = new Set(["branch_update_pushed", "repair_pushed"]);
+
+/**
+ * The head change an attempt proved it produced, or null when it proved none.
+ *
+ * A writing role succeeds by moving the head its claim recorded, so success makes the claim's
+ * revision stale by construction. The attempt's own validated report, bound to the attempt and
+ * naming the live head, is what separates that from a head somebody else pushed.
+ */
+function pushedHeadTransition(record: JsonObject, pr: JsonObject): { originalHeadOid: string; headOid: string } | null {
+  const validation = validatePromise(String(record.promiseFile || ""));
+  const promise = validation.promise as JsonObject | undefined;
+  if (validation.status !== "complete" || !promise || promise.status !== "complete") return null;
+  if (String(promise.attemptId || "") !== String(record.attemptId || "")) return null;
+  if (String(promise.role || "") !== String(record.role || "")) return null;
+  if (!PUSHED_OUTCOMES.has(String(promise.result?.outcome || ""))) return null;
+  const pushed = String(promise.result?.outputRevision || "").toLowerCase();
+  const original = String(record.inputRevision?.head || "").toLowerCase();
+  if (!pushed || pushed !== String(pr.headRefOid || "").toLowerCase() || pushed === original) return null;
+  return { originalHeadOid: original, headOid: pushed };
+}
+
 function classifyClaim(
   pr: JsonObject,
   events: JsonObject[],
@@ -189,6 +212,23 @@ function classifyClaim(
   const requestEventId = String(request?.id || request?.node_id || "");
   if (!record.reviewClaim) return { claim: { kind: "missing" }, requestEventId };
   const target = { repositoryId: String(repositoryIdentity.id || ""), repository: String(repositoryIdentity.nameWithOwner || repository), targetNumber: Number(pr.number) };
+  // An attempt that proved it pushed the live head keeps its authority until its completion handler
+  // runs. Without this, success would read as an unknown owner and stop the pull request.
+  const transition = pushedHeadTransition(record, pr);
+  if (transition) {
+    if (requestEventId && requestEventId !== String(record.reviewClaim.binding?.requestEventId || "")) {
+      return { claim: { kind: "superseded" }, requestEventId };
+    }
+    const transitioned = classifyPushedHeadAuthorityTransition(
+      pr, events, comments, restHeaders, record.reviewClaim, target, transition,
+    );
+    return {
+      claim: transitioned.kind === "claim_invalid" ? { kind: "malformed" }
+        : transitioned.kind === "binding_mismatch" ? { kind: "ambiguous" }
+          : transitioned,
+      requestEventId,
+    };
+  }
   const timeStatus = classifyReviewClaimTimeStatus(pr, events, comments, restHeaders, record.reviewClaim, target);
   if (timeStatus.kind !== "authorized") {
     return {
@@ -396,6 +436,7 @@ module.exports = {
   latestConfiguredRequest,
   loadAttempts,
   moveReconciledLabels,
+  pushedHeadTransition,
   reconcile,
   reconciledLabelReplacement,
   reconciliationAuthorityMatches,
