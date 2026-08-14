@@ -25,6 +25,7 @@ const {
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { postBlockRequestIsEligible, releasableRetainedAttempts } = require("../../../src/pr-work-authority-reconciliation.ts");
+const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { checkoutIsIdle, worktreeIsRetained } = require("../../../src/attempt-runtime-observation.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
@@ -1608,6 +1609,31 @@ function drive(fixturePath: string | undefined): DriverResult {
   if (plan.kind === "skip_no_candidate" || plan.kind === "skip_wait") {
     return driverResult("skip", plan.summary, { driverAction: plan.driverAction, decision: plan.decision });
   }
+
+  // The dispatch decision for one target runs while this process holds that target's lock. The lock
+  // covers the decision only: whether the attempt it starts is still running is the execution
+  // runtime's answer, and binding the two together would rebuild the two-authority problem.
+  const decided = withDispatchLock({
+    stateDir: env.stateDir,
+    repositoryId: env.githubRepositoryId,
+    target: { kind: "pull-request", number: Number(plan.decision.number) },
+  }, () => driveSelectedTarget(plan, env, fixture));
+  if (decided === null) {
+    return driverResult("skip", `PR #${plan.decision.number} is held by another dispatch decision`, {
+      driverAction: "target_dispatch_locked", prNumber: plan.decision.number,
+    });
+  }
+  return decided;
+}
+
+type SelectedPrPlan = Exclude<ReturnType<typeof planPrRequestAction>, { kind: "skip_no_candidate" } | { kind: "skip_wait" }>;
+
+/** One target's dispatch decision, run under that target's lock. */
+function driveSelectedTarget(
+  plan: SelectedPrPlan,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+): DriverResult {
 
   if (plan.kind === "review_required" && isConflictingPr(plan.pr)) {
     const transition = consumeRequest(

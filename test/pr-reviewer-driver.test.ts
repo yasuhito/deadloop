@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -14,6 +15,7 @@ const {
   resolveAuthorizedAutomationLogins,
 } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
 const { assertClaimMatchesCurrentConfiguration } = require("../extensions/deadloop/automations/pr-review-claim.ts");
+const { withDispatchLock } = require("../src/dispatch-lock.cjs");
 
 function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> = {}) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/pr-reviewer-driver", fixtureName)], {
@@ -610,13 +612,34 @@ describe("PR reviewer deterministic driver", () => {
       .toBe("PR #52 is no longer eligible for reviewer launch; no workflow state was mutated");
   });
 
+  it("skips a target another dispatch decision is holding", () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "deadloop-driver-lock-"));
+    try {
+      // Holding the same target's lock here is what a second host does to this one.
+      const held = withDispatchLock(
+        { stateDir, repositoryId: "fixture-repository-id", target: { kind: "pull-request", number: 22 } },
+        () => runDriverFixture("external-review-request.json", { DEADLOOP_STATE_DIR: stateDir }),
+      );
+
+      expect(held.driverAction).toBe("target_dispatch_locked");
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("reports the deterministic reviewer promise path outside the worktree", () => {
-    expect(
-      runDriverFixture("fallback-review.json", {
-        DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1",
-        DEADLOOP_STATE_DIR: "/state/deadloop",
-      }).launch.promiseFile,
-    ).toBe("/state/deadloop/runs/fixture-reviewer-uuid/promise.json");
+    // The dispatch lock writes under the state directory, so the run needs a real one.
+    const stateDir = mkdtempSync(path.join(tmpdir(), "deadloop-driver-state-"));
+    try {
+      expect(
+        runDriverFixture("fallback-review.json", {
+          DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1",
+          DEADLOOP_STATE_DIR: stateDir,
+        }).launch.promiseFile,
+      ).toBe(path.join(stateDir, "runs/fixture-reviewer-uuid/promise.json"));
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("isolates runtime artifacts during reviewer monitor validation", () => {
