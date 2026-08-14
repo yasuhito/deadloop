@@ -23,3 +23,10 @@ This prevents duplicate launches that retain the previous head's Reviewer and av
 * Given A blocked pull request has a completed Reviewer and its head changed after repair
 * When deadloop checks the pull request after agent:blocked is removed
 * Then The Reviewer handoff uses the repaired head
+
+`@requeued-pr-review`
+## Scenario: Record the history the completed review will be judged against
+
+* Given A blocked pull request has a completed Reviewer and its head changed after repair
+* When deadloop checks the pull request after agent:blocked is removed
+* Then The recorded review history holds the claim comment the launch posted
