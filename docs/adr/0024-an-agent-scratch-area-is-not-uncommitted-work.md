@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Replaces the runtime path list recorded in [ADR 0010](0010-runtime-artifact-isolation.md).
+Accepted. Replaces the runtime path list recorded in [ADR 0010](0010-runtime-artifact-isolation.md). The application scope in this decision is replaced by [ADR 0025](0025-every-uncommitted-work-gate-shares-one-implementation.md); the definition, the path list, and the rejected alternatives stand.
 
 ## Context
 

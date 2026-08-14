@@ -455,7 +455,6 @@ Exact target:
 
 Safety contract:
 - Work only in ${worktreePath}; never edit the main workspace ${env.repoPath}.
-- First require a clean worktree and require HEAD to equal the expected PR head.
 - Merge ${baseOid} into the existing PR branch. Use git merge, never rebase, and never rewrite existing commits.
 - Resolve only conflicts caused by this merge. Do not widen the PR's scope.
 - Commit the merge resolution before finalization.
