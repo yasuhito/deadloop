@@ -31,9 +31,11 @@ function stateDirWith(attempts: Array<Record<string, unknown>>): string {
       target: { kind: "pull-request", number: 31 },
       inputRevision: { head: currentHead },
       branch: "agent/issue-31",
-      worktreePath: "/wt",
+      worktreePath: `/wt-${index}`,
       agentName: `dl-r-31-${index}`,
+      workspaceId: `workspace-${index}`,
       workspaceLabel: `demo-pr-31-reviewer-${index}`,
+      rootPaneId: `pane-${index}`,
       promptFile: path.join(runDir, "reviewer-prompt.md"),
       promiseFile: path.join(runDir, "promise.json"),
       phase: "report_received",
@@ -44,11 +46,36 @@ function stateDirWith(attempts: Array<Record<string, unknown>>): string {
   return root;
 }
 
-function takeover(stateDir: string, stopped = true) {
+function workspaceOf(index: number) {
+  return { workspaceId: `workspace-${index}`, worktreePath: `/wt-${index}`, tabCount: 1, paneCount: 1 };
+}
+
+/**
+ * The runtime an Automation host sees for attempts whose agent is gone. The workspaces stay listed
+ * on purpose: a workspace nobody works in is not a running attempt.
+ */
+function stoppedRuntime(attempts = 1) {
+  const indexes = Array.from({ length: attempts }, (_value, index) => index);
+  return {
+    listWorkspaces: () => indexes.map(workspaceOf),
+    listAgents: () => [],
+    listWorktrees: () => indexes.map((index) => ({ path: `/wt-${index}` })),
+  };
+}
+
+/** The runtime an Automation host sees while the attempt's own agent is still working. */
+function liveRuntime(index = 0) {
+  return {
+    ...stoppedRuntime(index + 1),
+    listAgents: () => [{ name: `dl-r-31-${index}`, paneId: `pane-${index}`, cwd: `/wt-${index}`, status: "working" }],
+  };
+}
+
+function takeover(stateDir: string, runner: Record<string, unknown> = stoppedRuntime()) {
   return takeWorkAuthorityFromRetainedAttempts({
-    stateDir, projectId: "demo", projectRepo: "/repo", githubRepo: "owner/repo", prNumber: 31,
+    stateDir, projectId: "demo", githubRepo: "owner/repo", prNumber: 31,
     currentHead, currentRequestEventId: "req-2",
-  }, { stoppedFor: () => stopped });
+  }, { runner });
 }
 
 describe("work authority takeover at claim time", () => {
@@ -74,7 +101,35 @@ describe("work authority takeover at claim time", () => {
   it("keeps a live attempt bound to a superseded head", () => {
     const stateDir = stateDirWith([{ inputRevision: { head: olderHead } }]);
 
-    expect(takeover(stateDir, false)).toEqual([]);
+    expect(takeover(stateDir, liveRuntime())).toEqual([]);
+  });
+
+  it("releases an attempt whose agent is gone even though its workspace is still open", () => {
+    const stateDir = stateDirWith([{ inputRevision: { head: olderHead } }]);
+
+    expect(takeover(stateDir, stoppedRuntime())).toEqual(["attempt-0"]);
+  });
+
+  it("releases a stopped attempt that never reported a completion", () => {
+    const stateDir = stateDirWith([{
+      inputRevision: { head: olderHead }, phase: "agent_started", lastSuccessfulPhase: "agent_started",
+    }]);
+
+    expect(takeover(stateDir)).toEqual(["attempt-0"]);
+  });
+
+  it("keeps an attempt whose checkout another agent occupies", () => {
+    const stateDir = stateDirWith([{ inputRevision: { head: olderHead } }]);
+    const occupied = { ...stoppedRuntime(), listAgents: () => [{ name: "other", paneId: "pane-9", cwd: "/wt-0", status: "working" }] };
+
+    expect(takeover(stateDir, occupied)).toEqual([]);
+  });
+
+  it("keeps an attempt whose runtime cannot be reached", () => {
+    const stateDir = stateDirWith([{ inputRevision: { head: olderHead } }]);
+    const unreachable = { ...stoppedRuntime(), listAgents: () => { throw new Error("connection refused"); } };
+
+    expect(takeover(stateDir, unreachable)).toEqual([]);
   });
 
   it("ignores an attempt that already released ownership", () => {
@@ -108,7 +163,7 @@ describe("work authority takeover at claim time", () => {
       {},
     ]);
 
-    expect(takeover(stateDir)).toEqual(["attempt-0", "attempt-1"]);
+    expect(takeover(stateDir, stoppedRuntime(3))).toEqual(["attempt-0", "attempt-1"]);
   });
 
   it("keeps the journal of an attempt it took authority from", () => {

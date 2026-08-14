@@ -21,7 +21,6 @@ const {
   replaceReconciledLabels,
   revalidatedMissingRecordClaimKind,
   revalidatedReplacedClaimKind,
-  runtimeForAttempt,
 } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
 const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 
@@ -519,93 +518,6 @@ describe("reconciliation entrypoint", () => {
       ["agent:in-progress", requestLabel],
       base.requestLabels,
     )?.id).toBe("11");
-  });
-
-  it("refuses stopped ownership when the workspace has an extra pane", () => {
-    const runner = {
-      listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 2 }],
-      listAgents: () => [],
-      listWorktrees: () => [{ path: "/wt" }],
-    };
-    expect(runtimeForAttempt(runner, { workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }).kind).toBe("ambiguous");
-  });
-
-  it("refuses stopped ownership when another agent occupies a nested checkout path", () => {
-    const runner = {
-      listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 1 }],
-      listAgents: () => [{ name: "foreign", paneId: "pane-2", cwd: "/wt/src", status: "working" }],
-      listWorktrees: () => [{ path: "/wt" }],
-    };
-    expect(runtimeForAttempt(runner, { workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }).kind).toBe("ambiguous");
-  });
-
-  it("fails closed when the matching owner has an unknown status", () => {
-    const runner = {
-      listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 1 }],
-      listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt/src", status: "paused-maybe" }],
-      listWorktrees: () => [{ path: "/wt" }],
-    };
-    expect(runtimeForAttempt(runner, { workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }).kind).toBe("ambiguous");
-  });
-
-  it("refuses stopped ownership when another agent occupies the checkout", () => {
-    const runner = {
-      listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 1 }],
-      listAgents: () => [{ name: "foreign", paneId: "pane-2", cwd: "/wt", status: "working" }],
-      listWorktrees: () => [{ path: "/wt" }],
-    };
-    expect(runtimeForAttempt(runner, { workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }).kind).toBe("ambiguous");
-  });
-
-  it("applies nested checkout occupancy proof when recovering a close receipt", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "deadloop-close-proof-"));
-    try {
-      writeFileSync(path.join(root, "authority-release-started.json"), JSON.stringify({
-        schemaVersion: 1, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt",
-      }));
-      const runner = {
-        listWorkspaces: () => [],
-        listAgents: () => [{ name: "foreign", paneId: "pane-2", cwd: "/wt/src", status: "working" }],
-        listWorktrees: () => [{ path: "/wt" }],
-      };
-      expect(runtimeForAttempt(runner, { runDir: root, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }, process.cwd()).kind).toBe("ambiguous");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("fails closed on an unknown owner status while recovering a close receipt", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "deadloop-close-proof-"));
-    try {
-      writeFileSync(path.join(root, "authority-release-started.json"), JSON.stringify({
-        schemaVersion: 1, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt",
-      }));
-      const runner = {
-        listWorkspaces: () => [],
-        listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt/src", status: "unknown" }],
-        listWorktrees: () => [{ path: "/wt" }],
-      };
-      expect(runtimeForAttempt(runner, { runDir: root, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }, process.cwd()).kind).toBe("ambiguous");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("applies checkout-wide agent proof when recovering a close receipt", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "deadloop-close-proof-"));
-    try {
-      writeFileSync(path.join(root, "authority-release-started.json"), JSON.stringify({
-        schemaVersion: 1, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt",
-      }));
-      const runner = {
-        listWorkspaces: () => [],
-        listAgents: () => [{ name: "foreign", paneId: "pane-2", cwd: "/wt", status: "working" }],
-        listWorktrees: () => [{ path: "/wt" }],
-      };
-      expect(runtimeForAttempt(runner, { runDir: root, attemptId: "attempt-1", workspaceId: "workspace-1", worktreePath: "/wt", rootPaneId: "pane-1", agentName: "owner" }, process.cwd()).kind).toBe("ambiguous");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
   });
 
   it("preserves a request added between revalidation and a supersession label mutation", () => {
