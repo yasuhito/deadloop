@@ -1452,7 +1452,8 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
   const uuid = fixture ? "fixture-reviewer-uuid" : randomUUID();
   const history = fixture ? null : observePrHistory(env.githubRepo, number, commandRunner);
   const plan = prReviewerLaunchPlan(pr, env, reason, uuid, history?.revision);
-  if (history) writePrHistoryObservation(path.join(env.stateDir, "runs", uuid, "pr-review-history.json"), history);
+  const historyFile = path.join(env.stateDir, "runs", uuid, "pr-review-history.json");
+  if (history) writePrHistoryObservation(historyFile, history);
   const { reviewerName, headRefName } = plan;
   let claim: JsonObject | null = null;
   let launch: JsonObject;
@@ -1493,7 +1494,11 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
           // here leaves GitHub changed. The caller has to say so instead of reporting an untouched
           // workflow, which is the same mark the branch-update launch carries.
           try {
-            reauthorizeClaimedReviewerLaunch(pr, env, number, claim, history, enabledAutomationLogin, enabledRepositoryIdentity);
+            const claimed = reauthorizeClaimedReviewerLaunch(pr, env, number, claim, history, enabledAutomationLogin, enabledRepositoryIdentity);
+            // The completion dispatcher judges the finished review against this record, so it has to
+            // hold the history as it stands after the claim. Leaving the pre-claim record in place
+            // makes every completed review read as a changed conversation and be thrown away.
+            if (claimed) writePrHistoryObservation(historyFile, claimed);
           } catch (error) {
             if (error instanceof Error) (error as Error & { claimed?: boolean }).claimed = true;
             throw error;
@@ -1530,7 +1535,10 @@ function staleReviewerLaunchSummary(error: unknown, requestConsumed: boolean): s
   return `${reason}; ${requestConsumed ? "the request was already consumed" : "no workflow state was mutated"}`;
 }
 
-/** The checks a reviewer launch must still pass once its own claim consumed the request. */
+/**
+ * The checks a reviewer launch must still pass once its own claim consumed the request, and the
+ * review history as it stands after that claim.
+ */
 function reauthorizeClaimedReviewerLaunch(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -1539,7 +1547,7 @@ function reauthorizeClaimedReviewerLaunch(
   history: JsonObject | null,
   enabledAutomationLogin: string,
   enabledRepositoryIdentity: { repoPath?: string; baseBranch?: string; githubRepositoryId?: string; githubRepo?: string; automationLogin?: string },
-): void {
+): JsonObject | null {
   const github = githubOperations();
   const live = reauthorizeClaimedReview(
     github, pr, env, claim, undefined, enabledRepositoryIdentity,
@@ -1560,7 +1568,7 @@ function reauthorizeClaimedReviewerLaunch(
   // The claim posted one comment, so the history this launch bound itself to has moved by exactly
   // that comment. Naming it lets the deterministic advance accept it and nothing else; leaving it
   // unnamed would make every launch fail on its own claim.
-  assertReviewHistoryUnchanged(env, number, history, String(claim.commentId || ""));
+  return assertReviewHistoryUnchanged(env, number, history, String(claim.commentId || ""));
 }
 
 function drive(fixturePath: string | undefined): DriverResult {
