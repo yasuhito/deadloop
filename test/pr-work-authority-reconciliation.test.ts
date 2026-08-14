@@ -163,8 +163,12 @@ describe("PR work-authority reconciliation", () => {
     expect(reconcilePrWorkAuthority({ ...base, pr: { ...base.pr, labels: [...base.pr.labels, "agent:review"] }, claim: { kind: "superseded" }, runtime: { kind: "stopped_owned" } }).action).toBe("release_for_request");
   });
 
-  it("removes the temporary block after safe supersession cleanup", () => {
-    expect(reconcilePrWorkAuthority({ ...base, pr: { ...base.pr, labels: [...base.pr.labels, "agent:review", "agent:blocked"] }, claim: { kind: "superseded" }, runtime: { kind: "stopped_owned" } }).labels).not.toContain("agent:blocked");
+  it("keeps the block a released pull request was stopped under", () => {
+    expect(reconcilePrWorkAuthority({ ...base, pr: { ...base.pr, labels: [...base.pr.labels, "agent:review", "agent:blocked"] }, claim: { kind: "superseded" }, runtime: { kind: "stopped_owned" } }).labels).toContain("agent:blocked");
+  });
+
+  it("still ends the in-progress state of a released pull request", () => {
+    expect(reconcilePrWorkAuthority({ ...base, pr: { ...base.pr, labels: [...base.pr.labels, "agent:review", "agent:blocked"] }, claim: { kind: "superseded" }, runtime: { kind: "stopped_owned" } }).labels).not.toContain("agent:in-progress");
   });
 
   it("preserves a superseding request when runtime ownership is ambiguous", () => {

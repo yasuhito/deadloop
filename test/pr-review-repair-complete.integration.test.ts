@@ -179,6 +179,10 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
       key,
       "--review-label",
       "agent:review",
+      "--implement-label",
+      "agent:implement",
+      "--update-branch-label",
+      "agent:update-branch",
       "--in-progress-label",
       "agent:in-progress",
       "--blocked-label",
@@ -287,6 +291,7 @@ else if (args[0] === "pr" && args[1] === "comment") {
     "--result", resultFile, "--contract", contractFile, "--project-repo", projectRepo, "--github-repo", "owner/repo", "--state-dir", stateDir,
     "--enabled-at", "1", "--pr", "24", "--branch", "agent/issue-24", "--expected-head", oldHead,
     "--attempt-key", key, "--review-label", "agent:review",
+    "--implement-label", "agent:implement", "--update-branch-label", "agent:update-branch",
     "--in-progress-label", "agent:in-progress", "--blocked-label", "agent:blocked",
     "--review-claim", JSON.stringify(reviewClaim),
   ];
@@ -388,6 +393,7 @@ describe("review repair deterministic completion", () => {
       result: "/state/runs/one/finalizer-result.json", contract: "/state/runs/one/review-contract.json",
       projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: "1", pr: "24",
       branch: "agent/issue-24", expectedHead: oldHead, attemptKey: key, reviewLabel: "review",
+      implementLabel: "implement", updateBranchLabel: "update-branch",
       inProgressLabel: "in-progress", blockedLabel: "blocked", reviewClaim: "{}",
     };
     const args = Object.entries(values).flatMap(([name, value]) => {
@@ -439,14 +445,16 @@ describe("review repair deterministic completion", () => {
     expect(result.output.driverAction).toBe("repair_human_blocked");
   });
 
-  it("requeues the review request when bounded repair requires human recovery", () => {
+  it("leaves no waiting request when bounded repair requires human recovery", () => {
     const result = runCompletion({
       promise: { status: "blocked", reason: "check_failed", summary: "checks stopped" },
       receipt: "{",
       liveHead: oldHead,
     });
 
-    expect(result.actions).toContain("--remove-label agent:in-progress --add-label agent:review --add-label agent:blocked");
+    expect(result.actions).toContain(
+      "--remove-label agent:update-branch --remove-label agent:implement --remove-label agent:review --remove-label agent:in-progress --add-label agent:blocked",
+    );
   });
 
   it("does not post repair success for stale_head", () => {

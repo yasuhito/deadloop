@@ -21,6 +21,7 @@ const {
   visiblyBlockReviewClaimTimeFailure,
 } = require("./pr-review-claim.ts");
 const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
+const { blockedPrLabelMove } = require("../../../src/pr-request-selection.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -32,10 +33,22 @@ function parseArgs(argv: string[]): JsonObject {
     if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs");
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
-  for (const name of ["promise", "attemptRecord", "projectId", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "inProgressLabel", "blockedLabel", "reviewClaim"]) {
+  for (const name of ["promise", "attemptRecord", "projectId", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "implementLabel", "updateBranchLabel", "inProgressLabel", "blockedLabel", "reviewClaim"]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
   return values;
+}
+
+function stoppedRepairLabelMove(args: JsonObject): { remove: string[]; add: string[] } {
+  return blockedPrLabelMove(
+    {
+      updateBranch: String(args.updateBranchLabel),
+      implement: String(args.implementLabel),
+      review: String(args.reviewLabel),
+    },
+    String(args.inProgressLabel),
+    String(args.blockedLabel),
+  );
 }
 
 function recoveryComment(args: JsonObject, reason: string, summary: string): string {
@@ -46,7 +59,7 @@ function recoveryComment(args: JsonObject, reason: string, summary: string): str
 - Detail: ${publicText(summary, "The bounded repair could not safely complete.")}
 
 ## Recovery steps
-Inspect the current PR head and checks, correct the branch without rewriting published history, push a new commit, then remove \`${args.blockedLabel}\` so review can resume.
+Inspect the current PR head and checks, correct the branch without rewriting published history, push a new commit, then add \`${args.reviewLabel}\` so review can resume. \`${args.blockedLabel}\` clears when the next attempt starts.
 
 <!-- deadloop:review-repair-stop key=${String(args.attemptKey).toLowerCase()} -->`;
 }
@@ -91,10 +104,15 @@ function completion(args: JsonObject): DriverResult {
       throw new Error(`${field} does not exactly match the saved review claim contract`);
     }
   }
-  // The label this completion adds is a workflow decision, not the request the claim consumed, so
-  // it is bound to the claim's managed set rather than to the claim's own request label.
-  if (!(reviewClaim.binding?.activeState?.managedLabels || []).includes(String(args.reviewLabel || ""))) {
-    throw new Error("reviewLabel is not managed by the saved review claim contract");
+  // The labels this completion moves are workflow decisions, not the request the claim consumed, so
+  // they are bound to the claim's managed set rather than to the claim's own request label. A stop
+  // clears every request label, which is reaching outside the contract unless all of them are named
+  // in it.
+  const managedLabels: string[] = reviewClaim.binding?.activeState?.managedLabels || [];
+  for (const field of ["reviewLabel", "implementLabel", "updateBranchLabel"] as const) {
+    if (!managedLabels.includes(String(args[field] || ""))) {
+      throw new Error(`${field} is not managed by the saved review claim contract`);
+    }
   }
   for (const [field, value, basename] of [
     ["promise", args.promise, "promise.json"],
@@ -266,20 +284,14 @@ function completion(args: JsonObject): DriverResult {
 
     const stopMarker = `<!-- deadloop:review-repair-stop key=${String(args.attemptKey).toLowerCase()} -->`;
     if (comments.some((comment) => String(comment?.body || "").includes(stopMarker))) {
-      github.movePrLabels(String(args.githubRepo), String(args.pr), {
-        remove: String(args.inProgressLabel),
-        add: [String(args.reviewLabel), String(args.blockedLabel)],
-      });
+      github.movePrLabels(String(args.githubRepo), String(args.pr), stoppedRepairLabelMove(args));
       return driverResult("done", `PR #${args.pr} repair stop was already posted`, { driverAction: "repair_stop_duplicate" });
     }
     const reason = validation.promise?.reason || validation.error || receipt?.reason || "inconclusive_repair_completion";
     const summary = validation.promise?.summary || "The finalizer receipt and structured repair report did not confirm the same successful push.";
     const comment = recoveryComment(args, reason, summary);
     github.commentPr(String(args.githubRepo), String(args.pr), comment);
-    github.movePrLabels(String(args.githubRepo), String(args.pr), {
-      remove: String(args.inProgressLabel),
-      add: [String(args.reviewLabel), String(args.blockedLabel)],
-    });
+    github.movePrLabels(String(args.githubRepo), String(args.pr), stoppedRepairLabelMove(args));
     return driverResult("done", `PR #${args.pr} repair requires human recovery`, { driverAction: "repair_human_blocked", comment });
   });
 }

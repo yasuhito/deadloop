@@ -22,6 +22,7 @@ const {
 } = require("./pr-review-comments.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.ts");
+const { blockedPrLabelMove } = require("../../../src/pr-request-selection.ts");
 const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.ts");
 const {
   createCommandRunner,
@@ -176,7 +177,7 @@ function recoveryComment(prNumber: string, env: ReturnType<typeof envConfig>, re
 gh pr view ${prNumber} -R ${shellQuote(env.githubRepo)} --comments --json number,state,headRefName,headRefOid,labels,statusCheckRollup
    \`\`\`
 2. Correct the branch or resolve the required decision without rewriting history.
-3. Push a new commit, then remove ${env.blockedLabel}; the changed head can start a new review cycle.${marker ? `\n\n${marker}` : ""}`;
+3. Push a new commit, then add ${env.reviewLabel}; the changed head starts a new review cycle and ${env.blockedLabel} clears with it.${marker ? `\n\n${marker}` : ""}`;
 }
 
 function requireReviewClaimForManagedPr(pr: JsonObject, env: ReturnType<typeof envConfig>): void {
@@ -322,18 +323,19 @@ function releaseStaleReviewHistory(
 }
 
 function blockedClaimMove(env: ReturnType<typeof envConfig>) {
-  return {
-    remove: [env.inProgressLabel],
-    add: [env.reviewLabel, env.blockedLabel],
-  };
+  return blockedPrLabelMove(
+    { updateBranch: env.updateBranchLabel, implement: env.implementLabel, review: env.reviewLabel },
+    env.inProgressLabel,
+    env.blockedLabel,
+  );
 }
 
 /**
  * Every agent workflow label, which a human handoff keeps none of.
  *
- * A blocked pull request is one deadloop could not finish safely; it keeps a request visible so the
- * loop can resume. A completed review that needs a person is the opposite: the checking deadloop
- * owns is done, so no agent request may remain waiting on it.
+ * A blocked pull request is one deadloop could not finish safely, and a completed review that needs
+ * a person is one deadloop finished. Neither keeps an agent request waiting; they differ in the
+ * blocked label, which the block adds and the handoff removes.
  */
 function humanHandoffLabelMove(env: ReturnType<typeof envConfig>) {
   return {
@@ -785,7 +787,7 @@ function dispatch(args: JsonObject): DriverResult {
     priorRequiredFindings,
     transitionReason: review.reason,
     reviewFingerprint,
-    blockedLabel: env.blockedLabel,
+    reviewLabel: env.reviewLabel,
   };
 
   if (review.transition === "approve") {
@@ -1064,7 +1066,8 @@ function dispatch(args: JsonObject): DriverResult {
         prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
         promiseFile: recoveredLaunch.promiseFile, attemptRecordFile: path.join(path.dirname(recoveredLaunch.promiseFile), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
         repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
-        reviewLabel: env.reviewLabel, inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
+        reviewLabel: env.reviewLabel, implementLabel: env.implementLabel, updateBranchLabel: env.updateBranchLabel,
+        inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
         reviewClaim: env.reviewClaim,
         attemptKey: selection.key,
       };
@@ -1083,9 +1086,9 @@ function dispatch(args: JsonObject): DriverResult {
       comment = block.comment;
     } else {
       const labels = labelNames(refreshedPr.labels);
-      if (labels.includes(env.inProgressLabel)
-        || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
-        const staleComparison = withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env)), historyFile);
+      const move = blockedClaimMove(env);
+      if (move.remove.some((label) => labels.includes(label)) || !move.add.every((label) => labels.includes(label))) {
+        const staleComparison = withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.movePrLabels(env.githubRepo, prNumber, move), historyFile);
         if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before interrupted-dispatch block");
       }
     }
@@ -1327,7 +1330,8 @@ function dispatch(args: JsonObject): DriverResult {
     prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
     promiseFile: launch.promiseFile, attemptRecordFile: launch.attemptRecordFile || path.join(path.dirname(String(launch.promiseFile)), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
     repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
-    reviewLabel: env.reviewLabel, inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
+    reviewLabel: env.reviewLabel, implementLabel: env.implementLabel, updateBranchLabel: env.updateBranchLabel,
+    inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
     reviewClaim: env.reviewClaim,
     attemptKey: selection.key,
   };
