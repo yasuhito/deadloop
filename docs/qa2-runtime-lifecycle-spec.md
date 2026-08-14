@@ -9,7 +9,7 @@ Implementation specification derived from the qa2-love2d dogfooding failures rec
 deadloop currently leaks two runner concerns into repository automation:
 
 1. A completed Herdr reviewer keeps its deterministic name. Re-reviewing the same PR can fail forever with `agent_name_taken`.
-2. `.deadloop/` and `.pi-subagents/` are created inside a worktree. Recursive project formatters inspect their JSON and can fail even when tracked project files are valid.
+2. The agent CLI creates its scratch areas inside a worktree. Recursive project formatters inspect their JSON and can fail even when tracked project files are valid.
 
 GitHub state and promise reports are authoritative. Herdr `agent_status` is lifecycle evidence, not completion authority.
 
@@ -27,7 +27,7 @@ All configured `checkCommand` executions launched by deadloop must go through a 
 
 The helper must:
 
-1. operate only on the exact top-level `.deadloop` and `.pi-subagents` directories under the selected worktree;
+1. operate only on the exact agent scratch areas under the selected worktree, as named by `src/agent-scratch-area.ts`;
 2. atomically rename existing directories to unique holding paths on the same filesystem;
 3. write an external recovery manifest before running the project command;
 4. execute the original command in the worktree and preserve its exit result;
@@ -49,7 +49,7 @@ A merged or closed PR workspace is removable only when:
 - no non-generated changes are present;
 - closed-but-unmerged head preservation checks pass.
 
-`.deadloop/` and `.pi-subagents/` are generated evidence and may be removed immediately before workspace removal. The implementation must re-run `git status --short` after removing them and abort if any other change remains. Files such as `luac.out` remain a blocker.
+Agent scratch areas are generated evidence and may be removed immediately before workspace removal. The implementation must re-run `git status --porcelain --untracked-files=all` after removing them and abort if any other change remains. Files such as `luac.out` remain a blocker.
 
 ## Verification
 

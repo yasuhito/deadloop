@@ -4,6 +4,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, createHerdrRunnerFromCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.ts");
 const { abandonPersistedAttempt, readAttemptRecord, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
@@ -153,7 +154,7 @@ function abandonLocked(args: JsonObject, dependencies: RecoveryDependencies, rec
   if (worktree.head.toLowerCase() !== record.inputRevision.head.toLowerCase()) {
     return manualReview("the linked worktree HEAD changed after the recorded launch input");
   }
-  if (worktree.status.trim()) return manualReview("the linked worktree contains changes");
+  if (hasUncommittedWork(worktree.status)) return manualReview("the linked worktree contains changes");
   if (dependencies.otherAttemptOwnsCheckout(record, runDir)) {
     return manualReview("another nonterminal attempt owns the recorded checkout");
   }
@@ -181,7 +182,7 @@ function abandonLocked(args: JsonObject, dependencies: RecoveryDependencies, rec
     if (worktreeAfterClose.head.toLowerCase() !== record.inputRevision.head.toLowerCase()) {
       return manualReview("the linked worktree HEAD changed while closing the workspace");
     }
-    if (worktreeAfterClose.status.trim()) {
+    if (hasUncommittedWork(worktreeAfterClose.status)) {
       return manualReview("the linked worktree changed while closing the workspace");
     }
     const targetAfterClose = dependencies.observeTarget(record);
@@ -249,7 +250,7 @@ function productionDependencies(args: JsonObject, commandRunner: ReturnType<type
     inspectWorktree: (record) => {
       assertWorktreeBelongsToProject(commandRunner, record, args);
       const head = commandRunner.runText(["git", "-C", record.worktreePath, "rev-parse", "HEAD"]).trim();
-      const status = commandRunner.runText(["git", "-C", record.worktreePath, "status", "--porcelain"]);
+      const status = commandRunner.runText(["git", "-C", record.worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]);
       const retained = runner.listWorktrees(String(args.projectRepo)).some((worktree: JsonObject) =>
         worktree.branch === record.branch && samePath(worktree.path, record.worktreePath));
       return { head, status, retained };

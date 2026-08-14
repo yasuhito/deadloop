@@ -80,6 +80,10 @@ _Avoid_: 人間への引き渡し、要求を残したまま止めた状態、`a
 試行に結び付いたworkspaceとsessionの所有権を持ち、起動、観測、停止、安全な後片付けを提供する基盤。GitHubの状態や再試行可否は判断せず、未知またはdirtyな作業領域を保全する。Herdrは実行基盤の一種。
 _Avoid_: runner(実装上のinterface名と混同するため)、Automation host(定期実行や試行管理の主体を指すため)、エージェント種別(Pi / Claude / Codexの差異を指すため)
 
+**エージェント作業領域 (Agent scratch area)**:
+deadloopが起動したエージェントCLIが、対象worktreeの中に自分の都合で作る未追跡のディレクトリ。対象リポジトリの成果物ではなく、operatorが管理する対象でもない。他者の未保存の作業があるかを見る安全ゲートは、これを未保存の作業として数えない。追跡された時点でこの区分から外れ、通常の未保存の作業として扱う。
+_Avoid_: 実行成果物(ADR 0010のdeadloop自身の出力を指すため)、エージェントCLIの設定ディレクトリ全体(共有される設定資産を含むため)、operatorの無視設定で吸収する対象
+
 **エージェント種別 (workerAgent)**:
 operator がプロジェクト設定で選ぶ、Worker を動かす CLI エージェントの種類(`pi` / `claude` の列挙)。起動構文・prompt の渡し方・session 形式・promise 抽出方法が連動して決まる分岐キーであり、モデル指定とは独立。未設定は `pi`。
 _Avoid_: 起動コマンドテンプレート、workerCommand

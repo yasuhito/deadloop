@@ -25,17 +25,17 @@ Do not isolate tracked artifacts; fail closed instead.
 * When deadloop runs recursive verification
 * Then Recursive verification fails
 
-## Scenario: Do not run a project check when `.deadloop` contains a tracked file
+## Scenario: Do not run a project check when an agent scratch area contains a tracked file
 
 * Given A project is configured for deadloop project checks
-* And The `.deadloop` directory contains a tracked file
+* And An agent scratch area contains a tracked file
 * When deadloop attempts to start a project check
 * Then deadloop does not run the project check
 
-## Scenario: Fail closed when `.deadloop` contains a tracked file
+## Scenario: Fail closed when an agent scratch area contains a tracked file
 
 * Given A project is configured for deadloop project checks
-* And The `.deadloop` directory contains a tracked file
+* And An agent scratch area contains a tracked file
 * When deadloop attempts to start a project check
 * Then The project check returns a failure result
 

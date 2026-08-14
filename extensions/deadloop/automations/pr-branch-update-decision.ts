@@ -4,6 +4,7 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.ts");
 
 type BranchUpdateDecision = Record<string, any>;
 
@@ -25,7 +26,7 @@ function mergeTreeIsClean(repo: string, headRef: string, baseRef: string): boole
 }
 
 function worktreeIsClean(repo: string): boolean {
-  return runGitForBranchUpdate(repo, ["status", "--short"]).stdout.trim() === "";
+  return !hasUncommittedWork(runGitForBranchUpdate(repo, UNCOMMITTED_WORK_STATUS_ARGS).stdout);
 }
 
 function revParseForBranchUpdate(repo: string, ref: string): string {

@@ -20,6 +20,7 @@ const {
   renderHumanRequiredComment,
   reviewCommentExists,
 } = require("./pr-review-comments.ts");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const { blockedPrLabelMove } = require("../../../src/pr-request-selection.ts");
@@ -161,8 +162,9 @@ function inspectRepairWorktree(repoPath: string, branch: string): RepairWorktree
   if (worktrees.length !== 1) return { kind: "ambiguous" };
   const worktreePath = worktrees[0];
   const head = commandRunner.runText(["git", "-C", worktreePath, "rev-parse", "HEAD"]).trim().toLowerCase();
-  const clean =
-    commandRunner.runText(["git", "-C", worktreePath, "status", "--porcelain", "--untracked-files=all"]).trim() === "";
+  const clean = !hasUncommittedWork(
+    commandRunner.runText(["git", "-C", worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]),
+  );
   return { kind: "present", head, clean };
 }
 

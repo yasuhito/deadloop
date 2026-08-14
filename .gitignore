@@ -5,5 +5,7 @@ __pycache__/
 *.py[cod]
 .env
 extensions/deadloop/projects.json
-.pi-subagents/
+.pi/subagents/
+.pi/npm/
+.pi/git/
 .scratch/
