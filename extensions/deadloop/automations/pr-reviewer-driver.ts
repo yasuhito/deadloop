@@ -27,7 +27,7 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { postBlockRequestIsEligible, releasableRetainedAttempts } = require("../../../src/pr-work-authority-reconciliation.ts");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { checkoutIsIdle, worktreeIsRetained } = require("../../../src/attempt-runtime-observation.ts");
+const { observeAttemptLiveness } = require("../../../src/attempt-runtime-observation.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
@@ -49,6 +49,7 @@ const {
   selectReviewClaimWinner,
 } = require("./pr-review-claim.ts");
 
+import type { AttemptAgentRunner } from "../../../src/attempt-runtime-observation";
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 import type { RunnerAdapter } from "../../../src/runner";
 
@@ -1130,7 +1131,6 @@ function reviewClaimManagedLabels(env: ReturnType<typeof envConfig>): string[] {
 type WorkAuthorityTakeover = {
   stateDir: string;
   projectId: string;
-  projectRepo: string;
   githubRepo: string;
   prNumber: number;
   currentHead: string;
@@ -1164,16 +1164,14 @@ function retainedAttemptsForPr(input: WorkAuthorityTakeover): Array<{ runDir: st
  */
 function takeWorkAuthorityFromRetainedAttempts(
   input: WorkAuthorityTakeover,
-  observe: { stoppedFor?: (record: JsonObject) => boolean } = {},
+  observe: { runner?: AttemptAgentRunner } = {},
 ): string[] {
   const retained = retainedAttemptsForPr(input);
   if (retained.length === 0) return [];
-  const stoppedFor = observe.stoppedFor
-    || ((record: JsonObject) => attemptStoppedForTakeover(record, input.projectRepo));
   const releasable = new Set(releasableRetainedAttempts({
     attempts: retained.map(({ record }) => ({
       attemptId: String(record.attemptId),
-      stopped: stoppedFor(record),
+      stopped: attemptStoppedForTakeover(record, observe.runner),
       revision: String(record.inputRevision?.head || ""),
       ...(record.reviewClaim?.binding?.requestEventId
         ? { claimRequestEventId: String(record.reviewClaim.binding.requestEventId) }
@@ -1192,31 +1190,20 @@ function takeWorkAuthorityFromRetainedAttempts(
 }
 
 /**
- * The proof ADR 0019 requires before a new Agent request may take work authority: the attempt
- * finished what it could do, its evidence is still on disk, and nothing occupies its checkout. An
- * attempt that lost both its workspace and its worktree proves nothing and keeps its authority.
+ * Whether a retained attempt has stopped, asked of the execution runtime and nothing else.
+ *
+ * ADR 0020 leaves one authority on this question, so the journal's phase, its claim marker, and the
+ * receipts beside it do not take part: an attempt whose agent is gone has stopped even if its
+ * completion was never handed to GitHub, and an attempt whose agent is working keeps its authority
+ * however finished it looks on disk. A runtime that cannot be reached, or that reports an agent this
+ * attempt cannot be told apart from, proves nothing, and an unproven attempt keeps its authority.
  */
-function attemptStoppedForTakeover(record: JsonObject, projectRepo: string): boolean {
-  if (!validAuthorityCloseReceipt(record) && !reportedCompletion(record)) return false;
+function attemptStoppedForTakeover(record: JsonObject, runner?: AttemptAgentRunner): boolean {
   try {
-    const runner = herdrRunner();
-    return worktreeIsRetained(runner, record, projectRepo) && checkoutIsIdle(runner, record);
+    return observeAttemptLiveness(runner || herdrRunner(), record).kind === "stopped";
   } catch {
-    // An unreachable runtime cannot prove the attempt stopped, so its authority stands.
     return false;
   }
-}
-
-function reportedCompletion(record: JsonObject): boolean {
-  return ["report_received", "github_persisted"].includes(String(record.phase || ""));
-}
-
-function validAuthorityCloseReceipt(record: JsonObject): boolean {
-  try {
-    const receipt = JSON.parse(fs.readFileSync(path.join(String(record.runDir || ""), "authority-release-started.json"), "utf8"));
-    return receipt?.schemaVersion === 1 && receipt?.attemptId === record.attemptId
-      && receipt?.workspaceId === record.workspaceId && receipt?.worktreePath === record.worktreePath;
-  } catch { return false; }
 }
 
 function claimReviewRequest(
@@ -1418,7 +1405,6 @@ function claimReviewRequest(
   takeWorkAuthorityFromRetainedAttempts({
     stateDir: env.stateDir,
     projectId: env.projectId,
-    projectRepo: env.repoPath,
     githubRepo: env.githubRepo,
     prNumber: number,
     currentHead: String(pr.headRefOid || ""),

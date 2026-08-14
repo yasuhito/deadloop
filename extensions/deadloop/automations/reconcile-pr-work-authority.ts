@@ -7,7 +7,7 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.ts");
-const { canonicalPath, canonicalPathContains } = require("../../../src/attempt-runtime-observation.ts");
+const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.ts");
 const { classifyActiveReviewClaim, classifyPushedHeadAuthorityTransition, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
 const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
 const { provenAttemptCompletion } = require("./attempt-completion-proof.ts");
@@ -126,10 +126,6 @@ function recoveryReceiptPath(stateDir: string, repositoryId: string, number: num
   return path.join(stateDir, "work-authority-reconciliation", `${repositoryId}-${number}.json`);
 }
 
-function closeReceiptPath(record: JsonObject): string {
-  return path.join(record.runDir, "authority-release-started.json");
-}
-
 /** The phases an attempt passes before its launch opens a workspace. */
 const PHASES_BEFORE_WORKSPACE = ["prepared", "github_claimed"];
 
@@ -147,14 +143,6 @@ function releasableUnlaunchedAttempt(record: JsonObject): boolean {
     && !record.workspaceId && !record.tabId && !record.rootPaneId;
 }
 
-function validCloseReceipt(record: JsonObject): boolean {
-  try {
-    const receipt = JSON.parse(fs.readFileSync(closeReceiptPath(record), "utf8"));
-    return receipt?.schemaVersion === 1 && receipt?.attemptId === record.attemptId
-      && receipt?.workspaceId === record.workspaceId && receipt?.worktreePath === record.worktreePath;
-  } catch { return false; }
-}
-
 function latestConfiguredRequest(events: JsonObject[], currentLabels: string[], requestLabels: string[]): JsonObject | null {
   const queued = new Set(currentLabels.filter((label) => requestLabels.includes(label)));
   return events.filter((event) => String(event.event || "").toLowerCase() === "labeled"
@@ -164,34 +152,6 @@ function latestConfiguredRequest(events: JsonObject[], currentLabels: string[], 
       const time = Date.parse(String(left.created_at || left.createdAt || "")) - Date.parse(String(right.created_at || right.createdAt || ""));
       return time || String(left.id || left.node_id).localeCompare(String(right.id || right.node_id), undefined, { numeric: true });
     }).at(-1) || null;
-}
-
-function runtimeForAttempt(runner: any, record: JsonObject, projectRepo = ""): { kind: string } {
-  const workspaces = runner.listWorkspaces();
-  const agents = runner.listAgents();
-  const checkoutWorkspaces = workspaces.filter((workspace: JsonObject) => canonicalPath(workspace.worktreePath) === canonicalPath(record.worktreePath));
-  const matchingWorkspaces = checkoutWorkspaces.filter((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record.workspaceId || ""));
-  const checkoutAgents = agents.filter((agent: JsonObject) => canonicalPathContains(record.worktreePath, agent.cwd));
-  const relatedAgents = agents.filter((agent: JsonObject) => String(agent.name || "") === String(record.agentName || "")
-    || String(agent.paneId || "") === String(record.rootPaneId || "")
-    || canonicalPathContains(record.worktreePath, agent.cwd));
-  const matchingAgents = relatedAgents.filter((agent: JsonObject) => String(agent.name || "") === String(record.agentName || "")
-    && String(agent.paneId || "") === String(record.rootPaneId || "")
-    && canonicalPathContains(record.worktreePath, agent.cwd));
-  if (matchingWorkspaces.length === 0 && validCloseReceipt(record) && projectRepo) {
-    const retained = runner.listWorktrees(projectRepo).some((worktree: JsonObject) => canonicalPath(worktree.path) === canonicalPath(record.worktreePath));
-    return retained && checkoutWorkspaces.length === 0 && relatedAgents.length === 0 && checkoutAgents.length === 0 ? { kind: "stopped_owned" } : { kind: "ambiguous" };
-  }
-  if (matchingWorkspaces.length !== 1 || checkoutWorkspaces.length !== 1
-    || Number(matchingWorkspaces[0].tabCount) !== 1 || Number(matchingWorkspaces[0].paneCount) !== 1
-    || matchingAgents.length > 1 || relatedAgents.length !== matchingAgents.length
-    || checkoutAgents.length !== matchingAgents.length) return { kind: "ambiguous" };
-  if (matchingAgents.length === 1) {
-    const status = String(matchingAgents[0].status || "").toLowerCase();
-    if (status === "working") return { kind: "live_matching_owner" };
-    if (!["done", "idle", "failed", "stopped"].includes(status)) return { kind: "ambiguous" };
-  }
-  return { kind: "stopped_owned" };
 }
 
 /** Every role whose completion is still owed to GitHub, and the handler that owes it. */
@@ -444,7 +404,7 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         { ...pr, labels: labels(pr) }, events, comments, github.readRestResponseHeaders(args.githubRepo),
         record, requestLabels, repositoryIdentity, args.githubRepo,
       ).claim;
-      try { runtime = runtimeForAttempt(runner, record, args.projectRepo); }
+      try { runtime = observeAttemptRuntime(runner, record, args.projectRepo); }
       catch { runtime = { kind: "unreachable" }; }
     }
 
@@ -540,14 +500,14 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         requestEventId: expectedRequestEventId,
       }) : undefined,
       closeOwnedWorkspace: record && runtime.kind === "stopped_owned" ? () => guarded(() => {
-        if (runtimeForAttempt(runner, record!, args.projectRepo).kind !== "stopped_owned") return false;
+        if (observeAttemptRuntime(runner, record!, args.projectRepo).kind !== "stopped_owned") return false;
         writeJsonAtomically(closeReceiptPath(record!), {
           schemaVersion: 1, attemptId: record!.attemptId, workspaceId: record!.workspaceId,
           worktreePath: record!.worktreePath, startedAt: new Date().toISOString(),
         });
         const alreadyAbsent = !runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record!.workspaceId));
         if (!alreadyAbsent) runner.closeWorkspace(record!.workspaceId);
-        return runtimeForAttempt(runner, record!, args.projectRepo).kind === "stopped_owned";
+        return observeAttemptRuntime(runner, record!, args.projectRepo).kind === "stopped_owned";
       }) : undefined,
       releaseLocalOwnership: record ? (cutoffEventId?: string) => {
         releasePersistedAttemptAuthority(record!.runDir, new Date().toISOString(), cutoffEventId);
@@ -585,5 +545,4 @@ module.exports = {
   replaceReconciledLabels,
   revalidatedMissingRecordClaimKind,
   revalidatedReplacedClaimKind,
-  runtimeForAttempt,
 };
