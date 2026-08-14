@@ -9,7 +9,7 @@ const {
   AGENT_SCRATCH_AREAS,
   UNCOMMITTED_WORK_STATUS_ARGS,
   hasUncommittedWork,
-} = require("../src/agent-scratch-area.ts");
+} = require("../src/agent-scratch-area.cjs");
 
 const sandboxes: string[] = [];
 

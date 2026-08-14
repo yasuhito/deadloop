@@ -45,13 +45,15 @@ An agent scratch area is an untracked directory that the launched agent CLI crea
 
 **Untracked only.** The rule is justified by "nobody owns this", so ownership ends it. A tracked path under a scratch prefix is uncommitted work and blocks, which is what `cleanup-completed-worker-worktrees.ts` already did and what `run-worker-required-verification.ts` did not. The pathspec form cannot express this and is replaced.
 
-**Applied to the gates that ask about someone else's unsaved work** — repair dispatch, the branch-update decision, the Issue coordinator's reuse of an abandoned checkout, attempt abandonment, checkout alignment, worktree cleanup, required verification — and to the ADR 0010 quarantine, which asks the same question of the same paths. Not applied to the two finalize gates, which ask whether deadloop itself left something behind before a push, nor to enablement verification, whose `--ignored` scan exists to prove a throwaway worktree is pristine.
+**Applied to everything that asks about someone else's unsaved work.** The gates: repair dispatch, the branch-update decision, the Issue coordinator's reuse of an abandoned checkout, attempt abandonment, checkout alignment, worktree cleanup, required verification. The ADR 0010 quarantine, which asks the same question of the same paths. And the host's own worktree-status snapshot, which `/deadloop-status`, `/deadloop-doctor`, and the local recovery guidance all read — otherwise the loop repairs a pull request while the operator asking about the same worktree is told it is changed, which is the original confusion moved one layer out.
+
+Not applied to the two finalize gates, which ask whether deadloop itself left something behind before a push, nor to enablement verification, whose `--ignored` scan exists to prove a throwaway worktree is pristine.
 
 **Read with `--untracked-files=all`.** Git collapses a fully untracked directory to a single `?? .pi/` line, which cannot be told apart from a change to `.pi/settings.json`. Cleanup's `git status --short` moves to the explicit form.
 
 **`.git/info/exclude` was rejected.** It is the obvious fix and it is not worktree-local; by measurement 4 it writes into the repository the operator works in, silently changing what `git status` shows them in their own checkout. Deadloop does not edit an operator's repository configuration to make its own gate pass.
 
-**Per-repository `.gitignore` was rejected.** It asks the operator to absorb, in their repository's settings, a directory deadloop caused to exist.
+**A target repository's `.gitignore` was rejected.** It asks the operator to absorb, in their repository's settings, a directory deadloop caused to exist. Deadloop's gates therefore never depend on a target repository's ignore settings. Deadloop's own `.gitignore` is a separate matter — it is this repository's housekeeping, not a gate.
 
 **`.deadloop` and `.pi-subagents` are dropped.** Prompts and promises have lived outside the worktree since ADR 0010, under `<stateDir>/runs/<uuid>/`, and no current prompt directs an agent to write into `.deadloop/`. No currently released Pi writes `.pi-subagents/`. Both are past formats.
 
@@ -59,7 +61,7 @@ An agent scratch area is an untracked directory that the launched agent CLI crea
 
 Required verification's gate tightens. A tracked modification under a scratch path used to vanish into the pathspec and now blocks.
 
-Worktrees written before this change hold `.pi-subagents/` and now read as dirty, so cleanup leaves them. The failure is toward stopping, and the cost is a leftover directory.
+Worktrees written before this change hold `.pi-subagents/` and now read as dirty. Cleanup leaves them, and checkout alignment refuses to reuse them, so a pre-existing worktree needs its old scratch directory removed before an attempt can open it again. The failure is toward stopping, and the cost is one manual removal.
 
 The quarantine now moves a subdirectory of `.pi/` instead of a top-level directory. Moving `.pi/` whole would carry the project's own Pi settings, skills, and extensions out of the worktree for the duration of the check.
 

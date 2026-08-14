@@ -17,7 +17,7 @@
  */
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("./agent-scratch-area.ts");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("./agent-scratch-area.cjs");
 
 type CommandResult = { status: number; stdout: string; stderr: string };
 

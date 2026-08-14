@@ -20,7 +20,7 @@ const {
   renderHumanRequiredComment,
   reviewCommentExists,
 } = require("./pr-review-comments.ts");
-const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.ts");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const { blockedPrLabelMove } = require("../../../src/pr-request-selection.ts");

@@ -19,15 +19,17 @@ const completionReport = "pending\n";
 const diagnosticReport = "diagnostic output\n";
 const checkMarker = ".deadloop-check-ran";
 
-function runtimePath(projectRoot: string, directory: string, file: string): string {
-  return path.join(projectRoot, directory, file);
+function scratchPath(projectRoot: string, scratchArea: string, file: string): string {
+  return path.join(projectRoot, scratchArea, file);
 }
 
-function writeRuntimeArtifacts(projectRoot: string): void {
+function writeAgentScratchAreas(projectRoot: string): void {
   fs.mkdirSync(path.join(projectRoot, ".pi", "subagents"), { recursive: true });
-  fs.writeFileSync(runtimePath(projectRoot, ".pi/subagents", "promise.json"), completionReport);
+  fs.writeFileSync(scratchPath(projectRoot, ".pi/subagents", "promise.json"), completionReport);
+  fs.writeFileSync(scratchPath(projectRoot, ".pi/subagents", "transcript.json"), diagnosticReport);
+  // A second scratch area, so the round trip covers more than one entry in the list.
   fs.mkdirSync(path.join(projectRoot, ".pi", "npm"), { recursive: true });
-  fs.writeFileSync(runtimePath(projectRoot, ".pi/npm", "metadata.json"), diagnosticReport);
+  fs.writeFileSync(scratchPath(projectRoot, ".pi/npm", "installed.json"), "{}\n");
 }
 
 function projectRoot(world: SafetyWorld): string {
@@ -73,7 +75,7 @@ visit(process.cwd());
 });
 
 Given("The project contains untracked runtime artifacts", function (this: SafetyWorld) {
-  writeRuntimeArtifacts(projectRoot(this));
+  writeAgentScratchAreas(projectRoot(this));
 });
 
 Given("The project contains an invalid tracked file", function (this: SafetyWorld) {
@@ -132,7 +134,7 @@ When("The deadloop project-check CLI is interrupted", async function (this: Safe
     ],
     { cwd: process.cwd(), stdio: "ignore" },
   );
-  while (fs.existsSync(path.join(root, ".pi", "npm"))) {
+  while (fs.existsSync(path.join(root, ".pi", "subagents"))) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   child.kill("SIGTERM");
@@ -156,7 +158,7 @@ Then("Recursive verification succeeds", function (this: SafetyWorld) {
 });
 
 Then("The completion report is restored with its original contents", function (this: SafetyWorld) {
-  assert.equal(fs.readFileSync(runtimePath(projectRoot(this), ".pi/subagents", "promise.json"), "utf8"), completionReport);
+  assert.equal(fs.readFileSync(scratchPath(projectRoot(this), ".pi/subagents", "promise.json"), "utf8"), completionReport);
 });
 
 Then("Recursive verification fails", function (this: SafetyWorld) {
@@ -172,7 +174,7 @@ Then("The project check returns a failure result", function (this: SafetyWorld) 
 });
 
 Then("The diagnostic information is restored with its original contents", function (this: SafetyWorld) {
-  assert.equal(fs.readFileSync(runtimePath(projectRoot(this), ".pi/npm", "metadata.json"), "utf8"), diagnosticReport);
+  assert.equal(fs.readFileSync(scratchPath(projectRoot(this), ".pi/subagents", "transcript.json"), "utf8"), diagnosticReport);
 });
 
 Then("The timed-out project check terminates promptly", function (this: SafetyWorld) {

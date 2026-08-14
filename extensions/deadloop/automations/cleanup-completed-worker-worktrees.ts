@@ -6,7 +6,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-const { AGENT_SCRATCH_AREAS, hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.ts");
+const { AGENT_SCRATCH_AREAS, hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { createHerdrRunner, normalizeHerdrWorktreeRecord } = require("../../../src/herdr-runner.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
@@ -328,6 +328,8 @@ function applyCleanupPlan(plan: { candidates: CleanupRecord[]; skipped: CleanupR
       const worktreePath = String(item.path || "");
       if (!worktreePath) throw new Error("missing worktree path; refusing cleanup");
       removeAgentScratchAreas(worktreePath, config);
+      // Stricter than the planning gate on purpose: the scratch areas are gone
+      // now, so anything left is somebody's work, not something to look past.
       const remainingStatus = runCleanupText(["git", "-C", worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]);
       if (remainingStatus.trim()) throw new Error("worktree became dirty after cleanup planning; refusing removal");
       withCleanupMutation(config, () => cleanupHerdrRunner().removeWorktree({
