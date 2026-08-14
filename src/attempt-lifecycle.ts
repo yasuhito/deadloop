@@ -487,6 +487,7 @@ export function releasePersistedAttemptAuthority(
   runDir: string,
   releasedAt: string,
   cutoffEventId?: string,
+  reason: AttemptAuthorityRelease["reason"] = "github_authority_lost",
 ): AttemptRecord {
   const current = readAttemptRecord(runDir);
   if (current.phase === "authority_released") return current;
@@ -496,7 +497,7 @@ export function releasePersistedAttemptAuthority(
     ...current,
     phase: "authority_released",
     authorityRelease: {
-      reason: "github_authority_lost",
+      reason,
       releasedAt,
       ...(cutoffEventId ? { cutoffEventId } : {}),
     },

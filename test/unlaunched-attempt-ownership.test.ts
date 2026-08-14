@@ -10,10 +10,14 @@ const { renderReviewClaimComment } = require("../extensions/deadloop/automations
 const HEAD = "a".repeat(40);
 const roots: string[] = [];
 let originalPath: string | undefined;
+let originalConfigDir: string | undefined;
 
 afterEach(() => {
   if (originalPath !== undefined) process.env.PATH = originalPath;
+  if (originalConfigDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalConfigDir;
   originalPath = undefined;
+  originalConfigDir = undefined;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -37,7 +41,7 @@ function claim(requestEventId: string, commentId: string) {
  * The state PR #228 reached: one review that completed and still owes its handoff, beside a second
  * attempt for the same pull request that failed to launch before any workspace was opened.
  */
-function pullRequestWithUnlaunchedSecondAttempt(options: { unlaunchedHoldsWorkspace?: boolean } = {}) {
+function pullRequestWithUnlaunchedSecondAttempt(options: { unlaunchedHoldsWorkspace?: boolean; blocked?: boolean } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "deadloop-unlaunched-"));
   roots.push(root);
   const repo = path.join(root, "repo");
@@ -48,16 +52,62 @@ function pullRequestWithUnlaunchedSecondAttempt(options: { unlaunchedHoldsWorksp
   const bin = path.join(root, "bin");
   for (const directory of [repo, worktree, bin, completedRun, unlaunchedRun]) mkdirSync(directory, { recursive: true });
   execFileSync("git", ["init", "--quiet", repo]);
+  for (const [key, value] of [["user.email", "test@example.com"], ["user.name", "Test"]]) {
+    execFileSync("git", ["-C", repo, "config", key, value]);
+  }
+  writeFileSync(path.join(repo, "deadloop.json"), "{}\n");
+  execFileSync("git", ["-C", repo, "add", "deadloop.json"]);
+  execFileSync("git", ["-C", repo, "commit", "--quiet", "-m", "fixture"]);
   execFileSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
-  // Every command the completion handler runs for itself resolves inside this fixture, so the loop
-  // never reaches a real GitHub.
-  writeFileSync(path.join(bin, "gh"), "#!/bin/sh\nprintf '{\"id\":\"repo-id\"}\\n'\n");
-  writeFileSync(path.join(bin, "herdr"), "#!/bin/sh\nprintf 'herdr 0.8.0\\n'\n");
+  execFileSync("git", ["-C", repo, "update-ref", "refs/remotes/origin/master", "HEAD"]);
+  writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{
+    id: "demo", repoPath: repo, githubRepo: "owner/repo", baseBranch: "origin/master",
+  }] }));
+  // The completion handler runs its own commands rather than the injected runner, so the whole
+  // handoff has to resolve inside this fixture. A stub that answers less than the handler asks for
+  // turns a refusal into something that reads like the reconciler declining to finish.
+  writeFileSync(path.join(bin, "gh"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const pr = () => ({
+  number: 42, state: "OPEN", isDraft: true, headRefName: "agent/issue-42", headRefOid: "${HEAD}",
+  isCrossRepository: false, labels: JSON.parse(fs.readFileSync(process.env.TEST_LABELS, "utf8")).map((name) => ({ name })),
+  comments: [],
+});
+if (args[0] === "repo") process.stdout.write(JSON.stringify({ id: "repo-id", nameWithOwner: "owner/repo" }));
+else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify(pr()));
+else if (args[0] === "pr") { fs.appendFileSync(process.env.TEST_MUTATIONS, args.join(" ") + "\\n"); process.stdout.write("https://github.com/owner/repo/pull/42#issuecomment-1\\n"); }
+else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
+else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Sat, 01 Aug 2026 10:06:01 GMT");
+else if (args.some((value) => String(value).endsWith("/comments"))) process.stdout.write(fs.readFileSync(process.env.TEST_COMMENTS, "utf8"));
+else if (args.some((value) => String(value).endsWith("/events"))) process.stdout.write(JSON.stringify([[{ id: 10, event: "labeled", created_at: "2026-08-01T09:00:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:review" } }]]));
+else if (args[0] === "api") process.stdout.write(JSON.stringify([[]]));
+`);
+  writeFileSync(path.join(bin, "herdr"), `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") process.stdout.write("herdr 0.8.0\\n");
+else if (args[0] === "status" && args[1] === "server") process.stdout.write("version: 0.8.0\\n");
+else if (args[0] === "worktree") process.stdout.write(JSON.stringify({ result: { worktrees: [] } }));
+else if (args[0] === "agent") process.stdout.write(JSON.stringify({ result: { agents: [] } }));
+else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
+`);
   for (const command of ["gh", "herdr"]) execFileSync("chmod", ["+x", path.join(bin, command)]);
   originalPath = process.env.PATH;
   process.env.PATH = `${bin}:${originalPath || ""}`;
+  // The handoff refuses a state directory that is not the enabled one, so the fixture has to be it.
+  originalConfigDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = root;
+  process.env.TEST_LABELS = path.join(root, "labels.json");
+  process.env.TEST_MUTATIONS = path.join(root, "mutations.log");
+  process.env.TEST_COMMENTS = path.join(root, "comments.json");
+  writeFileSync(process.env.TEST_COMMENTS, JSON.stringify([[{
+    id: 100, user: { login: "deadloop-bot" }, created_at: "2026-08-01T10:00:01Z", updated_at: "2026-08-01T10:00:01Z",
+    body: renderReviewClaimComment(claim("10", "100").binding),
+  }]]));
+  writeFileSync(process.env.TEST_LABELS, JSON.stringify(options.blocked ? ["agent:blocked"] : ["agent:in-progress"]));
+  writeFileSync(process.env.TEST_MUTATIONS, "");
   writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
-    repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "repo-id", enabledAt: 1,
+    repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "repo-id", enabledAt: 1, baseBranch: "origin/master",
     automationLogin: "deadloop-bot", firstEnableAutoMerge: false, firstStartPending: false,
     lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true,
   }] }));
@@ -97,7 +147,7 @@ function pullRequestWithUnlaunchedSecondAttempt(options: { unlaunchedHoldsWorksp
     reviewClaim: claim("20", "200"),
     launchError: "worktree agent/issue-42 already has an open attempt workspace",
   })));
-  return { root, repo, stateDir, worktree, completedRun };
+  return { root, repo, stateDir, worktree, completedRun, mutations: path.join(root, "mutations.log") };
 }
 
 async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunchedSecondAttempt>) {
@@ -149,7 +199,25 @@ describe("a second attempt that never opened a workspace", () => {
     const fixture = pullRequestWithUnlaunchedSecondAttempt();
     const { result } = await reconcileOnce(fixture);
 
-    expect(result.results.map((entry: { attemptId?: string }) => entry.attemptId)).toContain("completed");
+    expect(result.results.map((entry: { action: string }) => entry.action)).toContain("completed_proven_attempt");
+  });
+
+  it("hands the completed review to a human", async () => {
+    const fixture = pullRequestWithUnlaunchedSecondAttempt();
+    const { result } = await reconcileOnce(fixture);
+    const completed = result.results.find((entry: { action: string }) => entry.action === "completed_proven_attempt");
+
+    expect(completed.result.driverAction).toBe("review_human_handoff");
+  });
+
+  // The claim an earlier block invalidated is a separate gate, and one this change does not open.
+  // Naming it here keeps the refusal visible instead of leaving it to be rediscovered live.
+  it("still refuses the handoff while an earlier block holds the pull request", async () => {
+    const fixture = pullRequestWithUnlaunchedSecondAttempt({ blocked: true });
+    const { result } = await reconcileOnce(fixture);
+    const refused = result.results.find((entry: { action: string }) => entry.action === "completion_refused");
+
+    expect(refused.reason).toContain("active in-progress state is required");
   });
 
   it("releases the unlaunched attempt", async () => {
@@ -181,7 +249,7 @@ describe("a second attempt that never opened a workspace", () => {
   });
 
   it("reconciles a pull request whose block already removed every request label", async () => {
-    const fixture = pullRequestWithUnlaunchedSecondAttempt();
+    const fixture = pullRequestWithUnlaunchedSecondAttempt({ blocked: true });
     const { result } = await reconcileOnce(fixture);
 
     expect(result.results.some((entry: { prNumber?: number }) => entry.prNumber === 42)).toBe(true);
