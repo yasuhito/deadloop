@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. One refinement below no longer holds: a later abandoned active claim on a head that carries repair provenance records `repair_rereview`, not `stale_reclaim`, because [ADR 0020](0020-stop-proving-work-authority.md) removed local attempt journals from the launch decision.
 
 ## Decision
 
