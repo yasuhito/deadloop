@@ -25,9 +25,6 @@ describe("Herdr 0.8.0 activation boundary", () => {
     expect(namedFunction(reviewerDriver, "driveSelectedTarget")).toContain("launchBranchUpdate(");
   });
 
-  it("runs one target's dispatch decision under that target's lock", () => {
-    expect(namedFunction(reviewerDriver, "drive")).toContain("withDispatchLock(");
-  });
 
   it("selects launchRepair for the review-repair role", () => {
     expect(namedFunction(repairDriver, "dispatch")).toContain("launchRepair(");

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const { staleReviewerLaunchSummary } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
 const driverScript = "extensions/deadloop/automations/pr-reviewer-driver.ts";
@@ -17,6 +17,20 @@ const {
 const { assertClaimMatchesCurrentConfiguration } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 const { withDispatchLock } = require("../src/dispatch-lock.cjs");
 
+// The dispatch lock writes under the state directory, so a run needs a real one. Giving every run
+// its own temporary directory keeps that write out of the work tree.
+const stateDirs: string[] = [];
+
+afterEach(() => {
+  for (const stateDir of stateDirs.splice(0)) rmSync(stateDir, { recursive: true, force: true });
+});
+
+function driverStateDir(): string {
+  const stateDir = mkdtempSync(path.join(tmpdir(), "deadloop-driver-state-"));
+  stateDirs.push(stateDir);
+  return stateDir;
+}
+
 function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> = {}) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/pr-reviewer-driver", fixtureName)], {
     cwd: process.cwd(),
@@ -24,7 +38,7 @@ function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> 
     env: {
       ...process.env,
       DEADLOOP_PROJECT_ID: "demo",
-      DEADLOOP_STATE_DIR: path.join(process.cwd(), "test/fixtures/pr-reviewer-driver/state"),
+      DEADLOOP_STATE_DIR: driverStateDir(),
       DEADLOOP_REPO_PATH: "/repo",
       DEADLOOP_GITHUB_REPO: "owner/repo",
       DEADLOOP_REVIEWER_AGENT: "pi",
@@ -613,33 +627,27 @@ describe("PR reviewer deterministic driver", () => {
   });
 
   it("skips a target another dispatch decision is holding", () => {
-    const stateDir = mkdtempSync(path.join(tmpdir(), "deadloop-driver-lock-"));
-    try {
-      // Holding the same target's lock here is what a second host does to this one.
-      const held = withDispatchLock(
-        { stateDir, repositoryId: "fixture-repository-id", target: { kind: "pull-request", number: 22 } },
-        () => runDriverFixture("external-review-request.json", { DEADLOOP_STATE_DIR: stateDir }),
-      );
+    const stateDir = driverStateDir();
+    // Holding the same target's lock here is what a second host does to this one. This lock is
+    // never refused: nothing else in this process holds that target.
+    const held = withDispatchLock(
+      { stateDir, repositoryId: "fixture-repository-id", target: { kind: "pull-request", number: 22 } },
+      () => runDriverFixture("external-review-request.json", { DEADLOOP_STATE_DIR: stateDir }),
+    );
+    if (held === null) throw new Error("the test could not hold the target it needs to hold");
 
-      expect(held.driverAction).toBe("target_dispatch_locked");
-    } finally {
-      rmSync(stateDir, { recursive: true, force: true });
-    }
+    expect(held.driverAction).toBe("target_dispatch_locked");
   });
 
   it("reports the deterministic reviewer promise path outside the worktree", () => {
-    // The dispatch lock writes under the state directory, so the run needs a real one.
-    const stateDir = mkdtempSync(path.join(tmpdir(), "deadloop-driver-state-"));
-    try {
-      expect(
-        runDriverFixture("fallback-review.json", {
-          DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1",
-          DEADLOOP_STATE_DIR: stateDir,
-        }).launch.promiseFile,
-      ).toBe(path.join(stateDir, "runs/fixture-reviewer-uuid/promise.json"));
-    } finally {
-      rmSync(stateDir, { recursive: true, force: true });
-    }
+    const stateDir = driverStateDir();
+
+    expect(
+      runDriverFixture("fallback-review.json", {
+        DEADLOOP_EXTERNAL_REVIEW_ENABLED: "1",
+        DEADLOOP_STATE_DIR: stateDir,
+      }).launch.promiseFile,
+    ).toBe(path.join(stateDir, "runs/fixture-reviewer-uuid/promise.json"));
   });
 
   it("isolates runtime artifacts during reviewer monitor validation", () => {
