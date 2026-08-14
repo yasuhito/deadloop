@@ -25,6 +25,12 @@ function target(number: number, kind = "pull-request") {
 }
 
 describe("dispatch lock path", () => {
+  it("wires the pull-request dispatch decision through the lock", () => {
+    const driver = fs.readFileSync("extensions/deadloop/automations/pr-reviewer-driver.ts", "utf8");
+
+    expect(driver).toContain("withDispatchLock(");
+  });
+
   it("places one target's lock under its repository directory", () => {
     expect(dispatchLockPath({ stateDir: "/state", repositoryId, target: target(31) }))
       .toBe(path.join("/state", "locks", repositoryId, "pull-request-31.lock"));

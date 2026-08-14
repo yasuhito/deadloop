@@ -3,16 +3,33 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const cleanupScript = "extensions/deadloop/automations/cleanup-completed-worker-worktrees.ts";
 const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.ts";
+
+// The dispatch lock writes under the state directory, so a fixture run needs one of its own rather
+// than the operator's live deadloop state.
+const fixtureStateDirs: string[] = [];
+
+afterEach(() => {
+  for (const stateDir of fixtureStateDirs.splice(0)) rmSync(stateDir, { recursive: true, force: true });
+});
+
+function fixtureStateDir(): string {
+  const stateDir = mkdtempSync(path.join(tmpdir(), "deadloop-cleanup-state-"));
+  fixtureStateDirs.push(stateDir);
+  return stateDir;
+}
 
 function runDriverFixture(fixtureName: string) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName)], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo" },
+    env: {
+      ...process.env, DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo",
+      DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_STATE_DIR: fixtureStateDir(),
+    },
   });
   if (result.status !== 0) {
     throw new Error(result.stderr || result.stdout);

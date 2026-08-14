@@ -25,6 +25,7 @@ const {
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { postBlockRequestIsEligible, releasableRetainedAttempts } = require("../../../src/pr-work-authority-reconciliation.ts");
+const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { checkoutIsIdle, worktreeIsRetained } = require("../../../src/attempt-runtime-observation.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
@@ -1603,11 +1604,44 @@ function drive(fixturePath: string | undefined): DriverResult {
   const env = { ...configuredEnv, automationLogin, authorizedAutomationLogins, githubRepositoryId };
   const prs = exposePostBlockReviewRequests(observedPrs, env, driverGithubOperations(fixture));
   const agents = fixture ? fixture.agents || { result: { agents: [] } } : liveAgents();
-  const plan = planPrRequestAction(prs, agents, env);
+  // A target another holder has is not a stop and not the end of the tick: it belongs to somebody
+  // else for now, so it leaves the candidate set and selection runs again on what is left.
+  const heldElsewhere: number[] = [];
+  for (;;) {
+    const selectable = prs.filter((pr: JsonObject) => !heldElsewhere.includes(Number(pr.number)));
+    const plan = planPrRequestAction(selectable, agents, env);
 
-  if (plan.kind === "skip_no_candidate" || plan.kind === "skip_wait") {
-    return driverResult("skip", plan.summary, { driverAction: plan.driverAction, decision: plan.decision });
+    if (plan.kind === "skip_no_candidate" || plan.kind === "skip_wait") {
+      if (heldElsewhere.length && plan.kind === "skip_no_candidate") {
+        return driverResult("skip", `every selectable PR is held by another dispatch decision: ${heldElsewhere.map((number) => `#${number}`).join(", ")}`, {
+          driverAction: "target_dispatch_locked", prNumbers: heldElsewhere,
+        });
+      }
+      return driverResult("skip", plan.summary, { driverAction: plan.driverAction, decision: plan.decision });
+    }
+
+    // The dispatch decision for one target runs while this process holds that target's lock. The
+    // lock covers the decision only, across its GitHub round trips: whether the attempt it starts
+    // is still running is the execution runtime's answer, and binding the two together would
+    // rebuild the two-authority problem the lock exists to avoid.
+    const decided = withDispatchLock({
+      stateDir: env.stateDir,
+      repositoryId: env.githubRepositoryId,
+      target: { kind: "pull-request", number: Number(plan.decision.number) },
+    }, () => driveSelectedTarget(plan, env, fixture));
+    if (decided !== null) return decided;
+    heldElsewhere.push(Number(plan.decision.number));
   }
+}
+
+type SelectedPrPlan = Exclude<ReturnType<typeof planPrRequestAction>, { kind: "skip_no_candidate" } | { kind: "skip_wait" }>;
+
+/** One target's dispatch decision, run under that target's lock. */
+function driveSelectedTarget(
+  plan: SelectedPrPlan,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+): DriverResult {
 
   if (plan.kind === "review_required" && isConflictingPr(plan.pr)) {
     const transition = consumeRequest(

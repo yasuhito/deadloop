@@ -3,10 +3,24 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.ts";
 const { acquireLockSync, releaseOwned } = require("../src/enablement-lock.cjs");
+
+// The dispatch lock writes under the state directory, so a fixture run needs one of its own rather
+// than the operator's live deadloop state.
+const fixtureStateDirs: string[] = [];
+
+afterEach(() => {
+  for (const stateDir of fixtureStateDirs.splice(0)) rmSync(stateDir, { recursive: true, force: true });
+});
+
+function fixtureStateDir(): string {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "deadloop-coordinator-state-"));
+  fixtureStateDirs.push(stateDir);
+  return stateDir;
+}
 
 function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> = {}) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName)], {
@@ -19,6 +33,7 @@ function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> 
       DEADLOOP_GITHUB_REPO: "owner/repo",
       DEADLOOP_CHECK_COMMAND: "npm test",
       DEADLOOP_WORKER_AGENT: "pi",
+      DEADLOOP_STATE_DIR: fixtureStateDir(),
       ...extraEnv,
     },
   });
@@ -167,9 +182,11 @@ exit 2
   });
 
   it("reports the deterministic worker promise path outside the worktree", () => {
+    const stateDir = fixtureStateDir();
+
     expect(
-      runDriverFixture("driver-ready-worker.json", { DEADLOOP_STATE_DIR: "/state/deadloop" }).launch.promiseFile,
-    ).toBe("/state/deadloop/runs/fixture-worker-uuid/promise.json");
+      runDriverFixture("driver-ready-worker.json", { DEADLOOP_STATE_DIR: stateDir }).launch.promiseFile,
+    ).toBe(path.join(stateDir, "runs/fixture-worker-uuid/promise.json"));
   });
 
   it("isolates runtime artifacts during monitor validation", () => {

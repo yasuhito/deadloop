@@ -6,6 +6,8 @@ import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
 
+import { fixtureStateDir } from "../support/fixture-state-dir";
+
 const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
 const { renderRepairMarker, renderTechnicalFailureMarker, reviewResultFingerprint } = require("../../extensions/deadloop/automations/pr-review-repair-state.ts");
 const { finalizeReviewRepair } = require("../../extensions/deadloop/automations/pr-review-repair-finalize.ts");
@@ -71,7 +73,7 @@ function reviewerDriver(fixture: string): Record<string, unknown> {
       env: {
         ...process.env,
         DEADLOOP_PROJECT_ID: "demo",
-        DEADLOOP_STATE_DIR: path.join(process.cwd(), "test/fixtures/pr-reviewer-driver/state"),
+        DEADLOOP_STATE_DIR: fixtureStateDir(),
         DEADLOOP_REPO_PATH: "/repo",
         DEADLOOP_GITHUB_REPO: "owner/repo",
         DEADLOOP_REVIEWER_AGENT: "pi",
