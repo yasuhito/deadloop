@@ -225,7 +225,7 @@ function gitInspectionCommands(project: NormalizedProject, worktree: HerdrWorktr
   const targetPath = worktree ? worktreePath(worktree) : "";
   if (targetPath) {
     return [
-      `git -C ${shellArg(targetPath)} status --short`,
+      `git -C ${shellArg(targetPath)} status --short --untracked-files=all`,
       `git -C ${shellArg(targetPath)} log ${shellArg(project.baseBranch || "origin/main")}..HEAD --oneline`,
     ];
   }
