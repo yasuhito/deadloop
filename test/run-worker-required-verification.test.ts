@@ -61,13 +61,22 @@ describe("Worker required-verification checkout binding", () => {
     expect(() => assertCleanOutput(fixture.root, fixture.head)).toThrow("index flags");
   });
 
-  it("allows only quarantinable runtime artifacts in an otherwise clean checkout", () => {
+  it("allows an agent scratch area in an otherwise clean checkout", () => {
     const fixture = repository();
-    mkdirSync(path.join(fixture.root, ".deadloop"));
-    writeFileSync(path.join(fixture.root, ".deadloop", "state.json"), "{}\n");
-    mkdirSync(path.join(fixture.root, ".pi-subagents"));
-    writeFileSync(path.join(fixture.root, ".pi-subagents", "log"), "runtime\n");
+    mkdirSync(path.join(fixture.root, ".pi", "subagents"), { recursive: true });
+    writeFileSync(path.join(fixture.root, ".pi", "subagents", "log"), "runtime\n");
     expect(() => assertCleanOutput(fixture.root, fixture.head)).not.toThrow();
+  });
+
+  it("rejects a tracked change under an agent scratch area", () => {
+    const fixture = repository();
+    mkdirSync(path.join(fixture.root, ".pi", "subagents"), { recursive: true });
+    writeFileSync(path.join(fixture.root, ".pi", "subagents", "report.md"), "first\n");
+    execFileSync("git", ["-C", fixture.root, "add", ".pi/subagents/report.md"]);
+    execFileSync("git", ["-C", fixture.root, "commit", "-qm", "track scratch report"]);
+    const head = execFileSync("git", ["-C", fixture.root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(path.join(fixture.root, ".pi", "subagents", "report.md"), "edited\n");
+    expect(() => assertCleanOutput(fixture.root, head)).toThrow("must be clean");
   });
 
   it("rejects a normal untracked file", () => {

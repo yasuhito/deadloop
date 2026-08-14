@@ -129,6 +129,7 @@ function runStaleWorktreeDispatch(
     initialHead?: string;
     worktreeHead?: string;
     worktreeName?: string;
+    worktreeStatus?: string;
   } = {},
 ): { output: Record<string, unknown>; ghLog: string; herdrLog: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-stale-review-repair-"));
@@ -205,7 +206,7 @@ if (args[0] === "-C" && args[2] === "worktree" && args[3] === "list") {
 } else if (args[0] === "-C" && args[1] === process.env.TEST_WORKTREE && args[2] === "rev-parse") {
   process.stdout.write(process.env.TEST_WORKTREE_HEAD + "\\n");
 } else if (args[0] === "-C" && args[1] === process.env.TEST_WORKTREE && args[2] === "status") {
-  process.stdout.write(process.env.TEST_DIRTY === "true" && args.includes("--untracked-files=all") ? "?? untracked.txt\\n" : "");
+  process.stdout.write(!args.includes("--untracked-files=all") ? "" : (process.env.TEST_WORKTREE_STATUS || (process.env.TEST_DIRTY === "true" ? "?? untracked.txt\\n" : "")));
 } else if (args.includes("get-url")) {
   process.stdout.write("https://github.com/yasuhito/deadloop.git\\n");
 } else if (args[0] === "check-ref-format") {
@@ -275,6 +276,7 @@ else process.stdout.write(JSON.stringify({ok:true}));
         TEST_INITIAL_HEAD: options.initialHead || expectedHead,
         TEST_WORKTREE: worktree,
         TEST_WORKTREE_HEAD: worktreeHead,
+        TEST_WORKTREE_STATUS: options.worktreeStatus || "",
       },
     },
   );
@@ -1163,6 +1165,28 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
     const expectedHead = "6c994aad94595aa113e8a35cc2962a9e32a7f6c8";
     const result = runStaleWorktreeDispatch(expectedHead, expectedHead, {
       worktreeHead: "ab08360529da29cf16d5ccb109138c9a938e309d",
+    });
+
+    expect(result.output.driverAction).toBe("review_repair_worktree_mismatch");
+  });
+
+  it("blocks repair when the repair worktree holds somebody's uncommitted work", () => {
+    const expectedHead = "6c994aad94595aa113e8a35cc2962a9e32a7f6c8";
+    const result = runStaleWorktreeDispatch(expectedHead, expectedHead, {
+      worktreeHead: "ab08360529da29cf16d5ccb109138c9a938e309d",
+      worktreeStatus: "?? luac.out\n",
+    });
+
+    expect(result.output.driverAction).toBe("review_repair_dirty_worktree");
+  });
+
+  it("starts repair when the repair worktree only holds an agent scratch area", () => {
+    // The agent's own subagent artifacts used to stop the repair the same agent
+    // was launched for. Reaching the head comparison proves the gate let it past.
+    const expectedHead = "6c994aad94595aa113e8a35cc2962a9e32a7f6c8";
+    const result = runStaleWorktreeDispatch(expectedHead, expectedHead, {
+      worktreeHead: "ab08360529da29cf16d5ccb109138c9a938e309d",
+      worktreeStatus: "?? .pi/subagents/artifacts/c00eb25c_reviewer_0_input.md\n",
     });
 
     expect(result.output.driverAction).toBe("review_repair_worktree_mismatch");

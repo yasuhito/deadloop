@@ -3,6 +3,7 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { createCommandRunner } = require("../../../src/automation-driver-kit.ts");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
@@ -42,11 +43,7 @@ function assertCleanOutput(worktree: string, outputRevision: string): void {
   }
   const flagged = gitText(worktree, ["ls-files", "-v"]).split(/\r?\n/).filter((line) => /^[a-zS]/.test(line));
   if (flagged.length) throw new Error("Worker output checkout has assume-unchanged or skip-worktree index flags");
-  if (gitText(worktree, [
-    "status", "--porcelain", "--untracked-files=all", "--", ".",
-    ":(exclude).deadloop", ":(exclude).deadloop/**",
-    ":(exclude).pi-subagents", ":(exclude).pi-subagents/**",
-  ])) {
+  if (hasUncommittedWork(gitText(worktree, UNCOMMITTED_WORK_STATUS_ARGS))) {
     throw new Error("Worker output checkout must be clean before required verification");
   }
 }

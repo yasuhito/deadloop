@@ -105,6 +105,26 @@ describe("opened checkout alignment", () => {
     expect(git(checkout, ["status", "--porcelain"])).toBe("M file.txt");
   });
 
+  it("aligns a checkout whose only untracked files are an agent scratch area", () => {
+    const { checkout, expectedHead } = fixture();
+    mkdirSync(path.join(checkout, ".pi", "subagents"), { recursive: true });
+    writeFileSync(path.join(checkout, ".pi", "subagents", "transcript.jsonl"), "{}\n");
+    align(checkout, expectedHead);
+
+    expect(git(checkout, ["rev-parse", "HEAD"])).toBe(expectedHead);
+  });
+
+  it("refuses a checkout whose scratch area holds a tracked change", () => {
+    const { checkout, expectedHead } = fixture();
+    mkdirSync(path.join(checkout, ".pi", "subagents"), { recursive: true });
+    writeFileSync(path.join(checkout, ".pi", "subagents", "report.md"), "first\n");
+    git(checkout, ["add", ".pi/subagents/report.md"]);
+    git(checkout, ["commit", "--quiet", "-m", "track scratch report"]);
+    writeFileSync(path.join(checkout, ".pi", "subagents", "report.md"), "edited\n");
+
+    expect(() => align(checkout, expectedHead)).toThrow("uncommitted");
+  });
+
   it("refuses a revision the remote branch does not carry", () => {
     const { checkout } = fixture();
     const absent = "0".repeat(39) + "1";

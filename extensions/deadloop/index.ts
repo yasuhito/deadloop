@@ -33,6 +33,7 @@ import {
   isPendingIssueHandoffEligible,
   runScheduledAutomation,
 } from "../../src/automation-runner";
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../src/agent-scratch-area.cjs");
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
 const {
   agentOccupiesAttemptWorkspace,
@@ -889,7 +890,7 @@ async function collectLiveSnapshotData(
   for (const worktree of worktrees) {
     const worktreePath = String(worktree?.path || "");
     if (!worktreePath) continue;
-    const status = await gitText(pi, ["-C", worktreePath, "status", "--short"]);
+    const status = await gitText(pi, ["-C", worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]);
     if (status !== undefined) gitStatuses[worktreePath] = status;
     const head = await gitText(pi, ["-C", worktreePath, "rev-parse", "HEAD"]);
     if (head !== undefined) gitHeads[worktreePath] = head.trim();
@@ -942,7 +943,8 @@ function launchFailedRecoveryGuidance(record, runDir, project, workspaces, agent
   if (agents.some((agent) => agentOccupiesAttemptWorkspace(agent, record))) {
     return refuse("an agent still owns the recorded pane or launch-unique name");
   }
-  if (String(evidence?.gitStatuses?.[record.worktreePath] ?? "__unknown__").trim()) {
+  // The sentinel is not a status line, so an unavailable status counts as work and refuses.
+  if (hasUncommittedWork(evidence?.gitStatuses?.[record.worktreePath] ?? "__unknown__")) {
     return refuse("the linked worktree is changed or its clean status is unavailable");
   }
   if (String(evidence?.gitHeads?.[record.worktreePath] || "").toLowerCase() !== record.inputRevision.head.toLowerCase()) {

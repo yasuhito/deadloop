@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { hasUncommittedWork } from "./agent-scratch-area.cjs";
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
 import {
@@ -246,7 +247,7 @@ function hasOpenPrForWorktree(worktree: HerdrWorktree, openPrs: DoctorGithubItem
 
 function isCleanStatus(gitStatuses: Record<string, string>, pathValue: string): boolean {
   if (!Object.prototype.hasOwnProperty.call(gitStatuses, pathValue)) return false;
-  return String(gitStatuses[pathValue] || "").trim() === "";
+  return !hasUncommittedWork(gitStatuses[pathValue]);
 }
 
 function buildBlockedIssueFindings(project: NormalizedProject, issues: DoctorGithubItem[]): DoctorFinding[] {

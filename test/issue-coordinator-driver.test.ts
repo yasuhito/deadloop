@@ -61,7 +61,7 @@ describe("issue coordinator deterministic driver", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cleanup-disable-"));
     const repo = path.join(root, "repo");
     const worktree = path.join(root, "worktree");
-    const artifact = path.join(worktree, ".deadloop", "run.json");
+    const artifact = path.join(worktree, ".pi", "subagents", "run.json");
     const stateDir = path.join(root, ".pi", "agent", "deadloop");
     const binDir = path.join(root, "bin");
     const started = path.join(root, "cleanup-started");
@@ -207,5 +207,41 @@ exit 2
 
   it("uses the TypeScript renderer for planning comments", () => {
     expect(readFileSync(driverScript, "utf8")).toContain("renderIssuePlanningComment");
+  });
+});
+
+describe("reusing an abandoned Worker checkout", () => {
+  const checkout = {
+    branch: "agent/issue-1-task",
+    worktreePath: "/worktrees/agent-issue-1-task",
+    inputHead: "a".repeat(40),
+    abandonedAt: "2026-08-14T00:00:00.000Z",
+    workspaceId: "workspace-1",
+    agentName: "demo-issue-1-worker",
+  };
+
+  /** Every other proof passes, so the status line is the only thing under test. */
+  function assertWith(status: string) {
+    const { assertRecoverableWorkerCheckout } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
+    return () => assertRecoverableWorkerCheckout(checkout, { repoPath: "/repo" }, {
+      runner: {
+        listWorktrees: () => [{ branch: checkout.branch, path: checkout.worktreePath, workspaceId: "" }],
+        listWorkspaces: () => [],
+        listAgents: () => [],
+      },
+      runText: (args: string[]) => (args.includes("rev-parse") ? checkout.inputHead : status),
+    });
+  }
+
+  it("reuses a checkout whose only untracked files are an agent scratch area", () => {
+    expect(assertWith("?? .pi/subagents/artifacts/input.md\n")).not.toThrow();
+  });
+
+  it("refuses a checkout whose scratch area holds a tracked change", () => {
+    expect(assertWith(" M .pi/subagents/report.md\n")).toThrow("contains changes");
+  });
+
+  it("refuses a checkout holding somebody else's untracked file", () => {
+    expect(assertWith("?? luac.out\n")).toThrow("contains changes");
   });
 });
