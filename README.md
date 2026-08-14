@@ -85,7 +85,7 @@ flowchart TD
 
 1. **Request implementation** — `ready-for-agent` marks an Issue as eligible. `agent:implement` requests implementation. Remove `agent:implement` before deadloop claims the Issue to cancel the request.
 2. **Let deadloop work** — deadloop replaces the request label with `agent:in-progress`, creates a draft PR with `agent:review`, and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
-3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help; fix the cause reported in the Issue or PR comment, then follow its recovery instructions.
+3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help, and a stopped PR keeps no agent request; fix the cause reported in the Issue or PR comment, then add the request label for the role you want next. `agent:blocked` clears when that attempt starts.
 
 ## Operator commands
 
@@ -145,7 +145,7 @@ Each exact PR-head/base-head pair is attempted at most once.
 
 A stale PR head stops the update without pushing. deadloop re-evaluates the PR on the next cycle.
 
-A failed or unsafe update adds `agent:blocked` with recovery evidence.
+A failed or unsafe update adds `agent:blocked` with recovery evidence and leaves no agent request waiting.
 
 See [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) for the safety contract.
 
@@ -173,7 +173,7 @@ A changed head starts a fresh review cycle.
 
 A stale head stops the repair without pushing or changing labels.
 
-Repeated findings after the bounded attempt add `agent:blocked` with recovery guidance, and deadloop does the same when technical or safety retries are exhausted. A review that reports a human decision is a completed review: its result is recorded, the draft becomes ready, and every agent workflow label is removed, so the PR waits on a person and on no agent request.
+Repeated findings after the bounded attempt add `agent:blocked` with recovery guidance and clear every request label, and deadloop does the same when technical or safety retries are exhausted. A review that reports a human decision is a completed review: its result is recorded, the draft becomes ready, and every agent workflow label is removed, so the PR waits on a person and on no agent request.
 
 See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for details.
 

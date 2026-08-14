@@ -7,7 +7,7 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { planPrRequestAction } = require("./pr-reviewer-flow.ts");
-const { orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.ts");
+const { blockedPrLabelMove, orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.ts");
 const { CLAIM_BOUND_AGENT_ROLES, launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
@@ -507,7 +507,7 @@ function branchUpdateBlockedComment(pr: JsonObject, env: ReturnType<typeof envCo
 gh pr view ${Number(pr.number || 0)} -R ${shellQuote(env.githubRepo)} --comments --json number,state,headRefName,headRefOid,labels,statusCheckRollup
    \`\`\`
 2. Resolve the failure without rewriting the PR branch.
-3. After changing either the PR head or configured base head, remove ${env.blockedLabel}; the new exact head/base pair may be attempted once.`;
+3. After changing either the PR head or configured base head, add ${env.updateBranchLabel}; the new exact head/base pair may be attempted once and ${env.blockedLabel} clears with it.`;
 }
 
 type EnabledIdentity = {
@@ -626,7 +626,7 @@ function applyBranchUpdateBlocked(
   const comment = branchUpdateBlockedComment(pr, env, reason);
   const applied = applyPrTransition(pr, env, fixture, stillApplicable, (github, live) => {
     github.commentPr(env.githubRepo, Number(live.number || 0), comment);
-    github.movePrLabels(env.githubRepo, Number(live.number || 0), { remove: env.inProgressLabel, add: env.blockedLabel });
+    github.movePrLabels(env.githubRepo, Number(live.number || 0), blockedPrLabelMove(prRequestLabels(env), env.inProgressLabel, env.blockedLabel));
   });
   return { comment, applied };
 }
@@ -974,7 +974,7 @@ function blockUnverifiableClaim(
   const requestBeforeComment = currentReviewRequest(github, env, number, requestLabel);
   if (String(requestBeforeComment.id || requestBeforeComment.node_id || "") !== expectedRequestEventId || !hasBoundClaim()) return;
   authorizeCurrent();
-  github.commentPr(env.githubRepo, number, `deadloop stopped this ${requestLabel} claim because ${reason}. Remove \`${env.blockedLabel}\` and add \`${requestLabel}\` again after GitHub server-time evidence is available.`);
+  github.commentPr(env.githubRepo, number, `deadloop stopped this ${requestLabel} claim because ${reason}. Add \`${requestLabel}\` again after GitHub server-time evidence is available; \`${env.blockedLabel}\` clears when the next attempt starts.`);
 
   const beforeLabels = github.getPr(env.githubRepo, number);
   assertSamePrRevision(pr, beforeLabels);

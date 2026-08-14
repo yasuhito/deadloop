@@ -488,8 +488,10 @@ Then("deadloop does not start another dedicated repair attempt", function (this:
   assert.equal(loggedAgentStartCount(this.result), 0);
 });
 
-Then("deadloop keeps the pull request under review", function (this: RecoveryWorld) {
-  assert.equal(observedLabels(this.result).includes("agent:review"), true);
+const PR_REQUEST_LABELS = ["agent:update-branch", "agent:implement", "agent:review"];
+
+Then("deadloop leaves no waiting request on the pull request", function (this: RecoveryWorld) {
+  assert.equal(observedLabels(this.result).some((label) => PR_REQUEST_LABELS.includes(label)), false);
 });
 
 Then("deadloop escalates the pull request for human handling", function (this: RecoveryWorld) {

@@ -1204,15 +1204,16 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
     expect(result.output.driverAction).toBe("exception");
   });
 
-  it("requeues the active claim when review requires a human", () => {
+  it("leaves no waiting request when review requires a human", () => {
     expect(blockedClaimMove({
       inProgressLabel: "agent:in-progress",
-
+      updateBranchLabel: "agent:update-branch",
+      implementLabel: "agent:implement",
       reviewLabel: "agent:review",
       blockedLabel: "agent:blocked",
     })).toEqual({
-      remove: ["agent:in-progress"],
-      add: ["agent:review", "agent:blocked"],
+      remove: ["agent:update-branch", "agent:implement", "agent:review", "agent:in-progress"],
+      add: ["agent:blocked"],
     });
   });
 

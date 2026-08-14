@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { orderedPrRequestLabels, selectPrRequest } = require("../src/pr-request-selection.ts");
+const { blockedPrLabelMove, orderedPrRequestLabels, selectPrRequest } = require("../src/pr-request-selection.ts");
 
 const requestLabels = {
   updateBranch: "agent:update-branch",
@@ -41,5 +41,24 @@ describe("pull request Agent request selection", () => {
       "agent:implement",
       "agent:review",
     ]);
+  });
+
+  it("leaves a stopped pull request no waiting request", () => {
+    expect(blockedPrLabelMove(requestLabels, "agent:in-progress", "agent:blocked").remove).toEqual([
+      "agent:update-branch",
+      "agent:implement",
+      "agent:review",
+      "agent:in-progress",
+    ]);
+  });
+
+  it("marks a stopped pull request blocked", () => {
+    expect(blockedPrLabelMove(requestLabels, "agent:in-progress", "agent:blocked").add).toEqual(["agent:blocked"]);
+  });
+
+  it("removes the renamed request labels of a project that configured its own", () => {
+    expect(
+      blockedPrLabelMove({ ...requestLabels, review: "review-please" }, "agent:in-progress", "agent:blocked").remove,
+    ).toContain("review-please");
   });
 });
