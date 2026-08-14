@@ -104,10 +104,11 @@ describe("work authority takeover at claim time", () => {
     expect(takeover(stateDir, liveRuntime())).toEqual([]);
   });
 
-  it("releases an attempt whose agent is gone even though its workspace is still open", () => {
+  it("releases an attempt whose agent is gone whatever its workspace holds", () => {
     const stateDir = stateDirWith([{ inputRevision: { head: olderHead } }]);
+    const crowded = { ...stoppedRuntime(), listWorkspaces: () => [{ ...workspaceOf(0), tabCount: 3, paneCount: 4 }] };
 
-    expect(takeover(stateDir, stoppedRuntime())).toEqual(["attempt-0"]);
+    expect(takeover(stateDir, crowded)).toEqual(["attempt-0"]);
   });
 
   it("releases a stopped attempt that never reported a completion", () => {
