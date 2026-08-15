@@ -18,7 +18,7 @@ import type { DriverResult, JsonObject } from "../../../src/automation-driver-ki
 
 const REQUIRED_ARGUMENTS = [
   "promise", "attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "enabledAt",
-  "pr", "expectedHead", "reviewLabel", "inProgressLabel", "blockedLabel",
+  "pr", "expectedHead", "reviewLabel", "implementLabel", "updateBranchLabel", "inProgressLabel", "blockedLabel",
 ];
 
 function parseArgs(argv: string[]): JsonObject {
@@ -33,6 +33,40 @@ function parseArgs(argv: string[]): JsonObject {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
   return values;
+}
+
+type CompletionObservation = {
+  pr: JsonObject;
+  labels: string[];
+  revision: string;
+  authenticatedLogin: string;
+  enabledLogin: string;
+  reviewLabel: string;
+  implementLabel: string;
+  updateBranchLabel: string;
+  inProgressLabel: string;
+  blockedLabel: string;
+  mode: "pending" | "already-applied";
+};
+
+function assertBranchUpdateCompletionObservation(input: CompletionObservation): void {
+  if (!input.authenticatedLogin || input.authenticatedLogin !== input.enabledLogin) {
+    throw new Error("authenticated identity lost branch-update completion authority");
+  }
+  if (String(input.pr.state || "").toUpperCase() !== "OPEN"
+    || String(input.pr.headRefOid || "").toLowerCase() !== input.revision.toLowerCase()) {
+    throw new Error("branch-update completion target changed before the review request");
+  }
+  const labels = new Set(input.labels);
+  const exactManagedState = input.mode === "already-applied"
+    ? labels.has(input.reviewLabel) && !labels.has(input.inProgressLabel)
+    : labels.has(input.inProgressLabel) && !labels.has(input.reviewLabel);
+  if (!exactManagedState
+    || labels.has(input.implementLabel)
+    || labels.has(input.updateBranchLabel)
+    || labels.has(input.blockedLabel)) {
+    throw new Error("branch-update completion managed state is incompatible with the proven update");
+  }
 }
 
 function completion(args: JsonObject): DriverResult {
@@ -62,7 +96,7 @@ function completion(args: JsonObject): DriverResult {
     if (String(enabled.githubRepo || "") !== String(args.githubRepo)
       || !String(enabled.githubRepositoryId || "")) throw new Error("enablement repository identity changed before branch-update completion");
     const observation = createGithubOperations(runner);
-    const observe = (): JsonObject => {
+    const observe = (): { pr: JsonObject; labels: string[] } => {
       const current = observation.getPr(String(args.githubRepo), String(args.pr));
       return { pr: current, labels: labelNames(current) };
     };
@@ -71,24 +105,38 @@ function completion(args: JsonObject): DriverResult {
       || String(identity.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
       throw new Error("live repository identity changed before branch-update completion");
     }
+    const authenticatedLogin = (): string => runner.runText([
+      "gh", "api", "user", "--jq", ".login",
+    ]).trim().toLowerCase();
+    const assertCurrent = (mode: CompletionObservation["mode"]): void => {
+      const login = authenticatedLogin();
+      const current = observe();
+      assertBranchUpdateCompletionObservation({
+        ...current,
+        revision,
+        authenticatedLogin: login,
+        enabledLogin,
+        reviewLabel: String(args.reviewLabel),
+        implementLabel: String(args.implementLabel),
+        updateBranchLabel: String(args.updateBranchLabel),
+        inProgressLabel: String(args.inProgressLabel),
+        blockedLabel: String(args.blockedLabel),
+        mode,
+      });
+    };
     const before = observe();
-    // The review request may already exist when a retry re-enters after the label move landed.
+    // The review request may already exist when a retry re-enters after the label move landed, but
+    // it is idempotent only for this exact proven head, identity, and managed state.
     if (before.labels.includes(String(args.reviewLabel)) && !before.labels.includes(String(args.inProgressLabel))) {
+      recheck();
+      assertCurrent("already-applied");
       return driverResult("done", `PR #${args.pr} already carries its post-update review request`, {
         driverAction: "branch_update_review_already_requested",
       });
     }
     const reauthorize = (): void => {
       recheck();
-      const login = runner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
-      if (!login || login !== enabledLogin) throw new Error("authenticated identity lost branch-update completion authority");
-      const current = observe();
-      if (String(current.pr.state || "").toUpperCase() !== "OPEN"
-        || String(current.pr.headRefOid || "").toLowerCase() !== revision
-        || !current.labels.includes(String(args.inProgressLabel))
-        || current.labels.includes(String(args.blockedLabel))) {
-        throw new Error("branch-update completion target changed before the review request");
-      }
+      assertCurrent("pending");
     };
     reauthorize();
     const github = createGithubOperations(runner, () => { recheck(); reauthorize(); });
@@ -113,4 +161,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { completion, parseArgs };
+module.exports = { assertBranchUpdateCompletionObservation, completion, parseArgs };

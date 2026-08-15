@@ -14,16 +14,19 @@ A supported local client with an unreachable server has one recovery-only except
 
 A Git worktree is durable branch state. A Herdr attempt workspace is disposable runtime state.
 
-Worker, reviewer, review-repair, and branch-update launches all follow the same contract:
+Every role writes an atomic `prepared` attempt journal before its first external mutation, but its GitHub transition is role-specific:
 
-1. Resolve the selected request event and write an atomic `prepared` attempt journal in the launch-unique run directory before the first GitHub label mutation.
-2. Consume the role's GitHub request. Only a documented HTTP 200 response from the selected label DELETE, followed by complete postvalidation, permits the same process to advance the journal to `github_claimed`.
-3. If the host stops before that phase advance, retain the `prepared` journal and block scheduling for operator reconciliation even when GitHub appears fully transitioned. A restart cannot distinguish a confirmed 200 response from an ambiguous response whose server-side mutation happened. This check does not require a workspace ID.
-4. Reconcile retained workspaces and refuse a launch while the checkout is already open or ownership is ambiguous.
-5. Create the first linked worktree, or open an existing linked worktree without `--label`.
-6. Require Herdr's response to identify one new workspace, its first tab, root pane, and canonical worktree path. An open response must explicitly report `already_open: false`.
-7. Rename only that confirmed fresh workspace.
-8. Start the configured agent directly in the root pane:
+- A Worker uses the guarded Issue label move selected by the Issue coordinator.
+- A reviewer or branch-update launch records the selected PR request event, adds `agent:in-progress`, normalizes baseline managed labels individually, and deletes the selected request last. Only a documented HTTP 200 response plus complete postvalidation permits `github_claimed`. A crash before that phase advance retains `prepared` and blocks reconciliation because restart cannot prove the 200 response.
+- Review repair launches from a bound reviewer outcome; it does not consume a PR request label.
+
+After that role-specific transition, every launch follows the same workspace contract:
+
+1. Reconcile retained workspaces and refuse a launch while the checkout is already open or ownership is ambiguous.
+2. Create the first linked worktree, or open an existing linked worktree without `--label`.
+3. Require Herdr's response to identify one new workspace, its first tab, root pane, and canonical worktree path. An open response must explicitly report `already_open: false`.
+4. Rename only that confirmed fresh workspace.
+5. Start the configured agent directly in the root pane:
 
    ```text
    herdr agent start <name> --kind <kind> --pane <root-pane> -- <native-agent-args...>
