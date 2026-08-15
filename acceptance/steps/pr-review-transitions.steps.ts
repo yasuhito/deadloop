@@ -66,11 +66,11 @@ Then("deadloop starts normal review", function (this: TransitionWorld) {
 });
 
 Then("deadloop leaves the external review request untouched before claim", function (this: TransitionWorld) {
-  const effects = this.result?.testAdapterEffects as { githubComments?: unknown[]; labelReplacements?: unknown[]; herdrStarts?: unknown[] } | undefined;
+  const effects = this.result?.testAdapterEffects as { githubComments?: unknown[]; labelMutations?: unknown[]; herdrStarts?: unknown[] } | undefined;
   assert.deepEqual({
     action: this.result?.driverAction,
     comments: effects?.githubComments?.length ?? 0,
-    labels: effects?.labelReplacements?.length ?? 0,
+    labels: effects?.labelMutations?.length ?? 0,
     starts: effects?.herdrStarts?.length ?? 0,
   }, { action: "external_review_unclaimed", comments: 0, labels: 0, starts: 0 });
 });

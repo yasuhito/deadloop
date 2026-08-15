@@ -98,6 +98,24 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
       ], { input: JSON.stringify({ labels }) });
     },
 
+    addPrLabel(repo: string, prNumber: string | number, label: string): JsonObject {
+      beforeMutation();
+      return commandRunner.runJson([
+        "gh", "api", "--method", "POST", `repos/${repo}/issues/${prNumber}/labels`,
+        "--input", "-",
+      ], { input: JSON.stringify({ labels: [label] }) });
+    },
+
+    deletePrLabel(repo: string, prNumber: string | number, label: string): { status: number } {
+      beforeMutation();
+      const output = commandRunner.runText([
+        "gh", "api", "--method", "DELETE", "--include",
+        `repos/${repo}/issues/${prNumber}/labels/${encodeURIComponent(label)}`,
+      ], { check: false });
+      const statuses = [...output.matchAll(/^HTTP\/\S+\s+(\d{3})(?:\s|$)/gim)];
+      return { status: statuses.length === 1 ? Number(statuses[0][1]) : 0 };
+    },
+
     listPrLabels(repo: string, prNumber: string | number): JsonObject[] {
       const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${prNumber}/labels`]);
       return Array.isArray(pages) ? pages.flat() : [];

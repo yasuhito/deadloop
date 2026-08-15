@@ -7,51 +7,80 @@ const {
   resolveAuthorizedAutomationLogins,
 } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
 
-function scenario(
-  extraComments: Record<string, unknown>[] = [],
-  concurrentRequestLabel?: string,
-  concurrentBoundary: "replacement" | "after-live-read" = "replacement",
-  cancelConcurrentRequest = false,
-) {
+type RaceStage = "add-in-progress" | "delete-implement" | "delete-blocked" | "delete-selected";
+type Race = { stage: RaceStage; label: string; action: "labeled" | "unlabeled"; actor?: string };
+
+function scenario(options: {
+  labels?: string[];
+  races?: Race[];
+  deleteStatus?: Partial<Record<RaceStage, number>>;
+  extraComments?: Record<string, unknown>[];
+} = {}) {
   const head = "a".repeat(40);
-  const request = { id: "request-22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } };
-  const events: Record<string, unknown>[] = [request];
+  const labels = new Set(options.labels || ["agent:review", "agent:implement", "agent:blocked", "customer:keep"]);
+  const events: Record<string, any>[] = [
+    { id: "implement-20", event: "labeled", created_at: "2026-07-20T09:59:00Z", label: { name: "agent:implement" } },
+    { id: "review-22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } },
+  ];
+  let eventSequence = 30;
+  let commentsWritten = 0;
+  const operations: string[] = [];
   const pr: any = {
     number: 24, state: "OPEN", headRefName: "feature", headRefOid: head,
-    labels: [{ name: "agent:review" }, { name: "customer:keep" }], comments: extraComments,
+    labels: [...labels].map((name) => ({ name })), comments: options.extraComments || [],
   };
-  let commentsWritten = 0;
-  let concurrentInserted = false;
-  const insertConcurrentRequest = () => {
-    if (!concurrentRequestLabel || concurrentInserted) return;
-    concurrentInserted = true;
-    events.push({ id: "request-23", event: "labeled", created_at: "2026-07-20T10:00:01Z", actor: { login: "human" }, label: { name: concurrentRequestLabel } });
-    if (cancelConcurrentRequest) {
-      events.push({ id: "request-24", event: "unlabeled", created_at: "2026-07-20T10:00:02Z", actor: { login: "human" }, label: { name: concurrentRequestLabel } });
+  const syncLabels = () => { pr.labels = [...labels].map((name) => ({ name })); };
+  const applyRaces = (stage: RaceStage) => {
+    for (const race of (options.races || []).filter((candidate) => candidate.stage === stage)) {
+      eventSequence += 1;
+      events.push({
+        id: `race-${eventSequence}`,
+        event: race.action,
+        created_at: `2026-07-20T10:00:${eventSequence}Z`,
+        actor: { login: race.actor || "human" },
+        label: { name: race.label },
+      });
+      race.action === "labeled" ? labels.add(race.label) : labels.delete(race.label);
     }
+    syncLabels();
   };
+  const stageForLabel = (label: string): RaceStage => label === "agent:review"
+    ? "delete-selected"
+    : label === "agent:blocked" ? "delete-blocked" : "delete-implement";
   const github = {
     getRepositoryIdentity: () => ({ id: "R_repo", nameWithOwner: "owner/repo" }),
-    getPr: () => {
-      if (concurrentBoundary === "after-live-read") insertConcurrentRequest();
-      return pr;
+    getPr: () => ({ ...pr, labels: [...labels].map((name) => ({ name })) }),
+    listPrTimelineEvents: () => [...events],
+    listPrLabels: () => [...labels].map((name) => ({ name })),
+    addPrLabel: (_repo: string, _number: number, label: string) => {
+      operations.push(`add:${label}`);
+      labels.add(label);
+      applyRaces("add-in-progress");
     },
-    listPrTimelineEvents: () => events,
-    listPrLabels: () => pr.labels,
-    replacePrLabels: (_repo: string, _number: number, next: string[]) => {
-      if (concurrentBoundary === "replacement") {
-        insertConcurrentRequest();
-        if (concurrentRequestLabel && !cancelConcurrentRequest) {
-          events.push({ id: "request-25", event: "unlabeled", created_at: "2026-07-20T10:00:03Z", actor: { login: "deadloop-bot" }, label: { name: concurrentRequestLabel } });
-        }
+    deletePrLabel: (_repo: string, _number: number, label: string) => {
+      const stage = stageForLabel(label);
+      operations.push(`delete:${label}`);
+      applyRaces(stage);
+      const status = options.deleteStatus?.[stage] ?? (labels.has(label) ? 200 : 404);
+      if (status === 200) {
+        labels.delete(label);
+        eventSequence += 1;
+        events.push({
+          id: `operation-${eventSequence}`,
+          event: "unlabeled",
+          created_at: `2026-07-20T10:00:${eventSequence}Z`,
+          actor: { login: "deadloop-bot" },
+          label: { name: label },
+        });
       }
-      pr.labels = next.map((name) => ({ name }));
+      syncLabels();
+      return { status };
     },
     movePrLabels: (_repo: string, _number: number, move: { add?: string[]; remove?: string[] }) => {
-      const labels = new Set(pr.labels.map((label: { name: string }) => label.name));
+      operations.push(`move:${JSON.stringify(move)}`);
       for (const label of move.add || []) labels.add(label);
       for (const label of move.remove || []) labels.delete(label);
-      pr.labels = [...labels].map((name) => ({ name }));
+      syncLabels();
     },
     commentPr: () => { commentsWritten += 1; },
   };
@@ -64,13 +93,17 @@ function scenario(
   };
   try {
     const consumed = consumeRequestEvent(github, pr, env, "reviewer", () => "deadloop-bot");
-    return { consumed, pr, commentsWritten };
-  } catch (error) {
-    Object.assign(error instanceof Error ? error : new Error(String(error)), {
-      labels: pr.labels.map((label: { name: string }) => label.name),
-    });
+    return { consumed, labels: [...labels], commentsWritten, operations };
+  } catch (caught) {
+    const error = caught instanceof Error ? caught : new Error(String(caught));
+    Object.assign(error, { labels: [...labels], operations });
     throw error;
   }
+}
+
+function failedScenario(options: Parameters<typeof scenario>[0]) {
+  try { scenario(options); } catch (error) { return error as Error & { labels: string[]; operations: string[] }; }
+  throw new Error("scenario unexpectedly succeeded");
 }
 
 describe("PR request consumption", () => {
@@ -78,8 +111,8 @@ describe("PR request consumption", () => {
     expect(resolveAuthorizedAutomationLogins([])).toEqual([]);
   });
 
-  it("binds consumption to the latest request event id", () => {
-    expect(scenario().consumed.requestEventId).toBe("request-22");
+  it("binds consumption to the latest selected request event id", () => {
+    expect(scenario().consumed.requestEventId).toBe("review-22");
   });
 
   it("does not publish a machine-readable claim comment", () => {
@@ -87,50 +120,69 @@ describe("PR request consumption", () => {
   });
 
   it("preserves unrelated labels while consuming the request", () => {
-    expect(scenario().pr.labels.map((label: { name: string }) => label.name)).toContain("customer:keep");
+    expect(scenario().labels).toContain("customer:keep");
+  });
+
+  it("adds in-progress before individually deleting baseline managed labels", () => {
+    expect(scenario().operations.slice(0, 4)).toEqual([
+      "add:agent:in-progress",
+      "delete:agent:implement",
+      "delete:agent:blocked",
+      "delete:agent:review",
+    ]);
   });
 
   it("ignores an old claim comment left on the pull request", () => {
-    expect(scenario([{ id: 101, body: "<!-- deadloop:review-claim v1=obsolete -->" }]).consumed.requestEventId).toBe("request-22");
+    expect(scenario({ extraComments: [{ id: 101, body: "<!-- deadloop:review-claim v1=obsolete -->" }] }).consumed.requestEventId).toBe("review-22");
   });
 
-  it("stops review consumption when a newer branch-update request races the label replacement", () => {
-    expect(() => scenario([], "agent:update-branch")).toThrow("request changed after label transition");
+  it("preserves a new request added while in-progress is added", () => {
+    expect(failedScenario({ races: [{ stage: "add-in-progress", label: "agent:update-branch", action: "labeled" }] }).labels).toContain("agent:update-branch");
   });
 
-  it("restores a newer branch-update request erased by review label replacement", () => {
-    let labels: string[] = [];
-    try { scenario([], "agent:update-branch"); } catch (error) {
-      labels = ((error as Error & { labels?: string[] }).labels || []);
-    }
-    expect(labels).toContain("agent:update-branch");
+  it("preserves a new nonselected request generation erased during normalization", () => {
+    expect(failedScenario({ races: [
+      { stage: "delete-implement", label: "agent:implement", action: "unlabeled" },
+      { stage: "delete-implement", label: "agent:implement", action: "labeled" },
+    ] }).labels).toContain("agent:implement");
   });
 
-  it("stops review consumption for a concurrently cancelled branch-update request", () => {
-    expect(() => scenario([], "agent:update-branch", "replacement", true)).toThrow("request changed after label transition");
+  it("does not resurrect a same-login cancellation during normalization", () => {
+    expect(failedScenario({ races: [{ stage: "delete-implement", label: "agent:implement", action: "unlabeled", actor: "deadloop-bot" }] }).labels).not.toContain("agent:implement");
   });
 
-  it.each(["agent:update-branch", "agent:implement", "agent:review"])(
-    "does not restore a concurrently cancelled %s request",
-    (label) => {
-      let labels: string[] = [];
-      try { scenario([], label, "replacement", true); } catch (error) {
-        labels = ((error as Error & { labels?: string[] }).labels || []);
-      }
-      expect(labels).not.toContain(label);
-    },
-  );
-
-  it("stops when branch-update arrives after the live PR read but before the former event baseline", () => {
-    expect(() => scenario([], "agent:update-branch", "after-live-read")).toThrow("request changed after label transition");
+  it("preserves a new selected request generation erased at the linearization point", () => {
+    expect(failedScenario({ races: [
+      { stage: "delete-selected", label: "agent:review", action: "unlabeled" },
+      { stage: "delete-selected", label: "agent:review", action: "labeled" },
+    ] }).labels).toContain("agent:review");
   });
 
-  it("restores branch-update arriving after the live PR read but before the former event baseline", () => {
-    let labels: string[] = [];
-    try { scenario([], "agent:update-branch", "after-live-read"); } catch (error) {
-      labels = ((error as Error & { labels?: string[] }).labels || []);
-    }
-    expect(labels).toContain("agent:update-branch");
+  it("does not resurrect a same-login selected-request cancellation", () => {
+    expect(failedScenario({ races: [{ stage: "delete-selected", label: "agent:review", action: "unlabeled", actor: "deadloop-bot" }] }).labels).not.toContain("agent:review");
   });
 
+  it("fails closed when another host wins the selected DELETE", () => {
+    expect(() => scenario({ deleteStatus: { "delete-selected": 404 } })).toThrow("documented 200");
+  });
+
+  it("fails closed when the selected DELETE response is ambiguous", () => {
+    expect(() => scenario({ deleteStatus: { "delete-selected": 0 } })).toThrow("documented 200");
+  });
+
+  it("leaves in-progress visible after a partial normalization failure", () => {
+    expect(failedScenario({ deleteStatus: { "delete-implement": 404 } }).labels).toContain("agent:in-progress");
+  });
+
+  it("leaves the selected request available for reprocessing after an earlier DELETE fails", () => {
+    expect(failedScenario({ deleteStatus: { "delete-implement": 404 } }).labels).toContain("agent:review");
+  });
+
+  it("revalidates nonselected role generations before reaching the selected DELETE", () => {
+    expect(failedScenario({ races: [{ stage: "delete-blocked", label: "agent:update-branch", action: "labeled" }] }).message).toContain("request generation changed");
+  });
+
+  it("does not reach selected consumption after a request race at the blocked-label stage", () => {
+    expect(failedScenario({ races: [{ stage: "delete-blocked", label: "agent:update-branch", action: "labeled" }] }).operations).not.toContain("delete:agent:review");
+  });
 });

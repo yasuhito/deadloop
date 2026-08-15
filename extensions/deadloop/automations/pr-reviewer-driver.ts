@@ -8,7 +8,6 @@ const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { planPrRequestAction } = require("./pr-reviewer-flow.ts");
 const { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.ts");
-const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.ts");
 const { REQUEST_BOUND_AGENT_ROLES, launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
@@ -200,13 +199,26 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
       effects.labels[String(number)] = [...labels];
       githubEffects?.push({ operation: "move_pr_labels", repo, prNumber: String(number), move });
     },
-    replacePrLabels: (_repo: string, number: string | number, labels: string[]) => {
-      effects.labelReplacements ||= [];
-      effects.labelReplacements.push({ number: Number(number), labels: [...labels] });
+    addPrLabel: (_repo: string, number: string | number, label: string) => {
+      effects.labelMutations ||= [];
+      effects.labelMutations.push({ operation: "add", number: Number(number), label });
       const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
-      if (pr && !fixture.postMutationMismatch) pr.labels = labels.map((name) => ({ name }));
+      const labels = new Set((pr?.labels || []).map((item: JsonObject) => String(item.name)));
+      labels.add(label);
+      if (pr && !fixture.postMutationMismatch) pr.labels = [...labels].map((name) => ({ name }));
       effects.labels[String(number)] = [...labels];
-      return { names: labels };
+      return [...labels].map((name) => ({ name }));
+    },
+    deletePrLabel: (_repo: string, number: string | number, label: string) => {
+      effects.labelMutations ||= [];
+      effects.labelMutations.push({ operation: "delete", number: Number(number), label });
+      const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
+      const labels = new Set((pr?.labels || []).map((item: JsonObject) => String(item.name)));
+      const status = labels.has(label) ? 200 : 404;
+      if (status === 200) labels.delete(label);
+      if (pr && !fixture.postMutationMismatch) pr.labels = [...labels].map((name) => ({ name }));
+      effects.labels[String(number)] = [...labels];
+      return { status };
     },
     listPrLabels: (_repo: string, number: string | number) => {
       const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
@@ -686,6 +698,7 @@ function assertBranchUpdateRequestConsumed(
   baseOid: string,
   requestEventId: string,
   observe: BranchUpdateTargetObservation = {},
+  requestEventIds: Record<string, string> = {},
 ): void {
   const number = Number(pr.number || 0);
   const github = githubOperations();
@@ -700,6 +713,7 @@ function assertBranchUpdateRequestConsumed(
   if (String(request.id || request.node_id || "") !== requestEventId) {
     throw new StaleLaunchError(`PR #${number} branch-update request generation changed before launch`);
   }
+  if (!observe.request) assertLatestRequestEventIds(github, env, number, requestEventIds);
   const decisionFor = observe.decisionFor || ((candidate: JsonObject) => branchUpdateDecision(candidate, env, null));
   assertBranchUpdateTargetUnchanged(live, headOid, baseOid, decisionFor);
 }
@@ -719,6 +733,7 @@ function launchBranchUpdate(
   const baseOid = String(plan.input.inputRevision.base || "");
   if (!fixture) runText(["git", "check-ref-format", "--branch", branch]);
   let requestEventId = "";
+  let requestEventIds: Record<string, string> = {};
   let enabledIdentity: EnabledIdentity = {};
   const launch = launchWithAdapters(
     env,
@@ -727,6 +742,7 @@ function launchBranchUpdate(
     (github) => {
       const consumed = consumeRequestWithIdentity(github, pr, env, fixture, "branch-update", enabledIdentity);
       requestEventId = String(consumed.requestEventId || "");
+      requestEventIds = consumed.requestEventIds || {};
       plan.input.requestEventId = requestEventId;
       github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
     },
@@ -747,7 +763,7 @@ function launchBranchUpdate(
         return;
       }
       try {
-        assertBranchUpdateRequestConsumed(pr, env, headOid, baseOid, requestEventId);
+        assertBranchUpdateRequestConsumed(pr, env, headOid, baseOid, requestEventId, {}, requestEventIds);
       } catch (error) {
         // Mark the failure so the caller can say the request was already consumed.
         if (error instanceof Error) (error as Error & { claimed?: boolean }).claimed = true;
@@ -887,11 +903,128 @@ function managedWorkflowLabels(env: ReturnType<typeof envConfig>): string[] {
   return [env.reviewLabel, env.implementLabel, env.updateBranchLabel, env.inProgressLabel, env.blockedLabel];
 }
 
+function assertLatestRequestEventIds(
+  github: ReturnType<typeof githubOperations>,
+  env: ReturnType<typeof envConfig>,
+  number: number,
+  expected: Record<string, string>,
+): void {
+  if (Object.keys(expected).length === 0) return;
+  const events = github.listPrTimelineEvents(env.githubRepo, number);
+  for (const label of orderedPrRequestLabels(prRequestLabels(env))) {
+    const event = latestPrRequestEvent(events, label);
+    if (String(event?.id || event?.node_id || "") !== String(expected[label] || "")) {
+      throw new StaleLaunchError(`PR #${number} ${label} request generation changed before launch`);
+    }
+  }
+}
+
+type RequestConsumptionObservation = {
+  events: JsonObject[];
+  requestEventIds: Map<string, string>;
+  labels: Set<string>;
+};
+
+function observeRequestConsumption(
+  github: ReturnType<typeof githubOperations>,
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  requestLabels: string[],
+  authenticate: () => string,
+): RequestConsumptionObservation {
+  const number = Number(pr.number || 0);
+  assertReviewRepositoryIdentity(github, env);
+  const authenticatedLogin = authenticate().trim().toLowerCase();
+  if (!authenticatedLogin || authenticatedLogin !== env.automationLogin.toLowerCase()
+    || !env.authorizedAutomationLogins.includes(authenticatedLogin)) {
+    throw new RequestConsumptionError(`PR #${number} authenticated identity no longer has label-transition authority`);
+  }
+  assertSamePrRevision(pr, liveExposedPr(number, env, github));
+  const events = github.listPrTimelineEvents(env.githubRepo, number);
+  const requestEventIds = new Map(requestLabels.map((label) => {
+    const event = latestPrRequestEvent(events, label);
+    return [label, String(event?.id || event?.node_id || "")];
+  }));
+  return {
+    events,
+    requestEventIds,
+    labels: new Set(labelNames({ labels: github.listPrLabels(env.githubRepo, number) })),
+  };
+}
+
+function sameRequestEventIds(left: Map<string, string>, right: Map<string, string>): boolean {
+  return [...left].every(([label, id]) => right.get(label) === id);
+}
+
+function requestGenerationShouldRemain(
+  events: JsonObject[],
+  label: string,
+  baselineEventId: string,
+  ignoreOneSuccessfulDelete: boolean,
+): boolean {
+  const relevant = events.filter((event) =>
+    String(event.label?.name || "") === label
+    && ["labeled", "unlabeled"].includes(String(event.event || "").toLowerCase()),
+  ).sort((left, right) => {
+    const time = Date.parse(String(left.created_at || left.createdAt || "")) - Date.parse(String(right.created_at || right.createdAt || ""));
+    return time || String(left.id || left.node_id || "").localeCompare(String(right.id || right.node_id || ""), undefined, { numeric: true });
+  });
+  const baselineIndex = relevant.findIndex((event) => String(event.id || event.node_id || "") === baselineEventId);
+  const later = relevant.slice(baselineIndex + 1);
+  if (!later.some((event) => String(event.event || "").toLowerCase() === "labeled")) return false;
+  let present = false;
+  let ownDeleteIndex = -1;
+  if (ignoreOneSuccessfulDelete) {
+    for (let index = later.length - 1; index >= 0; index -= 1) {
+      if (String(later[index].event || "").toLowerCase() === "unlabeled") {
+        ownDeleteIndex = index;
+        break;
+      }
+    }
+  }
+  for (const [index, event] of later.entries()) {
+    const action = String(event.event || "").toLowerCase();
+    if (action === "labeled") present = true;
+    else if (index !== ownDeleteIndex) present = false;
+  }
+  return present;
+}
+
+function restoreNewRequestGenerations(
+  github: ReturnType<typeof githubOperations>,
+  env: ReturnType<typeof envConfig>,
+  number: number,
+  baselineIds: Map<string, string>,
+  observation: RequestConsumptionObservation,
+  successfulDeleteLabel?: string,
+): void {
+  const restore = [...baselineIds].filter(([label, id]) =>
+    observation.requestEventIds.get(label) !== id
+    && requestGenerationShouldRemain(observation.events, label, id, label === successfulDeleteLabel),
+  ).map(([label]) => label);
+  if (restore.length > 0) github.movePrLabels(env.githubRepo, number, { add: restore });
+}
+
+function assertConsumptionObservation(
+  observation: RequestConsumptionObservation,
+  baselineIds: Map<string, string>,
+  expectedManagedLabels: Set<string>,
+  env: ReturnType<typeof envConfig>,
+  number: number,
+): void {
+  if (!sameRequestEventIds(baselineIds, observation.requestEventIds)) {
+    throw new StaleLaunchError(`PR #${number} request generation changed during consumption`);
+  }
+  const liveManaged = new Set([...observation.labels].filter((label) => managedWorkflowLabels(env).includes(label)));
+  if (JSON.stringify([...liveManaged].sort()) !== JSON.stringify([...expectedManagedLabels].sort())) {
+    throw new StaleLaunchError(`PR #${number} managed labels changed during consumption`);
+  }
+}
+
 /**
- * Consume one request by replacing the managed label set, while binding every observation to the
- * exact request event id. A concurrent request that remains active is restored after the fact and
- * the launch stops; a concurrently cancelled request stays absent. GitHub labels are not treated as
- * a compare-and-swap database.
+ * Consume one exact request generation with granular label operations. `agent:in-progress` is made
+ * visible first; baseline managed labels are then normalized one at a time. The selected request's
+ * successful documented HTTP 200 DELETE is the final linearization point.
  */
 function consumeRequestEvent(
   github: ReturnType<typeof githubOperations>,
@@ -902,97 +1035,58 @@ function consumeRequestEvent(
 ): JsonObject {
   const number = Number(pr.number || 0);
   const requestLabel = requestLabelForRole(env, role);
-  assertReviewRepositoryIdentity(github, env);
-  // Establish every role's event boundary before reading mutable PR labels. Any request generation
-  // that arrives during or after that live read must stay outside this baseline so replacement can
-  // repair it instead of silently treating it as an old request.
-  const beforeTransitionEvents = github.listPrTimelineEvents(env.githubRepo, number);
-  const beforeTransitionEventIds = new Set(beforeTransitionEvents.map((event: JsonObject) => String(event.id || event.node_id || "")));
-  const requestLabels = orderedPrRequestLabels({
-    updateBranch: env.updateBranchLabel,
-    implement: env.implementLabel,
-    review: env.reviewLabel,
-  });
-  const beforeRequestIds = new Map(requestLabels.map((label) => {
-    const event = latestPrRequestEvent(beforeTransitionEvents, label);
-    return [label, String(event?.id || event?.node_id || "")];
-  }));
-  const requestEventId = beforeRequestIds.get(requestLabel) || "";
-  if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${requestLabel} request event id`);
-
-  const beforeTransition = liveExposedPr(number, env, github);
-  assertSameLaunchTarget(pr, beforeTransition, "pr");
-  const authenticatedLogin = authenticate().trim().toLowerCase();
-  if (!authenticatedLogin || authenticatedLogin !== env.automationLogin.toLowerCase()
-    || !env.authorizedAutomationLogins.includes(authenticatedLogin)) {
-    throw new RequestConsumptionError(`PR #${number} authenticated identity no longer has label-transition authority`);
+  const requestLabels = orderedPrRequestLabels(prRequestLabels(env));
+  const baseline = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+  const requestEventId = baseline.requestEventIds.get(requestLabel) || "";
+  if (!requestEventId || !baseline.labels.has(requestLabel)) {
+    throw new StaleLaunchError(`PR #${number} has no stable ${requestLabel} request event`);
   }
 
-  const managed = new Set(managedWorkflowLabels(env));
-  const nextLabels = labelNames({ labels: github.listPrLabels(env.githubRepo, number) }).filter((label) => !managed.has(label));
-  nextLabels.push(env.inProgressLabel);
-  github.replacePrLabels(env.githubRepo, number, nextLabels);
-
-  const transitioned = github.getPr(env.githubRepo, number);
-  assertSamePrRevision(pr, transitioned);
-  const labelsAfterReplacement = new Set(labelNames({ labels: github.listPrLabels(env.githubRepo, number) }));
-  const finalEvents = github.listPrTimelineEvents(env.githubRepo, number);
-  const racedRequestState = new Map<string, boolean>();
-  const racedRequestEvents = finalEvents
-    .filter((event: JsonObject) => !beforeTransitionEventIds.has(String(event.id || event.node_id || "")))
-    .filter((event: JsonObject) => {
-      const action = String(event.event || "").toLowerCase();
-      const label = String(event.label?.name || "");
-      const actor = String(event.actor?.login || "").toLowerCase();
-      const replacementEffect = actor === authenticatedLogin
-        && ((action === "labeled" && nextLabels.includes(label)) || (action === "unlabeled" && !nextLabels.includes(label)));
-      return requestLabels.includes(label) && ["labeled", "unlabeled"].includes(action) && !replacementEffect;
-    })
-    .sort(compareGithubTimelineEvents);
-  for (const event of racedRequestEvents) {
-    racedRequestState.set(String(event.label?.name || ""), String(event.event || "").toLowerCase() === "labeled");
-  }
-  const newerRequestLabels = requestLabels.filter((label) => racedRequestState.get(label) === true);
-  const requestLabelsToRestore = newerRequestLabels.length > 0
-    ? newerRequestLabels
-    : racedRequestEvents.length > 0 && !racedRequestState.has(requestLabel) ? [requestLabel] : [];
-
-  const racedEvents = finalEvents
-    .filter((event: JsonObject) => !beforeTransitionEventIds.has(String(event.id || event.node_id || "")))
-    .filter((event: JsonObject) => {
-      const action = String(event.event || "").toLowerCase();
-      const label = String(event.label?.name || "");
-      const actor = String(event.actor?.login || "").toLowerCase();
-      const transitionEffect = actor === authenticatedLogin
-        && ((action === "labeled" && nextLabels.includes(label)) || (action === "unlabeled" && !nextLabels.includes(label)));
-      return label && !managed.has(label) && ["labeled", "unlabeled"].includes(action) && !transitionEffect;
-    });
-  const racedLabelState = new Map<string, boolean>();
-  for (const event of racedEvents) racedLabelState.set(String(event.label?.name || ""), String(event.event || "").toLowerCase() === "labeled");
-
-  if (requestLabelsToRestore.length > 0) {
-    github.movePrLabels(env.githubRepo, number, { add: requestLabelsToRestore });
-    for (const label of requestLabelsToRestore) labelsAfterReplacement.add(label);
-  }
-  if (racedRequestEvents.length > 0) {
-    github.movePrLabels(env.githubRepo, number, { remove: env.inProgressLabel });
-    labelsAfterReplacement.delete(env.inProgressLabel);
-  }
-  const unrelatedToAdd = [...racedLabelState].filter(([label, present]) => present && !labelsAfterReplacement.has(label)).map(([label]) => label);
-  const unrelatedToRemove = [...racedLabelState].filter(([label, present]) => !present && labelsAfterReplacement.has(label)).map(([label]) => label);
-  if (unrelatedToAdd.length > 0) github.movePrLabels(env.githubRepo, number, { add: unrelatedToAdd });
-  if (unrelatedToRemove.length > 0) github.movePrLabels(env.githubRepo, number, { remove: unrelatedToRemove });
-  if (racedRequestEvents.length > 0) {
-    const changedLabels = [...racedRequestState.keys()];
-    throw new StaleLaunchError(`PR #${number} ${changedLabels.join(", ")} request changed after label transition`);
+  const expectedManaged = new Set([...baseline.labels].filter((label) => managedWorkflowLabels(env).includes(label)));
+  github.addPrLabel(env.githubRepo, number, env.inProgressLabel);
+  expectedManaged.add(env.inProgressLabel);
+  let observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+  try {
+    assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
+  } catch (error) {
+    restoreNewRequestGenerations(github, env, number, baseline.requestEventIds, observed);
+    throw error;
   }
 
-  const expectedLabelSet = new Set(nextLabels);
-  for (const [label, present] of racedLabelState) present ? expectedLabelSet.add(label) : expectedLabelSet.delete(label);
-  const finalLiveLabels = new Set(labelNames({ labels: github.listPrLabels(env.githubRepo, number) }));
-  if (JSON.stringify([...finalLiveLabels].sort()) !== JSON.stringify([...expectedLabelSet].sort())
-    || !finalLiveLabels.has(env.inProgressLabel) || finalLiveLabels.has(requestLabel) || finalLiveLabels.has(env.blockedLabel)) {
-    throw new StaleLaunchError(`PR #${number} ${requestLabel} consumption label transition did not persist`);
+  const labelsToNormalize = [
+    ...requestLabels.filter((label) => label !== requestLabel && baseline.labels.has(label)),
+    ...(baseline.labels.has(env.blockedLabel) ? [env.blockedLabel] : []),
+  ];
+  for (const label of labelsToNormalize) {
+    observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+    assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
+    const deleted = github.deletePrLabel(env.githubRepo, number, label);
+    observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+    if (deleted.status !== 200) {
+      throw new RequestConsumptionError(`PR #${number} ${label} DELETE did not return the documented 200 response`);
+    }
+    expectedManaged.delete(label);
+    try {
+      assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
+    } catch (error) {
+      restoreNewRequestGenerations(github, env, number, baseline.requestEventIds, observed, label);
+      throw error;
+    }
+  }
+
+  observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+  assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
+  const consumed = github.deletePrLabel(env.githubRepo, number, requestLabel);
+  observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+  if (consumed.status !== 200) {
+    throw new RequestConsumptionError(`PR #${number} ${requestLabel} DELETE did not return the documented 200 response`);
+  }
+  expectedManaged.delete(requestLabel);
+  try {
+    assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
+  } catch (error) {
+    restoreNewRequestGenerations(github, env, number, baseline.requestEventIds, observed, requestLabel);
+    throw error;
   }
 
   takeWorkAuthorityFromRetainedAttempts({
@@ -1001,7 +1095,11 @@ function consumeRequestEvent(
     githubRepo: env.githubRepo,
     prNumber: number,
   });
-  return { requestEventId, labels: [...finalLiveLabels] };
+  return {
+    requestEventId,
+    requestEventIds: Object.fromEntries(baseline.requestEventIds),
+    labels: [...observed.labels],
+  };
 }
 
 type WorkAuthorityTakeover = {
@@ -1094,6 +1192,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
   if (history) writePrHistoryObservation(historyFile, history);
   const { reviewerName, headRefName } = plan;
   let requestEventId = "";
+  let requestEventIds: Record<string, string> = {};
   let launch: JsonObject;
   let enabledAutomationLogin = "";
   try {
@@ -1110,6 +1209,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
           fixture ? () => env.automationLogin : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
         );
         requestEventId = String(consumed.requestEventId || "");
+        requestEventIds = consumed.requestEventIds || {};
         plan.input.requestEventId = requestEventId;
       },
       (enabled) => {
@@ -1118,7 +1218,7 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
         assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
         if (requestEventId) {
           try {
-            revalidateConsumedReviewerLaunch(pr, env, number, requestEventId, history);
+            revalidateConsumedReviewerLaunch(pr, env, number, requestEventId, history, requestEventIds);
           } catch (error) {
             if (error instanceof Error) (error as Error & { claimed?: boolean }).claimed = true;
             throw error;
@@ -1160,6 +1260,7 @@ function revalidateConsumedReviewerLaunch(
   number: number,
   requestEventId: string,
   history: JsonObject | null,
+  requestEventIds: Record<string, string> = {},
 ): JsonObject | null {
   const github = githubOperations();
   const live = github.getPr(env.githubRepo, number);
@@ -1172,6 +1273,7 @@ function revalidateConsumedReviewerLaunch(
   if (String(request.id || request.node_id || "") !== requestEventId) {
     throw new StaleLaunchError(`PR #${number} review request changed before reviewer launch`);
   }
+  assertLatestRequestEventIds(github, env, number, requestEventIds);
   return assertReviewHistoryUnchanged(env, number, history);
 }
 
