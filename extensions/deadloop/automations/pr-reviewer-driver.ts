@@ -24,7 +24,7 @@ const {
   shellQuote,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
-const { postBlockRequestIsEligible, releasableRetainedAttempts } = require("../../../src/pr-work-authority-reconciliation.ts");
+const { postBlockRequestIsEligible } = require("../../../src/pr-work-authority-reconciliation.ts");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { observeAttemptLiveness } = require("../../../src/attempt-runtime-observation.ts");
@@ -1132,8 +1132,6 @@ type WorkAuthorityTakeover = {
   projectId: string;
   githubRepo: string;
   prNumber: number;
-  currentHead: string;
-  currentRequestEventId: string;
 };
 
 function retainedAttemptsForPr(input: WorkAuthorityTakeover): Array<{ runDir: string; record: JsonObject }> {
@@ -1157,31 +1155,22 @@ function retainedAttemptsForPr(input: WorkAuthorityTakeover): Array<{ runDir: st
 }
 
 /**
- * Take work authority from the retained attempts that provably cannot act on the current work, as
- * part of winning a new Agent request. See ADR 0019. Only the authority claim is dropped: the
- * journal and its worktree stay as evidence, and nothing is published to GitHub.
+ * Take work authority from the retained attempts the execution runtime reports stopped, as part of
+ * winning a new Agent request. Only the authority claim is dropped: the journal and its worktree
+ * stay as evidence, and nothing is published to GitHub.
+ *
+ * A stopped attempt releases whatever else it carries. ADR 0020 leaves the runtime the only
+ * authority on liveness, so neither the revision the attempt was launched against nor the request
+ * its saved claim consumed takes part. The head still guards every GitHub mutation and decides
+ * whether a completion report may be applied; neither question is answered here.
  */
 function takeWorkAuthorityFromRetainedAttempts(
   input: WorkAuthorityTakeover,
   observe: { runner?: AttemptAgentRunner } = {},
 ): string[] {
-  const retained = retainedAttemptsForPr(input);
-  if (retained.length === 0) return [];
-  const releasable = new Set(releasableRetainedAttempts({
-    attempts: retained.map(({ record }) => ({
-      attemptId: String(record.attemptId),
-      stopped: attemptStoppedForTakeover(record, observe.runner),
-      revision: String(record.inputRevision?.head || ""),
-      ...(record.reviewClaim?.binding?.requestEventId
-        ? { claimRequestEventId: String(record.reviewClaim.binding.requestEventId) }
-        : {}),
-    })),
-    currentHead: input.currentHead,
-    currentRequestEventId: input.currentRequestEventId,
-  }));
   const released: string[] = [];
-  for (const { runDir, record } of retained) {
-    if (!releasable.has(String(record.attemptId))) continue;
+  for (const { runDir, record } of retainedAttemptsForPr(input)) {
+    if (!attemptStoppedForTakeover(record, observe.runner)) continue;
     releasePersistedAttemptAuthority(runDir, new Date().toISOString());
     released.push(String(record.attemptId));
   }
@@ -1398,16 +1387,14 @@ function claimReviewRequest(
     if (finalWinner) restorePreemptedReviewRequest(github, pr, env, claim, authenticate, authorizeCurrent);
     throw new StaleLaunchError(`PR #${number} review claim changed after label transition`);
   }
-  // Winning the request is the moment work authority moves. Take it from the retained attempts that
-  // provably cannot act on this head, before this attempt writes a journal of its own. The result
-  // stays out of the claim contract, which is persisted verbatim in the attempt journal.
+  // Winning the request is the moment work authority moves. Take it from the retained attempts the
+  // runtime reports stopped, before this attempt writes a journal of its own. The result stays out
+  // of the claim contract, which is persisted verbatim in the attempt journal.
   takeWorkAuthorityFromRetainedAttempts({
     stateDir: env.stateDir,
     projectId: env.projectId,
     githubRepo: env.githubRepo,
     prNumber: number,
-    currentHead: String(pr.headRefOid || ""),
-    currentRequestEventId: requestEventId,
   });
   return { ...claim, labels: [...finalLiveLabels] };
 }

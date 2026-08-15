@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR 0020](0020-stop-proving-work-authority.md). The two proofs below are no longer implemented: a retained attempt now loses work authority when the execution runtime reports it stopped, and neither the pull request's head nor the request event id takes part in that decision.
 
 ## Context
 
