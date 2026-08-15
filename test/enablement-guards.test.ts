@@ -83,6 +83,40 @@ function writeGuardedPrAttempt(project: ReturnType<typeof fixture>, head = "a".r
   return attemptRecord;
 }
 
+function guardedPrFinalIdentityRace(race: "login" | "repository-id" | "repository-name"): number {
+  const project = fixture();
+  writeState(project, { enabledAt: 1 });
+  const attemptRecord = writeGuardedPrAttempt(project);
+  let loginReads = 0;
+  let repositoryReads = 0;
+  let mutations = 0;
+  try {
+    runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord, inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
+      (_command: string, args: string[]) => {
+        if (args[0] === "api") {
+          loginReads += 1;
+          return { status: 0, stdout: loginReads >= 2 && race === "login" ? "other-bot\n" : "deadloop-bot\n", stderr: "" };
+        }
+        if (args[0] === "repo") {
+          repositoryReads += 1;
+          const final = repositoryReads >= 2;
+          return { status: 0, stdout: JSON.stringify({
+            id: final && race === "repository-id" ? "R_other" : "R_repo",
+            nameWithOwner: final && race === "repository-name" ? "other/repo" : project.githubRepo,
+          }), stderr: "" };
+        }
+        if (args[0] === "pr" && args[1] === "view") {
+          return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: "a".repeat(40), labels: [{ name: "agent:in-progress" }] }), stderr: "" };
+        }
+        mutations += 1;
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    );
+  } catch {}
+  return mutations;
+}
+
 afterEach(() => {
   if (originalConfigDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = originalConfigDir;
@@ -454,6 +488,18 @@ describe("enablement mutation guards", () => {
     } catch {}
 
     expect(mutations).toBe(0);
+  });
+
+  it("does not mutate when authenticated login races the final PR guard", () => {
+    expect(guardedPrFinalIdentityRace("login")).toBe(0);
+  });
+
+  it("does not mutate when repository ID races the final PR guard", () => {
+    expect(guardedPrFinalIdentityRace("repository-id")).toBe(0);
+  });
+
+  it("does not mutate when repository name races the final PR guard", () => {
+    expect(guardedPrFinalIdentityRace("repository-name")).toBe(0);
   });
 
   it("does not mutate when enablement races the final guarded PR recheck", () => {

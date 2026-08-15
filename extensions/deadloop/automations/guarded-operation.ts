@@ -138,20 +138,23 @@ function runGuarded(
           throw new Error("saved attempt target does not match guarded PR mutation target");
         }
         const query = (queryArgs: string[]) => spawn("gh", queryArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GUARDED_OPERATION_TIMEOUT_MS });
-        const authenticated = query(["api", "user", "--jq", ".login"]);
-        const automationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
-        if (authenticated.status !== 0 || !automationLogin || String(authenticated.stdout || "").trim().toLowerCase() !== automationLogin) {
-          throw new Error("current authenticated GitHub identity does not match enablement authority");
-        }
-        const repository = query(["repo", "view", args.githubRepo, "--json", "id,nameWithOwner"]);
-        let identity: Record<string, unknown> = {};
-        try { identity = JSON.parse(repository.stdout || "{}"); }
-        catch { throw new Error("live GitHub PR target could not be verified"); }
-        if (repository.status !== 0 || String(identity.id || "") !== String(enabled.githubRepositoryId || "")
-          || String(identity.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
-          throw new Error("guarded PR mutation target changed from the attempt revision");
-        }
-        const assertLivePrActive = (pr: ReturnType<typeof query>): void => {
+        const assertCurrentPrMutationBoundary = (): void => {
+          const authenticated = query(["api", "user", "--jq", ".login"]);
+          const automationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
+          if (authenticated.status !== 0 || !automationLogin || String(authenticated.stdout || "").trim().toLowerCase() !== automationLogin) {
+            throw new Error("current authenticated GitHub identity does not match enablement authority");
+          }
+
+          const repository = query(["repo", "view", args.githubRepo, "--json", "id,nameWithOwner"]);
+          let identity: Record<string, unknown> = {};
+          try { identity = JSON.parse(repository.stdout || "{}"); }
+          catch { throw new Error("live GitHub PR target could not be verified"); }
+          if (repository.status !== 0 || String(identity.id || "") !== String(enabled.githubRepositoryId || "")
+            || String(identity.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
+            throw new Error("guarded PR mutation target changed from the attempt revision");
+          }
+
+          const pr = query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
           let livePr: Record<string, unknown> = {};
           try { livePr = JSON.parse(pr.stdout || "{}"); }
           catch { throw new Error("live GitHub PR target could not be verified"); }
@@ -166,9 +169,9 @@ function runGuarded(
             throw new Error("guarded PR mutation requires the current active workflow state");
           }
         };
-        assertLivePrActive(query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]));
+        assertCurrentPrMutationBoundary();
         recheck();
-        assertLivePrActive(query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]));
+        assertCurrentPrMutationBoundary();
       }
       if (args.targetKind === "issue") recheck();
       const result = spawn(args.command[0], args.command.slice(1), {
