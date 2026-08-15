@@ -12,9 +12,10 @@ const {
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-function scenario(extraComments: Record<string, unknown>[] = []) {
+function scenario(extraComments: Record<string, unknown>[] = [], concurrentRequestLabel?: string) {
   const head = "a".repeat(40);
   const request = { id: "request-22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } };
+  const events = [request];
   const pr: any = {
     number: 24, state: "OPEN", headRefName: "feature", headRefOid: head,
     labels: [{ name: "agent:review" }, { name: "customer:keep" }], comments: extraComments,
@@ -23,10 +24,20 @@ function scenario(extraComments: Record<string, unknown>[] = []) {
   const github = {
     getRepositoryIdentity: () => ({ id: "R_repo", nameWithOwner: "owner/repo" }),
     getPr: () => pr,
-    listPrTimelineEvents: () => [request],
+    listPrTimelineEvents: () => events,
     listPrLabels: () => pr.labels,
-    replacePrLabels: (_repo: string, _number: number, next: string[]) => { pr.labels = next.map((name) => ({ name })); },
-    movePrLabels: () => {},
+    replacePrLabels: (_repo: string, _number: number, next: string[]) => {
+      if (concurrentRequestLabel) {
+        events.push({ id: "request-23", event: "labeled", created_at: "2026-07-20T10:00:01Z", label: { name: concurrentRequestLabel } });
+      }
+      pr.labels = next.map((name) => ({ name }));
+    },
+    movePrLabels: (_repo: string, _number: number, move: { add?: string[]; remove?: string[] }) => {
+      const labels = new Set(pr.labels.map((label: { name: string }) => label.name));
+      for (const label of move.add || []) labels.add(label);
+      for (const label of move.remove || []) labels.delete(label);
+      pr.labels = [...labels].map((name) => ({ name }));
+    },
     commentPr: () => { commentsWritten += 1; },
   };
   const env = {
@@ -36,8 +47,15 @@ function scenario(extraComments: Record<string, unknown>[] = []) {
     inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     stateDir: path.join(tmpdir(), "missing-deadloop-state"), projectId: "demo",
   };
-  const consumed = consumeRequestEvent(github, pr, env, "reviewer", () => "deadloop-bot");
-  return { consumed, pr, commentsWritten };
+  try {
+    const consumed = consumeRequestEvent(github, pr, env, "reviewer", () => "deadloop-bot");
+    return { consumed, pr, commentsWritten };
+  } catch (error) {
+    Object.assign(error instanceof Error ? error : new Error(String(error)), {
+      labels: pr.labels.map((label: { name: string }) => label.name),
+    });
+    throw error;
+  }
 }
 
 describe("PR request consumption", () => {
@@ -59,6 +77,18 @@ describe("PR request consumption", () => {
 
   it("ignores an old claim comment left on the pull request", () => {
     expect(scenario([{ id: 101, body: "<!-- deadloop:review-claim v1=obsolete -->" }]).consumed.requestEventId).toBe("request-22");
+  });
+
+  it("stops review consumption when a newer branch-update request races the label replacement", () => {
+    expect(() => scenario([], "agent:update-branch")).toThrow("request changed after label transition");
+  });
+
+  it("restores a newer branch-update request erased by review label replacement", () => {
+    let labels: string[] = [];
+    try { scenario([], "agent:update-branch"); } catch (error) {
+      labels = ((error as Error & { labels?: string[] }).labels || []);
+    }
+    expect(labels).toContain("agent:update-branch");
   });
 
   it("reviewer fixture output contains no claim marker", () => {

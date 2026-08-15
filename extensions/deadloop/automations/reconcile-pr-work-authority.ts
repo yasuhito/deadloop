@@ -4,6 +4,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, createHerdrRunnerFromCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.ts");
@@ -128,10 +129,7 @@ function latestConfiguredRequest(events: JsonObject[], currentLabels: string[], 
   return events.filter((event) => String(event.event || "").toLowerCase() === "labeled"
     && queued.has(String(event.label?.name || ""))
     && String(event.id || event.node_id || ""))
-    .sort((left, right) => {
-      const time = Date.parse(String(left.created_at || left.createdAt || "")) - Date.parse(String(right.created_at || right.createdAt || ""));
-      return time || String(left.id || left.node_id).localeCompare(String(right.id || right.node_id), undefined, { numeric: true });
-    }).at(-1) || null;
+    .sort(compareGithubTimelineEvents).at(-1) || null;
 }
 
 /** Every role whose completion is still owed to GitHub, and the handler that owes it. */

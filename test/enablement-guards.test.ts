@@ -58,6 +58,31 @@ function writeState(project: ReturnType<typeof fixture>, record: Record<string, 
   writeFileSync(path.join(project.stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{ repoPath: project.repoPath, githubRepo: project.githubRepo, ...safetyFields, ...record }] }));
 }
 
+function writeGuardedPrAttempt(project: ReturnType<typeof fixture>, head = "a".repeat(40)): string {
+  const runDir = path.join(project.stateDir, "runs", "guarded-pr");
+  mkdirSync(runDir, { recursive: true });
+  const attemptRecord = path.join(runDir, "attempt.json");
+  writeFileSync(attemptRecord, JSON.stringify({
+    schemaVersion: 1,
+    attemptId: "guarded-pr",
+    launchUuid: "guarded-pr",
+    project: "demo",
+    repository: project.githubRepo,
+    role: "reviewer",
+    target: { kind: "pull-request", number: 24 },
+    inputRevision: { head },
+    branch: "agent/issue-24",
+    worktreePath: path.join(project.repoPath, "worktree"),
+    agentName: "dl-r-24",
+    workspaceLabel: "demo-pr-24-reviewer",
+    promptFile: path.join(runDir, "prompt.md"),
+    promiseFile: path.join(runDir, "promise.json"),
+    phase: "report_received",
+    lastSuccessfulPhase: "report_received",
+  }));
+  return attemptRecord;
+}
+
 afterEach(() => {
   if (originalConfigDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = originalConfigDir;
@@ -327,6 +352,76 @@ describe("enablement mutation guards", () => {
       { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "issue", command: ["gh", "issue", "comment", "1", "-R", project.githubRepo, "--body", "done"] },
       () => ({ status: 0, stdout: "{}", stderr: "" }),
     )).toThrow("exact non-PR issue target");
+  });
+
+  it("rejects a guarded PR mutation when the live repository ID drifts", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const attemptRecord = writeGuardedPrAttempt(project);
+
+    expect(() => runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
+      (_command: string, args: string[]) => {
+        if (args[0] === "api") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+        if (args[0] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_other", nameWithOwner: project.githubRepo }), stderr: "" };
+        return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: "a".repeat(40) }), stderr: "" };
+      },
+    )).toThrow("attempt revision");
+  });
+
+  it("rejects a guarded PR mutation when the live repository name drifts", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const attemptRecord = writeGuardedPrAttempt(project);
+
+    expect(() => runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
+      (_command: string, args: string[]) => {
+        if (args[0] === "api") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+        if (args[0] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: "other/repo" }), stderr: "" };
+        return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: "a".repeat(40) }), stderr: "" };
+      },
+    )).toThrow("attempt revision");
+  });
+
+  it("rejects a guarded PR mutation when its exact head drifts", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const attemptRecord = writeGuardedPrAttempt(project);
+
+    expect(() => runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
+      (_command: string, args: string[]) => {
+        if (args[0] === "api") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+        if (args[0] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: project.githubRepo }), stderr: "" };
+        return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: "b".repeat(40) }), stderr: "" };
+      },
+    )).toThrow("attempt revision");
+  });
+
+  it("does not mutate when enablement races the final guarded PR recheck", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const attemptRecord = writeGuardedPrAttempt(project);
+    let mutations = 0;
+
+    try {
+      runGuarded(
+        { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
+        (_command: string, args: string[]) => {
+          if (args[0] === "api") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+          if (args[0] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: project.githubRepo }), stderr: "" };
+          if (args[0] === "pr" && args[1] === "view") {
+            writeState(project, { enabledAt: 2 });
+            return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: "a".repeat(40) }), stderr: "" };
+          }
+          mutations += 1;
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      );
+    } catch {}
+
+    expect(mutations).toBe(0);
   });
 
   it("rejects merge through the generic guarded operation", () => {

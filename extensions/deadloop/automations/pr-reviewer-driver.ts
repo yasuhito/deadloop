@@ -909,8 +909,16 @@ function consumeRequestEvent(
   assertSameLaunchTarget(pr, beforeTransition, "pr");
   const beforeTransitionEvents = github.listPrTimelineEvents(env.githubRepo, number);
   const beforeTransitionEventIds = new Set(beforeTransitionEvents.map((event: JsonObject) => String(event.id || event.node_id || "")));
-  const beforeTransitionRequest = latestPrRequestEvent(beforeTransitionEvents, requestLabel);
-  if (String(beforeTransitionRequest?.id || beforeTransitionRequest?.node_id || "") !== requestEventId) {
+  const requestLabels = orderedPrRequestLabels({
+    updateBranch: env.updateBranchLabel,
+    implement: env.implementLabel,
+    review: env.reviewLabel,
+  });
+  const beforeRequestIds = new Map(requestLabels.map((label) => {
+    const event = latestPrRequestEvent(beforeTransitionEvents, label);
+    return [label, String(event?.id || event?.node_id || "")];
+  }));
+  if (beforeRequestIds.get(requestLabel) !== requestEventId) {
     throw new StaleLaunchError(`PR #${number} ${requestLabel} request changed before label transition`);
   }
   const authenticatedLogin = authenticate().trim().toLowerCase();
@@ -928,8 +936,11 @@ function consumeRequestEvent(
   assertSamePrRevision(pr, transitioned);
   const labelsAfterReplacement = new Set(labelNames({ labels: github.listPrLabels(env.githubRepo, number) }));
   const finalEvents = github.listPrTimelineEvents(env.githubRepo, number);
-  const finalRequest = latestPrRequestEvent(finalEvents, requestLabel);
-  const finalRequestId = String(finalRequest?.id || finalRequest?.node_id || "");
+  const newerRequestLabels = requestLabels.filter((label) => {
+    const event = latestPrRequestEvent(finalEvents, label);
+    const finalId = String(event?.id || event?.node_id || "");
+    return Boolean(finalId) && finalId !== beforeRequestIds.get(label) && !beforeTransitionEventIds.has(finalId);
+  });
 
   const racedEvents = finalEvents
     .filter((event: JsonObject) => !beforeTransitionEventIds.has(String(event.id || event.node_id || "")))
@@ -944,10 +955,9 @@ function consumeRequestEvent(
   const racedLabelState = new Map<string, boolean>();
   for (const event of racedEvents) racedLabelState.set(String(event.label?.name || ""), String(event.event || "").toLowerCase() === "labeled");
 
-  const newerRequest = finalRequestId !== requestEventId && !beforeTransitionEventIds.has(finalRequestId);
-  if (newerRequest) {
-    github.movePrLabels(env.githubRepo, number, { add: requestLabel });
-    labelsAfterReplacement.add(requestLabel);
+  if (newerRequestLabels.length > 0) {
+    github.movePrLabels(env.githubRepo, number, { add: newerRequestLabels });
+    for (const label of newerRequestLabels) labelsAfterReplacement.add(label);
     github.movePrLabels(env.githubRepo, number, { remove: env.inProgressLabel });
     labelsAfterReplacement.delete(env.inProgressLabel);
   }
@@ -955,7 +965,9 @@ function consumeRequestEvent(
   const unrelatedToRemove = [...racedLabelState].filter(([label, present]) => !present && labelsAfterReplacement.has(label)).map(([label]) => label);
   if (unrelatedToAdd.length > 0) github.movePrLabels(env.githubRepo, number, { add: unrelatedToAdd });
   if (unrelatedToRemove.length > 0) github.movePrLabels(env.githubRepo, number, { remove: unrelatedToRemove });
-  if (finalRequestId !== requestEventId) throw new StaleLaunchError(`PR #${number} ${requestLabel} request changed after label transition`);
+  if (newerRequestLabels.length > 0) {
+    throw new StaleLaunchError(`PR #${number} ${newerRequestLabels.join(", ")} request changed after label transition`);
+  }
 
   const expectedLabelSet = new Set(nextLabels);
   for (const [label, present] of racedLabelState) present ? expectedLabelSet.add(label) : expectedLabelSet.delete(label);

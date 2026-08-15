@@ -1,14 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 const { mergeReviewedPr } = require("../extensions/deadloop/automations/merge-reviewed-pr.ts");
-const renderReviewClaimComment = (_binding: unknown) => "<!-- obsolete claim comment -->";
 
 const expectedHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const activeReviewState = {
-  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
-  requestLabel: "agent:review",
-  requiredLabels: ["agent:in-progress"],
-};
 const eligiblePr = {
   state: "OPEN",
   isDraft: false,
@@ -29,13 +23,8 @@ function runMerge(options: {
   enabled?: { githubRepositoryId: string; githubRepo: string; firstEnableAutoMerge: boolean; firstStartPending: boolean; autoMergeAcknowledged: boolean };
   pr?: Record<string, unknown>;
   review?: typeof approvedReview;
-  reviewClaim?: boolean;
   repository?: { id: string; nameWithOwner: string };
-  claimTargetNumber?: number;
-  finalRace?: "expiry" | "comment" | "request" | "head" | "labels";
-  currentConfiguration?: Record<string, unknown>;
-  dateUnavailable?: boolean;
-  editedClaim?: boolean;
+  finalRace?: "head" | "repository";
   onHistoryCheck?: (count: number) => void;
 } = {}) {
   const commands: string[][] = [];
@@ -45,18 +34,7 @@ function runMerge(options: {
   let autoMergeChecks = 0;
   let historyChecks = 0;
   let prReads = 0;
-  let eventReads = 0;
-  let commentReads = 0;
-  let dateReads = 0;
-  const authoritativeReviewClaim = {
-    binding: {
-      repositoryId: "R_repo", repository: "owner/repo", targetNumber: options.claimTargetNumber ?? 24,
-      requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a",
-      authority: { durationSeconds: 3600 }, activeState: activeReviewState,
-    },
-    commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, obsoleteDurationSeconds: 3600,
-    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-  };
+  let repositoryReads = 0;
   let markedReady = false;
   let action: number;
   try {
@@ -73,29 +51,12 @@ function runMerge(options: {
       historyObservation: "/state/runs/reviewer/pr-review-history-accepted.json",
       inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked",
-      ...(options.reviewClaim !== false ? { reviewClaim: authoritativeReviewClaim } : {}),
     },
     {
       loadAttemptRecord: () => ({
         role: "reviewer", repository: "owner/repo", target: { kind: "pull-request", number: 24 },
         inputRevision: { head: expectedHead },
       }),
-      ...(options.reviewClaim !== false ? {
-        loadCurrentReviewClaimConfiguration: () => ({
-          reviewerMaxRuntimeSeconds: 3500,
-          cleanupGraceSeconds: 100,
-          obsoleteDurationSeconds: 3600,
-          managedLabels: activeReviewState.managedLabels,
-          requestLabel: "agent:review",
-          requiredLabels: ["agent:in-progress"],
-          repositoryId: "R_repo",
-          repository: "owner/repo",
-          authorizedLogins: ["deadloop-bot"],
-          authenticatedLogin: "deadloop-bot",
-          reviewerAgent: "pi",
-          ...options.currentConfiguration,
-        }),
-      } : {}),
       withLock: (_project: unknown, operation: (enabled: unknown) => number) => {
         lockHeld = true;
         try {
@@ -128,7 +89,11 @@ function runMerge(options: {
       run: (args: string[]) => {
         commands.push(args);
         if (args[1] === "repo" && args[2] === "view") {
-          return { status: 0, stdout: JSON.stringify(options.repository || { id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
+          repositoryReads += 1;
+          const repository = repositoryReads >= 3 && options.finalRace === "repository"
+            ? { id: "R_other", nameWithOwner: "other/repo" }
+            : options.repository || { id: "R_repo", nameWithOwner: "owner/repo" };
+          return { status: 0, stdout: JSON.stringify(repository), stderr: "" };
         }
         if (args[1] === "pr" && args[2] === "ready") {
           markedReady = true;
@@ -140,32 +105,10 @@ function runMerge(options: {
           const basePr = markedReady ? { ...observed, isDraft: false, mergeStateStatus: "CLEAN" } : observed;
           const finalPr = prReads >= 3 && options.finalRace === "head"
             ? { ...basePr, headRefOid: "b".repeat(40) }
-            : prReads >= 3 && options.finalRace === "labels"
-              ? { ...basePr, labels: [...eligiblePr.labels, { name: "agent:blocked" }] }
-              : basePr;
+            : basePr;
           return { status: 0, stdout: JSON.stringify(finalPr), stderr: "" };
         }
-        if (args.some((arg) => arg.endsWith("/events"))) {
-          eventReads += 1;
-          const id = eventReads >= 2 && options.finalRace === "request" ? 23 : 22;
-          return { status: 0, stdout: JSON.stringify([[], [{ id, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
-        }
-        if (args.some((arg) => arg.endsWith("/comments"))) {
-          commentReads += 1;
-          const binding = {
-            repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22",
-            role: "reviewer", revision: expectedHead, owner: "host-a",
-            authority: { durationSeconds: 3600 }, activeState: activeReviewState,
-          };
-          const comments = commentReads >= 2 && options.finalRace === "comment" ? [] : [{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: options.editedClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }];
-          return { status: 0, stdout: JSON.stringify([[], comments]), stderr: "" };
-        }
         if (args[1] === "api" && args[2] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
-        if (args[1] === "api") {
-          dateReads += 1;
-          const date = dateReads >= 2 && options.finalRace === "expiry" ? "Mon, 20 Jul 2026 11:01:00 GMT" : "Mon, 20 Jul 2026 10:03:00 GMT";
-          return { status: 0, stdout: options.dateUnavailable ? "" : `date: ${date}`, stderr: "" };
-        }
         mutationObservedInsideLock = lockHeld;
         const status = options.mergeStatus ?? 0;
         return { status, stdout: "", stderr: status ? "head commit changed" : "" };
@@ -289,6 +232,22 @@ describe("reviewed PR merge", () => {
 
   it("fails closed when the blocked label is added", () => {
     expect(() => runMerge({ pr: { ...eligiblePr, labels: [...eligiblePr.labels, { name: "agent:blocked" }] } })).toThrow("PR is blocked");
+  });
+
+  it("fails closed when the live repository ID differs from enablement", () => {
+    expect(() => runMerge({ repository: { id: "R_other", nameWithOwner: "owner/repo" } })).toThrow("repository identity changed");
+  });
+
+  it("fails closed when the live repository name differs from enablement", () => {
+    expect(() => runMerge({ repository: { id: "R_repo", nameWithOwner: "other/repo" } })).toThrow("repository identity changed");
+  });
+
+  it("fails closed when the exact PR head races a final merge guard", () => {
+    expect(() => runMerge({ finalRace: "head" })).toThrow("PR head changed");
+  });
+
+  it("fails closed when repository identity races immediately before merge", () => {
+    expect(() => runMerge({ finalRace: "repository" })).toThrow("repository identity changed");
   });
 
   it("fails closed when GitHub's atomic head guard rejects the merge", () => {

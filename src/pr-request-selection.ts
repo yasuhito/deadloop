@@ -1,3 +1,5 @@
+const { compareGithubTimelineEvents } = require("./github-timeline-order.ts");
+
 /**
  * Deterministic pull request Agent-request order.
  *
@@ -32,13 +34,7 @@ function latestPrRequestEvent(events: TimelineEvent[], requestLabel: string): Ti
     && String(event.label?.name || "") === requestLabel
     && String(event.id || event.node_id || ""),
   );
-  matching.sort((left, right) => {
-    const time = Date.parse(String(left.created_at || left.createdAt || ""))
-      - Date.parse(String(right.created_at || right.createdAt || ""));
-    return time || String(left.id || left.node_id).localeCompare(
-      String(right.id || right.node_id), undefined, { numeric: true },
-    );
-  });
+  matching.sort(compareGithubTimelineEvents);
   return matching.at(-1) || null;
 }
 

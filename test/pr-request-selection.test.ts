@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { blockedPrLabelMove, orderedPrRequestLabels, selectPrRequest } = require("../src/pr-request-selection.ts");
+const { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, selectPrRequest } = require("../src/pr-request-selection.ts");
 
 const requestLabels = {
   updateBranch: "agent:update-branch",
@@ -33,6 +33,13 @@ describe("pull request Agent request selection", () => {
 
   it("honours a project that renamed its request labels", () => {
     expect(selectPrRequest(["review-please"], { ...requestLabels, review: "review-please" })?.role).toBe("reviewer");
+  });
+
+  it("uses numeric event identity to order requests with the same timestamp", () => {
+    expect(latestPrRequestEvent([
+      { id: "9", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } },
+      { id: "10", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } },
+    ], "agent:review")?.id).toBe("10");
   });
 
   it("lists the request labels in the order they are processed", () => {

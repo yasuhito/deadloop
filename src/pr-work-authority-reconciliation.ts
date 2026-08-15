@@ -1,3 +1,5 @@
+const { compareGithubTimelineEvents } = require("./github-timeline-order.ts");
+
 type JsonObject = Record<string, any>;
 
 type RequestObservation = { kind: "current" | "superseded" | "missing" | "ambiguous" };
@@ -53,18 +55,12 @@ function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDec
   return { action: "block", reason, labels: blockLabels(input, preserveRequests), cleanup, invalidatesRequests: !preserveRequests };
 }
 
-function eventTime(event: JsonObject): number {
-  return Date.parse(String(event.created_at || event.createdAt || ""));
-}
-
 function eventId(event: JsonObject): string {
   return String(event.id || event.node_id || "");
 }
 
-/** GitHub event order: server timestamp first and immutable event ID as the tie-breaker. */
-function compareGithubEvents(left: JsonObject, right: JsonObject): number {
-  const time = eventTime(left) - eventTime(right);
-  return time || eventId(left).localeCompare(eventId(right), undefined, { numeric: true });
+function eventTime(event: JsonObject): number {
+  return Date.parse(String(event.created_at || event.createdAt || ""));
 }
 
 /**
@@ -104,7 +100,7 @@ function latestBlockedEvent(
     && eventLabel(event) === blockedLabel
     && (owner === undefined || eventActor(event) === owner)
     && eventId(event))
-    .sort(compareGithubEvents)
+    .sort(compareGithubTimelineEvents)
     .at(-1) || null;
 }
 
