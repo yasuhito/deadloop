@@ -91,12 +91,12 @@ When("deadloop completes approval processing for the current pull request", func
         reviewPromise: "/state/reviewer-promise.json",
         inProgressLabel: "agent:in-progress",
         blockedLabel: "agent:blocked",
-        reviewClaim: {
-          inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-        },
       },
       {
-        loadSavedReviewClaim: () => ({ inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked" }),
+        loadAttemptRecord: () => ({
+          role: "reviewer", repository: "owner/repo", target: { kind: "pull-request", number: 25 },
+          inputRevision: { head: currentHead },
+        }),
         withLock: (_project: unknown, operation: (enabled: unknown) => number) => operation({
           firstEnableAutoMerge: false,
           firstStartPending: false,

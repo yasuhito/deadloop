@@ -5,7 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { finalizeReviewRepair } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
-const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
+const renderReviewClaimComment = (_binding: unknown) => "<!-- obsolete claim comment -->";
+const { createPreparedAttempt } = require("../src/attempt-lifecycle-runtime.cjs");
 const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 const { finalizeBranchUpdate } = require("../extensions/deadloop/automations/pr-branch-update-finalize.ts");
 
@@ -51,6 +52,14 @@ function fixture() {
 
 function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind") {
   const { repo, remote, rootOid, expectedHead, configPath } = fixture();
+  const stateDir = path.dirname(repo);
+  const runDir = path.join(stateDir, "runs", "attempt");
+  createPreparedAttempt(runDir, {
+    attemptId: "attempt", launchUuid: "launch", project: "demo", repository: "owner/repo",
+    role: "review-repair", target: { kind: "pull-request", number: 1 }, inputRevision: { head: expectedHead },
+    branch, worktreePath: repo, agentName: "repair", workspaceLabel: "repair",
+    promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
+  });
   const hookPath = path.join(repo, ".git", "hooks", "pre-push");
   const updateRef = race === "delete"
     ? `git --git-dir='${remote}' update-ref -d '${ref}'`
@@ -87,12 +96,12 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
     return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
   };
   const reviewClaim = {
-    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, obsoleteDurationSeconds: 86700,
     requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const common = {
     repo,
-    attemptRecord: "/state/runs/attempt/attempt.json",
+    attemptRecord: path.join(runDir, "attempt.json"),
     projectRepo: repo,
     githubRepo: "owner/repo",
     pr: "1",
@@ -100,17 +109,18 @@ function runRace(finalizer: "repair" | "branch-update", race: "delete" | "rewind
     expectedHead,
     remote: "origin",
     automationDir: "/automation",
-    stateDir: "/state",
+    stateDir,
     enabledAt: 1,
     checkCommand: "true",
     resultFile: path.join(path.dirname(repo), "result.json"),
-    reviewClaim,
+    inProgressLabel: "agent:in-progress",
+    blockedLabel: "agent:blocked",
   };
   const ops = {
     run,
     loadSavedReviewClaim: () => reviewClaim,
     loadCurrentReviewClaimConfiguration: () => ({
-      reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+      reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, obsoleteDurationSeconds: 86700,
       managedLabels: activeReviewState.managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
       repositoryId: "R_repo", repository: "owner/repo", authorizedLogins: ["deadloop-bot"],
       authenticatedLogin: "deadloop-bot", reviewerAgent: "pi",
@@ -180,7 +190,7 @@ process.exit(result.status ?? 1);
       authority: { durationSeconds: 86700 }, activeState: activeReviewState,
     };
     const reviewClaim = {
-      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, obsoleteDurationSeconds: 86700,
       requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     };
     writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({

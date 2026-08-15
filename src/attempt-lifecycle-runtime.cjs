@@ -62,7 +62,7 @@ function parseAttemptRecord(value) {
   if (value.outputRevision !== undefined) sha(value.outputRevision, "outputRevision");
   if (value.autoMergePolicy !== undefined && typeof value.autoMergePolicy !== "boolean") throw new Error("Invalid attempt record: autoMergePolicy must be boolean");
   if (value.reviewHistoryRequired !== undefined && typeof value.reviewHistoryRequired !== "boolean") throw new Error("Invalid attempt record: reviewHistoryRequired must be boolean");
-  if (value.reviewClaim !== undefined && (!value.reviewClaim || typeof value.reviewClaim !== "object" || Array.isArray(value.reviewClaim))) throw new Error("Invalid attempt record: reviewClaim must be an object");
+  if (value.requestEventId !== undefined && (typeof value.requestEventId !== "string" || !value.requestEventId.trim())) throw new Error("Invalid attempt record: requestEventId must be a non-empty string");
   return {
     attemptId: nonEmpty(value.attemptId, "attemptId"),
     launchUuid: nonEmpty(value.launchUuid, "launchUuid"),
@@ -91,7 +91,7 @@ function parseAttemptRecord(value) {
     ...(value.autoMergePolicy === undefined ? {} : { autoMergePolicy: value.autoMergePolicy }),
     ...(value.reviewHistoryRequired === undefined ? {} : { reviewHistoryRequired: value.reviewHistoryRequired }),
     ...(requiredVerification(value.requiredVerification, false) ? { requiredVerification: requiredVerification(value.requiredVerification, true) } : {}),
-    ...(value.reviewClaim === undefined ? {} : { reviewClaim: value.reviewClaim }),
+    ...(value.requestEventId === undefined ? {} : { requestEventId: value.requestEventId }),
     ...(abandonment ? { abandonment } : {}),
     ...(authorityRelease ? { authorityRelease } : {}),
   };
@@ -179,7 +179,7 @@ function assertAdvance(current, next) {
   if (!sameIdentity(current, next)) throw new Error("Attempt record identity cannot change");
   for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy", "reviewHistoryRequired"]) if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
-  if (current.reviewClaim !== undefined && JSON.stringify(current.reviewClaim) !== JSON.stringify(next.reviewClaim)) throw new Error("Attempt record reviewClaim cannot change");
+  if (current.requestEventId !== next.requestEventId) throw new Error("Attempt record requestEventId cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"]) if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (current.abandonment !== undefined && JSON.stringify(current.abandonment) !== JSON.stringify(next.abandonment)) throw new Error("Attempt record abandonment evidence cannot change");
   if (current.authorityRelease !== undefined && JSON.stringify(current.authorityRelease) !== JSON.stringify(next.authorityRelease)) throw new Error("Attempt record authority-release evidence cannot change");

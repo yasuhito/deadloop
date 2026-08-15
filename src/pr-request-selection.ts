@@ -23,6 +23,25 @@ export type PrRequest = {
   label: string;
 };
 
+type TimelineEvent = Record<string, any>;
+
+/** Latest labeled event for one configured request label, ordered by server event identity. */
+function latestPrRequestEvent(events: TimelineEvent[], requestLabel: string): TimelineEvent | null {
+  const matching = events.filter((event) =>
+    String(event.event || "").toLowerCase() === "labeled"
+    && String(event.label?.name || "") === requestLabel
+    && String(event.id || event.node_id || ""),
+  );
+  matching.sort((left, right) => {
+    const time = Date.parse(String(left.created_at || left.createdAt || ""))
+      - Date.parse(String(right.created_at || right.createdAt || ""));
+    return time || String(left.id || left.node_id).localeCompare(
+      String(right.id || right.node_id), undefined, { numeric: true },
+    );
+  });
+  return matching.at(-1) || null;
+}
+
 /**
  * Processing order: a branch update first, because a conflicted head makes both
  * later roles work against a revision that cannot merge; then the repair, which
@@ -79,4 +98,4 @@ function blockedPrLabelMove(
   };
 }
 
-module.exports = { blockedPrLabelMove, orderedPrRequestLabels, prRequestLabelForRole, selectPrRequest };
+module.exports = { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, prRequestLabelForRole, selectPrRequest };

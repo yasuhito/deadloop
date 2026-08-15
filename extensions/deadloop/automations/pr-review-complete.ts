@@ -61,7 +61,6 @@ function completion(args: JsonObject, ops: ReviewCompletionOps = { dispatch }): 
     updateBranchLabel: String(args.updateBranchLabel || ""),
     inProgressLabel: String(args.inProgressLabel || ""),
     blockedLabel: String(args.blockedLabel || ""),
-    ...(args.reviewClaim ? { reviewClaim: typeof args.reviewClaim === "string" ? args.reviewClaim : JSON.stringify(args.reviewClaim) } : {}),
   });
 }
 

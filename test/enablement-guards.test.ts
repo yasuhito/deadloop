@@ -15,29 +15,10 @@ const {
 } = require("../src/driver-enablement.cjs");
 const { acquireLockSync, reclaimStale } = require("../src/enablement-lock.cjs");
 const { GUARDED_OPERATION_TIMEOUT_MS, runGuarded } = require("../extensions/deadloop/automations/guarded-operation.ts");
-const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 const { assertWorkerHead, assertWorkerPushBinding, parseArgs: parseGuardedPushArgs, runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.ts");
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
 const originalPath = process.env.PATH;
 const sandboxes: string[] = [];
-const activeReviewState = {
-  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
-  requestLabel: "agent:review",
-  requiredLabels: ["agent:in-progress"],
-};
-const currentReviewConfiguration = {
-  reviewerMaxRuntimeSeconds: 86400,
-  cleanupGraceSeconds: 300,
-  authoritySeconds: 86700,
-  managedLabels: activeReviewState.managedLabels,
-  requestLabel: "agent:review",
-  requiredLabels: ["agent:in-progress"],
-  repositoryId: "R_repo",
-  repository: "owner/repo",
-  authorizedLogins: ["deadloop-bot"],
-  authenticatedLogin: "deadloop-bot",
-  reviewerAgent: "pi",
-};
 
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-guard-"));
@@ -215,10 +196,10 @@ describe("enablement mutation guards", () => {
       () => events.push("github-claim"),
       () => events.push("launched"),
       {
-        claimBeforePrepare: true,
+        consumeBeforePrepare: true,
         revalidate: () => events.push("revalidated"),
         prepareAttempt: () => events.push("prepared"),
-        recordClaim: () => events.push("claim-recorded"),
+        recordGithubMutation: () => events.push("claim-recorded"),
       },
     );
 
@@ -234,7 +215,7 @@ describe("enablement mutation guards", () => {
         { ...project, enabledAt: 1 },
         () => events.push("github-claim"),
         () => { events.push("runner-open"); throw new Error("runner failed"); },
-        { prepareAttempt: () => events.push("prepared"), recordClaim: () => events.push("claim-recorded") },
+        { prepareAttempt: () => events.push("prepared"), recordGithubMutation: () => events.push("claim-recorded") },
       );
     } catch {}
     expect(events).toEqual(["prepared", "github-claim", "claim-recorded", "runner-open"]);
@@ -346,230 +327,6 @@ describe("enablement mutation guards", () => {
       { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "issue", command: ["gh", "issue", "comment", "1", "-R", project.githubRepo, "--body", "done"] },
       () => ({ status: 0, stdout: "{}", stderr: "" }),
     )).toThrow("exact non-PR issue target");
-  });
-
-  it("rejects a guarded PR mutation without an active claim", () => {
-    const project = fixture();
-    writeState(project, { enabledAt: 1 });
-
-    expect(() => runGuarded({
-      projectRepo: project.repoPath,
-      githubRepo: project.githubRepo,
-      stateDir: project.stateDir,
-      enabledAt: 1,
-      targetKind: "pull-request",
-      command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"],
-    })).toThrow("saved attempt record is required");
-  });
-
-  it("rejects a guarded PR mutation disguised as an issue target without an active claim", () => {
-    const project = fixture();
-    writeState(project, { enabledAt: 1 });
-
-    expect(() => runGuarded({
-      projectRepo: project.repoPath,
-      githubRepo: project.githubRepo,
-      stateDir: project.stateDir,
-      enabledAt: 1,
-      targetKind: "issue",
-      command: ["gh", "issue", "comment", "24", "-R", project.githubRepo, "--body", "done"],
-    }, (_command: string, args: string[]) => ({
-      status: 0,
-      stdout: args[0] === "api" ? JSON.stringify({ number: 24, pull_request: { url: "https://api.github.test/pulls/24" } }) : "",
-      stderr: "",
-    }))).toThrow("exact non-PR issue target");
-  });
-
-  it("rejects a guarded PR mutation for another claim target", () => {
-    const project = fixture();
-    writeState(project, { enabledAt: 1 });
-    const reviewClaim = {
-      binding: { targetNumber: 24 },
-    };
-
-    expect(() => runGuarded({
-      projectRepo: project.repoPath,
-      githubRepo: project.githubRepo,
-      stateDir: project.stateDir,
-      enabledAt: 1,
-      targetKind: "pull-request",
-      attemptRecord: path.join(project.stateDir, "runs", "reviewer", "attempt.json"),
-      reviewClaim,
-      command: ["gh", "pr", "comment", "25", "-R", project.githubRepo, "--body", "done"],
-    }, () => { throw new Error("unexpected command"); }, () => reviewClaim)).toThrow("claim target does not match");
-  });
-
-  it("authorizes a guarded mutation when the active claim is on a later REST page", () => {
-    const project = fixture();
-    writeState(project, { enabledAt: 1 });
-    const head = "a".repeat(40);
-    const binding = {
-      repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
-      authority: { durationSeconds: 86700 }, activeState: activeReviewState,
-    };
-    const claim = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
-    const reviewClaim = {
-      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-    };
-    let mutated = false;
-    runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord: path.join(project.stateDir, "runs", "reviewer", "attempt.json"), reviewClaim, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
-      (_command: string, args: string[]) => {
-        if (args[0] === "api" && args[1] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
-        if (args[0] === "repo" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: project.githubRepo }), stderr: "" };
-        if (args[0] === "pr" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] }), stderr: "" };
-        if (args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[], [{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
-        if (args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[], [claim]]), stderr: "" };
-        if (args[0] === "api") return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
-        mutated = true;
-        return { status: 0, stdout: "", stderr: "" };
-      },
-      () => reviewClaim,
-      () => currentReviewConfiguration,
-    );
-
-    expect(mutated).toBe(true);
-  });
-
-  function guardedDateFailureScenario(editClaim = false, expireAfterObservations = false) {
-    const project = fixture();
-    writeState(project, { enabledAt: 1 });
-    const head = "a".repeat(40);
-    const binding = {
-      repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
-      authority: { durationSeconds: 86700 }, activeState: activeReviewState,
-    };
-    const claim = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: editClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
-    const comments: Record<string, unknown>[] = [claim];
-    const labels = ["agent:in-progress", "customer:keep"];
-    const mutations: string[] = [];
-    let observationComplete = false;
-    const reviewClaim = {
-      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-    };
-    try {
-      runGuarded(
-        { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord: path.join(project.stateDir, "runs", "reviewer", "attempt.json"), reviewClaim, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "requested"] },
-        (_command: string, args: string[]) => {
-          if (args[0] === "api" && args[1] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
-          if (args[0] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: project.githubRepo }), stderr: "" };
-          if (args[0] === "pr" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: head, labels: labels.map((name) => ({ name })) }), stderr: "" };
-          if (args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
-          if (args.some((arg) => arg.endsWith("/comments"))) {
-            observationComplete = true;
-            return { status: 0, stdout: JSON.stringify([comments]), stderr: "" };
-          }
-          if (args[0] === "api") return {
-            status: 0,
-            stdout: expireAfterObservations && observationComplete ? "date: Tue, 21 Jul 2026 10:06:01 GMT" : "",
-            stderr: "",
-          };
-          if (args[0] === "pr" && args[1] === "comment") {
-            mutations.push(String(args.at(-1)) === "requested" ? "requested" : "visible-comment");
-            comments.push({ id: 102, body: String(args.at(-1)) });
-          }
-          if (args[0] === "pr" && args[1] === "edit") {
-            mutations.push("blocked");
-            labels.push("agent:blocked");
-          }
-          return { status: 0, stdout: "", stderr: "" };
-        },
-        () => reviewClaim,
-        () => currentReviewConfiguration,
-      );
-    } catch {}
-    return { mutations, labels };
-  }
-
-  it("performs no generic mutation when the claim expires while observations are being collected", () => {
-    expect(guardedDateFailureScenario(false, true).mutations).toEqual([]);
-  });
-
-  it("visibly blocks a generic guarded PR mutation when only REST Date is unavailable", () => {
-    expect(guardedDateFailureScenario().mutations).toEqual(["visible-comment", "blocked"]);
-  });
-
-  it("performs no generic GitHub mutation when the claim is edited and REST Date is unavailable", () => {
-    expect(guardedDateFailureScenario(true).mutations).toEqual([]);
-  });
-
-  it("preserves unrelated labels while visibly blocking a guarded Date failure", () => {
-    expect(guardedDateFailureScenario().labels).toEqual(["agent:in-progress", "customer:keep", "agent:blocked"]);
-  });
-
-  it.each([
-    ["comment", ["gh", "pr", "comment", "24", "-R", "owner/repo", "--body", "done"]],
-    ["label/ready", ["gh", "pr", "edit", "24", "-R", "owner/repo", "--remove-label", "agent:in-progress"]],
-  ] as const)("blocks generic guarded %s mutations for every current activation race", (_seam, command) => {
-    const project = fixture();
-    writeState(project, { enabledAt: 1 });
-    const head = "a".repeat(40);
-    const binding = {
-      repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
-      authority: { durationSeconds: 86700 }, activeState: activeReviewState,
-    };
-    const reviewClaim = {
-      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi",
-      reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-    };
-    let mutated = false;
-    const failures = [
-      { ...currentReviewConfiguration, reviewerMaxRuntimeSeconds: 80000, authoritySeconds: 80300 },
-      { ...currentReviewConfiguration, cleanupGraceSeconds: 100, authoritySeconds: 86500 },
-      { ...currentReviewConfiguration, requestLabel: "custom:review" },
-      { ...currentReviewConfiguration, authorizedLogins: ["other-bot"] },
-      { ...currentReviewConfiguration, authenticatedLogin: "other-bot" },
-    ];
-    const results = failures.map((configuration) => {
-      mutated = false;
-      let error = "";
-      try {
-        runGuarded(
-          { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord: path.join(project.stateDir, "runs", "reviewer", "attempt.json"), reviewClaim, command: [...command] },
-          (_command: string, args: string[]) => {
-            if (args[0] === "api" && args[1] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
-            mutated = true;
-            return { status: 0, stdout: "", stderr: "" };
-          },
-          () => reviewClaim,
-          () => configuration,
-        );
-      } catch (caught) { error = String(caught); }
-      return { error: error.includes("current enablement"), mutated };
-    });
-
-    expect(results).toEqual(failures.map(() => ({ error: true, mutated: false })));
-  });
-
-  it("suppresses a generic PR mutation when the winning comment disappears during final inspection", () => {
-    const project = fixture();
-    writeState(project, { enabledAt: 1 });
-    const head = "a".repeat(40);
-    const binding = {
-      repositoryId: "R_repo", repository: project.githubRepo, targetNumber: 24, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
-      authority: { durationSeconds: 86700 }, activeState: activeReviewState,
-    };
-    const reviewClaim = {
-      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-    };
-
-    expect(() => runGuarded(
-      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord: path.join(project.stateDir, "runs", "reviewer", "attempt.json"), reviewClaim, command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
-      (_command: string, args: string[]) => {
-        if (args[0] === "api" && args[1] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
-        if (args[0] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: project.githubRepo }), stderr: "" };
-        if (args[0] === "pr") return { status: 0, stdout: JSON.stringify({ state: "OPEN", headRefOid: head, labels: [{ name: "agent:in-progress" }] }), stderr: "" };
-        if (args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
-        if (args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: "[[]]", stderr: "" };
-        return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
-      },
-      () => reviewClaim,
-      () => currentReviewConfiguration,
-    )).toThrow("reauthorized");
   });
 
   it("rejects merge through the generic guarded operation", () => {

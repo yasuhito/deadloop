@@ -224,12 +224,8 @@ Then("deadloop starts a new Reviewer without reusing the completed Reviewer", fu
   assert.deepEqual({ oldPaneClosed: actions.includes("pane close pane-old"), newStarts: actions.filter((action) => action.startsWith("agent start dl-r-44-")).length }, { oldPaneClosed: false, newStarts: 1 });
 });
 
-/**
- * The launch observes the review history, then claims, and claiming posts a comment. The completion
- * dispatcher is judged against the recorded observation, so a record taken before the claim makes
- * every completed review read as a changed conversation and be thrown away.
- */
-Then("The recorded review history holds the claim comment the launch posted", function (this: RequeuedReviewWorld) {
+/** Request consumption changes labels, not the review conversation recorded for completion. */
+Then("The recorded review history is unchanged by request consumption", function (this: RequeuedReviewWorld) {
   if (!this.configDir) throw new Error("requeued pull request state is missing");
   const runsRoot = path.join(this.configDir, "deadloop", "runs");
   const recorded = fs.readdirSync(runsRoot)
@@ -238,7 +234,7 @@ Then("The recorded review history holds the claim comment the launch posted", fu
     .flatMap((file) => JSON.parse(fs.readFileSync(file, "utf8")).history.conversationComments)
     .map((comment: { id: string }) => String(comment.id));
 
-  assert.deepEqual(recorded, ["7700", "9901"]);
+  assert.deepEqual(recorded, ["7700"]);
 });
 
 Then("The Reviewer handoff uses the repaired head", function (this: RequeuedReviewWorld) {

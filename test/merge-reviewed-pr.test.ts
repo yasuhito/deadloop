@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 const { mergeReviewedPr } = require("../extensions/deadloop/automations/merge-reviewed-pr.ts");
-const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
+const renderReviewClaimComment = (_binding: unknown) => "<!-- obsolete claim comment -->";
 
 const expectedHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const activeReviewState = {
@@ -54,7 +54,7 @@ function runMerge(options: {
       requestEventId: "22", role: "reviewer", revision: expectedHead, owner: "host-a",
       authority: { durationSeconds: 3600 }, activeState: activeReviewState,
     },
-    commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, authoritySeconds: 3600,
+    commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 3500, cleanupGraceSeconds: 100, obsoleteDurationSeconds: 3600,
     requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   let markedReady = false;
@@ -76,12 +76,15 @@ function runMerge(options: {
       ...(options.reviewClaim !== false ? { reviewClaim: authoritativeReviewClaim } : {}),
     },
     {
+      loadAttemptRecord: () => ({
+        role: "reviewer", repository: "owner/repo", target: { kind: "pull-request", number: 24 },
+        inputRevision: { head: expectedHead },
+      }),
       ...(options.reviewClaim !== false ? {
-        loadSavedReviewClaim: () => authoritativeReviewClaim,
         loadCurrentReviewClaimConfiguration: () => ({
           reviewerMaxRuntimeSeconds: 3500,
           cleanupGraceSeconds: 100,
-          authoritySeconds: 3600,
+          obsoleteDurationSeconds: 3600,
           managedLabels: activeReviewState.managedLabels,
           requestLabel: "agent:review",
           requiredLabels: ["agent:in-progress"],
@@ -177,61 +180,11 @@ function runMerge(options: {
 }
 
 describe("reviewed PR merge", () => {
-  it("fails closed when the active review claim is omitted", () => {
-    expect(() => runMerge({ reviewClaim: false })).toThrow("active review claim is required");
-  });
-
   it("passes the reviewed head to GitHub's atomic merge guard", () => {
     expect(runMerge().commands.at(-1)).toEqual([
       "gh", "pr", "merge", "24", "-R", "owner/repo",
       "--squash", "--delete-branch", "--match-head-commit", expectedHead,
     ]);
-  });
-
-  it("authorizes merge when the active claim is on a later REST page", () => {
-    expect(runMerge({ reviewClaim: true }).action).toBe(0);
-  });
-
-  it("rejects merge when the live repository ID differs from the claim", () => {
-    expect(() => runMerge({ repository: { id: "R_other", nameWithOwner: "owner/repo" } })).toThrow("reauthorized");
-  });
-
-  it("rejects merge when the live canonical repository name differs from the claim", () => {
-    expect(() => runMerge({ repository: { id: "R_repo", nameWithOwner: "owner/renamed" } })).toThrow("reauthorized");
-  });
-
-  it("rejects merge when the actual target PR differs from the claim", () => {
-    expect(() => runMerge({ claimTargetNumber: 25 })).toThrow("reauthorized");
-  });
-
-  it("visibly blocks ready/merge when only REST Date is unavailable", () => {
-    let commands: string[][] = [];
-    try { runMerge({ dateUnavailable: true }); } catch (error) { commands = (error as { commands?: string[][] }).commands || []; }
-
-    expect(commands.some((command) => command[1] === "pr" && command[2] === "comment")).toBe(true);
-  });
-
-  it("adds only blocked at the ready/merge Date-failure seam", () => {
-    let commands: string[][] = [];
-    try { runMerge({ dateUnavailable: true }); } catch (error) { commands = (error as { commands?: string[][] }).commands || []; }
-
-    expect(commands.find((command) => command[1] === "pr" && command[2] === "edit")?.slice(-2)).toEqual(["--add-label", "agent:blocked"]);
-  });
-
-  it("performs no ready/merge GitHub mutation for an edited claim with missing REST Date", () => {
-    let commands: string[][] = [];
-    try { runMerge({ dateUnavailable: true, editedClaim: true }); } catch (error) { commands = (error as { commands?: string[][] }).commands || []; }
-
-    expect(commands.some((command) => command[1] === "pr" && ["comment", "edit", "merge"].includes(command[2]))).toBe(false);
-  });
-
-  it.each([
-    ["shortened runtime", { reviewerMaxRuntimeSeconds: 3400, authoritySeconds: 3500 }],
-    ["changed labels", { requestLabel: "agent:review-v2" }],
-    ["changed identities", { authorizedLogins: ["deadloop-bot", "other-bot"] }],
-    ["changed repository", { repositoryId: "R_other" }],
-  ])("stops merge before mutation when current claim configuration has %s", (_name, currentConfiguration) => {
-    expect(() => runMerge({ currentConfiguration })).toThrow("current enablement");
   });
 
   it("revalidates current auto-merge configuration while holding the enablement lock", () => {
@@ -251,38 +204,6 @@ describe("reviewed PR merge", () => {
   it("fails closed when auto-merge was disabled after launch", () => {
     expect(() => runMerge({ autoMergeEnabled: false })).toThrow("autoMerge is not currently enabled");
   });
-
-  it("rechecks auto-merge before the final fresh claim observation adjacent to merge", () => {
-    const commands = runMerge().commands;
-    expect(commands.slice(-9).map((args) => args.join(" "))).toEqual([
-      "config",
-      "gh pr view 24 -R owner/repo --json state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,labels",
-      "gh api user --jq .login",
-      "gh repo view owner/repo --json id,nameWithOwner",
-      "gh pr view 24 -R owner/repo --json state,headRefOid,labels",
-      "gh api --paginate --slurp repos/owner/repo/issues/24/events",
-      "gh api --paginate --slurp repos/owner/repo/issues/24/comments",
-      "gh api --include repos/owner/repo",
-      `gh pr merge 24 -R owner/repo --squash --delete-branch --match-head-commit ${expectedHead}`,
-    ]);
-  });
-
-  it("stops before the final claim observation when auto-merge is disabled", () => {
-    expect(() => runMerge({ autoMergeEnabled: [true, false] })).toThrow("autoMerge is not currently enabled");
-  });
-
-  it.each([
-    ["expiry", "reauthorized"],
-    ["comment", "reauthorized"],
-    ["request", "reauthorized"],
-    ["head", "PR head changed"],
-    ["labels", "PR is blocked"],
-  ] as const)(
-    "suppresses merge when %s changes during the final claim inspection",
-    (finalRace, expected) => {
-      expect(() => runMerge({ finalRace })).toThrow(expected);
-    },
-  );
 
   it("rejects auto-merge during the first safe start", () => {
     expect(() => runMerge({ enabled: { githubRepositoryId: "R_repo", githubRepo: "owner/repo", firstEnableAutoMerge: true, firstStartPending: true, autoMergeAcknowledged: false } })).toThrow("first safe start");
@@ -362,8 +283,8 @@ describe("reviewed PR merge", () => {
     expect(() => runMerge({ pr: { ...eligiblePr, statusCheckRollup: [{}] } })).toThrow("CI check state is unknown");
   });
 
-  it("fails closed when the active in-progress claim is removed", () => {
-    expect(() => runMerge({ pr: { ...eligiblePr, labels: [] } })).toThrow("required in-progress claim label");
+  it("fails closed when the active in-progress label is removed", () => {
+    expect(() => runMerge({ pr: { ...eligiblePr, labels: [] } })).toThrow("required in-progress label");
   });
 
   it("fails closed when the blocked label is added", () => {

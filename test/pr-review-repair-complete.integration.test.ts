@@ -5,8 +5,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
-const { completion } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
+const renderReviewClaimComment = (_binding: unknown) => "<!-- obsolete deadloop review claim -->";
 const roots: string[] = [];
 const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
@@ -83,7 +82,7 @@ function runCompletion(options: {
     authority: { durationSeconds: 86700 }, activeState: activeReviewState,
   };
   const reviewClaim = {
-    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, obsoleteDurationSeconds: 86700,
     requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: options.editedClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
@@ -245,7 +244,7 @@ async function runConcurrentSuccessRetries(): Promise<number> {
     authority: { durationSeconds: 86700 }, activeState: activeReviewState,
   };
   const reviewClaim = {
-    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, obsoleteDurationSeconds: 86700,
     requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
   const checks = [{ command: "npm test", result: "passed" }];
@@ -309,100 +308,6 @@ afterEach(() => {
 });
 
 describe("review repair deterministic completion", () => {
-  it.each([
-    ["runtime", { currentProject: { automations: [{ id: "demo:pr-reviewer", driverFile: "pr-reviewer-driver.ts", maxRuntimeSeconds: 80000, shutdownGraceSeconds: 300 }] } }],
-    ["grace", { currentProject: { automations: [{ id: "demo:pr-reviewer", driverFile: "pr-reviewer-driver.ts", maxRuntimeSeconds: 86400, shutdownGraceSeconds: 100 }] } }],
-    ["labels", { currentProject: { labels: { review: "custom:review" } } }],
-    ["identities", { currentProject: { automationLogins: ["other-bot"] } }],
-    ["authenticated login", { authenticatedLogin: "other-bot" }],
-    ["enablement", { enabled: false }],
-  ])("performs no repair completion comment or label mutation after current %s changes", (_name, change) => {
-    const result = runCompletion({
-      promise: { status: "complete", summary: "fixed", reason: "repair_pushed", repairs: [{ title: "Unsafe fallback", summary: "fixed" }], checks: [{ command: "npm test", result: "passed" }] },
-      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks: [{ command: "npm test", result: "passed" }] },
-      ...change,
-    });
-    expect({ posted: result.posted, actions: result.actions }).toEqual({ posted: "", actions: "" });
-  });
-  it.each(["runtime", "grace", "managed label", "authorized identity", "authenticated login", "enablement"] as const)(
-    "suppresses the repair-completion label mutation when %s races after the success comment",
-    (raceAfterComment) => {
-      const checks = [{ command: "npm test", result: "passed" }];
-      const result = runCompletion({
-        promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed" }], checks },
-        receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
-        raceAfterComment,
-      });
-      expect(result.actions).toBe("");
-    },
-  );
-
-  it("posts no repair success when the claim expires while completion observations are being collected", () => {
-    const checks = [{ command: "npm test", result: "passed" }];
-    const result = runCompletion({
-      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed" }], checks },
-      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
-      expireAfterObservations: true,
-    });
-
-    expect(result.posted).toBe("");
-  });
-
-  it("visibly blocks repair completion when only REST Date is unavailable", () => {
-    const checks = [{ command: "npm test", result: "passed" }];
-    const result = runCompletion({
-      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed", paths: ["src/review.ts"] }], checks },
-      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
-      dateUnavailable: true,
-    });
-
-    expect(result.posted).toContain("GitHub server-time evidence");
-  });
-
-  it("adds only blocked at the repair-completion Date-failure seam", () => {
-    const checks = [{ command: "npm test", result: "passed" }];
-    const result = runCompletion({
-      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed", paths: ["src/review.ts"] }], checks },
-      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
-      dateUnavailable: true,
-    });
-
-    expect(result.actions.trim().split(/\s+/).slice(-2)).toEqual(["--add-label", "agent:blocked"]);
-  });
-
-  it("performs no repair-completion mutation for an edited claim with missing REST Date", () => {
-    const checks = [{ command: "npm test", result: "passed" }];
-    const result = runCompletion({
-      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "fixed", paths: ["src/review.ts"] }], checks },
-      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
-      dateUnavailable: true,
-      editedClaim: true,
-    });
-
-    expect({ posted: result.posted, actions: result.actions }).toEqual({ posted: "", actions: "" });
-  });
-
-  it("fails before repair completion effects when the active review claim is omitted", () => {
-    expect(() => completion({})).toThrow("active review claim is required");
-  });
-
-  it.each(["--attempt-record", "--project-id", "--review-claim"])("requires mutation authority argument %s", (missingFlag) => {
-    const { parseArgs } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
-    const values = {
-      promise: "/state/runs/one/promise.json", attemptRecord: "/state/runs/one/attempt.json", projectId: "demo",
-      result: "/state/runs/one/finalizer-result.json", contract: "/state/runs/one/review-contract.json",
-      projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: "1", pr: "24",
-      branch: "agent/issue-24", expectedHead: oldHead, attemptKey: key, reviewLabel: "review",
-      implementLabel: "implement", updateBranchLabel: "update-branch",
-      inProgressLabel: "in-progress", blockedLabel: "blocked", reviewClaim: "{}",
-    };
-    const args = Object.entries(values).flatMap(([name, value]) => {
-      const flag = `--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)}`;
-      return flag === missingFlag ? [] : [flag, value];
-    });
-    expect(() => parseArgs(args)).toThrow();
-  });
-
   it("posts success after the promise, finalizer receipt, and live head agree", () => {
     const checks = [{ command: "npm test", result: "passed" }];
     const result = runCompletion({

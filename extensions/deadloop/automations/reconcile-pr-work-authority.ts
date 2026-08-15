@@ -8,7 +8,6 @@ const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.ts");
 const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.ts");
-const { classifyActiveReviewClaim, classifyPushedHeadAuthorityTransition, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
 const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
 const { provenAttemptCompletion } = require("./attempt-completion-proof.ts");
 
@@ -67,25 +66,6 @@ function replaceReconciledLabels(github: any, repository: string, number: number
     throw new Error("PR label recovery postcondition was not reached");
   }
   return observed;
-}
-
-/**
- * Only an authorized claim loses its classification to the managed-label replacement: its exact
- * active state stops matching. Every other kind stays derivable from evidence the replacement
- * cannot change, so revalidation after the mutation must keep expecting it.
- */
-function revalidatedReplacedClaimKind(claimKind: string, hasRecord: boolean): string {
-  return hasRecord && claimKind === "authorized" ? "ambiguous" : claimKind;
-}
-
-function claimCommentSnapshot(comments: JsonObject[]): string[] {
-  return comments.filter((comment) => parseReviewClaim(comment.body) !== null)
-    .map((comment) => JSON.stringify([comment.id || comment.databaseId, comment.created_at || comment.createdAt, comment.updated_at || comment.updatedAt, comment.body])).sort();
-}
-
-function revalidatedMissingRecordClaimKind(expectedClaimKind: string, initialComments: JsonObject[], liveComments: JsonObject[]): string {
-  return JSON.stringify(claimCommentSnapshot(liveComments)) === JSON.stringify(claimCommentSnapshot(initialComments))
-    ? expectedClaimKind : "ambiguous";
 }
 
 function loadAttempts(stateDir: string, projectId: string, repository: string): { valid: JsonObject[]; released: JsonObject[]; malformed: JsonObject[] } {
@@ -231,7 +211,6 @@ function completeProvenStoppedAttempt(
     updateBranchLabel: workflowLabels.updateBranchLabel,
     inProgressLabel: workflowLabels.inProgressLabel,
     blockedLabel: workflowLabels.blockedLabel,
-    reviewClaim: record.reviewClaim,
     ...handler.args(record, runDir),
   };
   const complete = ops.complete
@@ -260,63 +239,18 @@ function pushedHeadTransition(record: JsonObject, pr: JsonObject): { originalHea
   return transition.headOid === String(pr.headRefOid || "").toLowerCase() ? transition : null;
 }
 
-function classifyClaim(
-  pr: JsonObject,
+function classifyRequest(
   events: JsonObject[],
-  comments: JsonObject[],
-  restHeaders: string,
+  currentLabels: string[],
   record: JsonObject,
   requestLabels: string[],
-  repositoryIdentity: JsonObject,
-  repository: string,
-): { claim: { kind: string }; requestEventId: string } {
-  const request = latestConfiguredRequest(events, labels(pr), requestLabels);
-  const requestEventId = String(request?.id || request?.node_id || "");
-  if (!record.reviewClaim) return { claim: { kind: "missing" }, requestEventId };
-  const target = { repositoryId: String(repositoryIdentity.id || ""), repository: String(repositoryIdentity.nameWithOwner || repository), targetNumber: Number(pr.number) };
-  // An attempt that proved it pushed the live head keeps its authority until its completion handler
-  // runs. Without this, success would read as an unknown owner and stop the pull request.
-  const transition = pushedHeadTransition(record, pr);
-  if (transition) {
-    if (requestEventId && requestEventId !== String(record.reviewClaim.binding?.requestEventId || "")) {
-      return { claim: { kind: "superseded" }, requestEventId };
-    }
-    const transitioned = classifyPushedHeadAuthorityTransition(
-      pr, events, comments, restHeaders, record.reviewClaim, target, transition,
-    );
-    return {
-      claim: transitioned.kind === "claim_invalid" ? { kind: "malformed" }
-        : transitioned.kind === "binding_mismatch" ? { kind: "ambiguous" }
-          : transitioned,
-      requestEventId,
-    };
-  }
-  const timeStatus = classifyReviewClaimTimeStatus(pr, events, comments, restHeaders, record.reviewClaim, target);
-  if (timeStatus.kind !== "authorized") {
-    return {
-      claim: timeStatus.kind === "claim_invalid" ? { kind: "malformed" }
-        : timeStatus.kind === "binding_mismatch" ? { kind: "ambiguous" }
-          : timeStatus,
-      requestEventId,
-    };
-  }
-  if (requestEventId && requestEventId !== String(record.reviewClaim.binding?.requestEventId || "")) {
-    return { claim: { kind: "superseded" }, requestEventId };
-  }
-  const classified = classifyActiveReviewClaim(
-    pr,
-    events,
-    comments,
-    restHeaders,
-    record.reviewClaim,
-    target,
-  );
-  return {
-    claim: classified.kind === "claim_invalid" ? { kind: "malformed" }
-      : classified.kind === "binding_mismatch" ? { kind: "ambiguous" }
-        : classified,
-    requestEventId,
-  };
+): { request: { kind: string }; requestEventId: string } {
+  const latest = latestConfiguredRequest(events, currentLabels, requestLabels);
+  const requestEventId = String(latest?.id || latest?.node_id || "");
+  const consumedEventId = String(record.requestEventId || "");
+  if (!consumedEventId) return { request: { kind: "ambiguous" }, requestEventId };
+  if (requestEventId && requestEventId !== consumedEventId) return { request: { kind: "superseded" }, requestEventId };
+  return { request: { kind: "current" }, requestEventId };
 }
 
 function sameStringSet(left: string[], right: string[]): boolean {
@@ -326,7 +260,7 @@ function sameStringSet(left: string[], right: string[]): boolean {
 function reconciliationAuthorityMatches(expected: JsonObject, observed: JsonObject): boolean {
   return String(observed.state || "").toUpperCase() === "OPEN"
     && String(observed.headRefOid || "").toLowerCase() === String(expected.headRefOid || "").toLowerCase()
-    && observed.claimKind === expected.claimKind
+    && observed.requestKind === expected.requestKind
     && observed.requestEventId === expected.requestEventId
     && sameStringSet(observed.managedLabels || [], expected.managedLabels || []);
 }
@@ -387,23 +321,19 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     }
     const malformed = attempts.malformed.filter((attempt) => Number(attempt.target?.number) === number);
     const events = github.listPrTimelineEvents(args.githubRepo, number);
-    const comments = github.listPrComments(args.githubRepo, number);
-    let claim: { kind: string };
+    let request: { kind: string };
     let runtime: { kind: string };
     let record: JsonObject | undefined;
 
     if (malformed.length || matching.length > 1) {
-      claim = { kind: "ambiguous" };
+      request = { kind: "ambiguous" };
       runtime = { kind: "ambiguous" };
     } else if (matching.length === 0) {
-      claim = { kind: "missing" };
+      request = { kind: "missing" };
       runtime = { kind: "ambiguous" };
     } else {
       record = matching[0];
-      claim = classifyClaim(
-        { ...pr, labels: labels(pr) }, events, comments, github.readRestResponseHeaders(args.githubRepo),
-        record, requestLabels, repositoryIdentity, args.githubRepo,
-      ).claim;
+      request = classifyRequest(events, labels(pr), record, requestLabels).request;
       try { runtime = observeAttemptRuntime(runner, record, args.projectRepo); }
       catch { runtime = { kind: "unreachable" }; }
     }
@@ -427,7 +357,7 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       }
     }
 
-    const input = { pr: { ...pr, labels: labels(pr) }, claim, runtime, requestLabels, inProgressLabel, blockedLabel };
+    const input = { pr: { ...pr, labels: labels(pr) }, request, runtime, requestLabels, inProgressLabel, blockedLabel };
     let blockStarted: { reason: string; timelineEventIds: string[] } | undefined;
     try {
       const receipt = JSON.parse(fs.readFileSync(recoveryFile, "utf8"));
@@ -440,35 +370,28 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       }
     } catch {}
     const initialRequest = latestConfiguredRequest(events, labels(input.pr), requestLabels);
-    let expectedRequestEventId = record ? classifyClaim(
-      input.pr, events, comments, github.readRestResponseHeaders(args.githubRepo),
-      record, requestLabels, repositoryIdentity, args.githubRepo,
-    ).requestEventId : String(initialRequest?.id || initialRequest?.node_id || "");
+    let expectedRequestEventId = record
+      ? classifyRequest(events, labels(input.pr), record, requestLabels).requestEventId
+      : String(initialRequest?.id || initialRequest?.node_id || "");
     const managed = [...requestLabels, inProgressLabel, blockedLabel];
-    const revalidate = (expectedManagedLabels: string[], expectedClaimKind: string): string[] => {
+    const revalidate = (expectedManagedLabels: string[], expectedRequestKind: string): string[] => {
       const livePr = github.getPr(args.githubRepo, number);
       const liveLabels = labels({ labels: github.listPrLabels(args.githubRepo, number) });
       const liveEvents = github.listPrTimelineEvents(args.githubRepo, number);
-      const liveComments = github.listPrComments(args.githubRepo, number);
       const liveRequest = latestConfiguredRequest(liveEvents, liveLabels, requestLabels);
-      const observed = record ? classifyClaim(
-        { ...livePr, labels: liveLabels }, liveEvents, liveComments, github.readRestResponseHeaders(args.githubRepo),
-        record, requestLabels, repositoryIdentity, args.githubRepo,
-      ) : {
-        claim: {
-          kind: revalidatedMissingRecordClaimKind(expectedClaimKind, comments, liveComments),
-        },
+      const observed = record ? classifyRequest(liveEvents, liveLabels, record, requestLabels) : {
+        request: { kind: expectedRequestKind },
         requestEventId: String(liveRequest?.id || liveRequest?.node_id || ""),
       };
       if (!reconciliationAuthorityMatches({
-        state: "OPEN", headRefOid: pr.headRefOid, claimKind: expectedClaimKind,
+        state: "OPEN", headRefOid: pr.headRefOid, requestKind: expectedRequestKind,
         requestEventId: expectedRequestEventId,
         managedLabels: expectedManagedLabels.filter((label) => managed.includes(label)),
       }, {
-        state: livePr.state, headRefOid: livePr.headRefOid, claimKind: observed.claim.kind,
+        state: livePr.state, headRefOid: livePr.headRefOid, requestKind: observed.request.kind,
         requestEventId: observed.requestEventId,
         managedLabels: liveLabels.filter((label) => managed.includes(label)),
-      })) throw new Error("PR work authority changed before recovery mutation");
+      })) throw new Error("PR reconciliation state changed before recovery mutation");
       return liveLabels;
     };
     const result = await applyPrWorkAuthorityReconciliation(input, {
@@ -483,14 +406,13 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       listTimelineEvents: () => github.listPrTimelineEvents(args.githubRepo, number),
       listComments: () => github.listPrComments(args.githubRepo, number),
       replaceLabels: (next: string[], options: { invalidatesRequests: boolean }) => guarded(() => {
-        const current = revalidate(input.pr.labels, claim.kind);
+        const current = revalidate(input.pr.labels, request.kind);
         const apply = options.invalidatesRequests ? replaceReconciledLabels : moveReconciledLabels;
         input.pr.labels = apply(github, args.githubRepo, number, current, next, managed);
-        claim = { kind: revalidatedReplacedClaimKind(claim.kind, Boolean(record)) };
         if (!next.some((label) => requestLabels.includes(label))) expectedRequestEventId = "";
       }),
       comment: (body: string) => guarded(() => {
-        revalidate(input.pr.labels, claim.kind);
+        revalidate(input.pr.labels, request.kind);
         return github.createPrComment(args.githubRepo, number, body);
       }),
       recordReleaseStarted: record ? () => writeJsonAtomically(recoveryFile, {
@@ -532,8 +454,7 @@ async function main(): Promise<void> {
 
 if (require.main === module) void main();
 module.exports = {
-  claimCommentSnapshot,
-  classifyClaim,
+  classifyRequest,
   completeProvenStoppedAttempt,
   latestConfiguredRequest,
   loadAttempts,
@@ -543,6 +464,4 @@ module.exports = {
   reconciledLabelReplacement,
   reconciliationAuthorityMatches,
   replaceReconciledLabels,
-  revalidatedMissingRecordClaimKind,
-  revalidatedReplacedClaimKind,
 };

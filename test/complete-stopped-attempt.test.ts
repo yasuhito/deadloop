@@ -48,7 +48,7 @@ function stoppedAttempt(overrides: { role?: string; reason?: string; receipt?: u
     worktreePath: runDir, agentName: "dl-u-31-abcdef123456", workspaceLabel: role,
     promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
     phase: "agent_started", lastSuccessfulPhase: "agent_started",
-    reviewClaim: { binding: { repository: "owner/repo", targetNumber: 31 }, authoritySeconds: 3600 },
+    reviewClaim: { binding: { repository: "owner/repo", targetNumber: 31 }, obsoleteDurationSeconds: 3600 },
     runDir,
   };
   const write = (name: string, value: unknown) => fs.writeFileSync(path.join(runDir, name), JSON.stringify(value));
@@ -83,7 +83,7 @@ function stoppedReview(outcome = "human_required") {
     worktreePath: runDir, agentName: "dl-r-31-abcdef123456", workspaceLabel: "reviewer",
     promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
     phase: "agent_started", lastSuccessfulPhase: "agent_started",
-    reviewClaim: { binding: { repository: "owner/repo", targetNumber: 31 }, authoritySeconds: 3600 },
+    reviewClaim: { binding: { repository: "owner/repo", targetNumber: 31 }, obsoleteDurationSeconds: 3600 },
     runDir,
   };
   const write = (name: string, value: unknown) => fs.writeFileSync(path.join(runDir, name), JSON.stringify(value));
@@ -139,12 +139,11 @@ describe("completing a proven stopped attempt", () => {
     expect(calls[0].handlerArgs.expectedHead).toBe(startHead);
   });
 
-  it("hands the completion handler the attempt's saved review claim", () => {
+  it("does not hand a saved review claim to the completion handler", () => {
     const calls: any[] = [];
-    const record = stoppedAttempt();
-    complete(record, pushedHead, calls);
+    complete(stoppedAttempt(), pushedHead, calls);
 
-    expect(calls[0].handlerArgs.reviewClaim).toEqual(record.reviewClaim);
+    expect(calls[0].handlerArgs.reviewClaim).toBeUndefined();
   });
 
   it("completes a proven review repair through its own handler", () => {

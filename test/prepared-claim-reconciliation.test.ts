@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPreparedAttempt, readAttemptRecord } from "../src/attempt-lifecycle";
 
-const { hasExactClaim, reconcileLocked } = require("../extensions/deadloop/automations/reconcile-prepared-attempt.ts");
+const { hasExactRequestConsumption, reconcileLocked } = require("../extensions/deadloop/automations/reconcile-prepared-attempt.ts");
 
 const roots: string[] = [];
 function setup() {
@@ -48,21 +48,21 @@ describe("prepared attempt claim reconciliation", () => {
     const data = setup();
     const runner = { runJson: () => ({ state: "OPEN", labels: [{ name: "custom:ready" }, { name: "custom:claimed" }] }) };
     const result = reconcileLocked(data.args, runner);
-    expect(result.driverAction).toBe("prepared_claim_reconciled");
+    expect(result.driverAction).toBe("prepared_request_consumption_reconciled");
   });
 
   it("rejects a reviewer claim when the selected PR head changed", () => {
     const data = setup();
     const record = { ...readAttemptRecord(data.runDir), role: "reviewer", target: { kind: "pull-request", number: 12 } };
     const item = { state: "OPEN", headRefName: record.branch, headRefOid: "b".repeat(40), labels: [{ name: "custom:review" }, { name: "custom:claimed" }], comments: [] };
-    expect(hasExactClaim(record, item, data.args)).toBe(false);
+    expect(hasExactRequestConsumption(record, item, data.args)).toBe(false);
   });
 
   it("requires the exact repair-attempt marker for a review-repair claim", () => {
     const data = setup();
     const record = { ...readAttemptRecord(data.runDir), role: "review-repair", target: { kind: "pull-request", number: 12 } };
     const item = { state: "OPEN", headRefName: record.branch, headRefOid: record.inputRevision.head, labels: [{ name: "custom:review" }, { name: "custom:claimed" }], comments: [{ body: `<!-- deadloop:review-repair-attempt key=${record.attemptId} head=${record.inputRevision.head} review=abc -->` }] };
-    expect(hasExactClaim(record, item, data.args)).toBe(true);
+    expect(hasExactRequestConsumption(record, item, data.args)).toBe(true);
   });
 
   it("is idempotent after restart once the exact claim was durably reconciled", () => {

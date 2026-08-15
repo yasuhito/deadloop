@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 const {
-  assertBranchUpdateClaimHeld,
+  assertBranchUpdateRequestConsumed,
   assertBranchUpdateRequestSelectable,
 } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
 const { renderBranchUpdateMarker } = require("../extensions/deadloop/automations/pr-branch-update-state.ts");
@@ -21,8 +21,8 @@ function env(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** The pull request as GitHub shows it once the branch-update request has been claimed. */
-const claimedPr = {
+/** The pull request as GitHub shows it once the branch-update request has been consumed. */
+const consumedPr = {
   number: 31, state: "OPEN", headRefName: "agent/issue-31", headRefOid: head,
   isDraft: false, mergeable: "CONFLICTING",
   labels: [{ name: "agent:in-progress" }],
@@ -30,7 +30,7 @@ const claimedPr = {
 };
 
 const selectablePr = {
-  ...claimedPr,
+  ...consumedPr,
   labels: [{ name: "agent:update-branch" }],
   comments: [],
 };
@@ -52,30 +52,30 @@ describe("branch update launch revalidation", () => {
   });
 
   it("rejects a repeated attempt for the same head and base before the claim", () => {
-    const attempted = { ...selectablePr, comments: claimedPr.comments };
+    const attempted = { ...selectablePr, comments: consumedPr.comments };
 
     expect(() => assertBranchUpdateRequestSelectable(attempted, env(), head, base, {
       livePrs: () => [attempted], agents: () => ({ result: { agents: [] } }), decisionFor: () => delegating,
     })).toThrow("branch-update target changed");
   });
 
-  it("accepts the claimed pull request after its own claim consumed the request label", () => {
-    expect(() => assertBranchUpdateClaimHeld(claimedPr, env(), head, base, { binding: {} }, {
-      reauthorize: () => claimedPr, decisionFor: () => delegating,
+  it("accepts the consumed pull request after its own consumption removed the request label", () => {
+    expect(() => assertBranchUpdateRequestConsumed(consumedPr, env(), head, base, "request-22", {
+      request: () => ({ id: "request-22" }), reauthorize: () => consumedPr, decisionFor: () => delegating,
     })).not.toThrow();
   });
 
-  it("rejects a claimed pull request that lost its active claim state", () => {
-    const released = { ...claimedPr, labels: [{ name: "agent:review" }] };
+  it("rejects a consumed pull request that lost its active workflow state", () => {
+    const released = { ...consumedPr, labels: [{ name: "agent:review" }] };
 
-    expect(() => assertBranchUpdateClaimHeld(claimedPr, env(), head, base, { binding: {} }, {
-      reauthorize: () => released, decisionFor: () => delegating,
-    })).toThrow("claimed branch-update state");
+    expect(() => assertBranchUpdateRequestConsumed(consumedPr, env(), head, base, "request-22", {
+      request: () => ({ id: "request-22" }), reauthorize: () => released, decisionFor: () => delegating,
+    })).toThrow("consumed branch-update state");
   });
 
-  it("rejects a claimed pull request whose branch-update target moved", () => {
-    expect(() => assertBranchUpdateClaimHeld(claimedPr, env(), head, base, { binding: {} }, {
-      reauthorize: () => claimedPr, decisionFor: () => ({ ...delegating, headOid: "c".repeat(40) }),
+  it("rejects a consumed pull request whose branch-update target moved", () => {
+    expect(() => assertBranchUpdateRequestConsumed(consumedPr, env(), head, base, "request-22", {
+      request: () => ({ id: "request-22" }), reauthorize: () => consumedPr, decisionFor: () => ({ ...delegating, headOid: "c".repeat(40) }),
     })).toThrow("branch-update target changed");
   });
 });

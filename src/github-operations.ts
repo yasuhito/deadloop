@@ -113,9 +113,6 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
       return Array.isArray(pages) ? pages.flat() : [];
     },
 
-    readRestResponseHeaders(repo: string): string {
-      return commandRunner.runText(["gh", "api", "--include", `repos/${repo}`]);
-    },
 
     createPrComment(repo: string, prNumber: string | number, body: string): JsonObject {
       beforeMutation();

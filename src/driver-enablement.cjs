@@ -32,13 +32,13 @@ function withEnabledDriverLaunch(project, mutateWorkflowState, launchAgent, opti
   return withEnabledProjectLock(project, (_enabled, recheck) => {
     options.revalidate?.(_enabled);
     recheck();
-    if (options.claimBeforePrepare) {
-      // Review claims are the authority source: a losing host must not leave a
-      // journal, workspace, branch, or runner mutation behind.
+    if (options.consumeBeforePrepare) {
+      // PR request consumption happens before the journal: a stale host must not leave a
+      // workspace, branch, or runner mutation behind.
       mutateWorkflowState(recheck, _enabled);
       recheck();
-      // Re-observe the persisted GitHub claim before creating any local
-      // attempt, workspace, branch, or runner state.
+      // Re-observe the consumed request event and live target before creating any local
+      // workspace, branch, or runner state.
       options.revalidate?.(_enabled);
       recheck();
       options.prepareAttempt?.();
@@ -48,8 +48,8 @@ function withEnabledDriverLaunch(project, mutateWorkflowState, launchAgent, opti
       recheck();
       mutateWorkflowState(recheck, _enabled);
     }
-    // The winning claim is durable before any runner/workspace operation.
-    options.recordClaim?.();
+    // The GitHub transition is journaled before any runner/workspace operation.
+    options.recordGithubMutation?.();
     recheck();
     return launchAgent(recheck);
   }, options);

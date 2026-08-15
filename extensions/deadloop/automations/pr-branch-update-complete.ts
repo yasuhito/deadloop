@@ -12,19 +12,13 @@ const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
-const {
-  classifyPushedHeadAuthorityTransition,
-  readGithubRestResponseHeaders,
-  savedReviewClaimContract,
-} = require("./pr-review-claim.ts");
-const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
 const { labelNames } = require("../../../src/launch-revalidation.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
 const REQUIRED_ARGUMENTS = [
   "promise", "attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "enabledAt",
-  "pr", "expectedHead", "reviewLabel", "inProgressLabel", "blockedLabel", "reviewClaim",
+  "pr", "expectedHead", "reviewLabel", "inProgressLabel", "blockedLabel",
 ];
 
 function parseArgs(argv: string[]): JsonObject {
@@ -42,32 +36,12 @@ function parseArgs(argv: string[]): JsonObject {
 }
 
 function completion(args: JsonObject): DriverResult {
-  let suppliedReviewClaim: JsonObject;
-  try {
-    suppliedReviewClaim = typeof args.reviewClaim === "string" ? JSON.parse(args.reviewClaim) : args.reviewClaim;
-  } catch {
-    throw new Error("active branch-update claim must be valid JSON before completion");
-  }
   const runner = createCommandRunner();
   runHerdrPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
   const location = canonicalAttemptLocation(args);
   const record = readAttemptRecord(location.runDir);
   assertAttemptProjectBinding(record, args);
   if (record.role !== "branch-update") throw new Error("branch-update completion requires a branch-update attempt");
-  const reviewClaim = savedReviewClaimContract(location.attemptRecord, suppliedReviewClaim, {
-    stateDir: String(args.stateDir),
-    githubRepo: String(args.githubRepo),
-    projectId: String(args.projectId),
-    targetNumber: Number(args.pr),
-  });
-  for (const field of ["inProgressLabel", "blockedLabel"] as const) {
-    if (String(reviewClaim[field] || "") !== String(args[field] || "")) {
-      throw new Error(`${field} does not exactly match the saved branch-update claim contract`);
-    }
-  }
-  if (!(reviewClaim.binding?.activeState?.managedLabels || []).includes(String(args.reviewLabel || ""))) {
-    throw new Error("reviewLabel is not managed by the saved branch-update claim contract");
-  }
   if (path.resolve(String(args.promise)) !== path.resolve(String(record.promiseFile))) {
     throw new Error("promise does not match the attempt journal's completion report path");
   }
@@ -85,16 +59,18 @@ function completion(args: JsonObject): DriverResult {
     enabledAt: Number(args.enabledAt),
   }, (enabled: JsonObject, recheck: () => void) => {
     const enabledLogin = String(enabled.automationLogin || "").trim().toLowerCase();
+    if (String(enabled.githubRepo || "") !== String(args.githubRepo)
+      || !String(enabled.githubRepositoryId || "")) throw new Error("enablement repository identity changed before branch-update completion");
     const observation = createGithubOperations(runner);
     const observe = (): JsonObject => {
       const current = observation.getPr(String(args.githubRepo), String(args.pr));
-      return {
-        pr: current,
-        events: observation.listPrTimelineEvents(String(args.githubRepo), String(args.pr)),
-        comments: observation.listPrComments(String(args.githubRepo), String(args.pr)),
-        labels: labelNames(current),
-      };
+      return { pr: current, labels: labelNames(current) };
     };
+    const identity = observation.getRepositoryIdentity(String(args.githubRepo));
+    if (String(identity.id || "") !== String(enabled.githubRepositoryId || "")
+      || String(identity.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
+      throw new Error("live repository identity changed before branch-update completion");
+    }
     const before = observe();
     // The review request may already exist when a retry re-enters after the label move landed.
     if (before.labels.includes(String(args.reviewLabel)) && !before.labels.includes(String(args.inProgressLabel))) {
@@ -106,17 +82,12 @@ function completion(args: JsonObject): DriverResult {
       recheck();
       const login = runner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
       if (!login || login !== enabledLogin) throw new Error("authenticated identity lost branch-update completion authority");
-      assertCurrentReviewClaimAuthority(reviewClaim, String(args.stateDir), enabled, login);
       const current = observe();
-      const authority = classifyPushedHeadAuthorityTransition(
-        current.pr, current.events, current.comments,
-        readGithubRestResponseHeaders(runner, String(args.githubRepo)),
-        reviewClaim,
-        { repositoryId: String(enabled.githubRepositoryId), repository: String(args.githubRepo), targetNumber: Number(args.pr) },
-        { originalHeadOid: String(args.expectedHead), headOid: revision },
-      );
-      if (authority.kind !== "authorized") {
-        throw new Error("active branch-update claim could not be reauthorized before the review request");
+      if (String(current.pr.state || "").toUpperCase() !== "OPEN"
+        || String(current.pr.headRefOid || "").toLowerCase() !== revision
+        || !current.labels.includes(String(args.inProgressLabel))
+        || current.labels.includes(String(args.blockedLabel))) {
+        throw new Error("branch-update completion target changed before the review request");
       }
     };
     reauthorize();

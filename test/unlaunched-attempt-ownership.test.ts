@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { reconcile } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
-const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
+const renderReviewClaimComment = (_binding: unknown) => "<!-- obsolete deadloop review claim -->";
 
 const HEAD = "a".repeat(40);
 const roots: string[] = [];
@@ -32,7 +32,7 @@ function claim(requestEventId: string, commentId: string) {
   };
   return {
     binding, commentId, authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot",
-    reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
+    reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, obsoleteDurationSeconds: 86700,
     requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
   };
 }
