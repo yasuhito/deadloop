@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 const { decideRepairPushGuard, parseArgs: parseFinalizerArgs } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
 const { recoveryComment, sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
-const { repairWorkerPrompt, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
+const { requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 
 const head = "a".repeat(40);
 
@@ -25,15 +25,6 @@ describe("automatic review repair", () => {
 
   it("rejects repair mutation while blocked", () => {
     expect(() => requireManagedPr({ labels: [{ name: "agent:in-progress" }, { name: "agent:blocked" }] }, { inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked" })).toThrow("in-progress");
-  });
-
-  it("renders no review-claim argument in the repair finalizer command", () => {
-    const prompt = repairWorkerPrompt("24", "feature", head, [], "attempt", "/state/promise.json", "/worktree", {
-      automationDir: "/automation", repoPath: "/repo", githubRepo: "owner/repo", remote: "origin",
-      stateDir: "/state", enabledAt: 1, checkCommand: "npm test", inProgressLabel: "agent:in-progress",
-      blockedLabel: "agent:blocked",
-    });
-    expect(prompt).not.toContain("--review-claim");
   });
 
   it("requires configured workflow labels in finalizer arguments", () => {

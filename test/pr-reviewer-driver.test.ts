@@ -1,25 +1,21 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 const {
   consumeRequestEvent,
   resolveAuthorizedAutomationLogins,
 } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
 
-const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-
 function scenario(
   extraComments: Record<string, unknown>[] = [],
   concurrentRequestLabel?: string,
   concurrentBoundary: "replacement" | "after-live-read" = "replacement",
+  cancelConcurrentRequest = false,
 ) {
   const head = "a".repeat(40);
   const request = { id: "request-22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } };
-  const events = [request];
+  const events: Record<string, unknown>[] = [request];
   const pr: any = {
     number: 24, state: "OPEN", headRefName: "feature", headRefOid: head,
     labels: [{ name: "agent:review" }, { name: "customer:keep" }], comments: extraComments,
@@ -29,7 +25,10 @@ function scenario(
   const insertConcurrentRequest = () => {
     if (!concurrentRequestLabel || concurrentInserted) return;
     concurrentInserted = true;
-    events.push({ id: "request-23", event: "labeled", created_at: "2026-07-20T10:00:01Z", label: { name: concurrentRequestLabel } });
+    events.push({ id: "request-23", event: "labeled", created_at: "2026-07-20T10:00:01Z", actor: { login: "human" }, label: { name: concurrentRequestLabel } });
+    if (cancelConcurrentRequest) {
+      events.push({ id: "request-24", event: "unlabeled", created_at: "2026-07-20T10:00:02Z", actor: { login: "human" }, label: { name: concurrentRequestLabel } });
+    }
   };
   const github = {
     getRepositoryIdentity: () => ({ id: "R_repo", nameWithOwner: "owner/repo" }),
@@ -40,7 +39,12 @@ function scenario(
     listPrTimelineEvents: () => events,
     listPrLabels: () => pr.labels,
     replacePrLabels: (_repo: string, _number: number, next: string[]) => {
-      if (concurrentBoundary === "replacement") insertConcurrentRequest();
+      if (concurrentBoundary === "replacement") {
+        insertConcurrentRequest();
+        if (concurrentRequestLabel && !cancelConcurrentRequest) {
+          events.push({ id: "request-25", event: "unlabeled", created_at: "2026-07-20T10:00:03Z", actor: { login: "deadloop-bot" }, label: { name: concurrentRequestLabel } });
+        }
+      }
       pr.labels = next.map((name) => ({ name }));
     },
     movePrLabels: (_repo: string, _number: number, move: { add?: string[]; remove?: string[] }) => {
@@ -102,6 +106,21 @@ describe("PR request consumption", () => {
     expect(labels).toContain("agent:update-branch");
   });
 
+  it("stops review consumption for a concurrently cancelled branch-update request", () => {
+    expect(() => scenario([], "agent:update-branch", "replacement", true)).toThrow("request changed after label transition");
+  });
+
+  it.each(["agent:update-branch", "agent:implement", "agent:review"])(
+    "does not restore a concurrently cancelled %s request",
+    (label) => {
+      let labels: string[] = [];
+      try { scenario([], label, "replacement", true); } catch (error) {
+        labels = ((error as Error & { labels?: string[] }).labels || []);
+      }
+      expect(labels).not.toContain(label);
+    },
+  );
+
   it("stops when branch-update arrives after the live PR read but before the former event baseline", () => {
     expect(() => scenario([], "agent:update-branch", "after-live-read")).toThrow("request changed after label transition");
   });
@@ -114,20 +133,4 @@ describe("PR request consumption", () => {
     expect(labels).toContain("agent:update-branch");
   });
 
-  it("reviewer fixture output contains no claim marker", () => {
-    const stateDir = mkdtempSync(path.join(tmpdir(), "deadloop-reviewer-driver-"));
-    roots.push(stateDir);
-    const result = spawnSync("node", [
-      "extensions/deadloop/automations/pr-reviewer-driver.ts", "--fixture",
-      "test/fixtures/pr-reviewer-driver/fallback-review.json",
-    ], {
-      cwd: process.cwd(), encoding: "utf8",
-      env: {
-        ...process.env, DEADLOOP_PROJECT_ID: "demo", DEADLOOP_STATE_DIR: stateDir,
-        DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo",
-        DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
-      },
-    });
-    expect(result.stdout).not.toContain("deadloop:review-claim");
-  });
 });

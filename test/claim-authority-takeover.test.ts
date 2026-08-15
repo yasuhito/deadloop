@@ -83,8 +83,8 @@ describe("work authority takeover at claim time", () => {
     expect(takeover(stateDir)).toEqual(["attempt-0"]);
   });
 
-  it("releases a stopped attempt whatever its saved claim records", () => {
-    const stateDir = stateDirWith([{ reviewClaim: { binding: { requestEventId: "req-2" } } }]);
+  it("releases a stopped attempt whatever request event it consumed", () => {
+    const stateDir = stateDirWith([{ requestEventId: "req-2" }]);
 
     expect(takeover(stateDir)).toEqual(["attempt-0"]);
   });

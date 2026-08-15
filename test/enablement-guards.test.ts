@@ -117,6 +117,35 @@ function guardedPrFinalIdentityRace(race: "login" | "repository-id" | "repositor
   return mutations;
 }
 
+function guardedPrFinalStateRace(race: "closed" | "head" | "blocked"): number {
+  const project = fixture();
+  writeState(project, { enabledAt: 1 });
+  const attemptRecord = writeGuardedPrAttempt(project);
+  let prReads = 0;
+  let mutations = 0;
+  try {
+    runGuarded(
+      { projectRepo: project.repoPath, githubRepo: project.githubRepo, stateDir: project.stateDir, enabledAt: 1, targetKind: "pull-request", attemptRecord, inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", command: ["gh", "pr", "comment", "24", "-R", project.githubRepo, "--body", "done"] },
+      (_command: string, args: string[]) => {
+        if (args[0] === "api") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+        if (args[0] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: project.githubRepo }), stderr: "" };
+        if (args[0] === "pr" && args[1] === "view") {
+          prReads += 1;
+          const final = prReads >= 2;
+          return { status: 0, stdout: JSON.stringify({
+            state: final && race === "closed" ? "CLOSED" : "OPEN",
+            headRefOid: final && race === "head" ? "b".repeat(40) : "a".repeat(40),
+            labels: final && race === "blocked" ? [{ name: "agent:in-progress" }, { name: "agent:blocked" }] : [{ name: "agent:in-progress" }],
+          }), stderr: "" };
+        }
+        mutations += 1;
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    );
+  } catch {}
+  return mutations;
+}
+
 afterEach(() => {
   if (originalConfigDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = originalConfigDir;
@@ -488,6 +517,18 @@ describe("enablement mutation guards", () => {
     } catch {}
 
     expect(mutations).toBe(0);
+  });
+
+  it("does not mutate when the PR closes after enablement recheck", () => {
+    expect(guardedPrFinalStateRace("closed")).toBe(0);
+  });
+
+  it("does not mutate when the exact PR head changes after enablement recheck", () => {
+    expect(guardedPrFinalStateRace("head")).toBe(0);
+  });
+
+  it("does not mutate when the PR becomes blocked after enablement recheck", () => {
+    expect(guardedPrFinalStateRace("blocked")).toBe(0);
   });
 
   it("does not mutate when authenticated login races the final PR guard", () => {

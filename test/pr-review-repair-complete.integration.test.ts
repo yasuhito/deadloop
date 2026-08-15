@@ -5,16 +5,10 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const renderReviewClaimComment = (_binding: unknown) => "<!-- obsolete deadloop review claim -->";
 const roots: string[] = [];
 const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
 const key = "abcdef1234567890abcd";
-const activeReviewState = {
-  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
-  requestLabel: "agent:review",
-  requiredLabels: ["agent:in-progress"],
-};
 
 function writeCompatibleHerdr(bin: string): void {
   const herdr = path.join(bin, "herdr");
@@ -32,9 +26,6 @@ function runCompletion(options: {
   currentProject?: Record<string, unknown>;
   authenticatedLogin?: string;
   enabled?: boolean;
-  dateUnavailable?: boolean;
-  editedClaim?: boolean;
-  expireAfterObservations?: boolean;
   raceAfterComment?: "runtime" | "grace" | "managed label" | "authorized identity" | "authenticated login" | "enablement";
 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-repair-complete-"));
@@ -50,7 +41,6 @@ function runCompletion(options: {
   const postedFile = path.join(root, "posted.txt");
   const actionsFile = path.join(root, "actions.txt");
   const authLoginFile = path.join(root, "authenticated-login");
-  const observationFile = path.join(root, "claim-observation-complete");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(runDir, { recursive: true });
   fs.mkdirSync(projectRepo);
@@ -77,15 +67,6 @@ function runCompletion(options: {
   fs.writeFileSync(projectsFile, JSON.stringify({ projects: [{
     id: "demo", repoPath: projectRepo, githubRepo: "owner/repo", baseBranch, ...options.currentProject,
   }] }));
-  const binding = {
-    repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a",
-    authority: { durationSeconds: 86700 }, activeState: activeReviewState,
-  };
-  const reviewClaim = {
-    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, obsoleteDurationSeconds: 86700,
-    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-  };
-  const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: options.editedClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
   const outcome = String(options.promise.reason || "");
   const strongPromise = {
     schemaVersion: 1, attemptId: key, role: "review-repair",
@@ -105,7 +86,7 @@ function runCompletion(options: {
     role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
     branch: "agent/issue-24", worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
     workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
-    phase: "agent_started", lastSuccessfulPhase: "agent_started", reviewClaim,
+    phase: "agent_started", lastSuccessfulPhase: "agent_started", requestEventId: "22",
   }));
   fs.writeFileSync(
     contractFile,
@@ -122,9 +103,6 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if (args[0] === "api" && args[1] === "user") process.stdout.write(fs.readFileSync(process.env.AUTH_LOGIN_FILE, "utf8"));
-else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
-else if (args.some((arg) => arg.endsWith("/comments"))) { fs.writeFileSync(process.env.OBSERVATION_FILE, "complete"); process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))}); }
-else if (args[0] === "api" && args.includes("--include")) { const expired = process.env.EXPIRE_AFTER_OBSERVATIONS === "1" && fs.existsSync(process.env.OBSERVATION_FILE); process.stdout.write(expired ? "date: Tue, 21 Jul 2026 10:06:01 GMT" : ${JSON.stringify(options.dateUnavailable ? "" : "date: Mon, 20 Jul 2026 10:03:00 GMT")}); }
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:in-progress" }])},comments:${JSON.stringify(options.comments || [])}}));
 else if (args[0] === "pr" && args[1] === "comment") {
   fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
@@ -186,14 +164,11 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
       "agent:in-progress",
       "--blocked-label",
       "agent:blocked",
-      "--review-claim",
-      JSON.stringify(reviewClaim),
     ],
     { cwd: process.cwd(), encoding: "utf8", env: {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
       POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile, AUTH_LOGIN_FILE: authLoginFile,
       ENABLED_PROJECTS_FILE: enabledProjectsFile, PROJECTS_FILE: projectsFile,
-      OBSERVATION_FILE: observationFile, EXPIRE_AFTER_OBSERVATIONS: options.expireAfterObservations ? "1" : "0",
       RACE_AFTER_COMMENT: options.raceAfterComment || "",
     } },
   );
@@ -239,14 +214,6 @@ async function runConcurrentSuccessRetries(): Promise<number> {
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
   }] }));
-  const binding = {
-    repositoryId: "R_repo", repository: "owner/repo", targetNumber: 24, requestEventId: "22", role: "reviewer", revision: oldHead, owner: "host-a",
-    authority: { durationSeconds: 86700 }, activeState: activeReviewState,
-  };
-  const reviewClaim = {
-    binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, obsoleteDurationSeconds: 86700,
-    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-  };
   const checks = [{ command: "npm test", result: "passed" }];
   const receipt = { action: "pushed", reason: "repair_pushed", originalHeadOid: oldHead, headOid: newHead, checks };
   fs.writeFileSync(promiseFile, JSON.stringify({
@@ -262,20 +229,16 @@ async function runConcurrentSuccessRetries(): Promise<number> {
     role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
     branch: "agent/issue-24", worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
     workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
-    phase: "agent_started", lastSuccessfulPhase: "agent_started", reviewClaim,
+    phase: "agent_started", lastSuccessfulPhase: "agent_started", requestEventId: "22",
   }));
   fs.writeFileSync(contractFile, JSON.stringify({ attemptKey: key, expectedHead: oldHead, findingTitles: ["Unsafe fallback"] }));
   fs.writeFileSync(commentsFile, "[]");
-  const claimComment = { id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) };
   const gh = path.join(bin, "gh");
   fs.writeFileSync(gh, `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
-else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
-else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(${JSON.stringify(JSON.stringify([[claimComment]]))});
-else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:"OPEN",headRefName:"agent/issue-24",headRefOid:"${newHead}",isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"))}));
 else if (args[0] === "pr" && args[1] === "comment") {
   const comments = JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"));
@@ -292,7 +255,6 @@ else if (args[0] === "pr" && args[1] === "comment") {
     "--attempt-key", key, "--review-label", "agent:review",
     "--implement-label", "agent:implement", "--update-branch-label", "agent:update-branch",
     "--in-progress-label", "agent:in-progress", "--blocked-label", "agent:blocked",
-    "--review-claim", JSON.stringify(reviewClaim),
   ];
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir, COMMENTS_FILE: commentsFile };
   await Promise.all([0, 1].map(() => new Promise<void>((resolve, reject) => {
@@ -324,7 +286,7 @@ describe("review repair deterministic completion", () => {
     expect(result.posted).toContain(`New commit: \`${newHead}\``);
   });
 
-  it("releases the active review claim after recording successful repair", () => {
+  it("returns successful repair to a fresh review request", () => {
     const checks = [{ command: "npm test", result: "passed" }];
     const result = runCompletion({
       promise: {
@@ -432,7 +394,7 @@ describe("review repair deterministic completion", () => {
     expect(result.output.driverAction).toBe("repair_result_duplicate");
   });
 
-  it("releases the active review claim when reconciling a duplicate result", () => {
+  it("returns a duplicate repair result to a fresh review request", () => {
     const checks = [{ command: "npm test", result: "passed" }];
     const result = runCompletion({
       promise: {

@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
 const { blockedClaimMove, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
-const renderReviewClaimComment = (_binding: unknown) => "<!-- obsolete deadloop review claim -->";
 const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
 const trustedCumulativeComments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
   ...comment,
@@ -16,29 +15,10 @@ const trustedCumulativeComments = cumulativeRepairFixture.comments.map((comment:
 }));
 
 const tempDirs: string[] = [];
-const activeReviewState = {
-  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
-  requestLabel: "agent:review",
-  requiredLabels: ["agent:in-progress"],
-};
-
-function reviewClaimEnvironment(head: string, targetNumber = 243, repository = "owner/repo") {
-  const binding = {
-    repositoryId: "R_repo", repository, targetNumber, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
-    authority: { durationSeconds: 86700 }, activeState: activeReviewState,
-  };
-  return {
-    DEADLOOP_OBSOLETE_CLAIM: JSON.stringify({
-      binding, commentId: "101", authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, obsoleteDurationSeconds: 86700,
-      requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-    }),
-    TEST_REVIEW_CLAIM_COMMENT: JSON.stringify({ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(binding) }),
-  };
-}
 
 function executable(file: string, content: string): void {
   const prepared = path.basename(file) === "gh"
-    ? content.replace("\n", `\nconst deadloopGhArgs = process.argv.slice(2);\nif (deadloopGhArgs[0] === "api" && deadloopGhArgs[1] === "user") { const login = process.env.TEST_AUTH_LOGIN_FILE && require("node:fs").existsSync(process.env.TEST_AUTH_LOGIN_FILE) ? require("node:fs").readFileSync(process.env.TEST_AUTH_LOGIN_FILE, "utf8").trim() : (process.env.TEST_AUTH_LOGIN || "deadloop-bot"); process.stdout.write(login + "\\n"); process.exit(0); }\nif (process.env.DEADLOOP_OBSOLETE_CLAIM) {\n  const reviewClaim = JSON.parse(process.env.DEADLOOP_OBSOLETE_CLAIM);\n  if (deadloopGhArgs[0] === "repo" && deadloopGhArgs[1] === "view" && deadloopGhArgs.some((arg) => arg.includes("nameWithOwner"))) { process.stdout.write(JSON.stringify({id:reviewClaim.binding.repositoryId,nameWithOwner:reviewClaim.binding.repository})); process.exit(0); }\n  if (deadloopGhArgs.some((arg) => arg.endsWith("/events"))) { process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:reviewClaim.requestLabel}}]])); process.exit(0); }\n  if (deadloopGhArgs.some((arg) => arg.endsWith("/comments"))) { if (process.env.TEST_OBSERVATION_FILE) require("node:fs").writeFileSync(process.env.TEST_OBSERVATION_FILE, "complete"); process.stdout.write(JSON.stringify([[JSON.parse(process.env.TEST_REVIEW_CLAIM_COMMENT)]])); process.exit(0); }\n  if (deadloopGhArgs[0] === "api" && deadloopGhArgs.includes("--include")) { const expired = process.env.TEST_EXPIRE_AFTER_OBSERVATIONS === "1" && process.env.TEST_OBSERVATION_FILE && require("node:fs").existsSync(process.env.TEST_OBSERVATION_FILE); process.stdout.write(expired ? "date: Tue, 21 Jul 2026 10:06:01 GMT" : (process.env.TEST_REST_HEADERS ?? "date: Mon, 20 Jul 2026 10:03:00 GMT")); process.exit(0); }\n  if (process.env.TEST_VISIBLE_EFFECTS_FILE && deadloopGhArgs[0] === "pr" && ["comment", "edit"].includes(deadloopGhArgs[1])) { require("node:fs").appendFileSync(process.env.TEST_VISIBLE_EFFECTS_FILE, deadloopGhArgs.join(" ") + "\\n"); process.exit(0); }\n}\n`)
+    ? content.replace("\n", `\nconst deadloopGhArgs = process.argv.slice(2);\nif (deadloopGhArgs[0] === "api" && deadloopGhArgs[1] === "user") { const login = process.env.TEST_AUTH_LOGIN_FILE && require("node:fs").existsSync(process.env.TEST_AUTH_LOGIN_FILE) ? require("node:fs").readFileSync(process.env.TEST_AUTH_LOGIN_FILE, "utf8").trim() : (process.env.TEST_AUTH_LOGIN || "deadloop-bot"); process.stdout.write(login + "\\n"); process.exit(0); }\n`)
     : path.basename(file) === "git"
       ? content.replace("\n", `\nconst deadloopGitArgs = process.argv.slice(2);\nif ((deadloopGitArgs.includes("rev-parse") && deadloopGitArgs.some((arg) => arg.endsWith("^{commit}"))) || (deadloopGitArgs.includes("show") && deadloopGitArgs.some((arg) => arg.endsWith(":deadloop.json")))) {\n  const result = require("node:child_process").spawnSync("/usr/bin/git", deadloopGitArgs, {encoding:"utf8"});\n  process.stdout.write(result.stdout || ""); process.stderr.write(result.stderr || ""); process.exit(result.status ?? 1);\n}\n`)
       : content;
@@ -88,12 +68,11 @@ function writeSavedReviewerAuthority(
       },
     };
   fs.writeFileSync(promise, JSON.stringify(report));
-  const reviewClaim = JSON.parse(reviewClaimEnvironment(head, targetNumber, repository).DEADLOOP_OBSOLETE_CLAIM);
   fs.writeFileSync(attempt, JSON.stringify({
     attemptId: `reviewer-${targetNumber}`, launchUuid: `reviewer-${targetNumber}`, project: "demo", repository, role: "reviewer",
     target: { kind: "pull-request", number: targetNumber }, inputRevision: { head }, branch: `agent/issue-${targetNumber}`,
     worktreePath, agentName: "reviewer", workspaceLabel: "reviewer", promptFile: path.join(runDir, "prompt.md"),
-    promiseFile: promise, phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", reviewClaim,
+    promiseFile: promise, phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", requestEventId: "22",
   }));
   return attempt;
 }
@@ -190,7 +169,7 @@ if (args[0] === "pr" && args[1] === "view") {
     number:143,state:"OPEN",headRefName:"agent/issue-142-deadloop",headRefOid:heads[Math.min(count, heads.length - 1)],isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:[]
   }));
 } else if (args[0] === "repo" && args[1] === "view") {
-  process.stdout.write(JSON.stringify({id:"R_repo"}));
+  process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"yasuhito/deadloop"}));
 }
 `,
   );
@@ -256,7 +235,6 @@ else process.stdout.write(JSON.stringify({ok:true}));
       encoding: "utf8",
       env: {
         ...process.env,
-        ...reviewClaimEnvironment(expectedHead, 143, "yasuhito/deadloop"),
         PATH: `${bin}:${process.env.PATH}`,
         PI_CODING_AGENT_DIR: configDir,
         DEADLOOP_PROJECT_ID: "demo",
@@ -308,8 +286,6 @@ function runDispatch(enabled: boolean, supported = true): { output: Record<strin
     stateValue.projects[0].enabled = false;
     fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify(stateValue));
   }
-  const claimEnvironment = reviewClaimEnvironment("a".repeat(40));
-  const savedClaim = JSON.parse(claimEnvironment.DEADLOOP_OBSOLETE_CLAIM);
   const findings = [{ title: "Lint contract", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
   fs.writeFileSync(promise, JSON.stringify({
     schemaVersion: 1, attemptId: "reviewer", role: "reviewer", status: "complete",
@@ -321,7 +297,7 @@ function runDispatch(enabled: boolean, supported = true): { output: Record<strin
     attemptId: "reviewer", launchUuid: "reviewer", project: "demo", repository: "owner/repo", role: "reviewer",
     target: { kind: "pull-request", number: 243 }, inputRevision: { head: "a".repeat(40) }, branch: "agent/issue-243",
     worktreePath: worktree, agentName: "reviewer", workspaceLabel: "reviewer", promptFile: path.join(runDir, "prompt.md"),
-    promiseFile: promise, phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", reviewClaim: savedClaim,
+    promiseFile: promise, phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", requestEventId: "22",
   }));
 
   executable(
@@ -334,9 +310,6 @@ if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify(
 }));
 else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
-else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
-else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(JSON.stringify([[JSON.parse(process.env.TEST_REVIEW_CLAIM_COMMENT)]]));
-else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
 else fs.appendFileSync(process.env.EVENT_LOG, "github-mutation\\n");
 `,
   );
@@ -390,7 +363,6 @@ else if (args[0] === "agent" && args[1] === "start") {
       encoding: "utf8",
       env: {
         ...process.env,
-        ...claimEnvironment,
         PATH: `${bin}:${process.env.PATH}`,
         PI_CODING_AGENT_DIR: configDir,
         DEADLOOP_PROJECT_ID: "demo",
@@ -430,7 +402,7 @@ async function runConcurrentApprovedRetries(): Promise<number> {
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
+if (args[0] === "repo") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,
   labels:[{name:"agent:in-progress"}],comments:JSON.parse(fs.readFileSync(process.env.COMMENTS_FILE,"utf8"))
@@ -451,7 +423,7 @@ if (args.includes("get-url")) process.stdout.write("https://github.com/owner/rep
     "--promise", promise, "--attempt-record", attempt, "--pr", "243", "--expected-head", "a".repeat(40), "--branch", "agent/issue-243",
   ];
   const env = {
-    ...process.env, ...reviewClaimEnvironment("a".repeat(40)), PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir,
+    ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir,
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: root, DEADLOOP_WORKTREE_ROOT: path.join(root, "worktrees"), DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1",
     DEADLOOP_STATE_DIR: state, COMMENTS_FILE: commentsFile,
   };
@@ -470,9 +442,6 @@ function runV1ChangesRequestedTwice(options: {
   injectCumulativeLimitRace?: boolean;
   injectBlockingHistoryRace?: boolean;
   historyRequired?: boolean;
-  dateUnavailable?: boolean;
-  editedClaim?: boolean;
-  expireAfterObservations?: boolean;
   advisories?: Record<string, unknown>[];
 } = {}): {
   launches: number;
@@ -482,7 +451,6 @@ function runV1ChangesRequestedTwice(options: {
   repairWorktreePath: string;
   labelsPreserved: string[];
   dispatcherArgsForwarded: boolean;
-  githubMutations: string;
 } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-v1-repair-sequence-"));
   tempDirs.push(root);
@@ -505,8 +473,6 @@ function runV1ChangesRequestedTwice(options: {
   const comments = path.join(root, "comments.json");
   const ghViewCount = path.join(root, "gh-view-count");
   const runtime = path.join(root, "runtime.json");
-  const visibleEffects = path.join(root, "visible-effects.log");
-  const observationFile = path.join(root, "claim-observation-complete");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(reviewerRun, { recursive: true });
   fs.mkdirSync(worktreeRoot, { recursive: true });
@@ -548,21 +514,6 @@ function runV1ChangesRequestedTwice(options: {
   fs.writeFileSync(path.join(state, "projects.json"), JSON.stringify({ projects: [{
     id: "demo", repoPath: repo, githubRepo: "owner/repo", baseBranch: "origin/master", labels,
   }] }));
-  const baseReviewClaim = JSON.parse(reviewClaimEnvironment(head).DEADLOOP_OBSOLETE_CLAIM);
-  const savedReviewClaim = {
-    ...baseReviewClaim,
-    binding: {
-      ...baseReviewClaim.binding,
-      activeState: {
-        managedLabels: [labels.review, labels.implement, labels.updateBranch, "agent:in-progress", labels.blocked],
-        requestLabel: labels.review,
-        requiredLabels: ["agent:in-progress"],
-      },
-    },
-    requestLabel: labels.review,
-
-    blockedLabel: labels.blocked,
-  };
   const findings = [{ title: "Lint contract", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
   fs.writeFileSync(promise, JSON.stringify({
     schemaVersion: 1, attemptId: "reviewer-attempt", role: "reviewer",
@@ -581,11 +532,11 @@ function runV1ChangesRequestedTwice(options: {
     promptFile: path.join(reviewerRun, "prompt.md"), promiseFile: promise, phase: "agent_started",
     lastSuccessfulPhase: "agent_started", workspaceId: "reviewer-workspace", tabId: "reviewer-tab", rootPaneId: "reviewer-pane",
     ...(options.historyRequired || options.injectBlockingHistoryRace ? { reviewHistoryRequired: true } : {}),
-    reviewClaim: savedReviewClaim,
+    requestEventId: "22",
   }));
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const fs=require("node:fs");const a=process.argv.slice(2);
-if(a[0]==="repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
+if(a[0]==="repo") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if(a[0]==="pr"&&a[1]==="view") {
   const count=fs.existsSync(process.env.GH_VIEW_COUNT)?Number(fs.readFileSync(process.env.GH_VIEW_COUNT,"utf8")):0;
   fs.writeFileSync(process.env.GH_VIEW_COUNT,String(count+1));
@@ -619,16 +570,6 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     "--pr", "243", "--expected-head", head, "--branch", "agent/issue-243"];
   const env = {
     ...process.env,
-    ...reviewClaimEnvironment(head),
-    DEADLOOP_OBSOLETE_CLAIM: JSON.stringify(savedReviewClaim),
-    TEST_REVIEW_CLAIM_COMMENT: JSON.stringify({
-      id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: options.editedClaim ? "2026-07-20T10:02:00Z" : "2026-07-20T10:01:00Z",
-      user: { login: "deadloop-bot" }, body: renderReviewClaimComment(savedReviewClaim.binding),
-    }),
-    TEST_REST_HEADERS: options.dateUnavailable ? "" : "date: Mon, 20 Jul 2026 10:03:00 GMT",
-    TEST_VISIBLE_EFFECTS_FILE: options.dateUnavailable ? visibleEffects : "",
-    TEST_OBSERVATION_FILE: observationFile,
-    TEST_EXPIRE_AFTER_OBSERVATIONS: options.expireAfterObservations ? "1" : "0",
     PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: repo, DEADLOOP_WORKTREE_ROOT: worktreeRoot,
     DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
@@ -680,7 +621,6 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
       `--implement-label ${labels.implement}`,
       `--update-branch-label ${labels.updateBranch}`,
     ].every((argument) => dispatcherCommand.includes(argument)),
-    githubMutations: fs.existsSync(visibleEffects) ? fs.readFileSync(visibleEffects, "utf8") : "",
   };
 }
 
@@ -725,11 +665,11 @@ function runHumanRequiredHistoryRace(
     role: "reviewer", target: { kind: "pull-request", number: 243 }, inputRevision: { head }, branch: "agent/issue-243",
     worktreePath: root, agentName: "reviewer", workspaceLabel: "reviewer", promptFile: path.join(run, "prompt.md"),
     promiseFile: promise, phase: "agent_started", lastSuccessfulPhase: "agent_started", reviewHistoryRequired: true,
-    reviewClaim: JSON.parse(reviewClaimEnvironment(head, 243).DEADLOOP_OBSOLETE_CLAIM),
+    requestEventId: "22",
   }));
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const fs=require("node:fs");const a=process.argv.slice(2);
-if(a[0]==="repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
+if(a[0]==="repo") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if(a[0]==="pr"&&a[1]==="view") {const blocked=process.env.BLOCK_FLAG&&fs.existsSync(process.env.BLOCK_FLAG);process.stdout.write(JSON.stringify({number:243,state:"OPEN",isDraft:process.env.DRAFT==="1",headRefName:"agent/issue-243",headRefOid:process.env.HEAD,isCrossRepository:false,labels:blocked?[{name:"agent:in-progress"},{name:"agent:blocked"}]:[{name:"agent:in-progress"}],comments:[]}));}
 else if(a[0]==="api"&&a.includes("graphql")) process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:process.env.HEAD}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
 else if(a[0]==="api"&&a[1].includes("/pulls/243")&&a.includes("-H")) process.stdout.write("diff\\n");
@@ -749,7 +689,6 @@ const a=process.argv.slice(2);if(a.includes("get-url")) process.stdout.write("ht
   ], { cwd: process.cwd(), encoding: "utf8", env: {
     ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: root, DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
-    ...reviewClaimEnvironment(head, 243),
     HEAD: head, BASE: base, READS: historyReads, MUTATIONS: mutations,
     RACE_AT: options.stableHistory ? "-1" : "3", DRAFT: options.draft ? "1" : "0",
     BLOCK_FLAG: path.join(root, "block-flag"), BLOCK_AFTER_COMMENT: options.blockDuringRelease ? "1" : "0",
@@ -771,7 +710,7 @@ describe("review repair dispatch integration", () => {
   it("rejects repair mutation when in-progress state is absent", () => {
     expect(() => requireManagedPr(
       { labels: [] },
-      { inProgressLabel: "agent:in-progress", reviewClaim: { binding: {} } },
+      { inProgressLabel: "agent:in-progress" },
     )).toThrow("in-progress");
   });
 
@@ -789,7 +728,7 @@ describe("review repair dispatch integration", () => {
     expect(runV1ChangesRequestedTwice({ attempts: 1, historyRequired: true }).actions[0]).toBe("incomplete_review_history");
   });
 
-  it("releases a human-required claim when unrelated history races with its result comment", () => {
+  it("leaves human-required review state untouched when unrelated history races with its result comment", () => {
     const result = runHumanRequiredHistoryRace();
 
     expect(result).toEqual({
@@ -866,7 +805,7 @@ describe("review repair dispatch integration", () => {
     });
   });
 
-  it("releases the review claim when history changes before a cumulative-limit block", () => {
+  it("stops active review work when history changes before a cumulative-limit block", () => {
     const result = runV1ChangesRequestedTwice({ attempts: 1, injectBlockingHistoryRace: true });
 
     expect({ action: result.actions[0], launches: result.launches }).toEqual({
@@ -914,8 +853,6 @@ describe("review repair dispatch integration", () => {
         autoMergeAcknowledged: false, enabled: true,
       }],
     }));
-    const claimEnvironment = reviewClaimEnvironment("a".repeat(40), 143);
-    const savedClaim = JSON.parse(claimEnvironment.DEADLOOP_OBSOLETE_CLAIM);
     fs.writeFileSync(promise, JSON.stringify({
       schemaVersion: 1, attemptId: "reviewer", role: "reviewer", status: "complete",
       target: { kind: "pull-request", number: 143, repository: "owner/repo" },
@@ -927,15 +864,12 @@ describe("review repair dispatch integration", () => {
       role: "reviewer", target: { kind: "pull-request", number: 143 }, inputRevision: { head: "a".repeat(40) },
       branch: "agent/issue-142", worktreePath: root, agentName: "reviewer", workspaceLabel: "reviewer",
       promptFile: path.join(runDir, "prompt.md"), promiseFile: promise, phase: "report_received", lastSuccessfulPhase: "report_received",
-      reviewClaim: savedClaim,
+      requestEventId: "22",
     }));
     supportedHerdr(bin);
     executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
-else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
-else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(JSON.stringify([[JSON.parse(process.env.TEST_REVIEW_CLAIM_COMMENT)]]));
-else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
 else process.stdout.write(JSON.stringify(args[0] === "repo"
   ? {id:"R_repo",nameWithOwner:"owner/repo"}
   : {number:143,state:"OPEN",headRefName:"agent/issue-142",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:[]}));
@@ -954,7 +888,7 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
     const result = spawnSync("bash", ["-lc", command], {
       cwd: process.cwd(),
       encoding: "utf8",
-      env: { PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.dirname(state), ...claimEnvironment },
+      env: { PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.dirname(state) },
     });
 
     expect(JSON.parse(result.stdout).action).toBe("done");
@@ -1159,7 +1093,7 @@ const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:[]
 }));
-else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
+else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 `,
     );
     executable(
@@ -1211,7 +1145,6 @@ else if (args[0] === "agent" && args[1] === "start") {
         encoding: "utf8",
         env: {
           ...process.env,
-          ...reviewClaimEnvironment("a".repeat(40)),
           PATH: `${bin}:${process.env.PATH}`,
           DEADLOOP_PROJECT_ID: "demo",
           DEADLOOP_REPO_PATH: root,
@@ -1273,7 +1206,7 @@ const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${head}",isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:[]
 }));
-else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
+else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 `,
     );
     executable(path.join(bin, "git"), `#!/usr/bin/env node
@@ -1332,7 +1265,6 @@ else if (args[0] === "agent" && args[1] === "start") {
         encoding: "utf8",
         env: {
           ...process.env,
-          ...reviewClaimEnvironment(head),
           PATH: `${bin}:${process.env.PATH}`,
           DEADLOOP_PROJECT_ID: "demo",
           DEADLOOP_REPO_PATH: root,
@@ -1402,7 +1334,7 @@ const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${head}",isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:[{body:${JSON.stringify(marker)},author:{login:"deadloop-bot"}}]
 }));
-else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
+else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 `,
     );
     executable(
@@ -1438,7 +1370,6 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
         encoding: "utf8",
         env: {
           ...process.env,
-          ...reviewClaimEnvironment(head),
           PATH: `${bin}:${process.env.PATH}`,
           DEADLOOP_PROJECT_ID: "demo",
           DEADLOOP_REPO_PATH: root,
@@ -1492,7 +1423,7 @@ const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:"${head}",isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:[{body:${JSON.stringify(marker)},author:{login:"deadloop-bot"}}]
 }));
-else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo"}));
+else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 `,
     );
     executable(path.join(bin, "herdr"), `#!/usr/bin/env node
@@ -1525,7 +1456,6 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
         encoding: "utf8",
         env: {
           ...process.env,
-          ...reviewClaimEnvironment(head),
           PATH: `${bin}:${process.env.PATH}`,
           DEADLOOP_PROJECT_ID: "demo",
           DEADLOOP_REPO_PATH: root,
