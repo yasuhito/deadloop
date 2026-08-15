@@ -901,12 +901,9 @@ function consumeRequestEvent(
   const number = Number(pr.number || 0);
   const requestLabel = requestLabelForRole(env, role);
   assertReviewRepositoryIdentity(github, env);
-  const request = currentReviewRequest(github, env, number, requestLabel);
-  const requestEventId = String(request.id || request.node_id || "");
-  if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${requestLabel} request event id`);
-
-  const beforeTransition = liveExposedPr(number, env, github);
-  assertSameLaunchTarget(pr, beforeTransition, "pr");
+  // Establish every role's event boundary before reading mutable PR labels. Any request generation
+  // that arrives during or after that live read must stay outside this baseline so replacement can
+  // repair it instead of silently treating it as an old request.
   const beforeTransitionEvents = github.listPrTimelineEvents(env.githubRepo, number);
   const beforeTransitionEventIds = new Set(beforeTransitionEvents.map((event: JsonObject) => String(event.id || event.node_id || "")));
   const requestLabels = orderedPrRequestLabels({
@@ -918,9 +915,11 @@ function consumeRequestEvent(
     const event = latestPrRequestEvent(beforeTransitionEvents, label);
     return [label, String(event?.id || event?.node_id || "")];
   }));
-  if (beforeRequestIds.get(requestLabel) !== requestEventId) {
-    throw new StaleLaunchError(`PR #${number} ${requestLabel} request changed before label transition`);
-  }
+  const requestEventId = beforeRequestIds.get(requestLabel) || "";
+  if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${requestLabel} request event id`);
+
+  const beforeTransition = liveExposedPr(number, env, github);
+  assertSameLaunchTarget(pr, beforeTransition, "pr");
   const authenticatedLogin = authenticate().trim().toLowerCase();
   if (!authenticatedLogin || authenticatedLogin !== env.automationLogin.toLowerCase()
     || !env.authorizedAutomationLogins.includes(authenticatedLogin)) {

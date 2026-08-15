@@ -80,8 +80,9 @@ function renderPromisePollingRules(
   targetKind: "issue" | "pull-request",
   mutationAuthority = true,
 ): string {
+  const prInput = input as Partial<ReviewerMonitorPromptInput & RepairMonitorPromptInput & BranchUpdateMonitorPromptInput>;
   const attempt = targetKind === "pull-request"
-    ? ` --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)}`
+    ? ` --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --in-progress-label ${shellQuotePrompt(prInput.inProgressLabel || "agent:in-progress")} --blocked-label ${shellQuotePrompt(prInput.blockedLabel || "agent:blocked")}`
     : "";
   const guardedOperation = `node ${shellQuotePrompt(`${input.automationDir}/guarded-operation.ts`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --target-kind ${targetKind}${attempt} --`;
   const mutationRules = mutationAuthority

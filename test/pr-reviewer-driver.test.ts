@@ -12,7 +12,11 @@ const {
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-function scenario(extraComments: Record<string, unknown>[] = [], concurrentRequestLabel?: string) {
+function scenario(
+  extraComments: Record<string, unknown>[] = [],
+  concurrentRequestLabel?: string,
+  concurrentBoundary: "replacement" | "after-live-read" = "replacement",
+) {
   const head = "a".repeat(40);
   const request = { id: "request-22", event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } };
   const events = [request];
@@ -21,15 +25,22 @@ function scenario(extraComments: Record<string, unknown>[] = [], concurrentReque
     labels: [{ name: "agent:review" }, { name: "customer:keep" }], comments: extraComments,
   };
   let commentsWritten = 0;
+  let concurrentInserted = false;
+  const insertConcurrentRequest = () => {
+    if (!concurrentRequestLabel || concurrentInserted) return;
+    concurrentInserted = true;
+    events.push({ id: "request-23", event: "labeled", created_at: "2026-07-20T10:00:01Z", label: { name: concurrentRequestLabel } });
+  };
   const github = {
     getRepositoryIdentity: () => ({ id: "R_repo", nameWithOwner: "owner/repo" }),
-    getPr: () => pr,
+    getPr: () => {
+      if (concurrentBoundary === "after-live-read") insertConcurrentRequest();
+      return pr;
+    },
     listPrTimelineEvents: () => events,
     listPrLabels: () => pr.labels,
     replacePrLabels: (_repo: string, _number: number, next: string[]) => {
-      if (concurrentRequestLabel) {
-        events.push({ id: "request-23", event: "labeled", created_at: "2026-07-20T10:00:01Z", label: { name: concurrentRequestLabel } });
-      }
+      if (concurrentBoundary === "replacement") insertConcurrentRequest();
       pr.labels = next.map((name) => ({ name }));
     },
     movePrLabels: (_repo: string, _number: number, move: { add?: string[]; remove?: string[] }) => {
@@ -86,6 +97,18 @@ describe("PR request consumption", () => {
   it("restores a newer branch-update request erased by review label replacement", () => {
     let labels: string[] = [];
     try { scenario([], "agent:update-branch"); } catch (error) {
+      labels = ((error as Error & { labels?: string[] }).labels || []);
+    }
+    expect(labels).toContain("agent:update-branch");
+  });
+
+  it("stops when branch-update arrives after the live PR read but before the former event baseline", () => {
+    expect(() => scenario([], "agent:update-branch", "after-live-read")).toThrow("request changed after label transition");
+  });
+
+  it("restores branch-update arriving after the live PR read but before the former event baseline", () => {
+    let labels: string[] = [];
+    try { scenario([], "agent:update-branch", "after-live-read"); } catch (error) {
       labels = ((error as Error & { labels?: string[] }).labels || []);
     }
     expect(labels).toContain("agent:update-branch");

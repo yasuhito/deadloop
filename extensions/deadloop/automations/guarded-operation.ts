@@ -17,6 +17,8 @@ type Args = {
   targetKind: "issue" | "pull-request";
   command: string[];
   attemptRecord?: string;
+  inProgressLabel?: string;
+  blockedLabel?: string;
 };
 
 type ApprovedOperation = { positional: number; valueFlags: Set<string> };
@@ -95,6 +97,8 @@ function parseArgs(argv: string[]): Args {
     targetKind: values.targetKind as Args["targetKind"],
     command: argv.slice(separator + 1),
     ...(values.attemptRecord ? { attemptRecord: values.attemptRecord } : {}),
+    ...(values.inProgressLabel ? { inProgressLabel: values.inProgressLabel } : {}),
+    ...(values.blockedLabel ? { blockedLabel: values.blockedLabel } : {}),
   };
 }
 
@@ -105,6 +109,9 @@ function runGuarded(
   const commandTarget = assertApprovedCommand(args.command, args.githubRepo);
   if (args.targetKind === "pull-request" && !args.attemptRecord) {
     throw new Error("saved attempt record is required before guarded PR mutation");
+  }
+  if (args.targetKind === "pull-request" && (!args.inProgressLabel || !args.blockedLabel)) {
+    throw new Error("configured in-progress and blocked labels are required before guarded PR mutation");
   }
   if (args.targetKind === "issue" && args.command[1] === "pr") {
     throw new Error("issue mutation authority cannot target a pull request command");
@@ -137,20 +144,31 @@ function runGuarded(
           throw new Error("current authenticated GitHub identity does not match enablement authority");
         }
         const repository = query(["repo", "view", args.githubRepo, "--json", "id,nameWithOwner"]);
-        const pr = query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid"]);
-        let livePr: Record<string, unknown> = {};
         let identity: Record<string, unknown> = {};
-        try {
-          livePr = JSON.parse(pr.stdout || "{}");
-          identity = JSON.parse(repository.stdout || "{}");
-        } catch { throw new Error("live GitHub PR target could not be verified"); }
+        try { identity = JSON.parse(repository.stdout || "{}"); }
+        catch { throw new Error("live GitHub PR target could not be verified"); }
         if (repository.status !== 0 || String(identity.id || "") !== String(enabled.githubRepositoryId || "")
-          || String(identity.nameWithOwner || "") !== String(enabled.githubRepo || "")
-          || pr.status !== 0 || String(livePr.state || "").toUpperCase() !== "OPEN"
-          || String(livePr.headRefOid || "").toLowerCase() !== String(record.inputRevision?.head || "").toLowerCase()) {
+          || String(identity.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
           throw new Error("guarded PR mutation target changed from the attempt revision");
         }
+        const assertLivePrActive = (pr: ReturnType<typeof query>): void => {
+          let livePr: Record<string, unknown> = {};
+          try { livePr = JSON.parse(pr.stdout || "{}"); }
+          catch { throw new Error("live GitHub PR target could not be verified"); }
+          if (pr.status !== 0 || String(livePr.state || "").toUpperCase() !== "OPEN"
+            || String(livePr.headRefOid || "").toLowerCase() !== String(record.inputRevision?.head || "").toLowerCase()) {
+            throw new Error("guarded PR mutation target changed from the attempt revision");
+          }
+          const labels = new Set(Array.isArray(livePr.labels)
+            ? livePr.labels.map((label) => typeof label === "string" ? label : String(label?.name || "")).filter(Boolean)
+            : []);
+          if (!labels.has(String(args.inProgressLabel)) || labels.has(String(args.blockedLabel))) {
+            throw new Error("guarded PR mutation requires the current active workflow state");
+          }
+        };
+        assertLivePrActive(query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]));
         recheck();
+        assertLivePrActive(query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]));
       }
       if (args.targetKind === "issue") recheck();
       const result = spawn(args.command[0], args.command.slice(1), {

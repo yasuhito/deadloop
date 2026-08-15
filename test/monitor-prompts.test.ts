@@ -191,6 +191,17 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("Never pass merge, push, branch deletion, `gh api`, or arbitrary commands through `guarded-operation.ts`");
   });
 
+  it("binds guarded reviewer mutations to configured active-state labels", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
+      promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
+      checkCommand: "npm test", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", reviewLabel: "agent:review",
+      inProgressLabel: "custom:active", blockedLabel: "custom:blocked",
+    });
+
+    expect(prompt).toContain("--target-kind pull-request --attempt-record /state/attempt.json --in-progress-label custom:active --blocked-label custom:blocked --");
+  });
+
   it("binds auto-merge to the reviewed PR head", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
