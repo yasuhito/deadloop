@@ -16,9 +16,9 @@ A Git worktree is durable branch state. A Herdr attempt workspace is disposable 
 
 Worker, reviewer, review-repair, and branch-update launches all follow the same contract:
 
-1. Write an atomic `prepared` attempt journal in the launch-unique run directory before an external mutation.
-2. Consume the role's GitHub request and persist its request event id in the attempt journal.
-3. If the host stops between those non-atomic writes, re-read the exact target, revision, configured labels, and request event. Advance a still-`prepared` journal only when that exact consumption is present; otherwise retain it and block scheduling for operator reconciliation. This check does not require a workspace ID.
+1. Resolve the selected request event and write an atomic `prepared` attempt journal in the launch-unique run directory before the first GitHub label mutation.
+2. Consume the role's GitHub request. Only a documented HTTP 200 response from the selected label DELETE, followed by complete postvalidation, permits the same process to advance the journal to `github_claimed`.
+3. If the host stops before that phase advance, retain the `prepared` journal and block scheduling for operator reconciliation even when GitHub appears fully transitioned. A restart cannot distinguish a confirmed 200 response from an ambiguous response whose server-side mutation happened. This check does not require a workspace ID.
 4. Reconcile retained workspaces and refuse a launch while the checkout is already open or ownership is ambiguous.
 5. Create the first linked worktree, or open an existing linked worktree without `--label`.
 6. Require Herdr's response to identify one new workspace, its first tab, root pane, and canonical worktree path. An open response must explicitly report `already_open: false`.

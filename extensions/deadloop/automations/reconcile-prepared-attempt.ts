@@ -19,7 +19,7 @@ function parseArgs(argv: string[]): JsonObject {
   }
   for (const name of [
     "attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "enabledAt", "readyLabel", "implementLabel",
-    "inProgressLabel", "reviewLabel", "blockedLabel",
+    "inProgressLabel", "reviewLabel", "updateBranchLabel", "blockedLabel",
   ]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
@@ -40,13 +40,19 @@ function hasExactRequestConsumption(record: JsonObject, item: JsonObject, args: 
       && !labels.has(String(args.implementLabel))
       && !labels.has(String(args.blockedLabel));
   }
+  const requestBound = record.role === "reviewer" || record.role === "branch-update";
   const exactPullRequest = String(item.state || "").toUpperCase() === "OPEN"
     && String(item.headRefName || "") === String(record.branch)
     && String(item.headRefOid || "").toLowerCase() === String(record.inputRevision.head).toLowerCase()
     && labels.has(String(args.inProgressLabel))
-    && !labels.has(String(args.blockedLabel));
+    && !labels.has(String(args.blockedLabel))
+    && (!requestBound || (
+      !labels.has(String(args.implementLabel))
+      && !labels.has(String(args.reviewLabel))
+      && !labels.has(String(args.updateBranchLabel))
+    ));
   if (!exactPullRequest) return false;
-  if ((record.role === "reviewer" || record.role === "branch-update")
+  if (requestBound
     && !events.some((event) => String(event.id || event.node_id || "") === String(record.requestEventId || ""))) return false;
   const comments = (item.comments || []).map((comment: JsonObject) => String(comment?.body || ""));
   if (record.role === "branch-update") {
@@ -78,6 +84,11 @@ function reconcileLocked(args: JsonObject, runner: ReturnType<typeof createComma
   ]).flat();
   if (!hasExactRequestConsumption(record, item, args, events)) {
     return driverResult("done", "prepared attempt retained because the exact GitHub request consumption is absent or changed", {
+      driverAction: "prepared_request_consumption_blocked",
+    });
+  }
+  if (record.role === "reviewer" || record.role === "branch-update") {
+    return driverResult("done", "prepared request-bound attempt retained because the confirmed HTTP 200 result was not durably phase-advanced", {
       driverAction: "prepared_request_consumption_blocked",
     });
   }

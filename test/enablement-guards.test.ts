@@ -274,7 +274,7 @@ describe("enablement mutation guards", () => {
     },
   );
 
-  it("can persist a winning GitHub claim before creating its attempt journal", () => {
+  it("persists the prepared attempt before consuming a GitHub request", () => {
     const project = fixture();
     writeState(project, { enabledAt: 1 });
     const events: string[] = [];
@@ -284,14 +284,36 @@ describe("enablement mutation guards", () => {
       () => events.push("github-claim"),
       () => events.push("launched"),
       {
-        consumeBeforePrepare: true,
         revalidate: () => events.push("revalidated"),
+        revalidateAfterMutation: () => events.push("post-revalidated"),
         prepareAttempt: () => events.push("prepared"),
         recordGithubMutation: () => events.push("claim-recorded"),
       },
     );
 
-    expect(events).toEqual(["revalidated", "github-claim", "revalidated", "prepared", "claim-recorded", "launched"]);
+    expect(events).toEqual(["revalidated", "prepared", "github-claim", "post-revalidated", "claim-recorded", "launched"]);
+  });
+
+  it("retains prepared evidence when request consumption succeeds before phase advancement", () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const events: string[] = [];
+
+    try {
+      withEnabledDriverLaunch(
+        { ...project, enabledAt: 1 },
+        () => events.push("delete-200"),
+        () => events.push("launched"),
+        {
+          revalidate: () => events.push("revalidated"),
+          prepareAttempt: () => events.push("prepared"),
+          revalidateAfterMutation: () => { throw new Error("crash before phase advance"); },
+          recordGithubMutation: () => events.push("claim-recorded"),
+        },
+      );
+    } catch {}
+
+    expect(events).toEqual(["revalidated", "prepared", "delete-200"]);
   });
 
   it("records the guarded claim before a runner failure", () => {

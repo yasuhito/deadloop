@@ -8,7 +8,8 @@ const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { planPrRequestAction } = require("./pr-reviewer-flow.ts");
 const { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.ts");
-const { REQUEST_BOUND_AGENT_ROLES, launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
+const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.ts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { decideBranchUpdateLive } = require("./pr-branch-update-decision.ts");
@@ -295,6 +296,7 @@ function launchWithAdapters(
   if (fixture && !operations?.agentLaunchOps) {
     revalidate();
     mutate(() => {});
+    revalidate();
     fixtureEffects(fixture).herdrStarts.push({
       name: input.workspaceLabel,
       agent: input.agent,
@@ -318,7 +320,7 @@ function launchWithAdapters(
   const launch = (recheck: () => void) => launchAgentFlow(input, { ...ops, beforeAgentStart: recheck });
   return withEnabledDriverLaunch(env, mutate, launch, {
     revalidate,
-    consumeBeforePrepare: REQUEST_BOUND_AGENT_ROLES.includes(input.role),
+    revalidateAfterMutation: revalidate,
     prepareAttempt: () => prepareAgentLaunchFlow(input, ops),
     recordGithubMutation: () => recordAgentLaunchGithubClaimed(input),
   });
@@ -531,6 +533,8 @@ function consumeRequestWithIdentity(
   fixture: JsonObject | null,
   role: string,
   enabled: EnabledIdentity = {},
+  expectedRequestEventIds: Record<string, string> = {},
+  currentAttemptId = "",
 ): JsonObject {
   const enabledAutomationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
   return consumeRequestEvent(
@@ -539,6 +543,8 @@ function consumeRequestWithIdentity(
     env,
     role,
     fixture ? () => env.automationLogin : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
+    expectedRequestEventIds,
+    currentAttemptId,
   );
 }
 
@@ -740,14 +746,31 @@ function launchBranchUpdate(
     fixture,
     plan.input,
     (github) => {
-      const consumed = consumeRequestWithIdentity(github, pr, env, fixture, "branch-update", enabledIdentity);
+      const consumed = consumeRequestWithIdentity(
+        github, pr, env, fixture, "branch-update", enabledIdentity, requestEventIds, plan.input.uuid,
+      );
       requestEventId = String(consumed.requestEventId || "");
       requestEventIds = consumed.requestEventIds || {};
       plan.input.requestEventId = requestEventId;
       github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
     },
     (enabled) => {
-      if (fixture) return;
+      if (fixture) {
+        if (!requestEventId) {
+          const observed = observeRequestConsumption(
+            fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations>,
+            pr,
+            env,
+            orderedPrRequestLabels(prRequestLabels(env)),
+            () => env.automationLogin,
+          );
+          requestEventIds = Object.fromEntries(observed.requestEventIds);
+          requestEventId = String(requestEventIds[env.updateBranchLabel] || "");
+          if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.updateBranchLabel} request event`);
+          plan.input.requestEventId = requestEventId;
+        }
+        return;
+      }
       enabledIdentity = {
         repoPath: enabled?.repoPath,
         baseBranch: enabled?.baseBranch,
@@ -760,6 +783,18 @@ function launchBranchUpdate(
       // label again would make this launch fail on its own transition.
       if (!requestEventId) {
         assertBranchUpdateRequestSelectable(pr, env, headOid, baseOid);
+        const github = githubOperations();
+        const observed = observeRequestConsumption(
+          github,
+          pr,
+          env,
+          orderedPrRequestLabels(prRequestLabels(env)),
+          () => assertAuthenticatedReviewIdentity(env, enabledIdentity.automationLogin),
+        );
+        requestEventIds = Object.fromEntries(observed.requestEventIds);
+        requestEventId = String(requestEventIds[env.updateBranchLabel] || "");
+        if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.updateBranchLabel} request event`);
+        plan.input.requestEventId = requestEventId;
         return;
       }
       try {
@@ -920,8 +955,8 @@ function assertLatestRequestEventIds(
 }
 
 type RequestConsumptionObservation = {
-  events: JsonObject[];
   requestEventIds: Map<string, string>;
+  currentRequestEvents: Map<string, JsonObject | null>;
   labels: Set<string>;
 };
 
@@ -945,64 +980,22 @@ function observeRequestConsumption(
     const event = latestPrRequestEvent(events, label);
     return [label, String(event?.id || event?.node_id || "")];
   }));
+  const currentRequestEvents = new Map(requestLabels.map((label) => {
+    const matching = events.filter((event: JsonObject) =>
+      String(event.label?.name || "") === label
+      && ["labeled", "unlabeled"].includes(String(event.event || "").toLowerCase()),
+    ).sort(compareGithubTimelineEvents);
+    return [label, matching.at(-1) || null];
+  }));
   return {
-    events,
     requestEventIds,
+    currentRequestEvents,
     labels: new Set(labelNames({ labels: github.listPrLabels(env.githubRepo, number) })),
   };
 }
 
 function sameRequestEventIds(left: Map<string, string>, right: Map<string, string>): boolean {
   return [...left].every(([label, id]) => right.get(label) === id);
-}
-
-function requestGenerationShouldRemain(
-  events: JsonObject[],
-  label: string,
-  baselineEventId: string,
-  ignoreOneSuccessfulDelete: boolean,
-): boolean {
-  const relevant = events.filter((event) =>
-    String(event.label?.name || "") === label
-    && ["labeled", "unlabeled"].includes(String(event.event || "").toLowerCase()),
-  ).sort((left, right) => {
-    const time = Date.parse(String(left.created_at || left.createdAt || "")) - Date.parse(String(right.created_at || right.createdAt || ""));
-    return time || String(left.id || left.node_id || "").localeCompare(String(right.id || right.node_id || ""), undefined, { numeric: true });
-  });
-  const baselineIndex = relevant.findIndex((event) => String(event.id || event.node_id || "") === baselineEventId);
-  const later = relevant.slice(baselineIndex + 1);
-  if (!later.some((event) => String(event.event || "").toLowerCase() === "labeled")) return false;
-  let present = false;
-  let ownDeleteIndex = -1;
-  if (ignoreOneSuccessfulDelete) {
-    for (let index = later.length - 1; index >= 0; index -= 1) {
-      if (String(later[index].event || "").toLowerCase() === "unlabeled") {
-        ownDeleteIndex = index;
-        break;
-      }
-    }
-  }
-  for (const [index, event] of later.entries()) {
-    const action = String(event.event || "").toLowerCase();
-    if (action === "labeled") present = true;
-    else if (index !== ownDeleteIndex) present = false;
-  }
-  return present;
-}
-
-function restoreNewRequestGenerations(
-  github: ReturnType<typeof githubOperations>,
-  env: ReturnType<typeof envConfig>,
-  number: number,
-  baselineIds: Map<string, string>,
-  observation: RequestConsumptionObservation,
-  successfulDeleteLabel?: string,
-): void {
-  const restore = [...baselineIds].filter(([label, id]) =>
-    observation.requestEventIds.get(label) !== id
-    && requestGenerationShouldRemain(observation.events, label, id, label === successfulDeleteLabel),
-  ).map(([label]) => label);
-  if (restore.length > 0) github.movePrLabels(env.githubRepo, number, { add: restore });
 }
 
 function assertConsumptionObservation(
@@ -1013,7 +1006,12 @@ function assertConsumptionObservation(
   number: number,
 ): void {
   if (!sameRequestEventIds(baselineIds, observation.requestEventIds)) {
-    throw new StaleLaunchError(`PR #${number} request generation changed during consumption`);
+    const changed = [...baselineIds].find(([label, id]) => observation.requestEventIds.get(label) !== id);
+    const label = changed?.[0] || "Agent";
+    const current = observation.currentRequestEvents.get(label);
+    const currentAction = String(current?.event || "unknown").toLowerCase();
+    const live = observation.labels.has(label) ? "present" : "absent";
+    throw new StaleLaunchError(`PR #${number} ${label} request generation changed during consumption; current event is ${currentAction} and label is ${live}`);
   }
   const liveManaged = new Set([...observation.labels].filter((label) => managedWorkflowLabels(env).includes(label)));
   if (JSON.stringify([...liveManaged].sort()) !== JSON.stringify([...expectedManagedLabels].sort())) {
@@ -1032,12 +1030,18 @@ function consumeRequestEvent(
   env: ReturnType<typeof envConfig>,
   role: string,
   authenticate: () => string = () => assertAuthenticatedReviewIdentity(env),
+  expectedRequestEventIds: Record<string, string> = {},
+  currentAttemptId = "",
 ): JsonObject {
   const number = Number(pr.number || 0);
   const requestLabel = requestLabelForRole(env, role);
   const requestLabels = orderedPrRequestLabels(prRequestLabels(env));
   const baseline = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
   const requestEventId = baseline.requestEventIds.get(requestLabel) || "";
+  if (Object.keys(expectedRequestEventIds).length > 0
+    && !sameRequestEventIds(new Map(Object.entries(expectedRequestEventIds)), baseline.requestEventIds)) {
+    throw new StaleLaunchError(`PR #${number} request generation changed after attempt preparation`);
+  }
   if (!requestEventId || !baseline.labels.has(requestLabel)) {
     throw new StaleLaunchError(`PR #${number} has no stable ${requestLabel} request event`);
   }
@@ -1046,12 +1050,7 @@ function consumeRequestEvent(
   github.addPrLabel(env.githubRepo, number, env.inProgressLabel);
   expectedManaged.add(env.inProgressLabel);
   let observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
-  try {
-    assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
-  } catch (error) {
-    restoreNewRequestGenerations(github, env, number, baseline.requestEventIds, observed);
-    throw error;
-  }
+  assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
 
   const labelsToNormalize = [
     ...requestLabels.filter((label) => label !== requestLabel && baseline.labels.has(label)),
@@ -1066,12 +1065,7 @@ function consumeRequestEvent(
       throw new RequestConsumptionError(`PR #${number} ${label} DELETE did not return the documented 200 response`);
     }
     expectedManaged.delete(label);
-    try {
-      assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
-    } catch (error) {
-      restoreNewRequestGenerations(github, env, number, baseline.requestEventIds, observed, label);
-      throw error;
-    }
+    assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
   }
 
   observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
@@ -1082,18 +1076,14 @@ function consumeRequestEvent(
     throw new RequestConsumptionError(`PR #${number} ${requestLabel} DELETE did not return the documented 200 response`);
   }
   expectedManaged.delete(requestLabel);
-  try {
-    assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
-  } catch (error) {
-    restoreNewRequestGenerations(github, env, number, baseline.requestEventIds, observed, requestLabel);
-    throw error;
-  }
+  assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
 
   takeWorkAuthorityFromRetainedAttempts({
     stateDir: env.stateDir,
     projectId: env.projectId,
     githubRepo: env.githubRepo,
     prNumber: number,
+    currentAttemptId,
   });
   return {
     requestEventId,
@@ -1107,6 +1097,7 @@ type WorkAuthorityTakeover = {
   projectId: string;
   githubRepo: string;
   prNumber: number;
+  currentAttemptId?: string;
 };
 
 function retainedAttemptsForPr(input: WorkAuthorityTakeover): Array<{ runDir: string; record: JsonObject }> {
@@ -1123,6 +1114,7 @@ function retainedAttemptsForPr(input: WorkAuthorityTakeover): Array<{ runDir: st
     try { record = readAttemptRecord(runDir); } catch { continue; }
     if (record.project !== input.projectId || record.repository !== input.githubRepo) continue;
     if (record.target?.kind !== "pull-request" || Number(record.target?.number) !== input.prNumber) continue;
+    if (input.currentAttemptId && record.attemptId === input.currentAttemptId) continue;
     if (releasesAttemptOwnership(record.phase)) continue;
     retained.push({ runDir, record: { ...record, runDir } });
   }
@@ -1193,10 +1185,8 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
   const { reviewerName, headRefName } = plan;
   let requestEventId = "";
   let requestEventIds: Record<string, string> = {};
-  let launch: JsonObject;
   let enabledAutomationLogin = "";
-  try {
-    launch = launchWithAdapters(
+  const launch = launchWithAdapters(
       env,
       fixture,
       plan.input,
@@ -1207,13 +1197,30 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
           env,
           "reviewer",
           fixture ? () => env.automationLogin : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
+          requestEventIds,
+          plan.input.uuid,
         );
         requestEventId = String(consumed.requestEventId || "");
         requestEventIds = consumed.requestEventIds || {};
         plan.input.requestEventId = requestEventId;
       },
       (enabled) => {
-        if (fixture) return;
+        if (fixture) {
+          if (!requestEventId) {
+            const observed = observeRequestConsumption(
+              fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations>,
+              pr,
+              env,
+              orderedPrRequestLabels(prRequestLabels(env)),
+              () => env.automationLogin,
+            );
+            requestEventIds = Object.fromEntries(observed.requestEventIds);
+            requestEventId = String(requestEventIds[env.reviewLabel] || "");
+            if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.reviewLabel} request event`);
+            plan.input.requestEventId = requestEventId;
+          }
+          return;
+        }
         enabledAutomationLogin = String(enabled?.automationLogin || enabledAutomationLogin).trim().toLowerCase();
         assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
         if (requestEventId) {
@@ -1232,12 +1239,20 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
         if (branchUpdateDecision(livePlan.pr, env, null).action !== "no_update") {
           throw new StaleLaunchError(`PR #${number} branch-update state changed before reviewer launch`);
         }
+        const github = githubOperations();
+        const observed = observeRequestConsumption(
+          github,
+          pr,
+          env,
+          orderedPrRequestLabels(prRequestLabels(env)),
+          () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
+        );
+        requestEventIds = Object.fromEntries(observed.requestEventIds);
+        requestEventId = String(requestEventIds[env.reviewLabel] || "");
+        if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.reviewLabel} request event`);
+        plan.input.requestEventId = requestEventId;
       },
     );
-  } catch (error) {
-    if (error instanceof RequestConsumptionError) fs.rmSync(path.join(env.stateDir, "runs", uuid), { recursive: true, force: true });
-    throw error;
-  }
   return { reviewerName, headRefName, reason, requestEventId, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
@@ -1245,12 +1260,12 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
  * What a stopped reviewer launch tells its reader.
  *
  * The stale check that stopped the launch names itself, and only it can say which state moved.
- * Replacing it with one summary loses both the reason and the difference between a launch that
- * touched nothing and one whose own claim already consumed the request.
+ * Replacing it with one summary loses both the reason and the difference between a launch whose
+ * consumption was never confirmed and one whose selected DELETE was fully confirmed.
  */
 function staleReviewerLaunchSummary(error: unknown, requestConsumed: boolean): string {
   const reason = error instanceof Error ? error.message : String(error);
-  return `${reason}; ${requestConsumed ? "the request was already consumed" : "no workflow state was mutated"}`;
+  return `${reason}; ${requestConsumed ? "the request was already consumed" : "request consumption was not confirmed; any prepared or in-progress evidence remains for reconciliation"}`;
 }
 
 /** Revalidate the exact request event and live target after its label has been consumed. */
@@ -1491,7 +1506,7 @@ function driveSelectedTarget(
         const consumed = Boolean((error as Error & { claimed?: boolean }).claimed);
         return driverResult("skip", consumed
           ? `PR #${plan.decision.number} changed after its branch-update request was claimed; the claim and ${env.inProgressLabel} remain for reconciliation`
-          : `PR #${plan.decision.number} changed before branch-update launch; no workflow state was mutated`, {
+          : `PR #${plan.decision.number} changed before branch-update launch; request consumption was not confirmed and any prepared or in-progress evidence remains for reconciliation`, {
           driverAction: consumed ? "branch_update_launch_stale_after_claim" : "branch_update_launch_stale",
           prNumber: plan.decision.number,
         });

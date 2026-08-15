@@ -32,23 +32,15 @@ function withEnabledDriverLaunch(project, mutateWorkflowState, launchAgent, opti
   return withEnabledProjectLock(project, (_enabled, recheck) => {
     options.revalidate?.(_enabled);
     recheck();
-    if (options.consumeBeforePrepare) {
-      // PR request consumption happens before the journal: a stale host must not leave a
-      // workspace, branch, or runner mutation behind.
-      mutateWorkflowState(recheck, _enabled);
-      recheck();
-      // Re-observe the consumed request event and live target before creating any local
-      // workspace, branch, or runner state.
-      options.revalidate?.(_enabled);
-      recheck();
-      options.prepareAttempt?.();
-    } else {
-      // Non-review launches retain their existing crash-recovery contract.
-      options.prepareAttempt?.();
-      recheck();
-      mutateWorkflowState(recheck, _enabled);
-    }
-    // The GitHub transition is journaled before any runner/workspace operation.
+    // Every attempt publishes its exact prepared intent before the first GitHub mutation. A
+    // request-bound launch therefore supplies its selected request event during revalidation.
+    options.prepareAttempt?.();
+    recheck();
+    mutateWorkflowState(recheck, _enabled);
+    recheck();
+    options.revalidateAfterMutation?.(_enabled);
+    recheck();
+    // The fully revalidated GitHub transition is journaled before any runner/workspace operation.
     options.recordGithubMutation?.();
     recheck();
     return launchAgent(recheck);

@@ -7,23 +7,26 @@ import { createPreparedAttempt, readAttemptRecord } from "../src/attempt-lifecyc
 const { hasExactRequestConsumption, reconcileLocked } = require("../extensions/deadloop/automations/reconcile-prepared-attempt.ts");
 
 const roots: string[] = [];
-function setup() {
+function setup(role: "worker" | "reviewer" = "worker") {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-claim-reconcile-"));
   roots.push(root);
   const stateDir = path.join(root, "state");
   const runDir = path.join(stateDir, "runs", "launch-1");
   createPreparedAttempt(runDir, {
-    attemptId: "launch-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker",
-    target: { kind: "issue", number: 12 }, inputRevision: { head: "a".repeat(40) }, requiredVerification: {
+    attemptId: "launch-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role,
+    target: { kind: role === "worker" ? "issue" : "pull-request", number: 12 },
+    inputRevision: { head: "a".repeat(40) },
+    ...(role === "worker" ? { requiredVerification: {
       repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "a".repeat(40),
-    }, branch: "agent/issue-12",
+    } } : { requestEventId: "request-12" }),
+    branch: "agent/issue-12",
     baseBranch: "origin/main", worktreePath: path.join(root, "worktree"), agentName: "dl-w-12-123456789abc",
     workspaceLabel: "Issue 12", promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
   });
   const args = {
     attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: root, githubRepo: "owner/repo", stateDir,
     enabledAt: "1", readyLabel: "custom:ready", implementLabel: "custom:implement", inProgressLabel: "custom:claimed",
-    reviewLabel: "custom:review", blockedLabel: "custom:blocked",
+    reviewLabel: "custom:review", updateBranchLabel: "custom:update", blockedLabel: "custom:blocked",
   };
   return { args, runDir };
 }
@@ -49,6 +52,28 @@ describe("prepared attempt claim reconciliation", () => {
     const runner = { runJson: () => ({ state: "OPEN", labels: [{ name: "custom:ready" }, { name: "custom:claimed" }] }) };
     const result = reconcileLocked(data.args, runner);
     expect(result.driverAction).toBe("prepared_request_consumption_reconciled");
+  });
+
+  it("retains a prepared reviewer after DELETE succeeds before phase advancement", () => {
+    const data = setup("reviewer");
+    const runner = { runJson: (args: string[]) => args.some((arg) => arg.endsWith("/events"))
+      ? [[{ id: "request-12", event: "labeled", label: { name: "custom:review" } }]]
+      : { state: "OPEN", headRefName: "agent/issue-12", headRefOid: "a".repeat(40), labels: [{ name: "custom:claimed" }], comments: [] } };
+
+    reconcileLocked(data.args, runner);
+
+    expect(readAttemptRecord(data.runDir).phase).toBe("prepared");
+  });
+
+  it("does not recognize a partial reviewer transition that still has its selected request", () => {
+    const data = setup("reviewer");
+    const record = readAttemptRecord(data.runDir);
+    const item = {
+      state: "OPEN", headRefName: record.branch, headRefOid: record.inputRevision.head,
+      labels: [{ name: "custom:claimed" }, { name: "custom:review" }], comments: [],
+    };
+
+    expect(hasExactRequestConsumption(record, item, data.args, [{ id: "request-12" }])).toBe(false);
   });
 
   it("rejects a reviewer claim when the selected PR head changed", () => {

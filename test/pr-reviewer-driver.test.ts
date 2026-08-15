@@ -14,6 +14,8 @@ function scenario(options: {
   labels?: string[];
   races?: Race[];
   deleteStatus?: Partial<Record<RaceStage, number>>;
+  afterDeleteRaces?: Race[];
+  mutateOnNon200?: RaceStage;
   extraComments?: Record<string, unknown>[];
 } = {}) {
   const head = "a".repeat(40);
@@ -30,8 +32,8 @@ function scenario(options: {
     labels: [...labels].map((name) => ({ name })), comments: options.extraComments || [],
   };
   const syncLabels = () => { pr.labels = [...labels].map((name) => ({ name })); };
-  const applyRaces = (stage: RaceStage) => {
-    for (const race of (options.races || []).filter((candidate) => candidate.stage === stage)) {
+  const applyRaces = (stage: RaceStage, races = options.races || []) => {
+    for (const race of races.filter((candidate) => candidate.stage === stage)) {
       eventSequence += 1;
       events.push({
         id: `race-${eventSequence}`,
@@ -62,7 +64,7 @@ function scenario(options: {
       operations.push(`delete:${label}`);
       applyRaces(stage);
       const status = options.deleteStatus?.[stage] ?? (labels.has(label) ? 200 : 404);
-      if (status === 200) {
+      if (status === 200 || options.mutateOnNon200 === stage) {
         labels.delete(label);
         eventSequence += 1;
         events.push({
@@ -73,6 +75,7 @@ function scenario(options: {
           label: { name: label },
         });
       }
+      applyRaces(stage, options.afterDeleteRaces || []);
       syncLabels();
       return { status };
     },
@@ -140,9 +143,8 @@ describe("PR request consumption", () => {
     expect(failedScenario({ races: [{ stage: "add-in-progress", label: "agent:update-branch", action: "labeled" }] }).labels).toContain("agent:update-branch");
   });
 
-  it("preserves a new nonselected request generation erased during normalization", () => {
-    expect(failedScenario({ races: [
-      { stage: "delete-implement", label: "agent:implement", action: "unlabeled" },
+  it("preserves a new nonselected request generation that is live after normalization", () => {
+    expect(failedScenario({ afterDeleteRaces: [
       { stage: "delete-implement", label: "agent:implement", action: "labeled" },
     ] }).labels).toContain("agent:implement");
   });
@@ -151,15 +153,24 @@ describe("PR request consumption", () => {
     expect(failedScenario({ races: [{ stage: "delete-implement", label: "agent:implement", action: "unlabeled", actor: "deadloop-bot" }] }).labels).not.toContain("agent:implement");
   });
 
-  it("preserves a new selected request generation erased at the linearization point", () => {
-    expect(failedScenario({ races: [
-      { stage: "delete-selected", label: "agent:review", action: "unlabeled" },
+  it("preserves a new selected request generation that is live after the linearization point", () => {
+    expect(failedScenario({ afterDeleteRaces: [
       { stage: "delete-selected", label: "agent:review", action: "labeled" },
     ] }).labels).toContain("agent:review");
   });
 
-  it("does not resurrect a same-login selected-request cancellation", () => {
-    expect(failedScenario({ races: [{ stage: "delete-selected", label: "agent:review", action: "unlabeled", actor: "deadloop-bot" }] }).labels).not.toContain("agent:review");
+  it("does not resurrect a selected request added and cancelled after DELETE", () => {
+    expect(failedScenario({ afterDeleteRaces: [
+      { stage: "delete-selected", label: "agent:review", action: "labeled" },
+      { stage: "delete-selected", label: "agent:review", action: "unlabeled" },
+    ] }).labels).not.toContain("agent:review");
+  });
+
+  it("does not resurrect a nonselected request added and cancelled after DELETE", () => {
+    expect(failedScenario({ afterDeleteRaces: [
+      { stage: "delete-implement", label: "agent:implement", action: "labeled" },
+      { stage: "delete-implement", label: "agent:implement", action: "unlabeled" },
+    ] }).labels).not.toContain("agent:implement");
   });
 
   it("fails closed when another host wins the selected DELETE", () => {
@@ -168,6 +179,18 @@ describe("PR request consumption", () => {
 
   it("fails closed when the selected DELETE response is ambiguous", () => {
     expect(() => scenario({ deleteStatus: { "delete-selected": 0 } })).toThrow("documented 200");
+  });
+
+  it("does not launch or restore after an ambiguous response whose server mutation succeeded", () => {
+    expect(failedScenario({
+      deleteStatus: { "delete-selected": 0 }, mutateOnNon200: "delete-selected",
+    }).labels).not.toContain("agent:review");
+  });
+
+  it("does not restore a nonselected label after its ambiguous DELETE mutated the server", () => {
+    expect(failedScenario({
+      deleteStatus: { "delete-implement": 0 }, mutateOnNon200: "delete-implement",
+    }).labels).not.toContain("agent:implement");
   });
 
   it("leaves in-progress visible after a partial normalization failure", () => {
