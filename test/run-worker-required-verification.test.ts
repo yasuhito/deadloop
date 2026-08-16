@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { assertCleanOutput, completionStopDiagnosis, run, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
+const { applyCompletionRequiredVerificationStop, assertCleanOutput, completionStopDiagnosis, run, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
 const { inspectUnresolvedProjectCheckFailures } = require("../src/project-check.ts");
 const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 const roots: string[] = [];
@@ -43,6 +43,18 @@ function repository() {
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("Worker required-verification checkout binding", () => {
+  it("binds completion-stop enablement to the configured project repository path", () => {
+    let lockedProject: Record<string, unknown> | undefined;
+    applyCompletionRequiredVerificationStop(
+      { attemptRecord: "/state/runs/attempt/attempt.json", projectId: "demo", projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, worktree: "/worktree", quarantineRoot: "/quarantine" },
+      { target: { kind: "issue", number: 42 } },
+      new Error("required verification blocked: stale_policy"),
+      (project: Record<string, unknown>) => { lockedProject = project; },
+    );
+
+    expect(lockedProject?.repoPath).toBe("/repo");
+  });
+
   it("reports both fixed-contract sources when a local override becomes stale", () => {
     const attempt = {
       repository: "owner/repo",

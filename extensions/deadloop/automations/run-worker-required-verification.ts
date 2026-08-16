@@ -113,11 +113,22 @@ function completionStopDiagnosis(attempt: Record<string, any>, error: unknown) {
   };
 }
 
-function applyCompletionRequiredVerificationStop(args: Args, attempt: Record<string, any>, error: unknown): void {
+function applyCompletionRequiredVerificationStop(
+  args: Args,
+  attempt: Record<string, any>,
+  error: unknown,
+  enabledLock: typeof withEnabledDriverLock = withEnabledDriverLock,
+): void {
   if (attempt.target?.kind !== "issue" || !Number.isInteger(attempt.target.number)) {
     throw new Error("required-verification completion stop requires an Issue target");
   }
-  withEnabledDriverLock(args, (_enabled: unknown, recheck: () => void) => {
+  enabledLock({
+    projectId: args.projectId,
+    repoPath: args.projectRepo,
+    githubRepo: args.githubRepo,
+    stateDir: args.stateDir,
+    enabledAt: args.enabledAt,
+  }, (_enabled: unknown, recheck: () => void) => {
     const runner = createCommandRunner();
     const github = createGithubOperations(runner, recheck);
     const issue = github.getIssue(args.githubRepo, attempt.target.number);
