@@ -9,7 +9,6 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
-const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
 const { renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const {
   applyIssueRequiredVerificationStop,
