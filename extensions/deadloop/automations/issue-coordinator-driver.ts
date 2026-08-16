@@ -30,7 +30,7 @@ const { activeIssueRequestEvent, consumeIssueRequest } = require("../../../src/i
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
-const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { readAttemptRecord, releasePersistedAttemptAuthority } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertCurrentWorkerContract, requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
@@ -81,18 +81,22 @@ function reconcileAmbiguousPreparedWorkerConsumption(
     if (!issue) continue;
     const labels = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
     if (labels.has(String(attempt.agentRequest.label))) continue;
-    const outcome = withEnabledDriverLock(env, (enabled: { automationLogin?: string }, recheck: () => void) => consumeIssueRequest({
-      github: githubOperations(recheck),
-      repository: env.githubRepo,
-      issueNumber: Number(issue.number),
-      requestLabel: String(attempt.agentRequest.label),
-      requestEventId: String(attempt.agentRequest.eventId),
-      inProgressLabel: env.inProgressLabel,
-      blockedLabel: env.blockedLabel,
-      automationLogin: String(enabled.automationLogin || ""),
-      attemptId: String(attempt.attemptId),
-      persistConsumed: () => { throw new Error("prepared attempt has no durable consumption receipt"); },
-    }));
+    const outcome = withEnabledDriverLock(env, (enabled: { automationLogin?: string }, recheck: () => void) => {
+      const transition = consumeIssueRequest({
+        github: githubOperations(recheck),
+        repository: env.githubRepo,
+        issueNumber: Number(issue.number),
+        requestLabel: String(attempt.agentRequest.label),
+        requestEventId: String(attempt.agentRequest.eventId),
+        inProgressLabel: env.inProgressLabel,
+        blockedLabel: env.blockedLabel,
+        automationLogin: String(enabled.automationLogin || ""),
+        attemptId: String(attempt.attemptId),
+        persistConsumed: () => { throw new Error("prepared attempt has no durable consumption receipt"); },
+      });
+      releasePersistedAttemptAuthority(runDir, new Date().toISOString(), String(attempt.agentRequest.eventId), "never_launched");
+      return transition;
+    });
     if (outcome.kind === "ambiguous_blocked") {
       return { issueNumber: Number(issue.number), attemptId: String(attempt.attemptId) };
     }
@@ -559,6 +563,8 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         persistConsumed: () => recordAgentLaunchGithubClaimed(plan.input),
       });
       if (outcome.kind !== "consumed") {
+        const runDir = path.join(env.stateDir, "runs", path.basename(uuid));
+        releasePersistedAttemptAuthority(runDir, new Date().toISOString(), agentRequest.eventId, "never_launched");
         const error = new StaleLaunchError(`Issue #${number} implementation request was ${outcome.kind}`) as Error & { requestTransition?: string };
         error.requestTransition = outcome.kind;
         throw error;
