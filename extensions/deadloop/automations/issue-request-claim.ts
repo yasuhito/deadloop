@@ -18,14 +18,23 @@ function eventTime(event: JsonObject): number {
   return Date.parse(String(event.created_at || event.createdAt || ""));
 }
 
+function compareIssueEvents(left: JsonObject, right: JsonObject): number {
+  return eventTime(left) - eventTime(right)
+    || String(left.id || left.node_id).localeCompare(String(right.id || right.node_id), undefined, { numeric: true });
+}
+
+function issueLabelState(events: JsonObject[], label: string): { active: boolean; event: JsonObject | null } {
+  const matching = events.filter((event) => ["labeled", "unlabeled"].includes(String(event.event || "").toLowerCase())
+    && String(event.label?.name || "") === label && String(event.id || event.node_id || ""));
+  matching.sort(compareIssueEvents);
+  const event = matching.at(-1) || null;
+  return { active: String(event?.event || "").toLowerCase() === "labeled", event };
+}
+
 function activeIssueRequest(events: JsonObject[], requestLabel: string): JsonObject | null {
-  const matching = events.filter((event) =>
-    String(event.event || "").toLowerCase() === "labeled"
-    && String(event.label?.name || "") === requestLabel
-    && String(event.id || event.node_id || ""),
-  );
-  matching.sort((left, right) => eventTime(left) - eventTime(right)
-    || String(left.id || left.node_id).localeCompare(String(right.id || right.node_id), undefined, { numeric: true }));
+  const matching = events.filter((event) => String(event.event || "").toLowerCase() === "labeled"
+    && String(event.label?.name || "") === requestLabel && String(event.id || event.node_id || ""));
+  matching.sort(compareIssueEvents);
   return matching.at(-1) || null;
 }
 
@@ -36,12 +45,22 @@ function issueRequestGenerations(events: JsonObject[], labels: string[]): Map<st
   }));
 }
 
-function racedIssueRequestLabels(before: Map<string, string>, events: JsonObject[]): string[] {
-  return [...before].flatMap(([label, generation]) => {
-    const event = activeIssueRequest(events, label);
-    const current = String(event?.id || event?.node_id || "");
-    return current && current !== generation ? [label] : [];
+function issueRequestVersions(events: JsonObject[], labels: string[]): Map<string, string> {
+  return new Map(labels.map((label) => {
+    const event = issueLabelState(events, label).event;
+    return [label, String(event?.id || event?.node_id || "")];
+  }));
+}
+
+function changedIssueRequestLabels(before: Map<string, string>, events: JsonObject[]): string[] {
+  return [...before].flatMap(([label, version]) => {
+    const event = issueLabelState(events, label).event;
+    return String(event?.id || event?.node_id || "") !== version ? [label] : [];
   });
+}
+
+function racedIssueRequestLabels(before: Map<string, string>, events: JsonObject[]): string[] {
+  return changedIssueRequestLabels(before, events).filter((label) => issueLabelState(events, label).active);
 }
 
 function observeIssueRequestLabels(github: JsonObject, repository: string, number: number): { events: JsonObject[]; labels: Set<string> } {
@@ -53,9 +72,11 @@ function observeIssueRequestLabels(github: JsonObject, repository: string, numbe
 }
 
 function claimedIssueRequestGenerationIsCurrent(
-  observation: { events: JsonObject[] }, requestLabel: string, requestEventId: string,
+  observation: { events: JsonObject[]; labels: Set<string> }, requestLabel: string, requestEventId: string,
 ): boolean {
-  return issueRequestGenerations(observation.events, [requestLabel]).get(requestLabel) === requestEventId;
+  const state = issueLabelState(observation.events, requestLabel);
+  return observation.labels.has(requestLabel) && state.active
+    && String(state.event?.id || state.event?.node_id || "") === requestEventId;
 }
 
 function issueRequestRevision(request: JsonObject): string {
@@ -130,9 +151,13 @@ function selectIssueClaimWinner(
 
 module.exports = {
   activeIssueRequest,
+  changedIssueRequestLabels,
   claimedIssueRequestGenerationIsCurrent,
+  compareIssueEvents,
+  issueLabelState,
   issueRequestGenerations,
   issueRequestRevision,
+  issueRequestVersions,
   observeIssueRequestLabels,
   parseIssueClaim,
   racedIssueRequestLabels,

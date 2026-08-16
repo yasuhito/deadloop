@@ -45,7 +45,13 @@ describe("Issue request claim", () => {
   it("rejects a newer claimed request generation before label replacement", () => {
     expect(claimedIssueRequestGenerationIsCurrent({ events: [
       { id: "event-3", event: "labeled", created_at: "2026-07-09T00:00:00Z", label: { name: "agent:explore" } },
-    ] }, "agent:explore", "event-2")).toBe(false);
+    ], labels: new Set(["agent:explore"]) }, "agent:explore", "event-2")).toBe(false);
+  });
+
+  it("rejects a claimed request removed after its event was observed", () => {
+    expect(claimedIssueRequestGenerationIsCurrent({ events: [
+      { id: "event-2", event: "labeled", created_at: "2026-07-08T00:00:00Z", label: { name: "agent:explore" } },
+    ], labels: new Set() }, "agent:explore", "event-2")).toBe(false);
   });
 
   it("round-trips the issue claim marker", () => {

@@ -8,9 +8,11 @@ const { readAttemptRecord, recordPersistedCompletionReport, transitionPersistedA
 const { validatePromise } = require("./extract-worker-promise.ts");
 const {
   activeIssueRequest,
-  issueRequestGenerations,
+  changedIssueRequestLabels,
+  compareIssueEvents,
+  issueLabelState,
+  issueRequestVersions,
   observeIssueRequestLabels,
-  racedIssueRequestLabels,
   selectIssueClaimWinner,
 } = require("./issue-request-claim.ts");
 
@@ -60,9 +62,12 @@ function eventTime(event: JsonObject | null | undefined): number {
 function failedRequestStateIsRecoverable(observation: { labels: Set<string>; events: JsonObject[] }, requestLabels: string[], blockedLabel: string): boolean {
   const blocks = observation.events.filter((event) => String(event.event || "").toLowerCase() === "labeled"
     && String(event.label?.name || "") === blockedLabel).sort((left, right) => eventTime(left) - eventTime(right));
-  const blockTime = eventTime(blocks.at(-1));
-  if (!Number.isFinite(blockTime)) return false;
-  return requestLabels.filter((label) => observation.labels.has(label)).every((label) => eventTime(activeIssueRequest(observation.events, label)) > blockTime);
+  const latestBlock = blocks.at(-1);
+  if (!latestBlock) return false;
+  return requestLabels.filter((label) => observation.labels.has(label)).every((label) => {
+    const request = activeIssueRequest(observation.events, label);
+    return Boolean(request) && compareIssueEvents(request, latestBlock) > 0;
+  });
 }
 
 function hasExplorationPersistenceProof(
@@ -181,20 +186,24 @@ function main(argv = process.argv.slice(2)): JsonObject {
           github.createIssueComment(args.githubRepo, record.target.number, body);
         }
         observation = authorize();
-        const generationsBefore = issueRequestGenerations(observation.events, requestLabels);
+        const versionsBefore = issueRequestVersions(observation.events, requestLabels);
         const current = [...observation.labels].filter((label) => label !== args.inProgressLabel && label !== args.blockedLabel
           && (!failed || !requestLabels.includes(label)));
         if (failed) current.push(args.blockedLabel);
         github.replaceIssueLabels(args.githubRepo, record.target.number, current);
         observation = observe();
-        const racedRequests = racedIssueRequestLabels(generationsBefore, observation.events);
-        const missingRacedRequests = racedRequests.filter((label) => !observation.labels.has(label));
-        if (missingRacedRequests.length) {
-          github.moveIssueLabels(args.githubRepo, record.target.number, { add: missingRacedRequests });
+        const changedRequests = changedIssueRequestLabels(versionsBefore, observation.events);
+        if (changedRequests.length) {
+          const activeChanged = changedRequests.filter((label) => issueLabelState(observation.events, label).active);
+          const cancelledChanged = changedRequests.filter((label) => !issueLabelState(observation.events, label).active);
+          github.moveIssueLabels(args.githubRepo, record.target.number, {
+            remove: cancelledChanged.filter((label) => observation.labels.has(label)),
+            add: activeChanged.filter((label) => !observation.labels.has(label)),
+          });
           observation = observe();
         }
-        if (racedRequests.some((label) => !observation.labels.has(label))) {
-          throw new Error("exploration raced request restoration could not be proven");
+        if (changedRequests.some((label) => observation.labels.has(label) !== issueLabelState(observation.events, label).active)) {
+          throw new Error("exploration raced request reconciliation could not be proven");
         }
         if (!hasExplorationPersistenceProof(observation, claim, body, failed, proofLabels)) {
           throw new Error("exploration GitHub persistence could not be proven");

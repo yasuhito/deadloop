@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const { DEPENDENCY_QUERY_TIMEOUT_MS, defaultIssueDecisionConfig, remainingIssueDecisionTimeout, selectIssueForImplementation } = require("../extensions/deadloop/automations/issue-coordinator-decisions.ts");
+const { issueRecoverySelectionView } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
 const decisionScript = "extensions/deadloop/automations/issue-coordinator-decisions.ts";
 
 function runDecision(args: string[]) {
@@ -35,6 +36,22 @@ describe("issue coordinator selection", () => {
       defaultIssueDecisionConfig(), () => new Set(), () => "OPEN",
     );
     expect(decision.role).toBe("explorer");
+  });
+
+  it("does not let a pre-block request starve a valid Issue", () => {
+    const issues = [1, 2].map((number) => ({ number, labels: [{ name: "agent:blocked" }, { name: "agent:implement" }] }));
+    const events = new Map([
+      [1, [
+        { id: "10", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:implement" } },
+        { id: "11", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } },
+      ]],
+      [2, [
+        { id: "20", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } },
+        { id: "21", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:implement" } },
+      ]],
+    ]);
+    const view = issueRecoverySelectionView(issues, defaultIssueDecisionConfig(), (number: number) => events.get(number));
+    expect(decide(view).number).toBe(2);
   });
 
   it("shows CLI help without requiring a repo", () => {

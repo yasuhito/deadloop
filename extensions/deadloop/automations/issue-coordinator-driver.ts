@@ -17,11 +17,13 @@ const {
 } = require("../../../src/issue-required-verification-stop.ts");
 const {
   activeIssueRequest,
+  changedIssueRequestLabels,
   claimedIssueRequestGenerationIsCurrent,
-  issueRequestGenerations,
+  compareIssueEvents,
+  issueLabelState,
   issueRequestRevision,
+  issueRequestVersions,
   observeIssueRequestLabels,
-  racedIssueRequestLabels,
   renderIssueClaimComment,
   selectIssueClaimWinner,
 } = require("./issue-request-claim.ts");
@@ -144,6 +146,29 @@ function issueLabelNames(issue: JsonObject): string[] {
   return (issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")).filter(Boolean);
 }
 
+function issueRecoverySelectionView(
+  issues: JsonObject[], env: Pick<ReturnType<typeof envConfig>, "blockedLabel" | "exploreLabel" | "implementLabel">,
+  readEvents: (number: number) => JsonObject[],
+): JsonObject[] {
+  return issues.map((issue) => {
+    const labels = issueLabelNames(issue);
+    const requests = [env.exploreLabel, env.implementLabel].filter((label) => labels.includes(label));
+    if (!labels.includes(env.blockedLabel) || !requests.length) return issue;
+    const events = readEvents(Number(issue.number));
+    const blocks = events.filter((event) => String(event.event || "").toLowerCase() === "labeled"
+      && String(event.label?.name || "") === env.blockedLabel).sort(compareIssueEvents);
+    const block = blocks.at(-1);
+    const valid = new Set(requests.filter((label) => {
+      const state = issueLabelState(events, label);
+      return Boolean(block && state.active && state.event && compareIssueEvents(state.event, block) > 0);
+    }));
+    return { ...issue, labels: (issue.labels || []).filter((label: JsonObject | string) => {
+      const name = typeof label === "string" ? label : String(label.name || "");
+      return !requests.includes(name) || valid.has(name);
+    }) };
+  });
+}
+
 function claimIssueRequest(
   github: ReturnType<typeof githubOperations>, issue: JsonObject, env: ReturnType<typeof envConfig>,
   role: "explorer" | "worker", enabledIdentity: { automationLogin?: string; githubRepositoryId?: string } = {},
@@ -199,7 +224,7 @@ function claimIssueRequest(
   assertSameLaunchTarget(issue, before, "issue");
   const requestLabels = [env.exploreLabel, env.implementLabel];
   const mutationObservation = observeIssueRequestLabels(github, env.githubRepo, number);
-  const generationsBefore = issueRequestGenerations(mutationObservation.events, requestLabels);
+  const versionsBefore = issueRequestVersions(mutationObservation.events, requestLabels);
   if (!claimedIssueRequestGenerationIsCurrent(mutationObservation, requestLabel, binding.requestEventId)) {
     throw new StaleLaunchError(`Issue #${number} received a newer ${requestLabel} request before claim mutation`);
   }
@@ -210,18 +235,20 @@ function claimIssueRequest(
   let after = github.getIssue(env.githubRepo, number);
   let afterLabels = new Set(issueLabelNames(after));
   let eventsAfter = github.listIssueTimelineEvents(env.githubRepo, number);
-  const racedRequests = racedIssueRequestLabels(generationsBefore, eventsAfter);
-  if (racedRequests.length) {
+  const changedRequests = changedIssueRequestLabels(versionsBefore, eventsAfter);
+  if (changedRequests.length) {
+    const activeChanged = changedRequests.filter((label) => issueLabelState(eventsAfter, label).active);
+    const cancelledChanged = changedRequests.filter((label) => !issueLabelState(eventsAfter, label).active);
     github.moveIssueLabels(env.githubRepo, number, {
-      remove: afterLabels.has(env.inProgressLabel) ? env.inProgressLabel : undefined,
-      add: racedRequests.filter((label) => !afterLabels.has(label)),
+      remove: [afterLabels.has(env.inProgressLabel) ? env.inProgressLabel : "", ...cancelledChanged].filter(Boolean),
+      add: activeChanged.filter((label) => !afterLabels.has(label)),
     });
     after = github.getIssue(env.githubRepo, number);
     afterLabels = new Set(issueLabelNames(after));
     eventsAfter = github.listIssueTimelineEvents(env.githubRepo, number);
-    const unresolved = racedIssueRequestLabels(generationsBefore, eventsAfter).filter((label) => !afterLabels.has(label));
+    const unresolved = changedRequests.filter((label) => afterLabels.has(label) !== issueLabelState(eventsAfter, label).active);
     if (afterLabels.has(env.inProgressLabel) || unresolved.length) throw new Error(`Issue #${number} raced request release could not be proven`);
-    throw new StaleLaunchError(`Issue #${number} received a newer Agent request during claim`);
+    throw new StaleLaunchError(`Issue #${number} Agent request changed during claim`);
   }
   const latestRequest = activeIssueRequest(eventsAfter, requestLabel);
   if (String(latestRequest?.id || latestRequest?.node_id || "") !== binding.requestEventId
@@ -713,7 +740,12 @@ function drive(fixturePath: string | undefined): DriverResult {
     });
   }
 
-  const issues = issueList(fixture, env.githubRepo);
+  const observedIssues = issueList(fixture, env.githubRepo);
+  const issues = fixture ? observedIssues : issueRecoverySelectionView(
+    observedIssues,
+    env,
+    (number) => githubOperations().listIssueTimelineEvents(env.githubRepo, number),
+  );
   const verificationResolution = parsedRequiredVerificationResolution(env);
   const resumableStop = verificationResolution?.status === "blocked"
     ? issues.find((candidate) => {
@@ -895,4 +927,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { assertPreparedWorkerContractCurrent, assertRecoverableWorkerCheckout, assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };
+module.exports = { assertPreparedWorkerContractCurrent, assertRecoverableWorkerCheckout, assertWorkerLaunchBaseCurrent, envConfig, issueRecoverySelectionView, issueWorkerLaunchPlan, launchIssueWorkerFlow };

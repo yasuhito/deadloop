@@ -77,6 +77,22 @@ describe("Issue exploration completion", () => {
     )).toBe(false);
   });
 
+  it("accepts a post-block request ordered later in the same second", () => {
+    expect(hasExplorationPersistenceProof(
+      {
+        labels: new Set(["agent:blocked", "agent:implement"]),
+        events: [event,
+          { id: "100", event: "labeled", created_at: "2026-08-16T00:02:00Z", label: { name: "agent:blocked" } },
+          { id: "101", event: "labeled", created_at: "2026-08-16T00:02:00Z", label: { name: "agent:implement" } }],
+        comments: [resultComment("deadloop-bot")],
+      },
+      claim,
+      body,
+      true,
+      { inProgress: "agent:in-progress", blocked: "agent:blocked", requests: ["agent:explore", "agent:implement"] },
+    )).toBe(true);
+  });
+
   it("preserves a new request generation that races with completion", () => {
     expect(racedIssueRequestLabels(
       new Map([["agent:implement", "implement-1"]]),
