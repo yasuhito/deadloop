@@ -50,6 +50,22 @@ describe("implementation Issue required-verification stop", () => {
     expect(stopComment()).toContain("Inspected sources:\n- none");
   });
 
+  function localSourceComment() {
+    const localResolution = {
+      ...resolution,
+      sources: [{ kind: "local", location: "/home/operator/.pi/agent/deadloop/projects.json#project=demo", command: "npm run check" }],
+    };
+    return planIssueRequiredVerificationStop({ issue: issue(), resolution: localResolution, phase: "before_launch", labels }).comment;
+  }
+
+  it("does not expose an absolute local configuration path", () => {
+    expect(localSourceComment()).not.toContain("/home/operator");
+  });
+
+  it("identifies a local configuration source by its public basename", () => {
+    expect(localSourceComment()).toContain("local:projects.json#project=demo");
+  });
+
   it("documents the skipped operations", () => {
     expect(stopComment()).toContain("No Worker, branch, push, or pull request was created.");
   });
