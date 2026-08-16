@@ -115,7 +115,10 @@ Given("A blocked pull request has a completed Reviewer and its head changed afte
     updatedAt: "2026-07-13T00:00:00Z",
     isDraft: false,
     statusCheckRollup: [],
-    comments: [],
+    comments: [{
+      id: 7700, created_at: "2026-07-12T00:00:00Z", updated_at: "2026-07-12T00:00:00Z",
+      user: { login: "yasuhito" }, body: "An earlier conversation comment.",
+    }],
     reviewRequests: [],
     labels: [{ name: "agent:review" }, { name: "agent:blocked" }],
   }]));
@@ -148,8 +151,10 @@ if (args[0] === "pr" && args[1] === "list") {
   let input = ""; process.stdin.on("data", (chunk) => input += chunk); process.stdin.on("end", () => {
     const state = prs(); state[0].labels = JSON.parse(input).labels.map((name) => ({name})); save(state); process.stdout.write(JSON.stringify(state[0].labels));
   });
-} else if (args[0] === "api" && args.some((arg) => arg.endsWith("/comments"))) {
+} else if (args[0] === "api" && args.some((arg) => arg.includes("/issues/44/comments"))) {
   process.stdout.write(JSON.stringify([prs()[0].comments]));
+} else if (args[0] === "api" && args.some((arg) => arg.includes("/pulls/44/comments"))) {
+  process.stdout.write(JSON.stringify([[]]));
 } else if (args[0] === "api" && args.includes("graphql")) {
   const pr = prs()[0];
   process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:pr.headRefOid}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
@@ -165,6 +170,8 @@ if (args[0] === "pr" && args[1] === "list") {
   executable(path.join(bin, "git"), `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+// The checkout already carries the expected head, so alignment finds nothing to do.
+else if (args.includes("rev-parse") && args.includes("HEAD")) process.stdout.write("${updatedHead}\\n");
 else if (args.includes("rev-parse") && args.some(arg => arg.endsWith("^{commit}"))) process.stdout.write("${"f".repeat(40)}\\n");
 else if (args.includes("show") && args.some(arg => arg.endsWith(":deadloop.json"))) process.exit(1);
 `);
@@ -215,6 +222,23 @@ Then("deadloop starts exactly one Reviewer for the new head", function (this: Re
 Then("deadloop starts a new Reviewer without reusing the completed Reviewer", function (this: RequeuedReviewWorld) {
   const actions = readHerdrActions(this).map(actionName);
   assert.deepEqual({ oldPaneClosed: actions.includes("pane close pane-old"), newStarts: actions.filter((action) => action.startsWith("agent start dl-r-44-")).length }, { oldPaneClosed: false, newStarts: 1 });
+});
+
+/**
+ * The launch observes the review history, then claims, and claiming posts a comment. The completion
+ * dispatcher is judged against the recorded observation, so a record taken before the claim makes
+ * every completed review read as a changed conversation and be thrown away.
+ */
+Then("The recorded review history holds the claim comment the launch posted", function (this: RequeuedReviewWorld) {
+  if (!this.configDir) throw new Error("requeued pull request state is missing");
+  const runsRoot = path.join(this.configDir, "deadloop", "runs");
+  const recorded = fs.readdirSync(runsRoot)
+    .map((entry) => path.join(runsRoot, entry, "pr-review-history.json"))
+    .filter((file) => fs.existsSync(file))
+    .flatMap((file) => JSON.parse(fs.readFileSync(file, "utf8")).history.conversationComments)
+    .map((comment: { id: string }) => String(comment.id));
+
+  assert.deepEqual(recorded, ["7700", "9901"]);
 });
 
 Then("The Reviewer handoff uses the repaired head", function (this: RequeuedReviewWorld) {

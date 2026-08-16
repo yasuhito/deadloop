@@ -57,8 +57,16 @@ function blockLabels(input: ReconciliationInput, preserveRequests = false): stri
   ]);
 }
 
+/**
+ * A release ends the in-progress state and nothing else.
+ *
+ * The block a pull request was stopped under is not this function's to lift. It is lifted when a
+ * new attempt claims the target and replaces every managed label, so a pull request still carrying
+ * it is one nothing has started on yet. Lifting it here would show a pull request that reads as
+ * running while a release that can still fail — a workspace that will not close — leaves it idle.
+ */
 function releaseLabels(input: ReconciliationInput): string[] {
-  return labelNames(input.pr.labels).filter((label) => label !== input.inProgressLabel && label !== input.blockedLabel);
+  return labelNames(input.pr.labels).filter((label) => label !== input.inProgressLabel);
 }
 
 /**
@@ -289,10 +297,12 @@ function postBlockRequestIsEligible(input: {
   events: JsonObject[];
   blockedLabel: string;
 }): boolean {
-  // Counting only blocks deadloop explained would let the repair path's own request label carry a
-  // pull request past the stop that path just asked a person to resolve, and would leave a block
-  // nobody explained impossible to recover from at all. The timeline is fully paginated, so a
-  // blocked pull request with no blocked event is evidence this host cannot trust.
+  // Deadloop's own blocks leave no request behind, so this ordering only ever decides requests a
+  // person left in place — and a person stopping a pull request by hand writes a block deadloop
+  // never explained. Counting a block whoever applied it is what lets that stop outrank the
+  // requests that preceded it, and what keeps such a block recoverable at all. The timeline is
+  // fully paginated, so a blocked pull request with no blocked event is evidence this host cannot
+  // trust.
   const cutoff = latestBlockedEvent(input.events, input.blockedLabel);
   return cutoff !== null && requestAfterInvalidationCutoff(input.request, cutoff);
 }

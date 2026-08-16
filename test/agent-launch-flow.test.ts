@@ -14,7 +14,7 @@ function input(root: string, role: "worker" | "reviewer" = "worker") {
   return {
     worktree: role === "worker"
       ? { mode: "create" as const, branch: "agent/issue-1", baseBranch: "origin/main" }
-      : { mode: "open" as const, branch: "feature/review" },
+      : { mode: "open" as const, branch: "feature/review", remote: "origin" },
     repoPath: "/repo",
     automationDir: "/automation",
     stateDir: root,
@@ -51,6 +51,7 @@ function operations(_root: string, role: "worker" | "reviewer", calls: string[])
   let launchedName = "";
   return {
     mkdirSync: () => {},
+    alignCheckout: () => {},
     runner: {
       createWorktree: () => ({ workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1", worktreePath }),
       openWorktree: () => ({ workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1", worktreePath }),
@@ -308,7 +309,7 @@ describe("0.8.0 エージェント起動フロー", () => {
         const base = input(root, roles[index] === "worker" ? "worker" : "reviewer");
         const launchInput: any = {
           ...base, uuid: `chain-${roles[index]}`, role: roles[index], project: "demo", intendedWorktreePath: "/wt/shared",
-          worktree: index === 0 ? { mode: "create", branch: "feature/shared", baseBranch: "origin/main" } : { mode: "open", branch: "feature/shared" },
+          worktree: index === 0 ? { mode: "create", branch: "feature/shared", baseBranch: "origin/main" } : { mode: "open", branch: "feature/shared", remote: "origin" },
           target: index === 0 ? { kind: "issue", number: 1 } : { kind: "pull-request", number: 44 }, resolveWorktreeHead: false,
         };
         const ops: any = operations(root, roles[index] === "worker" ? "worker" : "reviewer", []);
@@ -341,6 +342,59 @@ describe("0.8.0 エージェント起動フロー", () => {
         "rename",
         expect.stringContaining("--pane pane-1"),
       ]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe("opened checkout alignment at launch", () => {
+  it("aligns an opened pull-request checkout to the recorded input revision", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-align-"));
+    try {
+      const launchInput = input(root, "reviewer");
+      const ops: any = operations(root, "reviewer", []);
+      const aligned: any[] = [];
+      ops.alignCheckout = (value: any) => aligned.push(value);
+      ops.runner.listWorktrees = () => [{ path: "/wt/review", branch: "feature/review" }];
+      prepareAgentLaunchFlow(launchInput, ops);
+      recordAgentLaunchGithubClaimed(launchInput);
+      launchAgentFlow(launchInput, ops);
+
+      expect(aligned).toEqual([{
+        worktreePath: "/wt/review", expectedHead: "a".repeat(40), remote: "origin", branch: "feature/review",
+      }]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("leaves a resumed issue Worker checkout alone, because its input revision is the base head", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-align-issue-"));
+    try {
+      const launchInput: any = {
+        ...input(root, "worker"),
+        worktree: { mode: "open", branch: "agent/issue-1" },
+        resolveWorktreeHead: false,
+      };
+      const ops: any = operations(root, "worker", []);
+      const aligned: any[] = [];
+      ops.alignCheckout = (value: any) => aligned.push(value);
+      ops.runner.listWorktrees = () => [{ path: "/wt/worker", branch: "agent/issue-1" }];
+      prepareAgentLaunchFlow(launchInput, ops);
+      recordAgentLaunchGithubClaimed(launchInput);
+      launchAgentFlow(launchInput, ops);
+
+      expect(aligned).toEqual([]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("refuses to open a pull-request checkout without the configured remote", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-align-remote-"));
+    try {
+      const launchInput: any = { ...input(root, "reviewer"), worktree: { mode: "open", branch: "feature/review" } };
+      const ops: any = operations(root, "reviewer", []);
+      ops.runner.listWorktrees = () => [{ path: "/wt/review", branch: "feature/review" }];
+      prepareAgentLaunchFlow(launchInput, ops);
+      recordAgentLaunchGithubClaimed(launchInput);
+
+      expect(() => launchAgentFlow(launchInput, ops)).toThrow("requires the configured remote");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

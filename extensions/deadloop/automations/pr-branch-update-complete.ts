@@ -4,7 +4,8 @@
 // reachable again once this handler replaces the active claim state with a new review request.
 // This handler never pushes, comments, or launches work.
 
-const { validatePromise } = require("./extract-worker-promise.ts");
+const path = require("node:path") as typeof import("node:path");
+const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
@@ -40,16 +41,6 @@ function parseArgs(argv: string[]): JsonObject {
   return values;
 }
 
-/** The commit the updater proved it pushed, or "" when the report cannot authorize a transition. */
-function pushedRevision(promiseFile: string): string {
-  const validation = validatePromise(promiseFile);
-  const promise = validation.promise as JsonObject | undefined;
-  if (validation.status !== "complete" || !promise || promise.status !== "complete") return "";
-  if (promise.result?.outcome !== "branch_update_pushed") return "";
-  const revision = String(promise.result?.outputRevision || "").toLowerCase();
-  return /^[0-9a-f]{40}$/.test(revision) ? revision : "";
-}
-
 function completion(args: JsonObject): DriverResult {
   let suppliedReviewClaim: JsonObject;
   try {
@@ -77,11 +68,15 @@ function completion(args: JsonObject): DriverResult {
   if (!(reviewClaim.binding?.activeState?.managedLabels || []).includes(String(args.reviewLabel || ""))) {
     throw new Error("reviewLabel is not managed by the saved branch-update claim contract");
   }
-  const revision = pushedRevision(String(args.promise));
-  if (!revision) throw new Error("the branch-update report does not prove a pushed head");
-  if (revision === String(args.expectedHead).toLowerCase()) {
-    throw new Error("the branch-update report claims a push that did not change the head");
+  if (path.resolve(String(args.promise)) !== path.resolve(String(record.promiseFile))) {
+    throw new Error("promise does not match the attempt journal's completion report path");
   }
+  const transition = provenPushedHeadTransition(location.runDir, record);
+  if (!transition) throw new Error("the branch-update evidence does not prove a pushed head");
+  if (transition.originalHeadOid !== String(args.expectedHead).toLowerCase()) {
+    throw new Error("the proven branch-update push did not start from the expected head");
+  }
+  const revision = transition.headOid;
 
   return withEnabledDriverLock({
     repoPath: String(args.projectRepo),
@@ -147,4 +142,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { completion, parseArgs, pushedRevision };
+module.exports = { completion, parseArgs };

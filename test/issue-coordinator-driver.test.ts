@@ -3,10 +3,24 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.ts";
 const { acquireLockSync, releaseOwned } = require("../src/enablement-lock.cjs");
+
+// The dispatch lock writes under the state directory, so a fixture run needs one of its own rather
+// than the operator's live deadloop state.
+const fixtureStateDirs: string[] = [];
+
+afterEach(() => {
+  for (const stateDir of fixtureStateDirs.splice(0)) rmSync(stateDir, { recursive: true, force: true });
+});
+
+function fixtureStateDir(): string {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "deadloop-coordinator-state-"));
+  fixtureStateDirs.push(stateDir);
+  return stateDir;
+}
 
 function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> = {}) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName)], {
@@ -19,6 +33,7 @@ function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> 
       DEADLOOP_GITHUB_REPO: "owner/repo",
       DEADLOOP_CHECK_COMMAND: "npm test",
       DEADLOOP_WORKER_AGENT: "pi",
+      DEADLOOP_STATE_DIR: fixtureStateDir(),
       ...extraEnv,
     },
   });
@@ -46,7 +61,7 @@ describe("issue coordinator deterministic driver", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cleanup-disable-"));
     const repo = path.join(root, "repo");
     const worktree = path.join(root, "worktree");
-    const artifact = path.join(worktree, ".deadloop", "run.json");
+    const artifact = path.join(worktree, ".pi", "subagents", "run.json");
     const stateDir = path.join(root, ".pi", "agent", "deadloop");
     const binDir = path.join(root, "bin");
     const started = path.join(root, "cleanup-started");
@@ -156,6 +171,58 @@ exit 2
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });
 
+  const blockedVerificationResolution = JSON.stringify({
+    status: "blocked",
+    reason: "no_source",
+    repository: "owner/repo",
+    baseRevision: "f".repeat(40),
+    sources: [],
+  });
+
+  it("stops an eligible Issue before launch when required verification is unresolved", () => {
+    expect(runDriverFixture("driver-ready-worker.json", { DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution }).driverAction).toBe("required_verification_blocked");
+  });
+
+  it("does not create an attempt for a pre-launch required-verification stop", () => {
+    expect(runDriverFixture("driver-ready-worker.json", { DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution })).not.toHaveProperty("launch");
+  });
+
+  it("resumes a fingerprinted partial stop while required verification remains blocked", () => {
+    expect(runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution,
+    }).driverAction).toBe("required_verification_blocked");
+  });
+
+  it("replaces a partial stop diagnosis when its recovery fingerprint changes", () => {
+    const changedResolution = JSON.stringify({
+      status: "blocked",
+      reason: "source_conflict",
+      repository: "owner/repo",
+      baseRevision: "f".repeat(40),
+      sources: [
+        { kind: "local", location: "projects.json", command: "npm test" },
+        { kind: "local", location: "projects.override.json", command: "npm run check" },
+      ],
+    });
+    const result = runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: changedResolution,
+    });
+
+    expect(result.comment).toContain("reason: source_conflict");
+  });
+
+  it("launches a Worker for a requeued fingerprinted Issue after required verification resolves", () => {
+    expect(runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify({ status: "resolved" }),
+    }).driverAction).toBe("worker_monitor_request");
+  });
+
+  it("does not requeue a durable verification stop when only configuration resolves", () => {
+    expect(runDriverFixture("driver-durable-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify({ status: "resolved" }),
+    }).driverAction).toBe("no_candidate");
+  });
+
   it("binds the Worker V1 identity to an exact commit SHA", () => {
     const instructions = runDriverFixture("driver-ready-worker.json").launch.instructions;
 
@@ -179,9 +246,11 @@ exit 2
   });
 
   it("reports the deterministic worker promise path outside the worktree", () => {
+    const stateDir = fixtureStateDir();
+
     expect(
-      runDriverFixture("driver-ready-worker.json", { DEADLOOP_STATE_DIR: "/state/deadloop" }).launch.promiseFile,
-    ).toBe("/state/deadloop/runs/fixture-worker-uuid/promise.json");
+      runDriverFixture("driver-ready-worker.json", { DEADLOOP_STATE_DIR: stateDir }).launch.promiseFile,
+    ).toBe(path.join(stateDir, "runs/fixture-worker-uuid/promise.json"));
   });
 
   it("isolates runtime artifacts during monitor validation", () => {
@@ -202,5 +271,41 @@ exit 2
 
   it("uses the TypeScript renderer for planning comments", () => {
     expect(readFileSync(driverScript, "utf8")).toContain("renderIssuePlanningComment");
+  });
+});
+
+describe("reusing an abandoned Worker checkout", () => {
+  const checkout = {
+    branch: "agent/issue-1-task",
+    worktreePath: "/worktrees/agent-issue-1-task",
+    inputHead: "a".repeat(40),
+    abandonedAt: "2026-08-14T00:00:00.000Z",
+    workspaceId: "workspace-1",
+    agentName: "demo-issue-1-worker",
+  };
+
+  /** Every other proof passes, so the status line is the only thing under test. */
+  function assertWith(status: string) {
+    const { assertRecoverableWorkerCheckout } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
+    return () => assertRecoverableWorkerCheckout(checkout, { repoPath: "/repo" }, {
+      runner: {
+        listWorktrees: () => [{ branch: checkout.branch, path: checkout.worktreePath, workspaceId: "" }],
+        listWorkspaces: () => [],
+        listAgents: () => [],
+      },
+      runText: (args: string[]) => (args.includes("rev-parse") ? checkout.inputHead : status),
+    });
+  }
+
+  it("reuses a checkout whose only untracked files are an agent scratch area", () => {
+    expect(assertWith("?? .pi/subagents/artifacts/input.md\n")).not.toThrow();
+  });
+
+  it("refuses a checkout whose scratch area holds a tracked change", () => {
+    expect(assertWith(" M .pi/subagents/report.md\n")).toThrow("contains changes");
+  });
+
+  it("refuses a checkout holding somebody else's untracked file", () => {
+    expect(assertWith("?? luac.out\n")).toThrow("contains changes");
   });
 });

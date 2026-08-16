@@ -336,22 +336,41 @@ describe("attempt completion persistence decisions", () => {
     expect(decide(record, report, github, fixture.context)).toEqual({ action: "preserve", reason: "invalid_report" });
   });
 
-  it("preserves a human-required reviewer result", () => {
+  it("closes a human-required reviewer result that reached its human handoff", () => {
     const fixture = reviewerFixture("human_required");
 
-    expect(decide(fixture.record, fixture.report, fixture.github)).toEqual({
-      action: "preserve",
-      reason: "human_required",
-    });
+    expect(decide(fixture.record, fixture.report, fixture.github, fixture.context)).toEqual({ action: "close" });
   });
 
-  it("preserves changes requested while a prior required finding persists", () => {
+  it("closes changes requested that a persisting prior finding handed to a human", () => {
     const fixture = reviewerFixture("changes_requested", "persisted");
 
-    expect(decide(fixture.record, fixture.report, fixture.github, fixture.context)).toEqual({
-      action: "preserve",
-      reason: "human_required",
-    });
+    expect(decide(fixture.record, fixture.report, fixture.github, fixture.context)).toEqual({ action: "close" });
+  });
+
+  it("retains a human-required reviewer result whose pull request is still a draft", () => {
+    const fixture = reviewerFixture("human_required");
+    const github = { ...fixture.github, draft: true };
+
+    expect(decide(fixture.record, fixture.report, github, fixture.context))
+      .toEqual({ action: "preserve", reason: "github_persistence_not_confirmed" });
+  });
+
+  it("closes a repairing reviewer result that keeps its pull request in draft", () => {
+    const fixture = reviewerFixture("changes_requested");
+    const github = { ...fixture.github, draft: true };
+
+    expect(decide(fixture.record, fixture.report, github, fixture.context)).toEqual({ action: "close" });
+  });
+
+  it("retains a human-required reviewer result whose pull request still carries an agent request", () => {
+    const fixture = reviewerFixture("human_required");
+    const github = { ...fixture.github, labels: ["agent:review"] };
+
+    expect(decide(fixture.record, fixture.report, github, {
+      reviewerExpectedLabels: [],
+      reviewerManagedLabels: ["agent:review", "agent:in-progress", "agent:blocked"],
+    })).toEqual({ action: "preserve", reason: "github_persistence_not_confirmed" });
   });
 
   it("preserves changes requested that reports no repair progress", () => {
@@ -977,7 +996,6 @@ describe("typed uncertainty and doctor findings", () => {
   it.each([
     "active_attempt",
     "blocked",
-    "human_required",
     "missing_report",
     "invalid_report",
     "github_persistence_not_confirmed",

@@ -7,7 +7,10 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.ts");
-const { classifyActiveReviewClaim, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
+const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.ts");
+const { classifyActiveReviewClaim, classifyPushedHeadAuthorityTransition, classifyReviewClaimTimeStatus, parseReviewClaim } = require("./pr-review-claim.ts");
+const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
+const { provenAttemptCompletion } = require("./attempt-completion-proof.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -123,16 +126,21 @@ function recoveryReceiptPath(stateDir: string, repositoryId: string, number: num
   return path.join(stateDir, "work-authority-reconciliation", `${repositoryId}-${number}.json`);
 }
 
-function closeReceiptPath(record: JsonObject): string {
-  return path.join(record.runDir, "authority-release-started.json");
-}
+/** The phases an attempt passes before its launch opens a workspace. */
+const PHASES_BEFORE_WORKSPACE = ["prepared", "github_claimed"];
 
-function validCloseReceipt(record: JsonObject): boolean {
-  try {
-    const receipt = JSON.parse(fs.readFileSync(closeReceiptPath(record), "utf8"));
-    return receipt?.schemaVersion === 1 && receipt?.attemptId === record.attemptId
-      && receipt?.workspaceId === record.workspaceId && receipt?.worktreePath === record.worktreePath;
-  } catch { return false; }
+/**
+ * An attempt whose launch failed before it opened a workspace.
+ *
+ * The launch is what opens the workspace, so a launch that failed while the journal was still at one
+ * of the phases before that left no runtime state at all: nothing to observe, nothing to close, and
+ * no way back to the pull request. That is the whole proof this attempt can no longer act. A launch
+ * failure that already held a workspace is the opposite case and keeps its ownership, because that
+ * workspace still has to be accounted for.
+ */
+function releasableUnlaunchedAttempt(record: JsonObject): boolean {
+  return record.phase === "launch_failed" && PHASES_BEFORE_WORKSPACE.includes(record.lastSuccessfulPhase)
+    && !record.workspaceId && !record.tabId && !record.rootPaneId;
 }
 
 function latestConfiguredRequest(events: JsonObject[], currentLabels: string[], requestLabels: string[]): JsonObject | null {
@@ -146,44 +154,110 @@ function latestConfiguredRequest(events: JsonObject[], currentLabels: string[], 
     }).at(-1) || null;
 }
 
-function canonicalPath(value: unknown): string {
-  const resolved = path.resolve(String(value || ""));
-  try { return fs.realpathSync(resolved); } catch { return resolved; }
+/** Every role whose completion is still owed to GitHub, and the handler that owes it. */
+const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonObject, runDir: string) => JsonObject }> = {
+  "branch-update": {
+    module: "./pr-branch-update-complete.ts",
+    args: () => ({}),
+  },
+  reviewer: {
+    module: "./pr-review-complete.ts",
+    args: () => ({}),
+  },
+  "review-repair": {
+    module: "./pr-review-repair-complete.ts",
+    args: (record, runDir) => ({
+      result: path.join(runDir, "finalizer-result.json"),
+      contract: path.join(runDir, "review-contract.json"),
+      branch: String(record.branch || ""),
+      attemptKey: String(record.attemptId || ""),
+    }),
+  },
+};
+
+/**
+ * Finishes a stopped attempt that proved it completed against the pull request's current head.
+ *
+ * An agent stops the moment it writes its completion report, so "the runtime says stopped" and "the
+ * work was abandoned" are indistinguishable from the runtime alone. The attempt's own evidence
+ * tells them apart, in whichever way its role proves one: a writing role by the finalizer receipt
+ * for its push, a review by its own report bound to the attempt journal. Either way the proof names
+ * the live head, so the work succeeded and only its handoff is still owed.
+ *
+ * Driving that handoff here rather than waiting for it removes the last authority only one session
+ * held. Completion was reachable solely from the monitor prompt, so an agent that finished while
+ * its monitor was gone left a pull request nobody would ever hand over. The handler is idempotent
+ * and re-authorizes under the enablement lock against the exact head, so holding the evidence is
+ * the only thing driving it requires.
+ *
+ * Returns null when the attempt proves nothing to finish, `completed` when the handoff ran, and
+ * `refused` with the handler's own reason when it could not. A refusal leaves the ordinary
+ * reconciliation to block the pull request, which is the safe direction, but the reason travels
+ * with it: an attempt that pushed and then could not hand over must not read as one that never
+ * pushed.
+ */
+function completeProvenStoppedAttempt(
+  record: JsonObject,
+  pr: JsonObject,
+  args: JsonObject,
+  workflowLabels: {
+    reviewLabel: string;
+    implementLabel: string;
+    updateBranchLabel: string;
+    inProgressLabel: string;
+    blockedLabel: string;
+  },
+  ops: { complete?: (role: string, handlerArgs: JsonObject) => JsonObject } = {},
+): { kind: "completed"; result: JsonObject } | { kind: "refused"; reason: string } | null {
+  const runDir = String(record.runDir || "");
+  const completion = provenAttemptCompletion(runDir, record);
+  if (!completion) return null;
+  if (completion.currentHeadOid !== String(pr.headRefOid || "").toLowerCase()) return null;
+  const role = String(record.role || "");
+  const handler = COMPLETION_HANDLERS[role];
+  if (!handler) return null;
+  const handlerArgs = {
+    promise: String(record.promiseFile || ""),
+    attemptRecord: path.join(runDir, "attempt.json"),
+    projectId: String(args.projectId || ""),
+    projectRepo: String(args.projectRepo || ""),
+    githubRepo: String(args.githubRepo || ""),
+    stateDir: String(args.stateDir || ""),
+    enabledAt: Number(args.enabledAt),
+    pr: Number(pr.number),
+    expectedHead: completion.expectedHead,
+    reviewLabel: workflowLabels.reviewLabel,
+    implementLabel: workflowLabels.implementLabel,
+    updateBranchLabel: workflowLabels.updateBranchLabel,
+    inProgressLabel: workflowLabels.inProgressLabel,
+    blockedLabel: workflowLabels.blockedLabel,
+    reviewClaim: record.reviewClaim,
+    ...handler.args(record, runDir),
+  };
+  const complete = ops.complete
+    || ((_role: string, values: JsonObject) => require(handler.module).completion(values));
+  try {
+    return { kind: "completed", result: complete(role, handlerArgs) };
+  } catch (error) {
+    // A refusal keeps the pull request on the ordinary blocking path, but the reason has to travel
+    // with it. Without one, an attempt that pushed and then could not hand over looks identical to
+    // an attempt that never pushed, and neither the operator nor the next change can tell them
+    // apart from the recorded stop alone.
+    return { kind: "refused", reason: error instanceof Error ? error.message : String(error) };
+  }
 }
 
-function canonicalPathContains(root: unknown, candidate: unknown): boolean {
-  const canonicalRoot = canonicalPath(root);
-  const canonicalCandidate = canonicalPath(candidate);
-  const relative = path.relative(canonicalRoot, canonicalCandidate);
-  return relative === "" || relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-}
-
-function runtimeForAttempt(runner: any, record: JsonObject, projectRepo = ""): { kind: string } {
-  const workspaces = runner.listWorkspaces();
-  const agents = runner.listAgents();
-  const checkoutWorkspaces = workspaces.filter((workspace: JsonObject) => canonicalPath(workspace.worktreePath) === canonicalPath(record.worktreePath));
-  const matchingWorkspaces = checkoutWorkspaces.filter((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record.workspaceId || ""));
-  const checkoutAgents = agents.filter((agent: JsonObject) => canonicalPathContains(record.worktreePath, agent.cwd));
-  const relatedAgents = agents.filter((agent: JsonObject) => String(agent.name || "") === String(record.agentName || "")
-    || String(agent.paneId || "") === String(record.rootPaneId || "")
-    || canonicalPathContains(record.worktreePath, agent.cwd));
-  const matchingAgents = relatedAgents.filter((agent: JsonObject) => String(agent.name || "") === String(record.agentName || "")
-    && String(agent.paneId || "") === String(record.rootPaneId || "")
-    && canonicalPathContains(record.worktreePath, agent.cwd));
-  if (matchingWorkspaces.length === 0 && validCloseReceipt(record) && projectRepo) {
-    const retained = runner.listWorktrees(projectRepo).some((worktree: JsonObject) => canonicalPath(worktree.path) === canonicalPath(record.worktreePath));
-    return retained && checkoutWorkspaces.length === 0 && relatedAgents.length === 0 && checkoutAgents.length === 0 ? { kind: "stopped_owned" } : { kind: "ambiguous" };
-  }
-  if (matchingWorkspaces.length !== 1 || checkoutWorkspaces.length !== 1
-    || Number(matchingWorkspaces[0].tabCount) !== 1 || Number(matchingWorkspaces[0].paneCount) !== 1
-    || matchingAgents.length > 1 || relatedAgents.length !== matchingAgents.length
-    || checkoutAgents.length !== matchingAgents.length) return { kind: "ambiguous" };
-  if (matchingAgents.length === 1) {
-    const status = String(matchingAgents[0].status || "").toLowerCase();
-    if (status === "working") return { kind: "live_matching_owner" };
-    if (!["done", "idle", "failed", "stopped"].includes(status)) return { kind: "ambiguous" };
-  }
-  return { kind: "stopped_owned" };
+/**
+ * The head change an attempt proved it produced and still holds, or null when it proved none.
+ *
+ * The proof itself is the finalizer receipt and the bound completion report agreeing on one push.
+ * Currency is this caller's part: a proven push the pull request has since moved past says nothing
+ * about who owns the head reconciliation is looking at now.
+ */
+function pushedHeadTransition(record: JsonObject, pr: JsonObject): { originalHeadOid: string; headOid: string } | null {
+  const transition = provenPushedHeadTransition(String(record.runDir || ""), record);
+  if (!transition) return null;
+  return transition.headOid === String(pr.headRefOid || "").toLowerCase() ? transition : null;
 }
 
 function classifyClaim(
@@ -200,6 +274,23 @@ function classifyClaim(
   const requestEventId = String(request?.id || request?.node_id || "");
   if (!record.reviewClaim) return { claim: { kind: "missing" }, requestEventId };
   const target = { repositoryId: String(repositoryIdentity.id || ""), repository: String(repositoryIdentity.nameWithOwner || repository), targetNumber: Number(pr.number) };
+  // An attempt that proved it pushed the live head keeps its authority until its completion handler
+  // runs. Without this, success would read as an unknown owner and stop the pull request.
+  const transition = pushedHeadTransition(record, pr);
+  if (transition) {
+    if (requestEventId && requestEventId !== String(record.reviewClaim.binding?.requestEventId || "")) {
+      return { claim: { kind: "superseded" }, requestEventId };
+    }
+    const transitioned = classifyPushedHeadAuthorityTransition(
+      pr, events, comments, restHeaders, record.reviewClaim, target, transition,
+    );
+    return {
+      claim: transitioned.kind === "claim_invalid" ? { kind: "malformed" }
+        : transitioned.kind === "binding_mismatch" ? { kind: "ambiguous" }
+          : transitioned,
+      requestEventId,
+    };
+  }
   const timeStatus = classifyReviewClaimTimeStatus(pr, events, comments, restHeaders, record.reviewClaim, target);
   if (timeStatus.kind !== "authorized") {
     return {
@@ -265,11 +356,25 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
   const runner = createHerdrRunnerFromCommandRunner(commandRunner);
   const results: JsonObject[] = [];
 
+  // A pull request deadloop still holds an attempt journal for is one it owes an answer on, whether
+  // or not a request label survives. Selecting on the in-progress label alone made a pull request
+  // invisible the moment reconciliation blocked it, which is exactly when it needs looking at.
+  const attemptedPrNumbers = new Set(attempts.valid
+    .filter((attempt) => attempt.target?.kind === "pull-request")
+    .map((attempt) => Number(attempt.target.number)));
   for (const pr of prs.filter((candidate: JsonObject) => labels(candidate).includes(inProgressLabel)
+    || attemptedPrNumbers.has(Number(candidate.number))
     || fs.existsSync(recoveryReceiptPath(args.stateDir, String(repositoryIdentity.id || ""), Number(candidate.number))))) {
     const number = Number(pr.number);
     const recoveryFile = recoveryReceiptPath(args.stateDir, String(repositoryIdentity.id || ""), number);
-    const matching = attempts.valid.filter((attempt) => attempt.target?.kind === "pull-request" && Number(attempt.target.number) === number);
+    const claimed = attempts.valid.filter((attempt) => attempt.target?.kind === "pull-request" && Number(attempt.target.number) === number);
+    // Counting an attempt that never launched as an owner makes its pull request ambiguous for
+    // good. Releasing it writes that into its journal, so the launch error stays as evidence.
+    const matching = claimed.filter((attempt) => !releasableUnlaunchedAttempt(attempt));
+    for (const attempt of claimed.filter(releasableUnlaunchedAttempt)) {
+      releasePersistedAttemptAuthority(attempt.runDir, new Date().toISOString(), undefined, "never_launched");
+      results.push({ number, action: "released_unlaunched_attempt", attemptId: attempt.attemptId });
+    }
     if (matching.length === 0 && fs.existsSync(recoveryFile)) {
       try {
         const receipt = JSON.parse(fs.readFileSync(recoveryFile, "utf8"));
@@ -299,8 +404,27 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         { ...pr, labels: labels(pr) }, events, comments, github.readRestResponseHeaders(args.githubRepo),
         record, requestLabels, repositoryIdentity, args.githubRepo,
       ).claim;
-      try { runtime = runtimeForAttempt(runner, record, args.projectRepo); }
+      try { runtime = observeAttemptRuntime(runner, record, args.projectRepo); }
       catch { runtime = { kind: "unreachable" }; }
+    }
+
+    // A stopped owner that left proof of a completed attempt is finished, not abandoned. Handing
+    // it over here is what keeps a successful attempt from being blocked for stopping on success.
+    if (record && runtime.kind === "stopped_owned") {
+      const completed = completeProvenStoppedAttempt(record, pr, args, {
+        reviewLabel: args.reviewLabel || "agent:review",
+        implementLabel: args.implementLabel || "agent:implement",
+        updateBranchLabel: args.updateBranchLabel || "agent:update-branch",
+        inProgressLabel,
+        blockedLabel,
+      });
+      if (completed?.kind === "completed") {
+        results.push({ number, action: "completed_proven_attempt", attemptId: record.attemptId, result: completed.result });
+        continue;
+      }
+      if (completed?.kind === "refused") {
+        results.push({ number, action: "completion_refused", attemptId: record.attemptId, reason: completed.reason });
+      }
     }
 
     const input = { pr: { ...pr, labels: labels(pr) }, claim, runtime, requestLabels, inProgressLabel, blockedLabel };
@@ -376,14 +500,14 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         requestEventId: expectedRequestEventId,
       }) : undefined,
       closeOwnedWorkspace: record && runtime.kind === "stopped_owned" ? () => guarded(() => {
-        if (runtimeForAttempt(runner, record!, args.projectRepo).kind !== "stopped_owned") return false;
+        if (observeAttemptRuntime(runner, record!, args.projectRepo).kind !== "stopped_owned") return false;
         writeJsonAtomically(closeReceiptPath(record!), {
           schemaVersion: 1, attemptId: record!.attemptId, workspaceId: record!.workspaceId,
           worktreePath: record!.worktreePath, startedAt: new Date().toISOString(),
         });
         const alreadyAbsent = !runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record!.workspaceId));
         if (!alreadyAbsent) runner.closeWorkspace(record!.workspaceId);
-        return runtimeForAttempt(runner, record!, args.projectRepo).kind === "stopped_owned";
+        return observeAttemptRuntime(runner, record!, args.projectRepo).kind === "stopped_owned";
       }) : undefined,
       releaseLocalOwnership: record ? (cutoffEventId?: string) => {
         releasePersistedAttemptAuthority(record!.runDir, new Date().toISOString(), cutoffEventId);
@@ -392,7 +516,13 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     });
     results.push({ prNumber: number, ...result });
   }
-  return driverResult("done", `reconciled ${results.length} active PR work state(s)`, { driverAction: "pr_work_authority_reconciled", results });
+  // A refused handoff has to reach the summary, not only the structured results. Callers keep the
+  // summary and drop the rest, so a reason left there alone would never be read by anybody.
+  const refused = results.filter((entry) => entry.action === "completion_refused")
+    .map((entry) => `#${entry.number} ${entry.reason}`);
+  const summary = `reconciled ${results.length} active PR work state(s)`
+    + (refused.length ? `; ${refused.length} proven completion(s) refused: ${refused.join("; ")}` : "");
+  return driverResult("done", summary, { driverAction: "pr_work_authority_reconciled", results });
 }
 
 async function main(): Promise<void> {
@@ -404,14 +534,15 @@ if (require.main === module) void main();
 module.exports = {
   claimCommentSnapshot,
   classifyClaim,
+  completeProvenStoppedAttempt,
   latestConfiguredRequest,
   loadAttempts,
   moveReconciledLabels,
+  pushedHeadTransition,
   reconcile,
   reconciledLabelReplacement,
   reconciliationAuthorityMatches,
   replaceReconciledLabels,
   revalidatedMissingRecordClaimKind,
   revalidatedReplacedClaimKind,
-  runtimeForAttempt,
 };

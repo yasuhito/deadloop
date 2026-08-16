@@ -52,6 +52,28 @@ Given("A blocking reason is recorded for an Issue with `agent:blocked`", functio
   });
 });
 
+const requiredVerificationStopComment = "<!-- deadloop:required-verification-blocked:v1 target=issue-8 fingerprint=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->";
+
+Given("An Issue was stopped by unresolved required verification", function (this: DoctorWorld) {
+  setInput(this, { issues: [{ number: 8, labels: ["agent:blocked"], comments: [{ body: requiredVerificationStopComment }] }] });
+});
+
+Given("An Issue was stopped by required verification that is now resolved", function (this: DoctorWorld) {
+  const resolvedProject = normalizeProject({ ...project, checkCommand: "npm run check" }, {
+    localPath: "/state/projects.json",
+    repoPolicyPath: "deadloop.json",
+    repoPolicyBaseBranch: "origin/main",
+    repoPolicyStatus: "loaded",
+    repoPolicyAppliedKeys: ["checkCommand"],
+    repoPolicyBaseRevision: "a".repeat(40),
+    repoPolicyCheckCommand: "npm run check",
+  });
+  setInput(this, {
+    projects: [resolvedProject],
+    issues: [{ number: 8, labels: ["agent:blocked"], comments: [{ body: requiredVerificationStopComment }] }],
+  });
+});
+
 Given("A worktree exists for an Issue with `agent:in-progress` whose updates stopped more than 24 hours ago", function (this: DoctorWorld) {
   setInput(this, {
     issues: [{ number: 2, labels: ["agent:in-progress"], updatedAt: "2026-07-03T23:59:59Z" }],
@@ -191,6 +213,14 @@ Then("doctor shows a command to requeue the Issue", function (this: DoctorWorld)
 
 Then("doctor displays the latest blocking reason", function (this: DoctorWorld) {
   assert.match(this.report || "", /BLOCKED: missing API token\./);
+});
+
+Then("doctor does not show its requeue command", function (this: DoctorWorld) {
+  assert.doesNotMatch(this.report || "", /gh issue edit 8 .*--add-label agent:implement/);
+});
+
+Then("doctor shows its target-specific requeue command", function (this: DoctorWorld) {
+  assert.match(this.report || "", /gh issue edit 8 --remove-label agent:blocked --add-label agent:implement/);
 });
 
 Then("doctor shows a command to inspect changes in the stale worktree", function (this: DoctorWorld) {

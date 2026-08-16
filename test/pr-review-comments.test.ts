@@ -188,7 +188,7 @@ Exactly one bounded automatic repair will now start and will change only the fin
         summary: "Choose whether empty reviews should pass.",
         reviewFingerprint: "2".repeat(20),
       }),
-    ).toContain("Resolve the decision above, push a new commit if code changes are needed, then remove `agent:blocked`");
+    ).toContain("Resolve the decision above, push a new commit if code changes are needed, then add `agent:review`");
   });
 
   it("renders every structured repair and check from the fixture", () => {

@@ -140,7 +140,7 @@ herdr workspace list
 herdr worktree list --cwd ${shellQuoteForRenderer(input.repoPath)} --json
 git -C ${shellQuoteForRenderer(input.repoPath)} worktree list
 git -C ${shellQuoteForRenderer(input.repoPath)} branch --list ${shellQuoteForRenderer(branchPattern)}
-git -C ${shellQuoteForRenderer(worktreePath)} status --short
+git -C ${shellQuoteForRenderer(worktreePath)} status --short --untracked-files=all
 \`\`\`
 3. Re-queue the issue after fixing the cause.
    \`\`\`bash

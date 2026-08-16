@@ -22,8 +22,9 @@ describe("Herdr 0.8.0 activation boundary", () => {
   });
 
   it("selects launchBranchUpdate for the branch-update role", () => {
-    expect(namedFunction(reviewerDriver, "drive")).toContain("launchBranchUpdate(");
+    expect(namedFunction(reviewerDriver, "driveSelectedTarget")).toContain("launchBranchUpdate(");
   });
+
 
   it("selects launchRepair for the review-repair role", () => {
     expect(namedFunction(repairDriver, "dispatch")).toContain("launchRepair(");

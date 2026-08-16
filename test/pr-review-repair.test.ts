@@ -59,7 +59,7 @@ function finalizeWith(
   pushUrl = "https://github.com/owner/repo.git",
   repositoryIds: Record<string, string> = {},
   raceRemoteHead?: string | null,
-  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; dirty?: boolean; missingAncestor?: boolean; checkFailure?: boolean; finalManagedConflict?: boolean; currentConfiguration?: Record<string, unknown>; dateHeaders?: string; expireAfterObservations?: boolean } = {},
+  localHeadChanges: { afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; dirty?: boolean; scratchArea?: boolean; missingAncestor?: boolean; checkFailure?: boolean; finalManagedConflict?: boolean; currentConfiguration?: Record<string, unknown>; dateHeaders?: string; expireAfterObservations?: boolean } = {},
 ) {
   let observedHead = actualHead;
   let localHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -101,6 +101,9 @@ function finalizeWith(
         if (args[0] === "node" && localHeadChanges.checkFailure) return { status: 1, stdout: "", stderr: "checks failed" };
         if (args.includes("merge-base") && localHeadChanges.missingAncestor) return { status: 1, stdout: "", stderr: "" };
         if (args.includes("status") && localHeadChanges.dirty) return { status: 0, stdout: " M src/a.ts\n", stderr: "" };
+        if (args.includes("status") && localHeadChanges.scratchArea) {
+          return { status: 0, stdout: "?? .pi/subagents/2026-08-14/mission.md\n", stderr: "" };
+        }
         if (args.includes("get-url")) return { status: 0, stdout: `${pushUrl}\n`, stderr: "" };
         if (args.includes("push") && raceRemoteHead !== undefined && raceRemoteHead !== head) {
           return { status: 1, stdout: "", stderr: "rejected (non-fast-forward)" };
@@ -453,6 +456,10 @@ describe("automatic PR review repair", () => {
 
   it("prevents push from a dirty repair worktree", () => {
     expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { dirty: true })).toThrow("repair worktree is dirty before checks");
+  });
+
+  it("pushes when the only untracked path is the agent's own scratch area", () => {
+    expect(finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { scratchArea: true }).action).toBe("pushed");
   });
 
   it("prevents push when the candidate does not contain the selected head", () => {

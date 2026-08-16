@@ -7,6 +7,7 @@ const {
   transitionPersistedAttempt,
   writeAttemptRecordAtomically,
 } = require("./attempt-lifecycle-runtime.cjs");
+const { alignOpenedCheckout } = require("./checkout-alignment.ts");
 const { deriveHerdrAgentName } = require("./herdr-agent-name.cjs");
 const { createHerdrRunner } = require("./herdr-runner.ts");
 const { writeWorkerContractSnapshot } = require("./worker-required-verification-runtime.cjs");
@@ -17,7 +18,7 @@ import type { RunnerAdapter } from "./runner";
 
 type WorktreeRequest =
   | { mode: "create"; branch: string; baseBranch: string }
-  | { mode: "open"; branch: string; baseBranch?: string };
+  | { mode: "open"; branch: string; baseBranch?: string; remote?: string };
 
 type AgentLaunchFlowInput = {
   worktree: WorktreeRequest;
@@ -51,6 +52,7 @@ type AgentLaunchFlowOps = {
   runText: (args: string[]) => string;
   writeFileSync: (file: string, text: string, encoding: "utf8") => void;
   beforeAgentStart?: () => void;
+  alignCheckout?: (input: { worktreePath: string; expectedHead: string; remote: string; branch: string }) => void;
 };
 
 type PreparedLaunch = {
@@ -240,7 +242,7 @@ function ensureFreshCheckout(input: AgentLaunchFlowInput, runner: RunnerAdapter)
   }
 }
 
-function prepareWorktree(input: AgentLaunchFlowInput, runner: RunnerAdapter) {
+function prepareWorktree(input: AgentLaunchFlowInput, runner: RunnerAdapter, ops: AgentLaunchFlowOps) {
   ensureFreshCheckout(input, runner);
   if (input.worktree.mode === "create") {
     return runner.createWorktree({
@@ -251,7 +253,23 @@ function prepareWorktree(input: AgentLaunchFlowInput, runner: RunnerAdapter) {
       intendedPath: input.intendedWorktreePath,
     });
   }
-  return runner.openWorktree({ repoPath: input.repoPath, branch: input.worktree.branch });
+  const launch = runner.openWorktree({ repoPath: input.repoPath, branch: input.worktree.branch });
+  // An opened checkout sits wherever the previous attempt left it, and every pull-request role binds
+  // to an exact head, so handing one over unaligned makes the agent refuse before doing any work.
+  //
+  // Only a pull-request attempt's input revision is its branch's own tip. An issue Worker's input
+  // revision is the base head, which its branch is deliberately ahead of, so aligning there would
+  // refuse every resumed Worker.
+  if (input.target.kind === "pull-request") {
+    if (!input.worktree.remote) throw new Error("opening a pull-request checkout requires the configured remote");
+    (ops.alignCheckout || alignOpenedCheckout)({
+      worktreePath: launch.worktreePath,
+      expectedHead: input.inputRevision.head,
+      remote: input.worktree.remote,
+      branch: input.worktree.branch,
+    });
+  }
+  return launch;
 }
 
 function recordWorkspaceOpened(runDir: string, launch: {
@@ -281,7 +299,7 @@ function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): 
   try {
     const record = readAttemptRecord(prepared.runDir);
     if (record.phase !== "github_claimed") throw new Error(`attempt phase ${record.phase} cannot launch a workspace`);
-    const launch = prepareWorktree(input, runner);
+    const launch = prepareWorktree(input, runner, ops);
     workspaceMayExist = true;
     if (input.worktree.mode === "open" && path.resolve(launch.worktreePath) !== path.resolve(input.intendedWorktreePath)) {
       throw new Error("Herdr returned a worktree path outside the recorded attempt checkout");

@@ -14,6 +14,18 @@ Operators can check blocked work simply by viewing `/deadloop-doctor`, clean up 
 * When The operator runs doctor
 * Then doctor displays the latest blocking reason
 
+## Scenario: Hide required-verification requeue while configuration remains blocked
+
+* Given An Issue was stopped by unresolved required verification
+* When The operator runs doctor
+* Then doctor does not show its requeue command
+
+## Scenario: Show required-verification requeue after configuration resolves
+
+* Given An Issue was stopped by required verification that is now resolved
+* When The operator runs doctor
+* Then doctor shows its target-specific requeue command
+
 ## Scenario: Show the command to check the worktree of a stale in-progress Issue.
 
 * Given A worktree exists for an Issue with `agent:in-progress` whose updates stopped more than 24 hours ago
