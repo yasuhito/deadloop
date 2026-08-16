@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { consumeIssueRequest } = require("../src/issue-request-transition.ts");
+const { consumeIssueRequest, persistSuccessfulExploration } = require("../src/issue-request-transition.ts");
 
 type Event = {
   id: string;
@@ -78,6 +78,78 @@ function createState() {
   };
 }
 
+function explorationCompletionScenario(options: {
+  requestBeforeCompletion?: string;
+  copiedResultLogin?: string;
+  requestDuringComment?: string;
+  requestDuringDelete?: string;
+  interruptAfterComment?: boolean;
+  interruptAfterDelete?: boolean;
+  retry?: boolean;
+} = {}) {
+  const state = createState();
+  state.unlabel("agent:explore", "deadloop-bot");
+  state.label("agent:in-progress", "deadloop-bot");
+  if (options.requestDuringComment) state.unlabel(options.requestDuringComment, "human");
+  if (options.requestDuringDelete) state.unlabel(options.requestDuringDelete, "human");
+  if (options.requestBeforeCompletion) state.label(options.requestBeforeCompletion, "human");
+  const comments: Array<{ id: string; body: string; user: { login: string }; created_at: string; updated_at: string }> = [];
+  if (options.copiedResultLogin) {
+    const timestamp = "2026-08-16T00:00:30Z";
+    comments.push({
+      id: "copied-comment",
+      body: "## deadloop exploration\n\nResult.\n\n<!-- deadloop:issue-exploration-result:v1 attempt=attempt-42 request=2 -->",
+      user: { login: options.copiedResultLogin },
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+  }
+  let persisted = false;
+  let commentInterrupted = false;
+  let deleteInterrupted = false;
+  const github = {
+    listIssueLabels: () => [...state.labels].map((name) => ({ name })),
+    listIssueTimelineEvents: () => state.events,
+    listIssueComments: () => comments,
+    addIssueLabel: (_repo: string, _number: number, label: string) => state.label(label, "deadloop-bot"),
+    deleteIssueLabel: (_repo: string, _number: number, label: string) => {
+      if (!state.labels.has(label)) return { status: 404 };
+      state.unlabel(label, "deadloop-bot");
+      if (options.requestDuringDelete) state.label(options.requestDuringDelete, "human");
+      if (options.interruptAfterDelete && !deleteInterrupted) {
+        deleteInterrupted = true;
+        throw new Error("interrupted after label deletion");
+      }
+      return { status: 200 };
+    },
+    commentIssue: (_repo: string, _number: number, body: string) => {
+      const timestamp = "2026-08-16T00:01:00Z";
+      comments.push({ id: `comment-${comments.length + 1}`, body, user: { login: "deadloop-bot" }, created_at: timestamp, updated_at: timestamp });
+      if (options.requestDuringComment) state.label(options.requestDuringComment, "human");
+      if (options.interruptAfterComment && !commentInterrupted) {
+        commentInterrupted = true;
+        throw new Error("interrupted after comment");
+      }
+    },
+  };
+  const input = {
+    github,
+    repository: "owner/repo",
+    issueNumber: 42,
+    requestLabel: "agent:explore",
+    requestEventId: "2",
+    inProgressLabel: "agent:in-progress",
+    automationLogin: "deadloop-bot",
+    attemptId: "attempt-42",
+    resultBody: "## deadloop exploration\n\nResult.",
+    persistGithub: () => { persisted = true; },
+  };
+  let outcome;
+  try { outcome = persistSuccessfulExploration(input); } catch (error) { outcome = { kind: "interrupted", error }; }
+  if (options.retry) outcome = persistSuccessfulExploration(input);
+  return { comments, labels: [...state.labels], outcome, persisted };
+}
+
 describe("Issue Agent request transition", () => {
   it("persists consumption after the selected request is removed", () => {
     expect(scenario().persisted).toBe(true);
@@ -147,5 +219,46 @@ describe("Issue Agent request transition", () => {
 
   it("treats an unprovable DELETE response as ambiguous", () => {
     expect(scenario({ deleteStatus: 0 }).outcome.kind).toBe("ambiguous_blocked");
+  });
+});
+
+describe("successful Issue exploration transition", () => {
+  it("posts the exact authorized human-readable result", () => {
+    expect(explorationCompletionScenario().comments[0]).toMatchObject({ user: { login: "deadloop-bot" }, body: "## deadloop exploration\n\nResult.\n\n<!-- deadloop:issue-exploration-result:v1 attempt=attempt-42 request=2 -->" });
+  });
+
+  it("does not trust an exact result copied by another commenter", () => {
+    expect(explorationCompletionScenario({ copiedResultLogin: "other-user" }).comments.at(-1)?.user.login).toBe("deadloop-bot");
+  });
+
+  it("removes only the completed attempt's active label", () => {
+    expect(explorationCompletionScenario().labels).toEqual(["agent:implement", "customer:urgent"]);
+  });
+
+  it("preserves an exploration request added while the explorer runs", () => {
+    const data = explorationCompletionScenario({ requestBeforeCompletion: "agent:explore" });
+    expect(data.labels).toContain("agent:explore");
+  });
+
+  it("preserves an implementation request added while the result comment is posted", () => {
+    const data = explorationCompletionScenario({ requestDuringComment: "agent:implement" });
+    expect(data.labels).toContain("agent:implement");
+  });
+
+  it("preserves an exploration request added while active state is removed", () => {
+    const data = explorationCompletionScenario({ requestDuringDelete: "agent:explore" });
+    expect(data.labels).toContain("agent:explore");
+  });
+
+  it("does not duplicate the result comment after a comment interruption", () => {
+    expect(explorationCompletionScenario({ interruptAfterComment: true, retry: true }).comments).toHaveLength(1);
+  });
+
+  it("continues after active-label deletion was interrupted", () => {
+    expect(explorationCompletionScenario({ interruptAfterDelete: true, retry: true }).outcome.kind).toBe("persisted");
+  });
+
+  it("proves GitHub persistence before advancing the attempt", () => {
+    expect(explorationCompletionScenario().persisted).toBe(true);
   });
 });

@@ -183,6 +183,10 @@ exit 2
     expect(runDriverFixture("driver-explore.json").launch.instructions).toContain("Do not edit, create, delete, rename, or format repository files");
   });
 
+  it("hands successful exploration to the deterministic completion path", () => {
+    expect(runDriverFixture("driver-explore.json").prompt).toContain("complete-issue-exploration.ts");
+  });
+
   it("reports the deterministic Worker name", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });

@@ -28,6 +28,19 @@ type IssueRequestTransitionOutcome =
   | { kind: "raced"; requestEventId: string }
   | { kind: "ambiguous_blocked"; requestEventId: string };
 
+type PersistSuccessfulExplorationInput = {
+  github: IssueRequestGithub;
+  repository: string;
+  issueNumber: number;
+  requestLabel: string;
+  requestEventId: string;
+  inProgressLabel: string;
+  automationLogin: string;
+  attemptId: string;
+  resultBody: string;
+  persistGithub: () => void;
+};
+
 function eventId(event: JsonObject | null | undefined): string {
   return String(event?.id || event?.node_id || "");
 }
@@ -105,6 +118,100 @@ function selectedRequestEvent(observation: ReturnType<typeof observeRequest>, in
   return observation.events.find((event) => eventId(event) === input.requestEventId
     && String(event.event || "").toLowerCase() === "labeled"
     && String(event.label?.name || "") === input.requestLabel) || null;
+}
+
+function explorationResultMarker(input: PersistSuccessfulExplorationInput): string {
+  return `<!-- deadloop:issue-exploration-result:v1 attempt=${input.attemptId} request=${input.requestEventId} -->`;
+}
+
+function explorationResultBody(input: PersistSuccessfulExplorationInput): string {
+  return `${input.resultBody.trim()}\n\n${explorationResultMarker(input)}`;
+}
+
+function trustedExplorationResultComment(
+  comments: JsonObject[],
+  input: PersistSuccessfulExplorationInput,
+): JsonObject | null {
+  const body = explorationResultBody(input);
+  return comments.find((comment) => {
+    const login = String(comment.user?.login || comment.author?.login || "").toLowerCase();
+    const created = String(comment.created_at || comment.createdAt || "");
+    const updated = String(comment.updated_at || comment.updatedAt || "");
+    return login === input.automationLogin.toLowerCase()
+      && Boolean(created)
+      && created === updated
+      && String(comment.body || "") === body;
+  }) || null;
+}
+
+function observeExplorationCompletion(input: PersistSuccessfulExplorationInput) {
+  const events = input.github.listIssueTimelineEvents(input.repository, input.issueNumber);
+  const labels = new Set(input.github.listIssueLabels(input.repository, input.issueNumber).map(labelName).filter(Boolean));
+  const comments = input.github.listIssueComments(input.repository, input.issueNumber);
+  return { events, labels, comments };
+}
+
+function ownedActiveState(
+  observation: ReturnType<typeof observeExplorationCompletion>,
+  input: PersistSuccessfulExplorationInput,
+): { request: JsonObject; latest: JsonObject; active: boolean } | null {
+  const request = observation.events.find((event) => eventId(event) === input.requestEventId
+    && String(event.event || "").toLowerCase() === "labeled"
+    && String(event.label?.name || "") === input.requestLabel);
+  const latest = labelEvent(observation.events, input.inProgressLabel);
+  const consumed = request && observation.events.find((event) =>
+    compareIssueTimelineEvents(event, request) > 0
+    && (!latest || compareIssueTimelineEvents(event, latest) < 0)
+    && String(event.event || "").toLowerCase() === "unlabeled"
+    && String(event.label?.name || "") === input.requestLabel
+    && String(event.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase(),
+  );
+  if (!request || !consumed || !latest || compareIssueTimelineEvents(latest, request) <= 0
+    || String(latest.actor?.login || "").toLowerCase() !== input.automationLogin.toLowerCase()) return null;
+  const action = String(latest.event || "").toLowerCase();
+  if (action !== "labeled" && action !== "unlabeled") return null;
+  return { request, latest, active: action === "labeled" && observation.labels.has(input.inProgressLabel) };
+}
+
+/**
+ * Persist one successful exploration result without replacing the Issue label set.
+ *
+ * The selected exploration request was consumed before launch. Completion posts one exact,
+ * Automation-host-authored result, removes only that attempt's active label, proves both writes
+ * from GitHub observations, and only then advances the durable attempt through `persistGithub`.
+ */
+function persistSuccessfulExploration(input: PersistSuccessfulExplorationInput): { kind: "persisted"; requestEventId: string } {
+  if (!input.automationLogin.trim()) throw new Error("authorized Automation host login is required");
+  let observation = observeExplorationCompletion(input);
+  let activeState = ownedActiveState(observation, input);
+  if (!activeState) throw new Error("exploration active state is not owned by this attempt");
+
+  if (!trustedExplorationResultComment(observation.comments, input)) {
+    if (!activeState.active) throw new Error("exploration result comment is missing after active state removal");
+    input.github.commentIssue(input.repository, input.issueNumber, explorationResultBody(input));
+    observation = observeExplorationCompletion(input);
+    activeState = ownedActiveState(observation, input);
+    if (!activeState || !trustedExplorationResultComment(observation.comments, input)) {
+      throw new Error("exploration result comment could not be proven");
+    }
+  }
+
+  if (activeState.active) {
+    const deletion = input.github.deleteIssueLabel(input.repository, input.issueNumber, input.inProgressLabel);
+    if (deletion.status !== 200 && deletion.status !== 404) {
+      throw new Error("exploration active-state removal could not be proven");
+    }
+    observation = observeExplorationCompletion(input);
+    activeState = ownedActiveState(observation, input);
+  }
+
+  if (!activeState || activeState.active || observation.labels.has(input.inProgressLabel)
+    || String(activeState.latest.event || "").toLowerCase() !== "unlabeled"
+    || !trustedExplorationResultComment(observation.comments, input)) {
+    throw new Error("exploration GitHub persistence could not be proven");
+  }
+  input.persistGithub();
+  return { kind: "persisted", requestEventId: input.requestEventId };
 }
 
 /**
@@ -187,4 +294,11 @@ function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTrans
   return { kind: "consumed", requestEventId: input.requestEventId };
 }
 
-module.exports = { activeIssueRequestEvent, compareIssueTimelineEvents, consumeIssueRequest };
+module.exports = {
+  activeIssueRequestEvent,
+  compareIssueTimelineEvents,
+  consumeIssueRequest,
+  explorationResultBody,
+  persistSuccessfulExploration,
+  trustedExplorationResultComment,
+};

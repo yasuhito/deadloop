@@ -37,6 +37,9 @@ import type { DriverResult, JsonObject } from "../../../src/automation-driver-ki
 
 const SCRIPT_DIR = __dirname;
 const CLEANUP_SCRIPT = path.join(SCRIPT_DIR, "cleanup-completed-worker-worktrees.ts");
+function shellQuote(value: unknown): string {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
 const commandRunner = createCommandRunner();
 const { runText, runJson } = commandRunner;
 
@@ -943,10 +946,22 @@ function driveSelectedIssue(
       }
       throw error;
     }
+    const completion = [
+      "node", shellQuote(path.join(env.automationDir, "complete-issue-exploration.ts")),
+      "--attempt-record", shellQuote(launch.attemptRecordFile),
+      "--project-id", shellQuote(env.projectId),
+      "--project-repo", shellQuote(env.repoPath),
+      "--github-repo", shellQuote(env.githubRepo),
+      "--state-dir", shellQuote(env.stateDir),
+      "--enabled-at", shellQuote(env.enabledAt),
+      "--in-progress-label", shellQuote(env.inProgressLabel),
+    ].join(" ");
     const prompt = [
       `A read-only explorer is running for Issue #${issue.number}.`,
       `Monitor only the promise file at ${launch.promiseFile}. Do not launch another agent.`,
       "Do not mutate the repository or GitHub. The deterministic completion path will validate and persist the result.",
+      `After a complete promise, run exactly: \`${completion}\`.`,
+      "If completion reports cleanup pending, do not replay the result comment or label mutation; retry the same command.",
     ].join("\n");
     return driverResult("needs_llm", `Launched read-only explorer for Issue #${issue.number}`, {
       driverAction: "explorer_monitor_request",
