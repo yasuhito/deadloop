@@ -133,6 +133,12 @@ export type AttemptAuthorityRelease = {
   cutoffEventId?: string;
 };
 
+export type AgentRequestBinding = {
+  role: "worker";
+  label: string;
+  eventId: string;
+};
+
 export type AttemptRecord = AttemptIdentity & {
   branch: string;
   baseBranch?: string;
@@ -151,6 +157,7 @@ export type AttemptRecord = AttemptIdentity & {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  agentRequest?: AgentRequestBinding;
   reviewClaim?: Record<string, unknown>;
   abandonment?: AttemptAbandonment;
   authorityRelease?: AttemptAuthorityRelease;
@@ -167,6 +174,7 @@ export type PreparedAttemptInput = AttemptIdentity & {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  agentRequest?: AgentRequestBinding;
   reviewClaim?: Record<string, unknown>;
 };
 
@@ -324,6 +332,16 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(parseRequiredVerification(record.requiredVerification, false)
       ? { requiredVerification: parseRequiredVerification(record.requiredVerification, true) }
       : {}),
+    ...(record.agentRequest === undefined
+      ? {}
+      : record.agentRequest && typeof record.agentRequest === "object" && !Array.isArray(record.agentRequest)
+        && (record.agentRequest as Record<string, unknown>).role === "worker"
+        ? { agentRequest: {
+          role: "worker" as const,
+          label: nonEmptyString((record.agentRequest as Record<string, unknown>).label, "agentRequest.label"),
+          eventId: nonEmptyString((record.agentRequest as Record<string, unknown>).eventId, "agentRequest.eventId"),
+        } }
+        : fail("agentRequest must be a Worker request binding")),
     ...(record.reviewClaim === undefined
       ? {}
       : record.reviewClaim && typeof record.reviewClaim === "object" && !Array.isArray(record.reviewClaim)
@@ -380,6 +398,7 @@ function assertRecordAdvance(current: AttemptRecord, next: AttemptRecord): void 
     if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
+  if (JSON.stringify(current.agentRequest) !== JSON.stringify(next.agentRequest)) throw new Error("Attempt record agentRequest cannot change");
   if (current.reviewClaim !== undefined && JSON.stringify(current.reviewClaim) !== JSON.stringify(next.reviewClaim)) throw new Error("Attempt record reviewClaim cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"] as const) {
     if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);

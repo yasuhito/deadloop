@@ -33,12 +33,15 @@ function input(root: string, role: "worker" | "reviewer" = "worker") {
       binding: { repository: "owner/repo", targetNumber: number, revision: "a".repeat(40) },
       authoritySeconds: 3600,
     } } : {}),
-    ...(role === "worker" ? { requiredVerification: {
-      repository: "owner/repo",
-      command: "npm test",
-      source: { kind: "repo_policy" as const, location: "deadloop.json" },
-      baseRevision: "a".repeat(40),
-    } } : {}),
+    ...(role === "worker" ? {
+      agentRequest: { role: "worker", label: "agent:implement", eventId: "request-1" },
+      requiredVerification: {
+        repository: "owner/repo",
+        command: "npm test",
+        source: { kind: "repo_policy" as const, location: "deadloop.json" },
+        baseRevision: "a".repeat(40),
+      },
+    } : {}),
     intendedWorktreePath: role === "worker" ? "/wt/worker" : "/wt/review",
     resolveWorktreeHead: role === "worker",
     renderPrompt: ({ promiseFile, worktreeHead }: { promiseFile: string; worktreeHead?: string }) =>
@@ -101,6 +104,14 @@ describe("0.8.0 エージェント起動フロー", () => {
       const launchInput = { ...input(root, "reviewer"), role: "review-repair", reviewClaim };
       const prepared = prepareAgentLaunchFlow(launchInput, operations(root, "reviewer", []));
       expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).reviewClaim).toEqual(reviewClaim);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("要求を変える前に Worker の選択済み要求世代を固定する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const prepared = prepareAgentLaunchFlow(input(root), operations(root, "worker", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).agentRequest.eventId).toBe("request-1");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
