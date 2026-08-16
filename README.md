@@ -41,10 +41,7 @@ You need an authenticated `gh` CLI and a running [Herdr](https://herdr.dev/) 0.8
    /deadloop-enable
    ```
 
-3. To send an Issue to deadloop, add both labels:
-
-   - `ready-for-agent`
-   - `agent:implement`
+3. To request implementation, add `agent:implement` to the Issue. `ready-for-agent` remains an optional triage label and is not required to start work.
 
 That is enough to start. During enablement, deadloop runs `npm run check`, creates any missing standard labels, and leaves automatic merge off. If the repository does not provide an `npm run check` script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
 
@@ -55,9 +52,9 @@ You start the loop by labeling an Issue. deadloop owns the implementation and re
 ```mermaid
 flowchart TD
     I["`**Issue queued**
-    ready-for-agent + agent:implement`"]
+    agent:implement`"]
     W["`**Implementation**
-    ready-for-agent + agent:in-progress`"]
+    agent:in-progress`"]
     R["`**PR review requested**
     draft PR + agent:review`"]
     V["`**Review and repair**
@@ -83,8 +80,8 @@ flowchart TD
     V -. problem .-> B
 ```
 
-1. **Request implementation** — `ready-for-agent` marks an Issue as eligible. `agent:implement` requests implementation. Remove `agent:implement` before deadloop claims the Issue to cancel the request.
-2. **Let deadloop work** — deadloop replaces the request label with `agent:in-progress`, creates a draft PR with `agent:review`, and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
+1. **Request implementation** — `agent:implement` requests implementation; `ready-for-agent` is optional triage metadata. Remove `agent:implement` before deadloop consumes the selected request generation to cancel it.
+2. **Let deadloop work** — deadloop durably records the attempt, consumes only the selected request, then adds `agent:in-progress` and starts the Worker. It creates a draft PR with `agent:review` and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
 3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help, and a stopped PR keeps no agent request; fix the cause reported in the Issue or PR comment, then add the request label for the role you want next. `agent:blocked` clears when that attempt starts.
 
 ## Operator commands
@@ -119,7 +116,7 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 `projects.json` contains local paths and rollout choices. Do not commit it. Prefer the repository-owned `deadloop.json` for shared, reviewable policy.
 
-If an implementation Issue reaches a required-verification block, deadloop keeps `ready-for-agent`, removes the implementation claim, and adds `agent:blocked` with reason-specific recovery guidance. It suppresses duplicate guidance for the same recovery, does not resume merely because configuration changes, and shows that Issue's requeue command in `/deadloop-doctor` only after required verification resolves.
+If an implementation Issue reaches a required-verification block, deadloop preserves unrelated triage labels, removes the implementation request or in-progress state, and adds `agent:blocked` with reason-specific recovery guidance. It suppresses duplicate guidance for the same recovery, does not resume merely because configuration changes, and shows that Issue's requeue command in `/deadloop-doctor` only after required verification resolves.
 
 ## Safety controls
 

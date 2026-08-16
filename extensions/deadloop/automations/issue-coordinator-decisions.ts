@@ -136,7 +136,7 @@ function selectIssueForImplementation(
   relationshipDependencies: (issue: IssueDecisionRecord) => Set<number>,
   dependencyState: (number: number) => string | null | undefined,
 ): IssueDecisionRecord {
-  const requiredLabels = [config.readyLabel, config.implementLabel];
+  const requiredLabels = [config.implementLabel];
   const skipLabels = [config.inProgressLabel, config.blockedLabel, config.needsInfoLabel, config.humanLabel, config.wontfixLabel];
   const skipped: IssueDecisionRecord[] = [];
 

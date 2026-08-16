@@ -27,6 +27,11 @@ function requiredVerification(value, required) {
   }
   return contract;
 }
+function agentRequest(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.role !== "worker") throw new Error("Invalid attempt record: agentRequest must be a Worker request binding");
+  return { role: "worker", label: nonEmpty(value.label, "agentRequest.label"), eventId: nonEmpty(value.eventId, "agentRequest.eventId") };
+}
 function parseAttemptRecord(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid attempt record: record must be an object");
   if (!ROLES.has(value.role)) throw new Error("Invalid attempt record: role is invalid");
@@ -91,6 +96,7 @@ function parseAttemptRecord(value) {
     ...(value.autoMergePolicy === undefined ? {} : { autoMergePolicy: value.autoMergePolicy }),
     ...(value.reviewHistoryRequired === undefined ? {} : { reviewHistoryRequired: value.reviewHistoryRequired }),
     ...(requiredVerification(value.requiredVerification, false) ? { requiredVerification: requiredVerification(value.requiredVerification, true) } : {}),
+    ...(agentRequest(value.agentRequest) ? { agentRequest: agentRequest(value.agentRequest) } : {}),
     ...(value.reviewClaim === undefined ? {} : { reviewClaim: value.reviewClaim }),
     ...(abandonment ? { abandonment } : {}),
     ...(authorityRelease ? { authorityRelease } : {}),
@@ -179,6 +185,7 @@ function assertAdvance(current, next) {
   if (!sameIdentity(current, next)) throw new Error("Attempt record identity cannot change");
   for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy", "reviewHistoryRequired"]) if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
+  if (JSON.stringify(current.agentRequest) !== JSON.stringify(next.agentRequest)) throw new Error("Attempt record agentRequest cannot change");
   if (current.reviewClaim !== undefined && JSON.stringify(current.reviewClaim) !== JSON.stringify(next.reviewClaim)) throw new Error("Attempt record reviewClaim cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"]) if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (current.abandonment !== undefined && JSON.stringify(current.abandonment) !== JSON.stringify(next.abandonment)) throw new Error("Attempt record abandonment evidence cannot change");

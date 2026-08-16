@@ -69,6 +69,29 @@ describe("GitHub operations", () => {
     expect(commands[0]).toEqual(["gh", "issue", "edit", "12", "-R", "owner/repo", "--remove-label", "agent:implement", "--add-label", "needs-triage"]);
   });
 
+  it("deletes one Issue label with a status-bearing response", () => {
+    const commands: string[][] = [];
+    const github = createGithubOperations({ runText: (args: string[]) => (commands.push(args), "HTTP/2 200 OK\n"), runJson: () => [] });
+
+    github.deleteIssueLabel("owner/repo", 12, "agent:implement");
+
+    expect(commands[0]).toEqual([
+      "gh", "api", "--method", "DELETE", "--include", "repos/owner/repo/issues/12/labels/agent%3Aimplement",
+    ]);
+  });
+
+  it("paginates live Issue events", () => {
+    const commands: string[][] = [];
+    const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), [[{ id: 1 }], [{ id: 2 }]]) });
+
+    const events = github.listIssueTimelineEvents("owner/repo", 12);
+
+    expect({ command: commands[0], events }).toEqual({
+      command: ["gh", "api", "--paginate", "--slurp", "repos/owner/repo/issues/12/events"],
+      events: [{ id: 1 }, { id: 2 }],
+    });
+  });
+
   it("paginates live PR labels", () => {
     const commands: string[][] = [];
     const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), [[{ name: "one" }], [{ name: "two" }]]) });

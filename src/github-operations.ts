@@ -52,6 +52,39 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
       commandRunner.runText(["gh", "issue", "edit", String(issueNumber), "-R", repo, ...labelArgs(move)]);
     },
 
+    addIssueLabel(repo: string, issueNumber: string | number, label: string): JsonObject {
+      beforeMutation();
+      return commandRunner.runJson([
+        "gh", "api", "--method", "POST", `repos/${repo}/issues/${issueNumber}/labels`,
+        "--input", "-",
+      ], { input: JSON.stringify({ labels: [label] }) });
+    },
+
+    deleteIssueLabel(repo: string, issueNumber: string | number, label: string): { status: number } {
+      beforeMutation();
+      const output = commandRunner.runText([
+        "gh", "api", "--method", "DELETE", "--include",
+        `repos/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`,
+      ], { check: false });
+      const statuses = [...output.matchAll(/^HTTP\/\S+\s+(\d{3})(?:\s|$)/gim)];
+      return { status: statuses.length === 1 ? Number(statuses[0][1]) : 0 };
+    },
+
+    listIssueLabels(repo: string, issueNumber: string | number): JsonObject[] {
+      const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${issueNumber}/labels`]);
+      return Array.isArray(pages) ? pages.flat() : [];
+    },
+
+    listIssueTimelineEvents(repo: string, issueNumber: string | number): JsonObject[] {
+      const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${issueNumber}/events`]);
+      return Array.isArray(pages) ? pages.flat() : [];
+    },
+
+    listIssueComments(repo: string, issueNumber: string | number): JsonObject[] {
+      const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${issueNumber}/comments`]);
+      return Array.isArray(pages) ? pages.flat() : [];
+    },
+
     commentIssue(repo: string, issueNumber: string | number, body: string): void {
       beforeMutation();
       commandRunner.runText(["gh", "issue", "comment", String(issueNumber), "-R", repo, "--body", body]);

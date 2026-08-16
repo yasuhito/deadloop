@@ -301,7 +301,7 @@ describe("issue coordinator cleanup", () => {
   // test/agent-profiles.test.ts. The coordinator keeps only the uuid coupling:
   // the same uuid names the promise file and is handed to the launcher.
   it("hands the shared session uuid to the promise path", () => {
-    expect(runDriverFixture("driver-ready-worker.json").launch.promiseFile).toContain("fixture-worker-uuid");
+    expect(runDriverFixture("driver-ready-worker.json").launch.promiseFile).toContain("fixture-worker-demo-12");
   });
 
 

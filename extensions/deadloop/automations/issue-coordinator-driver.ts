@@ -26,6 +26,7 @@ const {
   parseFixtureArg,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { activeIssueRequestEvent, consumeIssueRequest } = require("../../../src/issue-request-transition.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
@@ -60,6 +61,43 @@ function applyCleanup(plan: JsonObject, fixture: JsonObject | null): JsonObject 
 function issueList(fixture: JsonObject | null, repo: string): JsonObject[] {
   if (fixture) return (fixture.issues || []).filter((issue: unknown) => issue && typeof issue === "object");
   return githubOperations().listOpenIssues(repo);
+}
+
+function reconcileAmbiguousPreparedWorkerConsumption(
+  issues: JsonObject[],
+  env: ReturnType<typeof envConfig>,
+): { issueNumber: number; attemptId: string } | null {
+  const runsRoot = path.join(env.stateDir, "runs");
+  let entries: string[];
+  try { entries = fs.readdirSync(runsRoot); } catch { return null; }
+  for (const entry of entries.sort()) {
+    const runDir = path.join(runsRoot, entry);
+    let attempt: JsonObject;
+    try { attempt = readAttemptRecord(runDir); } catch { continue; }
+    if (attempt.project !== env.projectId || attempt.repository !== env.githubRepo
+      || attempt.role !== "worker" || attempt.target?.kind !== "issue" || attempt.phase !== "prepared"
+      || attempt.agentRequest?.role !== "worker") continue;
+    const issue = issues.find((candidate) => Number(candidate.number) === Number(attempt.target.number));
+    if (!issue) continue;
+    const labels = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
+    if (labels.has(String(attempt.agentRequest.label))) continue;
+    const outcome = withEnabledDriverLock(env, (enabled: { automationLogin?: string }, recheck: () => void) => consumeIssueRequest({
+      github: githubOperations(recheck),
+      repository: env.githubRepo,
+      issueNumber: Number(issue.number),
+      requestLabel: String(attempt.agentRequest.label),
+      requestEventId: String(attempt.agentRequest.eventId),
+      inProgressLabel: env.inProgressLabel,
+      blockedLabel: env.blockedLabel,
+      automationLogin: String(enabled.automationLogin || ""),
+      attemptId: String(attempt.attemptId),
+      persistConsumed: () => { throw new Error("prepared attempt has no durable consumption receipt"); },
+    }));
+    if (outcome.kind === "ambiguous_blocked") {
+      return { issueNumber: Number(issue.number), attemptId: String(attempt.attemptId) };
+    }
+  }
+  return null;
 }
 
 function gateMissingContractComment(issue: JsonObject): string {
@@ -186,7 +224,6 @@ function isExactDurableRequiredVerificationStop(
 ): boolean {
   const names = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label?.name || "")));
   return String(issue.state || "").toUpperCase() === "OPEN"
-    && names.has(env.readyLabel)
     && names.has(env.blockedLabel)
     && !names.has(env.implementLabel)
     && !names.has(env.inProgressLabel)
@@ -323,6 +360,7 @@ function issueWorkerLaunchPlan(
   baseHead: string,
   recovery: AbandonedWorkerCheckout | null = null,
   verificationBaseHead: string = baseHead,
+  agentRequest?: { role: "worker"; label: string; eventId: string },
 ) {
   const number = Number(issue.number || 0);
   const workerName = `${env.projectId}-issue-${number}-worker`;
@@ -350,6 +388,7 @@ function issueWorkerLaunchPlan(
       target: { kind: "issue" as const, number },
       inputRevision: { head: baseHead },
       requiredVerification: requiredVerificationContract(env, verificationBaseHead),
+      ...(agentRequest ? { agentRequest } : {}),
       intendedWorktreePath,
       resolveWorktreeHead: true,
       renderPrompt: ({ promiseFile, worktreePath, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
@@ -416,18 +455,71 @@ function launchIssueWorkerFlow(
 
 function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
   const number = Number(issue.number || 0);
-  const uuid = shouldSimulateLaunch(fixture) ? "fixture-worker-uuid" : randomUUID();
+  const uuid = shouldSimulateLaunch(fixture) ? `fixture-worker-${slugForBranch(env.projectId)}-${number}` : randomUUID();
   const recovery = shouldSimulateLaunch(fixture) ? null : abandonedWorkerCheckout(number, env);
   const currentBaseHead = shouldSimulateLaunch(fixture)
     ? "f".repeat(40)
     : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
   const baseHead = recovery?.inputHead || currentBaseHead;
-  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery, currentBaseHead);
+  const requestEvents = fixture
+    ? (issue.timelineEvents || [{ id: "1", event: "labeled", created_at: "2026-08-16T00:00:00Z", actor: { login: "fixture-user" }, label: { name: env.implementLabel } }])
+    : githubOperations().listIssueTimelineEvents(env.githubRepo, number);
+  const requestEvent = activeIssueRequestEvent(requestEvents, env.implementLabel);
+  if (!requestEvent) throw new StaleLaunchError(`Issue #${number} has no active ${env.implementLabel} request event`);
+  const agentRequest = {
+    role: "worker" as const,
+    label: env.implementLabel,
+    eventId: String(requestEvent.id || requestEvent.node_id || ""),
+  };
+  if (!agentRequest.eventId) throw new StaleLaunchError(`Issue #${number} request event has no immutable ID`);
+  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery, currentBaseHead, agentRequest);
   const { workerName, branch } = plan;
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
 
   if (shouldSimulateLaunch(fixture)) {
-    const promiseFile = `${env.stateDir}/runs/${uuid}/promise.json`;
+    const prepared = prepareAgentLaunchFlow(plan.input, {
+      mkdirSync: fs.mkdirSync,
+      runText: () => "",
+      writeFileSync: fs.writeFileSync,
+    });
+    const labels = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
+    const events = [...requestEvents];
+    const comments: JsonObject[] = [];
+    let nextEventId = events.length + 100;
+    const emit = (event: "labeled" | "unlabeled", label: string) => events.push({
+      id: String(nextEventId++), event, created_at: "2026-08-16T00:00:01Z",
+      actor: { login: "fixture-automation" }, label: { name: label },
+    });
+    const fixtureGithub = {
+      listIssueLabels: () => [...labels].map((name) => ({ name })),
+      listIssueTimelineEvents: () => events,
+      listIssueComments: () => comments,
+      addIssueLabel: (_repository: string, _issueNumber: number, label: string) => {
+        if (!labels.has(label)) { labels.add(label); emit("labeled", label); }
+        return {};
+      },
+      deleteIssueLabel: (_repository: string, _issueNumber: number, label: string) => {
+        if (!labels.delete(label)) return { status: 404 };
+        emit("unlabeled", label);
+        return { status: 200 };
+      },
+      commentIssue: (_repository: string, _issueNumber: number, body: string) => comments.push({ body }),
+    };
+    const requestTransition = consumeIssueRequest({
+      github: fixtureGithub,
+      repository: env.githubRepo,
+      issueNumber: number,
+      requestLabel: env.implementLabel,
+      requestEventId: agentRequest.eventId,
+      inProgressLabel: env.inProgressLabel,
+      blockedLabel: env.blockedLabel,
+      automationLogin: "fixture-automation",
+      attemptId: uuid,
+      persistConsumed: () => recordAgentLaunchGithubClaimed(plan.input),
+    });
+    if (requestTransition.kind !== "consumed") throw new StaleLaunchError(`fixture request was ${requestTransition.kind}`);
+    fixtureGithub.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
+    const promiseFile = prepared.promiseFile;
     return {
       workerName,
       branch,
@@ -435,9 +527,14 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       tabId: "fixture-tab-worker",
       rootPaneId: "fixture-pane-worker",
       worktreePath: simulatedWorktreePath,
-      promptFile: `${env.stateDir}/runs/${uuid}/worker-prompt.md`,
+      promptFile: prepared.promptFile,
       promiseFile,
-      attemptRecordFile: `${env.stateDir}/runs/${uuid}/attempt.json`,
+      attemptRecordFile: path.join(prepared.runDir, "attempt.json"),
+      agentRequest,
+      requestTransition,
+      issueLabels: [...labels],
+      timelineEvents: events,
+      attemptPhase: readAttemptRecord(prepared.runDir).phase,
       instructions: plan.input.renderPrompt({ promiseFile, worktreePath: simulatedWorktreePath, worktreeHead: baseHead }),
       simulated: true,
     };
@@ -446,9 +543,27 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   const runner = herdrRunner();
   const launch = withEnabledDriverLaunch(
     env,
-    (recheck: () => void, enabled: { githubRepositoryId?: string }) => {
+    (recheck: () => void, enabled: { githubRepositoryId?: string; automationLogin?: string }) => {
       assertPreparedWorkerContractCurrent(plan.input, env, enabled.githubRepositoryId);
-      githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel });
+      const github = githubOperations(recheck);
+      const outcome = consumeIssueRequest({
+        github,
+        repository: env.githubRepo,
+        issueNumber: number,
+        requestLabel: env.implementLabel,
+        requestEventId: agentRequest.eventId,
+        inProgressLabel: env.inProgressLabel,
+        blockedLabel: env.blockedLabel,
+        automationLogin: String(enabled.automationLogin || ""),
+        attemptId: uuid,
+        persistConsumed: () => recordAgentLaunchGithubClaimed(plan.input),
+      });
+      if (outcome.kind !== "consumed") {
+        const error = new StaleLaunchError(`Issue #${number} implementation request was ${outcome.kind}`) as Error & { requestTransition?: string };
+        error.requestTransition = outcome.kind;
+        throw error;
+      }
+      github.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
     },
     (recheck: () => void) => launchAgentFlow(
       plan.input,
@@ -529,6 +644,14 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   const issues = issueList(fixture, env.githubRepo);
+  const ambiguousPrepared = fixture ? null : reconcileAmbiguousPreparedWorkerConsumption(issues, env);
+  if (ambiguousPrepared) {
+    return driverResult("done", `Issue #${ambiguousPrepared.issueNumber} request consumption was ambiguous; blocked with recovery guidance`, {
+      driverAction: "ambiguous_request_consumption_blocked",
+      issueNumber: ambiguousPrepared.issueNumber,
+      attemptId: ambiguousPrepared.attemptId,
+    });
+  }
   const verificationResolution = parsedRequiredVerificationResolution(env);
   const resumableStop = verificationResolution?.status === "blocked"
     ? issues.find((candidate) => {
@@ -638,6 +761,21 @@ function driveSelectedIssue(
   try {
     launch = launchIssueWorker(issue, env, fixture);
   } catch (error) {
+    const transition = (error as Error & { requestTransition?: string }).requestTransition;
+    if (transition === "ambiguous_blocked") {
+      return driverResult("done", `Issue #${issue.number} request consumption was ambiguous; blocked with recovery guidance`, {
+        driverAction: "ambiguous_request_consumption_blocked",
+        issueNumber: issue.number,
+      });
+    }
+    if (transition === "cancelled" || transition === "raced") {
+      return driverResult("skip", transition === "cancelled"
+        ? `Issue #${issue.number} implementation request was cancelled before consumption`
+        : `Issue #${issue.number} received a newer implementation request; the selected attempt did not launch`, {
+        driverAction: transition === "cancelled" ? "implementation_request_cancelled" : "implementation_request_raced",
+        issueNumber: issue.number,
+      });
+    }
     if (isStaleLaunchError(error)) {
       return driverResult("skip", `Issue #${issue.number} changed before launch; no workflow state was mutated`, {
         driverAction: "worker_launch_stale",

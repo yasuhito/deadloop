@@ -42,6 +42,7 @@ type AgentLaunchFlowInput = {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  agentRequest?: { role: "worker"; label: string; eventId: string };
   reviewClaim?: Record<string, unknown>;
   renderPrompt: (input: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => string;
 };
@@ -106,6 +107,7 @@ function preparedRecordInput(input: AgentLaunchFlowInput, prepared: PreparedLaun
     ...(input.autoMergePolicy === undefined ? {} : { autoMergePolicy: input.autoMergePolicy }),
     ...(input.reviewHistoryRequired === undefined ? {} : { reviewHistoryRequired: input.reviewHistoryRequired }),
     ...(input.requiredVerification === undefined ? {} : { requiredVerification: input.requiredVerification }),
+    ...(input.agentRequest === undefined ? {} : { agentRequest: input.agentRequest }),
     ...(input.reviewClaim === undefined ? {} : { reviewClaim: input.reviewClaim }),
   };
 }
@@ -156,6 +158,7 @@ function samePreparedIdentity(record: AttemptRecord, expected: PreparedAttemptIn
     && record.autoMergePolicy === expected.autoMergePolicy
     && record.reviewHistoryRequired === expected.reviewHistoryRequired
     && JSON.stringify(record.requiredVerification) === JSON.stringify(expected.requiredVerification)
+    && JSON.stringify(record.agentRequest) === JSON.stringify(expected.agentRequest)
     && JSON.stringify(record.reviewClaim) === JSON.stringify(expected.reviewClaim);
 }
 
