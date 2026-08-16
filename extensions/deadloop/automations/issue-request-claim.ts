@@ -44,6 +44,20 @@ function racedIssueRequestLabels(before: Map<string, string>, events: JsonObject
   });
 }
 
+function observeIssueRequestLabels(github: JsonObject, repository: string, number: number): { events: JsonObject[]; labels: Set<string> } {
+  const events = github.listIssueTimelineEvents(repository, number);
+  const labels = new Set<string>((github.listIssueLabels(repository, number) || [])
+    .map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || ""))
+    .filter(Boolean));
+  return { events, labels };
+}
+
+function claimedIssueRequestGenerationIsCurrent(
+  observation: { events: JsonObject[] }, requestLabel: string, requestEventId: string,
+): boolean {
+  return issueRequestGenerations(observation.events, [requestLabel]).get(requestLabel) === requestEventId;
+}
+
 function issueRequestRevision(request: JsonObject): string {
   const revision = String(request.created_at || request.createdAt || "");
   if (!Number.isFinite(Date.parse(revision))) throw new Error("Issue request event revision is unavailable");
@@ -116,8 +130,10 @@ function selectIssueClaimWinner(
 
 module.exports = {
   activeIssueRequest,
+  claimedIssueRequestGenerationIsCurrent,
   issueRequestGenerations,
   issueRequestRevision,
+  observeIssueRequestLabels,
   parseIssueClaim,
   racedIssueRequestLabels,
   renderIssueClaimComment,

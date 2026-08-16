@@ -17,8 +17,10 @@ const {
 } = require("../../../src/issue-required-verification-stop.ts");
 const {
   activeIssueRequest,
+  claimedIssueRequestGenerationIsCurrent,
   issueRequestGenerations,
   issueRequestRevision,
+  observeIssueRequestLabels,
   racedIssueRequestLabels,
   renderIssueClaimComment,
   selectIssueClaimWinner,
@@ -196,8 +198,12 @@ function claimIssueRequest(
   const before = github.getIssue(env.githubRepo, number);
   assertSameLaunchTarget(issue, before, "issue");
   const requestLabels = [env.exploreLabel, env.implementLabel];
-  const generationsBefore = issueRequestGenerations(github.listIssueTimelineEvents(env.githubRepo, number), requestLabels);
-  const labels = issueLabelNames({ labels: github.listIssueLabels(env.githubRepo, number) });
+  const mutationObservation = observeIssueRequestLabels(github, env.githubRepo, number);
+  const generationsBefore = issueRequestGenerations(mutationObservation.events, requestLabels);
+  if (!claimedIssueRequestGenerationIsCurrent(mutationObservation, requestLabel, binding.requestEventId)) {
+    throw new StaleLaunchError(`Issue #${number} received a newer ${requestLabel} request before claim mutation`);
+  }
+  const labels = [...mutationObservation.labels];
   const next = labels.filter((label) => label !== requestLabel && label !== env.blockedLabel && label !== env.inProgressLabel);
   next.push(env.inProgressLabel);
   github.replaceIssueLabels(env.githubRepo, number, next);

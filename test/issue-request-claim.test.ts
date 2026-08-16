@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-const { activeIssueRequest, issueRequestRevision, parseIssueClaim, renderIssueClaimComment, selectIssueClaimWinner } = require("../extensions/deadloop/automations/issue-request-claim.ts");
+const {
+  activeIssueRequest,
+  claimedIssueRequestGenerationIsCurrent,
+  issueRequestRevision,
+  observeIssueRequestLabels,
+  parseIssueClaim,
+  renderIssueClaimComment,
+  selectIssueClaimWinner,
+} = require("../extensions/deadloop/automations/issue-request-claim.ts");
 
 const binding = {
   repositoryId: "R_1", repository: "owner/repo", targetNumber: 42, requestEventId: "event-2",
@@ -23,6 +31,21 @@ describe("Issue request claim", () => {
 
   it("binds the claim revision to the immutable request event", () => {
     expect(issueRequestRevision({ created_at: "2026-07-08T00:00:00Z" })).toBe("2026-07-08T00:00:00Z");
+  });
+
+  it("observes a request added between the event and label reads", () => {
+    const labels: Array<{ name: string }> = [];
+    const observation = observeIssueRequestLabels({
+      listIssueTimelineEvents: () => { labels.push({ name: "agent:implement" }); return []; },
+      listIssueLabels: () => labels,
+    }, "owner/repo", 42);
+    expect(observation.labels.has("agent:implement")).toBe(true);
+  });
+
+  it("rejects a newer claimed request generation before label replacement", () => {
+    expect(claimedIssueRequestGenerationIsCurrent({ events: [
+      { id: "event-3", event: "labeled", created_at: "2026-07-09T00:00:00Z", label: { name: "agent:explore" } },
+    ] }, "agent:explore", "event-2")).toBe(false);
   });
 
   it("round-trips the issue claim marker", () => {

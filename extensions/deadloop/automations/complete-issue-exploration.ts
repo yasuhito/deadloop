@@ -9,6 +9,7 @@ const { validatePromise } = require("./extract-worker-promise.ts");
 const {
   activeIssueRequest,
   issueRequestGenerations,
+  observeIssueRequestLabels,
   racedIssueRequestLabels,
   selectIssueClaimWinner,
 } = require("./issue-request-claim.ts");
@@ -138,14 +139,10 @@ function main(argv = process.argv.slice(2)): JsonObject {
     const github = createGithubOperations(command, recheck);
     const claim = record.reviewClaim;
     if (!claim?.binding?.requestEventId || !claim.requestLabel) throw new Error("exploration claim contract is missing");
-    const observe = () => {
-      const live = github.getIssue(args.githubRepo, record.target.number);
-      return {
-        labels: new Set<string>((live.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || ""))),
-        events: github.listIssueTimelineEvents(args.githubRepo, record.target.number),
-        comments: github.listIssueComments(args.githubRepo, record.target.number),
-      };
-    };
+    const observe = () => ({
+      ...observeIssueRequestLabels(github, args.githubRepo, record.target.number),
+      comments: github.listIssueComments(args.githubRepo, record.target.number),
+    });
     const authorize = (observation = observe()) => {
       if (!observation.labels.has(args.inProgressLabel) || observation.labels.has(args.blockedLabel)) throw new Error("exploration claim is no longer in progress");
       const request = activeIssueRequest(observation.events, claim.requestLabel);
