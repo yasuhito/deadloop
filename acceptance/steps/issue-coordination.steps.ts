@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
 
+import { fixtureStateDir } from "../support/fixture-state-dir";
+
 type IssueCoordinationResult = {
   action?: string;
   comment?: string;
@@ -32,6 +34,7 @@ function coordinateIssue(fixtureName: string): IssueCoordinationResult {
         DEADLOOP_GITHUB_REPO: "owner/repository",
         DEADLOOP_CHECK_COMMAND: "npm run check",
         DEADLOOP_WORKER_AGENT: "pi",
+        DEADLOOP_STATE_DIR: fixtureStateDir(),
       },
     },
   );

@@ -37,44 +37,6 @@ type ReconciliationDecision =
       invalidatesRequests: boolean;
     };
 
-/** One retained attempt, reduced to the evidence that decides whether it still holds authority. */
-type RetainedAttempt = {
-  attemptId: string;
-  /** The execution runtime proved this attempt is not running. */
-  stopped: boolean;
-  /** The revision the attempt was launched against. */
-  revision: string;
-  /** The Agent request event the attempt's saved claim consumed, absent when it saved no claim. */
-  claimRequestEventId?: string;
-};
-
-/**
- * The retained attempts a waiting Agent request may take work authority from.
- *
- * An attempt keeps its authority unless deadloop can prove it cannot act on the current work. Two
- * proofs qualify, and both need the runtime to have stopped it: a revision that is no longer the
- * pull request's head, which every exact-head guard makes unusable, or a saved claim naming an
- * Agent request that a newer one has replaced. A stopped runtime on its own proves nothing, because
- * a live attempt that paused looks the same.
- *
- * Only the claim of a won request calls this, which is how "only while a request waits" is kept:
- * there is no other caller, and no other moment at which authority moves.
- */
-function releasableRetainedAttempts(input: {
-  attempts: RetainedAttempt[];
-  currentHead: string;
-  currentRequestEventId: string;
-}): string[] {
-  const currentHead = String(input.currentHead || "").toLowerCase();
-  return input.attempts.filter((attempt) => {
-    if (!attempt.stopped) return false;
-    const revisionSuperseded = Boolean(currentHead) && String(attempt.revision || "").toLowerCase() !== currentHead;
-    const requestSuperseded = Boolean(attempt.claimRequestEventId)
-      && String(attempt.claimRequestEventId) !== String(input.currentRequestEventId || "");
-    return revisionSuperseded || requestSuperseded;
-  }).map((attempt) => attempt.attemptId);
-}
-
 function labelNames(labels: Array<string | { name?: string }>): string[] {
   return labels.map((label) => typeof label === "string" ? label : String(label.name || "")).filter(Boolean);
 }
@@ -95,8 +57,16 @@ function blockLabels(input: ReconciliationInput, preserveRequests = false): stri
   ]);
 }
 
+/**
+ * A release ends the in-progress state and nothing else.
+ *
+ * The block a pull request was stopped under is not this function's to lift. It is lifted when a
+ * new attempt claims the target and replaces every managed label, so a pull request still carrying
+ * it is one nothing has started on yet. Lifting it here would show a pull request that reads as
+ * running while a release that can still fail — a workspace that will not close — leaves it idle.
+ */
 function releaseLabels(input: ReconciliationInput): string[] {
-  return labelNames(input.pr.labels).filter((label) => label !== input.inProgressLabel && label !== input.blockedLabel);
+  return labelNames(input.pr.labels).filter((label) => label !== input.inProgressLabel);
 }
 
 /**
@@ -327,10 +297,12 @@ function postBlockRequestIsEligible(input: {
   events: JsonObject[];
   blockedLabel: string;
 }): boolean {
-  // Counting only blocks deadloop explained would let the repair path's own request label carry a
-  // pull request past the stop that path just asked a person to resolve, and would leave a block
-  // nobody explained impossible to recover from at all. The timeline is fully paginated, so a
-  // blocked pull request with no blocked event is evidence this host cannot trust.
+  // Deadloop's own blocks leave no request behind, so this ordering only ever decides requests a
+  // person left in place — and a person stopping a pull request by hand writes a block deadloop
+  // never explained. Counting a block whoever applied it is what lets that stop outrank the
+  // requests that preceded it, and what keeps such a block recoverable at all. The timeline is
+  // fully paginated, so a blocked pull request with no blocked event is evidence this host cannot
+  // trust.
   const cutoff = latestBlockedEvent(input.events, input.blockedLabel);
   return cutoff !== null && requestAfterInvalidationCutoff(input.request, cutoff);
 }
@@ -341,6 +313,5 @@ module.exports = {
   postBlockRequestIsEligible,
   reconcilePrWorkAuthority,
   recoveryComment,
-  releasableRetainedAttempts,
   requestAfterInvalidationCutoff,
 };

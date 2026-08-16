@@ -17,6 +17,7 @@
  */
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("./agent-scratch-area.cjs");
 
 type CommandResult = { status: number; stdout: string; stderr: string };
 
@@ -74,7 +75,9 @@ function alignOpenedCheckout(input: CheckoutAlignmentInput, ops: CheckoutAlignme
   const git = (args: string[]) => checked(ops, ["git", "-C", input.worktreePath, ...args], MAX_ALIGNMENT_MS);
 
   if (commitSha(git(["rev-parse", "HEAD"])) === expectedHead) return;
-  if (git(["status", "--porcelain"])) throw new Error("checkout alignment stopped: the checkout has uncommitted work");
+  if (hasUncommittedWork(git(UNCOMMITTED_WORK_STATUS_ARGS))) {
+    throw new Error("checkout alignment stopped: the checkout has uncommitted work");
+  }
 
   ensureExpectedCommit(input, ops, expectedHead);
   const current = commitSha(git(["rev-parse", "HEAD"]));

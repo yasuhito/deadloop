@@ -19,14 +19,13 @@ function evaluateCompletionPersistence(input){
  if(r.status==="blocked")return{action:"preserve",reason:"blocked"};
  if(r.role!=="reviewer"&&(!record.outputRevision||!sha(record.outputRevision,r.result.outputRevision)))return{action:"preserve",reason:"invalid_report"};
  const reviewTransition=r.role==="reviewer"?transition(r.result):undefined;
- if(reviewTransition==="human_required")return{action:"preserve",reason:"human_required"};
  if(github.kind!=="confirmed"||github.role!==r.role||!bound(github,record))return{action:"preserve",reason:"github_persistence_not_confirmed"};
  let ok=false;
  if(r.role==="worker"){
   const p=github.pullRequests.filter(x=>bound(x,record)&&x.state==="open"&&x.headBranch===record.branch);
   ok=typeof context.workerReviewLabel==="string"&&p.length===1&&sha(record.outputRevision,r.result.outputRevision)&&sha(p[0].headSha,r.result.outputRevision)&&p[0].baseBranch===record.baseBranch&&p[0].closesIssue===record.target.number&&p[0].labels.includes(context.workerReviewLabel)&&marker(p[0].marker,record,"complete",r.result.outputRevision)&&!github.issueClaimable&&!sha(r.result.outputRevision,record.inputRevision.head);
  } else if(r.role==="reviewer"){
-  const p=github.reviewPersistence;const expected=context["reviewerExpectedLabels"];const managed=new Set(context["reviewerManagedLabels"]||expected||[]);ok=sha(github.headSha,record.inputRevision.head)&&Array.isArray(expected)&&seteq(github.labels.filter(x=>managed.has(x)),expected)&&!!p&&bound(p,record)&&sha(p.headSha,record.inputRevision.head)&&marker(p.marker,record,r.result.outcome)&& (reviewTransition!=="repair"||(p.boundedRepairAttemptMarked&&findings(p.findings,r.result.findings||[])));
+  const p=github.reviewPersistence;const expected=context["reviewerExpectedLabels"];const managed=new Set(context["reviewerManagedLabels"]||expected||[]);ok=sha(github.headSha,record.inputRevision.head)&&Array.isArray(expected)&&seteq(github.labels.filter(x=>managed.has(x)),expected)&&!(expected.length===0&&github.draft)&&!!p&&bound(p,record)&&sha(p.headSha,record.inputRevision.head)&&marker(p.marker,record,r.result.outcome)&& (reviewTransition!=="repair"||(p.boundedRepairAttemptMarked&&findings(p.findings,r.result.findings||[])));
  } else {
   const out=r.result.outputRevision;const stale=r.result.outcome==="stale_head";
   ok=sha(record.outputRevision,out)&&sha(github.headSha,out)&&!sha(out,record.inputRevision.head)&&(stale?(!github.pushRecorded&&!github.successClaimRecorded):(github.pushRecorded&&github.successClaimRecorded&&marker(github.marker,record,r.result.outcome,out)&&github.marker?.validationPassed===true));

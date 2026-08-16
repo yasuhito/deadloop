@@ -67,6 +67,8 @@ export type RepairMonitorPromptInput = MonitorPromptBaseInput & {
   branch: string;
   attemptKey?: string;
   reviewLabel: string;
+  implementLabel: string;
+  updateBranchLabel: string;
   inProgressLabel: string;
   blockedLabel: string;
   reviewClaim?: Record<string, unknown> | null;
@@ -142,7 +144,7 @@ ${renderPromisePollingRules(input, "issue")}
 
 After a \`complete\` promise:
 - Inspect \`${input.worktreePath}\` and confirm only Issue #${input.issueNumber} changes are present.
-- Run the fixed required-verification contract through run-project-check.ts isolation before creating any PR, and persist its output-commit-bound record by running exactly \`${verify}\`. Agent-reported additional validations never replace this record. If the contract is missing, empty, or differs from current trusted policy, stop without push, PR creation, or success labels; a new attempt must adopt the new policy.
+- Run the fixed required-verification contract through run-project-check.ts isolation before creating any PR, and persist its output-commit-bound record by running exactly \`${verify}\`. Agent-reported additional validations never replace this record. If it reports \`status=blocked\`, it has deterministically removed the in-progress claim, added the blocked label, and posted idempotent recovery guidance; stop without another comment or label mutation. A new attempt must adopt the restored policy.
 - Only after that command reports \`status=passed\`, push only the Worker branch \`${input.branch}\` without force-push by running exactly \`${guardedPush}\`. The guarded push independently requires the same passed record and current policy.
 - Only after that push succeeds, create a reviewable PR whose body includes \`Closes #${input.issueNumber}\`, or recover that exact PR, and add \`${input.reviewLabel}\` by running exactly \`${createPr}\`. This dedicated command independently requires the verified output commit; do not run \`gh pr create\` or success label mutations directly.
 - Do not manually close the issue with GitHub commands, and do not merge the PR.
@@ -252,7 +254,7 @@ Completion handling:
 - For every validated V1 completion, run the deterministic dispatcher so it can record the public review result exactly once:
   \`${renderReviewerDispatcherCommand(input)}\`
 - Follow the dispatcher's returned repair or human-block action. When it returns driverAction=review_approved, continue the approved path below; do not stop merely because comment recording is done.
-- The dispatcher keeps ${input.inProgressLabel} as the active repair state. It adds ${input.blockedLabel} only for human-required or bounded failure paths.
+- The dispatcher keeps ${input.inProgressLabel} as the active repair state. A human-required result is a completed review: the dispatcher records it, marks a draft ready, and removes every agent workflow label, so no request is left waiting. It adds ${input.blockedLabel} only for bounded failure paths, where deadloop could not finish safely.
 - For outcome=approved, re-check GitHub PR state, reviews, and checks before changing labels.
 - Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork. A local fallback may support human handoff, but it does not authorize automatic merge while GitHub reports missing, pending, failed, or ambiguous checks.
 - The deterministic policy for this monitor is \`autoMerge=${input.autoMerge ? "true" : "false"}\`; do not infer or change it during monitoring or restart cleanup.
@@ -276,7 +278,7 @@ ${renderPromisePollingRules(input, "pull-request")}
 
 Terminal handling:
 - As soon as validation returns complete or blocked, run this deterministic completion handler exactly once and follow its result:
-  \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-complete.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --result ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/finalizer-result.json`)} --contract ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/review-contract.json`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --branch ${shellQuotePrompt(input.branch)} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --attempt-key ${shellQuotePrompt(input.attemptKey || "<attemptKey>")} --review-label ${shellQuotePrompt(input.reviewLabel)} --in-progress-label ${shellQuotePrompt(input.inProgressLabel || "agent:in-progress")} --blocked-label ${shellQuotePrompt(input.blockedLabel)}${input.reviewClaim ? ` --review-claim ${shellQuotePrompt(JSON.stringify(input.reviewClaim))}` : ""}\`
+  \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-complete.ts`)} --promise ${shellQuotePrompt(input.promiseFile)} --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --result ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/finalizer-result.json`)} --contract ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/review-contract.json`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --branch ${shellQuotePrompt(input.branch)} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --attempt-key ${shellQuotePrompt(input.attemptKey || "<attemptKey>")} --review-label ${shellQuotePrompt(input.reviewLabel)} --implement-label ${shellQuotePrompt(input.implementLabel)} --update-branch-label ${shellQuotePrompt(input.updateBranchLabel)} --in-progress-label ${shellQuotePrompt(input.inProgressLabel || "agent:in-progress")} --blocked-label ${shellQuotePrompt(input.blockedLabel)}${input.reviewClaim ? ` --review-claim ${shellQuotePrompt(JSON.stringify(input.reviewClaim))}` : ""}\`
 - The handler posts a success comment only when the structured promise, finalizer receipt, and live new head agree. It posts idempotent recovery guidance for blocked or inconclusive completion and posts nothing for stale_head.
 - After a repair_pushed or stale_head result is confirmed by the handler, run \`${renderWorkspaceCompletion(input)}\`. Never close a blocked or inconclusive repair workspace.
 - Do not independently render comments, infer changes from git diffs or logs, or change labels.

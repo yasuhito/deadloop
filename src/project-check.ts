@@ -2,8 +2,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { execFileSync, spawn } = require("node:child_process") as typeof import("node:child_process");
 const crypto = require("node:crypto") as typeof import("node:crypto");
-
-const RUNTIME_PATHS = [".deadloop", ".pi-subagents"];
+const { AGENT_SCRATCH_AREAS } = require("./agent-scratch-area.cjs");
 
 function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
@@ -37,12 +36,12 @@ type ProjectCheckInput = {
   signal?: AbortSignal;
 };
 
-type ArtifactRestorationFailure = {
+type ScratchAreaRestorationFailure = {
   message: string;
   quarantinePath: string;
 };
 
-type RetainedProjectCheckFailure = ArtifactRestorationFailure & {
+type RetainedProjectCheckFailure = ScratchAreaRestorationFailure & {
   recordPath: string;
   worktreePath: string;
   createdAt: string;
@@ -59,7 +58,7 @@ type ProjectCheckResult = {
   timedOut: boolean;
   interrupted: boolean;
   signal: NodeJS.Signals | null;
-  restorationFailure?: ArtifactRestorationFailure;
+  restorationFailure?: ScratchAreaRestorationFailure;
 };
 
 type HiddenArtifact = {
@@ -75,6 +74,9 @@ function preservedPath(target: string): string {
 
 function mergeRestoredPath(source: string, target: string): void {
   if (!fs.existsSync(target)) {
+    // A scratch area nests under the agent CLI's directory, which the check may
+    // have removed while it was quarantined.
+    fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.renameSync(source, target);
     return;
   }
@@ -95,12 +97,12 @@ function mergeRestoredPath(source: string, target: string): void {
   fs.renameSync(source, preservedPath(target));
 }
 
-function trackedRuntimeFiles(cwd: string): string[] {
-  const output = execFileSync("git", ["-C", cwd, "ls-files", "-z", "--", ...RUNTIME_PATHS], { encoding: "utf8" });
+function trackedScratchAreaFiles(cwd: string): string[] {
+  const output = execFileSync("git", ["-C", cwd, "ls-files", "-z", "--", ...AGENT_SCRATCH_AREAS], { encoding: "utf8" });
   return output.split("\0").filter(Boolean);
 }
 
-function hideRuntimeArtifacts(cwd: string, quarantineRoot: string): { restore: () => ArtifactRestorationFailure | undefined } {
+function hideAgentScratchAreas(cwd: string, quarantineRoot: string): { restore: () => ScratchAreaRestorationFailure | undefined } {
   const resolvedCwd = path.resolve(cwd);
   const resolvedRoot = path.resolve(quarantineRoot);
   if (resolvedRoot === resolvedCwd || resolvedRoot.startsWith(`${resolvedCwd}${path.sep}`)) {
@@ -111,10 +113,11 @@ function hideRuntimeArtifacts(cwd: string, quarantineRoot: string): { restore: (
   const quarantineDir = fs.mkdtempSync(path.join(resolvedRoot, "check-"));
   const hidden: HiddenArtifact[] = [];
   try {
-    for (const name of RUNTIME_PATHS) {
-      const original = path.join(resolvedCwd, name);
+    for (const scratchArea of AGENT_SCRATCH_AREAS) {
+      const original = path.join(resolvedCwd, scratchArea);
       if (!fs.existsSync(original)) continue;
-      const quarantined = path.join(quarantineDir, name);
+      const quarantined = path.join(quarantineDir, scratchArea);
+      fs.mkdirSync(path.dirname(quarantined), { recursive: true });
       fs.renameSync(original, quarantined);
       hidden.push({ original, quarantined });
     }
@@ -244,12 +247,12 @@ function runShell(
 async function runProjectCheck(input: ProjectCheckInput): Promise<ProjectCheckResult> {
   let tracked: string[];
   try {
-    tracked = trackedRuntimeFiles(input.cwd);
+    tracked = trackedScratchAreaFiles(input.cwd);
   } catch (error) {
     return {
       code: 1,
       stdout: "",
-      stderr: `project-check could not inspect tracked runtime paths: ${error instanceof Error ? error.message : String(error)}\n`,
+      stderr: `project-check could not inspect the agent scratch areas: ${error instanceof Error ? error.message : String(error)}\n`,
       timedOut: false,
       interrupted: false,
       signal: null,
@@ -259,14 +262,14 @@ async function runProjectCheck(input: ProjectCheckInput): Promise<ProjectCheckRe
     return {
       code: 1,
       stdout: "",
-      stderr: `project-check refuses to hide tracked runtime paths: ${tracked.join(", ")}\n`,
+      stderr: `project-check refuses to hide tracked files in an agent scratch area: ${tracked.join(", ")}\n`,
       timedOut: false,
       interrupted: false,
       signal: null,
     };
   }
 
-  const hidden = hideRuntimeArtifacts(input.cwd, input.quarantineRoot);
+  const hidden = hideAgentScratchAreas(input.cwd, input.quarantineRoot);
   let result: ProjectCheckResult;
   try {
     result = await runShell(input.command, input.cwd, input.timeoutMs, input.terminationGraceMs ?? 1000, input.signal);
@@ -284,7 +287,7 @@ async function runProjectCheck(input: ProjectCheckInput): Promise<ProjectCheckRe
   return restorationFailure ? { ...result, restorationFailure } : result;
 }
 
-function projectCheckRestorationFailureFrom(error: unknown): ArtifactRestorationFailure | undefined {
+function projectCheckRestorationFailureFrom(error: unknown): ScratchAreaRestorationFailure | undefined {
   const candidate = (error as { restorationFailure?: unknown } | null)?.restorationFailure;
   if (!candidate || typeof candidate !== "object") return undefined;
   const value = candidate as Record<string, unknown>;
@@ -337,7 +340,7 @@ function matchingAttempt(stateDir: string, worktreePath: string): {
   };
 }
 
-function recordProjectCheckRestorationFailure(input: ProjectCheckInput, failure: ArtifactRestorationFailure): string {
+function recordProjectCheckRestorationFailure(input: ProjectCheckInput, failure: ScratchAreaRestorationFailure): string {
   const stateDir = path.dirname(path.resolve(input.quarantineRoot));
   const worktreePath = path.resolve(input.cwd);
   const directory = path.join(stateDir, "project-check-restoration-failures");
@@ -430,7 +433,7 @@ async function projectCheckMain(
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.restorationFailure) {
       const recordPath = recordProjectCheckRestorationFailure(input, result.restorationFailure);
-      process.stderr.write(`project-check could not restore runtime artifacts; retained quarantine: ${result.restorationFailure.quarantinePath}; record: ${recordPath}; ${result.restorationFailure.message}\n`);
+      process.stderr.write(`project-check could not restore the agent scratch areas; retained quarantine: ${result.restorationFailure.quarantinePath}; record: ${recordPath}; ${result.restorationFailure.message}\n`);
     }
     process.exitCode = result.restorationFailure && result.code === 0 ? 1 : result.code ?? 1;
   } finally {

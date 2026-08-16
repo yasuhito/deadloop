@@ -7,7 +7,7 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { planPrRequestAction } = require("./pr-reviewer-flow.ts");
-const { orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.ts");
+const { blockedPrLabelMove, orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.ts");
 const { CLAIM_BOUND_AGENT_ROLES, launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
@@ -24,14 +24,16 @@ const {
   shellQuote,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
-const { postBlockRequestIsEligible, releasableRetainedAttempts } = require("../../../src/pr-work-authority-reconciliation.ts");
+const { postBlockRequestIsEligible } = require("../../../src/pr-work-authority-reconciliation.ts");
+const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { checkoutIsIdle, worktreeIsRetained } = require("../../../src/attempt-runtime-observation.ts");
+const { observeAttemptLiveness } = require("../../../src/attempt-runtime-observation.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 const { requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 const {
+  advancePrHistoryAfterDeterministicComment,
   comparePrHistoryObservations,
   observePrHistory,
   writePrHistoryObservation,
@@ -48,6 +50,7 @@ const {
   selectReviewClaimWinner,
 } = require("./pr-review-claim.ts");
 
+import type { AttemptAgentRunner } from "../../../src/attempt-runtime-observation";
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 import type { RunnerAdapter } from "../../../src/runner";
 
@@ -455,7 +458,6 @@ Exact target:
 
 Safety contract:
 - Work only in ${worktreePath}; never edit the main workspace ${env.repoPath}.
-- First require a clean worktree and require HEAD to equal the expected PR head.
 - Merge ${baseOid} into the existing PR branch. Use git merge, never rebase, and never rewrite existing commits.
 - Resolve only conflicts caused by this merge. Do not widen the PR's scope.
 - Commit the merge resolution before finalization.
@@ -507,7 +509,7 @@ function branchUpdateBlockedComment(pr: JsonObject, env: ReturnType<typeof envCo
 gh pr view ${Number(pr.number || 0)} -R ${shellQuote(env.githubRepo)} --comments --json number,state,headRefName,headRefOid,labels,statusCheckRollup
    \`\`\`
 2. Resolve the failure without rewriting the PR branch.
-3. After changing either the PR head or configured base head, remove ${env.blockedLabel}; the new exact head/base pair may be attempted once.`;
+3. After changing either the PR head or configured base head, add ${env.updateBranchLabel}; the new exact head/base pair may be attempted once and ${env.blockedLabel} clears with it.`;
 }
 
 type EnabledIdentity = {
@@ -626,7 +628,7 @@ function applyBranchUpdateBlocked(
   const comment = branchUpdateBlockedComment(pr, env, reason);
   const applied = applyPrTransition(pr, env, fixture, stillApplicable, (github, live) => {
     github.commentPr(env.githubRepo, Number(live.number || 0), comment);
-    github.movePrLabels(env.githubRepo, Number(live.number || 0), { remove: env.inProgressLabel, add: env.blockedLabel });
+    github.movePrLabels(env.githubRepo, Number(live.number || 0), blockedPrLabelMove(prRequestLabels(env), env.inProgressLabel, env.blockedLabel));
   });
   return { comment, applied };
 }
@@ -990,7 +992,7 @@ function blockUnverifiableClaim(
   const requestBeforeComment = currentReviewRequest(github, env, number, requestLabel);
   if (String(requestBeforeComment.id || requestBeforeComment.node_id || "") !== expectedRequestEventId || !hasBoundClaim()) return;
   authorizeCurrent();
-  github.commentPr(env.githubRepo, number, `deadloop stopped this ${requestLabel} claim because ${reason}. Remove \`${env.blockedLabel}\` and add \`${requestLabel}\` again after GitHub server-time evidence is available.`);
+  github.commentPr(env.githubRepo, number, `deadloop stopped this ${requestLabel} claim because ${reason}. Add \`${requestLabel}\` again after GitHub server-time evidence is available; \`${env.blockedLabel}\` clears when the next attempt starts.`);
 
   const beforeLabels = github.getPr(env.githubRepo, number);
   assertSamePrRevision(pr, beforeLabels);
@@ -1147,11 +1149,8 @@ function reviewClaimManagedLabels(env: ReturnType<typeof envConfig>): string[] {
 type WorkAuthorityTakeover = {
   stateDir: string;
   projectId: string;
-  projectRepo: string;
   githubRepo: string;
   prNumber: number;
-  currentHead: string;
-  currentRequestEventId: string;
 };
 
 function retainedAttemptsForPr(input: WorkAuthorityTakeover): Array<{ runDir: string; record: JsonObject }> {
@@ -1175,33 +1174,22 @@ function retainedAttemptsForPr(input: WorkAuthorityTakeover): Array<{ runDir: st
 }
 
 /**
- * Take work authority from the retained attempts that provably cannot act on the current work, as
- * part of winning a new Agent request. See ADR 0019. Only the authority claim is dropped: the
- * journal and its worktree stay as evidence, and nothing is published to GitHub.
+ * Take work authority from the retained attempts the execution runtime reports stopped, as part of
+ * winning a new Agent request. Only the authority claim is dropped: the journal and its worktree
+ * stay as evidence, and nothing is published to GitHub.
+ *
+ * A stopped attempt releases whatever else it carries. ADR 0020 leaves the runtime the only
+ * authority on liveness, so neither the revision the attempt was launched against nor the request
+ * its saved claim consumed takes part. The head still guards every GitHub mutation and decides
+ * whether a completion report may be applied; neither question is answered here.
  */
 function takeWorkAuthorityFromRetainedAttempts(
   input: WorkAuthorityTakeover,
-  observe: { stoppedFor?: (record: JsonObject) => boolean } = {},
+  observe: { runner?: AttemptAgentRunner } = {},
 ): string[] {
-  const retained = retainedAttemptsForPr(input);
-  if (retained.length === 0) return [];
-  const stoppedFor = observe.stoppedFor
-    || ((record: JsonObject) => attemptStoppedForTakeover(record, input.projectRepo));
-  const releasable = new Set(releasableRetainedAttempts({
-    attempts: retained.map(({ record }) => ({
-      attemptId: String(record.attemptId),
-      stopped: stoppedFor(record),
-      revision: String(record.inputRevision?.head || ""),
-      ...(record.reviewClaim?.binding?.requestEventId
-        ? { claimRequestEventId: String(record.reviewClaim.binding.requestEventId) }
-        : {}),
-    })),
-    currentHead: input.currentHead,
-    currentRequestEventId: input.currentRequestEventId,
-  }));
   const released: string[] = [];
-  for (const { runDir, record } of retained) {
-    if (!releasable.has(String(record.attemptId))) continue;
+  for (const { runDir, record } of retainedAttemptsForPr(input)) {
+    if (!attemptStoppedForTakeover(record, observe.runner)) continue;
     releasePersistedAttemptAuthority(runDir, new Date().toISOString());
     released.push(String(record.attemptId));
   }
@@ -1209,31 +1197,20 @@ function takeWorkAuthorityFromRetainedAttempts(
 }
 
 /**
- * The proof ADR 0019 requires before a new Agent request may take work authority: the attempt
- * finished what it could do, its evidence is still on disk, and nothing occupies its checkout. An
- * attempt that lost both its workspace and its worktree proves nothing and keeps its authority.
+ * Whether a retained attempt has stopped, asked of the execution runtime and nothing else.
+ *
+ * ADR 0020 leaves one authority on this question, so the journal's phase, its claim marker, and the
+ * receipts beside it do not take part: an attempt whose agent is gone has stopped even if its
+ * completion was never handed to GitHub, and an attempt whose agent is working keeps its authority
+ * however finished it looks on disk. A runtime that cannot be reached, or that reports an agent this
+ * attempt cannot be told apart from, proves nothing, and an unproven attempt keeps its authority.
  */
-function attemptStoppedForTakeover(record: JsonObject, projectRepo: string): boolean {
-  if (!validAuthorityCloseReceipt(record) && !reportedCompletion(record)) return false;
+function attemptStoppedForTakeover(record: JsonObject, runner?: AttemptAgentRunner): boolean {
   try {
-    const runner = herdrRunner();
-    return worktreeIsRetained(runner, record, projectRepo) && checkoutIsIdle(runner, record);
+    return observeAttemptLiveness(runner || herdrRunner(), record).kind === "stopped";
   } catch {
-    // An unreachable runtime cannot prove the attempt stopped, so its authority stands.
     return false;
   }
-}
-
-function reportedCompletion(record: JsonObject): boolean {
-  return ["report_received", "github_persisted"].includes(String(record.phase || ""));
-}
-
-function validAuthorityCloseReceipt(record: JsonObject): boolean {
-  try {
-    const receipt = JSON.parse(fs.readFileSync(path.join(String(record.runDir || ""), "authority-release-started.json"), "utf8"));
-    return receipt?.schemaVersion === 1 && receipt?.attemptId === record.attemptId
-      && receipt?.workspaceId === record.workspaceId && receipt?.worktreePath === record.worktreePath;
-  } catch { return false; }
 }
 
 function claimReviewRequest(
@@ -1429,27 +1406,50 @@ function claimReviewRequest(
     if (finalWinner) restorePreemptedReviewRequest(github, pr, env, claim, authenticate, authorizeCurrent);
     throw new StaleLaunchError(`PR #${number} review claim changed after label transition`);
   }
-  // Winning the request is the moment work authority moves. Take it from the retained attempts that
-  // provably cannot act on this head, before this attempt writes a journal of its own. The result
-  // stays out of the claim contract, which is persisted verbatim in the attempt journal.
+  // Winning the request is the moment work authority moves. Take it from the retained attempts the
+  // runtime reports stopped, before this attempt writes a journal of its own. The result stays out
+  // of the claim contract, which is persisted verbatim in the attempt journal.
   takeWorkAuthorityFromRetainedAttempts({
     stateDir: env.stateDir,
     projectId: env.projectId,
-    projectRepo: env.repoPath,
     githubRepo: env.githubRepo,
     prNumber: number,
-    currentHead: String(pr.headRefOid || ""),
-    currentRequestEventId: requestEventId,
   });
   return { ...claim, labels: [...finalLiveLabels] };
 }
 
-function assertReviewHistoryUnchanged(env: ReturnType<typeof envConfig>, number: number, history: JsonObject | null): void {
-  if (!history) return;
+/**
+ * The review history a launch bound itself to is still the one on GitHub.
+ *
+ * A claim posts a comment, and conversation comments are part of that history, so a launch that
+ * observed the history before claiming would always find it changed afterwards by its own comment.
+ * `createdComment` names that comment, and the deterministic advance accepts exactly it — a
+ * different author, a different body, a second addition, or any other part of the history moving
+ * all stay stale.
+ */
+function assertReviewHistoryUnchanged(
+  env: ReturnType<typeof envConfig>,
+  number: number,
+  history: JsonObject | null,
+  claimCommentId?: string,
+): JsonObject | null {
+  if (!history) return history;
   const currentHistory = observePrHistory(env.githubRepo, number, commandRunner);
-  if (comparePrHistoryObservations(history, currentHistory).kind !== "unchanged") {
+  // The claim's own comment is read out of the observation this check already holds, so the two
+  // sides of the advance describe the same moment. Fetching it separately would compare a history
+  // against a comment from a different read.
+  const createdComment = claimCommentId
+    ? currentHistory.history.conversationComments.find((comment: JsonObject) => String(comment.id) === String(claimCommentId))
+    : undefined;
+  const advancement = createdComment
+    ? advancePrHistoryAfterDeterministicComment(history, currentHistory, createdComment)
+    : (comparePrHistoryObservations(history, currentHistory).kind === "unchanged"
+      ? { kind: "accepted" as const, observation: currentHistory }
+      : { kind: "stale" as const });
+  if (advancement.kind !== "accepted") {
     throw new StaleLaunchError(`PR #${number} review history changed before reviewer launch`);
   }
+  return advancement.observation;
 }
 
 function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
@@ -1457,7 +1457,8 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
   const uuid = fixture ? "fixture-reviewer-uuid" : randomUUID();
   const history = fixture ? null : observePrHistory(env.githubRepo, number, commandRunner);
   const plan = prReviewerLaunchPlan(pr, env, reason, uuid, history?.revision);
-  if (history) writePrHistoryObservation(path.join(env.stateDir, "runs", uuid, "pr-review-history.json"), history);
+  const historyFile = path.join(env.stateDir, "runs", uuid, "pr-review-history.json");
+  if (history) writePrHistoryObservation(historyFile, history);
   const { reviewerName, headRefName } = plan;
   let claim: JsonObject | null = null;
   let launch: JsonObject;
@@ -1494,24 +1495,19 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
         };
         assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
         if (claim) {
-          const github = githubOperations();
-          const live = reauthorizeClaimedReview(
-            github, pr, env, claim, undefined, enabledRepositoryIdentity,
-            (currentClaim) => {
-              const authenticated = assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
-              return assertCurrentReviewClaimAuthority(currentClaim, env.stateDir, enabledRepositoryIdentity, authenticated);
-            },
-          );
-          const labels = new Set(labelNames(live));
-          const managedLabels = reviewClaimManagedLabels(env).filter((label) => labels.has(label));
-          if (managedLabels.length !== 1 || managedLabels[0] !== env.inProgressLabel) {
-            throw new StaleLaunchError(`PR #${number} no longer has the exact claimed review state`);
+          // Everything past the claim runs on a request this launch already consumed, so a failure
+          // here leaves GitHub changed. The caller has to say so instead of reporting an untouched
+          // workflow, which is the same mark the branch-update launch carries.
+          try {
+            const claimed = reauthorizeClaimedReviewerLaunch(pr, env, number, claim, history, enabledAutomationLogin, enabledRepositoryIdentity);
+            // The completion dispatcher judges the finished review against this record, so it has to
+            // hold the history as it stands after the claim. Leaving the pre-claim record in place
+            // makes every completed review read as a changed conversation and be thrown away.
+            if (claimed) writePrHistoryObservation(historyFile, claimed);
+          } catch (error) {
+            if (error instanceof Error) (error as Error & { claimed?: boolean }).claimed = true;
+            throw error;
           }
-          const request = currentReviewRequest(github, env, number, env.reviewLabel);
-          if (String(request.id || request.node_id || "") !== claim.binding.requestEventId) {
-            throw new StaleLaunchError(`PR #${number} review request changed before reviewer launch`);
-          }
-          assertReviewHistoryUnchanged(env, number, history);
           return;
         }
         const livePlan = planPrRequestAction(liveExposedPrs(env), liveAgents(), env);
@@ -1530,6 +1526,54 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
     throw error;
   }
   return { reviewerName, headRefName, reason, claim, ...launch, ...(fixture ? { simulated: true } : {}) };
+}
+
+/**
+ * What a stopped reviewer launch tells its reader.
+ *
+ * The stale check that stopped the launch names itself, and only it can say which state moved.
+ * Replacing it with one summary loses both the reason and the difference between a launch that
+ * touched nothing and one whose own claim already consumed the request.
+ */
+function staleReviewerLaunchSummary(error: unknown, requestConsumed: boolean): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  return `${reason}; ${requestConsumed ? "the request was already consumed" : "no workflow state was mutated"}`;
+}
+
+/**
+ * The checks a reviewer launch must still pass once its own claim consumed the request, and the
+ * review history as it stands after that claim.
+ */
+function reauthorizeClaimedReviewerLaunch(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  number: number,
+  claim: JsonObject,
+  history: JsonObject | null,
+  enabledAutomationLogin: string,
+  enabledRepositoryIdentity: { repoPath?: string; baseBranch?: string; githubRepositoryId?: string; githubRepo?: string; automationLogin?: string },
+): JsonObject | null {
+  const github = githubOperations();
+  const live = reauthorizeClaimedReview(
+    github, pr, env, claim, undefined, enabledRepositoryIdentity,
+    (currentClaim) => {
+      const authenticated = assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
+      return assertCurrentReviewClaimAuthority(currentClaim, env.stateDir, enabledRepositoryIdentity, authenticated);
+    },
+  );
+  const labels = new Set(labelNames(live));
+  const managedLabels = reviewClaimManagedLabels(env).filter((label) => labels.has(label));
+  if (managedLabels.length !== 1 || managedLabels[0] !== env.inProgressLabel) {
+    throw new StaleLaunchError(`PR #${number} no longer has the exact claimed review state`);
+  }
+  const request = currentReviewRequest(github, env, number, env.reviewLabel);
+  if (String(request.id || request.node_id || "") !== claim.binding.requestEventId) {
+    throw new StaleLaunchError(`PR #${number} review request changed before reviewer launch`);
+  }
+  // The claim posted one comment, so the history this launch bound itself to has moved by exactly
+  // that comment. Naming it lets the deterministic advance accept it and nothing else; leaving it
+  // unnamed would make every launch fail on its own claim.
+  return assertReviewHistoryUnchanged(env, number, history, String(claim.commentId || ""));
 }
 
 function drive(fixturePath: string | undefined): DriverResult {
@@ -1559,11 +1603,44 @@ function drive(fixturePath: string | undefined): DriverResult {
   const env = { ...configuredEnv, automationLogin, authorizedAutomationLogins, githubRepositoryId };
   const prs = exposePostBlockReviewRequests(observedPrs, env, driverGithubOperations(fixture));
   const agents = fixture ? fixture.agents || { result: { agents: [] } } : liveAgents();
-  const plan = planPrRequestAction(prs, agents, env);
+  // A target another holder has is not a stop and not the end of the tick: it belongs to somebody
+  // else for now, so it leaves the candidate set and selection runs again on what is left.
+  const heldElsewhere: number[] = [];
+  for (;;) {
+    const selectable = prs.filter((pr: JsonObject) => !heldElsewhere.includes(Number(pr.number)));
+    const plan = planPrRequestAction(selectable, agents, env);
 
-  if (plan.kind === "skip_no_candidate" || plan.kind === "skip_wait") {
-    return driverResult("skip", plan.summary, { driverAction: plan.driverAction, decision: plan.decision });
+    if (plan.kind === "skip_no_candidate" || plan.kind === "skip_wait") {
+      if (heldElsewhere.length && plan.kind === "skip_no_candidate") {
+        return driverResult("skip", `every selectable PR is held by another dispatch decision: ${heldElsewhere.map((number) => `#${number}`).join(", ")}`, {
+          driverAction: "target_dispatch_locked", prNumbers: heldElsewhere,
+        });
+      }
+      return driverResult("skip", plan.summary, { driverAction: plan.driverAction, decision: plan.decision });
+    }
+
+    // The dispatch decision for one target runs while this process holds that target's lock. The
+    // lock covers the decision only, across its GitHub round trips: whether the attempt it starts
+    // is still running is the execution runtime's answer, and binding the two together would
+    // rebuild the two-authority problem the lock exists to avoid.
+    const decided = withDispatchLock({
+      stateDir: env.stateDir,
+      repositoryId: env.githubRepositoryId,
+      target: { kind: "pull-request", number: Number(plan.decision.number) },
+    }, () => driveSelectedTarget(plan, env, fixture));
+    if (decided !== null) return decided;
+    heldElsewhere.push(Number(plan.decision.number));
   }
+}
+
+type SelectedPrPlan = Exclude<ReturnType<typeof planPrRequestAction>, { kind: "skip_no_candidate" } | { kind: "skip_wait" }>;
+
+/** One target's dispatch decision, run under that target's lock. */
+function driveSelectedTarget(
+  plan: SelectedPrPlan,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+): DriverResult {
 
   if (plan.kind === "review_required" && isConflictingPr(plan.pr)) {
     const transition = consumeRequest(
@@ -1776,9 +1853,11 @@ function reviewOnlyDrive(
     launch = launchPrReviewer(pr, env, fixture, reason);
   } catch (error) {
     if (isStaleLaunchError(error)) {
-      return driverResult("skip", `PR #${decision.number} changed before reviewer launch; no workflow state was mutated`, {
+      const claimed = Boolean((error as Error & { claimed?: boolean }).claimed);
+      return driverResult("skip", staleReviewerLaunchSummary(error, claimed), {
         driverAction: "reviewer_launch_stale",
         prNumber: decision.number,
+        requestConsumed: claimed,
       });
     }
     throw error;
@@ -1842,4 +1921,4 @@ function main(): void {
 if (require.main === module) main();
 
 module.exports = {
-  resolveAuthorizedAutomationLogins, assertAuthenticatedReviewIdentity, takeWorkAuthorityFromRetainedAttempts, assertBranchUpdateClaimHeld, assertBranchUpdateRequestSelectable, assertTrustedReviewIdentity, blockUnverifiableClaim, claimReviewRequest, envConfig, exposePostBlockReviewRequests, launchBranchUpdate, launchClaimedPrReviewerFlow, reauthorizeClaimedReview };
+  resolveAuthorizedAutomationLogins, staleReviewerLaunchSummary, assertAuthenticatedReviewIdentity, takeWorkAuthorityFromRetainedAttempts, assertBranchUpdateClaimHeld, assertBranchUpdateRequestSelectable, assertTrustedReviewIdentity, blockUnverifiableClaim, claimReviewRequest, envConfig, exposePostBlockReviewRequests, launchBranchUpdate, launchClaimedPrReviewerFlow, reauthorizeClaimedReview };

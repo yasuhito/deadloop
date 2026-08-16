@@ -36,14 +36,14 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
         "--limit",
         "200",
         "--json",
-        "number,title,body,labels,updatedAt,url",
+        "number,title,body,labels,updatedAt,url,state,comments",
       ]);
     },
 
     getIssue(repo: string, issueNumber: string | number): JsonObject {
       return commandRunner.runJson([
         "gh", "issue", "view", String(issueNumber), "-R", repo,
-        "--json", "number,title,body,labels,updatedAt,url,state",
+        "--json", "number,title,body,labels,updatedAt,url,state,comments",
       ]);
     },
 
@@ -83,6 +83,11 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
     movePrLabels(repo: string, prNumber: string | number, move: LabelMove, options: { check?: boolean } = {}): void {
       beforeMutation();
       commandRunner.runText(["gh", "pr", "edit", String(prNumber), "-R", repo, ...labelArgs(move)], { check: options.check });
+    },
+
+    markPrReady(repo: string, prNumber: string | number): void {
+      beforeMutation();
+      commandRunner.runText(["gh", "pr", "ready", String(prNumber), "-R", repo]);
     },
 
     replacePrLabels(repo: string, prNumber: string | number, labels: string[]): JsonObject {
