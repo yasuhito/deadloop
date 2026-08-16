@@ -129,6 +129,7 @@ function runStaleWorktreeDispatch(
     initialHead?: string;
     worktreeHead?: string;
     worktreeName?: string;
+    worktreeStatus?: string;
   } = {},
 ): { output: Record<string, unknown>; ghLog: string; herdrLog: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-stale-review-repair-"));
@@ -205,7 +206,7 @@ if (args[0] === "-C" && args[2] === "worktree" && args[3] === "list") {
 } else if (args[0] === "-C" && args[1] === process.env.TEST_WORKTREE && args[2] === "rev-parse") {
   process.stdout.write(process.env.TEST_WORKTREE_HEAD + "\\n");
 } else if (args[0] === "-C" && args[1] === process.env.TEST_WORKTREE && args[2] === "status") {
-  process.stdout.write(process.env.TEST_DIRTY === "true" && args.includes("--untracked-files=all") ? "?? untracked.txt\\n" : "");
+  process.stdout.write(!args.includes("--untracked-files=all") ? "" : (process.env.TEST_WORKTREE_STATUS || (process.env.TEST_DIRTY === "true" ? "?? untracked.txt\\n" : "")));
 } else if (args.includes("get-url")) {
   process.stdout.write("https://github.com/yasuhito/deadloop.git\\n");
 } else if (args[0] === "check-ref-format") {
@@ -275,6 +276,7 @@ else process.stdout.write(JSON.stringify({ok:true}));
         TEST_INITIAL_HEAD: options.initialHead || expectedHead,
         TEST_WORKTREE: worktree,
         TEST_WORKTREE_HEAD: worktreeHead,
+        TEST_WORKTREE_STATUS: options.worktreeStatus || "",
       },
     },
   );
@@ -343,6 +345,8 @@ else fs.appendFileSync(process.env.EVENT_LOG, "github-mutation\\n");
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+// The repair checkout already carries the expected head, so alignment finds nothing to do.
+else if (args.includes("rev-parse") && args.includes("HEAD")) process.stdout.write("${"a".repeat(40)}\\n");
 process.exit(0);
 `,
   );
@@ -779,7 +783,9 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
   };
 }
 
-function runHumanRequiredHistoryRace(options: { blockDuringRelease?: boolean } = {}): { action: string; mutations: string[] } {
+function runHumanRequiredHistoryRace(
+  options: { blockDuringRelease?: boolean; stableHistory?: boolean; draft?: boolean } = {},
+): { action: string; mutations: string[] } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-human-history-race-"));
   tempDirs.push(root);
   const bin = path.join(root, "bin");
@@ -823,11 +829,11 @@ function runHumanRequiredHistoryRace(options: { blockDuringRelease?: boolean } =
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const fs=require("node:fs");const a=process.argv.slice(2);
 if(a[0]==="repo") process.stdout.write(JSON.stringify({id:"R_repo"}));
-else if(a[0]==="pr"&&a[1]==="view") {const blocked=process.env.BLOCK_FLAG&&fs.existsSync(process.env.BLOCK_FLAG);process.stdout.write(JSON.stringify({number:243,state:"OPEN",headRefName:"agent/issue-243",headRefOid:process.env.HEAD,isCrossRepository:false,labels:blocked?[{name:"agent:in-progress"},{name:"agent:blocked"}]:[{name:"agent:in-progress"}],comments:[]}));}
+else if(a[0]==="pr"&&a[1]==="view") {const blocked=process.env.BLOCK_FLAG&&fs.existsSync(process.env.BLOCK_FLAG);process.stdout.write(JSON.stringify({number:243,state:"OPEN",isDraft:process.env.DRAFT==="1",headRefName:"agent/issue-243",headRefOid:process.env.HEAD,isCrossRepository:false,labels:blocked?[{name:"agent:in-progress"},{name:"agent:blocked"}]:[{name:"agent:in-progress"}],comments:[]}));}
 else if(a[0]==="api"&&a.includes("graphql")) process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:process.env.HEAD}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
 else if(a[0]==="api"&&a[1].includes("/pulls/243")&&a.includes("-H")) process.stdout.write("diff\\n");
 else if(a[0]==="api"&&a[1].endsWith("/pulls/243")) process.stdout.write(JSON.stringify({number:243,state:"open",head:{ref:"agent/issue-243",sha:process.env.HEAD},base:{ref:"main",sha:process.env.BASE}}));
-else if(a[0]==="api"&&a.some((value)=>value.includes("/issues/243/comments"))) {const n=fs.existsSync(process.env.READS)?Number(fs.readFileSync(process.env.READS,"utf8")):0;fs.writeFileSync(process.env.READS,String(n+1));const raced=n===3?[{id:1,user:{login:"deadloop-bot"},body:"deterministic result",created_at:"x",updated_at:"x"},{id:2,user:{login:"human"},body:"racing comment",created_at:"x",updated_at:"x"}]:[];process.stdout.write(JSON.stringify([raced]));}
+else if(a[0]==="api"&&a.some((value)=>value.includes("/issues/243/comments"))) {const n=fs.existsSync(process.env.READS)?Number(fs.readFileSync(process.env.READS,"utf8")):0;fs.writeFileSync(process.env.READS,String(n+1));const raced=n===Number(process.env.RACE_AT)?[{id:1,user:{login:"deadloop-bot"},body:"deterministic result",created_at:"x",updated_at:"x"},{id:2,user:{login:"human"},body:"racing comment",created_at:"x",updated_at:"x"}]:[];process.stdout.write(JSON.stringify([raced]));}
 else if(a[0]==="api") process.stdout.write(JSON.stringify([[]]));
 else if(a[0]==="pr"&&a[1]==="comment") {fs.appendFileSync(process.env.MUTATIONS,a.join(" ")+"\\n");if(process.env.BLOCK_AFTER_COMMENT==="1")fs.writeFileSync(process.env.BLOCK_FLAG,"1");process.stdout.write("https://github.com/owner/repo/pull/243#issuecomment-1\\n");}
 else {fs.appendFileSync(process.env.MUTATIONS,a.join(" ")+"\\n");}
@@ -844,6 +850,7 @@ const a=process.argv.slice(2);if(a.includes("get-url")) process.stdout.write("ht
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: root, DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
     ...reviewClaimEnvironment(head, 243),
     HEAD: head, BASE: base, READS: historyReads, MUTATIONS: mutations,
+    RACE_AT: options.stableHistory ? "-1" : "3", DRAFT: options.draft ? "1" : "0",
     BLOCK_FLAG: path.join(root, "block-flag"), BLOCK_AFTER_COMMENT: options.blockDuringRelease ? "1" : "0",
   }});
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
@@ -915,6 +922,31 @@ describe("review repair dispatch integration", () => {
         expect.stringContaining("--remove-label agent:in-progress --add-label agent:review"),
       ],
     });
+  });
+
+  it("hands a completed human-required review to a person", () => {
+    expect(runHumanRequiredHistoryRace({ stableHistory: true }).action).toBe("review_human_handoff");
+  });
+
+  it("leaves no agent workflow label on a pull request handed to a person", () => {
+    const result = runHumanRequiredHistoryRace({ stableHistory: true });
+
+    expect(result.mutations.at(-1)).toBe(
+      "pr edit 243 -R owner/repo --remove-label agent:review --remove-label agent:implement"
+      + " --remove-label agent:update-branch --remove-label agent:in-progress --remove-label agent:blocked",
+    );
+  });
+
+  it("records the review result before removing the requests that wait on it", () => {
+    const result = runHumanRequiredHistoryRace({ stableHistory: true });
+
+    expect(result.mutations[0]).toContain("pr comment 243");
+  });
+
+  it("marks a draft pull request ready when it hands its review to a person", () => {
+    const result = runHumanRequiredHistoryRace({ stableHistory: true, draft: true });
+
+    expect(result.mutations.some((mutation) => mutation.startsWith("pr ready 243"))).toBe(true);
   });
 
   it("keeps labels untouched when a concurrent block lands before the stale-history release", () => {
@@ -1138,6 +1170,28 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
     expect(result.output.driverAction).toBe("review_repair_worktree_mismatch");
   });
 
+  it("blocks repair when the repair worktree holds somebody's uncommitted work", () => {
+    const expectedHead = "6c994aad94595aa113e8a35cc2962a9e32a7f6c8";
+    const result = runStaleWorktreeDispatch(expectedHead, expectedHead, {
+      worktreeHead: "ab08360529da29cf16d5ccb109138c9a938e309d",
+      worktreeStatus: "?? luac.out\n",
+    });
+
+    expect(result.output.driverAction).toBe("review_repair_dirty_worktree");
+  });
+
+  it("starts repair when the repair worktree only holds an agent scratch area", () => {
+    // The agent's own subagent artifacts used to stop the repair the same agent
+    // was launched for. Reaching the head comparison proves the gate let it past.
+    const expectedHead = "6c994aad94595aa113e8a35cc2962a9e32a7f6c8";
+    const result = runStaleWorktreeDispatch(expectedHead, expectedHead, {
+      worktreeHead: "ab08360529da29cf16d5ccb109138c9a938e309d",
+      worktreeStatus: "?? .pi/subagents/artifacts/c00eb25c_reviewer_0_input.md\n",
+    });
+
+    expect(result.output.driverAction).toBe("review_repair_worktree_mismatch");
+  });
+
   it("finds a branch worktree whose path contains a newline", () => {
     const result = runStaleWorktreeDispatch(
       "6c994aad94595aa113e8a35cc2962a9e32a7f6c8",
@@ -1174,15 +1228,16 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
     expect(result.output.driverAction).toBe("exception");
   });
 
-  it("requeues the active claim when review requires a human", () => {
+  it("leaves no waiting request when review requires a human", () => {
     expect(blockedClaimMove({
       inProgressLabel: "agent:in-progress",
-
+      updateBranchLabel: "agent:update-branch",
+      implementLabel: "agent:implement",
       reviewLabel: "agent:review",
       blockedLabel: "agent:blocked",
     })).toEqual({
-      remove: ["agent:in-progress"],
-      add: ["agent:review", "agent:blocked"],
+      remove: ["agent:update-branch", "agent:implement", "agent:review", "agent:in-progress"],
+      add: ["agent:blocked"],
     });
   });
 
@@ -1257,6 +1312,8 @@ else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.str
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+// The repair checkout already carries the expected head, so alignment finds nothing to do.
+else if (args.includes("rev-parse") && args.includes("HEAD")) process.stdout.write("${"a".repeat(40)}\\n");
 process.exit(0);
 `,
     );
@@ -1367,6 +1424,8 @@ else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.str
     executable(path.join(bin, "git"), `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+// The repair checkout already carries the expected head, so alignment finds nothing to do.
+else if (args.includes("rev-parse") && args.includes("HEAD")) process.stdout.write("${"a".repeat(40)}\\n");
 process.exit(0);
 `);
     executable(

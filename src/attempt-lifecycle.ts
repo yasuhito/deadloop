@@ -128,7 +128,7 @@ export type AttemptAbandonment = {
 };
 
 export type AttemptAuthorityRelease = {
-  reason: "github_authority_lost";
+  reason: "github_authority_lost" | "never_launched";
   releasedAt: string;
   cutoffEventId?: string;
 };
@@ -284,7 +284,7 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
       fail("authority_released requires authorityRelease evidence");
     }
     const evidence = record.authorityRelease as Record<string, unknown>;
-    if (evidence.reason !== "github_authority_lost") fail("authorityRelease.reason is invalid");
+    if (evidence.reason !== "github_authority_lost" && evidence.reason !== "never_launched") fail("authorityRelease.reason is invalid");
     const releasedAt = nonEmptyString(evidence.releasedAt, "authorityRelease.releasedAt");
     if (!Number.isFinite(Date.parse(releasedAt))) fail("authorityRelease.releasedAt must be an ISO timestamp");
     const cutoffEventId = evidence.cutoffEventId === undefined ? undefined : nonEmptyString(evidence.cutoffEventId, "authorityRelease.cutoffEventId");
@@ -487,6 +487,7 @@ export function releasePersistedAttemptAuthority(
   runDir: string,
   releasedAt: string,
   cutoffEventId?: string,
+  reason: AttemptAuthorityRelease["reason"] = "github_authority_lost",
 ): AttemptRecord {
   const current = readAttemptRecord(runDir);
   if (current.phase === "authority_released") return current;
@@ -496,7 +497,7 @@ export function releasePersistedAttemptAuthority(
     ...current,
     phase: "authority_released",
     authorityRelease: {
-      reason: "github_authority_lost",
+      reason,
       releasedAt,
       ...(cutoffEventId ? { cutoffEventId } : {}),
     },

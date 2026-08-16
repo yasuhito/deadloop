@@ -4,7 +4,7 @@ deadloop のプロンプトと promise は `~/.pi/agent/deadloop/runs/<uuid>/` �
 
 ## Status
 
-Accepted.
+Accepted. The path list in this decision is replaced by [ADR 0024](0024-an-agent-scratch-area-is-not-uncommitted-work.md); the isolation mechanism stands.
 
 ## Consequences
 

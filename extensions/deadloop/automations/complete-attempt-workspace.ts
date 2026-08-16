@@ -82,7 +82,7 @@ function completionMarkerFromPersisted(marker: JsonObject | undefined) {
 function prView(runner: ReturnType<typeof createCommandRunner>, record: AttemptRecord): JsonObject {
   return runner.runJson([
     "gh", "pr", "view", String(record.target.number), "-R", record.repository,
-    "--json", "number,state,headRefName,headRefOid,baseRefName,body,labels,comments,closingIssuesReferences",
+    "--json", "number,state,isDraft,headRefName,headRefOid,baseRefName,body,labels,comments,closingIssuesReferences",
   ]);
 }
 
@@ -131,6 +131,7 @@ function reviewerObservation(record: AttemptRecord, report: CompletionReportV1, 
     target: record.target,
     headSha: String(pr.headRefOid || ""),
     labels: labelsOf(pr),
+    draft: pr.isDraft === true,
     ...(persisted ? {
       reviewPersistence: {
         repository: record.repository,
@@ -259,7 +260,10 @@ function completeLocked(
       assertWorktreeBelongsToProject(commandRunner, record, args);
       record = recordPersistedCompletionReport(runDir, report);
     }
-    if (report.status === "blocked" || (report.role === "reviewer" && report.status === "complete" && report.result.outcome === "human_required")) {
+    // A stop without a completion report keeps its workspace for inspection. A completed review
+    // that asks for a person does not: its result is on the pull request and the handoff is what
+    // the person acts on, so leaving the workspace open would only block the next attempt.
+    if (report.status === "blocked") {
       return driverResult("done", "attempt workspace retained for inspection", { driverAction: "workspace_retained" });
     }
 

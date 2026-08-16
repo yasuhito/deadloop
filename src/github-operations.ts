@@ -85,6 +85,11 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
       commandRunner.runText(["gh", "pr", "edit", String(prNumber), "-R", repo, ...labelArgs(move)], { check: options.check });
     },
 
+    markPrReady(repo: string, prNumber: string | number): void {
+      beforeMutation();
+      commandRunner.runText(["gh", "pr", "ready", String(prNumber), "-R", repo]);
+    },
+
     replacePrLabels(repo: string, prNumber: string | number, labels: string[]): JsonObject {
       beforeMutation();
       return commandRunner.runJson([

@@ -6,6 +6,8 @@ import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
 
+import { fixtureStateDir } from "../support/fixture-state-dir";
+
 const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
 const { renderRepairMarker, renderTechnicalFailureMarker, reviewResultFingerprint } = require("../../extensions/deadloop/automations/pr-review-repair-state.ts");
 const { finalizeReviewRepair } = require("../../extensions/deadloop/automations/pr-review-repair-finalize.ts");
@@ -71,7 +73,7 @@ function reviewerDriver(fixture: string): Record<string, unknown> {
       env: {
         ...process.env,
         DEADLOOP_PROJECT_ID: "demo",
-        DEADLOOP_STATE_DIR: path.join(process.cwd(), "test/fixtures/pr-reviewer-driver/state"),
+        DEADLOOP_STATE_DIR: fixtureStateDir(),
         DEADLOOP_REPO_PATH: "/repo",
         DEADLOOP_GITHUB_REPO: "owner/repo",
         DEADLOOP_REVIEWER_AGENT: "pi",
@@ -206,6 +208,8 @@ else {
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+// The checkout already carries the expected head, so alignment finds nothing to do.
+else if (args.includes("rev-parse") && args.includes("HEAD")) process.stdout.write("${currentHead}\\n");
 else if (args.includes("rev-parse") && args.some(arg => arg.endsWith("^{commit}"))) process.stdout.write("${"f".repeat(40)}\\n");
 else if (args.includes("show") && args.some(arg => arg.endsWith(":deadloop.json"))) process.exit(1);
 `,
@@ -484,8 +488,10 @@ Then("deadloop does not start another dedicated repair attempt", function (this:
   assert.equal(loggedAgentStartCount(this.result), 0);
 });
 
-Then("deadloop keeps the pull request under review", function (this: RecoveryWorld) {
-  assert.equal(observedLabels(this.result).includes("agent:review"), true);
+const PR_REQUEST_LABELS = ["agent:update-branch", "agent:implement", "agent:review"];
+
+Then("deadloop leaves no waiting request on the pull request", function (this: RecoveryWorld) {
+  assert.equal(observedLabels(this.result).some((label) => PR_REQUEST_LABELS.includes(label)), false);
 });
 
 Then("deadloop escalates the pull request for human handling", function (this: RecoveryWorld) {

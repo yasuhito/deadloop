@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { hasUncommittedWork } from "./agent-scratch-area.cjs";
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
 const { isRequiredVerificationStopComment } = require("./issue-required-verification-stop.ts") as {
@@ -109,7 +110,6 @@ export type DoctorFinding = {
 export type HerdrDoctorStatus =
   | "active"
   | "blocked"
-  | "human_required"
   | "missing_report"
   | "malformed_report"
   | "malformed_journal"
@@ -228,7 +228,7 @@ function gitInspectionCommands(project: NormalizedProject, worktree: HerdrWorktr
   const targetPath = worktree ? worktreePath(worktree) : "";
   if (targetPath) {
     return [
-      `git -C ${shellArg(targetPath)} status --short`,
+      `git -C ${shellArg(targetPath)} status --short --untracked-files=all`,
       `git -C ${shellArg(targetPath)} log ${shellArg(project.baseBranch || "origin/main")}..HEAD --oneline`,
     ];
   }
@@ -250,7 +250,7 @@ function hasOpenPrForWorktree(worktree: HerdrWorktree, openPrs: DoctorGithubItem
 
 function isCleanStatus(gitStatuses: Record<string, string>, pathValue: string): boolean {
   if (!Object.prototype.hasOwnProperty.call(gitStatuses, pathValue)) return false;
-  return String(gitStatuses[pathValue] || "").trim() === "";
+  return !hasUncommittedWork(gitStatuses[pathValue]);
 }
 
 function buildBlockedIssueFindings(project: NormalizedProject, issues: DoctorGithubItem[]): DoctorFinding[] {

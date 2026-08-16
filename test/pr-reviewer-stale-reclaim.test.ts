@@ -1,13 +1,20 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const script = "extensions/deadloop/automations/pr-reviewer-decisions.ts";
+const stateDirs: string[] = [];
+
+afterEach(() => {
+  for (const stateDir of stateDirs.splice(0)) fs.rmSync(stateDir, { recursive: true, force: true });
+});
 
 function runSelect(
   prsFixture: string,
-  options: { agents?: string; projectId?: string; now?: string } = {},
+  options: { agents?: string; projectId?: string; now?: string; stateDir?: string } = {},
 ): { selected: boolean; staleReclaim?: boolean; reason?: string } {
   const args = [
     script,
@@ -25,9 +32,39 @@ function runSelect(
   if (options.agents) {
     args.push("--agents", path.join("test/fixtures/pr-reviewer", options.agents));
   }
+  if (options.stateDir) args.push("--state-dir", options.stateDir, "--github-repo", "owner/repo");
   const result = spawnSync("node", args, { cwd: process.cwd(), encoding: "utf8" });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   return JSON.parse(result.stdout);
+}
+
+/** A state directory holding one finished reviewer attempt launched against the given head. */
+function stateDirWithReviewerAttempt(prNumber: number, head: string): string {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-select-"));
+  stateDirs.push(stateDir);
+  const runDir = path.join(stateDir, "runs", "run-0");
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+    schemaVersion: 1,
+    attemptId: "attempt-0",
+    launchUuid: "uuid-0",
+    project: "demo",
+    repository: "owner/repo",
+    role: "reviewer",
+    target: { kind: "pull-request", number: prNumber },
+    inputRevision: { head },
+    branch: `agent/issue-${prNumber}`,
+    worktreePath: "/wt-0",
+    agentName: `dl-r-${prNumber}-000000000000`,
+    workspaceId: "workspace-0",
+    workspaceLabel: `demo-pr-${prNumber}-reviewer`,
+    rootPaneId: "pane-0",
+    promptFile: path.join(runDir, "reviewer-prompt.md"),
+    promiseFile: path.join(runDir, "promise.json"),
+    phase: "workspace_closed",
+    lastSuccessfulPhase: "workspace_closed",
+  }));
+  return stateDir;
 }
 
 describe("PR reviewer stale reviewing reclaim", () => {
@@ -66,19 +103,10 @@ describe("PR reviewer stale reviewing reclaim", () => {
     expect(selectPrRequestTarget(prs, defaultDecisionConfig({ automationLogin: "deadloop-bot" })).reason).toBe("selectable");
   });
 
-  it("reclaims a reviewer claim after preserved repair re-review provenance is consumed", () => {
-    const { claimedReviewerHeads, defaultDecisionConfig, selectPrRequestTarget } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
-    const prs = require("./fixtures/pr-reviewer-driver/repaired-merge-conflict-updated.json").prs;
-    const attempts = [{
-      project: "demo", repository: "owner/repo", role: "reviewer",
-      target: { kind: "pull-request", number: 31 }, inputRevision: { head: prs[0].headRefOid },
-    }];
-    expect(selectPrRequestTarget(
-      prs,
-      defaultDecisionConfig({ automationLogin: "deadloop-bot" }),
-      new Set(),
-      claimedReviewerHeads("demo", attempts, "owner/repo"),
-    ).reason).toBe("stale_reclaim");
+  it("keeps repair re-review provenance under an active claim a finished journal already reviewed", () => {
+    const stateDir = stateDirWithReviewerAttempt(31, "c".repeat(40));
+
+    expect(runSelect("precheck-repair-rereview-in-progress.json", { agents: "agents-empty.json", stateDir }).reason).toBe("repair_rereview");
   });
 
   it("suppresses a queued review while its retained in-progress owner is active", () => {

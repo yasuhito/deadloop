@@ -74,11 +74,11 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop processes the review result
 * Then deadloop does not start another dedicated repair attempt
 
-## Scenario: Keep the new head under review when the same findings remain after repair
+## Scenario: Leave no waiting request when the same findings remain after repair
 
 * Given The same review findings remain on the new head after repair
 * When deadloop processes the review result
-* Then deadloop keeps the pull request under review
+* Then deadloop leaves no waiting request on the pull request
 
 ## Scenario: Escalate the new head for human handling when the same findings remain after repair
 
@@ -110,11 +110,11 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop processes the review result
 * Then deadloop does not start normal review
 
-## Scenario: Keep the pull request under review after a second technical review failure
+## Scenario: Leave no waiting request after a second technical review failure
 
 * Given A pull request already had one technical review failure
 * When deadloop processes the review result
-* Then deadloop keeps the pull request under review
+* Then deadloop leaves no waiting request on the pull request
 
 ## Scenario: Escalate a second technical review failure for human handling
 

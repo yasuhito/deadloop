@@ -7,6 +7,8 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
+const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
 const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
 const { renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const {
@@ -281,7 +283,7 @@ function assertRecoverableWorkerCheckout(
   })) throw new Error("abandoned Worker checkout is still occupied by an agent");
   const head = ops.runText(["git", "-C", checkout.worktreePath, "rev-parse", "--verify", "HEAD^{commit}"]).trim();
   if (head.toLowerCase() !== checkout.inputHead.toLowerCase()) throw new Error("abandoned Worker checkout HEAD changed");
-  if (ops.runText(["git", "-C", checkout.worktreePath, "status", "--porcelain"]).trim()) {
+  if (hasUncommittedWork(ops.runText(["git", "-C", checkout.worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]))) {
     throw new Error("abandoned Worker checkout contains changes");
   }
 }
@@ -480,6 +482,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     projectId: source.DEADLOOP_PROJECT_ID || "project",
     repoPath: source.DEADLOOP_REPO_PATH || ".",
     githubRepo: source.DEADLOOP_GITHUB_REPO || "",
+    githubRepositoryId: source.DEADLOOP_GITHUB_REPOSITORY_ID || "",
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
@@ -544,6 +547,41 @@ function drive(fixturePath: string | undefined): DriverResult {
   if (issuePlan.kind === "skip_no_candidate") return driverResult("skip", "No target issue", { driverAction: "no_candidate", decision });
 
   const issue = issuePlan.issue;
+  // Locking a target needs the repository it belongs to. The identity is immutable and rendered
+  // into every automation's environment, so its absence is a configuration fault, not a target to
+  // dispatch without exclusion.
+  const repositoryId = env.githubRepositoryId
+    || (fixture ? String(fixture.githubRepositoryId || "fixture-repository-id") : "");
+  if (!repositoryId) {
+    return driverResult("error", "immutable GitHub repository identity is unavailable", { driverAction: "configuration_error" });
+  }
+
+  // The dispatch decision for one target runs while this process holds that target's lock. Unlike
+  // the pull-request driver, a refused lock ends the tick rather than selecting again: issue
+  // selection resolves dependencies against GitHub, so re-selecting per held target would repeat
+  // those round trips. The next tick selects again anyway.
+  const decided = withDispatchLock({
+    stateDir: env.stateDir,
+    repositoryId,
+    target: { kind: "issue", number: Number(issue.number) },
+  }, () => driveSelectedIssue(issuePlan, issue, env, fixture, verificationResolution));
+  if (decided === null) {
+    return driverResult("skip", `Issue #${issue.number} is held by another dispatch decision`, {
+      driverAction: "target_dispatch_locked", issueNumber: issue.number,
+    });
+  }
+  return decided;
+}
+
+/** One issue's dispatch decision, run under that issue's lock. */
+function driveSelectedIssue(
+  issuePlan: JsonObject,
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  verificationResolution: JsonObject | null,
+): DriverResult {
+
   if (issuePlan.kind === "contract_missing") {
     if (!applyContractMissing(issue, env, fixture)) {
       return driverResult("skip", `Issue #${issue.number} changed before the contract gate; no workflow state was mutated`, {
@@ -651,4 +689,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { assertPreparedWorkerContractCurrent, assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };
+module.exports = { assertPreparedWorkerContractCurrent, assertRecoverableWorkerCheckout, assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };

@@ -104,6 +104,32 @@ describe("launch-failed attempt abandonment", () => {
     });
   });
 
+  it("abandons a retained checkout whose only untracked files are an agent scratch area", () => {
+    const attempt = failedAttempt("reviewer");
+    const fixture = dependencies({
+      listWorkspaces: () => [],
+      workspaceCloseWasStarted: () => true,
+      inspectWorktree: () => ({ head: "a".repeat(40), status: "?? .pi/subagents/artifacts/input.md\n", retained: true }),
+    });
+
+    const result = abandonLocked({ attemptRecord: attempt.recordFile }, fixture.deps, () => fixture.events.push("recheck"));
+
+    expect(result.action).toBe("done");
+  });
+
+  it("refuses a retained checkout whose scratch area holds a tracked change", () => {
+    const attempt = failedAttempt("reviewer");
+    const fixture = dependencies({
+      listWorkspaces: () => [],
+      workspaceCloseWasStarted: () => true,
+      inspectWorktree: () => ({ head: "a".repeat(40), status: " M .pi/subagents/report.md\n", retained: true }),
+    });
+
+    const result = abandonLocked({ attemptRecord: attempt.recordFile }, fixture.deps, () => fixture.events.push("recheck"));
+
+    expect(result.action).toBe("error");
+  });
+
   it("re-proves the retained checkout before requeueing an already-abandoned attempt", () => {
     const attempt = failedAttempt("worker");
     require("../src/attempt-lifecycle-runtime.cjs").abandonPersistedAttempt(attempt.runDir, "2026-07-24T00:00:00.000Z");
