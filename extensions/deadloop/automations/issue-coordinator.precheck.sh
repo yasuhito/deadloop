@@ -15,7 +15,7 @@ fi
 repo="${DEADLOOP_GITHUB_REPO:?}"
 ready_label="${DEADLOOP_READY_LABEL:-ready-for-agent}"
 explore_label="${DEADLOOP_EXPLORE_LABEL:-agent:explore}"
-implement_label="${DEADLOOP_IMPLEMENT_LABEL:-agent:implement}"},{
+implement_label="${DEADLOOP_IMPLEMENT_LABEL:-agent:implement}"
 in_progress_label="${DEADLOOP_IN_PROGRESS_LABEL:-agent:in-progress}"
 blocked_label="${DEADLOOP_BLOCKED_LABEL:-agent:blocked}"
 human_label="${DEADLOOP_HUMAN_LABEL:-ready-for-human}"

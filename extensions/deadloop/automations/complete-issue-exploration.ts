@@ -36,6 +36,31 @@ function renderResult(report: JsonObject, claim?: JsonObject): string {
   ].join("\n");
 }
 
+function trustedExplorationResultComment(comments: JsonObject[], claim: JsonObject, expectedBody: string): JsonObject | null {
+  const authorized = new Set((claim.authorizedLogins || []).map((login: unknown) => String(login).toLowerCase()));
+  return comments.find((comment) => {
+    const login = String(comment.author?.login || comment.user?.login || "").toLowerCase();
+    const created = String(comment.createdAt || comment.created_at || "");
+    const updated = String(comment.updatedAt || comment.updated_at || "");
+    return Boolean(login) && authorized.has(login) && Boolean(created) && created === updated
+      && String(comment.body || "") === expectedBody;
+  }) || null;
+}
+
+function hasExplorationPersistenceProof(
+  observation: { labels: Set<string>; events: JsonObject[]; comments: JsonObject[] },
+  claim: JsonObject,
+  expectedBody: string,
+  failed: boolean,
+  labels: { inProgress: string; blocked: string },
+): boolean {
+  const request = activeIssueRequest(observation.events, claim.requestLabel);
+  return String(request?.id || request?.node_id || "") === String(claim.binding?.requestEventId || "")
+    && !observation.labels.has(labels.inProgress)
+    && observation.labels.has(labels.blocked) === failed
+    && Boolean(trustedExplorationResultComment(observation.comments, claim, expectedBody));
+}
+
 function main(argv = process.argv.slice(2)): JsonObject {
   const args = parseArgs(argv);
   const runDir = path.dirname(String(args.attemptRecord));
@@ -52,27 +77,33 @@ function main(argv = process.argv.slice(2)): JsonObject {
   return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
     const github = createGithubOperations(command, recheck);
     const claim = record.reviewClaim;
-    const authorize = () => {
+    if (!claim?.binding?.requestEventId || !claim.requestLabel) throw new Error("exploration claim contract is missing");
+    const observe = () => {
       const live = github.getIssue(args.githubRepo, record.target.number);
-      const labels = new Set((live.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
-      if (!labels.has(args.inProgressLabel) || labels.has(args.blockedLabel)) throw new Error("exploration claim is no longer in progress");
-      const request = activeIssueRequest(github.listIssueTimelineEvents(args.githubRepo, record.target.number), claim.requestLabel);
-      if (String(request?.id || request?.node_id || "") !== String(claim.binding?.requestEventId || "")) throw new Error("exploration request generation changed");
-      const comments = github.listIssueComments(args.githubRepo, record.target.number);
-      const own = comments.find((comment: JsonObject) => String(comment.id || comment.databaseId || "") === String(claim.commentId || ""));
+      return {
+        labels: new Set<string>((live.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || ""))),
+        events: github.listIssueTimelineEvents(args.githubRepo, record.target.number),
+        comments: github.listIssueComments(args.githubRepo, record.target.number),
+      };
+    };
+    const authorize = (observation = observe()) => {
+      if (!observation.labels.has(args.inProgressLabel) || observation.labels.has(args.blockedLabel)) throw new Error("exploration claim is no longer in progress");
+      const request = activeIssueRequest(observation.events, claim.requestLabel);
+      if (String(request?.id || request?.node_id || "") !== String(claim.binding.requestEventId)) throw new Error("exploration request generation changed");
+      const own = observation.comments.find((comment: JsonObject) => String(comment.id || comment.databaseId || "") === String(claim.commentId || ""));
       const header = github.readRestResponseHeaders(args.githubRepo);
       const date = [...String(header).matchAll(/^date:\s*(.+)$/gim)].at(-1)?.[1]?.trim();
       const now = new Date(date || "");
       if (!own || Number.isNaN(now.getTime())) throw new Error("exploration claim evidence is unverifiable");
-      const winner = selectIssueClaimWinner(comments, claim.binding, claim.authorizedLogins || [], now);
+      const winner = selectIssueClaimWinner(observation.comments, claim.binding, claim.authorizedLogins || [], now);
       if (String(winner?.id || winner?.databaseId || "") !== String(claim.commentId || "")) throw new Error("exploration claim is no longer the winner");
-      return { labels, comments };
+      return observation;
     };
-    const initial = authorize();
     const runner = createHerdrRunnerFromCommandRunner(command);
     let failed = report.status === "blocked";
     if (record.phase === "agent_started" || record.phase === "report_received") {
       if (record.phase === "agent_started") {
+        authorize();
         if (!record.workspaceId) throw new Error("exploration workspace identity is missing");
         runner.closeWorkspace(record.workspaceId);
         if (runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId) === record.workspaceId)) throw new Error("exploration workspace closure could not be confirmed");
@@ -86,11 +117,22 @@ function main(argv = process.argv.slice(2)): JsonObject {
       const body = failed
         ? `## deadloop exploration stopped\n\n${repositoryChanged ? "The explorer changed repository files or HEAD, so its result was rejected." : report.result.explanation}\n\nRetry by adding \`${args.exploreLabel}\` again after resolving the cause.\n\n${marker}`
         : renderResult(report, claim);
-      if (!initial.comments.some((comment: JsonObject) => String(comment.body || "").includes(marker))) github.createIssueComment(args.githubRepo, record.target.number, body);
-      const currentObservation = authorize();
-      const current = [...currentObservation.labels].filter((label) => label !== args.inProgressLabel && label !== args.blockedLabel);
-      if (failed) current.push(args.blockedLabel);
-      github.replaceIssueLabels(args.githubRepo, record.target.number, current);
+      let observation = observe();
+      const proofLabels = { inProgress: args.inProgressLabel, blocked: args.blockedLabel };
+      if (!hasExplorationPersistenceProof(observation, claim, body, failed, proofLabels)) {
+        authorize(observation);
+        if (!trustedExplorationResultComment(observation.comments, claim, body)) {
+          github.createIssueComment(args.githubRepo, record.target.number, body);
+        }
+        observation = authorize();
+        const current = [...observation.labels].filter((label) => label !== args.inProgressLabel && label !== args.blockedLabel);
+        if (failed) current.push(args.blockedLabel);
+        github.replaceIssueLabels(args.githubRepo, record.target.number, current);
+        observation = observe();
+        if (!hasExplorationPersistenceProof(observation, claim, body, failed, proofLabels)) {
+          throw new Error("exploration GitHub persistence could not be proven");
+        }
+      }
       transitionPersistedAttempt(runDir, "github_persisted");
     }
     const latest = readAttemptRecord(runDir);
@@ -105,4 +147,4 @@ if (require.main === module) {
   catch (error) { process.stderr.write(`complete-issue-exploration.ts: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; }
 }
 
-module.exports = { main, renderResult };
+module.exports = { hasExplorationPersistenceProof, main, renderResult, trustedExplorationResultComment };
