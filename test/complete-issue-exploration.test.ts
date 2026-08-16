@@ -15,6 +15,7 @@ const claim = {
 };
 const body = "exploration result\n\n<!-- deadloop:issue-exploration-result request=event-2 -->";
 const event = { id: "event-2", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:explore" } };
+const consumedEvent = { id: "event-3", event: "unlabeled", created_at: "2026-08-16T00:00:01Z", label: { name: "agent:explore" } };
 const record = {
   workspaceId: "workspace-1",
   worktreePath: "/worktrees/explore-42",
@@ -43,12 +44,26 @@ describe("Issue exploration completion", () => {
 
   it("recognizes GitHub persistence after the success label mutation", () => {
     expect(hasExplorationPersistenceProof(
-      { labels: new Set(["ready-for-agent"]), events: [event], comments: [resultComment("deadloop-bot")] },
+      { labels: new Set(["ready-for-agent"]), events: [event, consumedEvent], comments: [resultComment("deadloop-bot")] },
       claim,
       body,
       false,
       { inProgress: "agent:in-progress", blocked: "agent:blocked" },
     )).toBe(true);
+  });
+
+  it("does not accept success after a raced implementation request was erased", () => {
+    expect(hasExplorationPersistenceProof(
+      {
+        labels: new Set(["ready-for-agent"]),
+        events: [event, consumedEvent, { id: "implement-2", event: "labeled", created_at: "2026-08-16T00:03:00Z", label: { name: "agent:implement" } }],
+        comments: [resultComment("deadloop-bot")],
+      },
+      claim,
+      body,
+      false,
+      { inProgress: "agent:in-progress", blocked: "agent:blocked", requests: ["agent:explore", "agent:implement"] },
+    )).toBe(false);
   });
 
   it("does not accept a result while the exploration claim is still active", () => {
@@ -65,7 +80,7 @@ describe("Issue exploration completion", () => {
     expect(hasExplorationPersistenceProof(
       {
         labels: new Set(["agent:blocked", "agent:implement"]),
-        events: [event,
+        events: [event, consumedEvent,
           { id: "implement-1", event: "labeled", created_at: "2026-08-16T00:00:30Z", label: { name: "agent:implement" } },
           { id: "block-1", event: "labeled", created_at: "2026-08-16T00:02:00Z", label: { name: "agent:blocked" } }],
         comments: [resultComment("deadloop-bot")],
@@ -81,7 +96,7 @@ describe("Issue exploration completion", () => {
     expect(hasExplorationPersistenceProof(
       {
         labels: new Set(["agent:blocked", "agent:implement"]),
-        events: [event,
+        events: [event, consumedEvent,
           { id: "100", event: "labeled", created_at: "2026-08-16T00:02:00Z", label: { name: "agent:blocked" } },
           { id: "101", event: "labeled", created_at: "2026-08-16T00:02:00Z", label: { name: "agent:implement" } }],
         comments: [resultComment("deadloop-bot")],

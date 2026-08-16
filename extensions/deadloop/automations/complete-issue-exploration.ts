@@ -79,10 +79,13 @@ function hasExplorationPersistenceProof(
 ): boolean {
   const boundRequest = observation.events.find((event) => String(event.id || event.node_id || "") === String(claim.binding?.requestEventId || ""));
   const latestRequest = activeIssueRequest(observation.events, claim.requestLabel);
+  const requestLabels = labels.requests || [];
+  const requestStateMatches = requestLabels.every((label) => observation.labels.has(label) === issueLabelState(observation.events, label).active);
   return Boolean(boundRequest) && eventTime(latestRequest) >= eventTime(boundRequest)
     && !observation.labels.has(labels.inProgress)
     && observation.labels.has(labels.blocked) === failed
-    && (!failed || failedRequestStateIsRecoverable(observation, labels.requests || [], labels.blocked))
+    && requestStateMatches
+    && (!failed || failedRequestStateIsRecoverable(observation, requestLabels, labels.blocked))
     && Boolean(trustedExplorationResultComment(observation.comments, claim, expectedBody));
 }
 

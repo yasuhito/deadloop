@@ -187,12 +187,9 @@ function claimIssueRequest(
   if (labelsBeforeClaim.has(env.blockedLabel)) {
     const blocks = events.filter((event: JsonObject) => String(event.event || "").toLowerCase() === "labeled"
       && String(event.label?.name || "") === env.blockedLabel);
-    blocks.sort((left: JsonObject, right: JsonObject) => Date.parse(String(left.created_at || left.createdAt || ""))
-      - Date.parse(String(right.created_at || right.createdAt || "")));
+    blocks.sort(compareIssueEvents);
     const latestBlock = blocks.at(-1);
-    const requestTime = Date.parse(String(request.created_at || request.createdAt || ""));
-    const blockTime = Date.parse(String(latestBlock?.created_at || latestBlock?.createdAt || ""));
-    if (!latestBlock || !Number.isFinite(requestTime) || !Number.isFinite(blockTime) || requestTime <= blockTime) {
+    if (!latestBlock || compareIssueEvents(request, latestBlock) <= 0) {
       throw new StaleLaunchError(`Issue #${number} request does not follow the latest block`);
     }
   }

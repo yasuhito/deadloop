@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 const {
   activeIssueRequest,
   claimedIssueRequestGenerationIsCurrent,
+  compareIssueEvents,
   issueRequestRevision,
   observeIssueRequestLabels,
   parseIssueClaim,
@@ -52,6 +53,13 @@ describe("Issue request claim", () => {
     expect(claimedIssueRequestGenerationIsCurrent({ events: [
       { id: "event-2", event: "labeled", created_at: "2026-07-08T00:00:00Z", label: { name: "agent:explore" } },
     ], labels: new Set() }, "agent:explore", "event-2")).toBe(false);
+  });
+
+  it("orders a same-second retry after the block by stable event ID", () => {
+    expect(compareIssueEvents(
+      { id: "101", created_at: "2026-07-08T00:00:00Z" },
+      { id: "100", created_at: "2026-07-08T00:00:00Z" },
+    )).toBeGreaterThan(0);
   });
 
   it("round-trips the issue claim marker", () => {
