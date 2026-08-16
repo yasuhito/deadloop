@@ -838,6 +838,7 @@ export function automationEnvironment(
     DEADLOOP_REQUIRED_VERIFICATION: project.requiredVerification.status === "resolved"
       ? JSON.stringify(project.requiredVerification.contract)
       : undefined,
+    DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify(project.requiredVerification),
     DEADLOOP_WORKER_AGENT: envText(values.workerAgent),
     DEADLOOP_WORKER_MODEL: envText(values.workerModel),
     DEADLOOP_WORKER_INSTRUCTIONS: envText(values.workerInstructions),

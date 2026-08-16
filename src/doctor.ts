@@ -3,6 +3,9 @@ import path from "node:path";
 import { hasUncommittedWork } from "./agent-scratch-area.cjs";
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
+const { isRequiredVerificationStopComment } = require("./issue-required-verification-stop.ts") as {
+  isRequiredVerificationStopComment(body: unknown): boolean;
+};
 import {
   formatRequiredVerification,
   formatVerificationCandidates,
@@ -253,15 +256,19 @@ function isCleanStatus(gitStatuses: Record<string, string>, pathValue: string): 
 function buildBlockedIssueFindings(project: NormalizedProject, issues: DoctorGithubItem[]): DoctorFinding[] {
   return issues
     .filter((issue) => labelsOf(issue).has(project.labels.blocked))
-    .map((issue) => ({
-      id: `blocked-issue-${issue.number ?? "unknown"}`,
-      type: "blocked_issue" as const,
-      title: `blocked issue: ${issueRef(issue)}`,
-      summary: blockedCommentSummary(issue),
-      commands: [
-        `gh issue edit ${issue.number ?? "<number>"} --remove-label ${shellArg(project.labels.blocked)} --add-label ${shellArg(project.labels.implement)}`,
-      ],
-    }));
+    .map((issue) => {
+      const requiredVerificationStop = (issue.comments || []).some((comment) => isRequiredVerificationStopComment(comment.body));
+      const canRequeueRequiredVerification = !requiredVerificationStop || project.requiredVerification.status === "resolved";
+      return {
+        id: `blocked-issue-${issue.number ?? "unknown"}`,
+        type: "blocked_issue" as const,
+        title: `blocked issue: ${issueRef(issue)}`,
+        summary: blockedCommentSummary(issue),
+        commands: canRequeueRequiredVerification
+          ? [`gh issue edit ${issue.number ?? "<number>"} --remove-label ${shellArg(project.labels.blocked)} --add-label ${shellArg(project.labels.implement)}`]
+          : [],
+      };
+    });
 }
 
 function buildStaleInProgressFindings(

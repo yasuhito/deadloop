@@ -143,7 +143,7 @@ ${renderPromisePollingRules(input, "issue")}
 
 After a \`complete\` promise:
 - Inspect \`${input.worktreePath}\` and confirm only Issue #${input.issueNumber} changes are present.
-- Run the fixed required-verification contract through run-project-check.ts isolation before creating any PR, and persist its output-commit-bound record by running exactly \`${verify}\`. Agent-reported additional validations never replace this record. If the contract is missing, empty, or differs from current trusted policy, stop without push, PR creation, or success labels; a new attempt must adopt the new policy.
+- Run the fixed required-verification contract through run-project-check.ts isolation before creating any PR, and persist its output-commit-bound record by running exactly \`${verify}\`. Agent-reported additional validations never replace this record. If it reports \`status=blocked\`, it has deterministically removed the in-progress claim, added the blocked label, and posted idempotent recovery guidance; stop without another comment or label mutation. A new attempt must adopt the restored policy.
 - Only after that command reports \`status=passed\`, push only the Worker branch \`${input.branch}\` without force-push by running exactly \`${guardedPush}\`. The guarded push independently requires the same passed record and current policy.
 - Only after that push succeeds, create a reviewable PR whose body includes \`Closes #${input.issueNumber}\`, or recover that exact PR, and add \`${input.reviewLabel}\` by running exactly \`${createPr}\`. This dedicated command independently requires the verified output commit; do not run \`gh pr create\` or success label mutations directly.
 - Do not manually close the issue with GitHub commands, and do not merge the PR.

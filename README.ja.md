@@ -119,6 +119,8 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 `projects.json` にはローカルのパスや運用設定が含まれます。リポジトリにはコミットしないでください。共有してレビューする方針は、リポジトリ内の `deadloop.json` に記載することを推奨します。
 
+実装 Issue が必須検証停止になった場合、deadloop は `ready-for-agent` を残し、実装用の進行ラベルを外して、理由別の復旧案内とともに `agent:blocked` を付けます。同じ復旧内容の案内は重複させず、設定変更だけでは再投入しません。必須検証が解決した後に限り、`/deadloop-doctor` が対象 Issue の再投入コマンドを表示します。
+
 ## 安全装置
 
 `autoMerge` は、レビュー済みの PR を deadloop が自動的にマージするかを制御します。
