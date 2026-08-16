@@ -85,6 +85,7 @@ function explorationCompletionScenario(options: {
   requestDuringDelete?: string;
   interruptAfterComment?: boolean;
   interruptAfterDelete?: boolean;
+  newerAttemptBeforeRetry?: boolean;
   retry?: boolean;
 } = {}) {
   const state = createState();
@@ -146,6 +147,7 @@ function explorationCompletionScenario(options: {
   };
   let outcome;
   try { outcome = persistSuccessfulExploration(input); } catch (error) { outcome = { kind: "interrupted", error }; }
+  if (options.newerAttemptBeforeRetry) state.label("agent:in-progress", "deadloop-bot");
   if (options.retry) outcome = persistSuccessfulExploration(input);
   return { comments, labels: [...state.labels], outcome, persisted };
 }
@@ -256,6 +258,14 @@ describe("successful Issue exploration transition", () => {
 
   it("continues after active-label deletion was interrupted", () => {
     expect(explorationCompletionScenario({ interruptAfterDelete: true, retry: true }).outcome.kind).toBe("persisted");
+  });
+
+  it("does not remove active state belonging to a newer attempt on retry", () => {
+    expect(explorationCompletionScenario({
+      interruptAfterDelete: true,
+      newerAttemptBeforeRetry: true,
+      retry: true,
+    }).labels).toContain("agent:in-progress");
   });
 
   it("proves GitHub persistence before advancing the attempt", () => {

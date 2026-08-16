@@ -154,23 +154,37 @@ function observeExplorationCompletion(input: PersistSuccessfulExplorationInput) 
 function ownedActiveState(
   observation: ReturnType<typeof observeExplorationCompletion>,
   input: PersistSuccessfulExplorationInput,
-): { request: JsonObject; latest: JsonObject; active: boolean } | null {
-  const request = observation.events.find((event) => eventId(event) === input.requestEventId
+): { request: JsonObject; activation: JsonObject; active: boolean; removed: boolean } | null {
+  const ordered = [...observation.events].sort(compareIssueTimelineEvents);
+  const request = ordered.find((event) => eventId(event) === input.requestEventId
     && String(event.event || "").toLowerCase() === "labeled"
     && String(event.label?.name || "") === input.requestLabel);
-  const latest = labelEvent(observation.events, input.inProgressLabel);
-  const consumed = request && observation.events.find((event) =>
+  const consumed = request && ordered.find((event) =>
     compareIssueTimelineEvents(event, request) > 0
-    && (!latest || compareIssueTimelineEvents(event, latest) < 0)
     && String(event.event || "").toLowerCase() === "unlabeled"
     && String(event.label?.name || "") === input.requestLabel
     && String(event.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase(),
   );
-  if (!request || !consumed || !latest || compareIssueTimelineEvents(latest, request) <= 0
-    || String(latest.actor?.login || "").toLowerCase() !== input.automationLogin.toLowerCase()) return null;
-  const action = String(latest.event || "").toLowerCase();
-  if (action !== "labeled" && action !== "unlabeled") return null;
-  return { request, latest, active: action === "labeled" && observation.labels.has(input.inProgressLabel) };
+  const activation = consumed && ordered.find((event) =>
+    compareIssueTimelineEvents(event, consumed) > 0
+    && String(event.event || "").toLowerCase() === "labeled"
+    && String(event.label?.name || "") === input.inProgressLabel
+    && String(event.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase(),
+  );
+  if (!request || !consumed || !activation) return null;
+  const nextActiveStateEvent = ordered.find((event) =>
+    compareIssueTimelineEvents(event, activation) > 0
+    && ["labeled", "unlabeled"].includes(String(event.event || "").toLowerCase())
+    && String(event.label?.name || "") === input.inProgressLabel,
+  );
+  if (!nextActiveStateEvent) {
+    return observation.labels.has(input.inProgressLabel)
+      ? { request, activation, active: true, removed: false }
+      : null;
+  }
+  const removed = String(nextActiveStateEvent.event || "").toLowerCase() === "unlabeled"
+    && String(nextActiveStateEvent.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase();
+  return removed ? { request, activation, active: false, removed: true } : null;
 }
 
 /**
@@ -205,8 +219,7 @@ function persistSuccessfulExploration(input: PersistSuccessfulExplorationInput):
     activeState = ownedActiveState(observation, input);
   }
 
-  if (!activeState || activeState.active || observation.labels.has(input.inProgressLabel)
-    || String(activeState.latest.event || "").toLowerCase() !== "unlabeled"
+  if (!activeState || activeState.active || !activeState.removed
     || !trustedExplorationResultComment(observation.comments, input)) {
     throw new Error("exploration GitHub persistence could not be proven");
   }
