@@ -1,4 +1,5 @@
 const { createHash } = require("node:crypto") as typeof import("node:crypto");
+const path = require("node:path") as typeof import("node:path");
 
 type IssueRequiredVerificationStopPhase = "before_launch" | "completion";
 type IssueRequiredVerificationStopDiagnosis = {
@@ -92,9 +93,15 @@ function applyIssueRequiredVerificationStop(
   }
 }
 
+function publicSourceLocation(source: IssueRequiredVerificationStopDiagnosis["sources"][number]): string {
+  if (source.kind !== "local") return source.location;
+  const [file, ...fragment] = source.location.split("#");
+  return `${path.basename(file)}${fragment.length ? `#${fragment.join("#")}` : ""}`;
+}
+
 function renderSources(diagnosis: IssueRequiredVerificationStopDiagnosis): string[] {
   if (!diagnosis.sources.length) return ["- none"];
-  return diagnosis.sources.map((source) => `- \`${source.kind}:${source.location}\`: \`${source.command || "<empty>"}\``);
+  return diagnosis.sources.map((source) => `- \`${source.kind}:${publicSourceLocation(source)}\`: \`${source.command || "<empty>"}\``);
 }
 
 function renderComment(
