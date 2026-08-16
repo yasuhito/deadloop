@@ -130,6 +130,10 @@ describe("completing a proven stopped attempt", () => {
     expect(complete(stoppedAttempt(), pushedHead)).toEqual({ kind: "completed", result: { status: "done" } });
   });
 
+  it("waits when the pushed head has not reached the pull request snapshot", () => {
+    expect(complete(stoppedAttempt(), startHead)).toEqual({ kind: "pending_head_visibility" });
+  });
+
   it("hands the completion handler the head the attempt started from", () => {
     const calls: any[] = [];
     complete(stoppedAttempt(), pushedHead, calls);

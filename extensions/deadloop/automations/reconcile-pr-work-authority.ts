@@ -168,7 +168,8 @@ const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonO
  * and re-authorizes under the enablement lock against the exact head, so holding the evidence is
  * the only thing driving it requires.
  *
- * Returns null when the attempt proves nothing to finish, `completed` when the handoff ran, and
+ * Returns null when the attempt proves nothing to finish, `pending_head_visibility` when a pushed
+ * head has not reached the pull-request snapshot yet, `completed` when the handoff ran, and
  * `refused` with the handler's own reason when it could not. A refusal leaves the ordinary
  * reconciliation to block the pull request, which is the safe direction, but the reason travels
  * with it: an attempt that pushed and then could not hand over must not read as one that never
@@ -186,11 +187,14 @@ function completeProvenStoppedAttempt(
     blockedLabel: string;
   },
   ops: { complete?: (role: string, handlerArgs: JsonObject) => JsonObject } = {},
-): { kind: "completed"; result: JsonObject } | { kind: "refused"; reason: string } | null {
+): { kind: "completed"; result: JsonObject } | { kind: "pending_head_visibility" } | { kind: "refused"; reason: string } | null {
   const runDir = String(record.runDir || "");
   const completion = provenAttemptCompletion(runDir, record);
   if (!completion) return null;
-  if (completion.currentHeadOid !== String(pr.headRefOid || "").toLowerCase()) return null;
+  if (completion.currentHeadOid !== String(pr.headRefOid || "").toLowerCase()) {
+    return completion.expectedHead === String(pr.headRefOid || "").toLowerCase()
+      ? { kind: "pending_head_visibility" } : null;
+  }
   const role = String(record.role || "");
   const handler = COMPLETION_HANDLERS[role];
   if (!handler) return null;
@@ -348,6 +352,10 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       });
       if (completed?.kind === "completed") {
         results.push({ number, action: "completed_proven_attempt", attemptId: record.attemptId, result: completed.result });
+        continue;
+      }
+      if (completed?.kind === "pending_head_visibility") {
+        results.push({ number, action: "completion_pending_head_visibility", attemptId: record.attemptId });
         continue;
       }
       if (completed?.kind === "refused") {
