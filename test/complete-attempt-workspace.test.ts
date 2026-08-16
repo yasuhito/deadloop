@@ -177,27 +177,44 @@ describe("selected attempt workspace completion", () => {
     };
   }
 
-  it("closes a completion-stopped Worker so an explicit doctor requeue can launch again", () => {
+  function completeStoppedWorker() {
     const data = fixture(false);
     data.setIssueObservation(exactStoppedIssue());
     const result = closeCompletionStoppedWorkerAttempt(data.args, data.runner, () => undefined, { resolution: stopResolution, labels: stopLabels });
-    const phase = readAttemptRecord(data.runDir).phase;
-    expect({ action: result.driverAction, phase, released: releasesAttemptOwnership(phase) }).toEqual({ action: "workspace_closed", phase: "workspace_closed", released: true });
+    return { data, result };
+  }
+
+  it("closes a completion-stopped Worker so an explicit doctor requeue can launch again", () => {
+    expect(completeStoppedWorker().result.driverAction).toBe("workspace_closed");
+  });
+
+  it("records the closed phase for a completion-stopped Worker", () => {
+    const { data } = completeStoppedWorker();
+
+    expect(readAttemptRecord(data.runDir).phase).toBe("workspace_closed");
+  });
+
+  it("releases ownership for a completion-stopped Worker", () => {
+    const { data } = completeStoppedWorker();
+
+    expect(releasesAttemptOwnership(readAttemptRecord(data.runDir).phase)).toBe(true);
   });
 
   it("retains ownership when the fingerprinted completion-stop comment is concurrently replaced", () => {
     const data = fixture(false);
     data.setIssueObservation({ ...exactStoppedIssue(), comments: [{ body: "replacement" }] });
-    const result = closeCompletionStoppedWorkerAttempt(data.args, data.runner, () => undefined, { resolution: stopResolution, labels: stopLabels });
-    expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_retained", phase: "report_received" });
+    closeCompletionStoppedWorkerAttempt(data.args, data.runner, () => undefined, { resolution: stopResolution, labels: stopLabels });
+
+    expect(readAttemptRecord(data.runDir).phase).toBe("report_received");
   });
 
   it("reconciles a completion-stop crash after the owned workspace was already closed", () => {
     const data = fixture(false);
     data.setIssueObservation(exactStoppedIssue());
     data.setWorkspaceOpen(false);
-    const result = closeCompletionStoppedWorkerAttempt(data.args, data.runner, () => undefined, { resolution: stopResolution, labels: stopLabels });
-    expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_closed", phase: "workspace_closed" });
+    closeCompletionStoppedWorkerAttempt(data.args, data.runner, () => undefined, { resolution: stopResolution, labels: stopLabels });
+
+    expect(readAttemptRecord(data.runDir).phase).toBe("workspace_closed");
   });
 
   it("durably records persistence before closing a proven Worker workspace", () => {

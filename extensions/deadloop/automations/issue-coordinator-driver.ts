@@ -531,8 +531,17 @@ function drive(fixturePath: string | undefined): DriverResult {
   const issues = issueList(fixture, env.githubRepo);
   const verificationResolution = parsedRequiredVerificationResolution(env);
   const resumableStop = verificationResolution?.status === "blocked"
-    ? issues.find((candidate) => requiredVerificationStopFingerprint(candidate)
-      && !isExactDurableRequiredVerificationStop(candidate, env))
+    ? issues.find((candidate) => {
+      const existingFingerprint = requiredVerificationStopFingerprint(candidate);
+      if (!existingFingerprint || isExactDurableRequiredVerificationStop(candidate, env)) return false;
+      const currentFingerprint = planIssueRequiredVerificationStop({
+        issue: candidate,
+        resolution: verificationResolution,
+        phase: "before_launch",
+        labels: { implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel },
+      }).fingerprint;
+      return existingFingerprint === currentFingerprint;
+    })
     : undefined;
   if (resumableStop) {
     const fingerprint = requiredVerificationStopFingerprint(resumableStop) as string;

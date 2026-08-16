@@ -181,6 +181,24 @@ exit 2
     }).driverAction).toBe("required_verification_blocked");
   });
 
+  it("replaces a partial stop diagnosis when its recovery fingerprint changes", () => {
+    const changedResolution = JSON.stringify({
+      status: "blocked",
+      reason: "source_conflict",
+      repository: "owner/repo",
+      baseRevision: "f".repeat(40),
+      sources: [
+        { kind: "local", location: "projects.json", command: "npm test" },
+        { kind: "local", location: "projects.override.json", command: "npm run check" },
+      ],
+    });
+    const result = runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: changedResolution,
+    });
+
+    expect(result.comment).toContain("reason: source_conflict");
+  });
+
   it("launches a Worker for a requeued fingerprinted Issue after required verification resolves", () => {
     expect(runDriverFixture("driver-partial-verification-stop.json", {
       DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify({ status: "resolved" }),

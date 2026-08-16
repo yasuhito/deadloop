@@ -77,7 +77,7 @@ describe("implementation Issue required-verification stop", () => {
     expect(requiredVerificationStopMarker(42, resolution)).toMatch(/^<!-- deadloop:required-verification-blocked:v1 target=issue-42 fingerprint=[0-9a-f]{64} -->$/);
   });
 
-  it("does not release ownership when fingerprint comment creation fails", () => {
+  function failedCommentApplication() {
     const moves: unknown[] = [];
     const plan = planIssueRequiredVerificationStop({ issue: issue(), resolution, phase: "before_launch", labels });
     let failure = "";
@@ -87,7 +87,15 @@ describe("implementation Issue required-verification stop", () => {
         moveIssueLabels: (...args: unknown[]) => { moves.push(args); },
       }, "owner/repo", 42, plan);
     } catch (error) { failure = error instanceof Error ? error.message : String(error); }
-    expect({ failure, moves: moves.length }).toEqual({ failure: "comment failed", moves: 0 });
+    return { failure, moves };
+  }
+
+  it("propagates fingerprint comment creation failure", () => {
+    expect(failedCommentApplication().failure).toBe("comment failed");
+  });
+
+  it("does not release ownership when fingerprint comment creation fails", () => {
+    expect(failedCommentApplication().moves).toHaveLength(0);
   });
 
   it("resumes label release from a fingerprinted-comment partial state", () => {
