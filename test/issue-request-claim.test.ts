@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { activeIssueRequest, parseIssueClaim, renderIssueClaimComment, selectIssueClaimWinner } = require("../extensions/deadloop/automations/issue-request-claim.ts");
+const { activeIssueRequest, issueRequestRevision, parseIssueClaim, renderIssueClaimComment, selectIssueClaimWinner } = require("../extensions/deadloop/automations/issue-request-claim.ts");
 
 const binding = {
   repositoryId: "R_1", repository: "owner/repo", targetNumber: 42, requestEventId: "event-2",
@@ -19,6 +19,10 @@ describe("Issue request claim", () => {
       { id: "event-1", event: "labeled", created_at: "2026-07-07T00:00:00Z", label: { name: "agent:explore" } },
       { id: "event-2", event: "labeled", created_at: "2026-07-08T00:00:00Z", label: { name: "agent:explore" } },
     ], "agent:explore").id).toBe("event-2");
+  });
+
+  it("binds the claim revision to the immutable request event", () => {
+    expect(issueRequestRevision({ created_at: "2026-07-08T00:00:00Z" })).toBe("2026-07-08T00:00:00Z");
   });
 
   it("round-trips the issue claim marker", () => {

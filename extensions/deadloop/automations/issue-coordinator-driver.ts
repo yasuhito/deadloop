@@ -9,12 +9,13 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
+const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
 const { renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const {
   applyIssueRequiredVerificationStop,
   planIssueRequiredVerificationStop,
 } = require("../../../src/issue-required-verification-stop.ts");
-const { activeIssueRequest, renderIssueClaimComment, selectIssueClaimWinner } = require("./issue-request-claim.ts");
+const { activeIssueRequest, issueRequestRevision, renderIssueClaimComment, selectIssueClaimWinner } = require("./issue-request-claim.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
@@ -170,7 +171,7 @@ function claimIssueRequest(
   const binding = {
     repositoryId, repository: env.githubRepo, targetNumber: number,
     requestEventId: String(request.id || request.node_id), role,
-    revision: String(issue.updatedAt || request.created_at || request.createdAt), owner: env.claimOwner,
+    revision: issueRequestRevision(request), owner: env.claimOwner,
     authority: { durationSeconds: authoritySeconds },
     activeState: { managedLabels, requestLabel, requiredLabels: [env.inProgressLabel] },
   };
@@ -551,7 +552,8 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         if (claim) {
           if (!issueLabelNames(liveIssue).includes(env.inProgressLabel)) throw new StaleLaunchError("selected issue claim is no longer active");
         } else {
-          const livePlan = planIssueCoordinatorAction([liveIssue], decisionForIssues(undefined, [liveIssue], env.githubRepo, env));
+          const deadline = issueDecisionDeadline();
+          const livePlan = planIssueCoordinatorAction([liveIssue], decisionForIssues(undefined, [liveIssue], env.githubRepo, env, deadline));
           if (livePlan.kind !== "worker_required") throw new StaleLaunchError("selected issue is no longer eligible");
         }
         assertSameLaunchTarget(issue, liveIssue, "issue");
@@ -607,7 +609,8 @@ function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig
         if (claim) {
           if (!issueLabelNames(live).includes(env.inProgressLabel)) throw new StaleLaunchError("exploration claim is no longer active");
         } else {
-          const plan = planIssueCoordinatorAction([live], decisionForIssues(undefined, [live], env.githubRepo, env));
+          const deadline = issueDecisionDeadline();
+          const plan = planIssueCoordinatorAction([live], decisionForIssues(undefined, [live], env.githubRepo, env, deadline));
           if (plan.kind !== "explorer_required") throw new StaleLaunchError("Issue is no longer eligible for exploration");
         }
         assertSameLaunchTarget(issue, live, "issue");

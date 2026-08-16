@@ -29,6 +29,12 @@ function activeIssueRequest(events: JsonObject[], requestLabel: string): JsonObj
   return matching.at(-1) || null;
 }
 
+function issueRequestRevision(request: JsonObject): string {
+  const revision = String(request.created_at || request.createdAt || "");
+  if (!Number.isFinite(Date.parse(revision))) throw new Error("Issue request event revision is unavailable");
+  return revision;
+}
+
 function claimPayload(binding: IssueClaimBinding): JsonObject {
   if (!binding.repositoryId || !binding.repository || !binding.targetNumber || !binding.requestEventId
     || !["explorer", "worker"].includes(binding.role) || !binding.revision || !binding.owner
@@ -93,4 +99,4 @@ function selectIssueClaimWinner(
   return valid[0] || null;
 }
 
-module.exports = { activeIssueRequest, parseIssueClaim, renderIssueClaimComment, selectIssueClaimWinner };
+module.exports = { activeIssueRequest, issueRequestRevision, parseIssueClaim, renderIssueClaimComment, selectIssueClaimWinner };

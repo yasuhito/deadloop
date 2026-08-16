@@ -70,6 +70,7 @@ function main(argv = process.argv.slice(2)): JsonObject {
     };
     const initial = authorize();
     const runner = createHerdrRunnerFromCommandRunner(command);
+    let failed = report.status === "blocked";
     if (record.phase === "agent_started" || record.phase === "report_received") {
       if (record.phase === "agent_started") {
         if (!record.workspaceId) throw new Error("exploration workspace identity is missing");
@@ -80,7 +81,7 @@ function main(argv = process.argv.slice(2)): JsonObject {
       const status = command.runText(["git", "-C", record.worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]);
       const repositoryChanged = head.toLowerCase() !== record.inputRevision.head.toLowerCase() || hasUncommittedWork(status);
       if (record.phase === "agent_started") recordPersistedCompletionReport(runDir, report);
-      const failed = report.status === "blocked" || repositoryChanged;
+      failed = report.status === "blocked" || repositoryChanged;
       const marker = explorationResultMarker(claim);
       const body = failed
         ? `## deadloop exploration stopped\n\n${repositoryChanged ? "The explorer changed repository files or HEAD, so its result was rejected." : report.result.explanation}\n\nRetry by adding \`${args.exploreLabel}\` again after resolving the cause.\n\n${marker}`
@@ -95,7 +96,7 @@ function main(argv = process.argv.slice(2)): JsonObject {
     const latest = readAttemptRecord(runDir);
     if (latest.phase === "github_persisted") transitionPersistedAttempt(runDir, "workspace_closed");
     runner.removeWorktree({ repoPath: args.projectRepo, branch: record.branch, worktreePath: record.worktreePath });
-    return { action: report.status === "blocked" ? "exploration_blocked" : "exploration_persisted", issueNumber: record.target.number };
+    return { action: failed ? "exploration_blocked" : "exploration_persisted", issueNumber: record.target.number };
   });
 }
 
