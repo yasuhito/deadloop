@@ -72,6 +72,16 @@ function sameFindingTitles(repairs: JsonObject[], findingTitles: unknown): boole
   return JSON.stringify(actual) === JSON.stringify(expected);
 }
 
+function assertRepairCompletionRepositoryIdentity(
+  identity: JsonObject,
+  enabled: { githubRepositoryId?: string; githubRepo?: string },
+): void {
+  if (String(identity.id || "") !== String(enabled.githubRepositoryId || "")
+    || String(identity.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
+    throw new Error("live repository identity changed before repair completion");
+  }
+}
+
 function completion(args: JsonObject): DriverResult {
   const runner = createCommandRunner();
   runHerdrPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
@@ -121,11 +131,10 @@ function completion(args: JsonObject): DriverResult {
   return withEnabledDriverLock(project, (enabled: { githubRepositoryId?: string; githubRepo?: string; automationLogin?: string }, recheck: () => void) => {
     const enabledLogin = String(enabled.automationLogin || "").trim().toLowerCase();
     if (!enabledLogin) throw new Error("enablement authority has no authenticated GitHub identity");
-    const repository = runner.runJson(["gh", "repo", "view", String(args.githubRepo), "--json", "id,nameWithOwner"]);
-    if (String(repository.id || "") !== String(enabled.githubRepositoryId || "")
-      || String(repository.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
-      throw new Error("live repository identity changed before repair completion");
-    }
+    assertRepairCompletionRepositoryIdentity(
+      runner.runJson(["gh", "repo", "view", String(args.githubRepo), "--json", "id,nameWithOwner"]),
+      enabled,
+    );
     const pr = runner.runJson([
       "gh", "pr", "view", String(args.pr), "-R", String(args.githubRepo),
       "--json", "state,headRefName,headRefOid,isCrossRepository,labels,comments",
@@ -164,6 +173,10 @@ function completion(args: JsonObject): DriverResult {
     const comments = (pr.comments || []) as JsonObject[];
     const reauthorize = () => {
       recheck();
+      assertRepairCompletionRepositoryIdentity(
+        runner.runJson(["gh", "repo", "view", String(args.githubRepo), "--json", "id,nameWithOwner"]),
+        enabled,
+      );
       const authenticatedLogin = runner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
       if (!authenticatedLogin || authenticatedLogin !== enabledLogin) {
         throw new Error("current authenticated GitHub identity does not match enablement authority");
@@ -233,4 +246,11 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { completion, parseArgs, readJson, recoveryComment, sameFindingTitles };
+module.exports = {
+  assertRepairCompletionRepositoryIdentity,
+  completion,
+  parseArgs,
+  readJson,
+  recoveryComment,
+  sameFindingTitles,
+};

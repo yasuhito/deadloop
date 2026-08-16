@@ -1584,6 +1584,7 @@ function reviewOnlyDrive(
     automationDir: env.automationDir,
     promiseFile: String(launch.promiseFile || ""),
     attemptRecordFile: String(launch.attemptRecordFile || ""),
+    requestEventId: String(launch.requestEventId || ""),
     actorName: "reviewer",
     projectId: env.projectId,
     repoPath: env.repoPath,

@@ -44,6 +44,7 @@ export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   autoMerge?: boolean;
   prNumber: number;
   expectedHeadOid: string;
+  requestEventId?: string;
   branch: string;
   checkCommand: string;
   projectCheckCommand?: string;
@@ -203,6 +204,7 @@ function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): str
   const argumentsWithConfig = [
     "--promise", shellQuotePrompt(input.promiseFile),
     "--attempt-record", shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`),
+    "--request-event-id", shellQuotePrompt(input.requestEventId || "<requestEventId>"),
     "--pr", String(input.prNumber),
     "--expected-head", shellQuotePrompt(input.expectedHeadOid),
     "--branch", shellQuotePrompt(input.branch),

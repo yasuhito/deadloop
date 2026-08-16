@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 const {
+  assertBranchUpdateAttemptBinding,
   assertBranchUpdateCompletionObservation,
+  assertBranchUpdateRepositoryIdentity,
   parseArgs,
 } = require("../extensions/deadloop/automations/pr-branch-update-complete.ts");
 const head = "a".repeat(40);
@@ -19,7 +21,8 @@ function args() {
 
 function idempotentObservation(overrides: Record<string, unknown> = {}) {
   return {
-    pr: { state: "OPEN", headRefOid: "b".repeat(40), ...overrides },
+    pr: { state: "OPEN", headRefName: "agent/issue-24", headRefOid: "b".repeat(40), ...overrides },
+    branch: "agent/issue-24",
     labels: ["agent:review"],
     revision: "b".repeat(40),
     authenticatedLogin: "deadloop-bot",
@@ -42,6 +45,37 @@ describe("branch update completion arguments", () => {
     const values = args();
     const index = values.indexOf("--expected-head");
     expect(() => parseArgs(values.filter((_value, item) => item !== index && item !== index + 1))).toThrow("--expected-head is required");
+  });
+});
+
+describe("branch update completion attempt", () => {
+  const record = {
+    project: "demo",
+    repository: "owner/repo",
+    role: "branch-update",
+    target: { kind: "pull-request", number: 24 },
+    branch: "agent/issue-24",
+    inputRevision: { head },
+  };
+
+  it("rejects an attempt for another pull request", () => {
+    expect(() => assertBranchUpdateAttemptBinding(record, {
+      projectId: "demo", githubRepo: "owner/repo", pr: "25", expectedHead: head,
+    })).toThrow("does not match");
+  });
+
+  it("rejects an attempt for another branch", () => {
+    expect(() => assertBranchUpdateCompletionObservation({
+      ...idempotentObservation({ headRefName: "agent/issue-25" }),
+      branch: "agent/issue-24",
+    })).toThrow("target changed");
+  });
+
+  it("rejects a changed repository identity", () => {
+    expect(() => assertBranchUpdateRepositoryIdentity(
+      { id: "R_other", nameWithOwner: "owner/repo" },
+      { githubRepositoryId: "R_repo", githubRepo: "owner/repo" },
+    )).toThrow("repository identity changed");
   });
 });
 

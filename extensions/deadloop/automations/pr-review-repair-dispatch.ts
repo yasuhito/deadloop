@@ -91,7 +91,7 @@ function parseArgs(argv: string[]): JsonObject {
     if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs");
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
-  for (const name of ["promise", "pr", "expectedHead", "branch"]) {
+  for (const name of ["promise", "pr", "expectedHead", "branch", "requestEventId"]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
   return values;
@@ -620,6 +620,19 @@ function persistedReviewBody(
   return marker && !markerExists ? marker : "";
 }
 
+function assertReviewerDispatchAttemptBinding(record: JsonObject, input: JsonObject): void {
+  if (record.project !== String(input.projectId)
+    || record.repository !== String(input.githubRepo)
+    || record.role !== "reviewer"
+    || record.target?.kind !== "pull-request"
+    || Number(record.target?.number) !== Number(input.pr)
+    || String(record.inputRevision?.head || "").toLowerCase() !== String(input.expectedHead).toLowerCase()
+    || record.branch !== String(input.branch)
+    || String(record.requestEventId || "") !== String(input.requestEventId || "")) {
+    throw new Error("saved reviewer attempt does not match the repair dispatch target");
+  }
+}
+
 function dispatch(args: JsonObject): DriverResult {
   runHerdrPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   const env = envConfig(args);
@@ -634,6 +647,14 @@ function dispatch(args: JsonObject): DriverResult {
   const promise = validation.promise as JsonObject;
   const rawReport = JSON.parse(fs.readFileSync(String(args.promise), "utf8"));
   const attemptRecord = readAttemptRecord(path.dirname(String(args.attemptRecord)));
+  assertReviewerDispatchAttemptBinding(attemptRecord, {
+    projectId: env.projectId,
+    githubRepo: env.githubRepo,
+    pr: prNumber,
+    expectedHead: args.expectedHead,
+    branch: args.branch,
+    requestEventId: args.requestEventId,
+  });
   env.requestEventId = String(attemptRecord.requestEventId || "");
   const persistenceMarker = rawReport?.schemaVersion === 1
     ? renderAttemptPersistenceMarker(attemptRecord, rawReport, {
@@ -1289,4 +1310,15 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { blockedClaimMove, dispatch, envConfig, launchRepair, parseArgs, readLivePr, recordRepairLaunchGithubClaim, repairWorkerPrompt, requireManagedPr };
+module.exports = {
+  assertReviewerDispatchAttemptBinding,
+  blockedClaimMove,
+  dispatch,
+  envConfig,
+  launchRepair,
+  parseArgs,
+  readLivePr,
+  recordRepairLaunchGithubClaim,
+  repairWorkerPrompt,
+  requireManagedPr,
+};

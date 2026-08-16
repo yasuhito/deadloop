@@ -209,7 +209,7 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
     );
     const result = spawnSync(
       "node",
-      ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attemptRecord, "--pr", "31", "--expected-head", currentHead, "--branch", branch],
+      ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attemptRecord, "--request-event-id", "22", "--pr", "31", "--expected-head", currentHead, "--branch", branch],
       {
         cwd: process.cwd(),
         encoding: "utf8",

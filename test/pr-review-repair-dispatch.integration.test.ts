@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
-const { blockedClaimMove, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
+const { assertReviewerDispatchAttemptBinding, blockedClaimMove, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
 const trustedCumulativeComments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
   ...comment,
@@ -43,6 +43,7 @@ function writeSavedReviewerAuthority(
   targetNumber = 243,
   repository = "owner/repo",
   worktreePath = path.dirname(promise),
+  branch = `agent/issue-${targetNumber}`,
 ): string {
   const runDir = path.join(state, "runs", `reviewer-${targetNumber}`);
   const attempt = path.join(runDir, "attempt.json");
@@ -70,7 +71,7 @@ function writeSavedReviewerAuthority(
   fs.writeFileSync(promise, JSON.stringify(report));
   fs.writeFileSync(attempt, JSON.stringify({
     attemptId: `reviewer-${targetNumber}`, launchUuid: `reviewer-${targetNumber}`, project: "demo", repository, role: "reviewer",
-    target: { kind: "pull-request", number: targetNumber }, inputRevision: { head }, branch: `agent/issue-${targetNumber}`,
+    target: { kind: "pull-request", number: targetNumber }, inputRevision: { head }, branch,
     worktreePath, agentName: "reviewer", workspaceLabel: "reviewer", promptFile: path.join(runDir, "prompt.md"),
     promiseFile: promise, phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", requestEventId: "22",
   }));
@@ -153,7 +154,15 @@ function runStaleWorktreeDispatch(
       findings: [{ title: "Bound finding", body: "Repair one finding", severity: "major" }],
     }),
   );
-  const attempt = writeSavedReviewerAuthority(state, promise, expectedHead, 143, "yasuhito/deadloop", worktree);
+  const attempt = writeSavedReviewerAuthority(
+    state,
+    promise,
+    expectedHead,
+    143,
+    "yasuhito/deadloop",
+    worktree,
+    "agent/issue-142-deadloop",
+  );
 
   executable(
     path.join(bin, "gh"),
@@ -217,6 +226,8 @@ else process.stdout.write(JSON.stringify({ok:true}));
       promise,
       "--attempt-record",
       attempt,
+      "--request-event-id",
+      "22",
       "--pr",
       "143",
       "--expected-head",
@@ -351,6 +362,8 @@ else if (args[0] === "agent" && args[1] === "start") {
       promise,
       "--attempt-record",
       attempt,
+      "--request-event-id",
+      "22",
       "--pr",
       "243",
       "--expected-head",
@@ -420,7 +433,7 @@ if (args.includes("get-url")) process.stdout.write("https://github.com/owner/rep
   supportedHerdr(bin);
   const args = [
     "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
-    "--promise", promise, "--attempt-record", attempt, "--pr", "243", "--expected-head", "a".repeat(40), "--branch", "agent/issue-243",
+    "--promise", promise, "--attempt-record", attempt, "--request-event-id", "22", "--pr", "243", "--expected-head", "a".repeat(40), "--branch", "agent/issue-243",
   ];
   const env = {
     ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir,
@@ -567,7 +580,7 @@ else if(a[0]==="agent"&&a[1]==="list") process.stdout.write(JSON.stringify({resu
 else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"terminal-1",name:a[2],agent_status:"working",cwd:process.env.WORKTREE,pane_id:a[a.indexOf("--pane")+1]};fs.writeFileSync(f,JSON.stringify(s));process.stdout.write("started");}
 `);
   const argv = ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attempt,
-    "--pr", "243", "--expected-head", head, "--branch", "agent/issue-243"];
+    "--request-event-id", "22", "--pr", "243", "--expected-head", head, "--branch", "agent/issue-243"];
   const env = {
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
@@ -585,6 +598,7 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
           automationDir: path.resolve("extensions/deadloop/automations"), promiseFile: promise,
           attemptRecordFile: attempt, actorName: "reviewer", projectId: "demo", repoPath: repo,
           worktreeRoot, githubRepo: "owner/repo", stateDir: state, enabledAt: 1,
+          requestEventId: "22",
           projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
           checkCommand: "npm test", implementLabel: labels.implement, updateBranchLabel: labels.updateBranch,
           reviewLabel: labels.review, blockedLabel: labels.blocked,
@@ -685,7 +699,7 @@ const a=process.argv.slice(2);if(a.includes("get-url")) process.stdout.write("ht
   supportedHerdr(bin);
   const result = spawnSync("node", [
     "extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attempt,
-    "--pr", "243", "--expected-head", head, "--branch", "agent/issue-243",
+    "--request-event-id", "22", "--pr", "243", "--expected-head", head, "--branch", "agent/issue-243",
   ], { cwd: process.cwd(), encoding: "utf8", env: {
     ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: root, DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
@@ -704,6 +718,51 @@ const a=process.argv.slice(2);if(a.includes("get-url")) process.stdout.write("ht
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+describe("review repair dispatch attempt", () => {
+  const record = {
+    project: "demo",
+    repository: "owner/repo",
+    requestEventId: "22",
+    role: "reviewer",
+    target: { kind: "pull-request", number: 243 },
+    inputRevision: { head: "a".repeat(40) },
+    branch: "agent/issue-243",
+  };
+
+  it("rejects a saved reviewer attempt for another pull request", () => {
+    expect(() => assertReviewerDispatchAttemptBinding(record, {
+      projectId: "demo",
+      githubRepo: "owner/repo",
+      pr: "244",
+      expectedHead: "a".repeat(40),
+      branch: "agent/issue-243",
+      requestEventId: "22",
+    })).toThrow("does not match");
+  });
+
+  it("rejects a saved reviewer attempt for another branch", () => {
+    expect(() => assertReviewerDispatchAttemptBinding(record, {
+      projectId: "demo",
+      githubRepo: "owner/repo",
+      pr: "243",
+      expectedHead: "a".repeat(40),
+      branch: "agent/issue-244",
+      requestEventId: "22",
+    })).toThrow("does not match");
+  });
+
+  it("rejects a saved reviewer attempt for another request generation", () => {
+    expect(() => assertReviewerDispatchAttemptBinding(record, {
+      projectId: "demo",
+      githubRepo: "owner/repo",
+      pr: "243",
+      expectedHead: "a".repeat(40),
+      branch: "agent/issue-243",
+      requestEventId: "23",
+    })).toThrow("does not match");
+  });
 });
 
 describe("review repair dispatch integration", () => {
@@ -881,6 +940,7 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
       projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
       checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review",
       blockedLabel: "agent:blocked",
+      requestEventId: "22",
     });
     const command = prompt.match(/run the deterministic dispatcher[^`]*:\n  `([^`]+)`/)?.[1];
     if (!command) throw new Error("rendered dispatcher command was not found");
@@ -1133,6 +1193,8 @@ else if (args[0] === "agent" && args[1] === "start") {
         promise,
         "--attempt-record",
         writeSavedReviewerAuthority(state, promise, "a".repeat(40), 243, "owner/repo", worktree),
+        "--request-event-id",
+        "22",
         "--pr",
         "243",
         "--expected-head",
@@ -1253,6 +1315,8 @@ else if (args[0] === "agent" && args[1] === "start") {
         promise,
         "--attempt-record",
         writeSavedReviewerAuthority(state, promise, head, 243, "owner/repo", worktree),
+        "--request-event-id",
+        "22",
         "--pr",
         "243",
         "--expected-head",
@@ -1358,6 +1422,8 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
         promise,
         "--attempt-record",
         writeSavedReviewerAuthority(state, promise, head, 243, "owner/repo", worktree),
+        "--request-event-id",
+        "22",
         "--pr",
         "243",
         "--expected-head",
@@ -1444,6 +1510,8 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
         promise,
         "--attempt-record",
         writeSavedReviewerAuthority(state, promise, head, 243, "owner/repo", root),
+        "--request-event-id",
+        "22",
         "--pr",
         "243",
         "--expected-head",

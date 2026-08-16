@@ -47,13 +47,46 @@ type CompletionObservation = {
   inProgressLabel: string;
   blockedLabel: string;
   mode: "pending" | "already-applied";
+  branch: string;
 };
+
+type RepositoryIdentity = {
+  id?: unknown;
+  nameWithOwner?: unknown;
+};
+
+type EnabledRepositoryIdentity = {
+  githubRepositoryId?: unknown;
+  githubRepo?: unknown;
+};
+
+function assertBranchUpdateAttemptBinding(record: JsonObject, args: JsonObject): void {
+  if (record.project !== String(args.projectId)
+    || record.repository !== String(args.githubRepo)
+    || record.role !== "branch-update"
+    || record.target?.kind !== "pull-request"
+    || Number(record.target?.number) !== Number(args.pr)
+    || String(record.inputRevision?.head || "").toLowerCase() !== String(args.expectedHead).toLowerCase()) {
+    throw new Error("branch-update attempt does not match the completion target");
+  }
+}
+
+function assertBranchUpdateRepositoryIdentity(
+  identity: RepositoryIdentity,
+  enabled: EnabledRepositoryIdentity,
+): void {
+  if (String(identity.id || "") !== String(enabled.githubRepositoryId || "")
+    || String(identity.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
+    throw new Error("live repository identity changed before branch-update completion");
+  }
+}
 
 function assertBranchUpdateCompletionObservation(input: CompletionObservation): void {
   if (!input.authenticatedLogin || input.authenticatedLogin !== input.enabledLogin) {
     throw new Error("authenticated identity lost branch-update completion authority");
   }
   if (String(input.pr.state || "").toUpperCase() !== "OPEN"
+    || String(input.pr.headRefName || "") !== input.branch
     || String(input.pr.headRefOid || "").toLowerCase() !== input.revision.toLowerCase()) {
     throw new Error("branch-update completion target changed before the review request");
   }
@@ -75,7 +108,7 @@ function completion(args: JsonObject): DriverResult {
   const location = canonicalAttemptLocation(args);
   const record = readAttemptRecord(location.runDir);
   assertAttemptProjectBinding(record, args);
-  if (record.role !== "branch-update") throw new Error("branch-update completion requires a branch-update attempt");
+  assertBranchUpdateAttemptBinding(record, args);
   if (path.resolve(String(args.promise)) !== path.resolve(String(record.promiseFile))) {
     throw new Error("promise does not match the attempt journal's completion report path");
   }
@@ -100,20 +133,18 @@ function completion(args: JsonObject): DriverResult {
       const current = observation.getPr(String(args.githubRepo), String(args.pr));
       return { pr: current, labels: labelNames(current) };
     };
-    const identity = observation.getRepositoryIdentity(String(args.githubRepo));
-    if (String(identity.id || "") !== String(enabled.githubRepositoryId || "")
-      || String(identity.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
-      throw new Error("live repository identity changed before branch-update completion");
-    }
+    assertBranchUpdateRepositoryIdentity(observation.getRepositoryIdentity(String(args.githubRepo)), enabled);
     const authenticatedLogin = (): string => runner.runText([
       "gh", "api", "user", "--jq", ".login",
     ]).trim().toLowerCase();
     const assertCurrent = (mode: CompletionObservation["mode"]): void => {
       const login = authenticatedLogin();
       const current = observe();
+      assertBranchUpdateRepositoryIdentity(observation.getRepositoryIdentity(String(args.githubRepo)), enabled);
       assertBranchUpdateCompletionObservation({
         ...current,
         revision,
+        branch: String(record.branch),
         authenticatedLogin: login,
         enabledLogin,
         reviewLabel: String(args.reviewLabel),
@@ -161,4 +192,10 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { assertBranchUpdateCompletionObservation, completion, parseArgs };
+module.exports = {
+  assertBranchUpdateAttemptBinding,
+  assertBranchUpdateCompletionObservation,
+  assertBranchUpdateRepositoryIdentity,
+  completion,
+  parseArgs,
+};

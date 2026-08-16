@@ -5,6 +5,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+const { assertRepairCompletionRepositoryIdentity } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
+
 const roots: string[] = [];
 const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
@@ -267,6 +269,15 @@ else if (args[0] === "pr" && args[1] === "comment") {
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe("review repair completion repository identity", () => {
+  it("rejects a repository replacement", () => {
+    expect(() => assertRepairCompletionRepositoryIdentity(
+      { id: "R_other", nameWithOwner: "owner/repo" },
+      { githubRepositoryId: "R_repo", githubRepo: "owner/repo" },
+    )).toThrow("repository identity changed");
+  });
 });
 
 describe("review repair deterministic completion", () => {

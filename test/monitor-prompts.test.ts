@@ -171,6 +171,18 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("DEADLOOP_WORKTREE_ROOT='/custom worktrees' DEADLOOP_STATE_DIR=/state");
   });
 
+  it("binds reviewer dispatch to the consumed request generation", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), requestEventId: "review-22", branch: "agent/issue-24",
+      automationDir: "/automation", promiseFile: "/state/promise.json", actorName: "reviewer",
+      repoPath: "/repo", worktreeRoot: "/worktrees", githubRepo: "owner/repo", stateDir: "/state",
+      checkCommand: "npm test", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch",
+      reviewLabel: "agent:review", blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("--request-event-id review-22");
+  });
+
   it("routes issue monitor mutations through the enablement guard", () => {
     const prompt = renderIssueMonitorPrompt({
       issueNumber: 12, automationDir: "/automation", promiseFile: "/state/promise.json", actorName: "Worker",
