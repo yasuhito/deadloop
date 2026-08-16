@@ -6,7 +6,12 @@ const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, recordPersistedCompletionReport, transitionPersistedAttempt } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
-const { activeIssueRequest, selectIssueClaimWinner } = require("./issue-request-claim.ts");
+const {
+  activeIssueRequest,
+  issueRequestGenerations,
+  racedIssueRequestLabels,
+  selectIssueClaimWinner,
+} = require("./issue-request-claim.ts");
 
 type JsonObject = Record<string, any>;
 
@@ -47,18 +52,73 @@ function trustedExplorationResultComment(comments: JsonObject[], claim: JsonObje
   }) || null;
 }
 
+function eventTime(event: JsonObject | null | undefined): number {
+  return Date.parse(String(event?.created_at || event?.createdAt || ""));
+}
+
+function failedRequestStateIsRecoverable(observation: { labels: Set<string>; events: JsonObject[] }, requestLabels: string[], blockedLabel: string): boolean {
+  const blocks = observation.events.filter((event) => String(event.event || "").toLowerCase() === "labeled"
+    && String(event.label?.name || "") === blockedLabel).sort((left, right) => eventTime(left) - eventTime(right));
+  const blockTime = eventTime(blocks.at(-1));
+  if (!Number.isFinite(blockTime)) return false;
+  return requestLabels.filter((label) => observation.labels.has(label)).every((label) => eventTime(activeIssueRequest(observation.events, label)) > blockTime);
+}
+
 function hasExplorationPersistenceProof(
   observation: { labels: Set<string>; events: JsonObject[]; comments: JsonObject[] },
   claim: JsonObject,
   expectedBody: string,
   failed: boolean,
-  labels: { inProgress: string; blocked: string },
+  labels: { inProgress: string; blocked: string; requests?: string[] },
 ): boolean {
-  const request = activeIssueRequest(observation.events, claim.requestLabel);
-  return String(request?.id || request?.node_id || "") === String(claim.binding?.requestEventId || "")
+  const boundRequest = observation.events.find((event) => String(event.id || event.node_id || "") === String(claim.binding?.requestEventId || ""));
+  const latestRequest = activeIssueRequest(observation.events, claim.requestLabel);
+  return Boolean(boundRequest) && eventTime(latestRequest) >= eventTime(boundRequest)
     && !observation.labels.has(labels.inProgress)
     && observation.labels.has(labels.blocked) === failed
+    && (!failed || failedRequestStateIsRecoverable(observation, labels.requests || [], labels.blocked))
     && Boolean(trustedExplorationResultComment(observation.comments, claim, expectedBody));
+}
+
+function closeExplorationWorkspace(record: JsonObject, runner: JsonObject): void {
+  if (!record.workspaceId) throw new Error("exploration workspace identity is missing");
+  const workspaces = runner.listWorkspaces();
+  const exact = workspaces.find((workspace: JsonObject) => String(workspace.workspaceId) === String(record.workspaceId));
+  if (exact && path.resolve(String(exact.worktreePath || "")) !== path.resolve(record.worktreePath)) {
+    throw new Error("exploration workspace identity points to another checkout");
+  }
+  if (exact) runner.closeWorkspace(record.workspaceId);
+  const remaining = runner.listWorkspaces();
+  if (remaining.some((workspace: JsonObject) => String(workspace.workspaceId) === String(record.workspaceId)
+    || (workspace.worktreePath && path.resolve(workspace.worktreePath) === path.resolve(record.worktreePath)))) {
+    throw new Error("exploration workspace closure could not be confirmed");
+  }
+  const occupied = runner.listAgents().some((agent: JsonObject) => {
+    const cwd = typeof agent.cwd === "string" ? path.resolve(agent.cwd) : "";
+    const relative = cwd ? path.relative(path.resolve(record.worktreePath), cwd) : "";
+    return agent.name === record.agentName || agent.workspaceId === record.workspaceId || agent.workspace_id === record.workspaceId
+      || (Boolean(cwd) && (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))));
+  });
+  if (occupied) throw new Error("exploration workspace is absent but its agent still occupies the checkout");
+}
+
+function removeExplorationWorktree(record: JsonObject, repoPath: string, runner: JsonObject): void {
+  const worktrees = runner.listWorktrees(repoPath);
+  const expectedPath = path.resolve(record.worktreePath);
+  const branchMatches = worktrees.filter((worktree: JsonObject) => String(worktree.branch || "") === String(record.branch));
+  const pathMatches = worktrees.filter((worktree: JsonObject) => typeof worktree.path === "string" && path.resolve(worktree.path) === expectedPath);
+  if (!branchMatches.length && !pathMatches.length) return;
+  const exact = worktrees.filter((worktree: JsonObject) => String(worktree.branch || "") === String(record.branch)
+    && typeof worktree.path === "string" && path.resolve(worktree.path) === expectedPath);
+  if (exact.length !== 1 || branchMatches.length !== 1 || pathMatches.length !== 1) {
+    throw new Error("exploration worktree identity is ambiguous");
+  }
+  runner.removeWorktree({ repoPath, branch: record.branch, worktreePath: record.worktreePath });
+  const remaining = runner.listWorktrees(repoPath);
+  if (remaining.some((worktree: JsonObject) => String(worktree.branch || "") === String(record.branch)
+    || (typeof worktree.path === "string" && path.resolve(worktree.path) === expectedPath))) {
+    throw new Error("exploration worktree removal could not be confirmed");
+  }
 }
 
 function main(argv = process.argv.slice(2)): JsonObject {
@@ -104,9 +164,7 @@ function main(argv = process.argv.slice(2)): JsonObject {
     if (record.phase === "agent_started" || record.phase === "report_received") {
       if (record.phase === "agent_started") {
         authorize();
-        if (!record.workspaceId) throw new Error("exploration workspace identity is missing");
-        runner.closeWorkspace(record.workspaceId);
-        if (runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId) === record.workspaceId)) throw new Error("exploration workspace closure could not be confirmed");
+        closeExplorationWorkspace(record, runner);
       }
       const head = command.runText(["git", "-C", record.worktreePath, "rev-parse", "--verify", "HEAD^{commit}"]).trim();
       const status = command.runText(["git", "-C", record.worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]);
@@ -118,17 +176,29 @@ function main(argv = process.argv.slice(2)): JsonObject {
         ? `## deadloop exploration stopped\n\n${repositoryChanged ? "The explorer changed repository files or HEAD, so its result was rejected." : report.result.explanation}\n\nRetry by adding \`${args.exploreLabel}\` again after resolving the cause.\n\n${marker}`
         : renderResult(report, claim);
       let observation = observe();
-      const proofLabels = { inProgress: args.inProgressLabel, blocked: args.blockedLabel };
+      const requestLabels = [args.exploreLabel, args.implementLabel];
+      const proofLabels = { inProgress: args.inProgressLabel, blocked: args.blockedLabel, requests: requestLabels };
       if (!hasExplorationPersistenceProof(observation, claim, body, failed, proofLabels)) {
         authorize(observation);
         if (!trustedExplorationResultComment(observation.comments, claim, body)) {
           github.createIssueComment(args.githubRepo, record.target.number, body);
         }
         observation = authorize();
-        const current = [...observation.labels].filter((label) => label !== args.inProgressLabel && label !== args.blockedLabel);
+        const generationsBefore = issueRequestGenerations(observation.events, requestLabels);
+        const current = [...observation.labels].filter((label) => label !== args.inProgressLabel && label !== args.blockedLabel
+          && (!failed || !requestLabels.includes(label)));
         if (failed) current.push(args.blockedLabel);
         github.replaceIssueLabels(args.githubRepo, record.target.number, current);
         observation = observe();
+        const racedRequests = racedIssueRequestLabels(generationsBefore, observation.events);
+        const missingRacedRequests = racedRequests.filter((label) => !observation.labels.has(label));
+        if (missingRacedRequests.length) {
+          github.moveIssueLabels(args.githubRepo, record.target.number, { add: missingRacedRequests });
+          observation = observe();
+        }
+        if (racedRequests.some((label) => !observation.labels.has(label))) {
+          throw new Error("exploration raced request restoration could not be proven");
+        }
         if (!hasExplorationPersistenceProof(observation, claim, body, failed, proofLabels)) {
           throw new Error("exploration GitHub persistence could not be proven");
         }
@@ -137,7 +207,7 @@ function main(argv = process.argv.slice(2)): JsonObject {
     }
     const latest = readAttemptRecord(runDir);
     if (latest.phase === "github_persisted") transitionPersistedAttempt(runDir, "workspace_closed");
-    runner.removeWorktree({ repoPath: args.projectRepo, branch: record.branch, worktreePath: record.worktreePath });
+    removeExplorationWorktree(record, args.projectRepo, runner);
     return { action: failed ? "exploration_blocked" : "exploration_persisted", issueNumber: record.target.number };
   });
 }
@@ -147,4 +217,11 @@ if (require.main === module) {
   catch (error) { process.stderr.write(`complete-issue-exploration.ts: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; }
 }
 
-module.exports = { hasExplorationPersistenceProof, main, renderResult, trustedExplorationResultComment };
+module.exports = {
+  closeExplorationWorkspace,
+  hasExplorationPersistenceProof,
+  main,
+  removeExplorationWorktree,
+  renderResult,
+  trustedExplorationResultComment,
+};

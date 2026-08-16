@@ -29,6 +29,21 @@ function activeIssueRequest(events: JsonObject[], requestLabel: string): JsonObj
   return matching.at(-1) || null;
 }
 
+function issueRequestGenerations(events: JsonObject[], labels: string[]): Map<string, string> {
+  return new Map(labels.map((label) => {
+    const event = activeIssueRequest(events, label);
+    return [label, String(event?.id || event?.node_id || "")];
+  }));
+}
+
+function racedIssueRequestLabels(before: Map<string, string>, events: JsonObject[]): string[] {
+  return [...before].flatMap(([label, generation]) => {
+    const event = activeIssueRequest(events, label);
+    const current = String(event?.id || event?.node_id || "");
+    return current && current !== generation ? [label] : [];
+  });
+}
+
 function issueRequestRevision(request: JsonObject): string {
   const revision = String(request.created_at || request.createdAt || "");
   if (!Number.isFinite(Date.parse(revision))) throw new Error("Issue request event revision is unavailable");
@@ -99,4 +114,12 @@ function selectIssueClaimWinner(
   return valid[0] || null;
 }
 
-module.exports = { activeIssueRequest, issueRequestRevision, parseIssueClaim, renderIssueClaimComment, selectIssueClaimWinner };
+module.exports = {
+  activeIssueRequest,
+  issueRequestGenerations,
+  issueRequestRevision,
+  parseIssueClaim,
+  racedIssueRequestLabels,
+  renderIssueClaimComment,
+  selectIssueClaimWinner,
+};

@@ -15,7 +15,14 @@ const {
   applyIssueRequiredVerificationStop,
   planIssueRequiredVerificationStop,
 } = require("../../../src/issue-required-verification-stop.ts");
-const { activeIssueRequest, issueRequestRevision, renderIssueClaimComment, selectIssueClaimWinner } = require("./issue-request-claim.ts");
+const {
+  activeIssueRequest,
+  issueRequestGenerations,
+  issueRequestRevision,
+  racedIssueRequestLabels,
+  renderIssueClaimComment,
+  selectIssueClaimWinner,
+} = require("./issue-request-claim.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
@@ -188,13 +195,29 @@ function claimIssueRequest(
   }
   const before = github.getIssue(env.githubRepo, number);
   assertSameLaunchTarget(issue, before, "issue");
+  const requestLabels = [env.exploreLabel, env.implementLabel];
+  const generationsBefore = issueRequestGenerations(github.listIssueTimelineEvents(env.githubRepo, number), requestLabels);
   const labels = issueLabelNames({ labels: github.listIssueLabels(env.githubRepo, number) });
   const next = labels.filter((label) => label !== requestLabel && label !== env.blockedLabel && label !== env.inProgressLabel);
   next.push(env.inProgressLabel);
   github.replaceIssueLabels(env.githubRepo, number, next);
-  const after = github.getIssue(env.githubRepo, number);
-  const afterLabels = new Set(issueLabelNames(after));
-  const latestRequest = activeIssueRequest(github.listIssueTimelineEvents(env.githubRepo, number), requestLabel);
+  let after = github.getIssue(env.githubRepo, number);
+  let afterLabels = new Set(issueLabelNames(after));
+  let eventsAfter = github.listIssueTimelineEvents(env.githubRepo, number);
+  const racedRequests = racedIssueRequestLabels(generationsBefore, eventsAfter);
+  if (racedRequests.length) {
+    github.moveIssueLabels(env.githubRepo, number, {
+      remove: afterLabels.has(env.inProgressLabel) ? env.inProgressLabel : undefined,
+      add: racedRequests.filter((label) => !afterLabels.has(label)),
+    });
+    after = github.getIssue(env.githubRepo, number);
+    afterLabels = new Set(issueLabelNames(after));
+    eventsAfter = github.listIssueTimelineEvents(env.githubRepo, number);
+    const unresolved = racedIssueRequestLabels(generationsBefore, eventsAfter).filter((label) => !afterLabels.has(label));
+    if (afterLabels.has(env.inProgressLabel) || unresolved.length) throw new Error(`Issue #${number} raced request release could not be proven`);
+    throw new StaleLaunchError(`Issue #${number} received a newer Agent request during claim`);
+  }
+  const latestRequest = activeIssueRequest(eventsAfter, requestLabel);
   if (String(latestRequest?.id || latestRequest?.node_id || "") !== binding.requestEventId
     || !afterLabels.has(env.inProgressLabel) || afterLabels.has(requestLabel)) {
     throw new StaleLaunchError(`Issue #${number} request claim did not persist exactly`);
@@ -623,7 +646,7 @@ function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig
 }
 
 function renderExplorerMonitorPrompt(issue: JsonObject, launch: JsonObject, env: ReturnType<typeof envConfig>): string {
-  const command = `node ${path.join(env.automationDir, "complete-issue-exploration.ts")} --attempt-record ${launch.attemptRecordFile} --project-id ${env.projectId} --project-repo ${env.repoPath} --github-repo ${env.githubRepo} --state-dir ${env.stateDir} --enabled-at ${env.enabledAt} --explore-label ${env.exploreLabel} --in-progress-label ${env.inProgressLabel} --blocked-label ${env.blockedLabel}`;
+  const command = `node ${path.join(env.automationDir, "complete-issue-exploration.ts")} --attempt-record ${launch.attemptRecordFile} --project-id ${env.projectId} --project-repo ${env.repoPath} --github-repo ${env.githubRepo} --state-dir ${env.stateDir} --enabled-at ${env.enabledAt} --explore-label ${env.exploreLabel} --implement-label ${env.implementLabel} --in-progress-label ${env.inProgressLabel} --blocked-label ${env.blockedLabel}`;
   return `Deterministic driver launched a read-only explorer for Issue #${issue.number}. Do not launch another agent or mutate GitHub directly.\n\nMonitor only ${launch.promiseFile} with extract-worker-promise.ts. Break immediately on complete or blocked. Then run this deterministic host completion command exactly once:\n\`${command}\`\n\nThe completion host rejects any changed repository HEAD or dirty file, posts one human-readable result on success, and moves failures to ${env.blockedLabel}.`;
 }
 

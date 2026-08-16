@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 const {
+  closeExplorationWorkspace,
   hasExplorationPersistenceProof,
+  removeExplorationWorktree,
   trustedExplorationResultComment,
 } = require("../extensions/deadloop/automations/complete-issue-exploration.ts");
+const { racedIssueRequestLabels } = require("../extensions/deadloop/automations/issue-request-claim.ts");
 
 const claim = {
   binding: { requestEventId: "event-2" },
@@ -12,6 +15,12 @@ const claim = {
 };
 const body = "exploration result\n\n<!-- deadloop:issue-exploration-result request=event-2 -->";
 const event = { id: "event-2", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:explore" } };
+const record = {
+  workspaceId: "workspace-1",
+  worktreePath: "/worktrees/explore-42",
+  branch: "agent/explore-42",
+  agentName: "explorer-42",
+};
 
 function resultComment(login: string) {
   return {
@@ -50,5 +59,40 @@ describe("Issue exploration completion", () => {
       false,
       { inProgress: "agent:in-progress", blocked: "agent:blocked" },
     )).toBe(false);
+  });
+
+  it("rejects a failed result that preserves an implementation request from before the block", () => {
+    expect(hasExplorationPersistenceProof(
+      {
+        labels: new Set(["agent:blocked", "agent:implement"]),
+        events: [event,
+          { id: "implement-1", event: "labeled", created_at: "2026-08-16T00:00:30Z", label: { name: "agent:implement" } },
+          { id: "block-1", event: "labeled", created_at: "2026-08-16T00:02:00Z", label: { name: "agent:blocked" } }],
+        comments: [resultComment("deadloop-bot")],
+      },
+      claim,
+      body,
+      true,
+      { inProgress: "agent:in-progress", blocked: "agent:blocked", requests: ["agent:explore", "agent:implement"] },
+    )).toBe(false);
+  });
+
+  it("preserves a new request generation that races with completion", () => {
+    expect(racedIssueRequestLabels(
+      new Map([["agent:implement", "implement-1"]]),
+      [{ id: "implement-2", event: "labeled", created_at: "2026-08-16T00:03:00Z", label: { name: "agent:implement" } }],
+    )).toEqual(["agent:implement"]);
+  });
+
+  it("accepts retry after the exact exploration workspace is already absent", () => {
+    let closeCalls = 0;
+    closeExplorationWorkspace(record, { listWorkspaces: () => [], listAgents: () => [], closeWorkspace: () => { closeCalls += 1; } });
+    expect(closeCalls).toBe(0);
+  });
+
+  it("accepts retry after the exact exploration worktree is already absent", () => {
+    let removeCalls = 0;
+    removeExplorationWorktree(record, "/repo", { listWorktrees: () => [], removeWorktree: () => { removeCalls += 1; } });
+    expect(removeCalls).toBe(0);
   });
 });
