@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const path = require("node:path") as typeof import("node:path");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { createCommandRunner, createHerdrRunnerFromCommandRunner } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
@@ -76,8 +77,8 @@ function main(argv = process.argv.slice(2)): JsonObject {
         if (runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId) === record.workspaceId)) throw new Error("exploration workspace closure could not be confirmed");
       }
       const head = command.runText(["git", "-C", record.worktreePath, "rev-parse", "--verify", "HEAD^{commit}"]).trim();
-      const dirty = command.runText(["git", "-C", record.worktreePath, "status", "--porcelain", "--ignored"]).trim();
-      const repositoryChanged = head.toLowerCase() !== record.inputRevision.head.toLowerCase() || Boolean(dirty);
+      const status = command.runText(["git", "-C", record.worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]);
+      const repositoryChanged = head.toLowerCase() !== record.inputRevision.head.toLowerCase() || hasUncommittedWork(status);
       if (record.phase === "agent_started") recordPersistedCompletionReport(runDir, report);
       const failed = report.status === "blocked" || repositoryChanged;
       const marker = explorationResultMarker(claim);
