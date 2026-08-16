@@ -119,6 +119,8 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 `projects.json` contains local paths and rollout choices. Do not commit it. Prefer the repository-owned `deadloop.json` for shared, reviewable policy.
 
+If an implementation Issue reaches a required-verification block, deadloop keeps `ready-for-agent`, removes the implementation claim, and adds `agent:blocked` with reason-specific recovery guidance. It suppresses duplicate guidance for the same recovery, does not resume merely because configuration changes, and shows that Issue's requeue command in `/deadloop-doctor` only after required verification resolves.
+
 ## Safety controls
 
 `autoMerge` controls whether deadloop merges reviewed PRs automatically.

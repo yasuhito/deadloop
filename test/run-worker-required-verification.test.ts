@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { assertCleanOutput, run, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
+const { applyCompletionRequiredVerificationStop, assertCleanOutput, completionStopDiagnosis, run, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
 const { inspectUnresolvedProjectCheckFailures } = require("../src/project-check.ts");
 const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 const roots: string[] = [];
@@ -43,6 +43,40 @@ function repository() {
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("Worker required-verification checkout binding", () => {
+  it("binds completion-stop enablement to the configured project repository path", () => {
+    let lockedProject: Record<string, unknown> | undefined;
+    applyCompletionRequiredVerificationStop(
+      { attemptRecord: "/state/runs/attempt/attempt.json", projectId: "demo", projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, worktree: "/worktree", quarantineRoot: "/quarantine" },
+      { target: { kind: "issue", number: 42 } },
+      new Error("required verification blocked: stale_policy"),
+      (project: Record<string, unknown>) => { lockedProject = project; },
+    );
+
+    expect(lockedProject?.repoPath).toBe("/repo");
+  });
+
+  it("reports both fixed-contract sources when a local override becomes stale", () => {
+    const attempt = {
+      repository: "owner/repo",
+      inputRevision: { head: "a".repeat(40) },
+      requiredVerification: {
+        command: "npm run local-check",
+        source: { kind: "local", location: "projects.json#project=demo" },
+        baseRevision: "a".repeat(40),
+        override: { source: { kind: "repo_policy", location: "deadloop.json" }, command: "npm run check" },
+      },
+    };
+    expect(completionStopDiagnosis(attempt, new Error("required verification blocked: stale_policy")).sources).toHaveLength(2);
+  });
+
+  it("reports current inspected sources when stale-policy diagnosis provides them", () => {
+    const error = Object.assign(new Error("required verification blocked: stale_policy"), {
+      requiredVerificationSources: [{ kind: "repo_policy", location: "deadloop.json", command: "npm run changed-check" }],
+    });
+    const diagnosis = completionStopDiagnosis({ repository: "owner/repo", inputRevision: { head: "a".repeat(40) }, requiredVerification: {} }, error);
+    expect(diagnosis.sources[0].command).toBe("npm run changed-check");
+  });
+
   it("accepts a clean checkout at the reported output commit", () => {
     const fixture = repository();
     expect(() => assertCleanOutput(fixture.root, fixture.head)).not.toThrow();
@@ -114,12 +148,20 @@ describe("Worker required-verification checkout binding", () => {
     expect(command).toBe("npm run check");
   });
 
-  it("rejects a local override added after a default-backed launch", async () => {
+  it("stops the Issue when a local override is added after a default-backed launch", async () => {
     const fixture = verificationAttempt("default");
     writeFileSync(path.join(fixture.args.stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "true" }] }));
+    let stopped = false;
 
-    await expect(run(fixture.args, undefined, async () => ({ check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } }), () => ({})))
-      .rejects.toThrow("stale_policy");
+    const result = await run(
+      fixture.args,
+      undefined,
+      async () => ({ check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } }),
+      () => ({}),
+      () => { stopped = true; },
+    );
+
+    expect({ status: result.status, stopped }).toEqual({ status: "blocked", stopped: true });
   });
 
   it("reruns verification when a passed attempt-local record already exists", async () => {
@@ -154,17 +196,15 @@ describe("Worker required-verification checkout binding", () => {
       .rejects.toThrow("host-persisted launch snapshot");
   });
 
-  it("rejects policy changes made while required verification is running", async () => {
+  it("stops the Issue when policy changes while required verification is running", async () => {
     const fixture = verificationAttempt();
-    let rejected = false;
-    try {
-      await run(fixture.args, undefined, async () => {
-        writeFileSync(path.join(fixture.args.stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "false" }] }));
-        return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
-      }, () => ({}));
-    } catch { rejected = true; }
+    let stopped = false;
+    const result = await run(fixture.args, undefined, async () => {
+      writeFileSync(path.join(fixture.args.stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "false" }] }));
+      return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
+    }, () => ({}), () => { stopped = true; });
 
-    expect(rejected).toBe(true);
+    expect({ status: result.status, stopped }).toEqual({ status: "blocked", stopped: true });
   });
 
   it("does not follow a pre-existing verification-log symlink", async () => {

@@ -159,6 +159,58 @@ exit 2
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });
 
+  const blockedVerificationResolution = JSON.stringify({
+    status: "blocked",
+    reason: "no_source",
+    repository: "owner/repo",
+    baseRevision: "f".repeat(40),
+    sources: [],
+  });
+
+  it("stops an eligible Issue before launch when required verification is unresolved", () => {
+    expect(runDriverFixture("driver-ready-worker.json", { DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution }).driverAction).toBe("required_verification_blocked");
+  });
+
+  it("does not create an attempt for a pre-launch required-verification stop", () => {
+    expect(runDriverFixture("driver-ready-worker.json", { DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution })).not.toHaveProperty("launch");
+  });
+
+  it("resumes a fingerprinted partial stop while required verification remains blocked", () => {
+    expect(runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution,
+    }).driverAction).toBe("required_verification_blocked");
+  });
+
+  it("replaces a partial stop diagnosis when its recovery fingerprint changes", () => {
+    const changedResolution = JSON.stringify({
+      status: "blocked",
+      reason: "source_conflict",
+      repository: "owner/repo",
+      baseRevision: "f".repeat(40),
+      sources: [
+        { kind: "local", location: "projects.json", command: "npm test" },
+        { kind: "local", location: "projects.override.json", command: "npm run check" },
+      ],
+    });
+    const result = runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: changedResolution,
+    });
+
+    expect(result.comment).toContain("reason: source_conflict");
+  });
+
+  it("launches a Worker for a requeued fingerprinted Issue after required verification resolves", () => {
+    expect(runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify({ status: "resolved" }),
+    }).driverAction).toBe("worker_monitor_request");
+  });
+
+  it("does not requeue a durable verification stop when only configuration resolves", () => {
+    expect(runDriverFixture("driver-durable-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify({ status: "resolved" }),
+    }).driverAction).toBe("no_candidate");
+  });
+
   it("binds the Worker V1 identity to an exact commit SHA", () => {
     const instructions = runDriverFixture("driver-ready-worker.json").launch.instructions;
 
