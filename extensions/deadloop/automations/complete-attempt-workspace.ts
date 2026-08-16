@@ -58,7 +58,9 @@ function same(left: unknown, right: unknown): boolean {
 }
 
 function outputRevision(report: CompletionReportV1): string | undefined {
-  return report.status === "complete" && report.role !== "reviewer" ? report.result.outputRevision : undefined;
+  return report.status === "complete" && ["worker", "review-repair", "branch-update"].includes(report.role)
+    ? (report.result as { outputRevision: string }).outputRevision
+    : undefined;
 }
 
 function persistedMarker(comments: JsonObject[], record: AttemptRecord): JsonObject | undefined {

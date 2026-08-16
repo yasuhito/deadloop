@@ -76,12 +76,12 @@ function reconcileLocked(
   if (record.phase !== "prepared") {
     return driverResult("done", `attempt is already ${record.phase}`, { driverAction: "claim_already_reconciled" });
   }
-  const item = record.role === "worker"
+  const item = record.role === "worker" || record.role === "explorer"
     ? runner.runJson(["gh", "issue", "view", String(record.target.number), "-R", record.repository, "--json", "number,state,labels"])
     : runner.runJson(["gh", "pr", "view", String(record.target.number), "-R", record.repository,
       "--json", "number,state,headRefName,headRefOid,labels,comments"]);
   const labels = labelNames(item);
-  if (record.role === "worker" && record.agentRequest && !labels.has(String(record.agentRequest.label))) {
+  if ((record.role === "worker" || record.role === "explorer") && record.agentRequest && !labels.has(String(record.agentRequest.label))) {
     const github = requestGithub || createGithubOperations(runner, recheck);
     const outcome = consumeIssueRequest({
       github,
@@ -96,10 +96,15 @@ function reconcileLocked(
       persistConsumed: () => { throw new Error("prepared attempt has no durable consumption receipt"); },
     });
     releasePersistedAttemptAuthority(runDir, new Date().toISOString(), String(record.agentRequest.eventId), "never_launched");
-    return driverResult("done", `prepared Worker request consumption was ${outcome.kind}`, {
+    return driverResult("done", `prepared Issue request consumption was ${outcome.kind}`, {
       driverAction: outcome.kind === "ambiguous_blocked"
         ? "prepared_request_consumption_ambiguous"
         : `prepared_request_${outcome.kind}`,
+    });
+  }
+  if (record.role === "explorer") {
+    return driverResult("done", "prepared exploration retained while its request still awaits consumption", {
+      driverAction: "prepared_request_waiting",
     });
   }
   if (!hasExactClaim(record, item, args)) {

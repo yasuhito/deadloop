@@ -11,6 +11,7 @@ type Event = {
 };
 
 function scenario(options: {
+  requestLabel?: "agent:implement" | "agent:explore";
   beforeDelete?: (state: ReturnType<typeof createState>) => void;
   duringDelete?: (state: ReturnType<typeof createState>) => void;
   deleteStatus?: number;
@@ -34,12 +35,13 @@ function scenario(options: {
     },
     commentIssue: (_repo: string, _number: number, body: string) => state.comments.push({ id: `comment-${state.comments.length + 1}`, body }),
   };
+  const requestLabel = options.requestLabel || "agent:implement";
   const input = {
     github,
     repository: "owner/repo",
     issueNumber: 42,
-    requestLabel: "agent:implement",
-    requestEventId: "1",
+    requestLabel,
+    requestEventId: requestLabel === "agent:explore" ? "2" : "1",
     inProgressLabel: "agent:in-progress",
     blockedLabel: "agent:blocked",
     automationLogin: "deadloop-bot",
@@ -127,6 +129,20 @@ describe("Issue Agent request transition", () => {
 
   it("keeps ambiguous recovery guidance idempotent after interruption", () => {
     expect(scenario({ persistError: "interrupted", retry: true }).comments).toHaveLength(1);
+  });
+
+  it("cancels exploration removed before its consumption", () => {
+    expect(scenario({
+      requestLabel: "agent:explore",
+      beforeDelete: (state) => state.unlabel("agent:explore", "human"),
+    }).outcome.kind).toBe("cancelled");
+  });
+
+  it("preserves a raced exploration generation for a later attempt", () => {
+    expect(scenario({
+      requestLabel: "agent:explore",
+      duringDelete: (state) => state.label("agent:explore", "human"),
+    }).labels).toContain("agent:explore");
   });
 
   it("treats an unprovable DELETE response as ambiguous", () => {

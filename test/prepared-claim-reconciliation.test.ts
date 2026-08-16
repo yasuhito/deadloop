@@ -7,23 +7,24 @@ import { createPreparedAttempt, readAttemptRecord } from "../src/attempt-lifecyc
 const { hasExactClaim, reconcileLocked } = require("../extensions/deadloop/automations/reconcile-prepared-attempt.ts");
 
 const roots: string[] = [];
-function setup(options: { agentRequest?: boolean } = {}) {
+function setup(options: { agentRequest?: boolean; role?: "worker" | "explorer" } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-claim-reconcile-"));
   roots.push(root);
   const stateDir = path.join(root, "state");
   const runDir = path.join(stateDir, "runs", "launch-1");
+  const role = options.role || "worker";
   createPreparedAttempt(runDir, {
-    attemptId: "launch-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker",
-    target: { kind: "issue", number: 12 }, inputRevision: { head: "a".repeat(40) }, requiredVerification: {
-      repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "a".repeat(40),
-    }, branch: "agent/issue-12",
+    attemptId: "launch-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role,
+    target: { kind: "issue", number: 12 }, inputRevision: { head: "a".repeat(40) }, ...(role === "worker" ? { requiredVerification: {
+      repository: "owner/repo", command: "npm test", source: { kind: "repo_policy" as const, location: "deadloop.json" }, baseRevision: "a".repeat(40),
+    } } : {}), branch: "agent/issue-12",
     baseBranch: "origin/main", worktreePath: path.join(root, "worktree"), agentName: "dl-w-12-123456789abc",
     workspaceLabel: "Issue 12", promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
-    ...(options.agentRequest ? { agentRequest: { role: "worker" as const, label: "custom:implement", eventId: "request-1" } } : {}),
+    ...(options.agentRequest ? { agentRequest: { role, label: role === "explorer" ? "custom:explore" : "custom:implement", eventId: "request-1" } } : {}),
   });
   const args = {
     attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: root, githubRepo: "owner/repo", stateDir,
-    enabledAt: "1", readyLabel: "custom:ready", implementLabel: "custom:implement", inProgressLabel: "custom:claimed",
+    enabledAt: "1", readyLabel: "custom:ready", exploreLabel: "custom:explore", implementLabel: "custom:implement", inProgressLabel: "custom:claimed",
     reviewLabel: "custom:review", blockedLabel: "custom:blocked",
   };
   return { args, runDir };
@@ -58,6 +59,12 @@ describe("prepared attempt claim reconciliation", () => {
     expect(hasExactClaim(readAttemptRecord(data.runDir), item, data.args)).toBe(true);
   });
 
+  it("retains prepared exploration without claim-authority reconciliation", () => {
+    const data = setup({ agentRequest: true, role: "explorer" });
+    const runner = { runJson: () => ({ state: "OPEN", labels: [{ name: "custom:explore" }] }) };
+    expect(reconcileLocked(data.args, runner).driverAction).toBe("prepared_request_waiting");
+  });
+
   it("rejects a reviewer claim when the selected PR head changed", () => {
     const data = setup();
     const record = { ...readAttemptRecord(data.runDir), role: "reviewer", target: { kind: "pull-request", number: 12 } };
@@ -80,13 +87,13 @@ describe("prepared attempt claim reconciliation", () => {
     expect(result.driverAction).toBe("claim_already_reconciled");
   });
 
-  function reconcileInterruptedRequestConsumption() {
-    const data = setup({ agentRequest: true });
+  function reconcileInterruptedRequestConsumption(role: "worker" | "explorer" = "worker") {
+    const data = setup({ agentRequest: true, role });
     const labels = new Set<string>();
     const comments: Array<{ body: string }> = [];
     const events = [
-      { id: "request-1", event: "labeled", created_at: "2026-08-16T00:00:00Z", actor: { login: "human" }, label: { name: "custom:implement" } },
-      { id: "removal-1", event: "unlabeled", created_at: "2026-08-16T00:00:01Z", actor: { login: "deadloop-bot" }, label: { name: "custom:implement" } },
+      { id: "request-1", event: "labeled", created_at: "2026-08-16T00:00:00Z", actor: { login: "human" }, label: { name: role === "explorer" ? "custom:explore" : "custom:implement" } },
+      { id: "removal-1", event: "unlabeled", created_at: "2026-08-16T00:00:01Z", actor: { login: "deadloop-bot" }, label: { name: role === "explorer" ? "custom:explore" : "custom:implement" } },
     ];
     const github = {
       listIssueLabels: () => [...labels].map((name) => ({ name })),
@@ -103,6 +110,10 @@ describe("prepared attempt claim reconciliation", () => {
 
   it("turns DELETE-before-receipt interruption into an ambiguous stop", () => {
     expect(reconcileInterruptedRequestConsumption().result.driverAction).toBe("prepared_request_consumption_ambiguous");
+  });
+
+  it("uses the same ambiguous interruption recovery for exploration", () => {
+    expect(reconcileInterruptedRequestConsumption("explorer").result.driverAction).toBe("prepared_request_consumption_ambiguous");
   });
 
   it("releases the unlaunched prepared attempt after persisting the ambiguous stop", () => {

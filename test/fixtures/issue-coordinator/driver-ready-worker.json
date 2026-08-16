@@ -6,7 +6,7 @@
       "title": "Implement small feature",
       "body": "## Agent Brief\nBuild a focused feature.\n\n## Acceptance criteria\n- Tests pass.",
       "url": "https://github.com/owner/repo/issues/12",
-      "labels": [{"name": "agent:implement"}, {"name": "agent:explore"}, {"name": "customer:urgent"}]
+      "labels": [{"name": "agent:implement"}, {"name": "customer:urgent"}]
     }
   ]
 }

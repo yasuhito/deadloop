@@ -10,7 +10,7 @@ const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coord
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
 const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
-const { renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
+const { renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const {
   applyIssueRequiredVerificationStop,
   planIssueRequiredVerificationStop,
@@ -75,8 +75,8 @@ function reconcileAmbiguousPreparedWorkerConsumption(
     let attempt: JsonObject;
     try { attempt = readAttemptRecord(runDir); } catch { continue; }
     if (attempt.project !== env.projectId || attempt.repository !== env.githubRepo
-      || attempt.role !== "worker" || attempt.target?.kind !== "issue" || attempt.phase !== "prepared"
-      || attempt.agentRequest?.role !== "worker") continue;
+      || (attempt.role !== "worker" && attempt.role !== "explorer") || attempt.target?.kind !== "issue" || attempt.phase !== "prepared"
+      || attempt.agentRequest?.role !== attempt.role) continue;
     const issue = issues.find((candidate) => Number(candidate.number) === Number(attempt.target.number));
     if (!issue) continue;
     const labels = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
@@ -598,6 +598,173 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   return { workerName, branch, ...launch };
 }
 
+function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
+  const number = Number(issue.number || 0);
+  const uuid = fixture ? `fixture-explorer-${slugForBranch(env.projectId)}-${number}` : randomUUID();
+  const baseHead = fixture
+    ? "e".repeat(40)
+    : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  const branch = `agent/explore-${number}-${uuid.slice(-8)}`;
+  const intendedWorktreePath = path.join(env.worktreeRoot, branch.replace(/\//g, "-"));
+  const requestEvents = fixture
+    ? (issue.timelineEvents || [{ id: "1", event: "labeled", created_at: "2026-08-16T00:00:00Z", actor: { login: "fixture-user" }, label: { name: env.exploreLabel } }])
+    : githubOperations().listIssueTimelineEvents(env.githubRepo, number);
+  const requestEvent = activeIssueRequestEvent(requestEvents, env.exploreLabel);
+  if (!requestEvent) throw new StaleLaunchError(`Issue #${number} has no active ${env.exploreLabel} request event`);
+  const agentRequest = {
+    role: "explorer" as const,
+    label: env.exploreLabel,
+    eventId: String(requestEvent.id || requestEvent.node_id || ""),
+  };
+  if (!agentRequest.eventId) throw new StaleLaunchError(`Issue #${number} exploration request event has no immutable ID`);
+  const input = {
+    worktree: { mode: "create" as const, branch, baseBranch: env.baseBranch },
+    repoPath: env.repoPath,
+    automationDir: env.automationDir,
+    stateDir: env.stateDir,
+    workspaceLabel: `${env.projectId}-issue-${number}-explorer`,
+    agent: env.workerAgent,
+    model: env.workerModel,
+    level: "medium",
+    uuid,
+    promptFilePrefix: "explorer-prompt",
+    project: env.projectId,
+    repository: env.githubRepo,
+    role: "explorer" as const,
+    target: { kind: "issue" as const, number },
+    inputRevision: { head: baseHead },
+    agentRequest,
+    intendedWorktreePath,
+    resolveWorktreeHead: true,
+    renderPrompt: ({ promiseFile, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
+      if (!worktreeHead) throw new Error("Explorer prompt requires the exact created worktree HEAD");
+      return renderIssueExplorerPrompt({
+        issueNumber: number,
+        issueTitle: String(issue.title || ""),
+        issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
+        githubRepo: env.githubRepo,
+        workerInstructions: env.workerInstructions,
+        promiseFile,
+        reportIdentity: { attemptId: uuid, inputRevision: { head: worktreeHead } },
+      });
+    },
+  };
+
+  if (fixture) {
+    const prepared = prepareAgentLaunchFlow(input, {
+      mkdirSync: fs.mkdirSync,
+      runText: () => "",
+      writeFileSync: fs.writeFileSync,
+    });
+    const labels = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
+    const events = [...requestEvents];
+    const comments: JsonObject[] = [];
+    let nextEventId = events.length + 100;
+    const emit = (event: "labeled" | "unlabeled", label: string) => events.push({
+      id: String(nextEventId++), event, created_at: "2026-08-16T00:00:02Z",
+      actor: { login: "fixture-automation" }, label: { name: label },
+    });
+    const fixtureGithub = {
+      listIssueLabels: () => [...labels].map((name) => ({ name })),
+      listIssueTimelineEvents: () => events,
+      listIssueComments: () => comments,
+      addIssueLabel: (_repository: string, _issueNumber: number, label: string) => {
+        if (!labels.has(label)) { labels.add(label); emit("labeled", label); }
+        return {};
+      },
+      deleteIssueLabel: (_repository: string, _issueNumber: number, label: string) => {
+        if (!labels.delete(label)) return { status: 404 };
+        emit("unlabeled", label);
+        return { status: 200 };
+      },
+      commentIssue: (_repository: string, _issueNumber: number, body: string) => comments.push({ body }),
+    };
+    const requestTransition = consumeIssueRequest({
+      github: fixtureGithub,
+      repository: env.githubRepo,
+      issueNumber: number,
+      requestLabel: env.exploreLabel,
+      requestEventId: agentRequest.eventId,
+      inProgressLabel: env.inProgressLabel,
+      blockedLabel: env.blockedLabel,
+      automationLogin: "fixture-automation",
+      attemptId: uuid,
+      persistConsumed: () => recordAgentLaunchGithubClaimed(input),
+    });
+    if (requestTransition.kind !== "consumed") throw new StaleLaunchError(`fixture exploration request was ${requestTransition.kind}`);
+    fixtureGithub.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
+    return {
+      branch,
+      workspaceId: "fixture-workspace-explorer",
+      tabId: "fixture-tab-explorer",
+      rootPaneId: "fixture-pane-explorer",
+      worktreePath: intendedWorktreePath,
+      promptFile: prepared.promptFile,
+      promiseFile: prepared.promiseFile,
+      attemptRecordFile: path.join(prepared.runDir, "attempt.json"),
+      agentRequest,
+      requestTransition,
+      issueLabels: [...labels],
+      timelineEvents: events,
+      comments,
+      attemptPhase: readAttemptRecord(prepared.runDir).phase,
+      instructions: input.renderPrompt({ promiseFile: prepared.promiseFile, worktreePath: intendedWorktreePath, worktreeHead: baseHead }),
+      simulated: true,
+    };
+  }
+
+  const runner = herdrRunner();
+  const launch = withEnabledDriverLaunch(
+    env,
+    (recheck: () => void, enabled: { automationLogin?: string }) => {
+      const github = githubOperations(recheck);
+      const outcome = consumeIssueRequest({
+        github,
+        repository: env.githubRepo,
+        issueNumber: number,
+        requestLabel: env.exploreLabel,
+        requestEventId: agentRequest.eventId,
+        inProgressLabel: env.inProgressLabel,
+        blockedLabel: env.blockedLabel,
+        automationLogin: String(enabled.automationLogin || ""),
+        attemptId: uuid,
+        persistConsumed: () => recordAgentLaunchGithubClaimed(input),
+      });
+      if (outcome.kind !== "consumed") {
+        const runDir = path.join(env.stateDir, "runs", path.basename(uuid));
+        releasePersistedAttemptAuthority(runDir, new Date().toISOString(), agentRequest.eventId, "never_launched");
+        const error = new StaleLaunchError(`Issue #${number} exploration request was ${outcome.kind}`) as Error & { requestTransition?: string };
+        error.requestTransition = outcome.kind;
+        throw error;
+      }
+      github.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
+    },
+    (recheck: () => void) => launchAgentFlow(
+      input,
+      { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
+    ),
+    {
+      prepareAttempt: () => prepareAgentLaunchFlow(
+        input,
+        { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync },
+      ),
+      recordClaim: () => recordAgentLaunchGithubClaimed(input),
+      revalidate: () => {
+        const deadline = issueDecisionDeadline();
+        const liveIssue = githubOperations().getIssue(env.githubRepo, number);
+        const livePlan = planIssueCoordinatorAction(
+          [liveIssue],
+          decisionForIssues(undefined, [liveIssue], env.githubRepo, env, deadline),
+        );
+        if (livePlan.kind !== "explorer_required") throw new StaleLaunchError("selected issue is no longer eligible for exploration");
+        assertSameLaunchTarget(issue, livePlan.issue, "issue");
+        assertWorkerLaunchBaseCurrent(env, baseHead, runText);
+      },
+    },
+  );
+  return { branch, agentRequest, ...launch };
+}
+
 function envConfig(source: NodeJS.ProcessEnv = process.env) {
   return {
     projectId: source.DEADLOOP_PROJECT_ID || "project",
@@ -620,6 +787,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     workerAgent: source.DEADLOOP_WORKER_AGENT || "pi",
     workerModel: source.DEADLOOP_WORKER_MODEL || "",
     readyLabel: source.DEADLOOP_READY_LABEL || "ready-for-agent",
+    exploreLabel: source.DEADLOOP_EXPLORE_LABEL || "agent:explore",
     implementLabel: source.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
     inProgressLabel: source.DEADLOOP_IN_PROGRESS_LABEL || "agent:in-progress",
     blockedLabel: source.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
@@ -744,6 +912,47 @@ function driveSelectedIssue(
       driverAction: "blocked_comment",
       issueNumber: issue.number,
       comment,
+    });
+  }
+
+  if (issuePlan.kind === "explorer_required") {
+    let launch: JsonObject;
+    try {
+      launch = launchIssueExplorer(issue, env, fixture);
+    } catch (error) {
+      const transition = (error as Error & { requestTransition?: string }).requestTransition;
+      if (transition === "ambiguous_blocked") {
+        return driverResult("done", `Issue #${issue.number} exploration request consumption was ambiguous; blocked with recovery guidance`, {
+          driverAction: "ambiguous_request_consumption_blocked",
+          issueNumber: issue.number,
+        });
+      }
+      if (transition === "cancelled" || transition === "raced") {
+        return driverResult("skip", transition === "cancelled"
+          ? `Issue #${issue.number} exploration request was cancelled before consumption`
+          : `Issue #${issue.number} received a newer exploration request; the selected attempt did not launch`, {
+          driverAction: transition === "cancelled" ? "exploration_request_cancelled" : "exploration_request_raced",
+          issueNumber: issue.number,
+        });
+      }
+      if (isStaleLaunchError(error)) {
+        return driverResult("skip", `Issue #${issue.number} changed before exploration launch; no workflow state was mutated`, {
+          driverAction: "explorer_launch_stale",
+          issueNumber: issue.number,
+        });
+      }
+      throw error;
+    }
+    const prompt = [
+      `A read-only explorer is running for Issue #${issue.number}.`,
+      `Monitor only the promise file at ${launch.promiseFile}. Do not launch another agent.`,
+      "Do not mutate the repository or GitHub. The deterministic completion path will validate and persist the result.",
+    ].join("\n");
+    return driverResult("needs_llm", `Launched read-only explorer for Issue #${issue.number}`, {
+      driverAction: "explorer_monitor_request",
+      issueNumber: issue.number,
+      launch,
+      prompt,
     });
   }
 

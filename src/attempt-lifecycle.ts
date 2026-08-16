@@ -9,7 +9,7 @@ const { isPriorRequiredFindingDisposition } = require("./reviewer-outcome-contra
 export const ATTEMPT_RECORD_FILE = "attempt.json";
 const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
 
-export type AttemptRole = "worker" | "reviewer" | "review-repair" | "branch-update";
+export type AttemptRole = "worker" | "explorer" | "reviewer" | "review-repair" | "branch-update";
 export type AttemptTargetKind = "issue" | "pull-request";
 export type AttemptPhase =
   | "prepared"
@@ -78,6 +78,19 @@ export type CompletionReportV1 = {
   | { role: AttemptRole; status: "blocked"; result: BlockedCompletionResult; evidence: Record<string, unknown> }
   | { role: "worker"; status: "complete"; result: { outputRevision: string }; evidence: { validations: string[] } }
   | {
+      role: "explorer";
+      status: "complete";
+      result: {
+        difficulty: "low" | "medium" | "high";
+        relevantFiles: string[];
+        verifiedClaims: string[];
+        disprovedClaims: string[];
+        openQuestions: string[];
+        approach?: string;
+      };
+      evidence: { commands: string[] };
+    }
+  | {
       role: "reviewer";
       status: "complete";
       result: {
@@ -134,7 +147,7 @@ export type AttemptAuthorityRelease = {
 };
 
 export type AgentRequestBinding = {
-  role: "worker";
+  role: "worker" | "explorer";
   label: string;
   eventId: string;
 };
@@ -253,7 +266,7 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("record must be an object");
   const record = value as Record<string, unknown>;
   const role = record.role;
-  if (role !== "worker" && role !== "reviewer" && role !== "review-repair" && role !== "branch-update")
+  if (role !== "worker" && role !== "explorer" && role !== "reviewer" && role !== "review-repair" && role !== "branch-update")
     fail("role is invalid");
   const phase = record.phase;
   if (!SUCCESSFUL_PHASES.includes(phase as Exclude<AttemptPhase, "launch_failed" | "abandoned" | "authority_released">)
@@ -335,13 +348,14 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(record.agentRequest === undefined
       ? {}
       : record.agentRequest && typeof record.agentRequest === "object" && !Array.isArray(record.agentRequest)
-        && (record.agentRequest as Record<string, unknown>).role === "worker"
+        && ((record.agentRequest as Record<string, unknown>).role === "worker"
+          || (record.agentRequest as Record<string, unknown>).role === "explorer")
         ? { agentRequest: {
-          role: "worker" as const,
+          role: (record.agentRequest as Record<string, unknown>).role as "worker" | "explorer",
           label: nonEmptyString((record.agentRequest as Record<string, unknown>).label, "agentRequest.label"),
           eventId: nonEmptyString((record.agentRequest as Record<string, unknown>).eventId, "agentRequest.eventId"),
         } }
-        : fail("agentRequest must be a Worker request binding")),
+        : fail("agentRequest must be an Issue request binding")),
     ...(record.reviewClaim === undefined
       ? {}
       : record.reviewClaim && typeof record.reviewClaim === "object" && !Array.isArray(record.reviewClaim)
@@ -489,8 +503,8 @@ export function recordPersistedCompletionReport(runDir: string, report: Completi
   const current = readAttemptRecord(runDir);
   validateCompletionReportBinding(current, report);
   if (current.phase !== "agent_started") throw new Error(`Attempt phase ${current.phase} cannot receive a report`);
-  const outputRevision = report.status === "complete" && report.role !== "reviewer"
-    ? report.result.outputRevision
+  const outputRevision = report.status === "complete" && ["worker", "review-repair", "branch-update"].includes(report.role)
+    ? (report.result as { outputRevision: string }).outputRevision
     : undefined;
   const next: AttemptRecord = {
     ...current,
@@ -573,7 +587,7 @@ export function parseCompletionReportV1(value: unknown): CompletionReportEnvelop
   const report = value as Record<string, unknown>;
   if (report.schemaVersion !== 1) throw new Error("Completion report schemaVersion is not V1");
   const role = report.role;
-  if (role !== "worker" && role !== "reviewer" && role !== "review-repair" && role !== "branch-update") {
+  if (role !== "worker" && role !== "explorer" && role !== "reviewer" && role !== "review-repair" && role !== "branch-update") {
     throw new Error("Completion report role is invalid");
   }
   if (!report.target || typeof report.target !== "object") throw new Error("Completion report target is invalid");
@@ -715,6 +729,15 @@ function validateCompleteResult(report: CompletionReportEnvelope): void {
   if (report.role === "worker") {
     requiredCommitSha(result, "outputRevision");
     if (!nonEmptyStringArray(evidence.validations)) throw new Error("Worker completion requires validation evidence");
+    return;
+  }
+  if (report.role === "explorer") {
+    if (!["low", "medium", "high"].includes(String(result.difficulty))) throw new Error("Explorer completion difficulty is invalid");
+    for (const field of ["relevantFiles", "verifiedClaims", "disprovedClaims", "openQuestions"]) {
+      if (!Array.isArray(result[field]) || !result[field].every((value: unknown) => typeof value === "string" && Boolean(value.trim()))) throw new Error(`Explorer completion ${field} is invalid`);
+    }
+    if (result.approach !== undefined && (typeof result.approach !== "string" || !result.approach.trim())) throw new Error("Explorer completion approach is invalid");
+    if (!Array.isArray(evidence.commands) || !evidence.commands.every((value: unknown) => typeof value === "string" && Boolean(value.trim()))) throw new Error("Explorer completion command evidence is invalid");
     return;
   }
   if (report.role === "reviewer") {

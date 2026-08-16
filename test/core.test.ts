@@ -111,6 +111,7 @@ describe("deterministic extension core", () => {
       automationLogins: [],
       labels: {
         ready: "agent-ready",
+        explore: "agent:explore",
         implement: "agent:implement",
         updateBranch: "agent:update-branch",
         inProgress: "agent:in-progress",

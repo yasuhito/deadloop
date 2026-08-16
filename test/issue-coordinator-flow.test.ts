@@ -30,10 +30,16 @@ describe("Issue coordinator use-case flow", () => {
     expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 11 }).kind).toBe("planning_blocked");
   });
 
+  it("plans exploration without requiring an implementation contract", () => {
+    const data = fixture("driver-explore.json");
+
+    expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 13, role: "explorer" }).kind).toBe("explorer_required");
+  });
+
   it("plans Worker launch for implementable issues", () => {
     const data = fixture("driver-ready-worker.json");
 
-    expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 12 }).kind).toBe("worker_required");
+    expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 12, role: "worker" }).kind).toBe("worker_required");
   });
 
   it("does not block implementable issues that only reference a PRD document path", () => {

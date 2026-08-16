@@ -155,6 +155,34 @@ exit 2
     }
   });
 
+  it("selects exploration before implementation", () => {
+    expect(runDriverFixture("driver-explore.json").driverAction).toBe("explorer_monitor_request");
+  });
+
+  it("binds exploration to the selected request generation", () => {
+    expect(runDriverFixture("driver-explore.json").launch.agentRequest.eventId).toBe("2");
+  });
+
+  it("records exploration consumption before launch", () => {
+    expect(runDriverFixture("driver-explore.json").launch.attemptPhase).toBe("github_claimed");
+  });
+
+  it("consumes only the exploration request", () => {
+    expect(runDriverFixture("driver-explore.json").launch.issueLabels).not.toContain("agent:explore");
+  });
+
+  it("leaves implementation queued after exploration consumption", () => {
+    expect(runDriverFixture("driver-explore.json").launch.issueLabels).toContain("agent:implement");
+  });
+
+  it("creates no Issue comment while launching exploration", () => {
+    expect(runDriverFixture("driver-explore.json").launch.comments).toEqual([]);
+  });
+
+  it("forbids repository and GitHub mutations in the explorer prompt", () => {
+    expect(runDriverFixture("driver-explore.json").launch.instructions).toContain("Do not edit, create, delete, rename, or format repository files");
+  });
+
   it("reports the deterministic Worker name", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });
@@ -169,10 +197,6 @@ exit 2
 
   it("records consumption before the simulated Worker launch", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.attemptPhase).toBe("github_claimed");
-  });
-
-  it("preserves a request for another Issue role", () => {
-    expect(runDriverFixture("driver-ready-worker.json").launch.issueLabels).toContain("agent:explore");
   });
 
   it("preserves an unrelated Issue label", () => {

@@ -42,7 +42,7 @@ type AgentLaunchFlowInput = {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
-  agentRequest?: { role: "worker"; label: string; eventId: string };
+  agentRequest?: { role: "worker" | "explorer"; label: string; eventId: string };
   reviewClaim?: Record<string, unknown>;
   renderPrompt: (input: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => string;
 };
