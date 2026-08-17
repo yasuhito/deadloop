@@ -32,6 +32,66 @@ describe("issue coordinator selection", () => {
     expect(decision.role).toBe("worker");
   });
 
+  it("selects a recovery request ordered after an Issue block", () => {
+    const decision = selectIssueForImplementation(
+      [{
+        number: 1,
+        body: "",
+        labels: [{ name: "agent:explore" }, { name: "agent:blocked" }],
+        timelineEvents: [
+          { id: "10", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } },
+          { id: "11", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:explore" } },
+        ],
+      }],
+      defaultIssueDecisionConfig(),
+      () => new Set(),
+      () => "CLOSED",
+    );
+
+    expect(decision.number).toBe(1);
+  });
+
+  it("rejects a blocked request ordered before the Issue block", () => {
+    const decision = selectIssueForImplementation(
+      [{
+        number: 1,
+        body: "",
+        labels: [{ name: "agent:explore" }, { name: "agent:blocked" }],
+        timelineEvents: [
+          { id: "10", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:explore" } },
+          { id: "11", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } },
+        ],
+      }],
+      defaultIssueDecisionConfig(),
+      () => new Set(),
+      () => "CLOSED",
+    );
+
+    expect(decision.selected).toBe(false);
+  });
+
+  it("skips an invalid blocked candidate before selecting another Issue", () => {
+    const decision = selectIssueForImplementation(
+      [
+        {
+          number: 1,
+          body: "",
+          labels: [{ name: "agent:explore" }, { name: "agent:blocked" }],
+          timelineEvents: [
+            { id: "10", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:explore" } },
+            { id: "11", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } },
+          ],
+        },
+        { number: 2, body: "", labels: [{ name: "agent:explore" }] },
+      ],
+      defaultIssueDecisionConfig(),
+      () => new Set(),
+      () => "CLOSED",
+    );
+
+    expect(decision.number).toBe(2);
+  });
+
   it("shows CLI help without requiring a repo", () => {
     expect(runDecision(["--help"]).status).toBe(0);
   });

@@ -1,0 +1,26 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 14,
+      "title": "Stale blocked exploration",
+      "body": "The request predates the stop.",
+      "url": "https://github.com/owner/repo/issues/14",
+      "labels": [{"name": "agent:blocked"}, {"name": "agent:explore"}],
+      "timelineEvents": [
+        {"id": "10", "event": "labeled", "created_at": "2026-08-16T00:00:00Z", "actor": {"login": "human"}, "label": {"name": "agent:explore"}},
+        {"id": "11", "event": "labeled", "created_at": "2026-08-16T00:00:00Z", "actor": {"login": "deadloop-bot"}, "label": {"name": "agent:blocked"}}
+      ]
+    },
+    {
+      "number": 15,
+      "title": "Valid exploration",
+      "body": "Investigate this Issue.",
+      "url": "https://github.com/owner/repo/issues/15",
+      "labels": [{"name": "agent:explore"}],
+      "timelineEvents": [
+        {"id": "20", "event": "labeled", "created_at": "2026-08-16T00:00:01Z", "actor": {"login": "human"}, "label": {"name": "agent:explore"}}
+      ]
+    }
+  ]
+}

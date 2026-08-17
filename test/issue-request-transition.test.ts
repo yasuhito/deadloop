@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-const { consumeIssueRequest, persistSuccessfulExploration } = require("../src/issue-request-transition.ts");
+const {
+  consumeIssueRequest,
+  issueRecoveryBlockCanBeCleared,
+  persistFailedExploration,
+  persistSuccessfulExploration,
+} = require("../src/issue-request-transition.ts");
 
 type Event = {
   id: string;
@@ -16,14 +21,18 @@ function scenario(options: {
   duringDelete?: (state: ReturnType<typeof createState>) => void;
   deleteStatus?: number;
   persistError?: string;
+  blockDuringObservation?: boolean;
   retry?: boolean;
 } = {}) {
   const state = createState();
   let persisted = false;
   let launches = 0;
   const github = {
-    listIssueLabels: () => [...state.labels].map((name) => ({ name })),
-    listIssueTimelineEvents: () => state.events,
+    listIssueLabels: () => {
+      if (options.blockDuringObservation) state.label("agent:blocked", "human");
+      return [...state.labels].map((name) => ({ name }));
+    },
+    listIssueTimelineEvents: () => [...state.events],
     listIssueComments: () => state.comments,
     addIssueLabel: (_repo: string, _number: number, label: string) => state.label(label, "deadloop-bot"),
     deleteIssueLabel: (_repo: string, _number: number, label: string) => {
@@ -73,8 +82,21 @@ function createState() {
     labels,
     events,
     comments,
-    label(label: string, login: string) { if (!labels.has(label)) { labels.add(label); emit("labeled", label, login); } },
-    unlabel(label: string, login: string) { if (labels.delete(label)) emit("unlabeled", label, login); },
+    label(label: string, login: string, createdAt?: string) {
+      if (!labels.has(label)) {
+        labels.add(label);
+        const before = events.length;
+        emit("labeled", label, login);
+        if (createdAt && events[before]) events[before].created_at = createdAt;
+      }
+    },
+    unlabel(label: string, login: string, createdAt?: string) {
+      if (labels.delete(label)) {
+        const before = events.length;
+        emit("unlabeled", label, login);
+        if (createdAt && events[before]) events[before].created_at = createdAt;
+      }
+    },
   };
 }
 
@@ -152,6 +174,77 @@ function explorationCompletionScenario(options: {
   return { comments, labels: [...state.labels], outcome, persisted };
 }
 
+function failedExplorationScenario(options: {
+  requestDuringBlock?: string;
+  interruptAfterBlock?: boolean;
+  interruptAfterRequestDelete?: boolean;
+  raceRequestDuringDelete?: string;
+  retry?: boolean;
+  eventTime?: string;
+} = {}) {
+  const state = createState();
+  state.unlabel("agent:explore", "deadloop-bot");
+  state.label("agent:in-progress", "deadloop-bot");
+  let persisted = false;
+  let blockInterrupted = false;
+  let requestDeleteInterrupted = false;
+  const comments: Array<{ body: string; user: { login: string }; created_at: string; updated_at: string }> = [];
+  const github = {
+    listIssueLabels: () => [...state.labels].map((name) => ({ name })),
+    listIssueTimelineEvents: () => state.events,
+    listIssueComments: () => comments,
+    addIssueLabel: (_repo: string, _number: number, label: string) => {
+      state.label(label, "deadloop-bot", options.eventTime);
+      if (label === "agent:blocked" && options.requestDuringBlock) {
+        state.label(options.requestDuringBlock, "human", options.eventTime);
+      }
+      if (label === "agent:blocked" && options.interruptAfterBlock && !blockInterrupted) {
+        blockInterrupted = true;
+        throw new Error("interrupted after block");
+      }
+    },
+    deleteIssueLabel: (_repo: string, _number: number, label: string) => {
+      if (!state.labels.has(label)) return { status: 404 };
+      if (options.raceRequestDuringDelete === label && !requestDeleteInterrupted) {
+        state.unlabel(label, "human", options.eventTime);
+        state.label(label, "human", options.eventTime);
+      }
+      state.unlabel(label, "deadloop-bot", options.eventTime);
+      if (label !== "agent:in-progress" && options.interruptAfterRequestDelete && !requestDeleteInterrupted) {
+        requestDeleteInterrupted = true;
+        throw new Error("interrupted after request deletion");
+      }
+      return { status: 200 };
+    },
+    commentIssue: (_repo: string, _number: number, body: string) => {
+      const timestamp = "2026-08-16T00:02:00Z";
+      comments.push({ body, user: { login: "deadloop-bot" }, created_at: timestamp, updated_at: timestamp });
+    },
+  };
+  const input = {
+    github,
+    repository: "owner/repo",
+    issueNumber: 42,
+    requestLabels: ["agent:explore", "agent:implement"],
+    requestLabel: "agent:explore",
+    requestEventId: "2",
+    inProgressLabel: "agent:in-progress",
+    blockedLabel: "agent:blocked",
+    automationLogin: "deadloop-bot",
+    attemptId: "attempt-42",
+    failure: {
+      reason: "exploration_failed",
+      explanation: "The explorer could not prove a safe result.",
+      recovery: "Correct the cause, then add the exploration request again.",
+    },
+    persistGithub: () => { persisted = true; },
+  };
+  let outcome;
+  try { outcome = persistFailedExploration(input); } catch (error) { outcome = { kind: "interrupted", error }; }
+  if (options.retry) outcome = persistFailedExploration(input);
+  return { comments, events: state.events, labels: [...state.labels], outcome, persisted };
+}
+
 describe("Issue Agent request transition", () => {
   it("persists consumption after the selected request is removed", () => {
     expect(scenario().persisted).toBe(true);
@@ -221,6 +314,67 @@ describe("Issue Agent request transition", () => {
 
   it("treats an unprovable DELETE response as ambiguous", () => {
     expect(scenario({ deleteStatus: 0 }).outcome.kind).toBe("ambiguous_blocked");
+  });
+
+  it("does not consume a request when a block races into its first observation", () => {
+    expect(scenario({ blockDuringObservation: true }).outcome.kind).toBe("recovery_blocked");
+  });
+
+  it("does not consume a request when a block appears during deletion", () => {
+    expect(scenario({ duringDelete: (state) => state.label("agent:blocked", "human") }).outcome.kind)
+      .toBe("recovery_blocked");
+  });
+
+  it("does not clear a recovery block newer than the selected request", () => {
+    expect(issueRecoveryBlockCanBeCleared([
+      { id: "10", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:explore" } },
+      { id: "11", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } },
+    ], "agent:explore", "10", "agent:blocked")).toBe(false);
+  });
+});
+
+describe("failed Issue exploration transition", () => {
+  it("turns a failed exploration into a visible block", () => {
+    expect(failedExplorationScenario().labels).toContain("agent:blocked");
+  });
+
+  it("posts one recovery explanation", () => {
+    expect(failedExplorationScenario({ interruptAfterBlock: true, retry: true }).comments).toHaveLength(1);
+  });
+
+  it("clears an implementation request that predates the terminal block", () => {
+    expect(failedExplorationScenario().labels).not.toContain("agent:implement");
+  });
+
+  it("preserves a request ordered after the terminal block", () => {
+    expect(failedExplorationScenario({ requestDuringBlock: "agent:explore" }).labels).toContain("agent:explore");
+  });
+
+  it("orders same-second block and recovery request by stable event ID", () => {
+    expect(failedExplorationScenario({
+      requestDuringBlock: "agent:explore",
+      eventTime: "2026-08-16T00:00:01Z",
+    }).labels).toContain("agent:explore");
+  });
+
+  it("does not erase a post-block request when retrying after the block", () => {
+    expect(failedExplorationScenario({
+      requestDuringBlock: "agent:explore",
+      interruptAfterBlock: true,
+      retry: true,
+    }).labels).toContain("agent:explore");
+  });
+
+  it("restores a post-block request when retrying after its deletion", () => {
+    expect(failedExplorationScenario({
+      raceRequestDuringDelete: "agent:implement",
+      interruptAfterRequestDelete: true,
+      retry: true,
+    }).labels).toContain("agent:implement");
+  });
+
+  it("proves the terminal GitHub state before advancing the attempt", () => {
+    expect(failedExplorationScenario().persisted).toBe(true);
   });
 });
 

@@ -1,7 +1,13 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 const {
   assertOwnedExplorationWorkspace,
+  persistExplorationOutcome,
+  readOnlyExplorationFailure,
   removeExplorationWorktree,
   renderExplorationResult,
 } = require("../extensions/deadloop/automations/complete-issue-exploration.ts");
@@ -13,6 +19,12 @@ const record = {
 };
 
 const report = {
+  schemaVersion: 1,
+  role: "explorer",
+  status: "complete",
+  attemptId: "attempt-42",
+  target: { repository: "owner/repo", kind: "issue", number: 42 },
+  inputRevision: { head: "a".repeat(40) },
   summary: "The change is straightforward.",
   result: {
     difficulty: "low",
@@ -22,11 +34,80 @@ const report = {
     openQuestions: ["Which name should be public?"],
     approach: "Extend the existing seam.",
   },
+  evidence: { commands: [] },
 };
+
+const outcomeRecord = {
+  attemptId: "attempt-42",
+  launchUuid: "launch-42",
+  project: "demo",
+  repository: "owner/repo",
+  role: "explorer",
+  target: { kind: "issue", number: 42 },
+  inputRevision: { head: "a".repeat(40) },
+  branch: "agent/explore-42",
+  worktreePath: "/worktrees/explore-42",
+  agentName: "dl-e-42-deadbeef0000",
+  workspaceLabel: "explorer 42",
+  promptFile: "/runs/attempt-42/prompt.md",
+  promiseFile: "/runs/attempt-42/promise.json",
+  phase: "agent_started",
+  lastSuccessfulPhase: "agent_started",
+  workspaceId: "workspace-1",
+  tabId: "tab-1",
+  rootPaneId: "pane-1",
+  agentRequest: { role: "explorer", label: "agent:explore", eventId: "request-42" },
+};
+
+const failure = {
+  reason: "exploration_failed",
+  explanation: "Exploration failed.",
+  recovery: "Retry after fixing it.",
+};
+
+function blockedReport() {
+  return {
+    ...report,
+    status: "blocked",
+    summary: failure.explanation,
+    result: failure,
+    evidence: {},
+  };
+}
 
 describe("Issue exploration completion", () => {
   it("renders the authorized human-readable result", () => {
     expect(renderExplorationResult(report)).toContain("### Verified claims\n- The seam already exists.");
+  });
+
+  it("keeps a durably chosen successful outcome when a retry presents a blocked report", () => {
+    const runDir = mkdtempSync(path.join(os.tmpdir(), "deadloop-exploration-outcome-"));
+    try {
+      persistExplorationOutcome(runDir, outcomeRecord, report, null);
+      expect(persistExplorationOutcome(runDir, outcomeRecord, blockedReport(), failure).outcome).toBe("persisted");
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a durably chosen blocked outcome when a retry presents success", () => {
+    const runDir = mkdtempSync(path.join(os.tmpdir(), "deadloop-exploration-outcome-"));
+    try {
+      persistExplorationOutcome(runDir, outcomeRecord, blockedReport(), failure);
+      expect(persistExplorationOutcome(runDir, outcomeRecord, report, null).outcome).toBe("blocked");
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an exploration result after repository HEAD changes", () => {
+    expect(readOnlyExplorationFailure({ inputRevision: { head: "a".repeat(40) } }, "b".repeat(40), "")?.reason)
+      .toBe("explorer_repository_changed");
+  });
+
+  it("rejects an exploration result after repository files change", () => {
+    expect(readOnlyExplorationFailure({ inputRevision: { head: "a".repeat(40) } }, "a".repeat(40), " M src/example.ts\n")?.reason)
+      .toBe("explorer_repository_changed");
   });
 
   it("rejects a workspace identity bound to another checkout", () => {

@@ -80,9 +80,9 @@ flowchart TD
     V -. problem .-> B
 ```
 
-1. **Request implementation** — `agent:implement` requests implementation; `ready-for-agent` is optional triage metadata. Remove `agent:implement` before deadloop consumes the selected request generation to cancel it.
+1. **Request work** — `agent:implement` requests implementation; `agent:explore` requests a read-only investigation and takes priority when both are waiting. `ready-for-agent` is optional triage metadata. Remove a request label before deadloop consumes its selected generation to cancel it.
 2. **Let deadloop work** — deadloop durably records the attempt, consumes only the selected request, then adds `agent:in-progress` and starts the Worker. It creates a draft PR with `agent:review` and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
-3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help, and a stopped PR keeps no agent request; fix the cause reported in the Issue or PR comment, then add the request label for the role you want next. `agent:blocked` clears when that attempt starts.
+3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help. A failed or unsafe Issue exploration clears requests that predate its block; a request added after the block remains the recovery interface and is eligible for a new attempt. Fix the reported cause, then add the request label for the role you want next. `agent:blocked` clears when that attempt starts.
 
 ## Operator commands
 
