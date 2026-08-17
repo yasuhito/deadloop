@@ -29,16 +29,16 @@ function input(root: string, role: "worker" | "reviewer" = "worker") {
     role,
     target: { kind: role === "worker" ? "issue" as const : "pull-request" as const, number },
     inputRevision: { head: "a".repeat(40) },
-    ...(role === "reviewer" ? { reviewClaim: {
-      binding: { repository: "owner/repo", targetNumber: number, revision: "a".repeat(40) },
-      authoritySeconds: 3600,
-    } } : {}),
-    ...(role === "worker" ? { requiredVerification: {
-      repository: "owner/repo",
-      command: "npm test",
-      source: { kind: "repo_policy" as const, location: "deadloop.json" },
-      baseRevision: "a".repeat(40),
-    } } : {}),
+    ...(role === "reviewer" ? { requestEventId: "request-22" } : {}),
+    ...(role === "worker" ? {
+      agentRequest: { role: "worker" as const, label: "agent:implement", eventId: "request-1" },
+      requiredVerification: {
+        repository: "owner/repo",
+        command: "npm test",
+        source: { kind: "repo_policy" as const, location: "deadloop.json" },
+        baseRevision: "a".repeat(40),
+      },
+    } : {}),
     intendedWorktreePath: role === "worker" ? "/wt/worker" : "/wt/review",
     resolveWorktreeHead: role === "worker",
     renderPrompt: ({ promiseFile, worktreeHead }: { promiseFile: string; worktreeHead?: string }) =>
@@ -84,23 +84,30 @@ describe("0.8.0 エージェント起動フロー", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("reviewer は固定済み claim 契約なしで GitHub claim 記録へ進めない", () => {
+  it("reviewer は要求イベント id なしで GitHub 要求消費を記録できない", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
     try {
       const launchInput: any = input(root, "reviewer");
-      delete launchInput.reviewClaim;
+      delete launchInput.requestEventId;
       prepareAgentLaunchFlow(launchInput, operations(root, "reviewer", []));
-      expect(() => recordAgentLaunchGithubClaimed(launchInput)).toThrow("immutable review claim contract");
+      expect(() => recordAgentLaunchGithubClaimed(launchInput)).toThrow("request event id");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("修復試行へ継承したレビュー claim 契約を準備時に固定する", () => {
+  it("reviewer の要求消費を要求イベント id に束縛する", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
     try {
-      const reviewClaim = { binding: { repository: "owner/repo", targetNumber: 44 }, authoritySeconds: 3600 };
-      const launchInput = { ...input(root, "reviewer"), role: "review-repair", reviewClaim };
+      const launchInput = input(root, "reviewer");
       const prepared = prepareAgentLaunchFlow(launchInput, operations(root, "reviewer", []));
-      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).reviewClaim).toEqual(reviewClaim);
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).requestEventId).toBe("request-22");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("要求を変える前に Worker の選択済み要求世代を固定する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const prepared = prepareAgentLaunchFlow(input(root), operations(root, "worker", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).agentRequest.eventId).toBe("request-1");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

@@ -1,3 +1,5 @@
+const { compareGithubTimelineEvents } = require("./github-timeline-order.ts");
+
 /**
  * Deterministic pull request Agent-request order.
  *
@@ -22,6 +24,19 @@ export type PrRequest = {
   role: PrRequestRole;
   label: string;
 };
+
+type TimelineEvent = Record<string, any>;
+
+/** Latest labeled event for one configured request label, ordered by server event identity. */
+function latestPrRequestEvent(events: TimelineEvent[], requestLabel: string): TimelineEvent | null {
+  const matching = events.filter((event) =>
+    String(event.event || "").toLowerCase() === "labeled"
+    && String(event.label?.name || "") === requestLabel
+    && String(event.id || event.node_id || ""),
+  );
+  matching.sort(compareGithubTimelineEvents);
+  return matching.at(-1) || null;
+}
 
 /**
  * Processing order: a branch update first, because a conflicted head makes both
@@ -79,4 +94,4 @@ function blockedPrLabelMove(
   };
 }
 
-module.exports = { blockedPrLabelMove, orderedPrRequestLabels, prRequestLabelForRole, selectPrRequest };
+module.exports = { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, prRequestLabelForRole, selectPrRequest };

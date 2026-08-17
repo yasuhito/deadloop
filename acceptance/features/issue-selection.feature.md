@@ -1,11 +1,11 @@
-# Feature: Select an explicit Issue Agent request
+# Feature: Select only an Issue that is ready to start
 
-deadloop selects `agent:explore` or `agent:implement` without requiring the `ready-for-agent` triage label.
-It still prevents duplicate work on a closed or in-progress Issue and keeps implementation dependencies gated.
+deadloop checks Agent requests, dependencies, and Issue state and selects only an Issue that can be started safely.
+This prevents duplicate work on an Issue that is closed, unrequested, in progress, blocked, or has unfinished dependencies.
 
-## Scenario: Select a prepared Issue for work
+## Scenario: Select an implementation request without a triage label
 
-* Given An eligible Issue has the `ready-for-agent` and `agent:implement` labels
+* Given An eligible Issue has the `agent:implement` request without `ready-for-agent`
 * When deadloop selects a work target
 * Then Issue #1 is selected for work
 
@@ -15,17 +15,23 @@ It still prevents duplicate work on a closed or in-progress Issue and keeps impl
 * When deadloop searches for a work target
 * Then The closed Issue is not selected for work
 
-## Scenario: Select implementation without the triage label
+## Scenario: Do not select an Issue without an implementation request
 
-* Given An unprepared Issue lacks required public labels
+* Given An Issue lacks the required implementation request
 * When deadloop selects a work target
-* Then Issue #3 is selected for work
+* Then The unprepared Issue is not selected for work
 
 ## Scenario: Do not select an Issue already in progress
 
 * Given An Issue in progress has the `agent:in-progress` label
 * When deadloop selects a work target
 * Then The Issue in progress is not selected for work
+
+## Scenario: Do not select a blocked Issue for work
+
+* Given A blocked Issue has the `agent:blocked` label
+* When deadloop selects a work target
+* Then The blocked Issue is not selected for work
 
 ## Scenario Outline: Do not select an Issue with an unfinished dependency in its body
 

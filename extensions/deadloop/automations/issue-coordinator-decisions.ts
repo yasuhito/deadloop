@@ -139,14 +139,10 @@ function selectIssueForImplementation(
   relationshipDependencies: (issue: IssueDecisionRecord) => Set<number>,
   dependencyState: (number: number) => string | null | undefined,
 ): IssueDecisionRecord {
-  // A request label added after a block is the explicit retry surface. The claim
-  // transition consumes both the block and that request generation.
-  const skipLabels = [config.inProgressLabel, config.needsInfoLabel, config.humanLabel, config.wontfixLabel];
+  const skipLabels = [config.inProgressLabel, config.blockedLabel, config.needsInfoLabel, config.humanLabel, config.wontfixLabel];
   const skipped: IssueDecisionRecord[] = [];
   const sorted = [...issues].sort((left, right) => issueNumberForDecision(left) - issueNumberForDecision(right));
 
-  // Explore is deliberately selected across the repository before implementation so a
-  // persisted exploration comment is available when both requests are queued.
   for (const request of [
     { label: config.exploreLabel, role: "explorer" },
     { label: config.implementLabel, role: "worker" },
@@ -165,9 +161,9 @@ function selectIssueForImplementation(
     if (request.role === "worker") {
       for (const number of bodyDependencyNumbers(issue.body || "")) dependencies.add(number);
       for (const number of relationshipDependencies(issue)) dependencies.add(number);
-      const state = dependencyStatesClosed(dependencies, dependencyState);
-      if (!state.closed) {
-        skipped.push({ ...skipIssueForDecision("open_dependency", issue), dependencies: state.openDependencies });
+      const { closed, openDependencies } = dependencyStatesClosed(dependencies, dependencyState);
+      if (!closed) {
+        skipped.push({ ...skipIssueForDecision("open_dependency", issue), dependencies: openDependencies });
         continue;
       }
     }
@@ -277,9 +273,9 @@ function issueDecisionHelp(): string {
     "  --input FILE                    Path to issue JSON. Defaults to stdin.",
     "  --fixture FILE                  Load issues and dependency states from fixture JSON.",
     "  --repo owner/name               GitHub repository for live dependency checks.",
-    "  --ready-label LABEL             Triage label. Default: ready-for-agent.",
-    "  --explore-label LABEL           Explore request. Default: agent:explore.",
-    "  --implement-label LABEL         Implement request. Default: agent:implement.",
+    "  --ready-label LABEL             Ready label. Default: ready-for-agent.",
+    "  --explore-label LABEL           Explore label. Default: agent:explore.",
+    "  --implement-label LABEL         Implement label. Default: agent:implement.",
     "  --in-progress-label LABEL       In-progress label. Default: agent:in-progress.",
     "  --blocked-label LABEL           Blocked label. Default: agent:blocked.",
     "  --human-label LABEL             Human handoff label. Default: ready-for-human.",

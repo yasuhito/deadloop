@@ -836,7 +836,6 @@ export function automationEnvironment(
     DEADLOOP_REPO_PATH: envText(values.repoPath),
     DEADLOOP_GITHUB_REPO: envText(values.githubRepo),
     DEADLOOP_GITHUB_REPOSITORY_ID: envText(project.githubRepositoryId),
-    DEADLOOP_AUTOMATION_LOGIN: envText(project.automationLogins[0]),
     DEADLOOP_BASE_BRANCH: envText(values.baseBranch),
     DEADLOOP_WORKTREE_ROOT: envText(values.worktreeRoot),
     DEADLOOP_CHECK_COMMAND: envText(values.checkCommand),
@@ -852,12 +851,6 @@ export function automationEnvironment(
     DEADLOOP_REVIEWER_MODEL: envText(values.reviewerModel),
     DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS: automation.driverFile === "pr-reviewer-driver.ts"
       ? envText(values.automationMaxRuntimeSeconds)
-      : undefined,
-    DEADLOOP_REQUEST_MAX_RUNTIME_SECONDS: automation.driverFile === "issue-coordinator-driver.ts"
-      ? envText(values.automationMaxRuntimeSeconds)
-      : undefined,
-    DEADLOOP_CLAIM_CLEANUP_GRACE_SECONDS: ["pr-reviewer-driver.ts", "issue-coordinator-driver.ts"].includes(String(automation.driverFile))
-      ? envText(values.automationShutdownGraceSeconds)
       : undefined,
     DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: envText(project.automationLogins.join(",")),
     DEADLOOP_AUTO_MERGE: envText(values.autoMerge),

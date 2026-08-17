@@ -167,7 +167,9 @@ You may run read-only inspection and verification commands such as focused tests
 
 Hard limits:
 - Do not edit, create, delete, rename, or format repository files.
-- Do not commit, push, create or edit a PR, edit labels, close issues, or post GitHub comments.
+- Do not commit or push.
+- Do not create, edit, or close pull requests.
+- Do not edit labels or post GitHub comments.
 - Do not run destructive commands. The Automation host alone validates and posts the result.
 
 Promise report:

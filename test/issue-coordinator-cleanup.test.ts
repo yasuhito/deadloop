@@ -147,46 +147,6 @@ function runCleanupApply(scratchArea: ".pi/subagents" | ".pi/npm" | ".pi/git", t
   }
 }
 
-function runIssuePrecheckWithImplementationRequest(): number | null {
-  const tempRoot = mkdtempSync(path.join(tmpdir(), "deadloop-issue-request-precheck-"));
-  try {
-    const repoPath = path.join(tempRoot, "repo");
-    mkdirSync(repoPath);
-    writeExecutable(path.join(tempRoot, "gh"), [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      "if [ \"${1:-}\" = \"pr\" ] && [ \"${2:-}\" = \"list\" ]; then printf '%s\\n' '[]'; exit 0; fi",
-      "if [ \"${1:-}\" = \"issue\" ] && [ \"${2:-}\" = \"list\" ]; then",
-      "  printf '%s\\n' '[{\"number\":42,\"title\":\"Implement request\",\"body\":\"## Agent Brief\\nBuild it.\\n\\n## Acceptance criteria\\n- It works.\",\"updatedAt\":\"2026-08-16T00:00:00Z\",\"labels\":[{\"name\":\"agent:implement\"}]}]'",
-      "  exit 0",
-      "fi",
-      "echo \"unexpected gh invocation: $*\" >&2",
-      "exit 2",
-    ]);
-    writeExecutable(path.join(tempRoot, "herdr"), [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      "if [ \"${1:-}\" = \"worktree\" ] && [ \"${2:-}\" = \"list\" ]; then printf '%s\\n' '{\"result\":{\"worktrees\":[]}}'; exit 0; fi",
-      "echo \"unexpected herdr invocation: $*\" >&2",
-      "exit 2",
-    ]);
-    const result = spawnSync("bash", ["extensions/deadloop/automations/issue-coordinator.precheck.sh"], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        PATH: `${tempRoot}:${process.env.PATH || ""}`,
-        DEADLOOP_REPO_PATH: repoPath,
-        DEADLOOP_GITHUB_REPO: "owner/repo",
-        DEADLOOP_WORKTREE_ROOT: "/worktrees/repo",
-      },
-      encoding: "utf8",
-    });
-    return result.status;
-  } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
-  }
-}
-
 function runIssuePrecheckWithCleanupCandidate(): number | null {
   const tempRoot = mkdtempSync(path.join(tmpdir(), "deadloop-issue-precheck-"));
   try {
@@ -251,10 +211,6 @@ function runIssuePrecheckWithCleanupCandidate(): number | null {
 }
 
 describe("issue coordinator cleanup", () => {
-  it("passes precheck for an implementation request without the triage label", () => {
-    expect(runIssuePrecheckWithImplementationRequest()).toBe(0);
-  });
-
   it("ignores agent scratch areas when selecting cleanup candidates", () => {
     expect(runCleanupFixture("cleanup-generated-artifacts.json").candidates).toEqual([
       {
@@ -345,7 +301,7 @@ describe("issue coordinator cleanup", () => {
   // test/agent-profiles.test.ts. The coordinator keeps only the uuid coupling:
   // the same uuid names the promise file and is handed to the launcher.
   it("hands the shared session uuid to the promise path", () => {
-    expect(runDriverFixture("driver-ready-worker.json").launch.promiseFile).toContain("fixture-worker-uuid");
+    expect(runDriverFixture("driver-ready-worker.json").launch.promiseFile).toContain("fixture-worker-demo-12");
   });
 
 

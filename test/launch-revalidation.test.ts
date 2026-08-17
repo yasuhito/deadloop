@@ -21,7 +21,7 @@ describe("guarded launch revalidation wiring", () => {
   });
 
   it("bounds launch revalidation to the exact selected issue", () => {
-    expect(issueDriver).toMatch(/revalidate:[\s\S]*getIssue\(env\.githubRepo, number\)[\s\S]*assertSameLaunchTarget\(issue, liveIssue/);
+    expect(issueDriver).toMatch(/revalidate:[\s\S]*issueDecisionDeadline\(\)[\s\S]*getIssue\(env\.githubRepo, number\)/);
   });
 
   it("passes launch revalidation through the non-replaceable guarded reviewer launch boundary", () => {
@@ -32,9 +32,9 @@ describe("guarded launch revalidation wiring", () => {
     expect(launchPrReviewer).toMatch(/launchWithAdapters[\s\S]*planPrRequestAction/);
   });
 
-  it("revalidates the branch-update target on both sides of its claim inside the launch guard", () => {
+  it("revalidates the branch-update target on both sides of request consumption inside the launch guard", () => {
     expect(launchBranchUpdate).toMatch(
-      /launchWithAdapters[\s\S]*assertBranchUpdateRequestSelectable[\s\S]*assertBranchUpdateClaimHeld/,
+      /launchWithAdapters[\s\S]*assertBranchUpdateRequestSelectable[\s\S]*assertBranchUpdateRequestConsumed/,
     );
   });
 

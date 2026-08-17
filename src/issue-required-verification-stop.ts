@@ -68,11 +68,10 @@ function hasRequiredVerificationStopMarker(issue: GithubIssue, diagnosis: IssueR
 function isExactRequiredVerificationStop(
   issue: GithubIssue & { state?: string },
   diagnosis: IssueRequiredVerificationStopDiagnosis,
-  labels: StopLabels & { ready: string },
+  labels: StopLabels,
 ): boolean {
   const names = labelNames(issue);
   return String(issue.state || "").toUpperCase() === "OPEN"
-    && names.has(labels.ready)
     && names.has(labels.blocked)
     && !names.has(labels.implement)
     && !names.has(labels.inProgress)

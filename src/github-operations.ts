@@ -47,6 +47,29 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
       ]);
     },
 
+    moveIssueLabels(repo: string, issueNumber: string | number, move: LabelMove): void {
+      beforeMutation();
+      commandRunner.runText(["gh", "issue", "edit", String(issueNumber), "-R", repo, ...labelArgs(move)]);
+    },
+
+    addIssueLabel(repo: string, issueNumber: string | number, label: string): JsonObject {
+      beforeMutation();
+      return commandRunner.runJson([
+        "gh", "api", "--method", "POST", `repos/${repo}/issues/${issueNumber}/labels`,
+        "--input", "-",
+      ], { input: JSON.stringify({ labels: [label] }) });
+    },
+
+    deleteIssueLabel(repo: string, issueNumber: string | number, label: string): { status: number } {
+      beforeMutation();
+      const output = commandRunner.runText([
+        "gh", "api", "--method", "DELETE", "--include",
+        `repos/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`,
+      ], { check: false });
+      const statuses = [...output.matchAll(/^HTTP\/\S+\s+(\d{3})(?:\s|$)/gim)];
+      return { status: statuses.length === 1 ? Number(statuses[0][1]) : 0 };
+    },
+
     listIssueLabels(repo: string, issueNumber: string | number): JsonObject[] {
       const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${issueNumber}/labels`]);
       return Array.isArray(pages) ? pages.flat() : [];
@@ -60,23 +83,6 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
     listIssueComments(repo: string, issueNumber: string | number): JsonObject[] {
       const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${issueNumber}/comments`]);
       return Array.isArray(pages) ? pages.flat() : [];
-    },
-
-    createIssueComment(repo: string, issueNumber: string | number, body: string): JsonObject {
-      beforeMutation();
-      return commandRunner.runJson(["gh", "api", "--method", "POST", `repos/${repo}/issues/${issueNumber}/comments`, "-f", `body=${body}`]);
-    },
-
-    replaceIssueLabels(repo: string, issueNumber: string | number, labels: string[]): JsonObject {
-      beforeMutation();
-      return commandRunner.runJson(["gh", "api", "--method", "PUT", `repos/${repo}/issues/${issueNumber}/labels`, "--input", "-"], {
-        input: JSON.stringify({ labels }),
-      });
-    },
-
-    moveIssueLabels(repo: string, issueNumber: string | number, move: LabelMove): void {
-      beforeMutation();
-      commandRunner.runText(["gh", "issue", "edit", String(issueNumber), "-R", repo, ...labelArgs(move)]);
     },
 
     commentIssue(repo: string, issueNumber: string | number, body: string): void {
@@ -125,6 +131,24 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
       ], { input: JSON.stringify({ labels }) });
     },
 
+    addPrLabel(repo: string, prNumber: string | number, label: string): JsonObject {
+      beforeMutation();
+      return commandRunner.runJson([
+        "gh", "api", "--method", "POST", `repos/${repo}/issues/${prNumber}/labels`,
+        "--input", "-",
+      ], { input: JSON.stringify({ labels: [label] }) });
+    },
+
+    deletePrLabel(repo: string, prNumber: string | number, label: string): { status: number } {
+      beforeMutation();
+      const output = commandRunner.runText([
+        "gh", "api", "--method", "DELETE", "--include",
+        `repos/${repo}/issues/${prNumber}/labels/${encodeURIComponent(label)}`,
+      ], { check: false });
+      const statuses = [...output.matchAll(/^HTTP\/\S+\s+(\d{3})(?:\s|$)/gim)];
+      return { status: statuses.length === 1 ? Number(statuses[0][1]) : 0 };
+    },
+
     listPrLabels(repo: string, prNumber: string | number): JsonObject[] {
       const pages = commandRunner.runJson(["gh", "api", "--paginate", "--slurp", `repos/${repo}/issues/${prNumber}/labels`]);
       return Array.isArray(pages) ? pages.flat() : [];
@@ -140,9 +164,6 @@ function createGithubOperations(commandRunner: CommandRunner, beforeMutation: ()
       return Array.isArray(pages) ? pages.flat() : [];
     },
 
-    readRestResponseHeaders(repo: string): string {
-      return commandRunner.runText(["gh", "api", "--include", `repos/${repo}`]);
-    },
 
     createPrComment(repo: string, prNumber: string | number, body: string): JsonObject {
       beforeMutation();

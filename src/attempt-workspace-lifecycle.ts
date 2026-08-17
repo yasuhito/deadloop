@@ -176,7 +176,7 @@ function sameTarget(left: AttemptTarget, right: AttemptTarget): boolean {
 }
 
 function roleMatchesTarget(role: AttemptRole, target: AttemptTarget): boolean {
-  return role === "worker" ? target.kind === "issue" : target.kind === "pull-request";
+  return role === "worker" || role === "explorer" ? target.kind === "issue" : target.kind === "pull-request";
 }
 
 function sameOptionalSha(left: string | undefined, right: string | undefined): boolean {

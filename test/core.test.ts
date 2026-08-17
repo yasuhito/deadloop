@@ -254,11 +254,6 @@ describe("deterministic extension core", () => {
     });
   });
 
-  it("passes the authorized automation identity to Issue claims", () => {
-    const project = normalizeProject({ githubRepo: "owner/repo", automationLogins: ["deadloop-bot"] });
-    expect(automationEnvironment(project, project.automations[0]).DEADLOOP_AUTOMATION_LOGIN).toBe("deadloop-bot");
-  });
-
   it("passes the selected projects.json path to completion automations", () => {
     const project = projectsFromConfig(
       { projects: [{ id: "demo", automations: [{}] }] },

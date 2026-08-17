@@ -1,13 +1,16 @@
 {
+  "cleanup": {"candidates": []},
   "issues": [
     {
       "number": 13,
       "title": "Investigate behavior",
       "body": "No implementation contract is required for exploration.",
       "url": "https://github.com/owner/repo/issues/13",
-      "labels": [{ "name": "agent:explore" }]
+      "labels": [{"name": "agent:explore"}, {"name": "agent:implement"}, {"name": "customer:urgent"}],
+      "timelineEvents": [
+        {"id": "1", "event": "labeled", "created_at": "2026-08-16T00:00:00Z", "actor": {"login": "human"}, "label": {"name": "agent:implement"}},
+        {"id": "2", "event": "labeled", "created_at": "2026-08-16T00:00:01Z", "actor": {"login": "human"}, "label": {"name": "agent:explore"}}
+      ]
     }
-  ],
-  "dependencyStates": {},
-  "cleanup": { "candidates": [] }
+  ]
 }

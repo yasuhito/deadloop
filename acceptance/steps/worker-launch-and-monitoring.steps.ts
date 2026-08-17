@@ -142,6 +142,7 @@ When("deadloop starts work on the selected Issue", function (this: WorkerWorld) 
       env: {
         ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("DEADLOOP_"))),
         DEADLOOP_PROJECT_ID: "demo",
+        DEADLOOP_GITHUB_REPO: "owner/repo",
         DEADLOOP_STATE_DIR: fixtureStateDir(),
       },
     },
