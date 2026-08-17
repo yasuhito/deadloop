@@ -123,7 +123,7 @@ function ambiguousComment(input: ConsumeIssueRequestInput): string {
     `<!-- deadloop:ambiguous-request-consumption:v1 attempt=${input.attemptId} -->`,
     "## Agent request consumption could not be proven",
     "",
-    `deadloop stopped before it could durably prove whether the selected \`${input.requestLabel}\` request was consumed. No Worker was launched.`,
+    `deadloop stopped before it could durably prove whether the selected \`${input.requestLabel}\` request was consumed. No agent was launched.`,
     "",
     "The request was not restored because removing it may have been a person's cancellation.",
     "To request a new attempt, add a new Agent request:",
@@ -135,12 +135,37 @@ function ambiguousComment(input: ConsumeIssueRequestInput): string {
 }
 
 function blockAmbiguousConsumption(input: ConsumeIssueRequestInput): IssueRequestTransitionOutcome {
-  const labels = new Set(input.github.listIssueLabels(input.repository, input.issueNumber).map(labelName).filter(Boolean));
-  if (!labels.has(input.blockedLabel)) input.github.addIssueLabel(input.repository, input.issueNumber, input.blockedLabel);
-  const marker = `<!-- deadloop:ambiguous-request-consumption:v1 attempt=${input.attemptId} -->`;
-  const comments = input.github.listIssueComments(input.repository, input.issueNumber);
-  if (!comments.some((comment) => String(comment.body || "").includes(marker))) {
-    input.github.commentIssue(input.repository, input.issueNumber, ambiguousComment(input));
+  if (!input.automationLogin.trim()) throw new Error("authorized Automation host login is required");
+  const observe = () => ({
+    events: input.github.listIssueTimelineEvents(input.repository, input.issueNumber),
+    labels: new Set(input.github.listIssueLabels(input.repository, input.issueNumber).map(labelName).filter(Boolean)),
+    comments: input.github.listIssueComments(input.repository, input.issueNumber),
+  });
+  const trustedActiveBlock = (observation: ReturnType<typeof observe>) => {
+    const latest = labelEvent(observation.events, input.blockedLabel);
+    return observation.labels.has(input.blockedLabel)
+      && String(latest?.event || "").toLowerCase() === "labeled"
+      && String(latest?.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase();
+  };
+  const body = ambiguousComment(input);
+  let observation = observe();
+  if (!trustedActiveBlock(observation)) {
+    if (observation.labels.has(input.blockedLabel)) {
+      throw new Error("ambiguous request-consumption block could not be proven");
+    }
+    input.github.addIssueLabel(input.repository, input.issueNumber, input.blockedLabel);
+    observation = observe();
+  }
+  if (!trustedActiveBlock(observation)) {
+    throw new Error("ambiguous request-consumption block could not be proven");
+  }
+  if (!trustedExactComment(observation.comments, input.automationLogin, body)) {
+    input.github.commentIssue(input.repository, input.issueNumber, body);
+    observation = observe();
+  }
+  if (!trustedActiveBlock(observation)
+    || !trustedExactComment(observation.comments, input.automationLogin, body)) {
+    throw new Error("ambiguous request-consumption recovery explanation could not be proven");
   }
   return { kind: "ambiguous_blocked", requestEventId: input.requestEventId };
 }

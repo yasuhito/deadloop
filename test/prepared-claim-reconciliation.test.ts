@@ -119,7 +119,12 @@ describe("prepared attempt claim reconciliation", () => {
   function reconcileInterruptedRequestConsumption(role: "worker" | "explorer" = "worker") {
     const data = setup({ agentRequest: true, role });
     const labels = new Set<string>();
-    const comments: Array<{ body: string }> = [];
+    const comments: Array<{
+      body: string;
+      user: { login: string };
+      created_at: string;
+      updated_at: string;
+    }> = [];
     const events = [
       { id: "request-1", event: "labeled", created_at: "2026-08-16T00:00:00Z", actor: { login: "human" }, label: { name: role === "explorer" ? "custom:explore" : "custom:implement" } },
       { id: "removal-1", event: "unlabeled", created_at: "2026-08-16T00:00:01Z", actor: { login: "deadloop-bot" }, label: { name: role === "explorer" ? "custom:explore" : "custom:implement" } },
@@ -128,9 +133,26 @@ describe("prepared attempt claim reconciliation", () => {
       listIssueLabels: () => [...labels].map((name) => ({ name })),
       listIssueTimelineEvents: () => events,
       listIssueComments: () => comments,
-      addIssueLabel: (_repository: string, _issueNumber: number, label: string) => labels.add(label),
+      addIssueLabel: (_repository: string, _issueNumber: number, label: string) => {
+        labels.add(label);
+        events.push({
+          id: `event-${events.length + 1}`,
+          event: "labeled",
+          created_at: "2026-08-16T00:00:02Z",
+          actor: { login: "deadloop-bot" },
+          label: { name: label },
+        });
+      },
       deleteIssueLabel: () => ({ status: 404 }),
-      commentIssue: (_repository: string, _issueNumber: number, body: string) => comments.push({ body }),
+      commentIssue: (_repository: string, _issueNumber: number, body: string) => {
+        const timestamp = "2026-08-16T00:00:03Z";
+        comments.push({
+          body,
+          user: { login: "deadloop-bot" },
+          created_at: timestamp,
+          updated_at: timestamp,
+        });
+      },
     };
     const runner = { runJson: () => ({ state: "OPEN", labels: [] }) };
     const result = reconcileLocked(data.args, runner, { automationLogin: "deadloop-bot" }, () => {}, github);

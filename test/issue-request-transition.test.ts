@@ -22,11 +22,25 @@ function scenario(options: {
   deleteStatus?: number;
   persistError?: string;
   blockDuringObservation?: boolean;
+  removeBlockAfterAdd?: boolean;
+  copiedAmbiguousComment?: { body: string; login: string };
+  automationLogin?: string;
   retry?: boolean;
 } = {}) {
   const state = createState();
+  const automationLogin = options.automationLogin ?? "deadloop-bot";
   let persisted = false;
   let launches = 0;
+  if (options.copiedAmbiguousComment) {
+    const timestamp = "2026-08-16T00:00:30Z";
+    state.comments.push({
+      id: "copied-comment",
+      body: options.copiedAmbiguousComment.body,
+      user: { login: options.copiedAmbiguousComment.login },
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+  }
   const github = {
     listIssueLabels: () => {
       if (options.blockDuringObservation) state.label("agent:blocked", "human");
@@ -34,7 +48,10 @@ function scenario(options: {
     },
     listIssueTimelineEvents: () => [...state.events],
     listIssueComments: () => state.comments,
-    addIssueLabel: (_repo: string, _number: number, label: string) => state.label(label, "deadloop-bot"),
+    addIssueLabel: (_repo: string, _number: number, label: string) => {
+      state.label(label, automationLogin);
+      if (label === "agent:blocked" && options.removeBlockAfterAdd) state.unlabel(label, "human");
+    },
     deleteIssueLabel: (_repo: string, _number: number, label: string) => {
       options.beforeDelete?.(state);
       if (!state.labels.has(label)) return { status: 404 };
@@ -42,7 +59,16 @@ function scenario(options: {
       options.duringDelete?.(state);
       return { status: options.deleteStatus ?? 200 };
     },
-    commentIssue: (_repo: string, _number: number, body: string) => state.comments.push({ id: `comment-${state.comments.length + 1}`, body }),
+    commentIssue: (_repo: string, _number: number, body: string) => {
+      const timestamp = "2026-08-16T00:01:00Z";
+      state.comments.push({
+        id: `comment-${state.comments.length + 1}`,
+        body,
+        user: { login: automationLogin },
+        created_at: timestamp,
+        updated_at: timestamp,
+      });
+    },
   };
   const requestLabel = options.requestLabel || "agent:implement";
   const input = {
@@ -53,7 +79,7 @@ function scenario(options: {
     requestEventId: requestLabel === "agent:explore" ? "2" : "1",
     inProgressLabel: "agent:in-progress",
     blockedLabel: "agent:blocked",
-    automationLogin: "deadloop-bot",
+    automationLogin,
     attemptId: "attempt-42",
     persistConsumed: () => {
       if (options.persistError) throw new Error(options.persistError);
@@ -73,7 +99,13 @@ function createState() {
     { id: "2", event: "labeled", created_at: "2026-08-16T00:00:00Z", actor: { login: "human" }, label: { name: "agent:explore" } },
     { id: "3", event: "labeled", created_at: "2026-08-16T00:00:00Z", actor: { login: "human" }, label: { name: "customer:urgent" } },
   ];
-  const comments: Array<{ id: string; body: string }> = [];
+  const comments: Array<{
+    id: string;
+    body: string;
+    user: { login: string };
+    created_at: string;
+    updated_at: string;
+  }> = [];
   let nextId = 10;
   const emit = (event: "labeled" | "unlabeled", label: string, login: string) => events.push({
     id: String(nextId++), event, created_at: "2026-08-16T00:00:01Z", actor: { login }, label: { name: label },
@@ -296,6 +328,27 @@ describe("Issue Agent request transition", () => {
 
   it("keeps ambiguous recovery guidance idempotent after interruption", () => {
     expect(scenario({ persistError: "interrupted", retry: true }).comments).toHaveLength(1);
+  });
+
+  it("refuses to report an ambiguous stop when its block is removed during persistence", () => {
+    expect(() => scenario({ persistError: "interrupted", removeBlockAfterAdd: true }))
+      .toThrow("ambiguous request-consumption block could not be proven");
+  });
+
+  it("does not trust copied ambiguous recovery guidance from another commenter", () => {
+    const body = scenario({ persistError: "interrupted" }).comments[0].body;
+    expect(scenario({ persistError: "interrupted", copiedAmbiguousComment: { body, login: "intruder" } }).comments)
+      .toHaveLength(2);
+  });
+
+  it("does not let missing automation identity authorize actorless stop evidence", () => {
+    expect(() => scenario({ persistError: "interrupted", automationLogin: "" }))
+      .toThrow("authorized Automation host login is required");
+  });
+
+  it("uses role-neutral wording when ambiguous exploration consumption stops", () => {
+    expect(scenario({ requestLabel: "agent:explore", persistError: "interrupted" }).comments[0].body)
+      .toContain("No agent was launched.");
   });
 
   it("cancels exploration removed before its consumption", () => {
