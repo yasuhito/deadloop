@@ -19,6 +19,8 @@ function scenario(options: {
   requestLabel?: "agent:implement" | "agent:explore";
   beforeDelete?: (state: ReturnType<typeof createState>) => void;
   duringDelete?: (state: ReturnType<typeof createState>) => void;
+  afterActiveState?: (state: ReturnType<typeof createState>) => void;
+  activeStateAlreadyPresent?: boolean;
   deleteStatus?: number;
   persistError?: string;
   blockDuringObservation?: boolean;
@@ -31,6 +33,7 @@ function scenario(options: {
   const automationLogin = options.automationLogin ?? "deadloop-bot";
   let persisted = false;
   let launches = 0;
+  if (options.activeStateAlreadyPresent) state.label("agent:in-progress", automationLogin);
   if (options.copiedComment) {
     const timestamp = "2026-08-16T00:00:30Z";
     state.comments.push({
@@ -41,6 +44,7 @@ function scenario(options: {
       updated_at: timestamp,
     });
   }
+  const trace: string[] = [];
   const github = {
     listIssueLabels: () => {
       if (options.blockDuringObservation) state.label("agent:blocked", "human");
@@ -49,10 +53,13 @@ function scenario(options: {
     listIssueTimelineEvents: () => [...state.events],
     listIssueComments: () => state.comments,
     addIssueLabel: (_repo: string, _number: number, label: string) => {
+      trace.push(`add:${label}`);
       state.label(label, automationLogin);
       if (label === "agent:blocked" && options.removeBlockAfterAdd) state.unlabel(label, "human");
+      if (label === "agent:in-progress") options.afterActiveState?.(state);
     },
     deleteIssueLabel: (_repo: string, _number: number, label: string) => {
+      trace.push(`delete:${label}`);
       options.beforeDelete?.(state);
       if (!state.labels.has(label)) return { status: 404 };
       state.unlabel(label, "deadloop-bot");
@@ -82,6 +89,7 @@ function scenario(options: {
     automationLogin,
     attemptId: "attempt-42",
     persistConsumed: () => {
+      trace.push("persist");
       if (options.persistError) throw new Error(options.persistError);
       persisted = true;
     },
@@ -89,7 +97,7 @@ function scenario(options: {
   let outcome = consumeIssueRequest(input);
   if (options.retry) outcome = consumeIssueRequest(input);
   if (outcome.kind === "consumed") launches += 1;
-  return { outcome, labels: [...state.labels], events: state.events, comments: state.comments, persisted, launches };
+  return { outcome, labels: [...state.labels], events: state.events, comments: state.comments, persisted, launches, trace };
 }
 
 function createState() {
@@ -283,11 +291,53 @@ describe("Issue Agent request transition", () => {
   });
 
   it("removes only the selected request label", () => {
-    expect(scenario().labels).toEqual(["agent:explore", "customer:urgent"]);
+    expect(scenario().labels).toEqual(["agent:explore", "customer:urgent", "agent:in-progress"]);
   });
 
   it("emits the production unlabeled event for consumption", () => {
-    expect(scenario().events.at(-1)).toMatchObject({ event: "unlabeled", label: { name: "agent:implement" } });
+    expect(scenario().events.filter((event) => event.event === "unlabeled" && event.label.name === "agent:implement"))
+      .toHaveLength(1);
+  });
+
+  it("creates the active state for a consumed request", () => {
+    expect(scenario().labels).toContain("agent:in-progress");
+  });
+
+  it("proves the active state before writing the durable receipt", () => {
+    expect(scenario().trace.indexOf("add:agent:in-progress")).toBeLessThan(scenario().trace.indexOf("persist"));
+  });
+
+  it("stops instead of launching when a block races the active state", () => {
+    expect(scenario({ afterActiveState: (state) => state.label("agent:blocked", "human") }).outcome.kind)
+      .toBe("blocked_after_consumption");
+  });
+
+  it("releases the active state it created when a block races it", () => {
+    expect(scenario({ afterActiveState: (state) => state.label("agent:blocked", "human") }).labels)
+      .not.toContain("agent:in-progress");
+  });
+
+  it("writes no durable receipt when a block races the active state", () => {
+    expect(scenario({ afterActiveState: (state) => state.label("agent:blocked", "human") }).persisted).toBe(false);
+  });
+
+  it("yields to a newer request that races the active state", () => {
+    expect(scenario({ afterActiveState: (state) => state.label("agent:implement", "human") }).outcome.kind)
+      .toBe("raced");
+  });
+
+  it("releases the active state it created when a newer request races it", () => {
+    expect(scenario({ afterActiveState: (state) => state.label("agent:implement", "human") }).labels)
+      .not.toContain("agent:in-progress");
+  });
+
+  it("reuses an active state left by an interrupted attempt", () => {
+    expect(scenario({ activeStateAlreadyPresent: true }).trace.filter((entry) => entry === "add:agent:in-progress"))
+      .toHaveLength(0);
+  });
+
+  it("consumes a request whose active state an interrupted attempt already created", () => {
+    expect(scenario({ activeStateAlreadyPresent: true }).outcome.kind).toBe("consumed");
   });
 
   it("treats a request removed at the mutation boundary as cancellation", () => {

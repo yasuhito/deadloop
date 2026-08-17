@@ -105,11 +105,13 @@ function issueRecoveryRequestIsEligible(events: JsonObject[], requestLabel: stri
   return Boolean(request && issueRecoveryBlockCanBeCleared(events, requestLabel, eventId(request), blockedLabel));
 }
 
-function observeRequest(input: ConsumeIssueRequestInput): {
+type IssueRequestObservation = {
   events: JsonObject[];
   labels: Set<string>;
   latest: JsonObject | null;
-} {
+};
+
+function observeRequest(input: ConsumeIssueRequestInput): IssueRequestObservation {
   const events = input.github.listIssueTimelineEvents(input.repository, input.issueNumber);
   const labels = new Set(input.github.listIssueLabels(input.repository, input.issueNumber).map(labelName).filter(Boolean));
   return { events, labels, latest: labelEvent(events, input.requestLabel) };
@@ -221,7 +223,7 @@ function stopConsumedRequest(input: ConsumeIssueRequestInput): IssueRequestTrans
   return { kind: "blocked_after_consumption", requestEventId: input.requestEventId };
 }
 
-function selectedRequestEvent(observation: ReturnType<typeof observeRequest>, input: ConsumeIssueRequestInput): JsonObject | null {
+function selectedRequestEvent(observation: IssueRequestObservation, input: ConsumeIssueRequestInput): JsonObject | null {
   return observation.events.find((event) => eventId(event) === input.requestEventId
     && String(event.event || "").toLowerCase() === "labeled"
     && String(event.label?.name || "") === input.requestLabel) || null;
@@ -506,7 +508,7 @@ function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTrans
   if (deletion.status === 404) return { kind: "cancelled", requestEventId: input.requestEventId };
   if (deletion.status !== 200) return blockAmbiguousConsumption(input);
 
-  let after: ReturnType<typeof observeRequest>;
+  let after: IssueRequestObservation;
   try {
     after = observeRequest(input);
   } catch {
@@ -540,12 +542,59 @@ function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTrans
   }
   if (after.labels.has(input.requestLabel)) return { kind: "raced", requestEventId: input.requestEventId };
 
+  return createActiveState(input, selected);
+}
+
+/**
+ * Create the active state for a consumed request and prove it before the durable receipt.
+ *
+ * The receipt is last on purpose: an interruption anywhere in here leaves a still-prepared attempt
+ * that reconciliation owns, never a durably claimed attempt with no workspace. A block or a newer
+ * request observed after the active state exists releases that state again and stops.
+ */
+function createActiveState(
+  input: ConsumeIssueRequestInput,
+  selected: JsonObject,
+): IssueRequestTransitionOutcome {
+  let observation: IssueRequestObservation;
+  try {
+    if (!observeRequest(input).labels.has(input.inProgressLabel)) {
+      input.github.addIssueLabel(input.repository, input.issueNumber, input.inProgressLabel);
+    }
+    observation = observeRequest(input);
+  } catch {
+    return blockAmbiguousConsumption(input);
+  }
+  const blocked = observation.labels.has(input.blockedLabel)
+    || issueLabelIsActive(observation.events, input.blockedLabel);
+  const newerRequest = observation.labels.has(input.requestLabel)
+    || observation.events.some((event) => compareIssueTimelineEvents(event, selected) > 0
+      && String(event.event || "").toLowerCase() === "labeled"
+      && String(event.label?.name || "") === input.requestLabel
+      && eventId(event) !== input.requestEventId);
+  if (blocked || newerRequest || !observation.labels.has(input.inProgressLabel)) {
+    releaseActiveState(input);
+    if (blocked) return stopConsumedRequest(input);
+    if (newerRequest) return { kind: "raced", requestEventId: input.requestEventId };
+    return blockAmbiguousConsumption(input);
+  }
+
   try {
     input.persistConsumed();
   } catch {
     return blockAmbiguousConsumption(input);
   }
   return { kind: "consumed", requestEventId: input.requestEventId };
+}
+
+function releaseActiveState(input: ConsumeIssueRequestInput): void {
+  try {
+    if (!observeRequest(input).labels.has(input.inProgressLabel)) return;
+    input.github.deleteIssueLabel(input.repository, input.issueNumber, input.inProgressLabel);
+  } catch {
+    // The stop that follows explains the state deadloop could observe; a failed release must not
+    // replace that explanation with an exception.
+  }
 }
 
 module.exports = {

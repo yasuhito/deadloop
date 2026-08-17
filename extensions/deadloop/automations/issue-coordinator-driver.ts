@@ -566,7 +566,6 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       persistConsumed: () => recordAgentLaunchGithubClaimed(plan.input),
     });
     if (requestTransition.kind !== "consumed") throw new StaleLaunchError(`fixture request was ${requestTransition.kind}`);
-    fixtureGithub.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
     const promiseFile = prepared.promiseFile;
     return {
       workerName,
@@ -614,7 +613,6 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         error.requestTransition = outcome.kind;
         throw error;
       }
-      github.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
     },
     (recheck: () => void) => launchAgentFlow(
       plan.input,
@@ -744,7 +742,6 @@ function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig
       persistConsumed: () => recordAgentLaunchGithubClaimed(input),
     });
     if (requestTransition.kind !== "consumed") throw new StaleLaunchError(`fixture exploration request was ${requestTransition.kind}`);
-    fixtureGithub.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
     return {
       branch,
       workspaceId: "fixture-workspace-explorer",
@@ -790,7 +787,6 @@ function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig
         error.requestTransition = outcome.kind;
         throw error;
       }
-      github.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
     },
     (recheck: () => void) => launchAgentFlow(
       input,
