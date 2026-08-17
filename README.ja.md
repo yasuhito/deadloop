@@ -47,7 +47,7 @@ pi install git:github.com/yasuhito/deadloop
 
 ## ラベルでループを制御する
 
-Issue にラベルを付けると、ループが始まります。実装中とレビュー中の状態は deadloop が管理し、承認後は方針に従って PR を人間へ引き渡すか、自動でマージします。
+Issue にラベルを付けると、ループが始まります。調査、実装、レビューの状態は deadloop が管理し、承認後は方針に従って PR を人間へ引き渡すか、自動でマージします。
 
 ```mermaid
 flowchart TD

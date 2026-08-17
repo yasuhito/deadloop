@@ -47,7 +47,7 @@ That is enough to start. During enablement, deadloop runs `npm run check`, creat
 
 ## Control the loop with labels
 
-You start the loop by labeling an Issue. deadloop owns the implementation and review transitions, then either hands the approved PR to a human or merges it according to policy.
+You start the loop by labeling an Issue. deadloop owns the exploration, implementation, and review transitions, then either hands the approved PR to a human or merges it according to policy.
 
 ```mermaid
 flowchart TD
