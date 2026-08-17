@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Turn one successful branch update into the next GitHub Agent request. The updater consumed the
-// `agent:update-branch` request when it claimed the pull request, so the updated head is only
-// reachable again once this handler replaces the active claim state with a new review request.
+// `agent:update-branch` request when it claimed the pull request, so the updated head becomes
+// reachable again only after this handler replaces the active workflow state with a new review request.
 // This handler never pushes, comments, or launches work.
 
 const path = require("node:path") as typeof import("node:path");
@@ -115,6 +115,8 @@ function waitForPushedHeadVisibility(input: {
   pushedHead: string;
   attempts?: number;
 }): PrObservation {
+  const originalHead = input.originalHead.toLowerCase();
+  const pushedHead = input.pushedHead.toLowerCase();
   const attempts = input.attempts ?? 10;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const current = input.observe();
@@ -124,8 +126,8 @@ function waitForPushedHeadVisibility(input: {
     if (state !== "OPEN" || branch !== input.branch) {
       throw new Error("branch-update completion target changed before the pushed head became visible");
     }
-    if (head === input.pushedHead.toLowerCase()) return current;
-    if (head !== input.originalHead.toLowerCase()) {
+    if (head === pushedHead) return current;
+    if (head !== originalHead) {
       throw new Error("branch-update completion target changed before the pushed head became visible");
     }
     if (attempt + 1 < attempts) input.pause();

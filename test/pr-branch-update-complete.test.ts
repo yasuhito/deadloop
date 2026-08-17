@@ -109,7 +109,7 @@ describe("branch update head visibility", () => {
     })).toThrow("target changed");
   });
 
-  it("fails without mutating labels when the pushed head remains invisible", () => {
+  it("fails when the pushed head remains invisible", () => {
     expect(() => waitForPushedHeadVisibility({
       observe: () => ({
         pr: { state: "OPEN", headRefName: "agent/issue-24", headRefOid: head },
