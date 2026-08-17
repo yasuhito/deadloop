@@ -3,8 +3,10 @@
 const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { createGithubOperations } = require("../../../src/github-operations.ts");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
-const { readAttemptRecord, transitionPersistedAttempt } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { consumeIssueRequest } = require("../../../src/issue-request-transition.ts");
+const { readAttemptRecord, releasePersistedAttemptAuthority, transitionPersistedAttempt } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
 type JsonObject = Record<string, any>;
@@ -35,7 +37,7 @@ function hasExactRequestConsumption(record: JsonObject, item: JsonObject, args: 
   const labels = labelNames(item);
   if (record.role === "worker") {
     return String(item.state || "").toUpperCase() === "OPEN"
-      && labels.has(String(args.readyLabel))
+      && (record.agentRequest || labels.has(String(args.readyLabel)))
       && labels.has(String(args.inProgressLabel))
       && !labels.has(String(args.implementLabel))
       && !labels.has(String(args.blockedLabel));
@@ -68,17 +70,50 @@ function hasExactRequestConsumption(record: JsonObject, item: JsonObject, args: 
   return record.role === "reviewer";
 }
 
-function reconcileLocked(args: JsonObject, runner: ReturnType<typeof createCommandRunner>): JsonObject {
+function reconcileLocked(
+  args: JsonObject,
+  runner: ReturnType<typeof createCommandRunner>,
+  enabled: { automationLogin?: string } = {},
+  recheck: () => void = () => {},
+  requestGithub?: ReturnType<typeof createGithubOperations>,
+): JsonObject {
   const { runDir } = canonicalAttemptLocation(args);
   const record = readAttemptRecord(runDir);
   assertAttemptProjectBinding(record, args);
   if (record.phase !== "prepared") {
     return driverResult("done", `attempt is already ${record.phase}`, { driverAction: "claim_already_reconciled" });
   }
-  const item = record.role === "worker"
+  const item = record.role === "worker" || record.role === "explorer"
     ? runner.runJson(["gh", "issue", "view", String(record.target.number), "-R", record.repository, "--json", "number,state,labels"])
     : runner.runJson(["gh", "pr", "view", String(record.target.number), "-R", record.repository,
       "--json", "number,state,headRefName,headRefOid,labels,comments"]);
+  const labels = labelNames(item);
+  if ((record.role === "worker" || record.role === "explorer") && record.agentRequest && !labels.has(String(record.agentRequest.label))) {
+    const github = requestGithub || createGithubOperations(runner, recheck);
+    const outcome = consumeIssueRequest({
+      github,
+      repository: String(record.repository),
+      issueNumber: Number(record.target.number),
+      requestLabel: String(record.agentRequest.label),
+      requestEventId: String(record.agentRequest.eventId),
+      inProgressLabel: String(args.inProgressLabel),
+      blockedLabel: String(args.blockedLabel),
+      automationLogin: String(enabled.automationLogin || ""),
+      attemptId: String(record.attemptId),
+      persistConsumed: () => { throw new Error("prepared attempt has no durable consumption receipt"); },
+    });
+    releasePersistedAttemptAuthority(runDir, new Date().toISOString(), String(record.agentRequest.eventId), "never_launched");
+    return driverResult("done", `prepared Issue request consumption was ${outcome.kind}`, {
+      driverAction: outcome.kind === "ambiguous_blocked"
+        ? "prepared_request_consumption_ambiguous"
+        : `prepared_request_${outcome.kind}`,
+    });
+  }
+  if (record.role === "explorer") {
+    return driverResult("done", "prepared exploration retained while its request still awaits consumption", {
+      driverAction: "prepared_request_waiting",
+    });
+  }
   const events = record.role === "worker" ? [] : runner.runJson([
     "gh", "api", "--paginate", "--slurp", `repos/${record.repository}/issues/${record.target.number}/events`,
   ]).flat();
@@ -105,7 +140,8 @@ function reconcile(args: JsonObject): JsonObject {
     id: String(args.projectId), repoPath: path.resolve(String(args.projectRepo)), githubRepo: String(args.githubRepo),
     stateDir: path.resolve(String(args.stateDir)), enabledAt: Number(args.enabledAt),
   };
-  return withEnabledDriverLock(project, () => reconcileLocked(args, runner));
+  return withEnabledDriverLock(project, (enabled: { automationLogin?: string }, recheck: () => void) =>
+    reconcileLocked(args, runner, enabled, recheck));
 }
 
 function main(): void {

@@ -41,10 +41,7 @@ pi install git:github.com/yasuhito/deadloop
    /deadloop-enable
    ```
 
-3. deadloop に任せる Issue に、次のラベルを両方付けます。
-
-   - `ready-for-agent`
-   - `agent:implement`
+3. 実装を依頼する Issue に `agent:implement` を付けます。`ready-for-agent` は任意のトリアージ用ラベルであり、作業開始には不要です。
 
 これだけで利用を開始できます。有効化すると、deadloop は `npm run check` を実行し、不足している標準ラベルを作成して、自動マージを無効にした状態で動き始めます。リポジトリに `npm run check` スクリプトがない場合は、[詳細設定](#詳細設定)に従って `deadloop.json` に別の `checkCommand` を指定してください。
 
@@ -55,9 +52,9 @@ Issue にラベルを付けると、ループが始まります。実装中と�
 ```mermaid
 flowchart TD
     I["`**実装待ちの Issue**
-    ready-for-agent + agent:implement`"]
+    agent:implement`"]
     W["`**実装中**
-    ready-for-agent + agent:in-progress`"]
+    agent:in-progress`"]
     R["`**PR のレビュー待ち**
     draft PR + agent:review`"]
     V["`**レビューと修正**
@@ -83,8 +80,8 @@ flowchart TD
     V -. 問題発生 .-> B
 ```
 
-1. **実装を依頼する** — `ready-for-agent` は、エージェントが対応できる Issue であることを示します。`agent:implement` を付けると実装を依頼できます。deadloop が Issue を取得する前に `agent:implement` を外すと、依頼を取り消せます。
-2. **deadloop に任せる** — deadloop は依頼ラベルを `agent:in-progress` に置き換え、`agent:review` を付けた draft PR を作成します。必要に応じて、レビューと修正を繰り返します。PR の作業は要求ラベルだけが待ち行列になり、`agent:update-branch`、`agent:implement`、`agent:review` の順に一度に 1 件ずつ処理されます。
+1. **実装を依頼する** — `agent:implement` を付けると実装を依頼できます。`ready-for-agent` は任意のトリアージ情報です。deadloop が選択した要求世代を消費する前に `agent:implement` を外すと、依頼を取り消せます。
+2. **deadloop に任せる** — deadloop は試行を永続化し、選択した要求だけを消費してから `agent:in-progress` を付け、Worker を起動します。その後、`agent:review` を付けた draft PR を作成し、必要に応じてレビューと修正を繰り返します。PR の作業は要求ラベルだけが待ち行列になり、`agent:update-branch`、`agent:implement`、`agent:review` の順に一度に 1 件ずつ処理されます。
 3. **完了または対応する** — 承認された PR は、自動マージが無効なら ready へ変わり agent 系ワークフローラベルが外れます。有効ならマージされます。`ready-for-human` は Issue の分類用ラベルであり、PR には付きません。`agent:blocked` が付くとループは止まり、止まった PR には agent への要求が 1 つも残りません。Issue または PR のコメントに記載された原因を解消し、次に実行したい役割の要求ラベルを追加してください。`agent:blocked` はその試行が始まった時点で消えます。
 
 ## 運用コマンド
@@ -119,7 +116,7 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 `projects.json` にはローカルのパスや運用設定が含まれます。リポジトリにはコミットしないでください。共有してレビューする方針は、リポジトリ内の `deadloop.json` に記載することを推奨します。
 
-実装 Issue が必須検証停止になった場合、deadloop は `ready-for-agent` を残し、実装用の進行ラベルを外して、理由別の復旧案内とともに `agent:blocked` を付けます。同じ復旧内容の案内は重複させず、設定変更だけでは再投入しません。必須検証が解決した後に限り、`/deadloop-doctor` が対象 Issue の再投入コマンドを表示します。
+実装 Issue が必須検証停止になった場合、deadloop は無関係なトリアージ用ラベルを残し、実装要求または進行中を示すラベルを外して、理由別の復旧案内とともに `agent:blocked` を付けます。同じ復旧内容の案内は重複させず、設定変更だけでは再投入しません。必須検証が解決した後に限り、`/deadloop-doctor` が対象 Issue の再投入コマンドを表示します。
 
 ## 安全装置
 

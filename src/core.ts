@@ -41,6 +41,7 @@ export const CANONICAL_GITHUB_LABELS = [
 
 export type LabelConfig = {
   ready?: string;
+  explore?: string;
   implement?: string;
   updateBranch?: string;
   inProgress?: string;
@@ -249,6 +250,7 @@ export function sanitizeId(value: unknown): string {
 export function normalizeLabels(labels: LabelConfig = {}): NormalizedLabels {
   return {
     ready: labels.ready || "ready-for-agent",
+    explore: labels.explore || "agent:explore",
     implement: labels.implement || "agent:implement",
     updateBranch: labels.updateBranch || "agent:update-branch",
     inProgress: labels.inProgress || "agent:in-progress",
@@ -320,6 +322,7 @@ const REPO_POLICY_PROJECT_KEYS = new Set([
 ]);
 const REPO_POLICY_LABEL_KEYS = new Set([
   "ready",
+  "explore",
   "implement",
   "updateBranch",
   "inProgress",
@@ -790,6 +793,7 @@ function automationRuntimeValues(
     reviewerAgent: project.reviewerAgent,
     reviewerModel: project.reviewerModel || "",
     readyLabel: project.labels.ready,
+    exploreLabel: project.labels.explore,
     implementLabel: project.labels.implement,
     updateBranchLabel: project.labels.updateBranch,
     inProgressLabel: project.labels.inProgress,
@@ -856,6 +860,7 @@ export function automationEnvironment(
     DEADLOOP_EXTERNAL_REVIEW_ENABLED: envText(values.externalReviewEnabled),
     DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS: envText(values.externalReviewWaitSeconds),
     DEADLOOP_READY_LABEL: envText(values.readyLabel),
+    DEADLOOP_EXPLORE_LABEL: envText(values.exploreLabel),
     DEADLOOP_IMPLEMENT_LABEL: envText(values.implementLabel),
     DEADLOOP_UPDATE_BRANCH_LABEL: envText(values.updateBranchLabel),
     DEADLOOP_IN_PROGRESS_LABEL: envText(values.inProgressLabel),

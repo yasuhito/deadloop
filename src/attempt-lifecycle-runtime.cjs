@@ -4,7 +4,7 @@ const path = require("node:path");
 const ATTEMPT_RECORD_FILE = "attempt.json";
 const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
 const SUCCESSFUL_PHASES = ["prepared", "github_claimed", "workspace_opened", "agent_started", "report_received", "github_persisted", "workspace_closed"];
-const ROLES = new Set(["worker", "reviewer", "review-repair", "branch-update"]);
+const ROLES = new Set(["worker", "explorer", "reviewer", "review-repair", "branch-update"]);
 const NEXT = { prepared: "github_claimed", github_claimed: "workspace_opened", workspace_opened: "agent_started", agent_started: "report_received", report_received: "github_persisted", github_persisted: "workspace_closed" };
 
 function attemptRecordPath(runDir) { return path.join(runDir, ATTEMPT_RECORD_FILE); }
@@ -26,6 +26,11 @@ function requiredVerification(value, required) {
     contract.override = { source: { kind: value.override.source.kind, location: nonEmpty(value.override.source.location, "requiredVerification.override.source.location") }, command: nonEmpty(value.override.command, "requiredVerification.override.command") };
   }
   return contract;
+}
+function agentRequest(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value) || !["worker", "explorer"].includes(value.role)) throw new Error("Invalid attempt record: agentRequest must be an Issue request binding");
+  return { role: value.role, label: nonEmpty(value.label, "agentRequest.label"), eventId: nonEmpty(value.eventId, "agentRequest.eventId") };
 }
 function parseAttemptRecord(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid attempt record: record must be an object");
@@ -92,6 +97,7 @@ function parseAttemptRecord(value) {
     ...(value.reviewHistoryRequired === undefined ? {} : { reviewHistoryRequired: value.reviewHistoryRequired }),
     ...(requiredVerification(value.requiredVerification, false) ? { requiredVerification: requiredVerification(value.requiredVerification, true) } : {}),
     ...(value.requestEventId === undefined ? {} : { requestEventId: value.requestEventId }),
+    ...(agentRequest(value.agentRequest) ? { agentRequest: agentRequest(value.agentRequest) } : {}),
     ...(abandonment ? { abandonment } : {}),
     ...(authorityRelease ? { authorityRelease } : {}),
   };
@@ -141,6 +147,13 @@ function validateFinalizer(report, evidence) {
 function validateComplete(report) {
   const result = object(report.result, "Completion result"); const evidence = object(report.evidence, "Completion evidence");
   if (report.role === "worker") { requiredSha(result, "outputRevision"); if (!stringArray(evidence.validations)) throw new Error("Worker completion requires validation evidence"); return; }
+  if (report.role === "explorer") {
+    if (!["low", "medium", "high"].includes(result.difficulty)) throw new Error("Explorer completion difficulty is invalid");
+    for (const field of ["relevantFiles", "verifiedClaims", "disprovedClaims", "openQuestions"]) if (!Array.isArray(result[field]) || !result[field].every((item) => typeof item === "string" && item.trim())) throw new Error(`Explorer completion ${field} is invalid`);
+    if (result.approach !== undefined && (typeof result.approach !== "string" || !result.approach.trim())) throw new Error("Explorer completion approach is invalid");
+    if (!Array.isArray(evidence.commands) || !evidence.commands.every((item) => typeof item === "string" && item.trim())) throw new Error("Explorer completion command evidence is invalid");
+    return;
+  }
   if (report.role === "reviewer") {
     if (!["approved", "changes_requested", "human_required"].includes(result.outcome)) throw new Error("Reviewer completion outcome is invalid");
     requiredSha(result, "reviewedHead"); if (!sameText(result.reviewedHead, report.inputRevision.head)) throw new Error("Reviewer completion reviewedHead does not match input revision");
@@ -180,6 +193,7 @@ function assertAdvance(current, next) {
   for (const field of ["branch", "baseBranch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile", "autoMergePolicy", "reviewHistoryRequired"]) if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
   if (current.requestEventId !== next.requestEventId) throw new Error("Attempt record requestEventId cannot change");
+  if (JSON.stringify(current.agentRequest) !== JSON.stringify(next.agentRequest)) throw new Error("Attempt record agentRequest cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"]) if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (current.abandonment !== undefined && JSON.stringify(current.abandonment) !== JSON.stringify(next.abandonment)) throw new Error("Attempt record abandonment evidence cannot change");
   if (current.authorityRelease !== undefined && JSON.stringify(current.authorityRelease) !== JSON.stringify(next.authorityRelease)) throw new Error("Attempt record authority-release evidence cannot change");
@@ -234,7 +248,7 @@ function recordPersistedCompletionReport(runDir, report) {
   const record = readAttemptRecord(runDir);
   validateCompletionReportBinding(record, report);
   if (record.phase !== "agent_started") throw new Error(`Attempt phase ${record.phase} cannot receive a report`);
-  const outputRevision = report.status === "complete" && report.role !== "reviewer" ? report.result?.outputRevision : undefined;
+  const outputRevision = report.status === "complete" && ["worker", "review-repair", "branch-update"].includes(report.role) ? report.result?.outputRevision : undefined;
   const next = { ...record, ...(outputRevision ? { outputRevision } : {}), phase: "report_received", lastSuccessfulPhase: "report_received" };
   writeAttemptRecordAtomically(attemptRecordPath(runDir), next); return next;
 }
