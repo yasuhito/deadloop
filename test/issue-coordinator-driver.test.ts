@@ -183,6 +183,53 @@ exit 2
     expect(runDriverFixture("driver-explore.json").launch.instructions).toContain("Do not edit, create, delete, rename, or format repository files");
   });
 
+  it("hands successful exploration to the deterministic completion path", () => {
+    expect(runDriverFixture("driver-explore.json").prompt).toContain("complete-issue-exploration.ts");
+  });
+
+  it("launches a recovery request ordered after an Issue block", () => {
+    expect(runDriverFixture("driver-blocked-recovery.json").driverAction).toBe("explorer_monitor_request");
+  });
+
+  it("clears the old block when its recovery attempt starts", () => {
+    expect(runDriverFixture("driver-blocked-recovery.json").launch.issueLabels).not.toContain("agent:blocked");
+  });
+
+  it("clears the recovery block before consuming its only request", () => {
+    expect(runDriverFixture("driver-blocked-recovery.json").launch.timelineEvents.slice(-3)
+      .map((event: any) => `${event.event}:${event.label.name}`)).toEqual([
+        "unlabeled:agent:blocked",
+        "unlabeled:agent:explore",
+        "labeled:agent:in-progress",
+      ]);
+  });
+
+  it("does not let a stale blocked candidate starve another valid Issue", () => {
+    expect(runDriverFixture("driver-stale-blocked-before-valid.json").issueNumber).toBe(15);
+  });
+
+  it("does not consume a request when a newer block races with recovery", () => {
+    const { clearIssueRecoveryBlock } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
+    const events = [
+      { id: "10", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } },
+      { id: "11", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:explore" } },
+    ];
+    expect(() => clearIssueRecoveryBlock({
+      listIssueLabels: () => [{ name: "agent:blocked" }],
+      listIssueTimelineEvents: () => events,
+      deleteIssueLabel: () => {
+        events.push(
+          { id: "12", event: "unlabeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } },
+          { id: "13", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } },
+        );
+        return { status: 200 };
+      },
+    }, { githubRepo: "owner/repo", blockedLabel: "agent:blocked" }, 14, {
+      label: "agent:explore",
+      eventId: "11",
+    })).toThrow("blocked again");
+  });
+
   it("reports the deterministic Worker name", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });

@@ -26,7 +26,12 @@ const {
   parseFixtureArg,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
-const { activeIssueRequestEvent, consumeIssueRequest } = require("../../../src/issue-request-transition.ts");
+const {
+  activeIssueRequestEvent,
+  consumeIssueRequest,
+  issueLabelIsActive,
+  issueRecoveryBlockCanBeCleared,
+} = require("../../../src/issue-request-transition.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
@@ -37,6 +42,9 @@ import type { DriverResult, JsonObject } from "../../../src/automation-driver-ki
 
 const SCRIPT_DIR = __dirname;
 const CLEANUP_SCRIPT = path.join(SCRIPT_DIR, "cleanup-completed-worker-worktrees.ts");
+function shellQuote(value: unknown): string {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
 const commandRunner = createCommandRunner();
 const { runText, runJson } = commandRunner;
 
@@ -104,6 +112,34 @@ function reconcileAmbiguousPreparedWorkerConsumption(
   return null;
 }
 
+function clearIssueRecoveryBlock(
+  github: {
+    deleteIssueLabel: (repository: string, issueNumber: number, label: string) => { status: number };
+    listIssueLabels: (repository: string, issueNumber: number) => JsonObject[];
+    listIssueTimelineEvents: (repository: string, issueNumber: number) => JsonObject[];
+  },
+  env: ReturnType<typeof envConfig>,
+  issueNumber: number,
+  request: { label: string; eventId: string },
+): void {
+  const labels = github.listIssueLabels(env.githubRepo, issueNumber);
+  if (!labels.some((label) => String(label.name || "") === env.blockedLabel)) return;
+  const events = github.listIssueTimelineEvents(env.githubRepo, issueNumber);
+  if (!issueRecoveryBlockCanBeCleared(events, request.label, request.eventId, env.blockedLabel)) {
+    throw new StaleLaunchError(`Issue #${issueNumber} recovery block is newer than the selected request`);
+  }
+  const deletion = github.deleteIssueLabel(env.githubRepo, issueNumber, env.blockedLabel);
+  if (deletion.status !== 200 && deletion.status !== 404) {
+    throw new Error(`Issue #${issueNumber} recovery block removal could not be proven`);
+  }
+  const afterLabels = github.listIssueLabels(env.githubRepo, issueNumber);
+  const afterEvents = github.listIssueTimelineEvents(env.githubRepo, issueNumber);
+  if (afterLabels.some((label) => String(label.name || "") === env.blockedLabel)
+    || issueLabelIsActive(afterEvents, env.blockedLabel)) {
+    throw new StaleLaunchError(`Issue #${issueNumber} was blocked again before request consumption`);
+  }
+}
+
 function gateMissingContractComment(issue: JsonObject): string {
   return [
     "deadloop skipped automated implementation because the issue is missing an implementation contract.",
@@ -132,7 +168,14 @@ function applyIssueTransition(
       assertSameLaunchTarget(issue, live, "issue");
       const livePlan = planIssueCoordinatorAction(
         [live],
-        decisionForIssues(undefined, [live], env.githubRepo, env),
+        decisionForIssues(
+          undefined,
+          [live],
+          env.githubRepo,
+          env,
+          undefined,
+          (candidate) => github.listIssueTimelineEvents(env.githubRepo, candidate.number),
+        ),
       );
       if (livePlan.kind !== expectedKind || Number(livePlan.issue.number) !== Number(issue.number)) {
         throw new StaleLaunchError(`Issue #${issue.number} transition changed`);
@@ -509,6 +552,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       },
       commentIssue: (_repository: string, _issueNumber: number, body: string) => comments.push({ body }),
     };
+    clearIssueRecoveryBlock(fixtureGithub, env, number, agentRequest);
     const requestTransition = consumeIssueRequest({
       github: fixtureGithub,
       repository: env.githubRepo,
@@ -550,6 +594,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     (recheck: () => void, enabled: { githubRepositoryId?: string; automationLogin?: string }) => {
       assertPreparedWorkerContractCurrent(plan.input, env, enabled.githubRepositoryId);
       const github = githubOperations(recheck);
+      clearIssueRecoveryBlock(github, env, number, agentRequest);
       const outcome = consumeIssueRequest({
         github,
         repository: env.githubRepo,
@@ -580,13 +625,20 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         plan.input,
         { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync },
       ),
-      recordGithubMutation: () => recordAgentLaunchGithubClaimed(plan.input),
+      recordClaim: () => recordAgentLaunchGithubClaimed(plan.input),
       revalidate: () => {
         const deadline = issueDecisionDeadline();
         const liveIssue = githubOperations().getIssue(env.githubRepo, number);
         const livePlan = planIssueCoordinatorAction(
           [liveIssue],
-          decisionForIssues(undefined, [liveIssue], env.githubRepo, env, deadline),
+          decisionForIssues(
+            undefined,
+            [liveIssue],
+            env.githubRepo,
+            env,
+            deadline,
+            (candidate) => githubOperations().listIssueTimelineEvents(env.githubRepo, candidate.number),
+          ),
         );
         if (livePlan.kind !== "worker_required") throw new StaleLaunchError("selected issue is no longer eligible");
         assertSameLaunchTarget(issue, livePlan.issue, "issue");
@@ -679,6 +731,7 @@ function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig
       },
       commentIssue: (_repository: string, _issueNumber: number, body: string) => comments.push({ body }),
     };
+    clearIssueRecoveryBlock(fixtureGithub, env, number, agentRequest);
     const requestTransition = consumeIssueRequest({
       github: fixtureGithub,
       repository: env.githubRepo,
@@ -718,6 +771,7 @@ function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig
     env,
     (recheck: () => void, enabled: { automationLogin?: string }) => {
       const github = githubOperations(recheck);
+      clearIssueRecoveryBlock(github, env, number, agentRequest);
       const outcome = consumeIssueRequest({
         github,
         repository: env.githubRepo,
@@ -754,7 +808,14 @@ function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig
         const liveIssue = githubOperations().getIssue(env.githubRepo, number);
         const livePlan = planIssueCoordinatorAction(
           [liveIssue],
-          decisionForIssues(undefined, [liveIssue], env.githubRepo, env, deadline),
+          decisionForIssues(
+            undefined,
+            [liveIssue],
+            env.githubRepo,
+            env,
+            deadline,
+            (candidate) => githubOperations().listIssueTimelineEvents(env.githubRepo, candidate.number),
+          ),
         );
         if (livePlan.kind !== "explorer_required") throw new StaleLaunchError("selected issue is no longer eligible for exploration");
         assertSameLaunchTarget(issue, livePlan.issue, "issue");
@@ -848,7 +909,14 @@ function drive(fixturePath: string | undefined): DriverResult {
       ...(verificationResolution?.reason ? { reason: verificationResolution.reason } : {}), fingerprint: stopped.fingerprint,
     });
   }
-  const decision = decisionForIssues(fixturePath, issues, env.githubRepo, env);
+  const decision = decisionForIssues(
+    fixturePath,
+    issues,
+    env.githubRepo,
+    env,
+    undefined,
+    (candidate) => githubOperations().listIssueTimelineEvents(env.githubRepo, candidate.number),
+  );
   const issuePlan = planIssueCoordinatorAction(issues, decision);
   if (issuePlan.kind === "skip_no_candidate") return driverResult("skip", "No target issue", { driverAction: "no_candidate", decision });
 
@@ -943,10 +1011,25 @@ function driveSelectedIssue(
       }
       throw error;
     }
+    const completion = [
+      "node", shellQuote(path.join(env.automationDir, "complete-issue-exploration.ts")),
+      "--attempt-record", shellQuote(launch.attemptRecordFile),
+      "--project-id", shellQuote(env.projectId),
+      "--project-repo", shellQuote(env.repoPath),
+      "--github-repo", shellQuote(env.githubRepo),
+      "--state-dir", shellQuote(env.stateDir),
+      "--enabled-at", shellQuote(env.enabledAt),
+      "--explore-label", shellQuote(env.exploreLabel),
+      "--implement-label", shellQuote(env.implementLabel),
+      "--in-progress-label", shellQuote(env.inProgressLabel),
+      "--blocked-label", shellQuote(env.blockedLabel),
+    ].join(" ");
     const prompt = [
       `A read-only explorer is running for Issue #${issue.number}.`,
       `Monitor only the promise file at ${launch.promiseFile}. Do not launch another agent.`,
       "Do not mutate the repository or GitHub. The deterministic completion path will validate and persist the result.",
+      `After a complete or blocked promise, run exactly: \`${completion}\`.`,
+      "If completion reports cleanup pending, do not replay the result comment or label mutation; retry the same command.",
     ].join("\n");
     return driverResult("needs_llm", `Launched read-only explorer for Issue #${issue.number}`, {
       driverAction: "explorer_monitor_request",
@@ -1051,4 +1134,12 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { assertPreparedWorkerContractCurrent, assertRecoverableWorkerCheckout, assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };
+module.exports = {
+  assertPreparedWorkerContractCurrent,
+  assertRecoverableWorkerCheckout,
+  assertWorkerLaunchBaseCurrent,
+  clearIssueRecoveryBlock,
+  envConfig,
+  issueWorkerLaunchPlan,
+  launchIssueWorkerFlow,
+};

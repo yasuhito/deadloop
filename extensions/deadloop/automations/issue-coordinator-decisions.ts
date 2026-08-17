@@ -5,6 +5,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { passesIssueLabelGate } = require("../../../src/issue-eligibility.cjs");
+const { issueRecoveryRequestIsEligible } = require("../../../src/issue-request-transition.ts");
 const { MAX_DRIVER_REVALIDATION_MS } = require("../../../src/driver-enablement.cjs");
 
 type IssueDecisionRecord = Record<string, any>;
@@ -138,8 +139,9 @@ function selectIssueForImplementation(
   config: IssueDecisionConfig,
   relationshipDependencies: (issue: IssueDecisionRecord) => Set<number>,
   dependencyState: (number: number) => string | null | undefined,
+  timelineEvents: (issue: IssueDecisionRecord) => IssueDecisionRecord[] = (issue) => issue.timelineEvents || [],
 ): IssueDecisionRecord {
-  const skipLabels = [config.inProgressLabel, config.blockedLabel, config.needsInfoLabel, config.humanLabel, config.wontfixLabel];
+  const skipLabels = [config.inProgressLabel, config.needsInfoLabel, config.humanLabel, config.wontfixLabel];
   const skipped: IssueDecisionRecord[] = [];
   const sorted = [...issues].sort((left, right) => issueNumberForDecision(left) - issueNumberForDecision(right));
 
@@ -154,6 +156,11 @@ function selectIssueForImplementation(
     }
     if (!passesIssueLabelGate(issue, { required: [request.label], blocked: skipLabels })) {
       skipped.push(skipIssueForDecision("skip_label", issue));
+      continue;
+    }
+    if (labels.has(config.blockedLabel)
+      && !issueRecoveryRequestIsEligible(timelineEvents(issue), request.label, config.blockedLabel)) {
+      skipped.push(skipIssueForDecision("stale_blocked_request", issue));
       continue;
     }
 
