@@ -5,6 +5,7 @@ const {
   assertBranchUpdateCompletionObservation,
   assertBranchUpdateRepositoryIdentity,
   parseArgs,
+  waitForPushedHeadVisibility,
 } = require("../extensions/deadloop/automations/pr-branch-update-complete.ts");
 const head = "a".repeat(40);
 
@@ -76,6 +77,50 @@ describe("branch update completion attempt", () => {
       { id: "R_other", nameWithOwner: "owner/repo" },
       { githubRepositoryId: "R_repo", githubRepo: "owner/repo" },
     )).toThrow("repository identity changed");
+  });
+});
+
+describe("branch update head visibility", () => {
+  it("waits through the original head until GitHub exposes the pushed head", () => {
+    const observations = [
+      { pr: { state: "OPEN", headRefName: "agent/issue-24", headRefOid: head }, labels: ["agent:in-progress"] },
+      { pr: { state: "OPEN", headRefName: "agent/issue-24", headRefOid: "b".repeat(40) }, labels: ["agent:in-progress"] },
+    ];
+    expect(waitForPushedHeadVisibility({
+      observe: () => observations.shift(),
+      pause: () => {},
+      branch: "agent/issue-24",
+      originalHead: head,
+      pushedHead: "b".repeat(40),
+      attempts: 2,
+    }).pr.headRefOid).toBe("b".repeat(40));
+  });
+
+  it("rejects a head that is neither the original nor the proven pushed revision", () => {
+    expect(() => waitForPushedHeadVisibility({
+      observe: () => ({
+        pr: { state: "OPEN", headRefName: "agent/issue-24", headRefOid: "c".repeat(40) },
+        labels: ["agent:in-progress"],
+      }),
+      pause: () => {},
+      branch: "agent/issue-24",
+      originalHead: head,
+      pushedHead: "b".repeat(40),
+    })).toThrow("target changed");
+  });
+
+  it("fails without mutating labels when the pushed head remains invisible", () => {
+    expect(() => waitForPushedHeadVisibility({
+      observe: () => ({
+        pr: { state: "OPEN", headRefName: "agent/issue-24", headRefOid: head },
+        labels: ["agent:in-progress"],
+      }),
+      pause: () => {},
+      branch: "agent/issue-24",
+      originalHead: head,
+      pushedHead: "b".repeat(40),
+      attempts: 2,
+    })).toThrow("not yet visible");
   });
 });
 

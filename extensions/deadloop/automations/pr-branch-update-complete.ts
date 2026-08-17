@@ -102,6 +102,37 @@ function assertBranchUpdateCompletionObservation(input: CompletionObservation): 
   }
 }
 
+type PrObservation = {
+  pr: JsonObject;
+  labels: string[];
+};
+
+function waitForPushedHeadVisibility(input: {
+  observe: () => PrObservation;
+  pause: () => void;
+  branch: string;
+  originalHead: string;
+  pushedHead: string;
+  attempts?: number;
+}): PrObservation {
+  const attempts = input.attempts ?? 10;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const current = input.observe();
+    const state = String(current.pr.state || "").toUpperCase();
+    const branch = String(current.pr.headRefName || "");
+    const head = String(current.pr.headRefOid || "").toLowerCase();
+    if (state !== "OPEN" || branch !== input.branch) {
+      throw new Error("branch-update completion target changed before the pushed head became visible");
+    }
+    if (head === input.pushedHead.toLowerCase()) return current;
+    if (head !== input.originalHead.toLowerCase()) {
+      throw new Error("branch-update completion target changed before the pushed head became visible");
+    }
+    if (attempt + 1 < attempts) input.pause();
+  }
+  throw new Error("branch-update pushed head is not yet visible on the pull request");
+}
+
 function completion(args: JsonObject): DriverResult {
   const runner = createCommandRunner();
   runHerdrPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
@@ -129,17 +160,24 @@ function completion(args: JsonObject): DriverResult {
     if (String(enabled.githubRepo || "") !== String(args.githubRepo)
       || !String(enabled.githubRepositoryId || "")) throw new Error("enablement repository identity changed before branch-update completion");
     const observation = createGithubOperations(runner);
-    const observe = (): { pr: JsonObject; labels: string[] } => {
+    const observe = (): PrObservation => {
       const current = observation.getPr(String(args.githubRepo), String(args.pr));
       return { pr: current, labels: labelNames(current) };
     };
+    const observePushedHead = (): PrObservation => waitForPushedHeadVisibility({
+      observe,
+      pause: () => { runner.runText(["sleep", "1"]); },
+      branch: String(record.branch),
+      originalHead: transition.originalHeadOid,
+      pushedHead: revision,
+    });
     assertBranchUpdateRepositoryIdentity(observation.getRepositoryIdentity(String(args.githubRepo)), enabled);
     const authenticatedLogin = (): string => runner.runText([
       "gh", "api", "user", "--jq", ".login",
     ]).trim().toLowerCase();
     const assertCurrent = (mode: CompletionObservation["mode"]): void => {
       const login = authenticatedLogin();
-      const current = observe();
+      const current = observePushedHead();
       assertBranchUpdateRepositoryIdentity(observation.getRepositoryIdentity(String(args.githubRepo)), enabled);
       assertBranchUpdateCompletionObservation({
         ...current,
@@ -155,7 +193,7 @@ function completion(args: JsonObject): DriverResult {
         mode,
       });
     };
-    const before = observe();
+    const before = observePushedHead();
     // The review request may already exist when a retry re-enters after the label move landed, but
     // it is idempotent only for this exact proven head, identity, and managed state.
     if (before.labels.includes(String(args.reviewLabel)) && !before.labels.includes(String(args.inProgressLabel))) {
@@ -197,5 +235,6 @@ module.exports = {
   assertBranchUpdateCompletionObservation,
   assertBranchUpdateRepositoryIdentity,
   completion,
+  waitForPushedHeadVisibility,
   parseArgs,
 };
