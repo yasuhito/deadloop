@@ -23,7 +23,7 @@ describe("monitor prompts", () => {
   it("passes the configured Worker review label to attempt persistence", () => {
     const prompt = renderIssueMonitorPrompt({
       issueNumber: 12, automationDir: "/automation", promiseFile: "/state/runs/one/promise.json", actorName: "Worker",
-      worktreePath: "/wt", branch: "agent/issue-12", checkCommand: "npm test", readyLabel: "custom:ready",
+      worktreePath: "/wt", branch: "agent/issue-12", checkCommand: "npm test",
       implementLabel: "custom:implement", reviewLabel: "custom:review", inProgressLabel: "custom:claimed",
       blockedLabel: "custom:blocked",
     });
@@ -34,7 +34,7 @@ describe("monitor prompts", () => {
   it("passes configured Worker labels to the completion proof", () => {
     const prompt = renderIssueMonitorPrompt({
       issueNumber: 12, automationDir: "/automation", promiseFile: "/state/runs/one/promise.json", actorName: "Worker",
-      worktreePath: "/wt", branch: "agent/issue-12", checkCommand: "npm test", readyLabel: "custom:ready",
+      worktreePath: "/wt", branch: "agent/issue-12", checkCommand: "npm test",
       implementLabel: "custom:implement", reviewLabel: "custom:review", inProgressLabel: "custom:claimed",
       blockedLabel: "custom:blocked",
     });

@@ -27,6 +27,7 @@ type IssueRequestTransitionOutcome =
   | { kind: "cancelled"; requestEventId: string }
   | { kind: "raced"; requestEventId: string }
   | { kind: "recovery_blocked"; requestEventId: string }
+  | { kind: "blocked_after_consumption"; requestEventId: string }
   | { kind: "ambiguous_blocked"; requestEventId: string };
 
 type PersistSuccessfulExplorationInput = {
@@ -134,40 +135,90 @@ function ambiguousComment(input: ConsumeIssueRequestInput): string {
   ].join("\n");
 }
 
-function blockAmbiguousConsumption(input: ConsumeIssueRequestInput): IssueRequestTransitionOutcome {
-  if (!input.automationLogin.trim()) throw new Error("authorized Automation host login is required");
-  const observe = () => ({
+function blockedConsumptionComment(input: ConsumeIssueRequestInput): string {
+  return [
+    `<!-- deadloop:blocked-request-consumption:v1 attempt=${input.attemptId} -->`,
+    "## Agent request was consumed before a stop",
+    "",
+    `deadloop consumed the selected \`${input.requestLabel}\` request, then observed \`${input.blockedLabel}\` again before the attempt started. No agent was launched.`,
+    "",
+    "The consumed request was not restored because a stop holds no waiting Agent request.",
+    "To request a new attempt, resolve the reported stop, then add a new Agent request:",
+    "",
+    "```bash",
+    `gh issue edit ${input.issueNumber} -R ${quoteShell(input.repository)} --add-label ${quoteShell(input.requestLabel)}`,
+    "```",
+  ].join("\n");
+}
+
+type IssueStopObservation = {
+  events: JsonObject[];
+  labels: Set<string>;
+  comments: JsonObject[];
+};
+
+function observeStopState(input: ConsumeIssueRequestInput): IssueStopObservation {
+  return {
     events: input.github.listIssueTimelineEvents(input.repository, input.issueNumber),
     labels: new Set(input.github.listIssueLabels(input.repository, input.issueNumber).map(labelName).filter(Boolean)),
     comments: input.github.listIssueComments(input.repository, input.issueNumber),
-  });
-  const trustedActiveBlock = (observation: ReturnType<typeof observe>) => {
-    const latest = labelEvent(observation.events, input.blockedLabel);
-    return observation.labels.has(input.blockedLabel)
-      && String(latest?.event || "").toLowerCase() === "labeled"
-      && String(latest?.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase();
   };
+}
+
+function automationAuthoredActiveBlock(
+  observation: IssueStopObservation,
+  input: ConsumeIssueRequestInput,
+): boolean {
+  const latest = labelEvent(observation.events, input.blockedLabel);
+  return observation.labels.has(input.blockedLabel)
+    && String(latest?.event || "").toLowerCase() === "labeled"
+    && String(latest?.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase();
+}
+
+function blockAmbiguousConsumption(input: ConsumeIssueRequestInput): IssueRequestTransitionOutcome {
+  if (!input.automationLogin.trim()) throw new Error("authorized Automation host login is required");
   const body = ambiguousComment(input);
-  let observation = observe();
-  if (!trustedActiveBlock(observation)) {
+  let observation = observeStopState(input);
+  if (!automationAuthoredActiveBlock(observation, input)) {
     if (observation.labels.has(input.blockedLabel)) {
       throw new Error("ambiguous request-consumption block could not be proven");
     }
     input.github.addIssueLabel(input.repository, input.issueNumber, input.blockedLabel);
-    observation = observe();
+    observation = observeStopState(input);
   }
-  if (!trustedActiveBlock(observation)) {
+  if (!automationAuthoredActiveBlock(observation, input)) {
     throw new Error("ambiguous request-consumption block could not be proven");
   }
   if (!trustedExactComment(observation.comments, input.automationLogin, body)) {
     input.github.commentIssue(input.repository, input.issueNumber, body);
-    observation = observe();
+    observation = observeStopState(input);
   }
-  if (!trustedActiveBlock(observation)
+  if (!automationAuthoredActiveBlock(observation, input)
     || !trustedExactComment(observation.comments, input.automationLogin, body)) {
     throw new Error("ambiguous request-consumption recovery explanation could not be proven");
   }
   return { kind: "ambiguous_blocked", requestEventId: input.requestEventId };
+}
+
+/**
+ * Explain a stop that raced in after the selected request was provably consumed.
+ *
+ * The consumed generation cannot be restored, so the operator-visible recovery interface is a new
+ * Agent request. The stop label is owned by whoever raised it; this seam only proves its own exact
+ * recovery explanation and never mutates a label.
+ */
+function stopConsumedRequest(input: ConsumeIssueRequestInput): IssueRequestTransitionOutcome {
+  if (!input.automationLogin.trim()) throw new Error("authorized Automation host login is required");
+  const body = blockedConsumptionComment(input);
+  let observation = observeStopState(input);
+  if (!trustedExactComment(observation.comments, input.automationLogin, body)) {
+    input.github.commentIssue(input.repository, input.issueNumber, body);
+    observation = observeStopState(input);
+  }
+  if (!trustedExactComment(observation.comments, input.automationLogin, body)) {
+    throw new Error("consumed-request stop explanation could not be proven");
+  }
+  return { kind: "blocked_after_consumption", requestEventId: input.requestEventId };
 }
 
 function selectedRequestEvent(observation: ReturnType<typeof observeRequest>, input: ConsumeIssueRequestInput): JsonObject | null {
@@ -471,7 +522,7 @@ function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTrans
   );
   if (!ownRemoval) return blockAmbiguousConsumption(input);
   if (after.labels.has(input.blockedLabel) || issueLabelIsActive(after.events, input.blockedLabel)) {
-    return { kind: "recovery_blocked", requestEventId: input.requestEventId };
+    return stopConsumedRequest(input);
   }
 
   const newerRequest = selectedLabelEvents.find((event) =>

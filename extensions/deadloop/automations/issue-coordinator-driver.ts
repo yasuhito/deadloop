@@ -9,7 +9,7 @@ const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
-const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
+const { issueDecisionDeadline, issueRequestStopResult } = require("./issue-coordinator-decisions.ts");
 const { renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
 const {
   applyIssueRequiredVerificationStop,
@@ -625,7 +625,6 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         plan.input,
         { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync },
       ),
-      recordClaim: () => recordAgentLaunchGithubClaimed(plan.input),
       revalidate: () => {
         const deadline = issueDecisionDeadline();
         const liveIssue = githubOperations().getIssue(env.githubRepo, number);
@@ -802,7 +801,6 @@ function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig
         input,
         { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync },
       ),
-      recordClaim: () => recordAgentLaunchGithubClaimed(input),
       revalidate: () => {
         const deadline = issueDecisionDeadline();
         const liveIssue = githubOperations().getIssue(env.githubRepo, number);
@@ -989,17 +987,10 @@ function driveSelectedIssue(
       launch = launchIssueExplorer(issue, env, fixture);
     } catch (error) {
       const transition = (error as Error & { requestTransition?: string }).requestTransition;
-      if (transition === "ambiguous_blocked") {
-        return driverResult("done", `Issue #${issue.number} exploration request consumption was ambiguous; blocked with recovery guidance`, {
-          driverAction: "ambiguous_request_consumption_blocked",
-          issueNumber: issue.number,
-        });
-      }
-      if (transition === "cancelled" || transition === "raced") {
-        return driverResult("skip", transition === "cancelled"
-          ? `Issue #${issue.number} exploration request was cancelled before consumption`
-          : `Issue #${issue.number} received a newer exploration request; the selected attempt did not launch`, {
-          driverAction: transition === "cancelled" ? "exploration_request_cancelled" : "exploration_request_raced",
+      const stop = issueRequestStopResult(String(transition || ""), "exploration", Number(issue.number));
+      if (stop) {
+        return driverResult(stop.status, stop.message, {
+          driverAction: stop.driverAction,
           issueNumber: issue.number,
         });
       }
@@ -1060,17 +1051,10 @@ function driveSelectedIssue(
     launch = launchIssueWorker(issue, env, fixture);
   } catch (error) {
     const transition = (error as Error & { requestTransition?: string }).requestTransition;
-    if (transition === "ambiguous_blocked") {
-      return driverResult("done", `Issue #${issue.number} request consumption was ambiguous; blocked with recovery guidance`, {
-        driverAction: "ambiguous_request_consumption_blocked",
-        issueNumber: issue.number,
-      });
-    }
-    if (transition === "cancelled" || transition === "raced") {
-      return driverResult("skip", transition === "cancelled"
-        ? `Issue #${issue.number} implementation request was cancelled before consumption`
-        : `Issue #${issue.number} received a newer implementation request; the selected attempt did not launch`, {
-        driverAction: transition === "cancelled" ? "implementation_request_cancelled" : "implementation_request_raced",
+    const stop = issueRequestStopResult(String(transition || ""), "implementation", Number(issue.number));
+    if (stop) {
+      return driverResult(stop.status, stop.message, {
+        driverAction: stop.driverAction,
         issueNumber: issue.number,
       });
     }
@@ -1103,7 +1087,6 @@ function driveSelectedIssue(
       cwd: String(launch.worktreePath || ""),
       command: env.checkCommand,
     }),
-    readyLabel: env.readyLabel,
     implementLabel: env.implementLabel,
     reviewLabel: env.reviewLabel,
     inProgressLabel: env.inProgressLabel,

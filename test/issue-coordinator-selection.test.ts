@@ -2,7 +2,13 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-const { DEPENDENCY_QUERY_TIMEOUT_MS, defaultIssueDecisionConfig, remainingIssueDecisionTimeout, selectIssueForImplementation } = require("../extensions/deadloop/automations/issue-coordinator-decisions.ts");
+const {
+  DEPENDENCY_QUERY_TIMEOUT_MS,
+  defaultIssueDecisionConfig,
+  issueRequestStopResult,
+  remainingIssueDecisionTimeout,
+  selectIssueForImplementation,
+} = require("../extensions/deadloop/automations/issue-coordinator-decisions.ts");
 const decisionScript = "extensions/deadloop/automations/issue-coordinator-decisions.ts";
 
 function runDecision(args: string[]) {
@@ -49,6 +55,26 @@ describe("issue coordinator selection", () => {
     );
 
     expect(decision.number).toBe(1);
+  });
+
+  it("queries a blocked Issue timeline once for both requested roles", () => {
+    let queries = 0;
+    selectIssueForImplementation(
+      [{
+        number: 1,
+        body: "",
+        labels: [{ name: "agent:explore" }, { name: "agent:implement" }, { name: "agent:blocked" }],
+      }],
+      defaultIssueDecisionConfig(),
+      () => new Set(),
+      () => "CLOSED",
+      () => {
+        queries += 1;
+        return [{ id: "10", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } }];
+      },
+    );
+
+    expect(queries).toBe(1);
   });
 
   it("rejects a blocked request ordered before the Issue block", () => {
@@ -110,5 +136,41 @@ describe("issue coordinator selection", () => {
 
   it("stops dependency queries once the overall deadline expires", () => {
     expect(() => remainingIssueDecisionTimeout(10_000, 10_000)).toThrow("deadline exceeded");
+  });
+});
+
+describe("issue request stop results", () => {
+  it("reports an ambiguous consumption stop as completed work", () => {
+    expect(issueRequestStopResult("ambiguous_blocked", "implementation", 42).driverAction)
+      .toBe("ambiguous_request_consumption_blocked");
+  });
+
+  it("reports a stop that raced in after consumption with its own action", () => {
+    expect(issueRequestStopResult("blocked_after_consumption", "implementation", 42).driverAction)
+      .toBe("request_consumed_before_stop");
+  });
+
+  it("does not call a consumed request an untouched Issue", () => {
+    expect(issueRequestStopResult("blocked_after_consumption", "implementation", 42).message)
+      .toBe("Issue #42 implementation request was consumed before a stop; left recovery guidance");
+  });
+
+  it("skips an Issue blocked again before its request was consumed", () => {
+    expect(issueRequestStopResult("recovery_blocked", "exploration", 42).driverAction)
+      .toBe("recovery_block_raced");
+  });
+
+  it("names the role of a cancelled request", () => {
+    expect(issueRequestStopResult("cancelled", "exploration", 42).driverAction)
+      .toBe("exploration_request_cancelled");
+  });
+
+  it("names the role of a raced request", () => {
+    expect(issueRequestStopResult("raced", "implementation", 42).driverAction)
+      .toBe("implementation_request_raced");
+  });
+
+  it("leaves an unrelated launch failure to the caller", () => {
+    expect(issueRequestStopResult("consumed", "implementation", 42)).toBeNull();
   });
 });

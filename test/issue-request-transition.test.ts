@@ -23,7 +23,7 @@ function scenario(options: {
   persistError?: string;
   blockDuringObservation?: boolean;
   removeBlockAfterAdd?: boolean;
-  copiedAmbiguousComment?: { body: string; login: string };
+  copiedComment?: { body: string; login: string };
   automationLogin?: string;
   retry?: boolean;
 } = {}) {
@@ -31,12 +31,12 @@ function scenario(options: {
   const automationLogin = options.automationLogin ?? "deadloop-bot";
   let persisted = false;
   let launches = 0;
-  if (options.copiedAmbiguousComment) {
+  if (options.copiedComment) {
     const timestamp = "2026-08-16T00:00:30Z";
     state.comments.push({
       id: "copied-comment",
-      body: options.copiedAmbiguousComment.body,
-      user: { login: options.copiedAmbiguousComment.login },
+      body: options.copiedComment.body,
+      user: { login: options.copiedComment.login },
       created_at: timestamp,
       updated_at: timestamp,
     });
@@ -337,7 +337,7 @@ describe("Issue Agent request transition", () => {
 
   it("does not trust copied ambiguous recovery guidance from another commenter", () => {
     const body = scenario({ persistError: "interrupted" }).comments[0].body;
-    expect(scenario({ persistError: "interrupted", copiedAmbiguousComment: { body, login: "intruder" } }).comments)
+    expect(scenario({ persistError: "interrupted", copiedComment: { body, login: "intruder" } }).comments)
       .toHaveLength(2);
   });
 
@@ -373,9 +373,31 @@ describe("Issue Agent request transition", () => {
     expect(scenario({ blockDuringObservation: true }).outcome.kind).toBe("recovery_blocked");
   });
 
-  it("does not consume a request when a block appears during deletion", () => {
+  it("reports a stop bound to the consumed request when a block appears during deletion", () => {
     expect(scenario({ duringDelete: (state) => state.label("agent:blocked", "human") }).outcome.kind)
-      .toBe("recovery_blocked");
+      .toBe("blocked_after_consumption");
+  });
+
+  it("does not launch when a block appears after the request was consumed", () => {
+    expect(scenario({ duringDelete: (state) => state.label("agent:blocked", "human") }).launches).toBe(0);
+  });
+
+  it("leaves recovery guidance when a block appears after the request was consumed", () => {
+    expect(scenario({ duringDelete: (state) => state.label("agent:blocked", "human") }).comments[0].body)
+      .toContain("--add-label 'agent:implement'");
+  });
+
+  it("says the request was consumed when a block appears after consumption", () => {
+    expect(scenario({ duringDelete: (state) => state.label("agent:blocked", "human") }).comments[0].body)
+      .toContain("consumed the selected `agent:implement` request");
+  });
+
+  it("does not trust copied consumed-request stop guidance from another commenter", () => {
+    const body = scenario({ duringDelete: (state) => state.label("agent:blocked", "human") }).comments[0].body;
+    expect(scenario({
+      duringDelete: (state) => state.label("agent:blocked", "human"),
+      copiedComment: { body, login: "intruder" },
+    }).comments).toHaveLength(2);
   });
 
   it("does not clear a recovery block newer than the selected request", () => {

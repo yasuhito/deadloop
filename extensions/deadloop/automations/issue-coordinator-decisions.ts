@@ -144,6 +144,17 @@ function selectIssueForImplementation(
   const skipLabels = [config.inProgressLabel, config.needsInfoLabel, config.humanLabel, config.wontfixLabel];
   const skipped: IssueDecisionRecord[] = [];
   const sorted = [...issues].sort((left, right) => issueNumberForDecision(left) - issueNumberForDecision(right));
+  // Every Issue is visited once per requested role, and its timeline cannot change between those
+  // passes, so a blocked candidate must cost at most one paginated timeline query per decision.
+  const timelineByIssue = new Map<number, IssueDecisionRecord[]>();
+  const cachedTimelineEvents = (issue: IssueDecisionRecord): IssueDecisionRecord[] => {
+    const number = issueNumberForDecision(issue);
+    const cached = timelineByIssue.get(number);
+    if (cached) return cached;
+    const events = timelineEvents(issue);
+    timelineByIssue.set(number, events);
+    return events;
+  };
 
   for (const request of [
     { label: config.exploreLabel, role: "explorer" },
@@ -159,7 +170,7 @@ function selectIssueForImplementation(
       continue;
     }
     if (labels.has(config.blockedLabel)
-      && !issueRecoveryRequestIsEligible(timelineEvents(issue), request.label, config.blockedLabel)) {
+      && !issueRecoveryRequestIsEligible(cachedTimelineEvents(issue), request.label, config.blockedLabel)) {
       skipped.push(skipIssueForDecision("stale_blocked_request", issue));
       continue;
     }
@@ -330,6 +341,64 @@ function configFromIssueArgs(args: IssueDecisionRecord): IssueDecisionConfig {
   });
 }
 
+type IssueRequestRole = "exploration" | "implementation";
+
+type IssueRequestStopResult = {
+  status: "done" | "skip";
+  message: string;
+  driverAction: string;
+};
+
+/**
+ * Map one Issue request transition outcome onto the driver result that reports it.
+ *
+ * Only outcomes that describe the request itself are mapped here; an unrelated launch failure
+ * returns null so the caller keeps its own staleness handling. Messages must not claim an untouched
+ * Issue for an outcome that already mutated workflow state.
+ */
+function issueRequestStopResult(
+  kind: string,
+  role: IssueRequestRole,
+  issueNumber: number,
+): IssueRequestStopResult | null {
+  if (kind === "ambiguous_blocked") {
+    return {
+      status: "done",
+      message: `Issue #${issueNumber} ${role} request consumption was ambiguous; blocked with recovery guidance`,
+      driverAction: "ambiguous_request_consumption_blocked",
+    };
+  }
+  if (kind === "blocked_after_consumption") {
+    return {
+      status: "done",
+      message: `Issue #${issueNumber} ${role} request was consumed before a stop; left recovery guidance`,
+      driverAction: "request_consumed_before_stop",
+    };
+  }
+  if (kind === "recovery_blocked") {
+    return {
+      status: "skip",
+      message: `Issue #${issueNumber} was blocked again before its ${role} request was consumed`,
+      driverAction: "recovery_block_raced",
+    };
+  }
+  if (kind === "cancelled") {
+    return {
+      status: "skip",
+      message: `Issue #${issueNumber} ${role} request was cancelled before consumption`,
+      driverAction: `${role}_request_cancelled`,
+    };
+  }
+  if (kind === "raced") {
+    return {
+      status: "skip",
+      message: `Issue #${issueNumber} received a newer ${role} request; the selected attempt did not launch`,
+      driverAction: `${role}_request_raced`,
+    };
+  }
+  return null;
+}
+
 function main(argv: string[] = process.argv.slice(2)): number {
   const args = parseArgsForIssueDecision(argv);
   if (args.help) {
@@ -377,6 +446,7 @@ module.exports = {
   issueBlockedByNumbers,
   issueDecisionDeadline,
   issueNumberForDecision,
+  issueRequestStopResult,
   liveDependencyState,
   remainingIssueDecisionTimeout,
   selectIssueForImplementation,

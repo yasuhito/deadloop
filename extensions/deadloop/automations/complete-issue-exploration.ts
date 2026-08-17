@@ -218,7 +218,6 @@ function completeExplorationLocked(args: JsonObject, command: ReturnType<typeof 
     || record.agentRequest.role !== "explorer") throw new Error("attempt is not a bound Issue exploration");
 
   const runner = createHerdrRunnerFromCommandRunner(command);
-  let failed = false;
   if (record.phase !== "github_persisted" && record.phase !== "workspace_closed") {
     let receipt: JsonObject;
     if (fs.existsSync(explorationOutcomePath(runDir))) {
@@ -257,7 +256,6 @@ function completeExplorationLocked(args: JsonObject, command: ReturnType<typeof 
     }
     const report = receipt.report;
     const failure = receipt.failure as { reason: string; explanation: string; recovery: string } | null;
-    failed = receipt.outcome === "blocked";
     if (record.phase === "agent_started") record = recordPersistedCompletionReport(runDir, report);
     if (record.phase !== "report_received") throw new Error(`exploration is not completable from ${record.phase}`);
 
@@ -288,7 +286,7 @@ function completeExplorationLocked(args: JsonObject, command: ReturnType<typeof 
   const completion = completeLocked(args, command, recheck);
   if (completion.driverAction !== "workspace_closed") return completion;
   record = readAttemptRecord(runDir);
-  failed = readExplorationOutcome(runDir, record).outcome === "blocked";
+  const failed = readExplorationOutcome(runDir, record).outcome === "blocked";
   if (!failed) {
     removeExplorationWorktree(record, String(args.projectRepo), runner);
     persistExplorationWorktreeCleanup(runDir, record);
