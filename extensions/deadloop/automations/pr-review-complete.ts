@@ -48,6 +48,7 @@ function completion(args: JsonObject, ops: ReviewCompletionOps = { dispatch }): 
   return ops.dispatch({
     promise: String(record.promiseFile),
     attemptRecord: attemptRecordFile,
+    requestEventId: String(record.requestEventId || ""),
     pr: String(args.pr),
     expectedHead: proven.expectedHead,
     branch: String(record.branch || ""),
@@ -61,7 +62,6 @@ function completion(args: JsonObject, ops: ReviewCompletionOps = { dispatch }): 
     updateBranchLabel: String(args.updateBranchLabel || ""),
     inProgressLabel: String(args.inProgressLabel || ""),
     blockedLabel: String(args.blockedLabel || ""),
-    ...(args.reviewClaim ? { reviewClaim: typeof args.reviewClaim === "string" ? args.reviewClaim : JSON.stringify(args.reviewClaim) } : {}),
   });
 }
 

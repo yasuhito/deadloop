@@ -4,10 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPreparedAttempt, readAttemptRecord } from "../src/attempt-lifecycle";
 
-const { hasExactClaim, reconcileLocked } = require("../extensions/deadloop/automations/reconcile-prepared-attempt.ts");
+const { hasExactRequestConsumption, reconcileLocked } = require("../extensions/deadloop/automations/reconcile-prepared-attempt.ts");
 
 const roots: string[] = [];
-function setup(options: { agentRequest?: boolean; role?: "worker" | "explorer" } = {}) {
+function setup(input: "worker" | "reviewer" | { agentRequest?: boolean; role?: "worker" | "explorer" } = "worker") {
+  const options: { agentRequest?: boolean; role?: "worker" | "explorer" | "reviewer" } =
+    typeof input === "string" ? { role: input } : input;
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-claim-reconcile-"));
   roots.push(root);
   const stateDir = path.join(root, "state");
@@ -15,17 +17,22 @@ function setup(options: { agentRequest?: boolean; role?: "worker" | "explorer" }
   const role = options.role || "worker";
   createPreparedAttempt(runDir, {
     attemptId: "launch-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role,
-    target: { kind: "issue", number: 12 }, inputRevision: { head: "a".repeat(40) }, ...(role === "worker" ? { requiredVerification: {
+    target: { kind: role === "reviewer" ? "pull-request" : "issue", number: 12 },
+    inputRevision: { head: "a".repeat(40) },
+    ...(role === "worker" ? { requiredVerification: {
       repository: "owner/repo", command: "npm test", source: { kind: "repo_policy" as const, location: "deadloop.json" }, baseRevision: "a".repeat(40),
-    } } : {}), branch: "agent/issue-12",
+    } } : role === "reviewer" ? { requestEventId: "request-12" } : {}),
+    branch: "agent/issue-12",
     baseBranch: "origin/main", worktreePath: path.join(root, "worktree"), agentName: "dl-w-12-123456789abc",
     workspaceLabel: "Issue 12", promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
-    ...(options.agentRequest ? { agentRequest: { role, label: role === "explorer" ? "custom:explore" : "custom:implement", eventId: "request-1" } } : {}),
+    ...(options.agentRequest && role !== "reviewer"
+      ? { agentRequest: { role, label: role === "explorer" ? "custom:explore" : "custom:implement", eventId: "request-1" } }
+      : {}),
   });
   const args = {
     attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: root, githubRepo: "owner/repo", stateDir,
     enabledAt: "1", readyLabel: "custom:ready", exploreLabel: "custom:explore", implementLabel: "custom:implement", inProgressLabel: "custom:claimed",
-    reviewLabel: "custom:review", blockedLabel: "custom:blocked",
+    reviewLabel: "custom:review", updateBranchLabel: "custom:update", blockedLabel: "custom:blocked",
   };
   return { args, runDir };
 }
@@ -50,13 +57,35 @@ describe("prepared attempt claim reconciliation", () => {
     const data = setup();
     const runner = { runJson: () => ({ state: "OPEN", labels: [{ name: "custom:ready" }, { name: "custom:claimed" }] }) };
     const result = reconcileLocked(data.args, runner);
-    expect(result.driverAction).toBe("prepared_claim_reconciled");
+    expect(result.driverAction).toBe("prepared_request_consumption_reconciled");
   });
 
-  it("does not require the optional triage label for a request-bound Worker claim", () => {
+  it("retains a prepared reviewer after DELETE succeeds before phase advancement", () => {
+    const data = setup("reviewer");
+    const runner = { runJson: (args: string[]) => args.some((arg) => arg.endsWith("/events"))
+      ? [[{ id: "request-12", event: "labeled", label: { name: "custom:review" } }]]
+      : { state: "OPEN", headRefName: "agent/issue-12", headRefOid: "a".repeat(40), labels: [{ name: "custom:claimed" }], comments: [] } };
+
+    reconcileLocked(data.args, runner);
+
+    expect(readAttemptRecord(data.runDir).phase).toBe("prepared");
+  });
+
+  it("does not recognize a partial reviewer transition that still has its selected request", () => {
+    const data = setup("reviewer");
+    const record = readAttemptRecord(data.runDir);
+    const item = {
+      state: "OPEN", headRefName: record.branch, headRefOid: record.inputRevision.head,
+      labels: [{ name: "custom:claimed" }, { name: "custom:review" }], comments: [],
+    };
+
+    expect(hasExactRequestConsumption(record, item, data.args, [{ id: "request-12" }])).toBe(false);
+  });
+
+  it("does not require the optional triage label for request-bound Worker consumption", () => {
     const data = setup({ agentRequest: true });
     const item = { state: "OPEN", labels: [{ name: "custom:claimed" }] };
-    expect(hasExactClaim(readAttemptRecord(data.runDir), item, data.args)).toBe(true);
+    expect(hasExactRequestConsumption(readAttemptRecord(data.runDir), item, data.args)).toBe(true);
   });
 
   it("retains prepared exploration without claim-authority reconciliation", () => {
@@ -69,14 +98,14 @@ describe("prepared attempt claim reconciliation", () => {
     const data = setup();
     const record = { ...readAttemptRecord(data.runDir), role: "reviewer", target: { kind: "pull-request", number: 12 } };
     const item = { state: "OPEN", headRefName: record.branch, headRefOid: "b".repeat(40), labels: [{ name: "custom:review" }, { name: "custom:claimed" }], comments: [] };
-    expect(hasExactClaim(record, item, data.args)).toBe(false);
+    expect(hasExactRequestConsumption(record, item, data.args)).toBe(false);
   });
 
   it("requires the exact repair-attempt marker for a review-repair claim", () => {
     const data = setup();
     const record = { ...readAttemptRecord(data.runDir), role: "review-repair", target: { kind: "pull-request", number: 12 } };
     const item = { state: "OPEN", headRefName: record.branch, headRefOid: record.inputRevision.head, labels: [{ name: "custom:review" }, { name: "custom:claimed" }], comments: [{ body: `<!-- deadloop:review-repair-attempt key=${record.attemptId} head=${record.inputRevision.head} review=abc -->` }] };
-    expect(hasExactClaim(record, item, data.args)).toBe(true);
+    expect(hasExactRequestConsumption(record, item, data.args)).toBe(true);
   });
 
   it("is idempotent after restart once the exact claim was durably reconciled", () => {

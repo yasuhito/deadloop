@@ -170,8 +170,8 @@ export type AttemptRecord = AttemptIdentity & {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  requestEventId?: string;
   agentRequest?: AgentRequestBinding;
-  reviewClaim?: Record<string, unknown>;
   abandonment?: AttemptAbandonment;
   authorityRelease?: AttemptAuthorityRelease;
 };
@@ -187,8 +187,8 @@ export type PreparedAttemptInput = AttemptIdentity & {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  requestEventId?: string;
   agentRequest?: AgentRequestBinding;
-  reviewClaim?: Record<string, unknown>;
 };
 
 const SUCCESSFUL_PHASES: Exclude<AttemptPhase, "launch_failed" | "abandoned" | "authority_released">[] = [
@@ -345,6 +345,7 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(parseRequiredVerification(record.requiredVerification, false)
       ? { requiredVerification: parseRequiredVerification(record.requiredVerification, true) }
       : {}),
+    ...(record.requestEventId === undefined ? {} : { requestEventId: nonEmptyString(record.requestEventId, "requestEventId") }),
     ...(record.agentRequest === undefined
       ? {}
       : record.agentRequest && typeof record.agentRequest === "object" && !Array.isArray(record.agentRequest)
@@ -356,11 +357,6 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
           eventId: nonEmptyString((record.agentRequest as Record<string, unknown>).eventId, "agentRequest.eventId"),
         } }
         : fail("agentRequest must be an Issue request binding")),
-    ...(record.reviewClaim === undefined
-      ? {}
-      : record.reviewClaim && typeof record.reviewClaim === "object" && !Array.isArray(record.reviewClaim)
-        ? { reviewClaim: record.reviewClaim as Record<string, unknown> }
-        : fail("reviewClaim must be an object")),
     ...(abandonment ? { abandonment } : {}),
     ...(authorityRelease ? { authorityRelease } : {}),
   };
@@ -412,8 +408,8 @@ function assertRecordAdvance(current: AttemptRecord, next: AttemptRecord): void 
     if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
+  if (current.requestEventId !== next.requestEventId) throw new Error("Attempt record requestEventId cannot change");
   if (JSON.stringify(current.agentRequest) !== JSON.stringify(next.agentRequest)) throw new Error("Attempt record agentRequest cannot change");
-  if (current.reviewClaim !== undefined && JSON.stringify(current.reviewClaim) !== JSON.stringify(next.reviewClaim)) throw new Error("Attempt record reviewClaim cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"] as const) {
     if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }

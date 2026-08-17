@@ -418,9 +418,9 @@ function buildStuckReviewClaimFindings(
       return !hasWorkingReviewer(agents, reviewerName, worktree);
     })
     .map((pr) => ({
-      id: `stuck-review-claim-${pr.number ?? "unknown"}`,
+      id: `stuck-review-state-${pr.number ?? "unknown"}`,
       type: "stuck_claim" as const,
-      title: `stuck reviewing claim: ${issueRef(pr)}`,
+      title: `stuck reviewing state: ${issueRef(pr)}`,
       summary: `${project.labels.inProgress} is present, but the matching reviewer agent is not working in Herdr. This may be a stale interrupted review run.`,
       commands: [`gh pr edit ${pr.number ?? "<number>"} -R ${shellArg(repo)} --remove-label ${shellArg(project.labels.inProgress)}`],
     }));

@@ -4,13 +4,8 @@
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
-const {
-  classifyActiveReviewClaim,
-  parsePaginatedGithubJson,
-  savedReviewClaimContract,
-  visiblyBlockReviewClaimTimeFailure,
-} = require("./pr-review-claim.ts");
-const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
 const GUARDED_OPERATION_TIMEOUT_MS = MAX_GUARDED_OPERATION_MS;
 
@@ -22,14 +17,9 @@ type Args = {
   targetKind: "issue" | "pull-request";
   command: string[];
   attemptRecord?: string;
-  reviewClaim?: Record<string, unknown>;
+  inProgressLabel?: string;
+  blockedLabel?: string;
 };
-
-type SavedClaimLoader = (
-  attemptRecord: string,
-  supplied: unknown,
-  authority: { stateDir: string; githubRepo: string; targetNumber: number },
-) => Record<string, unknown>;
 
 type ApprovedOperation = { positional: number; valueFlags: Set<string> };
 
@@ -107,26 +97,28 @@ function parseArgs(argv: string[]): Args {
     targetKind: values.targetKind as Args["targetKind"],
     command: argv.slice(separator + 1),
     ...(values.attemptRecord ? { attemptRecord: values.attemptRecord } : {}),
-    ...(values.reviewClaim ? { reviewClaim: JSON.parse(values.reviewClaim) } : {}),
+    ...(values.inProgressLabel ? { inProgressLabel: values.inProgressLabel } : {}),
+    ...(values.blockedLabel ? { blockedLabel: values.blockedLabel } : {}),
   };
 }
 
 function runGuarded(
   args: Args,
   spawn = spawnSync,
-  loadSavedClaim: SavedClaimLoader = savedReviewClaimContract,
-  loadCurrentConfiguration?: (...args: unknown[]) => Record<string, unknown>,
 ): number {
   const commandTarget = assertApprovedCommand(args.command, args.githubRepo);
   if (args.targetKind === "pull-request" && !args.attemptRecord) {
     throw new Error("saved attempt record is required before guarded PR mutation");
+  }
+  if (args.targetKind === "pull-request" && (!args.inProgressLabel || !args.blockedLabel)) {
+    throw new Error("configured in-progress and blocked labels are required before guarded PR mutation");
   }
   if (args.targetKind === "issue" && args.command[1] === "pr") {
     throw new Error("issue mutation authority cannot target a pull request command");
   }
   return withEnabledProjectLock(
     { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt },
-    (enabled: { automationLogin?: string }, recheck: () => void) => {
+    (enabled: { automationLogin?: string; githubRepositoryId?: string; githubRepo?: string }, recheck: () => void) => {
       if (args.targetKind === "issue") {
         const issue = spawn("gh", ["api", `repos/${args.githubRepo}/issues/${commandTarget}`], {
           encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GUARDED_OPERATION_TIMEOUT_MS,
@@ -139,85 +131,47 @@ function runGuarded(
       }
       if (args.targetKind === "pull-request") {
         const suppliedTarget = Number(commandTarget);
-        const savedClaim = loadSavedClaim(args.attemptRecord!, args.reviewClaim, {
-          stateDir: args.stateDir,
-          githubRepo: args.githubRepo,
-          targetNumber: suppliedTarget,
-        });
-        const number = String((savedClaim.binding as { targetNumber?: unknown })?.targetNumber || "");
-        if (commandTarget !== number) {
-          throw new Error("active review claim target does not match guarded PR mutation target");
+        const location = canonicalAttemptLocation({ stateDir: args.stateDir, attemptRecord: args.attemptRecord });
+        const record = readAttemptRecord(location.runDir);
+        if (record.repository !== args.githubRepo || record.target?.kind !== "pull-request"
+          || Number(record.target?.number) !== suppliedTarget) {
+          throw new Error("saved attempt target does not match guarded PR mutation target");
         }
         const query = (queryArgs: string[]) => spawn("gh", queryArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GUARDED_OPERATION_TIMEOUT_MS });
-        const authenticated = query(["api", "user", "--jq", ".login"]);
-        const automationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
-        if (authenticated.status !== 0 || !automationLogin || String(authenticated.stdout || "").trim().toLowerCase() !== automationLogin) {
-          throw new Error("current authenticated GitHub identity does not match enablement authority");
-        }
-        recheck();
-        const currentConfiguration = assertCurrentReviewClaimAuthority(
-          savedClaim, args.stateDir, enabled, automationLogin, loadCurrentConfiguration,
-        );
-        const authoritativeClaim = { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins };
-        const readObservation = (includeDate: boolean) => {
-          const repository = query(["repo", "view", args.githubRepo, "--json", "id,nameWithOwner"]);
-          const pr = query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
-          const events = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${commandTarget}/events`]);
-          const comments = query(["api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${commandTarget}/comments`]);
-          const headers = includeDate ? query(["api", "--include", `repos/${args.githubRepo}`]) : { status: 0, stdout: "", stderr: "" };
-          if ([repository, pr, events, comments].some((result) => result.status !== 0)) {
-            return { kind: "binding_mismatch", comments: [], labels: [] };
+        const assertCurrentPrMutationBoundary = (): void => {
+          const authenticated = query(["api", "user", "--jq", ".login"]);
+          const automationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
+          if (authenticated.status !== 0 || !automationLogin || String(authenticated.stdout || "").trim().toLowerCase() !== automationLogin) {
+            throw new Error("current authenticated GitHub identity does not match enablement authority");
           }
-          try {
-            const identity = JSON.parse(repository.stdout || "{}");
-            const livePr = JSON.parse(pr.stdout || "{}");
-            const liveComments = parsePaginatedGithubJson(comments.stdout);
-            return {
-              ...classifyActiveReviewClaim(
-                livePr,
-                parsePaginatedGithubJson(events.stdout),
-                liveComments,
-                headers.status === 0 ? headers.stdout : "",
-                authoritativeClaim,
-                { repositoryId: String(identity.id || ""), repository: String(identity.nameWithOwner || ""), targetNumber: Number(commandTarget) },
-              ),
-              comments: liveComments,
-              labels: (livePr.labels || []).map((label: { name?: unknown } | string) => typeof label === "string" ? label : String(label.name || "")),
-            };
-          } catch {
-            return { kind: "binding_mismatch", comments: [], labels: [] };
+
+          const repository = query(["repo", "view", args.githubRepo, "--json", "id,nameWithOwner"]);
+          let identity: Record<string, unknown> = {};
+          try { identity = JSON.parse(repository.stdout || "{}"); }
+          catch { throw new Error("live GitHub PR target could not be verified"); }
+          if (repository.status !== 0 || String(identity.id || "") !== String(enabled.githubRepositoryId || "")
+            || String(identity.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
+            throw new Error("guarded PR mutation target changed from the attempt revision");
+          }
+
+          const pr = query(["pr", "view", commandTarget, "-R", args.githubRepo, "--json", "state,headRefOid,labels"]);
+          let livePr: Record<string, unknown> = {};
+          try { livePr = JSON.parse(pr.stdout || "{}"); }
+          catch { throw new Error("live GitHub PR target could not be verified"); }
+          if (pr.status !== 0 || String(livePr.state || "").toUpperCase() !== "OPEN"
+            || String(livePr.headRefOid || "").toLowerCase() !== String(record.inputRevision?.head || "").toLowerCase()) {
+            throw new Error("guarded PR mutation target changed from the attempt revision");
+          }
+          const labels = new Set(Array.isArray(livePr.labels)
+            ? livePr.labels.map((label) => typeof label === "string" ? label : String(label?.name || "")).filter(Boolean)
+            : []);
+          if (!labels.has(String(args.inProgressLabel)) || labels.has(String(args.blockedLabel))) {
+            throw new Error("guarded PR mutation requires the current active workflow state");
           }
         };
-        const authority = readObservation(true);
-        if (authority.kind === "server_time_unverifiable") {
-          visiblyBlockReviewClaimTimeFailure({
-            contract: authoritativeClaim,
-            blockedLabel: String(savedClaim.blockedLabel || "agent:blocked"),
-            observe: () => {
-              recheck();
-              const login = query(["api", "user", "--jq", ".login"]);
-              if (login.status !== 0 || String(login.stdout || "").trim().toLowerCase() !== automationLogin) {
-                return { kind: "binding_mismatch", comments: [], labels: [] };
-              }
-              try {
-                assertCurrentReviewClaimAuthority(savedClaim, args.stateDir, enabled, automationLogin, loadCurrentConfiguration);
-              } catch {
-                return { kind: "binding_mismatch", comments: [], labels: [] };
-              }
-              return readObservation(false);
-            },
-            comment: (body: string) => {
-              const result = query(["pr", "comment", commandTarget, "-R", args.githubRepo, "--body", body]);
-              if (result.status !== 0) throw new Error("visible review claim block comment failed");
-            },
-            addBlocked: () => {
-              const result = query(["pr", "edit", commandTarget, "-R", args.githubRepo, "--add-label", String(savedClaim.blockedLabel || "agent:blocked")]);
-              if (result.status !== 0) throw new Error("visible review claim blocked label failed");
-            },
-          });
-          throw new Error("active review claim server time could not be verified before GitHub mutation");
-        }
-        if (authority.kind !== "authorized") throw new Error("active review claim could not be reauthorized before GitHub mutation");
+        assertCurrentPrMutationBoundary();
+        recheck();
+        assertCurrentPrMutationBoundary();
       }
       if (args.targetKind === "issue") recheck();
       const result = spawn(args.command[0], args.command.slice(1), {

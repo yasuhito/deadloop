@@ -42,8 +42,8 @@ type AgentLaunchFlowInput = {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
+  requestEventId?: string;
   agentRequest?: { role: "worker" | "explorer"; label: string; eventId: string };
-  reviewClaim?: Record<string, unknown>;
   renderPrompt: (input: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => string;
 };
 
@@ -107,8 +107,8 @@ function preparedRecordInput(input: AgentLaunchFlowInput, prepared: PreparedLaun
     ...(input.autoMergePolicy === undefined ? {} : { autoMergePolicy: input.autoMergePolicy }),
     ...(input.reviewHistoryRequired === undefined ? {} : { reviewHistoryRequired: input.reviewHistoryRequired }),
     ...(input.requiredVerification === undefined ? {} : { requiredVerification: input.requiredVerification }),
+    ...(input.requestEventId === undefined ? {} : { requestEventId: input.requestEventId }),
     ...(input.agentRequest === undefined ? {} : { agentRequest: input.agentRequest }),
-    ...(input.reviewClaim === undefined ? {} : { reviewClaim: input.reviewClaim }),
   };
 }
 
@@ -158,8 +158,8 @@ function samePreparedIdentity(record: AttemptRecord, expected: PreparedAttemptIn
     && record.autoMergePolicy === expected.autoMergePolicy
     && record.reviewHistoryRequired === expected.reviewHistoryRequired
     && JSON.stringify(record.requiredVerification) === JSON.stringify(expected.requiredVerification)
-    && JSON.stringify(record.agentRequest) === JSON.stringify(expected.agentRequest)
-    && JSON.stringify(record.reviewClaim) === JSON.stringify(expected.reviewClaim);
+    && record.requestEventId === expected.requestEventId
+    && JSON.stringify(record.agentRequest) === JSON.stringify(expected.agentRequest);
 }
 
 /** Persist the launch intent before a GitHub claim, label, comment, or runner mutation. */
@@ -202,11 +202,8 @@ function prepareAgentLaunchFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlo
   return prepared;
 }
 
-/**
- * Roles whose attempt journal must carry the GitHub request claim they consumed. Their prepared
- * identity includes that claim, so the claim has to exist before the journal is written.
- */
-const CLAIM_BOUND_AGENT_ROLES = ["reviewer", "branch-update"];
+/** Roles whose attempt journal records the exact GitHub request event they consumed. */
+const REQUEST_BOUND_AGENT_ROLES = ["reviewer", "branch-update"];
 
 function recordAgentLaunchGithubClaimed(input: AgentLaunchFlowInput): AttemptRecord {
   const prepared = launchPaths(input);
@@ -214,8 +211,8 @@ function recordAgentLaunchGithubClaimed(input: AgentLaunchFlowInput): AttemptRec
   if (!samePreparedIdentity(existing, preparedRecordInput(input, prepared))) {
     throw new Error("attempt run directory identity does not match this claim");
   }
-  if (CLAIM_BOUND_AGENT_ROLES.includes(String(existing.role)) && !existing.reviewClaim) {
-    throw new Error(`${existing.role} GitHub claim cannot be recorded without an immutable review claim contract`);
+  if (REQUEST_BOUND_AGENT_ROLES.includes(String(existing.role)) && !existing.requestEventId) {
+    throw new Error(`${existing.role} GitHub request consumption cannot be recorded without a request event id`);
   }
   if (existing.phase === "github_claimed") return existing;
   if (existing.phase !== "prepared") throw new Error(`attempt phase ${existing.phase} cannot record a GitHub claim`);
@@ -373,4 +370,4 @@ function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): 
   }
 }
 
-module.exports = { CLAIM_BOUND_AGENT_ROLES, launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed };
+module.exports = { REQUEST_BOUND_AGENT_ROLES, launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed };

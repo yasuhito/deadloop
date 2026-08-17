@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Reconcile the non-atomic GitHub-claim / local-journal boundary without replaying a claim.
+// Reconcile the non-atomic GitHub request-consumption / local-journal boundary without replaying it.
 const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
@@ -21,7 +21,7 @@ function parseArgs(argv: string[]): JsonObject {
   }
   for (const name of [
     "attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "enabledAt", "readyLabel", "implementLabel",
-    "inProgressLabel", "reviewLabel", "blockedLabel",
+    "inProgressLabel", "reviewLabel", "updateBranchLabel", "blockedLabel",
   ]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
@@ -33,7 +33,7 @@ function labelNames(item: JsonObject): Set<string> {
     typeof label === "string" ? label : String(label?.name || "")));
 }
 
-function hasExactClaim(record: JsonObject, item: JsonObject, args: JsonObject): boolean {
+function hasExactRequestConsumption(record: JsonObject, item: JsonObject, args: JsonObject, events: JsonObject[] = []): boolean {
   const labels = labelNames(item);
   if (record.role === "worker") {
     return String(item.state || "").toUpperCase() === "OPEN"
@@ -42,13 +42,20 @@ function hasExactClaim(record: JsonObject, item: JsonObject, args: JsonObject): 
       && !labels.has(String(args.implementLabel))
       && !labels.has(String(args.blockedLabel));
   }
+  const requestBound = record.role === "reviewer" || record.role === "branch-update";
   const exactPullRequest = String(item.state || "").toUpperCase() === "OPEN"
     && String(item.headRefName || "") === String(record.branch)
     && String(item.headRefOid || "").toLowerCase() === String(record.inputRevision.head).toLowerCase()
-    && labels.has(String(args.reviewLabel))
     && labels.has(String(args.inProgressLabel))
-    && !labels.has(String(args.blockedLabel));
+    && !labels.has(String(args.blockedLabel))
+    && (!requestBound || (
+      !labels.has(String(args.implementLabel))
+      && !labels.has(String(args.reviewLabel))
+      && !labels.has(String(args.updateBranchLabel))
+    ));
   if (!exactPullRequest) return false;
+  if (requestBound
+    && !events.some((event) => String(event.id || event.node_id || "") === String(record.requestEventId || ""))) return false;
   const comments = (item.comments || []).map((comment: JsonObject) => String(comment?.body || ""));
   if (record.role === "branch-update") {
     return comments.some((body: string) => body.includes(
@@ -107,14 +114,22 @@ function reconcileLocked(
       driverAction: "prepared_request_waiting",
     });
   }
-  if (!hasExactClaim(record, item, args)) {
-    return driverResult("done", "prepared attempt retained because the exact GitHub claim is absent or changed", {
-      driverAction: "prepared_claim_blocked",
+  const events = record.role === "worker" ? [] : runner.runJson([
+    "gh", "api", "--paginate", "--slurp", `repos/${record.repository}/issues/${record.target.number}/events`,
+  ]).flat();
+  if (!hasExactRequestConsumption(record, item, args, events)) {
+    return driverResult("done", "prepared attempt retained because the exact GitHub request consumption is absent or changed", {
+      driverAction: "prepared_request_consumption_blocked",
     });
   }
-  const claimed = transitionPersistedAttempt(runDir, "github_claimed");
-  return driverResult("done", "prepared attempt GitHub claim reconciled", {
-    driverAction: "prepared_claim_reconciled", record: claimed,
+  if (record.role === "reviewer" || record.role === "branch-update") {
+    return driverResult("done", "prepared request-bound attempt retained because the confirmed HTTP 200 result was not durably phase-advanced", {
+      driverAction: "prepared_request_consumption_blocked",
+    });
+  }
+  const consumed = transitionPersistedAttempt(runDir, "github_claimed");
+  return driverResult("done", "prepared attempt GitHub request consumption reconciled", {
+    driverAction: "prepared_request_consumption_reconciled", record: consumed,
   });
 }
 
@@ -136,4 +151,4 @@ function main(): void {
   }
 }
 if (require.main === module) main();
-module.exports = { hasExactClaim, parseArgs, reconcile, reconcileLocked };
+module.exports = { hasExactRequestConsumption, parseArgs, reconcile, reconcileLocked };

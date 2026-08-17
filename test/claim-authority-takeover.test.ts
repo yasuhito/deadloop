@@ -83,8 +83,16 @@ describe("work authority takeover at claim time", () => {
     expect(takeover(stateDir)).toEqual(["attempt-0"]);
   });
 
-  it("releases a stopped attempt whatever its saved claim records", () => {
-    const stateDir = stateDirWith([{ reviewClaim: { binding: { requestEventId: "req-2" } } }]);
+  it("does not release the prepared attempt performing the current consumption", () => {
+    const stateDir = stateDirWith([{ phase: "prepared", lastSuccessfulPhase: "prepared" }]);
+
+    expect(takeWorkAuthorityFromRetainedAttempts({
+      stateDir, projectId: "demo", githubRepo: "owner/repo", prNumber: 31, currentAttemptId: "attempt-0",
+    }, { runner: stoppedRuntime() })).toEqual([]);
+  });
+
+  it("releases a stopped attempt whatever request event it consumed", () => {
+    const stateDir = stateDirWith([{ requestEventId: "req-2" }]);
 
     expect(takeover(stateDir)).toEqual(["attempt-0"]);
   });

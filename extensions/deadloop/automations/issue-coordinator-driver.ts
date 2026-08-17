@@ -580,7 +580,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         plan.input,
         { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync },
       ),
-      recordClaim: () => recordAgentLaunchGithubClaimed(plan.input),
+      recordGithubMutation: () => recordAgentLaunchGithubClaimed(plan.input),
       revalidate: () => {
         const deadline = issueDecisionDeadline();
         const liveIssue = githubOperations().getIssue(env.githubRepo, number);

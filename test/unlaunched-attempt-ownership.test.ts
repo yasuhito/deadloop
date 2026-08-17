@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { reconcile } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
-const { renderReviewClaimComment } = require("../extensions/deadloop/automations/pr-review-claim.ts");
 
 const HEAD = "a".repeat(40);
 const roots: string[] = [];
@@ -20,22 +19,6 @@ afterEach(() => {
   originalConfigDir = undefined;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-
-function claim(requestEventId: string, commentId: string) {
-  const binding = {
-    repositoryId: "repo-id", repository: "owner/repo", targetNumber: 42, requestEventId, role: "reviewer",
-    revision: HEAD, owner: "host:1", authority: { durationSeconds: 86700 },
-    activeState: {
-      managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
-      requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
-    },
-  };
-  return {
-    binding, commentId, authorizedLogins: ["deadloop-bot"], automationLogin: "deadloop-bot",
-    reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-    requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-  };
-}
 
 /**
  * The state PR #228 reached: one review that completed and still owes its handoff, beside a second
@@ -100,10 +83,7 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
   process.env.TEST_LABELS = path.join(root, "labels.json");
   process.env.TEST_MUTATIONS = path.join(root, "mutations.log");
   process.env.TEST_COMMENTS = path.join(root, "comments.json");
-  writeFileSync(process.env.TEST_COMMENTS, JSON.stringify([[{
-    id: 100, user: { login: "deadloop-bot" }, created_at: "2026-08-01T10:00:01Z", updated_at: "2026-08-01T10:00:01Z",
-    body: renderReviewClaimComment(claim("10", "100").binding),
-  }]]));
+  writeFileSync(process.env.TEST_COMMENTS, JSON.stringify([[]]));
   writeFileSync(process.env.TEST_LABELS, JSON.stringify(options.blocked ? ["agent:blocked"] : ["agent:in-progress"]));
   writeFileSync(process.env.TEST_MUTATIONS, "");
   writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
@@ -122,7 +102,7 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
     attemptId: "completed", promptFile: path.join(completedRun, "prompt.md"),
     promiseFile: path.join(completedRun, "promise.json"),
     workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1",
-    phase: "report_received", lastSuccessfulPhase: "report_received", reviewClaim: claim("10", "100"),
+    phase: "report_received", lastSuccessfulPhase: "report_received", requestEventId: "10",
   })));
   writeFileSync(path.join(completedRun, "promise.json"), JSON.stringify({
     schemaVersion: 1, attemptId: "completed", role: "reviewer", status: "complete",
@@ -144,7 +124,7 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
     ...(options.unlaunchedHoldsWorkspace
       ? { workspaceId: "workspace-2", tabId: "tab-2", rootPaneId: "pane-2" }
       : {}),
-    reviewClaim: claim("20", "200"),
+    requestEventId: "20",
     launchError: "worktree agent/issue-42 already has an open attempt workspace",
   })));
   return { root, repo, stateDir, worktree, completedRun, mutations: path.join(root, "mutations.log") };
@@ -152,10 +132,7 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
 
 async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunchedSecondAttempt>) {
   const labels = ["agent:blocked"];
-  const comments = [
-    { id: "100", author: { login: "deadloop-bot" }, createdAt: "2026-08-01T10:00:01Z", updatedAt: "2026-08-01T10:00:01Z", body: renderReviewClaimComment(claim("10", "100").binding) },
-    { id: "200", author: { login: "deadloop-bot" }, createdAt: "2026-08-01T10:05:01Z", updatedAt: "2026-08-01T10:05:01Z", body: renderReviewClaimComment(claim("20", "200").binding) },
-  ];
+  const comments: Record<string, unknown>[] = [];
   const events = [
     { id: "10", event: "labeled", created_at: "2026-08-01T09:00:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:review" } },
     { id: "20", event: "labeled", created_at: "2026-08-01T10:04:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:review" } },
