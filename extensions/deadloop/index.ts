@@ -1575,8 +1575,6 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       "--github-repo", project.githubRepo,
       "--state-dir", STATE_DIR,
       "--enabled-at", String(project.enabledAt),
-      "--worker-ready-label", labels.ready,
-      "--worker-implement-label", labels.implement,
       "--worker-review-label", labels.review,
       "--auto-merge", reviewerAutoMerge ? "true" : "false",
       ...expectedLabels.flatMap((label) => ["--expected-label", label]),

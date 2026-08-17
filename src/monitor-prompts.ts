@@ -118,12 +118,8 @@ function renderWorkspaceCompletion(input: MonitorPromptBaseInput, expectedLabels
   ].filter((label): label is string => Boolean(label));
   const managed = managedLabels.flatMap((label) => ["--managed-label", shellQuotePrompt(label)]).join(" ");
   const worker = input as Partial<IssueMonitorPromptInput>;
-  const workerLabels = worker.readyLabel && worker.implementLabel && worker.reviewLabel
-    ? [
-        "--worker-ready-label", shellQuotePrompt(worker.readyLabel),
-        "--worker-implement-label", shellQuotePrompt(worker.implementLabel),
-        "--worker-review-label", shellQuotePrompt(worker.reviewLabel),
-      ].join(" ")
+  const workerLabels = worker.reviewLabel
+    ? ["--worker-review-label", shellQuotePrompt(worker.reviewLabel)].join(" ")
     : "";
   const policy = "autoMerge" in input ? `--auto-merge ${input.autoMerge ? "true" : "false"}` : "";
   const extras = [workerLabels, policy, labels, managed].filter(Boolean).join(" ");

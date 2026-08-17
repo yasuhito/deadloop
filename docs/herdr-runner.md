@@ -16,7 +16,7 @@ A Git worktree is durable branch state. A Herdr attempt workspace is disposable 
 
 Every role writes an atomic `prepared` attempt journal before its first external mutation, but its GitHub transition is role-specific:
 
-- A Worker uses the guarded Issue label move selected by the Issue coordinator.
+- An explorer or Worker binds its journal to the selected immutable Issue request event, deletes only that request label, and verifies the resulting timeline before adding `agent:in-progress`. A missing label cancels launch; a newer generation remains queued; an ambiguous deletion creates a visible stop. Only proven consumption permits `github_claimed`.
 - A reviewer or branch-update launch records the selected PR request event, adds `agent:in-progress`, normalizes baseline managed labels individually, and deletes the selected request last. Only a documented HTTP 200 response plus complete postvalidation permits `github_claimed`. A crash before that phase advance retains `prepared` and blocks reconciliation because restart cannot prove the 200 response.
 - Review repair launches from a bound reviewer outcome; it does not consume a PR request label.
 
@@ -40,7 +40,7 @@ A newly opened workspace can return before its root shell reaches an interactive
 
 A promise file is transport, not cleanup authority. Only a strong V1 report bound to the attempt journal can proceed to role-specific GitHub confirmation.
 
-- Worker: the exact pushed head, open PR, base, closing reference, review label, attempt marker, and consumed Issue request must agree.
+- Worker: the exact pushed head, open PR, base, closing reference, review label, and attempt marker must agree. Issue request labels are not completion evidence; a request added while the Worker runs remains queued for a later attempt.
 - Reviewer: the exact reviewed head, structured result comment, attempt marker, findings/repair marker when applicable, and expected labels must agree.
 - Review repair: the pushed or stale head and finalizer/result evidence must agree.
 - Branch update: the pushed or PR-head-stale result must agree. A base advance alone is not stale.

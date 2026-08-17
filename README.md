@@ -55,6 +55,8 @@ flowchart TD
     agent:explore or agent:implement`"]
     E["`**Read-only exploration**
     agent:in-progress`"]
+    X["`**Exploration complete**
+    no agent request`"]
     W["`**Implementation**
     agent:in-progress`"]
     R["`**PR review requested**
@@ -70,7 +72,8 @@ flowchart TD
     agent:blocked`"]
 
     I -->|exploration request consumed| E
-    E -->|result persisted| I
+    E -->|implementation request queued| I
+    E -->|no queued request| X
     E -. problem .-> B
     I -->|implementation request consumed| W
     W -->|draft PR created| R

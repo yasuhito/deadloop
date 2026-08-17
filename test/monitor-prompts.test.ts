@@ -39,7 +39,7 @@ describe("monitor prompts", () => {
       blockedLabel: "custom:blocked",
     });
 
-    expect(prompt).toContain("--worker-ready-label custom:ready --worker-implement-label custom:implement --worker-review-label custom:review");
+    expect(prompt).toContain("--worker-review-label custom:review");
   });
 
   it("renders issue-specific completion instructions", () => {

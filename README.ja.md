@@ -55,6 +55,8 @@ flowchart TD
     agent:explore または agent:implement`"]
     E["`**読み取り専用の調査**
     agent:in-progress`"]
+    X["`**調査完了**
+    agent への要求なし`"]
     W["`**実装中**
     agent:in-progress`"]
     R["`**PR のレビュー待ち**
@@ -70,7 +72,8 @@ flowchart TD
     agent:blocked`"]
 
     I -->|調査要求を消費| E
-    E -->|結果を保存| I
+    E -->|実装要求が待機中| I
+    E -->|待機中の要求なし| X
     E -. 問題発生 .-> B
     I -->|実装要求を消費| W
     W -->|draft PR を作成| R
