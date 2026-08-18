@@ -114,6 +114,20 @@ function reconcileLocked(
         : `prepared_request_${outcome.kind}`,
     });
   }
+  // A prepared Issue attempt whose bound request label is still live consumed nothing. The only
+  // GitHub write that can precede consumption is the idempotent recovery-block removal, and the
+  // active state is created after the request is gone, so nothing depends on this journal. Releasing
+  // exactly this phase is what lets the next cycle move: the Issue becomes selectable again with its
+  // request intact, instead of a workspace-less prepared record that stops all scheduling. An active
+  // state beside a live request is not this attempt's, and a workspace means the attempt got further,
+  // so both of those stay retained.
+  if ((record.role === "worker" || record.role === "explorer") && record.agentRequest
+    && !record.workspaceId && !labels.has(String(args.inProgressLabel))) {
+    releasePersistedAttemptAuthority(runDir, new Date().toISOString(), String(record.agentRequest.eventId), "never_launched");
+    return driverResult("done", "prepared Issue attempt released because its Agent request is still waiting", {
+      driverAction: "prepared_request_released",
+    });
+  }
   if (record.role === "explorer") {
     return driverResult("done", "prepared exploration retained while its request still awaits consumption", {
       driverAction: "prepared_request_waiting",

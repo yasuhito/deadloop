@@ -2,8 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createPreparedAttempt, readAttemptRecord } from "../src/attempt-lifecycle";
+import { createPreparedAttempt, readAttemptRecord, releasesAttemptOwnership } from "../src/attempt-lifecycle";
 
+const { clearIssueRecoveryBlock } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
 const { hasExactRequestConsumption, reconcileLocked } = require("../extensions/deadloop/automations/reconcile-prepared-attempt.ts");
 
 const roots: string[] = [];
@@ -88,10 +89,57 @@ describe("prepared attempt claim reconciliation", () => {
     expect(hasExactRequestConsumption(readAttemptRecord(data.runDir), item, data.args)).toBe(true);
   });
 
-  it("retains prepared exploration without claim-authority reconciliation", () => {
+  it("retains a prepared exploration whose live request sits beside an active state", () => {
     const data = setup({ agentRequest: true, role: "explorer" });
-    const runner = { runJson: () => ({ state: "OPEN", labels: [{ name: "custom:explore" }] }) };
+    const runner = { runJson: () => ({ state: "OPEN", labels: [{ name: "custom:explore" }, { name: "custom:claimed" }] }) };
     expect(reconcileLocked(data.args, runner).driverAction).toBe("prepared_request_waiting");
+  });
+
+  // The production seam: a post-block request is prepared, the recovery block is deleted, and the
+  // process stops before the request transition records any phase.
+  function interruptedAfterRecoveryBlockClearing(role: "worker" | "explorer") {
+    const data = setup({ agentRequest: true, role });
+    const requestLabel = role === "explorer" ? "custom:explore" : "custom:implement";
+    const labels = new Set(["custom:blocked", requestLabel]);
+    const events = [
+      { id: "10", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "custom:blocked" } },
+      { id: "request-1", event: "labeled", created_at: "2026-08-16T00:00:01Z", label: { name: requestLabel } },
+    ];
+    clearIssueRecoveryBlock({
+      listIssueLabels: () => [...labels].map((name) => ({ name })),
+      listIssueTimelineEvents: () => events,
+      deleteIssueLabel: (_repository: string, _issueNumber: number, label: string) => {
+        labels.delete(label);
+        events.push({ id: "12", event: "unlabeled", created_at: "2026-08-16T00:00:02Z", label: { name: label } });
+        return { status: 200 };
+      },
+    }, { githubRepo: "owner/repo", blockedLabel: "custom:blocked" }, 12, { label: requestLabel, eventId: "request-1" });
+    const runner = { runJson: () => ({ state: "OPEN", labels: [...labels].map((name) => ({ name })) }) };
+    return {
+      result: reconcileLocked(data.args, runner),
+      labels: [...labels],
+      phase: readAttemptRecord(data.runDir).phase,
+    };
+  }
+
+  it("releases a prepared Worker attempt interrupted after its recovery block was cleared", () => {
+    expect(interruptedAfterRecoveryBlockClearing("worker").result.driverAction).toBe("prepared_request_released");
+  });
+
+  it("releases a prepared exploration interrupted after its recovery block was cleared", () => {
+    expect(interruptedAfterRecoveryBlockClearing("explorer").result.driverAction).toBe("prepared_request_released");
+  });
+
+  it("stops holding scheduling after clearing a block left an unlaunched prepared attempt", () => {
+    expect(releasesAttemptOwnership(interruptedAfterRecoveryBlockClearing("worker").phase)).toBe(true);
+  });
+
+  it("keeps the implementation request selectable after releasing its interrupted attempt", () => {
+    expect(interruptedAfterRecoveryBlockClearing("worker").labels).toEqual(["custom:implement"]);
+  });
+
+  it("keeps the exploration request selectable after releasing its interrupted attempt", () => {
+    expect(interruptedAfterRecoveryBlockClearing("explorer").labels).toEqual(["custom:explore"]);
   });
 
   it("rejects a reviewer claim when the selected PR head changed", () => {
