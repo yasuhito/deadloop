@@ -2,7 +2,7 @@ import fs from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-const { RunnerAdapterError, createAsyncHerdrRunner, createHerdrRunner, normalizeHerdrWorktreeRecord } = require("../src/herdr-runner.ts");
+const { RunnerAdapterError, createAsyncHerdrRunner, createHerdrRunner, normalizeHerdrWorktreeRecord } = require("../src/herdr-runner.cts");
 
 const workspaceList075 = JSON.parse(fs.readFileSync("test/fixtures/herdr-workspace-list.json", "utf8"));
 const agentList075 = JSON.parse(fs.readFileSync("test/fixtures/herdr-agent-list.json", "utf8"));

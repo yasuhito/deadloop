@@ -3,7 +3,7 @@ import path from "node:path";
 import { hasUncommittedWork } from "./agent-scratch-area.cjs";
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
-const { isRequiredVerificationStopComment } = require("./issue-required-verification-stop.ts") as {
+const { isRequiredVerificationStopComment } = require("./issue-required-verification-stop.cts") as {
   isRequiredVerificationStopComment(body: unknown): boolean;
 };
 import {

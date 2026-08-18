@@ -18,7 +18,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.ts");
+const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.cts");
 const { provenReviewCompletion } = require("./attempt-completion-proof.ts");
 const { dispatch } = require("./pr-review-repair-dispatch.ts");
 

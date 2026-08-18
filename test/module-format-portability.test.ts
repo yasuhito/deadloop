@@ -13,7 +13,8 @@ function typescriptFiles(relativeRoot: string): string[] {
   return fs.readdirSync(path.join(process.cwd(), relativeRoot), { withFileTypes: true }).flatMap((entry) => {
     const relativePath = path.join(relativeRoot, entry.name);
     if (entry.isDirectory()) return entry.name === "node_modules" ? [] : typescriptFiles(relativePath);
-    return entry.isFile() && entry.name.endsWith(".ts") ? [relativePath] : [];
+    const typescriptModule = entry.name.endsWith(".ts") || entry.name.endsWith(".cts");
+    return entry.isFile() && typescriptModule ? [relativePath] : [];
   });
 }
 
@@ -29,5 +30,19 @@ describe("module format portability", () => {
       .sort();
 
     expect(hybridModules).toEqual([]);
+  });
+});
+
+describe("src CommonJS module extensions", () => {
+  it("keeps every src module.exports file in a .cts file", () => {
+    const commonJsPlainTypescript = typescriptFiles("src")
+      .filter((relativePath) => !relativePath.endsWith(".cts"))
+      .filter((relativePath) => {
+        const lines = fs.readFileSync(path.join(process.cwd(), relativePath), "utf8").split("\n");
+        return lines.some((line) => line.startsWith("module.exports"));
+      })
+      .sort();
+
+    expect(commonJsPlainTypescript).toEqual([]);
   });
 });

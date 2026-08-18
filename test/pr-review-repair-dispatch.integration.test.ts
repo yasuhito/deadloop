@@ -13,7 +13,7 @@ process.env.DEADLOOP_REQUIRED_VERIFICATION = JSON.stringify({
   baseRevision: "a".repeat(40),
 });
 
-const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
+const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.cts");
 const { assertReviewerDispatchAttemptBinding, blockedClaimMove, repairLaunchInput, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 const {
   persistHostVerificationEvidence,

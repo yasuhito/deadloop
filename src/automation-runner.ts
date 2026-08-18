@@ -5,7 +5,7 @@ import {
   type NormalizedProject,
 } from "./core";
 const { passesIssueLabelGate } = require("./issue-eligibility.cjs");
-const { renderPendingMonitorHandoff } = require("./monitor-prompts.ts");
+const { renderPendingMonitorHandoff } = require("./monitor-prompts.cts");
 
 export type AutomationExecResult = {
   code: number;

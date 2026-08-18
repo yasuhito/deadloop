@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { decideReviewTransition } = require("../src/reviewer-outcome-contract.ts");
+const { decideReviewTransition } = require("../src/reviewer-outcome-contract.cts");
 
 const advisory = { title: "Naming", body: "A clearer name would help." };
 const required = { title: "Unsafe fallback", body: "The fallback approves a failed review.", severity: "blocker" as const };

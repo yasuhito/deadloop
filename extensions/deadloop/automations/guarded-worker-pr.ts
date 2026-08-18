@@ -9,7 +9,7 @@ const { spawnSync } = require("node:child_process") as typeof import("node:child
 const { assertLocallyEnabled, withEnabledProjectLock, MAX_GUARDED_OPERATION_MS } = require("../../../src/enabled-operation.cjs");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { createCommandRunner } = require("../../../src/automation-driver-kit.ts");
+const { createCommandRunner } = require("../../../src/automation-driver-kit.cts");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
   assertCurrentWorkerContract,

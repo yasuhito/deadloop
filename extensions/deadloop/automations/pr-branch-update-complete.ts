@@ -6,13 +6,13 @@
 
 const path = require("node:path") as typeof import("node:path");
 const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
-const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
-const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.cts");
+const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
-const { labelNames } = require("../../../src/launch-revalidation.ts");
+const { labelNames } = require("../../../src/launch-revalidation.cts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
 

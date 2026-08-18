@@ -17,7 +17,7 @@ const {
   comparePrHistoryObservations,
   observePrHistory,
   readPrHistoryObservation,
-} = require("../../../src/pr-review-history.ts");
+} = require("../../../src/pr-review-history.cts");
 
 import type { JsonObject } from "../../../src/automation-driver-kit-types";
 

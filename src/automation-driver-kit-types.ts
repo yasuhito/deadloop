@@ -1,4 +1,4 @@
-// 実行時モジュール (automation-driver-kit.ts) を CJS のまま保つため、型だけをこのモジュールに分離している。
+// 実行時モジュール automation-driver-kit を CJS のまま保つため、型だけをこのモジュールに分離している。
 
 export type JsonObject = Record<string, any>;
 

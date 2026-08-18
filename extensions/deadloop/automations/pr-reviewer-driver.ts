@@ -7,11 +7,11 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { planPrRequestAction } = require("./pr-reviewer-flow.ts");
-const { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.ts");
-const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.ts");
-const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
-const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
-const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
+const { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.cts");
+const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.cts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.cts");
+const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.cts");
+const { renderProjectCheckCommand } = require("../../../src/project-check.cts");
 const { decideBranchUpdateLive } = require("./pr-branch-update-decision.ts");
 const { branchUpdateAttemptExists, branchUpdateRetryKey, renderBranchUpdateMarker } = require("./pr-branch-update-state.ts");
 const {
@@ -23,21 +23,21 @@ const {
   parseBool,
   parseFixtureArg,
   shellQuote,
-} = require("../../../src/automation-driver-kit.ts");
-const { createGithubOperations } = require("../../../src/github-operations.ts");
-const { postBlockRequestIsEligible } = require("../../../src/pr-work-authority-reconciliation.ts");
+} = require("../../../src/automation-driver-kit.cts");
+const { createGithubOperations } = require("../../../src/github-operations.cts");
+const { postBlockRequestIsEligible } = require("../../../src/pr-work-authority-reconciliation.cts");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { observeAttemptLiveness } = require("../../../src/attempt-runtime-observation.ts");
+const { observeAttemptLiveness } = require("../../../src/attempt-runtime-observation.cts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
-const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
+const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.cts");
 const { requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 const {
   comparePrHistoryObservations,
   observePrHistory,
   writePrHistoryObservation,
-} = require("../../../src/pr-review-history.ts");
+} = require("../../../src/pr-review-history.cts");
 
 import type { AttemptAgentRunner } from "../../../src/attempt-runtime-observation-types";
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";

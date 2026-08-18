@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { renderBranchUpdateMonitorPrompt, renderIssueMonitorPrompt, renderRepairMonitorPrompt, renderReviewerMonitorPrompt } = require("../src/monitor-prompts.ts");
+const { renderBranchUpdateMonitorPrompt, renderIssueMonitorPrompt, renderRepairMonitorPrompt, renderReviewerMonitorPrompt } = require("../src/monitor-prompts.cts");
 
 describe("monitor prompts", () => {
   it("renders shared promise polling rules for Worker monitoring", () => {

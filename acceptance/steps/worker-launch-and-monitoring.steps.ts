@@ -10,7 +10,7 @@ import { fixtureStateDir } from "../support/fixture-state-dir";
 
 import type { RunnerAdapter, RunnerAgent } from "../../src/runner";
 
-const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../src/agent-launch-flow.ts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../src/agent-launch-flow.cts");
 const { decideWorkerWatch } = require("../../extensions/deadloop/automations/worker-watch-decision.ts");
 
 const workerName = "demo-issue-12-worker";

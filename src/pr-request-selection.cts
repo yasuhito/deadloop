@@ -1,4 +1,4 @@
-const { compareGithubTimelineEvents } = require("./github-timeline-order.ts");
+const { compareGithubTimelineEvents } = require("./github-timeline-order.cts");
 
 /**
  * Deterministic pull request Agent-request order.

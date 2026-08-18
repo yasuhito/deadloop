@@ -4,7 +4,7 @@ const {
   applyPrWorkAuthorityReconciliation,
   reconcilePrWorkAuthority,
   recoveryComment,
-} = require("../src/pr-work-authority-reconciliation.ts");
+} = require("../src/pr-work-authority-reconciliation.cts");
 const { classifyRequest } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
 
 const base = {

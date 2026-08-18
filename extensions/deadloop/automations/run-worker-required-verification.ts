@@ -5,10 +5,10 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { createCommandRunner } = require("../../../src/automation-driver-kit.ts");
-const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { createCommandRunner } = require("../../../src/automation-driver-kit.cts");
+const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { closeCompletionStoppedWorkerAttempt } = require("./complete-attempt-workspace.ts");
-const { applyIssueRequiredVerificationStop, hasRequiredVerificationStopMarker, planIssueRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.ts");
+const { applyIssueRequiredVerificationStop, hasRequiredVerificationStopMarker, planIssueRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
@@ -22,7 +22,7 @@ const {
   projectCheckRestorationFailureFrom,
   recordProjectCheckRestorationFailure,
   runProjectCheck,
-} = require("../../../src/project-check.ts");
+} = require("../../../src/project-check.cts");
 
 type Args = { attemptRecord: string; projectId: string; projectRepo: string; githubRepo: string; stateDir: string; enabledAt: number; worktree: string; quarantineRoot: string; role: "worker" | "reviewer" };
 function parseArgs(argv: string[]): Args {

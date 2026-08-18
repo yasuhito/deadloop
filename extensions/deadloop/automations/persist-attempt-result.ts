@@ -2,7 +2,7 @@
 // Persist an attempt-bound marker only after the role's existing GitHub result is independently confirmed.
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
-const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
+const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertLocallyEnabled } = require("../../../src/enabled-operation.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");

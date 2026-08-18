@@ -1,6 +1,6 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-const { createHerdrRunner } = require("./herdr-runner.ts");
+const { createHerdrRunner } = require("./herdr-runner.cts");
 
 import type { CommandRunner, DriverResult, JsonObject } from "./automation-driver-kit-types";
 import type { RunnerAdapter } from "./runner";

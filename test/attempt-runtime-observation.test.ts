@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { observeAttemptLiveness, observeAttemptRuntime } = require("../src/attempt-runtime-observation.ts");
+const { observeAttemptLiveness, observeAttemptRuntime } = require("../src/attempt-runtime-observation.cts");
 
 const roots: string[] = [];
 

@@ -1,6 +1,6 @@
 import path from "node:path";
 
-const { normalizeEnablementStateValue, validIdentity } = require("./enablement-state.ts");
+const { normalizeEnablementStateValue, validIdentity } = require("./enablement-state.cts");
 
 export type EnabledProject = {
   repoPath: string;

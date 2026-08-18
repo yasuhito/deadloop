@@ -477,7 +477,7 @@ module.exports = {
 
 if (require.main === module) {
   projectCheckMain().catch((error) => {
-    console.error(`project-check.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`project-check.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   });
 }

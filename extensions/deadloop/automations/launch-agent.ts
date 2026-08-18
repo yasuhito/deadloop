@@ -21,7 +21,7 @@ const { execFileSync } = require("node:child_process") as typeof import("node:ch
 
 const { buildNativeAgentArgv, isAgentKind, AGENT_KINDS, AGENT_PROFILES } = require("../../../src/agent-profiles.cjs");
 const { readClaudeConfig, evaluateWorkspaceTrust } = require("../../../src/agent-trust.cjs");
-const { createHerdrRunner } = require("../../../src/herdr-runner.ts");
+const { createHerdrRunner } = require("../../../src/herdr-runner.cts");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 
 const FLAG_KEYS = ["agent", "name", "cwd", "model", "level", "uuid", "prompt-file", "pane", "repo-path"] as const;

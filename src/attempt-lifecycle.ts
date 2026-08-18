@@ -4,7 +4,7 @@ import path from "node:path";
 import type { RequiredVerificationContract } from "./required-verification";
 import type { PriorRequiredFindingDisposition } from "./reviewer-outcome-contract-types";
 
-const { isPriorRequiredFindingDisposition } = require("./reviewer-outcome-contract.ts");
+const { isPriorRequiredFindingDisposition } = require("./reviewer-outcome-contract.cts");
 
 export const ATTEMPT_RECORD_FILE = "attempt.json";
 const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");

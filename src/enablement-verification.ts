@@ -8,7 +8,7 @@ import type { RequiredVerificationContract, RequiredVerificationResolution } fro
 
 const ENABLEMENT_VERIFICATION_TIMEOUT_MS = 10 * 60_000;
 
-const { runProjectCheck } = require("./project-check.ts") as {
+const { runProjectCheck } = require("./project-check.cts") as {
   runProjectCheck: (input: {
     cwd: string;
     command: string;

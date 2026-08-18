@@ -3,8 +3,8 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
-const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
-const { createHerdrRunnerFromCommandRunner } = require("../../../src/automation-driver-kit.ts");
+const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.cts");
+const { createHerdrRunnerFromCommandRunner } = require("../../../src/automation-driver-kit.cts");
 const {
   readAttemptRecord,
   recordPersistedCompletionReport,
@@ -16,7 +16,7 @@ const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { parseAttemptPersistenceMarkers } = require("../../../src/attempt-persistence-marker.cjs");
 const { evaluateCompletionPersistence } = require("../../../src/attempt-workspace-predicates.cjs");
-const { isExactRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.ts");
+const { isExactRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.cts");
 const {
   assertAttemptProjectBinding,
   assertWorktreeBelongsToProject,

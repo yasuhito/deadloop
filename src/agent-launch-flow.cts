@@ -7,9 +7,9 @@ const {
   transitionPersistedAttempt,
   writeAttemptRecordAtomically,
 } = require("./attempt-lifecycle-runtime.cjs");
-const { alignOpenedCheckout } = require("./checkout-alignment.ts");
+const { alignOpenedCheckout } = require("./checkout-alignment.cts");
 const { deriveHerdrAgentName } = require("./herdr-agent-name.cjs");
-const { createHerdrRunner } = require("./herdr-runner.ts");
+const { createHerdrRunner } = require("./herdr-runner.cts");
 const { writeWorkerContractSnapshot } = require("./worker-required-verification-runtime.cjs");
 
 import type { AttemptRecord, AttemptRole, AttemptTarget, InputRevision, PreparedAttemptInput } from "./attempt-lifecycle";

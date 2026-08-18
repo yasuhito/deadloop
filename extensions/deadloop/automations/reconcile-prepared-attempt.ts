@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Reconcile the non-atomic GitHub request-consumption / local-journal boundary without replaying it.
 const path = require("node:path") as typeof import("node:path");
-const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
+const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
-const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
-const { consumeIssueRequest } = require("../../../src/issue-request-transition.ts");
+const { consumeIssueRequest } = require("../../../src/issue-request-transition.cts");
 const { readAttemptRecord, releasePersistedAttemptAuthority, transitionPersistedAttempt } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 

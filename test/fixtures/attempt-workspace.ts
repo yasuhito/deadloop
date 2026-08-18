@@ -8,7 +8,7 @@ import type {
 } from "../../src/attempt-workspace-lifecycle";
 import type { PriorRequiredFindingDisposition } from "../../src/reviewer-outcome-contract-types";
 
-const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.ts");
+const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
 
 export const INPUT_HEAD = "a".repeat(40);
 export const BASE_HEAD = "b".repeat(40);

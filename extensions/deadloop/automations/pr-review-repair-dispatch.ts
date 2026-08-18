@@ -21,22 +21,22 @@ const {
   reviewCommentExists,
 } = require("./pr-review-comments.ts");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
-const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
-const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.ts");
-const { blockedPrLabelMove } = require("../../../src/pr-request-selection.ts");
-const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.ts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.cts");
+const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.cts");
+const { blockedPrLabelMove } = require("../../../src/pr-request-selection.cts");
+const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.cts");
 const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
   driverResult,
   shellQuote,
-} = require("../../../src/automation-driver-kit.ts");
-const { createGithubOperations } = require("../../../src/github-operations.ts");
+} = require("../../../src/automation-driver-kit.cts");
+const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
-const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
+const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.cts");
 const {
   isRequiredVerificationPolicyBlock,
   reauthorizeReviewWrite,
@@ -48,7 +48,7 @@ const {
   observePrHistory,
   readPrHistoryObservation,
   writePrHistoryObservation,
-} = require("../../../src/pr-review-history.ts");
+} = require("../../../src/pr-review-history.cts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
 import type { RunnerAdapter } from "../../../src/runner";

@@ -57,6 +57,6 @@ Workspace closure never invokes worktree removal. After the workspace is closed,
 
 ## Runner boundary
 
-Herdr-specific operations remain runner concerns. The runner seam is `src/runner.ts`; the selected adapter is `src/herdr-runner.ts`. GitHub Issue/PR workflow meaning stays outside the runner so a future runtime can replace Herdr without changing candidate, review, push, or merge policy.
+Herdr-specific operations remain runner concerns. The runner seam is `src/runner.ts`; the selected adapter is `src/herdr-runner.cts`. GitHub Issue/PR workflow meaning stays outside the runner so a future runtime can replace Herdr without changing candidate, review, push, or merge policy.
 
 The Pi + Herdr support path runs the Automation host and Workers as the same operating-system user. Its deterministic gates protect against fallible-agent output, stale evidence, and mutation races, but Herdr does not provide a filesystem sandbox that contains an actively hostile same-user Worker. See [ADR 0015](adr/0015-worker-trust-boundary.md) for the supported trust boundary.

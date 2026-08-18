@@ -168,7 +168,7 @@ describe("selected attempt workspace completion", () => {
   };
   const stopLabels = { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", blocked: "agent:blocked" };
   function exactStoppedIssue() {
-    const { requiredVerificationStopMarker } = require("../src/issue-required-verification-stop.ts");
+    const { requiredVerificationStopMarker } = require("../src/issue-required-verification-stop.cts");
     return {
       number: 12,
       state: "OPEN",

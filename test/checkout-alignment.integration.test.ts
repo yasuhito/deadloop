@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { alignOpenedCheckout } = require("../src/checkout-alignment.ts");
+const { alignOpenedCheckout } = require("../src/checkout-alignment.cts");
 
 const branch = "agent/issue-203-task";
 const ref = `refs/heads/${branch}`;

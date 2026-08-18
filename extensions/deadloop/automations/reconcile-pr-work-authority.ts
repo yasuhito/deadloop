@@ -2,13 +2,13 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
-const { createCommandRunner, createHerdrRunnerFromCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
-const { createGithubOperations } = require("../../../src/github-operations.ts");
-const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.ts");
+const { createCommandRunner, createHerdrRunnerFromCommandRunner, driverResult } = require("../../../src/automation-driver-kit.cts");
+const { createGithubOperations } = require("../../../src/github-operations.cts");
+const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.ts");
-const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.ts");
+const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.cts");
+const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.cts");
 const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
 const { provenAttemptCompletion } = require("./attempt-completion-proof.ts");
 

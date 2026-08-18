@@ -10,26 +10,26 @@ const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coord
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
 const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
-const { renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
+const { renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.cts");
 const {
   applyIssueRequiredVerificationStop,
   planIssueRequiredVerificationStop,
-} = require("../../../src/issue-required-verification-stop.ts");
-const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
-const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
-const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
+} = require("../../../src/issue-required-verification-stop.cts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.cts");
+const { renderProjectCheckCommand } = require("../../../src/project-check.cts");
+const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.cts");
 const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
   driverResult,
   loadFixture,
   parseFixtureArg,
-} = require("../../../src/automation-driver-kit.ts");
-const { createGithubOperations } = require("../../../src/github-operations.ts");
-const { activeIssueRequestEvent, consumeIssueRequest } = require("../../../src/issue-request-transition.ts");
+} = require("../../../src/automation-driver-kit.cts");
+const { createGithubOperations } = require("../../../src/github-operations.cts");
+const { activeIssueRequestEvent, consumeIssueRequest } = require("../../../src/issue-request-transition.cts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
-const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
+const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.cts");
 const { readAttemptRecord, releasePersistedAttemptAuthority } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertCurrentWorkerContract, requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 

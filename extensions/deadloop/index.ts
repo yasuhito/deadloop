@@ -34,14 +34,14 @@ import {
   runScheduledAutomation,
 } from "../../src/automation-runner";
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../src/agent-scratch-area.cjs");
-const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
+const { createAsyncHerdrRunner } = require("../../src/herdr-runner.cts");
 const {
   agentOccupiesAttemptWorkspace,
   readWorkspaceCloseStartedReceipt,
   workspaceProof,
 } = require("./automations/abandon-launch-failed-attempt.ts");
 const { readAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
-const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.ts");
+const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
 const {
   defaultIssueDecisionConfig,
   issueBlockedByNumbers,
@@ -78,7 +78,7 @@ type RetainedProjectCheckFailure = {
   recordPath: string;
   attemptRecordPath?: string;
 };
-const { inspectRetainedProjectCheckFailures, inspectUnresolvedProjectCheckFailures } = require("../../src/project-check.ts") as {
+const { inspectRetainedProjectCheckFailures, inspectUnresolvedProjectCheckFailures } = require("../../src/project-check.cts") as {
   inspectRetainedProjectCheckFailures: (stateDir: string, project?: { id: string; githubRepo: string }) => RetainedProjectCheckFailure[];
   inspectUnresolvedProjectCheckFailures: (stateDir: string) => RetainedProjectCheckFailure[];
 };

@@ -7,7 +7,7 @@ import {
   validateCompletionReportBinding,
 } from "./attempt-lifecycle";
 
-const { decideReviewTransition } = require("./reviewer-outcome-contract.ts");
+const { decideReviewTransition } = require("./reviewer-outcome-contract.cts");
 
 export type RetentionReason =
   | "active_attempt"

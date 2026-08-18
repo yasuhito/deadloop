@@ -13,7 +13,7 @@ const {
   comparePrHistoryObservations,
   observePrHistory,
   readPrHistoryObservation,
-} = require("../../../src/pr-review-history.ts");
+} = require("../../../src/pr-review-history.cts");
 const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
 type MergeArgs = {

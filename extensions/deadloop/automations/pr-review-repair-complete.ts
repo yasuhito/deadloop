@@ -7,14 +7,14 @@ const path = require("node:path") as typeof import("node:path");
 const { validatePromise } = require("./extract-worker-promise.ts");
 const { authorizeFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
 const { publicText, renderRepairSuccessComment, repairResultCommentExists } = require("./pr-review-comments.ts");
-const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
-const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.cts");
+const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
-const { blockedPrLabelMove } = require("../../../src/pr-request-selection.ts");
+const { blockedPrLabelMove } = require("../../../src/pr-request-selection.cts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { applyCompletionRequiredVerificationStop, assertCleanOutput, completionStopDiagnosis, run, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
-const { inspectUnresolvedProjectCheckFailures } = require("../src/project-check.ts");
+const { inspectUnresolvedProjectCheckFailures } = require("../src/project-check.cts");
 const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 const roots: string[] = [];
 function verificationAttempt(source: "repo_policy" | "default" = "repo_policy") {

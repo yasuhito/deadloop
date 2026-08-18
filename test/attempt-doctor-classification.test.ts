@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { reviewerFixture, workerFixture } from "./fixtures/attempt-workspace";
 
-const { createHerdrRunner } = require("../src/herdr-runner.ts");
+const { createHerdrRunner } = require("../src/herdr-runner.cts");
 
 const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-doctor-attempt-"));
 const stateDir = path.join(root, "deadloop");

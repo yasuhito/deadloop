@@ -1,4 +1,4 @@
-const { compareGithubTimelineEvents } = require("./github-timeline-order.ts");
+const { compareGithubTimelineEvents } = require("./github-timeline-order.cts");
 
 type JsonObject = Record<string, any>;
 

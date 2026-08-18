@@ -7,7 +7,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { runEnablementVerification } from "../src/enablement-verification";
 import { schedulerLockName } from "../src/project-identity";
 const { withEnabledProjectLock } = require("../src/enabled-operation.cjs");
-const { projectCheckMain } = require("../src/project-check.ts") as {
+const { projectCheckMain } = require("../src/project-check.cts") as {
   projectCheckMain: (argv: string[], runner: (input: unknown) => Promise<unknown>) => Promise<void>;
 };
 

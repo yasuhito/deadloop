@@ -14,6 +14,7 @@
   },
   "include": [
     "src/**/*.ts",
+    "src/**/*.cts",
     "src/**/*.cjs",
     "extensions/deadloop/index.ts",
     "extensions/deadloop/automations/*.ts",

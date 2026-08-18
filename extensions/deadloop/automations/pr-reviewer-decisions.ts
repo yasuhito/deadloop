@@ -6,7 +6,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { readAttemptRecord, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers } = require("../../../src/attempt-persistence-marker.cjs");
-const { selectPrRequest } = require("../../../src/pr-request-selection.ts");
+const { selectPrRequest } = require("../../../src/pr-request-selection.cts");
 
 type AnyRecord = Record<string, any>;
 
