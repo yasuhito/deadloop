@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Validate and push a review repair. This is the repair worker's only push path.
-// It re-checks the open PR head, then performs a normal fast-forward push of
-// the immutable repair commit.
+// It re-checks the open PR head, then pushes the immutable repair commit bound to
+// that exact head by an expected-object-ID lease, so a remote change after the
+// check stops the push instead of overwriting it. The lease can only fast-forward
+// because the repair commit is required to contain the verified head.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const fs = require("node:fs") as typeof import("node:fs");
@@ -87,7 +89,7 @@ function pushConditionally(
   }
   beforePush();
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return { pushed: true, currentRemoteHeadOid: candidateOid.toLowerCase() };

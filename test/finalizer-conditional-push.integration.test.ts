@@ -50,8 +50,18 @@ function fixture() {
   return { repo, remote, rootOid, expectedHead, advancedOid, configPath };
 }
 
-async function runRace(finalizer: "repair" | "branch-update", race: "advance" | "delete" | "rewind") {
+type Interference = {
+  // A pre-push hook fires after the ref advertisement, so it models a remote that moves once the
+  // push connection has already learned the old value.
+  race?: "advance" | "delete" | "rewind";
+  // Moving the remote right after the finalizer's own ls-remote check models the gap the push
+  // itself has to close: the advertisement the push sees is already the new value.
+  advanceAfterVerification?: boolean;
+};
+
+async function runFinalizer(finalizer: "repair" | "branch-update", interference: Interference) {
   const { repo, remote, rootOid, expectedHead, advancedOid, configPath } = fixture();
+  const candidateOid = git(repo, ["rev-parse", "HEAD"]);
   const stateDir = path.dirname(repo);
   const runDir = path.join(stateDir, "runs", "attempt");
   createPreparedAttempt(runDir, {
@@ -60,14 +70,18 @@ async function runRace(finalizer: "repair" | "branch-update", race: "advance" | 
     branch, worktreePath: repo, agentName: "repair", workspaceLabel: "repair",
     promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"), requestEventId: "22",
   });
-  const hookPath = path.join(repo, ".git", "hooks", "pre-push");
-  const updateRef = race === "delete"
-    ? `git --git-dir='${remote}' update-ref -d '${ref}'`
-    : race === "advance"
-      ? `git --git-dir='${remote}' fetch --quiet '${repo}' '${advancedOid}' && git --git-dir='${remote}' update-ref '${ref}' '${advancedOid}'`
-      : `git --git-dir='${remote}' update-ref '${ref}' '${rootOid}'`;
-  writeFileSync(hookPath, `#!/bin/sh\n${updateRef}\n`);
-  chmodSync(hookPath, 0o755);
+  if (interference.race) {
+    const hookPath = path.join(repo, ".git", "hooks", "pre-push");
+    const updateRef = interference.race === "delete"
+      ? `git --git-dir='${remote}' update-ref -d '${ref}'`
+      : interference.race === "advance"
+        ? `git --git-dir='${remote}' fetch --quiet '${repo}' '${advancedOid}' && git --git-dir='${remote}' update-ref '${ref}' '${advancedOid}'`
+        : `git --git-dir='${remote}' update-ref '${ref}' '${rootOid}'`;
+    writeFileSync(hookPath, `#!/bin/sh\n${updateRef}\n`);
+    chmodSync(hookPath, 0o755);
+  }
+  const pushCommands: string[][] = [];
+  let advanced = false;
   const run = (args: string[]) => {
     if (args[0] === "node") return { status: 0, stdout: "", stderr: "" };
     if (args[0] === "gh" && args[1] === "api" && args[2] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
@@ -84,10 +98,15 @@ async function runRace(finalizer: "repair" | "branch-update", race: "advance" | 
     if (args[0] === "gh" && args[1] === "repo") {
       return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
     }
+    if (args.includes("push")) pushCommands.push(args);
     const result = spawnSync(args[0], args.slice(1), {
       encoding: "utf8",
       env: { ...process.env, GIT_CONFIG_GLOBAL: configPath, GIT_CONFIG_NOSYSTEM: "1" },
     });
+    if (interference.advanceAfterVerification && !advanced && args[1] === "ls-remote") {
+      advanced = true;
+      execFileSync("git", ["-C", repo, "push", "--quiet", remote, `${advancedOid}:${ref}`]);
+    }
     return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
   };
   const common = {
@@ -120,7 +139,7 @@ async function runRace(finalizer: "repair" | "branch-update", race: "advance" | 
   try {
     remoteHead = execFileSync("git", ["--git-dir", remote, "rev-parse", "--verify", ref], { encoding: "utf8" }).trim();
   } catch {}
-  return { action: result.action, remoteHead, rootOid, advancedOid };
+  return { action: result.action, remoteHead, rootOid, advancedOid, candidateOid, expectedHead, pushCommands };
 }
 
 afterEach(() => {
@@ -208,7 +227,7 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
       blockedLabel: "agent:blocked", inProgressLabel: "agent:in-progress",
       automationDir, enabledAt: 1,
     });
-    const command = rendered.match(/permitted non-force push to the exact branch:\n  (.+)\n- Never edit labels/)?.[1];
+    const command = rendered.match(/permitted push to the exact branch, leased to that exact head:\n  (.+)\n- Never edit labels/)?.[1];
     if (!command) throw new Error("rendered finalizer command was not found");
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
     return { command, env, root, runDir, remote, expectedHead };
@@ -325,7 +344,7 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
     ["review repair", "repair"],
     ["branch update", "branch-update"],
   ] as const)("rejects an advancing-ancestor race during %s finalization", async (_name, finalizer) => {
-    const result = await runRace(finalizer, "advance");
+    const result = await runFinalizer(finalizer, { race: "advance" });
     expect({ action: result.action, advancedHeadRetained: result.remoteHead === result.advancedOid }).toEqual({
       action: "stale_head",
       advancedHeadRetained: true,
@@ -336,7 +355,7 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
     ["review repair", "repair"],
     ["branch update", "branch-update"],
   ] as const)("does not recreate a deleted branch during %s finalization", async (_name, finalizer) => {
-    const result = await runRace(finalizer, "delete");
+    const result = await runFinalizer(finalizer, { race: "delete" });
     expect({ action: result.action, remoteHead: result.remoteHead }).toEqual({ action: "stale_head", remoteHead: "" });
   });
 
@@ -344,10 +363,40 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
     ["review repair", "repair"],
     ["branch update", "branch-update"],
   ] as const)("does not replace a rewound branch during %s finalization", async (_name, finalizer) => {
-    const result = await runRace(finalizer, "rewind");
+    const result = await runFinalizer(finalizer, { race: "rewind" });
     expect({ action: result.action, rewoundHeadRetained: result.remoteHead === result.rootOid }).toEqual({
       action: "stale_head",
       rewoundHeadRetained: true,
+    });
+  });
+
+  it.each([
+    ["review repair", "repair"],
+    ["branch update", "branch-update"],
+  ] as const)("leases the verified head on the %s finalizer push", async (_name, finalizer) => {
+    const result = await runFinalizer(finalizer, {});
+    expect(result.pushCommands[0]).toContain(`--force-with-lease=${ref}:${result.expectedHead}`);
+  });
+
+  it.each([
+    ["review repair", "repair"],
+    ["branch update", "branch-update"],
+  ] as const)("pushes the candidate when the remote stays on the verified head during %s finalization", async (_name, finalizer) => {
+    const result = await runFinalizer(finalizer, {});
+    expect({ action: result.action, candidateOnRemote: result.remoteHead === result.candidateOid }).toEqual({
+      action: "pushed",
+      candidateOnRemote: true,
+    });
+  });
+
+  it.each([
+    ["review repair", "repair"],
+    ["branch update", "branch-update"],
+  ] as const)("rejects a contained remote advance made after %s verification", async (_name, finalizer) => {
+    const result = await runFinalizer(finalizer, { advanceAfterVerification: true });
+    expect({ action: result.action, advancedHeadRetained: result.remoteHead === result.advancedOid }).toEqual({
+      action: "stale_head",
+      advancedHeadRetained: true,
     });
   });
 });

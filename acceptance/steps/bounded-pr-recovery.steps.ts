@@ -499,8 +499,8 @@ Then("deadloop does not push to the branch", function (this: RecoveryWorld) {
   assert.equal(this.commands?.some((command) => command.includes("push")), false);
 });
 
-Then("deadloop pushes non-forcibly to the verified branch", function (this: RecoveryWorld) {
-  assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
+Then("deadloop pushes to the verified branch under a lease on the verified head", function (this: RecoveryWorld) {
+  assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", `--force-with-lease=refs/heads/${branch}:${head}`, "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
 });
 
 Then("deadloop runs the configured checks before the final pull request head check", function (this: RecoveryWorld) {
@@ -509,8 +509,8 @@ Then("deadloop runs the configured checks before the final pull request head che
   assert.ok(checkIndex >= 0 && checkIndex < headCheckIndex);
 });
 
-Then("deadloop pushes non-forcibly to the conflict-recovery branch", function (this: RecoveryWorld) {
-  assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
+Then("deadloop pushes to the conflict-recovery branch under a lease on the verified head", function (this: RecoveryWorld) {
+  assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", `--force-with-lease=refs/heads/${branch}:${head}`, "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
 });
 
 Then("deadloop runs the configured checks before the final conflict-recovery pull request head check", function (this: RecoveryWorld) {

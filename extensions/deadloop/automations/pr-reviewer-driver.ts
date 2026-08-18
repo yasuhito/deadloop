@@ -444,7 +444,7 @@ Safety contract:
 - Merge ${baseOid} into the existing PR branch. Use git merge, never rebase, and never rewrite existing commits.
 - Resolve only conflicts caused by this merge. Do not widen the PR's scope.
 - Commit the merge resolution before finalization.
-- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted normal non-force push to the driver-selected branch:
+- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted push to the driver-selected branch, leased to the validated head:
   ${finalizeCommand}
 - Never force-push. Never push another ref. Never edit labels, create or edit a PR, merge a PR, close an issue, or delete a branch.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state so the next cycle can re-evaluate.
@@ -484,7 +484,7 @@ function branchUpdateDecision(pr: JsonObject, env: ReturnType<typeof envConfig>,
 function branchUpdateBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>, reason: string): string {
   return `## What happened
 - Automatic branch update for PR #${Number(pr.number || 0)} stopped because ${reason}.
-- No force-push was attempted. A human must inspect the existing PR branch before re-queueing it.
+- Nothing was pushed and no history was rewritten. A human must inspect the existing PR branch before re-queueing it.
 
 ## Recovery steps
 1. Inspect the PR head, checks, and branch-update comments.

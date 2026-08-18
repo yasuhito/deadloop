@@ -130,7 +130,7 @@ Start with `false`. Enable `true` only after verifying branch protection, CI, pe
 
 ## Merge-conflict recovery
 
-Automatic branch updates are currently unavailable. deadloop detects merge conflicts but does not update the branch until #241 connects the `agent:update-branch` request to its worker. The existing non-force, exact-head, required-verification, and normal-merge safety contracts remain required.
+Automatic branch updates are currently unavailable. deadloop detects merge conflicts but does not update the branch until #241 connects the `agent:update-branch` request to its worker. The existing exact-head, required-verification, and normal-merge safety contracts remain required, and the finalizer push stays bound to the verified head by an expected-object-ID lease.
 
 The behavior below describes the safety contract for that future connection, not behavior that can currently run.
 

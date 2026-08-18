@@ -226,9 +226,9 @@ describe("branch update launch plan", () => {
     expect(plan.input.worktree.baseBranch).toBe("origin/develop");
   });
 
-  it("describes the finalizer non-force push without allowing direct force-push", () => {
+  it("describes the finalizer leased push without allowing direct force-push", () => {
     const plan = branchUpdateLaunchPlan(pr, launchEnv, decision, "launch-uuid");
 
-    expect(plan.input.renderPrompt({ promiseFile: "/state/runs/x/promise.json", worktreePath: "/worktree" })).toContain("only permitted normal non-force push");
+    expect(plan.input.renderPrompt({ promiseFile: "/state/runs/x/promise.json", worktreePath: "/worktree" })).toContain("only permitted push to the driver-selected branch, leased to the validated head");
   });
 });
