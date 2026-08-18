@@ -582,7 +582,7 @@ function createActiveState(
     }
     observation = observeRequest(input);
   } catch {
-    return blockAmbiguousConsumption(input);
+    return blockAmbiguousConsumption(input, !releaseActiveState(input));
   }
   const blocked = observation.labels.has(input.blockedLabel)
     || issueLabelIsActive(observation.events, input.blockedLabel);

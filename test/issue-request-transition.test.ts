@@ -22,6 +22,7 @@ function scenario(options: {
   afterActiveState?: (state: ReturnType<typeof createState>) => void;
   activeStateAlreadyPresent?: boolean;
   activeStateReleaseFails?: boolean;
+  observationFailsAfterActiveState?: boolean;
   deleteStatus?: number;
   persistError?: string;
   blockDuringObservation?: boolean;
@@ -46,8 +47,13 @@ function scenario(options: {
     });
   }
   const trace: string[] = [];
+  let pendingObservationFailures = 0;
   const github = {
     listIssueLabels: () => {
+      if (pendingObservationFailures > 0) {
+        pendingObservationFailures -= 1;
+        throw new Error("observation unavailable");
+      }
       if (options.blockDuringObservation) state.label("agent:blocked", "human");
       return [...state.labels].map((name) => ({ name }));
     },
@@ -57,7 +63,10 @@ function scenario(options: {
       trace.push(`add:${label}`);
       state.label(label, automationLogin);
       if (label === "agent:blocked" && options.removeBlockAfterAdd) state.unlabel(label, "human");
-      if (label === "agent:in-progress") options.afterActiveState?.(state);
+      if (label === "agent:in-progress") {
+        if (options.observationFailsAfterActiveState) pendingObservationFailures = 1;
+        options.afterActiveState?.(state);
+      }
     },
     deleteIssueLabel: (_repo: string, _number: number, label: string) => {
       trace.push(`delete:${label}`);
@@ -344,6 +353,19 @@ describe("Issue Agent request transition", () => {
 
   it("removes the active state when the durable receipt fails", () => {
     expect(scenario({ persistError: "interrupted" }).labels).not.toContain("agent:in-progress");
+  });
+
+  it("stops when the observation right after active-state creation fails", () => {
+    expect(scenario({ observationFailsAfterActiveState: true }).outcome.kind).toBe("ambiguous_blocked");
+  });
+
+  it("removes the active state when the observation right after its creation fails", () => {
+    expect(scenario({ observationFailsAfterActiveState: true }).labels).not.toContain("agent:in-progress");
+  });
+
+  it("names the active state left behind when observation and release both fail", () => {
+    expect(scenario({ observationFailsAfterActiveState: true, activeStateReleaseFails: true }).comments[0].body)
+      .toContain("--remove-label 'agent:in-progress'");
   });
 
   it("reports a consumed-request stop when it cannot remove the active state beside a block", () => {
