@@ -1,6 +1,6 @@
-# Feature: Bound automatic pull request repair and conflict recovery to one attempt
+# Feature: Continue automatic pull request repair only while review history shows progress
 
-Handle review findings and conflicts safely without repeating the same change or overwriting another change.
+Handle review findings and conflicts safely without arbitrary repair-count or changed-file limits, without repeating a failed correction, and without overwriting another change.
 
 ## Scenario: Turn a merge conflict into a branch-update request
 
@@ -50,11 +50,71 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop checks the pull request
 * Then deadloop does not start another dedicated conflict-recovery attempt
 
+## Scenario: Accept an approved review with advisory observations
+
+* Given An approved review contains only advisory observations
+* When deadloop validates the review result
+* Then The review result is accepted as approved
+
+## Scenario: Reject an approved review with a required finding
+
+* Given An approved review contains a required finding
+* When deadloop validates the review result
+* Then The approved review result is rejected
+
 ## Scenario: Start a dedicated repair attempt for the first actionable review findings
 
 * Given A pull request has actionable review findings for the first time
 * When deadloop processes the review result
 * Then deadloop starts a dedicated repair attempt
+
+## Scenario: Start a fourth repair when every earlier required finding is resolved
+
+* Given A pull request has three historical repairs and only new required findings
+* When deadloop processes the review result
+* Then deadloop starts a dedicated repair attempt
+
+## Scenario: Hand a persisted required finding to a person
+
+* Given A prior required finding persists after repair
+* When deadloop processes the review result
+* Then deadloop leaves no agent workflow label on the pull request
+
+## Scenario: Hand a regressed required finding to a person
+
+* Given A resolved required finding regresses after repair
+* When deadloop processes the review result
+* Then deadloop leaves no agent workflow label on the pull request
+
+## Scenario: Hand mixed prior and new required findings to a person
+
+* Given Prior and new required findings are mixed after repair
+* When deadloop processes the review result
+* Then deadloop leaves no agent workflow label on the pull request
+
+## Scenario: Keep posted review comments as chronological history
+
+* Given A prior required finding persists after repair
+* When deadloop processes the review result
+* Then deadloop does not edit earlier review or repair-result comments
+
+## Scenario: Keep finding identifiers out of human-readable review text
+
+* Given A review result has an internal finding fingerprint
+* When deadloop renders the review comment
+* Then The human-readable review comment contains no finding fingerprint
+
+## Scenario: Request fresh review when the observed review history changes
+
+* Given A completed review has a recorded pull request history
+* When A conversation comment is added after review
+* Then The completed review history is stale
+
+## Scenario: Keep English and Japanese public repair documentation aligned
+
+* Given The English and Japanese public documentation
+* When The review repair contracts are compared
+* Then Both public documents describe the review-history repair contract
 
 ## Scenario: Preserve review state during repair
 
@@ -139,6 +199,18 @@ Handle review findings and conflicts safely without repeating the same change or
 * Given The pull request head selected for repair has been verified
 * When deadloop completes the repair
 * Then deadloop pushes non-forcibly to the verified branch
+
+## Scenario: Allow a verified repair spanning more than twenty files
+
+* Given A verified repair necessarily changes twenty-one files
+* When deadloop completes the repair
+* Then deadloop pushes non-forcibly to the verified branch
+
+## Scenario: Do not push a repair whose required verification fails
+
+* Given The pull request head selected for repair has been verified
+* When Required verification fails during repair completion
+* Then deadloop does not push to the branch
 
 ## Scenario: Run repair checks before the final pull request head check
 
