@@ -21,6 +21,7 @@ function scenario(options: {
   beforeDelete?: (state: ReturnType<typeof createState>) => void;
   duringDelete?: (state: ReturnType<typeof createState>) => void;
   afterActiveState?: (state: ReturnType<typeof createState>) => void;
+  afterFinishedExploration?: boolean;
   activeStateAlreadyPresent?: boolean;
   activeStateReleaseFails?: boolean;
   observationFailsAfterActiveState?: boolean;
@@ -37,6 +38,11 @@ function scenario(options: {
   let persisted = false;
   let launches = 0;
   if (options.activeStateAlreadyPresent) state.label("agent:in-progress", automationLogin);
+  if (options.afterFinishedExploration) {
+    state.unlabel("agent:explore", automationLogin);
+    state.label("agent:in-progress", automationLogin);
+    state.unlabel("agent:in-progress", automationLogin);
+  }
   if (options.copiedComment) {
     const timestamp = "2026-08-16T00:00:30Z";
     state.comments.push({
@@ -223,9 +229,10 @@ function concurrentRolesScenario(options: {
     },
   };
   const first = consumeIssueRequest(inputFor(firstRole));
+  const outcomes: Record<string, { kind: string } | null> = { [firstRole]: first, [secondRole]: second };
   return {
-    interrupted: first as { kind: string },
-    nested: second as unknown as { kind: string },
+    explore: outcomes["agent:explore"] as { kind: string },
+    implement: outcomes["agent:implement"] as { kind: string },
     launches: [first, second].filter((outcome) => outcome?.kind === "consumed").length,
     receipts,
     labels: [...state.labels],
@@ -455,16 +462,24 @@ describe("Issue Agent request transition", () => {
     expect(concurrentRolesScenario({ firstRole: "agent:implement" }).launches).toBe(1);
   });
 
-  it("hands the active state to the consumption it follows", () => {
-    expect(concurrentRolesScenario().nested.kind).toBe("consumed");
+  it("hands the active state to exploration when both roles are consumed in the same gap", () => {
+    expect(concurrentRolesScenario().explore.kind).toBe("consumed");
   });
 
-  it("supersedes the consumption the active state does not follow", () => {
-    expect(concurrentRolesScenario().interrupted.kind).toBe("superseded");
+  it("keeps exploration's win when it is consumed second", () => {
+    expect(concurrentRolesScenario({ firstRole: "agent:implement" }).explore.kind).toBe("consumed");
+  });
+
+  it("supersedes implementation consumed beside an exploration consumption", () => {
+    expect(concurrentRolesScenario().implement.kind).toBe("superseded");
+  });
+
+  it("supersedes implementation consumed first when exploration follows in the same gap", () => {
+    expect(concurrentRolesScenario({ firstRole: "agent:implement" }).implement.kind).toBe("superseded");
   });
 
   it("writes one durable receipt for two roles consumed in the same gap", () => {
-    expect(concurrentRolesScenario().receipts).toEqual(["agent:implement"]);
+    expect(concurrentRolesScenario().receipts).toEqual(["agent:explore"]);
   });
 
   it("leaves the winning active state in place", () => {
@@ -477,12 +492,16 @@ describe("Issue Agent request transition", () => {
   });
 
   it("explains the request a superseded consumption removed", () => {
-    expect(concurrentRolesScenario().comments[0].body).toContain("--add-label 'agent:explore'");
+    expect(concurrentRolesScenario().comments[0].body).toContain("--add-label 'agent:implement'");
   });
 
   it("does not trust a copied superseded explanation from another commenter", () => {
     const body = concurrentRolesScenario().comments[0].body;
     expect(concurrentRolesScenario({ copiedComment: { body, login: "intruder" } }).comments).toHaveLength(2);
+  });
+
+  it("launches implementation after an exploration attempt released its active state", () => {
+    expect(scenario({ afterFinishedExploration: true }).outcome.kind).toBe("consumed");
   });
 
   it("rejects a selected request label outside the Issue Agent request labels", () => {

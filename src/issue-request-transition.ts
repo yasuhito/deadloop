@@ -515,8 +515,9 @@ function persistSuccessfulExploration(input: PersistSuccessfulExplorationInput):
  * seam. Only the selected request label is deleted. The durable receipt is written only after the
  * resulting unlabeled event is observed and no newer generation has raced with it.
  *
- * `requestLabels` names every Agent request label an Issue can carry, because the roles compete for
- * one active state: the transition must recognize the other role's consumption to stay exclusive.
+ * `requestLabels` names every Agent request label an Issue can carry, in priority order, because the
+ * roles compete for one active state: the transition must recognize the other role's consumption and
+ * its rank to stay exclusive and to keep exploration ahead of implementation.
  */
 function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTransitionOutcome {
   if (!input.requestLabels.includes(input.requestLabel)) {
@@ -596,35 +597,74 @@ function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTrans
 }
 
 /**
+ * Start the current attempt window: the last proof on the timeline that no attempt was in flight.
+ *
+ * An active state that was released and a stop that was raised or cleared are deadloop's only
+ * attempt boundaries on an Issue. A consumption before the newest boundary belongs to an attempt
+ * that already ended, so it must not contend for the active state created afterwards; without this
+ * bound the exploration consumption of a finished attempt would starve implementation forever.
+ */
+function attemptWindowStart(
+  events: JsonObject[],
+  input: ConsumeIssueRequestInput,
+  activeState: JsonObject,
+): JsonObject | null {
+  const boundaries = events.filter((event) => {
+    if (!eventId(event) || compareIssueTimelineEvents(event, activeState) >= 0) return false;
+    const action = String(event.event || "").toLowerCase();
+    const label = String(event.label?.name || "");
+    if (label === input.inProgressLabel) return action === "unlabeled";
+    return label === input.blockedLabel && (action === "labeled" || action === "unlabeled");
+  });
+  boundaries.sort(compareIssueTimelineEvents);
+  return boundaries.at(-1) || null;
+}
+
+/**
  * Name the consumption that owns a live active state, using only stably ordered timeline facts.
  *
  * GitHub's label addition is idempotent: the second host to add `agent:in-progress` records no
  * second `labeled` event, so the label cannot say who created it, and the request-consumption
  * contract permits neither an ownership comment nor exclusion by comment time. What the timeline
  * does order is every automation-authored removal of an Agent request label, and one consumption
- * performs exactly one such removal immediately before it adds the active state. The last
- * consumption ordered strictly before the active state's `labeled` event therefore owns it.
+ * performs exactly one such removal immediately before it adds the active state.
  *
- * Only that direction is safe. A host reads this timeline after its own removal and its own
- * addition, so a competitor's earlier removal is already recorded and can only take a win away; a
- * competitor whose removal lands later is ordered after the active state's event, so the same rule
- * hands the state to the earlier consumption for both hosts. Role priority cannot arbitrate here:
- * it would let the host that has not yet seen the other role's removal keep a win. A removal left
- * by an abandoned attempt is ordered before this attempt's own removal, so it can never claim an
- * active state created after it.
+ * `requestLabels` is priority-ordered, exploration before implementation, because exploration must
+ * run first so the Worker can read its persisted result. The active state therefore belongs to the
+ * highest-priority role consumed inside the current attempt window, and within one role to the last
+ * consumption ordered before the state's `labeled` event.
+ *
+ * Both directions of that rule are safe under a partial view. A host reads this timeline after its
+ * own removal and its own addition, so a competitor already recorded can only take a win away: the
+ * lower-priority role loses as soon as the other role's removal becomes visible, and it can never
+ * gain a win by seeing more events. A competitor whose removal lands later is ordered after the
+ * state's event, so it is not in the contest at all and the same rule hands the state to the earlier
+ * consumption for both hosts. Plain role priority without the window would be unsafe in the other
+ * direction, because a finished exploration would keep vetoing implementation.
  */
 function activeStateOwner(
   events: JsonObject[],
   input: ConsumeIssueRequestInput,
   activeState: JsonObject,
 ): JsonObject | null {
+  const start = attemptWindowStart(events, input, activeState);
   const consumptions = events.filter((event) => eventId(event)
     && String(event.event || "").toLowerCase() === "unlabeled"
     && input.requestLabels.includes(String(event.label?.name || ""))
     && String(event.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase()
-    && compareIssueTimelineEvents(event, activeState) < 0);
+    && compareIssueTimelineEvents(event, activeState) < 0
+    && (!start || compareIssueTimelineEvents(event, start) > 0));
   consumptions.sort(compareIssueTimelineEvents);
-  return consumptions.at(-1) || null;
+  let owner: JsonObject | null = null;
+  let ownerPriority = input.requestLabels.length;
+  for (const consumption of consumptions) {
+    const priority = input.requestLabels.indexOf(String(consumption.label?.name || ""));
+    if (priority <= ownerPriority) {
+      owner = consumption;
+      ownerPriority = priority;
+    }
+  }
+  return owner;
 }
 
 /**
@@ -637,7 +677,8 @@ function activeStateOwner(
  * An active state this attempt did not create is never adopted, and the check and the addition are
  * separate operations, so the addition being idempotent is not proof of creation either. Exclusivity
  * comes from the timeline instead: exploration and implementation can be consumed by two hosts in
- * the same gap, and only the consumption this active state's event follows may launch. The loser
+ * the same gap, and only the highest-priority consumption in that window may launch, so an
+ * implementation consumption never takes the active state from a concurrent exploration. The loser
  * keeps its hands off the winner: no receipt, no release of that state, and an idempotent
  * explanation of its own consumed request.
  */
