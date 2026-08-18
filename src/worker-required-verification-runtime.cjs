@@ -139,6 +139,15 @@ function stalePolicyError(message, sources) {
     sources ? { requiredVerificationSources: sources } : {},
   );
 }
+/**
+ * A trusted-policy currency failure, as opposed to a tampered host snapshot. The snapshot mismatch
+ * is deliberately excluded: it is never a legitimate concurrent policy change, so it must surface.
+ */
+function isRequiredVerificationPolicyBlock(error) {
+  return error instanceof Error
+    && error.message.startsWith("required verification blocked:")
+    && !error.message.includes("host-persisted launch snapshot");
+}
 function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repositoryId) {
   const contract = readWorkerContractSnapshot(attempt); const baseBranch = attempt.baseBranch || "origin/main";
   const remoteRef = baseBranch.startsWith("refs/remotes/") ? baseBranch.slice("refs/remotes/".length) : baseBranch;
@@ -241,4 +250,24 @@ function assertReviewApprovalAuthorized(attempt, report, record, currentContract
   assertPassedRecord(attempt, record, currentContract, report.result.reviewedHead);
   return { reviewedHead: report.result.reviewedHead, record };
 }
-module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertReviewApprovalAuthorized, assertWorkerCompletionAuthorized, persistHostVerificationEvidence, readRequiredVerificationRecord, readWorkerContractSnapshot, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };
+/**
+ * Re-authenticate one review attempt immediately before a GitHub write, after its last external
+ * observation.
+ *
+ * Every write an attempt makes stands on the policy the attempt fixed, so the fixed contract must
+ * still be the current trusted policy at the moment of the write. A failing review result needs no
+ * passed verification record; supplying `report` adds the passing requirement, the host-executed
+ * success record bound to the exact reviewed head.
+ */
+function reauthorizeReviewWrite(attempt, options) {
+  const contract = assertCurrentWorkerContract(attempt, options.projectRepo, options.localConfigPath, options.repositoryId);
+  if (!options.report) return contract;
+  assertReviewApprovalAuthorized(
+    attempt,
+    options.report,
+    readRequiredVerificationRecord(workerRequiredVerificationPath(options.attemptRecordFile)),
+    contract,
+  );
+  return contract;
+}
+module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertReviewApprovalAuthorized, assertWorkerCompletionAuthorized, isRequiredVerificationPolicyBlock, persistHostVerificationEvidence, readRequiredVerificationRecord, readWorkerContractSnapshot, reauthorizeReviewWrite, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };

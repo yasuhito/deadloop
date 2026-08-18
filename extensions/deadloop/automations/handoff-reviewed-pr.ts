@@ -10,12 +10,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const {
-  assertCurrentWorkerContract,
-  assertReviewApprovalAuthorized,
-  readRequiredVerificationRecord,
-  workerRequiredVerificationPath,
-} = require("../../../src/worker-required-verification-runtime.cjs");
+const { reauthorizeReviewWrite } = require("../../../src/worker-required-verification-runtime.cjs");
 const { currentAutoMergeEnabled } = require("./merge-reviewed-pr.ts");
 const { validatePromise } = require("./extract-worker-promise.ts");
 const {
@@ -86,18 +81,13 @@ function assertRequiredVerificationApproved(args: HandoffArgs, enabled: EnabledP
   const attemptRecordFile = path.join(path.dirname(args.reviewPromise), "attempt.json");
   const attempt = readAttemptRecord(path.dirname(attemptRecordFile));
   const report = JSON.parse(fs.readFileSync(args.reviewPromise, "utf8"));
-  const contract = assertCurrentWorkerContract(
-    attempt,
-    args.projectRepo,
-    process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"),
-    enabled.githubRepositoryId,
-  );
-  assertReviewApprovalAuthorized(
-    attempt,
+  reauthorizeReviewWrite(attempt, {
+    projectRepo: args.projectRepo,
+    localConfigPath: process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"),
+    repositoryId: enabled.githubRepositoryId,
     report,
-    readRequiredVerificationRecord(workerRequiredVerificationPath(attemptRecordFile)),
-    contract,
-  );
+    attemptRecordFile,
+  });
   if (report.result.reviewedHead !== args.expectedHead) {
     throw new Error("required verification reviewed head changed; ready handoff stopped");
   }
@@ -197,9 +187,16 @@ function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRu
       return releaseStaleClaim(args, ops);
     }
     const eligible = assertEligiblePr(args, ops);
-    assertVerification(args, enabled);
-    assertEligiblePr(args, ops);
     if (autoMergeEnabled(args)) throw new Error("autoMerge is currently enabled; ready handoff stopped");
+    // The accepted review history is the last external observation before the mutation, and the
+    // fixed contract, current policy and current-head success record are re-authenticated after it.
+    // A policy or history change during the reads above therefore cannot hand a stale approval to
+    // people, and the same conditions are confirmed again once the mutation has been applied.
+    if (expected && !compareAcceptedHistory(args, ops, expected)) {
+      recheck();
+      return releaseStaleClaim(args, ops);
+    }
+    assertVerification(args, enabled);
     recheck();
     if (eligible.isDraft === true) {
       const ready = ops.run(["gh", "pr", "ready", args.pr, "-R", args.githubRepo], MAX_GUARDED_OPERATION_MS);
@@ -212,6 +209,10 @@ function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRu
     if (result.status !== 0) throw new Error(commandError(result, "reviewed PR ready handoff failed"));
     try {
       assertHandoffApplied(args, ops);
+      if (expected && !compareAcceptedHistory(args, ops, expected)) {
+        throw new Error("accepted review history changed during the ready handoff");
+      }
+      assertVerification(args, enabled);
     } catch (error) {
       restoreReviewState(args, ops);
       throw new Error(`ready handoff stopped and review state restored: ${error instanceof Error ? error.message : String(error)}`);

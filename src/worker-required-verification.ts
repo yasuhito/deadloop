@@ -50,6 +50,17 @@ type Runtime = {
     record: RequiredVerificationRecord | undefined,
     currentContract: RequiredVerificationContract,
   ) => { outputRevision: string; record: RequiredVerificationRecord };
+  reauthorizeReviewWrite: (
+    attempt: AttemptRecord,
+    options: {
+      projectRepo: string;
+      localConfigPath?: string;
+      repositoryId?: string;
+      report?: CompletionReportV1;
+      attemptRecordFile?: string;
+    },
+  ) => RequiredVerificationContract;
+  isRequiredVerificationPolicyBlock: (error: unknown) => boolean;
 };
 
 const runtime = require("./worker-required-verification-runtime.cjs") as Runtime;
@@ -62,3 +73,5 @@ export const requiredVerificationBinding = runtime.requiredVerificationBinding;
 export const assertCurrentWorkerContract = runtime.assertCurrentWorkerContract;
 export const assertReviewApprovalAuthorized = runtime.assertReviewApprovalAuthorized;
 export const assertWorkerCompletionAuthorized = runtime.assertWorkerCompletionAuthorized;
+export const reauthorizeReviewWrite = runtime.reauthorizeReviewWrite;
+export const isRequiredVerificationPolicyBlock = runtime.isRequiredVerificationPolicyBlock;

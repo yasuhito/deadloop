@@ -27,7 +27,7 @@ function runMerge(options: {
   verificationChangesAfterPrRead?: boolean;
   onMerge?: () => void;
   repository?: { id: string; nameWithOwner: string };
-  finalRace?: "head" | "repository";
+  finalRace?: "head" | "repository" | "policy" | "history";
   onHistoryCheck?: (count: number) => void;
 } = {}) {
   const commands: string[][] = [];
@@ -95,8 +95,16 @@ function runMerge(options: {
         if (options.verificationChangesAfterPrRead && prReads > 0 && verificationChecks > 1) {
           throw new Error("required verification policy changed");
         }
+        if (options.finalRace === "policy" && repositoryReads >= 3) {
+          throw new Error("required verification blocked: stale_policy; current policy differs from the fixed attempt contract");
+        }
       },
-      assertReviewHistoryFresh: () => options.onHistoryCheck?.(++historyChecks),
+      assertReviewHistoryFresh: () => {
+        if (options.finalRace === "history" && repositoryReads >= 3) {
+          throw new Error("PR review history changed; automatic merge stopped");
+        }
+        options.onHistoryCheck?.(++historyChecks);
+      },
       run: (args: string[]) => {
         commands.push(args);
         if (args[1] === "repo" && args[2] === "view") {
@@ -166,6 +174,26 @@ describe("reviewed PR merge", () => {
       runMerge({ verificationChangesAfterPrRead: true, onMerge: () => { merges += 1; } });
     } catch {
       // The changed policy must stop the guarded merge.
+    }
+    expect(merges).toBe(0);
+  });
+
+  it("does not merge when the trusted policy changes during the final revalidation", () => {
+    let merges = 0;
+    try {
+      runMerge({ finalRace: "policy", onMerge: () => { merges += 1; } });
+    } catch {
+      // The changed policy must stop the guarded merge.
+    }
+    expect(merges).toBe(0);
+  });
+
+  it("does not merge when the accepted review history changes during the final revalidation", () => {
+    let merges = 0;
+    try {
+      runMerge({ finalRace: "history", onMerge: () => { merges += 1; } });
+    } catch {
+      // The changed history must stop the guarded merge.
     }
     expect(merges).toBe(0);
   });

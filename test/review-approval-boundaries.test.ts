@@ -32,10 +32,12 @@ function runHandoff(options: {
   headChangesDuringAuthorization?: boolean;
   headChangesDuringLabelMutation?: boolean;
   policyChangesDuringFinalPrRead?: boolean;
+  policyChangesAfterFinalHistoryObservation?: boolean;
 }): { edits: number; labels: string[] } {
   let edits = 0;
   let policyReads = 0;
   let verificationReads = 0;
+  let historyReads = 0;
   let prReads = 0;
   let requiredVerificationPolicyChanged = false;
   let liveHead = head;
@@ -46,7 +48,11 @@ function runHandoff(options: {
       isAutoMergeEnabled: () => options.policyChanges === true && ++policyReads > 1,
       validateReviewPromise: () => approvedReview,
       readHistory: () => acceptedHistory,
-      observeHistory: () => acceptedHistory,
+      observeHistory: () => {
+        historyReads += 1;
+        if (options.policyChangesAfterFinalHistoryObservation && historyReads === 3) requiredVerificationPolicyChanged = true;
+        return acceptedHistory;
+      },
       assertReviewVerification: () => {
         verificationReads += 1;
         if (options.verificationError) throw new Error(options.verificationError);
@@ -135,5 +141,9 @@ describe("reviewed PR ready-handoff boundary", () => {
 
   it("rejects required-verification policy changes during the final PR read", () => {
     expect(handoffMutationCount({ policyChangesDuringFinalPrRead: true })).toBe(0);
+  });
+
+  it("rejects a policy change that lands after the final accepted-history observation", () => {
+    expect(handoffMutationCount({ policyChangesAfterFinalHistoryObservation: true })).toBe(0);
   });
 });

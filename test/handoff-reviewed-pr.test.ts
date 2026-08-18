@@ -110,7 +110,7 @@ describe("reviewed PR ready handoff", () => {
     expect(run.commands.some((command) => command[2] === "ready")).toBe(false);
   });
 
-  it("rechecks handoff eligibility after the final history observation", () => {
+  it("rechecks handoff eligibility before the final history observation", () => {
     expect(() => runHandoff([acceptedHistory, acceptedHistory], {
       prViews: [livePr, { ...livePr, labels: [{ name: "agent:in-progress" }, { name: "agent:blocked" }] }],
     })).toThrow("the active review claim state is no longer present");
@@ -120,6 +120,15 @@ describe("reviewed PR ready handoff", () => {
     expect(() => runHandoff([acceptedHistory, acceptedHistory], {
       prViews: [livePr, { ...livePr, labels: [{ name: "customer:urgent" }] }],
     })).toThrow("the active review claim state is no longer present");
+  });
+
+  it("releases the active review claim when history changes after the last handoff eligibility read", () => {
+    expect(runHandoff([acceptedHistory, acceptedHistory, { revision: "raced-comment" }]).result).toEqual({ action: "stale_history" });
+  });
+
+  it("restores the review state when history changes during the handoff mutation", () => {
+    expect(() => runHandoff([acceptedHistory, acceptedHistory, acceptedHistory, { revision: "raced-comment" }]))
+      .toThrow("ready handoff stopped and review state restored");
   });
 
 

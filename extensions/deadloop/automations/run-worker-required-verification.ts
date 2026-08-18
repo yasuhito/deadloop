@@ -13,6 +13,7 @@ const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
   assertCurrentWorkerContract,
+  isRequiredVerificationPolicyBlock,
   persistHostVerificationEvidence,
   requiredVerificationBinding,
   workerRequiredVerificationPath,
@@ -88,11 +89,6 @@ function writeVerificationLog(logPath: string, contents: string): void {
   } finally {
     fs.closeSync(descriptor);
   }
-}
-function isRequiredVerificationPolicyBlock(error: unknown): boolean {
-  return error instanceof Error
-    && error.message.startsWith("required verification blocked:")
-    && !error.message.includes("host-persisted launch snapshot");
 }
 
 function completionStopDiagnosis(attempt: Record<string, any>, error: unknown) {
@@ -264,4 +260,4 @@ async function main() {
   }
 }
 if (require.main === module) void main();
-module.exports = { applyCompletionRequiredVerificationStop, assertCleanOutput, completionStopDiagnosis, isRequiredVerificationPolicyBlock, parseArgs, run, runWorkerProjectCheck, writeVerificationLog };
+module.exports = { applyCompletionRequiredVerificationStop, assertCleanOutput, completionStopDiagnosis, parseArgs, run, runWorkerProjectCheck, writeVerificationLog };
