@@ -164,7 +164,7 @@ function samePreparedIdentity(record: AttemptRecord, expected: PreparedAttemptIn
 
 /** Persist the launch intent before a GitHub claim, label, comment, or runner mutation. */
 function prepareAgentLaunchFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): PreparedLaunch {
-  if (["worker", "review-repair", "branch-update"].includes(input.role) && !input.requiredVerification) {
+  if (["worker", "reviewer", "review-repair", "branch-update"].includes(input.role) && !input.requiredVerification) {
     throw new Error(`${input.role} launch requires a resolved required verification contract`);
   }
   const prepared = launchPaths(input);

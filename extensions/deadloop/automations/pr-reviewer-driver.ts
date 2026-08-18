@@ -32,6 +32,7 @@ const { observeAttemptLiveness } = require("../../../src/attempt-runtime-observa
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
+const { requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 const {
   comparePrHistoryObservations,
   observePrHistory,
@@ -375,9 +376,9 @@ Promise report:
 - Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
 - Separate the two kinds of observation: findings are the required corrections and the repair worker's entire contract, while advisories are optional observations that are published for humans and never repaired. Each advisory is {title,body,path?,line?}.
 - priorRequiredFindings states how the required findings raised by earlier reviews of this PR stand on the reviewed head: "none" when no earlier review raised one, "all_resolved" when every earlier one is fixed, "persisted" when at least one is still unresolved, "regressed" when a fixed one came back, "mixed" when unresolved earlier ones stand next to new ones. An earlier advisory that later became a required correction counts as a new required finding.
-- If no required correction remains, write a V1 report with a three-sentence summary, status="complete", result={outcome:"approved",reviewedHead:"${String(pr.headRefOid || "")}",findings:[],advisories:<advisory observations, may be empty>}, and evidence={reviewed:["diff and configured checks"]}. approved requires an empty findings list.
-- If required corrections exist, include a three-sentence summary and use result={outcome:"changes_requested",reviewedHead:"${String(pr.headRefOid || "")}",findings:[{title:"concise defect",body:"bounded required correction and evidence",path:"optional/repo/path",line:1,severity:"blocker|major|minor"}],advisories:<advisory observations, may be empty>,priorRequiredFindings:"none|all_resolved"} with non-empty evidence.reviewed. Only "none" or "all_resolved" may accompany changes_requested, because automatic repair continues only on reported repair progress.
-- Use outcome=human_required when a persisted, regressed, or mixed prior required finding leaves no repair progress to report, or when a product/spec/safety decision cannot be repaired within the PR. Include a three-sentence summary and write result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:<required findings, may be empty>,advisories:<advisory observations, may be empty>,priorRequiredFindings:"persisted|regressed|mixed|all_resolved|none"}, and evidence={reviewed:["decision boundary and supporting evidence"]}.
+- If no required correction remains, write a V1 report with a three-sentence summary, status="complete", result={outcome:"approved",reviewedHead:"${String(pr.headRefOid || "")}",findings:[],advisories:<advisory observations, may be empty>}, and evidence={reviewed:["diff and configured checks"],validations:["optional additional validation and result"]}. approved requires an empty findings list. The host independently runs required verification; validations are display-only additional evidence.
+- If required corrections exist, include a three-sentence summary and use result={outcome:"changes_requested",reviewedHead:"${String(pr.headRefOid || "")}",findings:[{title:"concise defect",body:"bounded required correction and evidence",path:"optional/repo/path",line:1,severity:"blocker|major|minor"}],advisories:<advisory observations, may be empty>,priorRequiredFindings:"none|all_resolved"} with non-empty evidence.reviewed and optional evidence.validations. Only "none" or "all_resolved" may accompany changes_requested, because automatic repair continues only on reported repair progress.
+- Use outcome=human_required when a persisted, regressed, or mixed prior required finding leaves no repair progress to report, or when a product/spec/safety decision cannot be repaired within the PR. Include a three-sentence summary and write result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:<required findings, may be empty>,advisories:<advisory observations, may be empty>,priorRequiredFindings:"persisted|regressed|mixed|all_resolved|none"}, and evidence={reviewed:["decision boundary and supporting evidence"],validations:["optional additional validation and result"]}.
 - For blocked reports include a three-sentence summary, result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
 - Include only verified defects as findings; #243-style lint or repository-contract failures are changes_requested, not blocked.
 - The reason, summary, and the titles, bodies, and paths of both findings and advisories can be published in a PR comment. Keep them human-readable and never include prompts, promise paths, absolute/local paths, internal agent names, or other runtime details.
@@ -820,6 +821,19 @@ function launchBranchUpdate(
   return { updaterName: plan.updaterName, headRefName: branch, retryKey: key, requestEventId, ...launch, ...(fixture && !operations?.agentLaunchOps ? { simulated: true } : {}) };
 }
 
+function reviewerRequiredVerificationContract(env: ReturnType<typeof envConfig>, targetHead: string) {
+  if (env.requiredVerification) {
+    const contract = env.requiredVerification;
+    requiredVerificationBinding(contract, targetHead);
+    if (contract.repository !== env.githubRepo) throw new Error("required verification contract repository does not match the review repository");
+    return contract;
+  }
+  if (process.env.NODE_ENV === "test" || process.env.DEADLOOP_TEST_ADAPTER === "1") {
+    return { repository: env.githubRepo, command: env.checkCommand, source: { kind: "local", location: "fixture" }, baseRevision: targetHead };
+  }
+  throw new Error("DEADLOOP_REQUIRED_VERIFICATION is required before reviewer launch");
+}
+
 function prReviewerLaunchPlan(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -852,6 +866,7 @@ function prReviewerLaunchPlan(
       reviewHistoryRequired: true,
       target: { kind: "pull-request", number },
       inputRevision: { head: String(pr.headRefOid || "") },
+      requiredVerification: reviewerRequiredVerificationContract(env, String(pr.headRefOid || "")),
       intendedWorktreePath: path.join(env.worktreeRoot, headRefName.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath, uuid, historyFile, historyRevision),
@@ -1599,6 +1614,7 @@ function reviewOnlyDrive(
     projectId: env.projectId,
     repoPath: env.repoPath,
     worktreeRoot: env.worktreeRoot,
+    worktreePath: String(launch.worktreePath || ""),
     githubRepo: env.githubRepo,
     stateDir: env.stateDir,
     enabledAt: env.enabledAt,

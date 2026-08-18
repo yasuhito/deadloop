@@ -126,6 +126,8 @@ With `false`, deadloop creates and reviews each PR, then hands the merge to a hu
 
 With `true`, deadloop squash-merges PRs that pass its safety checks and deletes their head branches.
 
+Reviewers can still report requested changes or a required human decision when required verification is missing or failing. Approval, successful human handoff, and merge consideration require a host-recorded successful required-verification result for the current PR head; agent-reported validations remain additional evidence only.
+
 Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
 
 ## Merge-conflict recovery

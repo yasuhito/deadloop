@@ -11,6 +11,7 @@ import { fixtureStateDir } from "../support/fixture-state-dir";
 const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
 const { renderRepairMarker, renderTechnicalFailureMarker, reviewResultFingerprint } = require("../../extensions/deadloop/automations/pr-review-repair-state.ts");
 const { finalizeReviewRepair } = require("../../extensions/deadloop/automations/pr-review-repair-finalize.ts");
+const { writeWorkerContractSnapshot } = require("../../src/worker-required-verification-runtime.cjs");
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const repairedHead = "cccccccccccccccccccccccccccccccccccccccc";
@@ -130,13 +131,21 @@ function repairDispatch(testCase: string): Record<string, unknown> {
           priorRequiredFindings: testCase === "repeated-repair" ? "persisted" : "none",
         },
       }));
+    // Every reviewer launch fixes a required-verification contract, and this fixture's policy
+    // resolves to the deadloop default because its project configures no check command.
     fs.writeFileSync(attemptRecord, JSON.stringify({
       attemptId: "reviewer", launchUuid: "reviewer", project: "demo", repository: "owner/repo", role: "reviewer",
       target: { kind: "pull-request", number: 31 }, inputRevision: { head: currentHead }, branch,
+      baseBranch: "origin/main",
       worktreePath: worktree, agentName: "reviewer", workspaceLabel: "reviewer",
       promptFile: path.join(runDir, "prompt.md"), promiseFile: promise,
       phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", requestEventId: "22",
+      requiredVerification: {
+        repository: "owner/repo", command: "npm run check",
+        source: { kind: "default", location: "deadloop" }, baseRevision: "f".repeat(40),
+      },
     }));
+    writeWorkerContractSnapshot(runDir, JSON.parse(fs.readFileSync(attemptRecord, "utf8")));
     const comments = testCase === "repeated-repair"
       ? [{ body: renderRepairMarker(head, reviewResultFingerprint(findings)), author: { login: "deadloop-bot" } }]
       : testCase === "repeated-technical-failure"

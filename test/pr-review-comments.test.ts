@@ -69,6 +69,15 @@ Exactly one automatic repair for this review result will now start and will chan
     ).toContain("The reviewed head is approved. The configured handoff or merge safety checks can continue.");
   });
 
+  it("labels agent validations as additional non-authoritative evidence", () => {
+    expect(renderApprovedReviewComment({
+      headOid: "a".repeat(40),
+      summary: "No actionable defects were found.",
+      reviewFingerprint: "1".repeat(20),
+      additionalValidations: ["npm run extra passed"],
+    })).toContain("informational and do not replace deadloop's required verification record");
+  });
+
   it("renders advisory observations on an approved result", () => {
     expect(
       renderApprovedReviewComment({

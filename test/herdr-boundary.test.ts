@@ -27,7 +27,7 @@ describe("Herdr 0.8.0 activation boundary", () => {
 
 
   it("selects launchRepair for the review-repair role", () => {
-    expect(namedFunction(repairDriver, "dispatch")).toContain("launchRepair(");
+    expect(namedFunction(repairDriver, "dispatchReviewResult")).toContain("launchRepair(");
   });
 
   it("keeps the startup preflight selected", () => {

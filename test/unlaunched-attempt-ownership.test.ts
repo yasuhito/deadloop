@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { reconcile } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
+const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 
 const HEAD = "a".repeat(40);
 const roots: string[] = [];
@@ -66,6 +67,14 @@ else if (args.some((value) => String(value).endsWith("/comments"))) process.stdo
 else if (args.some((value) => String(value).endsWith("/events"))) process.stdout.write(JSON.stringify([[{ id: 10, event: "labeled", created_at: "2026-08-01T09:00:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:review" } }]]));
 else if (args[0] === "api") process.stdout.write(JSON.stringify([[]]));
 `);
+  // Real git for every command except the trusted-policy fetch, which no fixture remote can serve.
+  writeFileSync(path.join(bin, "git"), `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if ((args[0] === "-C" ? args[2] : args[0]) === "fetch") process.exit(0);
+const result = require("node:child_process").spawnSync("/usr/bin/git", args, { encoding: "utf8" });
+process.stdout.write(result.stdout || ""); process.stderr.write(result.stderr || "");
+process.exit(result.status ?? 1);
+`);
   writeFileSync(path.join(bin, "herdr"), `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args[0] === "--version") process.stdout.write("herdr 0.8.0\\n");
@@ -74,7 +83,7 @@ else if (args[0] === "worktree") process.stdout.write(JSON.stringify({ result: {
 else if (args[0] === "agent") process.stdout.write(JSON.stringify({ result: { agents: [] } }));
 else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
 `);
-  for (const command of ["gh", "herdr"]) execFileSync("chmod", ["+x", path.join(bin, command)]);
+  for (const command of ["gh", "git", "herdr"]) execFileSync("chmod", ["+x", path.join(bin, command)]);
   originalPath = process.env.PATH;
   process.env.PATH = `${bin}:${originalPath || ""}`;
   // The handoff refuses a state directory that is not the enabled one, so the fixture has to be it.
@@ -92,11 +101,19 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
     lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true,
   }] }));
 
+  // Every reviewer launch fixes a required-verification contract, and this fixture's trusted policy
+  // resolves to the deadloop default because its project configures no check command.
+  const baseRevision = execFileSync("git", ["-C", repo, "rev-parse", "--verify", "origin/master^{commit}"], { encoding: "utf8" }).trim();
   const attempt = (overrides: Record<string, unknown>) => ({
     launchUuid: "launch", project: "demo", repository: "owner/repo", role: "reviewer",
     target: { kind: "pull-request", number: 42 }, inputRevision: { head: HEAD },
-    branch: "agent/issue-42", worktreePath: worktree, agentName: "dl-r-42-abcdef123456",
-    workspaceLabel: "reviewer", ...overrides,
+    branch: "agent/issue-42", baseBranch: "origin/master", worktreePath: worktree, agentName: "dl-r-42-abcdef123456",
+    workspaceLabel: "reviewer",
+    requiredVerification: {
+      repository: "owner/repo", command: "npm run check",
+      source: { kind: "default", location: "deadloop" }, baseRevision,
+    },
+    ...overrides,
   });
   writeFileSync(path.join(completedRun, "attempt.json"), JSON.stringify(attempt({
     attemptId: "completed", promptFile: path.join(completedRun, "prompt.md"),
@@ -104,6 +121,7 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
     workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1",
     phase: "report_received", lastSuccessfulPhase: "report_received", requestEventId: "10",
   })));
+  writeWorkerContractSnapshot(completedRun, JSON.parse(readFileSync(path.join(completedRun, "attempt.json"), "utf8")));
   writeFileSync(path.join(completedRun, "promise.json"), JSON.stringify({
     schemaVersion: 1, attemptId: "completed", role: "reviewer", status: "complete",
     target: { repository: "owner/repo", kind: "pull-request", number: 42 }, inputRevision: { head: HEAD },
@@ -127,6 +145,7 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
     requestEventId: "20",
     launchError: "worktree agent/issue-42 already has an open attempt workspace",
   })));
+  writeWorkerContractSnapshot(unlaunchedRun, JSON.parse(readFileSync(path.join(unlaunchedRun, "attempt.json"), "utf8")));
   return { root, repo, stateDir, worktree, completedRun, mutations: path.join(root, "mutations.log") };
 }
 

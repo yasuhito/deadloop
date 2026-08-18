@@ -51,6 +51,15 @@ function reviewMarker(input: JsonObject): string {
   return `<!-- deadloop:review-result head=${String(input.headOid).toLowerCase()} review=${String(input.reviewFingerprint).toLowerCase()} outcome=${input.outcome} -->`;
 }
 
+function additionalValidationSection(input: JsonObject): string {
+  const validations = (input.additionalValidations || []).map(
+    (validation: unknown) => `- ${publicText(validation, "Additional validation result omitted.")}`,
+  );
+  return validations.length
+    ? `\n## Additional agent-reported validation\nThese results are informational and do not replace deadloop's required verification record.\n\n${validations.join("\n")}\n`
+    : "";
+}
+
 /** Reads back the reviewer's disposition of the required findings raised earlier. */
 const PRIOR_REQUIRED_FINDING_PROSE: Record<string, string> = {
   none: "No required finding existed before this review.",
@@ -116,7 +125,7 @@ ${renderRequiredFindings(input)}
 ${renderAdvisorySection(input)}
 ## Next step
 ${nextStep}
-
+${additionalValidationSection(input)}
 ${reviewMarker({ ...input, outcome: "changes_requested" })}
 ${marker}`;
 }
@@ -126,7 +135,7 @@ function renderApprovedReviewComment(input: JsonObject): string {
 
 - Reviewed commit: ${code(input.headOid)}
 - Reason: ${publicText(input.summary || input.reason, "No actionable defects were found.")}
-${renderAdvisorySection(input)}
+${renderAdvisorySection(input)}${additionalValidationSection(input)}
 ## Next step
 The reviewed head is approved. The configured handoff or merge safety checks can continue.
 
@@ -146,7 +155,7 @@ function renderHumanRequiredComment(input: JsonObject): string {
 - Reviewed commit: ${code(input.headOid)}${renderPriorFindingLine(input)}
 - Reason: ${handoff}
 - Context: ${publicText(input.summary, "Review the findings and choose the safe next action.")}
-${requiredFindings}${renderAdvisorySection(input)}
+${requiredFindings}${renderAdvisorySection(input)}${additionalValidationSection(input)}
 ## Recovery steps
 Resolve the decision above, push a new commit if code changes are needed, then add ${code(input.reviewLabel || "agent:review")} so the new head can be reviewed.
 

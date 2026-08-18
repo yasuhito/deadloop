@@ -41,6 +41,7 @@ export type BranchUpdateMonitorPromptInput = MonitorPromptBaseInput & {
 
 export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   worktreeRoot: string;
+  worktreePath?: string;
   autoMerge?: boolean;
   prNumber: number;
   expectedHeadOid: string;
@@ -227,8 +228,9 @@ function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): str
 }
 
 function renderReviewerMonitorPrompt(input: ReviewerMonitorPromptInput): string {
-  // With automatic merge off the approved pull request keeps no agent workflow label at all, so the
-  // workspace completion expects an empty managed set instead of a handoff label.
+  const attemptRecord = input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`;
+  const verifyApproval = `node ${shellQuotePrompt(`${input.automationDir}/run-worker-required-verification.ts`)} --attempt-record ${shellQuotePrompt(attemptRecord)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --worktree ${shellQuotePrompt(input.worktreePath || "<worktreePath>")} --quarantine-root ${shellQuotePrompt(`${input.stateDir || "<stateDir>"}/check-quarantine`)} --role reviewer`;
+  // With automatic merge off the approved pull request keeps no agent workflow label at all.
   const approvedLabels = input.autoMerge ? [input.inProgressLabel || "agent:in-progress"] : [];
   const acceptedHistory = `${input.promiseFile.replace(/\/[^/]+$/, "")}/pr-review-history-accepted.json`;
   const guardedMerge = `node ${shellQuotePrompt(`${input.automationDir}/merge-reviewed-pr.ts`)} --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --review-promise ${shellQuotePrompt(input.promiseFile)} --history-observation ${shellQuotePrompt(acceptedHistory)} --in-progress-label ${shellQuotePrompt(input.inProgressLabel || "agent:in-progress")} --blocked-label ${shellQuotePrompt(input.blockedLabel)}`;
@@ -242,16 +244,18 @@ Review binding:
 ${renderPromisePollingRules(input, "pull-request")}
 
 Completion handling:
-- Read the validated promise payload. Only an explicit head-bound \`outcome=approved\` result may enter the automatic merge path; only strongly-bound V1 reports can authorize a human handoff or merge.
+- Read the validated promise payload. Only an explicit head-bound V1 \`outcome=approved\` result may enter approved handoff or automatic merge processing; only strongly-bound V1 reports can authorize a ready handoff or merge.
+- Legacy complete promises are inspection-only evidence: do not dispatch, comment, change labels, or report successful handoff for them.
 - A successful review with actionable defects is status=complete, outcome=changes_requested, never status=blocked.
-- For every validated completion, including approved reports, run the deterministic dispatcher so it can record the public review result exactly once:
+- For outcome=approved, first run the fixed, attempt-bound required verification exactly once: \`${verifyApproval}\`. A missing, failed, stale-head, or stale-policy record must not enter approved handoff or merge processing. Agent-reported \`evidence.validations\` remains display-only additional evidence.
+- For every validated V1 completion, run the deterministic dispatcher so it can record the public review result exactly once:
   \`${renderReviewerDispatcherCommand(input)}\`
 - Follow the dispatcher's returned repair or human-block action. When it returns driverAction=review_approved, continue the approved path below; do not stop merely because comment recording is done.
 - The dispatcher keeps ${input.inProgressLabel} as the active repair state. A human-required result is a completed review: the dispatcher records it, marks a draft ready, and removes every agent workflow label, so no request is left waiting. It adds ${input.blockedLabel} only for bounded failure paths, where deadloop could not finish safely.
 - For outcome=approved, re-check GitHub PR state, reviews, and checks before changing labels.
 - Run local validation including \`${input.checkCommand}\` when needed for CI fallback; do not ignore failing checks by guesswork. A local fallback may support human handoff, but it does not authorize automatic merge while GitHub reports missing, pending, failed, or ambiguous checks.
 - The deterministic policy for this monitor is \`autoMerge=${input.autoMerge ? "true" : "false"}\`; do not infer or change it during monitoring or restart cleanup.
-- If autoMerge=false, never merge or change review labels directly; run exactly \`${guardedReadyHandoff}\`. This command re-observes the accepted history under the enablement guard, marks the pull request ready, and removes every agent workflow label. It never adds a human handoff label to a PR.
+- If autoMerge=false, never merge or change review labels directly; run exactly \`${guardedReadyHandoff}\`. This command re-observes the accepted history and revalidates the live head, current policy, and authenticated host verification under the enablement guard before marking the pull request ready and removing every agent workflow label. It never adds a human handoff label to a PR.
 - If that command returns action=stale_history, do not hand off as reviewed. It returns the PR to review by replacing ${input.inProgressLabel || "agent:in-progress"} with ${input.reviewLabel}; then close the reviewer workspace with \`${renderWorkspaceCompletion(input, [input.reviewLabel])}\`.
 - After an approved result and its policy-specific final labels are confirmed, run \`${renderWorkspaceCompletion(input, approvedLabels)}\`. For changes_requested with reported repair progress the deterministic dispatcher closes the reviewer workspace with ${input.inProgressLabel || "agent:in-progress"} before it opens the separate repair workspace; without repair progress it hands the result to a human instead.
 - If autoMerge=true, retain exactly ${input.inProgressLabel || "agent:in-progress"} while applying unchanged merge gates. Merge only after the head-bound review approval, reported GitHub CI checks, and repository mergeability gates all pass. Perform the merge only by running exactly \`${guardedMerge}\`; never run \`gh pr merge\` directly. This binds GitHub's mutation to the reviewed head while holding the enablement guard.
