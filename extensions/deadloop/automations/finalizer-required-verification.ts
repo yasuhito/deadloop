@@ -190,12 +190,92 @@ function authorizeFinalizerRequiredVerification(
   return assertRequiredVerificationAuthorized(input.attempt, targetCommit, input.record, input.currentContract, [role]);
 }
 
+type FinalizerInterruptionOps = {
+  on: (signal: "SIGINT" | "SIGTERM", handler: () => void) => void;
+  off: (signal: "SIGINT" | "SIGTERM", handler: () => void) => void;
+  kill: (pid: number, signal: NodeJS.Signals) => void;
+  alive: (pid: number) => boolean;
+  sleep: (ms: number) => void;
+  readPid: (file: string) => number | null;
+};
+
+type FinalizerInterruption = {
+  observed: () => "SIGINT" | "SIGTERM" | null;
+  forwardAndWait: () => void;
+  release: () => void;
+};
+
+const INTERRUPTION_WAIT_MS = 30_000;
+const INTERRUPTION_POLL_MS = 100;
+
+function defaultInterruptionOps(): FinalizerInterruptionOps {
+  return {
+    on: (signal, handler) => { process.on(signal, handler); },
+    off: (signal, handler) => { process.removeListener(signal, handler); },
+    kill: (pid, signal) => { process.kill(pid, signal); },
+    alive: (pid) => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    },
+    sleep: (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); },
+    readPid: (file) => {
+      try {
+        const pid = Number(fs.readFileSync(file, "utf8").trim());
+        return Number.isInteger(pid) && pid > 0 ? pid : null;
+      } catch { return null; }
+    },
+  };
+}
+
+/**
+ * Keep a signaled finalizer from leaving its checker running without evidence.
+ *
+ * The checker runs in a synchronous wait, so a handler cannot run until that wait returns. Holding
+ * the signal is what keeps the default termination from killing this process first; the recorded
+ * signal is then forwarded to the published checker pid, and the finalizer waits for it to restore
+ * and exit before its caller persists the interrupted record.
+ */
+function guardFinalizerInterruption(
+  pidFile: string,
+  ops: FinalizerInterruptionOps = defaultInterruptionOps(),
+): FinalizerInterruption {
+  let observed: "SIGINT" | "SIGTERM" | null = null;
+  const handlers: Array<["SIGINT" | "SIGTERM", () => void]> = (["SIGINT", "SIGTERM"] as const)
+    .map((signal) => [signal, () => { observed ||= signal; }]);
+  for (const [signal, handler] of handlers) ops.on(signal, handler);
+  return {
+    observed: () => observed,
+    forwardAndWait: () => {
+      if (!observed) return;
+      const pid = ops.readPid(pidFile);
+      if (pid === null) return;
+      try { ops.kill(pid, observed); } catch { return; }
+      for (let waited = 0; waited < INTERRUPTION_WAIT_MS && ops.alive(pid); waited += INTERRUPTION_POLL_MS) {
+        ops.sleep(INTERRUPTION_POLL_MS);
+      }
+    },
+    release: () => {
+      for (const [signal, handler] of handlers) ops.off(signal, handler);
+    },
+  };
+}
+
+/**
+ * A signaled finalizer discards the checker's own verdict.
+ *
+ * The checks may well have finished while this process was already terminating; what deadloop can
+ * prove is the interruption, so the record must say interrupted rather than reuse a passed exit.
+ */
+function finalizerResultForSignal(result: CommandResult, signalled: "SIGINT" | "SIGTERM" | null): CommandResult {
+  return signalled ? { ...result, status: null, signal: signalled } : result;
+}
+
 function ensureFinalizerRequiredVerification(
   args: FinalizerArgs,
   role: "review-repair" | "branch-update",
   targetCommit: string,
   repositoryId: string,
   run: (args: string[], timeoutMs?: number) => CommandResult,
+  interruptionOps?: FinalizerInterruptionOps,
 ): JsonObject {
   const location = canonicalAttemptLocation({ attemptRecord: args.attemptRecord, stateDir: args.stateDir });
   const { input, recordFile } = finalizerVerificationInput(args, role, targetCommit, repositoryId);
@@ -207,24 +287,43 @@ function ensureFinalizerRequiredVerification(
     execute: () => {
       const started = Date.now();
       const structuredResultPath = path.join(location.runDir, "required-verification-check-result.json");
+      const pidFile = path.join(location.runDir, "required-verification-check.pid");
       fs.rmSync(structuredResultPath, { force: true });
-      const result = run([
-        "node",
-        path.join(args.automationDir, "run-project-check.ts"),
-        "--cwd",
-        args.repo,
-        "--timeout-ms",
-        String(FINALIZER_VERIFICATION_TIMEOUT_MS),
-        "--command",
-        input.currentContract.command,
-        "--quarantine-root",
-        path.join(args.stateDir, "check-quarantine"),
-        "--structured-result",
-        structuredResultPath,
-      ], FINALIZER_VERIFICATION_SUBPROCESS_TIMEOUT_MS);
+      fs.rmSync(pidFile, { force: true });
+      const interruption = guardFinalizerInterruption(pidFile, interruptionOps ?? defaultInterruptionOps());
+      let result: CommandResult;
+      try {
+        result = run([
+          "node",
+          path.join(args.automationDir, "run-project-check.ts"),
+          "--cwd",
+          args.repo,
+          "--timeout-ms",
+          String(FINALIZER_VERIFICATION_TIMEOUT_MS),
+          "--command",
+          input.currentContract.command,
+          "--quarantine-root",
+          path.join(args.stateDir, "check-quarantine"),
+          "--structured-result",
+          structuredResultPath,
+          "--pid-file",
+          pidFile,
+        ], FINALIZER_VERIFICATION_SUBPROCESS_TIMEOUT_MS);
+        interruption.forwardAndWait();
+      } finally {
+        interruption.release();
+      }
       const logPath = path.join(location.runDir, "required-verification.log");
       writeVerificationLog(logPath, `${result.stdout || ""}${result.stderr || ""}`);
-      const record = verificationRecordForResult(input, targetCommit, result, started, logPath, readStructuredCheckResult(structuredResultPath));
+      const signalled = interruption.observed();
+      const record = verificationRecordForResult(
+        input,
+        targetCommit,
+        finalizerResultForSignal(result, signalled),
+        started,
+        logPath,
+        signalled ? undefined : readStructuredCheckResult(structuredResultPath),
+      );
       if (record.outcome !== "passed") {
         persistHostVerificationEvidence(recordFile, record);
         throw new Error(`required verification ${record.outcome}; log: ${logPath}`);
@@ -250,4 +349,12 @@ function ensureFinalizerRequiredVerification(
   });
 }
 
-module.exports = { authorizeFinalizerRequiredVerification, ensureFinalizerRequiredVerification, ensureRequiredVerificationRecord, isExactPassedRecord, verificationRecordForResult };
+module.exports = {
+  authorizeFinalizerRequiredVerification,
+  ensureFinalizerRequiredVerification,
+  finalizerResultForSignal,
+  ensureRequiredVerificationRecord,
+  guardFinalizerInterruption,
+  isExactPassedRecord,
+  verificationRecordForResult,
+};

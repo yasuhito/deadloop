@@ -300,3 +300,71 @@ for (const role of ["review-repair", "branch-update"] as const) {
     });
   });
 }
+
+describe("finalizer interruption guard", () => {
+  function guardScenario(options: {
+    signal?: "SIGINT" | "SIGTERM";
+    pid?: number | null;
+    aliveFor?: number;
+  } = {}) {
+    const { guardFinalizerInterruption } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+    const handlers = new Map<string, () => void>();
+    const killed: Array<{ pid: number; signal: string }> = [];
+    let aliveChecks = options.aliveFor ?? 0;
+    const guard = guardFinalizerInterruption("/state/check.pid", {
+      on: (signal: string, handler: () => void) => handlers.set(signal, handler),
+      off: (signal: string) => handlers.delete(signal),
+      kill: (pid: number, signal: string) => killed.push({ pid, signal }),
+      alive: () => (aliveChecks-- > 0),
+      sleep: () => {},
+      readPid: () => (options.pid === undefined ? 4242 : options.pid),
+    });
+    if (options.signal) handlers.get(options.signal)?.();
+    guard.forwardAndWait();
+    const observed = guard.observed();
+    guard.release();
+    return { observed, killed, listeners: handlers.size };
+  }
+
+  it("records the signal that interrupted the finalizer", () => {
+    expect(guardScenario({ signal: "SIGTERM" }).observed).toBe("SIGTERM");
+  });
+
+  it("forwards the observed signal to the published checker pid", () => {
+    expect(guardScenario({ signal: "SIGTERM" }).killed).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+  });
+
+  it("waits for the checker to exit before returning", () => {
+    expect(guardScenario({ signal: "SIGINT", aliveFor: 3 }).killed).toHaveLength(1);
+  });
+
+  it("forwards nothing when no signal arrived", () => {
+    expect(guardScenario().killed).toHaveLength(0);
+  });
+
+  it("tolerates a missing checker pid file", () => {
+    expect(guardScenario({ signal: "SIGTERM", pid: null }).killed).toHaveLength(0);
+  });
+
+  it("releases its signal handlers", () => {
+    expect(guardScenario({ signal: "SIGTERM" }).listeners).toBe(0);
+  });
+});
+
+it("records an interruption even when the checker reported a passing exit", () => {
+  const { finalizerResultForSignal } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+  const record = verificationRecordForResult(
+    { attempt: attempt("review-repair"), currentContract: contract, targetCommit: candidate },
+    candidate,
+    finalizerResultForSignal({ status: 0, stdout: "", stderr: "" }, "SIGTERM"),
+    Date.now(),
+    "/state/check.log",
+  );
+
+  expect(record.outcome).toBe("interrupted");
+});
+
+it("keeps the checker verdict when no signal reached the finalizer", () => {
+  const { finalizerResultForSignal } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+  expect(finalizerResultForSignal({ status: 0, stdout: "", stderr: "" }, null).status).toBe(0);
+});

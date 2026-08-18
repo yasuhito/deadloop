@@ -152,7 +152,7 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop completes conflict recovery
 * Then deadloop does not push to the conflict-recovery branch
 
-## Scenario: Push conflict recovery with an exact-head lease to only the verified existing branch
+## Scenario: Push conflict recovery non-forcibly with an exact-head guard to only the verified existing branch
 
 * Given The pull request head selected for conflict recovery has been verified
 * When deadloop completes conflict recovery

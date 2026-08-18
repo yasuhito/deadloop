@@ -35,6 +35,8 @@ type ProjectCheckInput = {
   terminationGraceMs?: number;
   signal?: AbortSignal;
   structuredResultPath?: string;
+  /** Written at startup so a signaled parent can forward termination to this wrapper. */
+  pidFile?: string;
 };
 
 type ScratchAreaRestorationFailure = {
@@ -415,6 +417,7 @@ function parseCliArgs(argv: string[]): ProjectCheckInput {
     quarantineRoot: values["quarantine-root"],
     timeoutMs,
     ...(values["structured-result"] ? { structuredResultPath: values["structured-result"] } : {}),
+    ...(values["pid-file"] ? { pidFile: values["pid-file"] } : {}),
   };
 }
 
@@ -442,6 +445,9 @@ async function projectCheckMain(
   const interrupt = () => controller.abort();
   process.once("SIGINT", interrupt);
   process.once("SIGTERM", interrupt);
+  // A parent blocked in a synchronous wait cannot see this process; the published pid is how it
+  // forwards its own termination here so the checks stop and the scratch areas are restored.
+  if (input.pidFile) fs.writeFileSync(input.pidFile, `${process.pid}\n`, { mode: 0o600 });
   try {
     let result: ProjectCheckResult;
     try {
@@ -462,6 +468,7 @@ async function projectCheckMain(
   } finally {
     process.removeListener("SIGINT", interrupt);
     process.removeListener("SIGTERM", interrupt);
+    if (input.pidFile) fs.rmSync(input.pidFile, { force: true });
   }
 }
 
