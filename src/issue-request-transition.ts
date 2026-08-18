@@ -168,19 +168,25 @@ function blockedConsumptionComment(input: ConsumeIssueRequestInput, leftoverActi
   ].join("\n");
 }
 
-function supersededConsumptionComment(input: ConsumeIssueRequestInput): string {
+function supersededConsumptionComment(input: ConsumeIssueRequestInput, restoredRequest = false): string {
   return [
     `<!-- deadloop:superseded-request-consumption:v1 attempt=${input.attemptId} -->`,
     "## Agent request was consumed by a concurrent attempt",
     "",
     `deadloop consumed the selected \`${input.requestLabel}\` request, then proved that the live \`${input.inProgressLabel}\` state belongs to another Agent request consumed in the same moment. No agent was launched for this request, and the attempt that owns that state was left running.`,
     "",
-    "The consumed request was not restored because the active attempt holds no waiting Agent request.",
-    "To ask for this work again, add a new Agent request after the active attempt reports:",
-    "",
-    "```bash",
-    `gh issue edit ${input.issueNumber} -R ${quoteShell(input.repository)} --add-label ${quoteShell(input.requestLabel)}`,
-    "```",
+    ...(restoredRequest
+      ? [
+        `deadloop restored \`${input.requestLabel}\`, so this work stays queued for an attempt after the active one reports. Nothing is needed from you; remove that label to cancel it.`,
+      ]
+      : [
+        "The consumed request was not restored because a newer generation of it had already changed on GitHub.",
+        "To ask for this work again, add a new Agent request after the active attempt reports:",
+        "",
+        "```bash",
+        `gh issue edit ${input.issueNumber} -R ${quoteShell(input.repository)} --add-label ${quoteShell(input.requestLabel)}`,
+        "```",
+      ]),
   ].join("\n");
 }
 
@@ -675,12 +681,13 @@ function activeStateOwner(
  * request observed after the active state exists releases that state again and stops.
  *
  * An active state this attempt did not create is never adopted, and the check and the addition are
- * separate operations, so the addition being idempotent is not proof of creation either. Exclusivity
- * comes from the timeline instead: exploration and implementation can be consumed by two hosts in
- * the same gap, and only the highest-priority consumption in that window may launch, so an
+ * separate operations, so the addition being idempotent is not proof of creation either. A `labeled`
+ * event some other author wrote in that gap therefore fails closed, and among automation-authored
+ * events exclusivity comes from the timeline: exploration and implementation can be consumed by two
+ * hosts in the same gap, and only the highest-priority consumption in that window may launch, so an
  * implementation consumption never takes the active state from a concurrent exploration. The loser
- * keeps its hands off the winner: no receipt, no release of that state, and an idempotent
- * explanation of its own consumed request.
+ * keeps its hands off the winner — no receipt, no release of that state — and puts its own request
+ * back in the queue with an idempotent explanation instead of losing the work.
  */
 function createActiveState(
   input: ConsumeIssueRequestInput,
@@ -698,16 +705,27 @@ function createActiveState(
     return blockAmbiguousConsumption(input, !releaseActiveState(input));
   }
   const latestActiveEvent = labelEvent(observation.events, input.inProgressLabel);
-  const activeState = observation.labels.has(input.inProgressLabel)
-    && String(latestActiveEvent?.event || "").toLowerCase() === "labeled" ? latestActiveEvent : null;
+  const liveActiveState = observation.labels.has(input.inProgressLabel)
+    && String(latestActiveEvent?.event || "").toLowerCase() === "labeled";
+  // A person can add the active label inside the gap between the check above and the idempotent
+  // addition. Only an automation-authored `labeled` event can belong to a request consumption, so a
+  // foreign active state is never owned, never adopted, and never removed: it fails closed exactly
+  // like an active state that was already visible before the addition.
+  if (liveActiveState
+    && String(latestActiveEvent?.actor?.login || "").toLowerCase() !== input.automationLogin.toLowerCase()) {
+    return blockAmbiguousConsumption(input, true);
+  }
+  const activeState = liveActiveState ? latestActiveEvent : null;
   if (activeState) {
     const owner = activeStateOwner(observation.events, input, activeState);
     if (!owner) return blockAmbiguousConsumption(input, true);
     if (eventId(owner) !== eventId(ownRemoval)) {
-      // The winner is running, so nothing is mutated: a stop would clear an Issue of the state that
-      // attempt still needs, and releasing the state would strand its agent. Only the consumed
-      // request is explained, because an Agent request must never disappear without a trace.
-      proveConsumedRequestExplanation(input, supersededConsumptionComment(input));
+      // The winner is running, so its active state is left alone: a stop would clear an Issue of the
+      // state that attempt still needs, and releasing the state would strand its agent. This role's
+      // intent is put back in the queue instead, so exploration keeps its documented priority
+      // without the implementation request being lost.
+      const restored = restoreConsumedRequest(input, ownRemoval);
+      proveConsumedRequestExplanation(input, supersededConsumptionComment(input, restored));
       return { kind: "superseded", requestEventId: input.requestEventId };
     }
   }
@@ -748,6 +766,30 @@ function releaseActiveState(input: ConsumeIssueRequestInput): boolean {
     const deletion = input.github.deleteIssueLabel(input.repository, input.issueNumber, input.inProgressLabel);
     if (deletion.status !== 200 && deletion.status !== 404) return false;
     return !observeRequest(input).labels.has(input.inProgressLabel);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Put back the request this transition removed but could not use, and prove it is queued again.
+ *
+ * This is not the automatic restoration the ambiguous stop forbids: there deadloop cannot tell its
+ * own removal from a person's cancellation, while here it proved both its own removal event and that
+ * a higher-priority consumption owns the active state. Restoring keeps the documented order for two
+ * simultaneous roles — exploration runs now, this role stays queued for the attempt after it.
+ *
+ * A generation that changed on GitHub after this removal is never guessed back: only a timeline whose
+ * newest event for the label is still this transition's own removal is restored, and a label already
+ * present means a generation is queued and nothing needs adding.
+ */
+function restoreConsumedRequest(input: ConsumeIssueRequestInput, ownRemoval: JsonObject): boolean {
+  try {
+    const before = observeRequest(input);
+    if (before.labels.has(input.requestLabel)) return true;
+    if (eventId(labelEvent(before.events, input.requestLabel)) !== eventId(ownRemoval)) return false;
+    input.github.addIssueLabel(input.repository, input.issueNumber, input.requestLabel);
+    return observeRequest(input).labels.has(input.requestLabel);
   } catch {
     return false;
   }

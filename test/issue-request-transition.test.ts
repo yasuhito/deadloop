@@ -22,6 +22,7 @@ function scenario(options: {
   duringDelete?: (state: ReturnType<typeof createState>) => void;
   afterActiveState?: (state: ReturnType<typeof createState>) => void;
   afterFinishedExploration?: boolean;
+  foreignActiveStateDuringAdd?: boolean;
   activeStateAlreadyPresent?: boolean;
   activeStateReleaseFails?: boolean;
   observationFailsAfterActiveState?: boolean;
@@ -68,6 +69,9 @@ function scenario(options: {
     listIssueComments: () => state.comments,
     addIssueLabel: (_repo: string, _number: number, label: string) => {
       trace.push(`add:${label}`);
+      // A person adds the active label inside the gap between the pre-add check and this addition,
+      // so deadloop's own addition becomes the idempotent no-op GitHub records no event for.
+      if (label === "agent:in-progress" && options.foreignActiveStateDuringAdd) state.label(label, "human");
       state.label(label, automationLogin);
       if (label === "agent:blocked" && options.removeBlockAfterAdd) state.unlabel(label, "human");
       if (label === "agent:in-progress") {
@@ -165,6 +169,7 @@ function createState() {
 function concurrentRolesScenario(options: {
   firstRole?: "agent:explore" | "agent:implement";
   copiedComment?: { body: string; login: string };
+  racedGenerationAfterLoss?: boolean;
 } = {}) {
   const state = createState();
   const automationLogin = "deadloop-bot";
@@ -208,6 +213,12 @@ function concurrentRolesScenario(options: {
       if (label === "agent:in-progress" && !interleaved) {
         interleaved = true;
         second = consumeIssueRequest(inputFor(secondRole));
+        // A person adds and cancels this role's request while the losing host is still deciding, so
+        // the newest event for that label is no longer the removal it proved.
+        if (options.racedGenerationAfterLoss) {
+          state.label(firstRole, "human");
+          state.unlabel(firstRole, "human");
+        }
       }
       state.label(label, automationLogin);
     },
@@ -491,8 +502,35 @@ describe("Issue Agent request transition", () => {
       .toHaveLength(0);
   });
 
-  it("explains the request a superseded consumption removed", () => {
-    expect(concurrentRolesScenario().comments[0].body).toContain("--add-label 'agent:implement'");
+  it("keeps the implementation request queued when exploration wins", () => {
+    expect(concurrentRolesScenario().labels).toContain("agent:implement");
+  });
+
+  it("tells a person nothing is needed for a restored implementation request", () => {
+    expect(concurrentRolesScenario().comments[0].body)
+      .toContain("deadloop restored `agent:implement`, so this work stays queued");
+  });
+
+  it("does not guess back a superseded request whose generation changed on GitHub", () => {
+    expect(concurrentRolesScenario({ firstRole: "agent:implement", racedGenerationAfterLoss: true }).labels)
+      .not.toContain("agent:implement");
+  });
+
+  it("explains how to ask again when a superseded request cannot be restored", () => {
+    expect(concurrentRolesScenario({ firstRole: "agent:implement", racedGenerationAfterLoss: true }).comments[0].body)
+      .toContain("--add-label 'agent:implement'");
+  });
+
+  it("fails closed on an active state a person created in the check-and-add gap", () => {
+    expect(scenario({ foreignActiveStateDuringAdd: true }).outcome.kind).toBe("ambiguous_blocked");
+  });
+
+  it("leaves an active state a person created in the check-and-add gap in place", () => {
+    expect(scenario({ foreignActiveStateDuringAdd: true }).labels).toContain("agent:in-progress");
+  });
+
+  it("writes no durable receipt for an active state a person created in the check-and-add gap", () => {
+    expect(scenario({ foreignActiveStateDuringAdd: true }).persisted).toBe(false);
   });
 
   it("does not trust a copied superseded explanation from another commenter", () => {
