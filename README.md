@@ -41,10 +41,7 @@ You need an authenticated `gh` CLI and a running [Herdr](https://herdr.dev/) 0.8
    /deadloop-enable
    ```
 
-3. To send an Issue to deadloop, add both labels:
-
-   - `ready-for-agent`
-   - `agent:implement`
+3. To request implementation, add `agent:implement` to the Issue. `ready-for-agent` remains an optional triage label and is not required to start work.
 
 That is enough to start. During enablement, deadloop runs `npm run check`, creates any missing standard labels, and leaves automatic merge off. If the repository does not provide an `npm run check` script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
 
@@ -55,9 +52,9 @@ You start the loop by labeling an Issue. deadloop owns the implementation and re
 ```mermaid
 flowchart TD
     I["`**Issue queued**
-    ready-for-agent + agent:implement`"]
+    agent:implement`"]
     W["`**Implementation**
-    ready-for-agent + agent:in-progress`"]
+    agent:in-progress`"]
     R["`**PR review requested**
     draft PR + agent:review`"]
     V["`**Review and repair**
@@ -83,9 +80,9 @@ flowchart TD
     V -. problem .-> B
 ```
 
-1. **Request implementation** — `ready-for-agent` marks an Issue as eligible. `agent:implement` requests implementation. Remove `agent:implement` before deadloop claims the Issue to cancel the request.
-2. **Let deadloop work** — deadloop replaces the request label with `agent:in-progress`, creates a draft PR with `agent:review`, and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
-3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help; fix the cause reported in the Issue or PR comment, then follow its recovery instructions.
+1. **Request implementation** — `agent:implement` requests implementation; `ready-for-agent` is optional triage metadata. Remove `agent:implement` before deadloop consumes the selected request generation to cancel it.
+2. **Let deadloop work** — deadloop durably records the attempt, consumes only the selected request, then adds `agent:in-progress` and starts the Worker. It creates a draft PR with `agent:review` and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
+3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help, and a stopped PR keeps no agent request; fix the cause reported in the Issue or PR comment, then add the request label for the role you want next. `agent:blocked` clears when that attempt starts.
 
 ## Operator commands
 
@@ -119,6 +116,8 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 `projects.json` contains local paths and rollout choices. Do not commit it. Prefer the repository-owned `deadloop.json` for shared, reviewable policy.
 
+If an implementation Issue reaches a required-verification block, deadloop preserves unrelated triage labels, removes the implementation request or in-progress state, and adds `agent:blocked` with reason-specific recovery guidance. It suppresses duplicate guidance for the same recovery, does not resume merely because configuration changes, and shows that Issue's requeue command in `/deadloop-doctor` only after required verification resolves.
+
 ## Safety controls
 
 `autoMerge` controls whether deadloop merges reviewed PRs automatically.
@@ -145,7 +144,7 @@ Each exact PR-head/base-head pair is attempted at most once.
 
 A stale PR head stops the update without pushing. deadloop re-evaluates the PR on the next cycle.
 
-A failed or unsafe update adds `agent:blocked` with recovery evidence.
+A failed or unsafe update adds `agent:blocked` with recovery evidence and leaves no agent request waiting.
 
 See [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) for the safety contract.
 
@@ -153,7 +152,7 @@ See [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) for the safety contr
 
 When the built-in reviewer reports structured actionable findings, deadloop can start one bounded repair worker on the existing PR branch.
 
-During repair, deadloop preserves the active `agent:in-progress` claim without adding another workflow label. It does not create a new `agent:review` request generation until repair completion.
+During repair, deadloop preserves `agent:in-progress` without adding another workflow label. It does not create a new `agent:review` request generation until repair completion.
 
 The worker receives only the findings.
 
@@ -163,7 +162,7 @@ The finalizer never replaces another head or changes GitHub workflow state.
 
 The review result appears in a readable PR comment. The comment identifies the reviewed commit, reasons, findings, and next action.
 
-Each review is also bound to a complete, paginated observation of the PR's commit sequence, exact diff, conversation comments, submitted reviews, and inline review comments. Any addition, edit, deletion, head/base change, or diff change releases the active review claim and requires a fresh review; comment text is treated only as untrusted evidence.
+Each review is also bound to a complete, paginated observation of the PR's commit sequence, exact diff, conversation comments, submitted reviews, and inline review comments. Any addition, edit, deletion, head/base change, or diff change returns the PR to a fresh review request; comment text is treated only as untrusted evidence.
 
 After a confirmed repair push, deadloop adds a separate result comment. This comment records the changes for each finding, the new commit, the checks, and the handoff to re-review.
 
@@ -173,7 +172,7 @@ A changed head starts a fresh review cycle.
 
 A stale head stops the repair without pushing or changing labels.
 
-Repeated findings after the bounded attempt add `agent:blocked` with recovery guidance. deadloop does the same when a human decision is required or when technical or safety retries are exhausted.
+Repeated findings after the bounded attempt add `agent:blocked` with recovery guidance and clear every request label, and deadloop does the same when technical or safety retries are exhausted. A review that reports a human decision is a completed review: its result is recorded, the draft becomes ready, and every agent workflow label is removed, so the PR waits on a person and on no agent request.
 
 See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for details.
 

@@ -6,6 +6,8 @@ import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
 
+import { fixtureStateDir } from "../support/fixture-state-dir";
+
 import type { RunnerAdapter, RunnerAgent } from "../../src/runner";
 
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../src/agent-launch-flow.ts");
@@ -140,6 +142,8 @@ When("deadloop starts work on the selected Issue", function (this: WorkerWorld) 
       env: {
         ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("DEADLOOP_"))),
         DEADLOOP_PROJECT_ID: "demo",
+        DEADLOOP_GITHUB_REPO: "owner/repo",
+        DEADLOOP_STATE_DIR: fixtureStateDir(),
       },
     },
   );

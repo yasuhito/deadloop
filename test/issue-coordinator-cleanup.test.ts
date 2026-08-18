@@ -3,16 +3,33 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const cleanupScript = "extensions/deadloop/automations/cleanup-completed-worker-worktrees.ts";
 const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.ts";
+
+// The dispatch lock writes under the state directory, so a fixture run needs one of its own rather
+// than the operator's live deadloop state.
+const fixtureStateDirs: string[] = [];
+
+afterEach(() => {
+  for (const stateDir of fixtureStateDirs.splice(0)) rmSync(stateDir, { recursive: true, force: true });
+});
+
+function fixtureStateDir(): string {
+  const stateDir = mkdtempSync(path.join(tmpdir(), "deadloop-cleanup-state-"));
+  fixtureStateDirs.push(stateDir);
+  return stateDir;
+}
 
 function runDriverFixture(fixtureName: string) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName)], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo" },
+    env: {
+      ...process.env, DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo",
+      DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_STATE_DIR: fixtureStateDir(),
+    },
   });
   if (result.status !== 0) {
     throw new Error(result.stderr || result.stdout);
@@ -37,7 +54,7 @@ function writeExecutable(filePath: string, lines: string[]) {
   chmodSync(filePath, 0o755);
 }
 
-function runCleanupApply(runtimeDirectory: ".deadloop" | ".pi-subagents", tracked: boolean) {
+function runCleanupApply(scratchArea: ".pi/subagents" | ".pi/npm" | ".pi/git", tracked: boolean) {
   const tempRoot = mkdtempSync(path.join(tmpdir(), "deadloop-cleanup-runtime-"));
   try {
     const repoPath = path.join(tempRoot, "repo");
@@ -45,14 +62,14 @@ function runCleanupApply(runtimeDirectory: ".deadloop" | ".pi-subagents", tracke
     const worktreePath = path.join(worktreeRoot, "agent-issue-1-cleanup");
     const binPath = path.join(tempRoot, "bin");
     const herdrLog = path.join(tempRoot, "herdr.log");
-    const runtimeFile = path.join(worktreePath, runtimeDirectory, "artifact.json");
+    const runtimeFile = path.join(worktreePath, scratchArea, "artifact.json");
     mkdirSync(repoPath);
     mkdirSync(path.dirname(runtimeFile), { recursive: true });
     mkdirSync(binPath);
     execFileSync("git", ["init", "-q", worktreePath]);
     writeFileSync(runtimeFile, "{}\n");
     if (tracked) {
-      execFileSync("git", ["-C", worktreePath, "add", `${runtimeDirectory}/artifact.json`]);
+      execFileSync("git", ["-C", worktreePath, "add", `${scratchArea}/artifact.json`]);
       execFileSync("git", [
         "-C",
         worktreePath,
@@ -94,11 +111,11 @@ function runCleanupApply(runtimeDirectory: ".deadloop" | ".pi-subagents", tracke
       `printf '%s\\n' "$*" >> '${herdrLog}'`,
       'if [[ " $* " = *" fetch --prune "* ]]; then exit 0; fi',
       'if [[ " $* " = *" ls-files -z "* ]]; then',
-      tracked ? `  printf '%s\\0' '${runtimeDirectory}/artifact.json'` : "  true",
+      tracked ? `  printf '%s\\0' '${scratchArea}/artifact.json'` : "  true",
       "  exit 0",
       "fi",
-      'if [[ " $* " = *" status --short "* ]]; then',
-      tracked ? "  exit 0" : `  if [ -e '${runtimeFile}' ]; then printf '%s\\n' '?? ${runtimeDirectory}/artifact.json'; fi`,
+      'if [[ " $* " = *" status --porcelain "* ]]; then',
+      tracked ? "  exit 0" : `  if [ -e '${runtimeFile}' ]; then printf '%s\\n' '?? ${scratchArea}/artifact.json'; fi`,
       "  exit 0",
       "fi",
       'if [[ " $* " = *" worktree remove "* ]]; then',
@@ -166,7 +183,7 @@ function runIssuePrecheckWithCleanupCandidate(): number | null {
     writeExecutable(fakeGitPath, [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
-      "if [ \"${1:-}\" = \"-C\" ] && [ \"${3:-}\" = \"status\" ] && [ \"${4:-}\" = \"--short\" ]; then",
+      "if [ \"${1:-}\" = \"-C\" ] && [ \"${3:-}\" = \"status\" ] && [ \"${4:-}\" = \"--porcelain\" ]; then",
       "  exit 0",
       "fi",
       "echo \"unexpected git invocation: $*\" >&2",
@@ -194,7 +211,7 @@ function runIssuePrecheckWithCleanupCandidate(): number | null {
 }
 
 describe("issue coordinator cleanup", () => {
-  it("ignores generated deadloop artifacts when selecting cleanup candidates", () => {
+  it("ignores agent scratch areas when selecting cleanup candidates", () => {
     expect(runCleanupFixture("cleanup-generated-artifacts.json").candidates).toEqual([
       {
         branch: "agent/issue-1-add-safety-controls-for-dogfooding",
@@ -206,24 +223,23 @@ describe("issue coordinator cleanup", () => {
     ]);
   });
 
-  it("does not delete a tracked .deadloop file during cleanup", () => {
-    expect(runCleanupApply(".deadloop", true).fileExists).toBe(true);
+  it.each([".pi/subagents", ".pi/npm", ".pi/git"] as const)(
+    "does not delete a tracked file in %s during cleanup",
+    (scratchArea) => {
+      expect(runCleanupApply(scratchArea, true).fileExists).toBe(true);
+    },
+  );
+
+  it("reports why tracked files in an agent scratch area block cleanup", () => {
+    expect(runCleanupApply(".pi/subagents", true).failure).toContain("contain tracked files");
   });
 
-  it("does not delete a tracked .pi-subagents file during cleanup", () => {
-    expect(runCleanupApply(".pi-subagents", true).fileExists).toBe(true);
+  it("does not remove the workspace when tracked files in an agent scratch area block cleanup", () => {
+    expect(runCleanupApply(".pi/subagents", true).removedWorkspace).toBe(false);
   });
 
-  it("reports why tracked runtime-named files block cleanup", () => {
-    expect(runCleanupApply(".deadloop", true).failure).toContain("contain tracked files");
-  });
-
-  it("does not remove the workspace when tracked runtime-named files block cleanup", () => {
-    expect(runCleanupApply(".deadloop", true).removedWorkspace).toBe(false);
-  });
-
-  it("removes a workspace after deleting only untracked runtime artifacts", () => {
-    expect(runCleanupApply(".pi-subagents", false).removedWorkspace).toBe(true);
+  it("removes a workspace after deleting only untracked agent scratch areas", () => {
+    expect(runCleanupApply(".pi/subagents", false).removedWorkspace).toBe(true);
   });
 
   it("selects a closed linked worktree without fabricating a workspace id", () => {
@@ -285,7 +301,7 @@ describe("issue coordinator cleanup", () => {
   // test/agent-profiles.test.ts. The coordinator keeps only the uuid coupling:
   // the same uuid names the promise file and is handed to the launcher.
   it("hands the shared session uuid to the promise path", () => {
-    expect(runDriverFixture("driver-ready-worker.json").launch.promiseFile).toContain("fixture-worker-uuid");
+    expect(runDriverFixture("driver-ready-worker.json").launch.promiseFile).toContain("fixture-worker-demo-12");
   });
 
 

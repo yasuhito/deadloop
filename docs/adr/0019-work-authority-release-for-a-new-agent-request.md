@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR 0020](0020-stop-proving-work-authority.md). The two proofs below are no longer implemented: a retained attempt now loses work authority when the execution runtime reports it stopped, and neither the pull request's head nor the request event id takes part in that decision.
 
 ## Context
 
@@ -27,12 +27,12 @@ Two proofs qualify, and each requires the execution runtime to report the attemp
 
 A stopped runtime alone never qualifies: a live attempt that paused looks the same.
 
-The runtime reports an attempt stopped when its workspace closed through the normal path and left a
-close receipt, and also when it wrote its completion report, its worktree is still present, and no
-workspace or agent related to it remains. An agent that finishes its report and then loses its
-workspace without closing it is the ordinary shape of the failures this decision recovers from;
-requiring the receipt alone would leave every such attempt permanently unprovable, which is the
-state PRs #227, #228, and #229 are in.
+The runtime reports an attempt stopped when the agent this attempt's journal names is not working
+and no agent this attempt cannot be told apart from occupies its checkout. Nothing else takes part:
+not the journal's phase, not the receipt beside it, not the workspace, which can stay open long
+after the agent it held has finished. [ADR 0020](0020-stop-proving-work-authority.md) leaves the
+execution runtime as the only authority on this question, and evidence on disk never grants
+permission to act. An attempt the runtime cannot describe this way keeps its authority.
 
 Deadloop releases work authority only while a new Agent request is waiting. Without a request, a retained attempt keeps its authority until the pull request closes. This keeps the release a step of taking over work rather than an unrequested discard of local state.
 

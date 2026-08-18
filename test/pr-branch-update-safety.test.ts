@@ -18,7 +18,7 @@ function finalizeWith(
   pushUrl = "https://github.com/owner/repo.git",
   repositoryIds: Record<string, string> = {},
   raceRemoteHead?: string | null,
-  localHeadChanges: { candidate?: string; afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string } = {},
+  localHeadChanges: { candidate?: string; afterChecks?: string; beforePush?: string; projectCommonDir?: string; worktreeCommonDir?: string; checkedOutBranch?: string; scratchArea?: boolean } = {},
 ) {
   let observedHead = actualHead;
   let localHead = localHeadChanges.candidate || "cccccccccccccccccccccccccccccccccccccccc";
@@ -49,6 +49,9 @@ function finalizeWith(
         commands.push(args);
         timeouts.push(timeoutMs);
         if (args[0] === "node" && localHeadChanges.afterChecks) localHead = localHeadChanges.afterChecks;
+        if (args.includes("status") && localHeadChanges.scratchArea) {
+          return { status: 0, stdout: "?? .pi/subagents/2026-08-14/mission.md\n", stderr: "" };
+        }
         if (args.includes("get-url")) return { status: 0, stdout: `${pushUrl}\n`, stderr: "" };
         if (args.includes("push") && raceRemoteHead !== undefined && raceRemoteHead !== head) {
           return { status: 1, stdout: "", stderr: "rejected (non-fast-forward)" };
@@ -174,6 +177,10 @@ describe("PR branch-update safety", () => {
       "https://github.com/owner/repo.git",
       "cccccccccccccccccccccccccccccccccccccccc:refs/heads/agent/issue-31",
     ]);
+  });
+
+  it("pushes when the only untracked path is the agent's own scratch area", () => {
+    expect(finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { scratchArea: true }).action).toBe("pushed");
   });
 
   it("rejects a branch-update source from a foreign Git common directory", () => {

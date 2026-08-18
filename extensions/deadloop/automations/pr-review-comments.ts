@@ -152,7 +152,7 @@ function renderHumanRequiredComment(input: JsonObject): string {
 - Context: ${publicText(input.summary, "Review the findings and choose the safe next action.")}
 ${requiredFindings}${renderAdvisorySection(input)}
 ## Recovery steps
-Resolve the decision above, push a new commit if code changes are needed, then remove ${code(input.blockedLabel || "agent:blocked")} so the new head can be reviewed.
+Resolve the decision above, push a new commit if code changes are needed, then add ${code(input.reviewLabel || "agent:review")} so the new head can be reviewed.
 
 ${reviewMarker({ ...input, outcome: "human_required" })}`;
 }
@@ -176,7 +176,7 @@ ${repairs.join("\n\n")}
 ${checks.join("\n")}
 
 ## Next step
-The new head will be reviewed again. The review queue label remains in place while the active-review claim is released.
+The new head will be reviewed again. The review queue label remains in place while the prior in-progress state is released.
 
 <!-- deadloop:review-repair-result key=${String(input.attemptKey).toLowerCase()} head=${String(input.newHeadOid).toLowerCase()} -->`;
 }

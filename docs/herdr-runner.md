@@ -14,16 +14,19 @@ A supported local client with an unreachable server has one recovery-only except
 
 A Git worktree is durable branch state. A Herdr attempt workspace is disposable runtime state.
 
-Worker, reviewer, review-repair, and branch-update launches all follow the same contract:
+Every role writes an atomic `prepared` attempt journal before its first external mutation, but its GitHub transition is role-specific:
 
-1. Write an atomic `prepared` attempt journal in the launch-unique run directory before an external mutation.
-2. Persist the role's GitHub claim.
-3. If the host stops between those non-atomic writes, re-read the exact target, revision, configured labels, and role marker where applicable. Advance a still-`prepared` journal only when that exact claim is present; otherwise retain it and block scheduling for operator reconciliation. This check does not require a workspace ID.
-4. Reconcile retained workspaces and refuse a launch while the checkout is already open or ownership is ambiguous.
-5. Create the first linked worktree, or open an existing linked worktree without `--label`.
-6. Require Herdr's response to identify one new workspace, its first tab, root pane, and canonical worktree path. An open response must explicitly report `already_open: false`.
-7. Rename only that confirmed fresh workspace.
-8. Start the configured agent directly in the root pane:
+- A Worker uses the guarded Issue label move selected by the Issue coordinator.
+- A reviewer or branch-update launch records the selected PR request event, adds `agent:in-progress`, normalizes baseline managed labels individually, and deletes the selected request last. Only a documented HTTP 200 response plus complete postvalidation permits `github_claimed`. A crash before that phase advance retains `prepared` and blocks reconciliation because restart cannot prove the 200 response.
+- Review repair launches from a bound reviewer outcome; it does not consume a PR request label.
+
+After that role-specific transition, every launch follows the same workspace contract:
+
+1. Reconcile retained workspaces and refuse a launch while the checkout is already open or ownership is ambiguous.
+2. Create the first linked worktree, or open an existing linked worktree without `--label`.
+3. Require Herdr's response to identify one new workspace, its first tab, root pane, and canonical worktree path. An open response must explicitly report `already_open: false`.
+4. Rename only that confirmed fresh workspace.
+5. Start the configured agent directly in the root pane:
 
    ```text
    herdr agent start <name> --kind <kind> --pane <root-pane> -- <native-agent-args...>
@@ -44,9 +47,11 @@ A promise file is transport, not cleanup authority. Only a strong V1 report boun
 
 After confirmation, deadloop records `github_persisted`, runs only `herdr workspace close`, confirms the workspace is absent, confirms the linked worktree and branch remain, and records `workspace_closed`. A close timeout or ambiguous result remains cleanup pending and never replays a push, PR creation, comment, label transition, review, or merge.
 
-Blocked, human-required, malformed, missing, launch-failed, and ownership-ambiguous attempts remain visible. GitHub `agent:in-progress` is reconciled with its bound claim and runtime owner before candidate selection. Expired or unverifiable ownership is made visible as `agent:blocked`; a safely owned stopped workspace may be closed while its linked worktree, report, logs, and journal remain as evidence. Ambiguous ownership is preserved. Restart reconciliation is idempotent, and a local journal without matching GitHub work authority does not suppress a later GitHub request.
+A Worker completion stop caused by unresolved required verification may close its workspace only after re-reading GitHub and proving that the Issue is open, has `agent:blocked`, has neither `agent:implement` nor `agent:in-progress`, and contains the target-specific fingerprint comment for the exact fixed completion-time verification diagnosis. The host then records `github_persisted` before closing the workspace and retains the linked worktree and branch.
 
-A launch-failed Worker or reviewer attempt can be explicitly abandoned only through `/deadloop-abandon-attempt <attempt-id>`, and only when doctor and the operation can independently prove the unchanged GitHub claim and revision, a clean retained worktree, one exact one-tab/one-pane attempt workspace, no other owning attempt, and no agent in the recorded pane or launch-unique name. The guarded operation closes only that workspace, records `abandoned` evidence without discarding the launch error, confirms the linked worktree remains, and then requeues the target. Immediately before closing, it writes a bound `workspace_close_started` receipt beside the original journal. If a previous invocation stopped after the close, a retry may continue only when that receipt matches and both the recorded workspace and any workspace for the same checkout are absent. Missing or changed evidence stops with manual-review guidance and no label-only recovery command. A requeued Worker starts a new attempt by opening the exact retained abandoned checkout in a fresh workspace; it never tries to create a duplicate linked worktree.
+Blocked, malformed, missing, launch-failed, and runtime-ambiguous attempts remain visible. GitHub `agent:in-progress` is reconciled with the attempt journal and execution runtime before candidate selection. The runtime alone answers liveness; an unreachable, stopped, or ambiguous attempt becomes visible as `agent:blocked`. A safely identified stopped workspace may be closed while its linked worktree, report, logs, and journal remain as evidence. Restart reconciliation is idempotent, and a local journal does not grant permission to suppress a later GitHub request.
+
+A launch-failed Worker or reviewer attempt can be explicitly abandoned only through `/deadloop-abandon-attempt <attempt-id>`, and only when doctor and the operation can independently prove the unchanged GitHub target and revision, a clean retained worktree, one exact one-tab/one-pane attempt workspace, no other owning attempt, and no agent in the recorded pane or launch-unique name. The guarded operation closes only that workspace, records `abandoned` evidence without discarding the launch error, confirms the linked worktree remains, and then requeues the target. Immediately before closing, it writes a bound `workspace_close_started` receipt beside the original journal. If a previous invocation stopped after the close, a retry may continue only when that receipt matches and both the recorded workspace and any workspace for the same checkout are absent. Missing or changed evidence stops with manual-review guidance and no label-only recovery command. A requeued Worker starts a new attempt by opening the exact retained abandoned checkout in a fresh workspace; it never tries to create a duplicate linked worktree.
 
 Workspace closure never invokes worktree removal. After the workspace is closed, linked-worktree removal remains restricted to the merged/closed-PR safety gate, including dirty-worktree and closed-unmerged-head protection. The runner verifies one exact closed path/branch identity and uses `git worktree remove <path>` without fabricating a workspace ID.
 

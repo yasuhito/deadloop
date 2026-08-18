@@ -3,10 +3,24 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.ts";
 const { acquireLockSync, releaseOwned } = require("../src/enablement-lock.cjs");
+
+// The dispatch lock writes under the state directory, so a fixture run needs one of its own rather
+// than the operator's live deadloop state.
+const fixtureStateDirs: string[] = [];
+
+afterEach(() => {
+  for (const stateDir of fixtureStateDirs.splice(0)) rmSync(stateDir, { recursive: true, force: true });
+});
+
+function fixtureStateDir(): string {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "deadloop-coordinator-state-"));
+  fixtureStateDirs.push(stateDir);
+  return stateDir;
+}
 
 function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> = {}) {
   const result = spawnSync("node", [driverScript, "--fixture", path.join("test/fixtures/issue-coordinator", fixtureName)], {
@@ -19,6 +33,7 @@ function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> 
       DEADLOOP_GITHUB_REPO: "owner/repo",
       DEADLOOP_CHECK_COMMAND: "npm test",
       DEADLOOP_WORKER_AGENT: "pi",
+      DEADLOOP_STATE_DIR: fixtureStateDir(),
       ...extraEnv,
     },
   });
@@ -46,7 +61,7 @@ describe("issue coordinator deterministic driver", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cleanup-disable-"));
     const repo = path.join(root, "repo");
     const worktree = path.join(root, "worktree");
-    const artifact = path.join(worktree, ".deadloop", "run.json");
+    const artifact = path.join(worktree, ".pi", "subagents", "run.json");
     const stateDir = path.join(root, ".pi", "agent", "deadloop");
     const binDir = path.join(root, "bin");
     const started = path.join(root, "cleanup-started");
@@ -140,8 +155,127 @@ exit 2
     }
   });
 
+  it("selects exploration before implementation", () => {
+    expect(runDriverFixture("driver-explore.json").driverAction).toBe("explorer_monitor_request");
+  });
+
+  it("binds exploration to the selected request generation", () => {
+    expect(runDriverFixture("driver-explore.json").launch.agentRequest.eventId).toBe("2");
+  });
+
+  it("records exploration consumption before launch", () => {
+    expect(runDriverFixture("driver-explore.json").launch.attemptPhase).toBe("github_claimed");
+  });
+
+  it("consumes only the exploration request", () => {
+    expect(runDriverFixture("driver-explore.json").launch.issueLabels).not.toContain("agent:explore");
+  });
+
+  it("leaves implementation queued after exploration consumption", () => {
+    expect(runDriverFixture("driver-explore.json").launch.issueLabels).toContain("agent:implement");
+  });
+
+  it("creates no Issue comment while launching exploration", () => {
+    expect(runDriverFixture("driver-explore.json").launch.comments).toEqual([]);
+  });
+
+  it("forbids repository and GitHub mutations in the explorer prompt", () => {
+    expect(runDriverFixture("driver-explore.json").launch.instructions).toContain("Do not edit, create, delete, rename, or format repository files");
+  });
+
   it("reports the deterministic Worker name", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
+  });
+
+  it("launches implementation without ready-for-agent", () => {
+    expect(runDriverFixture("driver-ready-worker.json").driverAction).toBe("worker_monitor_request");
+  });
+
+  it("binds the durable attempt to the selected request generation", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.agentRequest.eventId).toBe("1");
+  });
+
+  it("records consumption before the simulated Worker launch", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.attemptPhase).toBe("github_claimed");
+  });
+
+  it("preserves an unrelated Issue label", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.issueLabels).toContain("customer:urgent");
+  });
+
+  it("consumes the selected implementation request", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.issueLabels).not.toContain("agent:implement");
+  });
+
+  it("enters in-progress only after request consumption", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.issueLabels).toContain("agent:in-progress");
+  });
+
+  it("emits the selected request's unlabeled event", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.timelineEvents).toContainEqual(expect.objectContaining({ event: "unlabeled", label: { name: "agent:implement" } }));
+  });
+
+  it("emits the in-progress labeled event", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.timelineEvents).toContainEqual(expect.objectContaining({ event: "labeled", label: { name: "agent:in-progress" } }));
+  });
+
+  it("adds in-progress after the request consumption event", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.timelineEvents.slice(-2).map((event: any) => `${event.event}:${event.label.name}`)).toEqual([
+      "unlabeled:agent:implement",
+      "labeled:agent:in-progress",
+    ]);
+  });
+
+  const blockedVerificationResolution = JSON.stringify({
+    status: "blocked",
+    reason: "no_source",
+    repository: "owner/repo",
+    baseRevision: "f".repeat(40),
+    sources: [],
+  });
+
+  it("stops an eligible Issue before launch when required verification is unresolved", () => {
+    expect(runDriverFixture("driver-ready-worker.json", { DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution }).driverAction).toBe("required_verification_blocked");
+  });
+
+  it("does not create an attempt for a pre-launch required-verification stop", () => {
+    expect(runDriverFixture("driver-ready-worker.json", { DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution })).not.toHaveProperty("launch");
+  });
+
+  it("resumes a fingerprinted partial stop while required verification remains blocked", () => {
+    expect(runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: blockedVerificationResolution,
+    }).driverAction).toBe("required_verification_blocked");
+  });
+
+  it("replaces a partial stop diagnosis when its recovery fingerprint changes", () => {
+    const changedResolution = JSON.stringify({
+      status: "blocked",
+      reason: "source_conflict",
+      repository: "owner/repo",
+      baseRevision: "f".repeat(40),
+      sources: [
+        { kind: "local", location: "projects.json", command: "npm test" },
+        { kind: "local", location: "projects.override.json", command: "npm run check" },
+      ],
+    });
+    const result = runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: changedResolution,
+    });
+
+    expect(result.comment).toContain("reason: source_conflict");
+  });
+
+  it("launches a Worker for a requeued fingerprinted Issue after required verification resolves", () => {
+    expect(runDriverFixture("driver-partial-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify({ status: "resolved" }),
+    }).driverAction).toBe("worker_monitor_request");
+  });
+
+  it("does not requeue a durable verification stop when only configuration resolves", () => {
+    expect(runDriverFixture("driver-durable-verification-stop.json", {
+      DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify({ status: "resolved" }),
+    }).driverAction).toBe("no_candidate");
   });
 
   it("binds the Worker V1 identity to an exact commit SHA", () => {
@@ -167,9 +301,11 @@ exit 2
   });
 
   it("reports the deterministic worker promise path outside the worktree", () => {
+    const stateDir = fixtureStateDir();
+
     expect(
-      runDriverFixture("driver-ready-worker.json", { DEADLOOP_STATE_DIR: "/state/deadloop" }).launch.promiseFile,
-    ).toBe("/state/deadloop/runs/fixture-worker-uuid/promise.json");
+      runDriverFixture("driver-ready-worker.json", { DEADLOOP_STATE_DIR: stateDir }).launch.promiseFile,
+    ).toBe(path.join(stateDir, "runs/fixture-worker-demo-12/promise.json"));
   });
 
   it("isolates runtime artifacts during monitor validation", () => {
@@ -190,5 +326,41 @@ exit 2
 
   it("uses the TypeScript renderer for planning comments", () => {
     expect(readFileSync(driverScript, "utf8")).toContain("renderIssuePlanningComment");
+  });
+});
+
+describe("reusing an abandoned Worker checkout", () => {
+  const checkout = {
+    branch: "agent/issue-1-task",
+    worktreePath: "/worktrees/agent-issue-1-task",
+    inputHead: "a".repeat(40),
+    abandonedAt: "2026-08-14T00:00:00.000Z",
+    workspaceId: "workspace-1",
+    agentName: "demo-issue-1-worker",
+  };
+
+  /** Every other proof passes, so the status line is the only thing under test. */
+  function assertWith(status: string) {
+    const { assertRecoverableWorkerCheckout } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
+    return () => assertRecoverableWorkerCheckout(checkout, { repoPath: "/repo" }, {
+      runner: {
+        listWorktrees: () => [{ branch: checkout.branch, path: checkout.worktreePath, workspaceId: "" }],
+        listWorkspaces: () => [],
+        listAgents: () => [],
+      },
+      runText: (args: string[]) => (args.includes("rev-parse") ? checkout.inputHead : status),
+    });
+  }
+
+  it("reuses a checkout whose only untracked files are an agent scratch area", () => {
+    expect(assertWith("?? .pi/subagents/artifacts/input.md\n")).not.toThrow();
+  });
+
+  it("refuses a checkout whose scratch area holds a tracked change", () => {
+    expect(assertWith(" M .pi/subagents/report.md\n")).toThrow("contains changes");
+  });
+
+  it("refuses a checkout holding somebody else's untracked file", () => {
+    expect(assertWith("?? luac.out\n")).toThrow("contains changes");
   });
 });

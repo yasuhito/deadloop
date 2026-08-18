@@ -20,7 +20,7 @@
 **Depends on:** none
 
 - Add packaged `run-project-check.ts` with a durable recovery manifest.
-- Isolate only `.deadloop/` and `.pi-subagents/` on the same filesystem.
+- Isolate only the agent scratch areas on the same filesystem.
 - Preserve exact command status and restore evidence on every supported exit path.
 - Recover abandoned manifests and fail closed on restoration conflicts.
 - Route issue-worker and reviewer validation instructions through the helper.

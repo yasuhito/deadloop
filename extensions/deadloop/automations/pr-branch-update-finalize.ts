@@ -8,6 +8,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { assertLocallyEnabled, MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { ensureFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { assertAuthorizedSource } = require("./guarded-push.ts");
@@ -113,7 +114,9 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   const verify = ops.ensureVerification
     || ((input: FinalizeArgs, oid: string, repositoryId: string, run: FinalizeOps["run"]) => ensureFinalizerRequiredVerification(input, "branch-update", oid, repositoryId, run));
   const verification = verify(args, candidateOid, initiallyEnabled.githubRepositoryId, ops.run);
-  if (checked(ops, ["git", "-C", args.repo, "status", "--porcelain"])) throw new Error("branch-update worktree is dirty after checks");
+  if (hasUncommittedWork(checked(ops, ["git", "-C", args.repo, ...UNCOMMITTED_WORK_STATUS_ARGS]))) {
+    throw new Error("branch-update worktree is dirty after checks");
+  }
   if (checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
     throw new Error("branch-update HEAD changed during checks");
   }

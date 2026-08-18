@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. One refinement below no longer holds: a later abandoned active claim on a head that carries repair provenance records `repair_rereview`, not `stale_reclaim`, because [ADR 0020](0020-stop-proving-work-authority.md) removed local attempt journals from the launch decision.
 
 ## Decision
 
@@ -45,7 +45,7 @@ The repair worker cannot push directly. The deterministic finalizer requires the
 
 The finalizer runs the configured checks for every repair and requires an authenticated passed verification record bound to the exact output commit and fixed project-check contract. It may reuse only a fully matching authenticated record; otherwise it runs the fixed check and persists a new authenticated record. It immediately re-reads the open PR's branch and head SHA, then updates that exact existing branch with a normal non-force fast-forward push after verifying that the destination still equals the selected PR head. It never changes labels, creates or merges a PR, closes an issue, or deletes a branch. A changed, rewound, or deleted head stops without an update, comment, or label change so the next cycle can re-evaluate it. A successful push changes the head; the completion handler authenticates that output-bound record again and requires the receipt to bind the claimed old head to the observed repaired head before any completion mutation. It then records the result and replaces `agent:in-progress` with a fresh `agent:review` request. The next selection records `repair_rereview`, then claims that request normally. Conflict recovery carries that provenance to its updated head, while a later abandoned active claim remains distinguishable as `stale_reclaim`.
 
-The exact head/review-result pair gets one repair attempt, and each PR gets at most three automatic repair attempts in total. The cumulative count comes from persistent `deadloop:review-repair-attempt` comment markers, so changing findings cannot reset the limit and scheduler restarts do not lose it. If the same findings recur after an attempted repair, the three-attempt cumulative limit is reached, the review reports no repair progress, or the reviewer reports `human_required`, deadloop adds `agent:blocked`, removes `agent:in-progress`, retains `agent:review`, and posts recovery guidance. Unsafe targets, exhausted attempts, failed repair launches, and failed/inconclusive repair completions are bounded safety failures and follow the same human-blocked path.
+The exact head/review-result pair gets one repair attempt, and each PR gets at most three automatic repair attempts in total. The cumulative count comes from persistent `deadloop:review-repair-attempt` comment markers, so changing findings cannot reset the limit and scheduler restarts do not lose it. If the same findings recur after an attempted repair or the three-attempt cumulative limit is reached, deadloop adds `agent:blocked`, removes `agent:in-progress`, retains `agent:review`, and posts recovery guidance. A review that reports `human_required`, including one that reports no repair progress, is a completed review and is handed to a person instead; see [ADR 0021](0021-a-human-required-review-is-a-completed-review.md). Unsafe targets, exhausted attempts, failed repair launches, and failed/inconclusive repair completions are bounded safety failures and follow the same human-blocked path.
 
 ## Consequences
 

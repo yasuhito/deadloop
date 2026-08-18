@@ -1,0 +1,17 @@
+[
+  {
+    "number": 31,
+    "updatedAt": "2026-07-31T07:30:00Z",
+    "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+    "isDraft": false,
+    "labels": [{ "name": "agent:review" }, { "name": "agent:in-progress" }],
+    "statusCheckRollup": [],
+    "comments": [
+      {
+        "author": { "login": "deadloop-bot" },
+        "body": "## Automatic review repair completed\n\n<!-- deadloop:review-repair-result key=c4ddc9641edec4e267b2 head=cccccccccccccccccccccccccccccccccccccccc -->"
+      }
+    ],
+    "reviewRequests": []
+  }
+]

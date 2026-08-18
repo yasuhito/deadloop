@@ -7,6 +7,7 @@ const path = require("node:path") as typeof import("node:path");
 const { isDeepStrictEqual } = require("node:util") as typeof import("node:util");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { writeVerificationLog } = require("./run-worker-required-verification.ts");
 const {
   assertCurrentWorkerContract,
@@ -231,8 +232,10 @@ function ensureFinalizerRequiredVerification(
       return record;
     },
     validate: () => {
-      const status = run(["git", "-C", args.repo, "status", "--porcelain"]);
-      if (status.status !== 0 || status.stdout.trim()) throw new Error("required verification post-check failed: worktree is dirty after checks");
+      const status = run(["git", "-C", args.repo, ...UNCOMMITTED_WORK_STATUS_ARGS]);
+      if (status.status !== 0 || hasUncommittedWork(status.stdout)) {
+        throw new Error("required verification post-check failed: worktree is dirty after checks");
+      }
       const head = run(["git", "-C", args.repo, "rev-parse", "HEAD"]);
       if (head.status !== 0 || head.stdout.trim().toLowerCase() !== targetCommit.toLowerCase()) {
         throw new Error("required verification post-check failed: HEAD changed during checks");

@@ -1,7 +1,11 @@
 import path from "node:path";
 
+import { hasUncommittedWork } from "./agent-scratch-area.cjs";
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
+const { isRequiredVerificationStopComment } = require("./issue-required-verification-stop.ts") as {
+  isRequiredVerificationStopComment(body: unknown): boolean;
+};
 import {
   formatRequiredVerification,
   formatVerificationCandidates,
@@ -106,7 +110,6 @@ export type DoctorFinding = {
 export type HerdrDoctorStatus =
   | "active"
   | "blocked"
-  | "human_required"
   | "missing_report"
   | "malformed_report"
   | "malformed_journal"
@@ -225,7 +228,7 @@ function gitInspectionCommands(project: NormalizedProject, worktree: HerdrWorktr
   const targetPath = worktree ? worktreePath(worktree) : "";
   if (targetPath) {
     return [
-      `git -C ${shellArg(targetPath)} status --short`,
+      `git -C ${shellArg(targetPath)} status --short --untracked-files=all`,
       `git -C ${shellArg(targetPath)} log ${shellArg(project.baseBranch || "origin/main")}..HEAD --oneline`,
     ];
   }
@@ -247,21 +250,25 @@ function hasOpenPrForWorktree(worktree: HerdrWorktree, openPrs: DoctorGithubItem
 
 function isCleanStatus(gitStatuses: Record<string, string>, pathValue: string): boolean {
   if (!Object.prototype.hasOwnProperty.call(gitStatuses, pathValue)) return false;
-  return String(gitStatuses[pathValue] || "").trim() === "";
+  return !hasUncommittedWork(gitStatuses[pathValue]);
 }
 
 function buildBlockedIssueFindings(project: NormalizedProject, issues: DoctorGithubItem[]): DoctorFinding[] {
   return issues
     .filter((issue) => labelsOf(issue).has(project.labels.blocked))
-    .map((issue) => ({
-      id: `blocked-issue-${issue.number ?? "unknown"}`,
-      type: "blocked_issue" as const,
-      title: `blocked issue: ${issueRef(issue)}`,
-      summary: blockedCommentSummary(issue),
-      commands: [
-        `gh issue edit ${issue.number ?? "<number>"} --remove-label ${shellArg(project.labels.blocked)} --add-label ${shellArg(project.labels.implement)}`,
-      ],
-    }));
+    .map((issue) => {
+      const requiredVerificationStop = (issue.comments || []).some((comment) => isRequiredVerificationStopComment(comment.body));
+      const canRequeueRequiredVerification = !requiredVerificationStop || project.requiredVerification.status === "resolved";
+      return {
+        id: `blocked-issue-${issue.number ?? "unknown"}`,
+        type: "blocked_issue" as const,
+        title: `blocked issue: ${issueRef(issue)}`,
+        summary: blockedCommentSummary(issue),
+        commands: canRequeueRequiredVerification
+          ? [`gh issue edit ${issue.number ?? "<number>"} --remove-label ${shellArg(project.labels.blocked)} --add-label ${shellArg(project.labels.implement)}`]
+          : [],
+      };
+    });
 }
 
 function buildStaleInProgressFindings(
@@ -411,9 +418,9 @@ function buildStuckReviewClaimFindings(
       return !hasWorkingReviewer(agents, reviewerName, worktree);
     })
     .map((pr) => ({
-      id: `stuck-review-claim-${pr.number ?? "unknown"}`,
+      id: `stuck-review-state-${pr.number ?? "unknown"}`,
       type: "stuck_claim" as const,
-      title: `stuck reviewing claim: ${issueRef(pr)}`,
+      title: `stuck reviewing state: ${issueRef(pr)}`,
       summary: `${project.labels.inProgress} is present, but the matching reviewer agent is not working in Herdr. This may be a stale interrupted review run.`,
       commands: [`gh pr edit ${pr.number ?? "<number>"} -R ${shellArg(repo)} --remove-label ${shellArg(project.labels.inProgress)}`],
     }));

@@ -4,7 +4,6 @@ const {
   selectPrRequestTarget,
   attemptJournalsForPrReviewer,
   workingReviewerPrNumbers,
-  claimedReviewerHeads,
 } = require("./pr-reviewer-decisions.ts");
 
 type JsonObject = Record<string, any>;
@@ -72,7 +71,6 @@ function planPrRequestAction(prs: JsonObject[], _agents: JsonObject, env: PrRequ
     prs,
     config,
     workingReviewerPrNumbers(_agents, env.projectId, attempts, env.githubRepo || ""),
-    claimedReviewerHeads(env.projectId, attempts, env.githubRepo || ""),
   );
 
   if (!decision.selected) {
