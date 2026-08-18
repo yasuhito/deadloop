@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { hasUncommittedWork } from "./agent-scratch-area.cjs";
+import type { CodeIdentityDecision } from "./code-identity";
 import { automationStateKey, nextSlotAfter, type NormalizedProject, type AutomationStateEntry } from "./core";
 import { formatRequiredVerification } from "./required-verification";
 
@@ -43,6 +44,7 @@ export type StatusReportInput = {
   gitStatuses?: Record<string, string>;
   gitHeads?: Record<string, string>;
   warnings?: string[];
+  codeIdentity?: CodeIdentityDecision;
   selectedProject?: NormalizedProject | null;
   nowMs?: number;
 };
@@ -75,6 +77,7 @@ export type StatusSnapshot = {
   repositoryEnablement: RepositoryEnablement;
   cwd: string;
   warnings: string[];
+  codeIdentity?: CodeIdentityDecision;
   automations: AutomationStatus[];
   issues: {
     eligible: StatusLineItem[];
@@ -221,6 +224,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
       repositoryEnablement,
       cwd: input.cwd,
       warnings: input.warnings || [],
+      codeIdentity: input.codeIdentity,
       automations: [],
       issues: { eligible: [], inProgress: [], blockedOrNeedsInfo: [] },
       prs: { reviewTarget: [], reviewing: [] },
@@ -278,6 +282,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
     repositoryEnablement,
     cwd: input.cwd,
     warnings: input.warnings || [],
+    codeIdentity: input.codeIdentity,
     automations,
     issues: {
       eligible: eligible.map(lineItem),
@@ -340,7 +345,18 @@ function formatAutomationSummary(summary: string | undefined): string {
   return summary ? `; summary=${summary}` : "";
 }
 
+function formatCodeIdentity(decision: CodeIdentityDecision | undefined): string[] {
+  if (!decision) return [];
+  return [
+    `loaded code identity: ${decision.loadedIdentity || "unavailable"}`,
+    `deployed code identity: ${decision.deployedIdentity || "unavailable"}`,
+    `automation host: ${decision.action === "continue" ? "running" : "stopped"}`,
+    ...(decision.action === "stop" ? [`stop reason: ${decision.reason}`, `recovery: ${decision.recovery}`] : []),
+  ];
+}
+
 export function formatStatusReport(snapshot: StatusSnapshot): string {
+  const codeIdentity = formatCodeIdentity(snapshot.codeIdentity);
   if (!snapshot.project) {
     const lines = snapshot.repositoryEnablement === "disabled"
       ? ["deadloop is not enabled for this repository.", "", "Enable it:", "  /deadloop-enable", ""]
@@ -348,6 +364,7 @@ export function formatStatusReport(snapshot: StatusSnapshot): string {
     return [
       ...lines,
       `cwd: ${snapshot.cwd}`,
+      ...codeIdentity,
       ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     ].join("\n");
   }
@@ -357,6 +374,7 @@ export function formatStatusReport(snapshot: StatusSnapshot): string {
     `deadloop status: ${project.id}`,
     `repo: ${project.githubRepo || "unknown"}`,
     `cwd: ${snapshot.cwd}`,
+    ...codeIdentity,
     ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     `config: ${formatConfigSource(project)}`,
     formatRequiredVerification(project.requiredVerification),

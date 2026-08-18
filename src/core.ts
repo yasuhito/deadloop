@@ -192,8 +192,6 @@ export type AutomationStateEntry = {
 
 export type TemplateValueMap = Record<string, unknown>;
 
-export const EXTENSION_CODE_CHANGED_WARNING = "⚠ extension code changed since load — restart required";
-
 export type ConfigPathOptions = {
   env?: Record<string, string | undefined>;
   stateDir: string;
@@ -207,11 +205,6 @@ export type ProjectConfigResolution =
   | { ok: false; reason: string; warnings?: string[] };
 
 export type TickProjectResolution = { ok: true; project: NormalizedProject } | { ok: false; reason: string };
-
-export type CodeSourceMtime = {
-  path: string;
-  mtimeMs: number;
-};
 
 export function resolveConfigPath(options: ConfigPathOptions): string {
   const env = options.env || {};
@@ -700,10 +693,6 @@ export function resolveProjectForTick(input: {
     return { ok: false, reason: "active project changed since scheduler lock was acquired" };
   }
   return { ok: true, project };
-}
-
-export function codeFreshnessWarning(loadedAtMs: number, sources: CodeSourceMtime[]): string | null {
-  return sources.some((source) => source.mtimeMs > loadedAtMs) ? EXTENSION_CODE_CHANGED_WARNING : null;
 }
 
 export function parseEveryMinutes(schedule: unknown): number | null {

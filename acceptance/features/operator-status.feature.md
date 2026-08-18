@@ -32,11 +32,11 @@ The operator can inspect Issues, pull requests, worktrees, configuration conditi
 * When The operator requests deadloop status
 * Then Status displays active worktrees
 
-## Scenario: Show code update warning
+## Scenario: Show code identities and reload recovery when the Automation host stops
 
-* Given deadloop Extension code update not reflected in status display
+* Given The loaded deadloop code differs from the deployed code
 * When The operator requests deadloop status
-* Then Status shows the code-update warning
+* Then Status shows both code identities and the reload recovery
 
 ## Scenario: Show the most recent automation decision
 

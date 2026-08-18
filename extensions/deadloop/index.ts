@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { reconcileAndSelectDueAutomation } from "../../src/automation-scheduler";
+import { decideCodeIdentity, observeGitCodeIdentity, type CodeIdentityDecision } from "../../src/code-identity";
 import { ensureCodeSnapshot } from "../../src/code-snapshot";
 import {
   DEFAULT_TIMEZONE,
@@ -12,7 +13,6 @@ import {
   automationEnvironment,
   automationStateKey,
   authorizeAutomationLogin,
-  codeFreshnessWarning,
   isLinkedGitWorktree,
   nextSlotAfter,
   parseProjectsConfig,
@@ -97,7 +97,6 @@ import { preserveEnablementAutomationLogins } from "../../src/enablement-write";
 const EXTENSION_NAME = "deadloop";
 const STATUS_KEY = EXTENSION_NAME;
 const TICK_MS = 30_000;
-const MODULE_LOAD_TIME_MS = Date.now();
 
 const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 const STATE_DIR = path.join(CONFIG_DIR, EXTENSION_NAME);
@@ -120,11 +119,7 @@ function resolveExtensionDir() {
 }
 
 const EXTENSION_DIR = resolveExtensionDir();
-const CODE_FRESHNESS_SOURCE_PATHS = [
-  __filename,
-  path.resolve(__dirname, "../../src/core.ts"),
-  path.resolve(__dirname, "../../src/automation-runner.ts"),
-];
+const PACKAGE_CHECKOUT_PATH = path.resolve(__dirname, "../..");
 const AUTOMATION_DIR = path.join(EXTENSION_DIR, "automations");
 const PACKAGE_ROOT = path.resolve(__dirname, "../..");
 const LOADED_CODE_IDENTITY = gitOutput(PACKAGE_ROOT, ["rev-parse", "HEAD^{commit}"]);
@@ -441,14 +436,17 @@ function loadEnablementState() {
   }
 }
 
-function saveEnablementState(state) {
+function saveEnablementState(state, writerCodeIdentity: string) {
   let previous = null;
   try {
     previous = JSON.parse(fs.readFileSync(ENABLEMENT_PATH, "utf8"));
   } catch (error) {
     if (error?.code !== "ENOENT") debugLog("enablement preservation read failed", error?.message || error);
   }
-  writeJsonFile(ENABLEMENT_PATH, preserveEnablementAutomationLogins(previous, state));
+  writeJsonFile(ENABLEMENT_PATH, preserveEnablementAutomationLogins(previous, {
+    ...state,
+    lastWriterCodeIdentity: writerCodeIdentity,
+  }));
 }
 
 
@@ -467,10 +465,13 @@ async function withEnablementStateLock(operation) {
   }
 }
 
-async function updateEnablementState(update) {
+async function updateEnablementState(update, assertCodeIdentityCurrent, loadedCodeIdentity: string) {
+  assertCodeIdentityCurrent();
   return await withEnablementStateLock(async () => {
+    assertCodeIdentityCurrent();
     const next = await update(loadEnablementState());
-    saveEnablementState(next);
+    assertCodeIdentityCurrent();
+    saveEnablementState(next, loadedCodeIdentity);
     return next;
   });
 }
@@ -491,17 +492,17 @@ function firstEnableAutoMergeGate(state, project) {
   };
 }
 
-async function applyFirstEnableAutoMergeGate(project) {
+async function applyFirstEnableAutoMergeGate(project, assertCodeIdentityCurrent, loadedCodeIdentity: string) {
   let effectiveProject = null;
   await updateEnablementState((state) => {
     const gated = firstEnableAutoMergeGate(state, project);
     effectiveProject = gated.project;
     return gated.state;
-  });
+  }, assertCodeIdentityCurrent, loadedCodeIdentity);
   return effectiveProject;
 }
 
-async function completeFirstSchedulerStart(project) {
+async function completeFirstSchedulerStart(project, assertCodeIdentityCurrent, loadedCodeIdentity: string) {
   await updateEnablementState((state) => ({
     projects: state.projects.map((candidate) =>
       candidate.repoPath === path.resolve(project.repoPath)
@@ -510,16 +511,16 @@ async function completeFirstSchedulerStart(project) {
         ? { ...candidate, firstStartPending: false }
         : candidate,
     ),
-  }));
+  }), assertCodeIdentityCurrent, loadedCodeIdentity);
 }
 
-async function rollbackFailedEnablementAttempt(identity, enabledAt, repoPath, enableAttemptToken) {
+async function rollbackFailedEnablementAttempt(identity, enabledAt, repoPath, enableAttemptToken, assertCodeIdentityCurrent, loadedCodeIdentity: string) {
   await updateEnablementState((state) => ownsEnableAttempt(repoPath, enableAttemptToken)
     ? removeEnabledProjectGeneration(state, identity, enabledAt)
-    : state);
+    : state, assertCodeIdentityCurrent, loadedCodeIdentity);
 }
 
-async function rollbackSavedEnablementAttempt(identity, enabledAt, enableAttemptToken, previousEnabledProject) {
+async function rollbackSavedEnablementAttempt(identity, enabledAt, enableAttemptToken, previousEnabledProject, assertCodeIdentityCurrent, loadedCodeIdentity: string) {
   await updateEnablementState((state) => {
     const current = findEnabledProject(state, identity);
     if (current?.enabledAt !== enabledAt || current.enableAttemptToken !== enableAttemptToken) return state;
@@ -529,7 +530,7 @@ async function rollbackSavedEnablementAttempt(identity, enabledAt, enableAttempt
     return {
       projects: state.projects.map((project) => project === current ? previousEnabledProject : project),
     };
-  });
+  }, assertCodeIdentityCurrent, loadedCodeIdentity);
 }
 
 function assertSavedAutomationAuthority(identity, expected) {
@@ -555,26 +556,11 @@ function isProjectEnabled(project) {
   }
 }
 
-function extensionCodeWarning() {
-  const sources = [];
-  for (const sourcePath of CODE_FRESHNESS_SOURCE_PATHS) {
-    try {
-      sources.push({ path: sourcePath, mtimeMs: fs.statSync(sourcePath).mtimeMs });
-    } catch (error) {
-      debugLog("code freshness stat failed", sourcePath, error?.message || error);
-    }
-  }
-  return codeFreshnessWarning(MODULE_LOAD_TIME_MS, sources);
-}
-
-function ownsSchedulerLock(project, token = null) {
-  const lock = readLock(projectLockPath(project));
-  return Number(lock?.pid) === process.pid && (!token || lock?.token === token);
-}
-
-function statusWarnings(extraWarnings = [], project = null) {
-  const freshnessWarning = project && ownsSchedulerLock(project) ? extensionCodeWarning() : null;
-  return [freshnessWarning, ...extraWarnings].filter(Boolean);
+function statusWarnings(extraWarnings = [], codeIdentity?: CodeIdentityDecision) {
+  const identityWarning = codeIdentity?.action === "stop"
+    ? `${codeIdentity.reason}. ${codeIdentity.recovery}`
+    : null;
+  return [identityWarning, ...extraWarnings].filter(Boolean);
 }
 
 function statusText(text) {
@@ -682,9 +668,9 @@ function activeProject(cwd, projects) {
   return project || null;
 }
 
-async function activeSchedulerProject(cwd, projects) {
+async function activeSchedulerProject(cwd, projects, assertCodeIdentityCurrent, loadedCodeIdentity: string) {
   const project = activeProject(cwd, projects);
-  return project ? await applyFirstEnableAutoMergeGate(project) : null;
+  return project ? await applyFirstEnableAutoMergeGate(project, assertCodeIdentityCurrent, loadedCodeIdentity) : null;
 }
 
 function shellQuote(value) {
@@ -774,7 +760,12 @@ function repositoryEnablementForRoot(repositoryRoot: string | undefined): Reposi
 async function collectLiveSnapshotData(
   pi,
   cwd,
-  options: { includeClosedPrs?: boolean; includeIssueComments?: boolean; includeAgents?: boolean } = {},
+  options: {
+    includeClosedPrs?: boolean;
+    includeIssueComments?: boolean;
+    includeAgents?: boolean;
+    codeIdentityDecision?: () => CodeIdentityDecision;
+  } = {},
 ) {
   const includeClosedPrs = options.includeClosedPrs === true;
   const includeIssueComments = options.includeIssueComments === true;
@@ -792,9 +783,10 @@ async function collectLiveSnapshotData(
   const diagnosticWarnings = projectsResult.ok
     ? [...projectsResult.warnings, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])]
     : [projectsResult.reason, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])];
-  const warnings = statusWarnings(diagnosticWarnings, project);
+  const codeIdentity = options.codeIdentityDecision?.();
+  const warnings = statusWarnings(diagnosticWarnings, codeIdentity);
   if (!project) {
-    return { cwd, projects, state, repositoryEnablement, warnings, selectedProject: null };
+    return { cwd, projects, state, repositoryEnablement, warnings, codeIdentity, selectedProject: null };
   }
 
   const issueFields = includeIssueComments
@@ -913,12 +905,13 @@ async function collectLiveSnapshotData(
     claudeConfig,
     repositoryEnablement,
     warnings,
+    codeIdentity,
     selectedProject: project,
   };
 }
 
-async function buildLiveStatusReport(pi, cwd) {
-  const data = await collectLiveSnapshotData(pi, cwd, { includeClosedPrs: true });
+async function buildLiveStatusReport(pi, cwd, codeIdentityDecision?: () => CodeIdentityDecision) {
+  const data = await collectLiveSnapshotData(pi, cwd, { includeClosedPrs: true, codeIdentityDecision });
   return formatStatusReport(buildStatusSnapshot(data));
 }
 
@@ -1138,8 +1131,8 @@ function unresolvedProjectCheckReport(): string {
   );
 }
 
-async function buildLiveDoctorReport(pi, cwd) {
-  const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true, includeAgents: true });
+async function buildLiveDoctorReport(pi, cwd, codeIdentityDecision?: () => CodeIdentityDecision) {
+  const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true, includeAgents: true, codeIdentityDecision });
   const retained = retainedAttemptClaimSnapshot(data.selectedProject);
   const snapshot = buildDoctorSnapshot({
     ...data,
@@ -1310,7 +1303,8 @@ async function detectProjectIdentity(pi, cwd) {
   };
 }
 
-async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disableGeneration) {
+async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disableGeneration, assertCodeIdentityCurrent) {
+  assertCodeIdentityCurrent();
   await commandExec(pi, "gh", ["auth", "status"]);
   const automationLogin = (await commandExec(pi, "gh", ["api", "user", "--jq", ".login"])).stdout.trim().toLowerCase();
   if (!automationLogin) throw new Error("authenticated GitHub login is required to enable deadloop");
@@ -1322,6 +1316,7 @@ async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disable
     throw new Error("GitHub write permission is required to enable deadloop");
   }
   for (const [name, color] of STANDARD_LABELS) {
+    assertCodeIdentityCurrent();
     if (!ownsEnableAttempt(repoPath, enableAttemptToken)) {
       throw new Error("enablement was revoked while preflight was running");
     }
@@ -1331,6 +1326,7 @@ async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disable
       throw new Error((lookup.stderr || lookup.stdout || `label lookup failed for ${name}`).trim());
     }
     await withEnablementStateLock(async () => {
+      assertCodeIdentityCurrent();
       if (
         !ownsEnableAttempt(repoPath, enableAttemptToken) ||
         disableGenerationForRepo(loadDisableGenerations(STATE_DIR), repoPath) !== disableGeneration
@@ -1342,6 +1338,7 @@ async function prepareGithub(pi, identity, repoPath, enableAttemptToken, disable
       if (!/HTTP 404\b/.test(`${lockedLookup.stderr || ""}\n${lockedLookup.stdout || ""}`)) {
         throw new Error((lockedLookup.stderr || lockedLookup.stdout || `label lookup failed for ${name}`).trim());
       }
+      assertCodeIdentityCurrent();
       await commandExec(pi, "gh", ["label", "create", name, "-R", identity.githubRepo, "--color", color]);
     });
   }
@@ -1616,6 +1613,44 @@ function displayCommandResult(pi, ctx, customType, content) {
 }
 
 export default function (pi) {
+  const observeDeployedCodeIdentity = typeof pi.testing?.observeDeployedCodeIdentity === "function"
+    ? () => pi.testing.observeDeployedCodeIdentity()
+    : () => observeGitCodeIdentity(PACKAGE_CHECKOUT_PATH, {
+        realpath: fs.realpathSync,
+        runGit: (args) => {
+          const result = childProcess.spawnSync("git", args, { encoding: "utf8", timeout: 10_000 });
+          if (result.error) throw result.error;
+          if (result.status !== 0) throw new Error((result.stderr || result.stdout || "git rev-parse failed").trim());
+          return result.stdout || "";
+        },
+      });
+  const observeCodeIdentitySafely = (): string | null => {
+    try { return observeDeployedCodeIdentity(); }
+    catch (error) { debugLog("code identity observation failed", error instanceof Error ? error.message : String(error)); return null; }
+  };
+  const loadedCodeIdentity = observeCodeIdentitySafely();
+  const currentCodeIdentityDecision = () => decideCodeIdentity({
+    loadedIdentity: loadedCodeIdentity,
+    deployedIdentity: observeCodeIdentitySafely(),
+  });
+  const assertCodeIdentityCurrent = () => {
+    const decision = currentCodeIdentityDecision();
+    if (decision.action === "stop") throw new Error(`${decision.reason}. ${decision.recovery}`);
+  };
+  const codeIdentityAllowsAutomation = (ctx) => {
+    try {
+      assertCodeIdentityCurrent();
+      return true;
+    } catch (error) {
+      setLooperStatus(ctx, `stopped: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  };
+  const loadedCodeIdentityForWrite = () => {
+    assertCodeIdentityCurrent();
+    if (!loadedCodeIdentity) throw new Error("the loaded deadloop code identity could not be determined");
+    return loadedCodeIdentity;
+  };
   const preflight = typeof pi.testing?.herdrPreflight === "function"
     ? () => pi.testing.herdrPreflight()
     : herdrPreflight;
@@ -1624,14 +1659,14 @@ export default function (pi) {
     "deadloop-status",
     "Show the active deadloop project, automations, GitHub queues, and Herdr worker worktrees",
     "deadloop-status",
-    buildLiveStatusReport,
+    (reportPi, cwd) => buildLiveStatusReport(reportPi, cwd, currentCodeIdentityDecision),
   );
   registerReportCommand(
     pi,
     "deadloop-doctor",
     "Diagnose known deadloop failure modes and show copy-paste recovery or inspection commands",
     "deadloop-doctor",
-    buildLiveDoctorReport,
+    (reportPi, cwd) => buildLiveDoctorReport(reportPi, cwd, currentCodeIdentityDecision),
   );
   pi.registerCommand("deadloop-abandon-attempt", {
     description: "Safely abandon one proven launch-failed attempt and requeue its unchanged Issue or PR",
@@ -1713,6 +1748,7 @@ export default function (pi) {
     const schedulerRun = active;
 
     // Global fail-closed gate: no candidate selection or workflow/runner mutation may happen first.
+    if (!codeIdentityAllowsAutomation(ctx)) return;
     try {
       preflight();
     } catch (error) {
@@ -1744,7 +1780,7 @@ export default function (pi) {
       setLooperStatus(ctx, `skipped: ${projectsResult.reason}`);
       return;
     }
-    const project = await activeSchedulerProject(ctx.cwd, projectsResult.projects);
+    const project = await activeSchedulerProject(ctx.cwd, projectsResult.projects, assertCodeIdentityCurrent, loadedCodeIdentityForWrite());
     if (!project) {
       invalidateSchedulerRun(ctx, schedulerRun);
       setLooperStatus(ctx, "deadloop is not enabled for this repository");
@@ -1771,6 +1807,8 @@ export default function (pi) {
       }
       // Restart reconciliation is idempotent and runs before pending handoffs or candidate selection.
       const safeToSchedule = await reconcilePersistedAttemptJournals(pi, project);
+      await pi.testing?.afterTickReconciliation?.();
+      if (!codeIdentityAllowsAutomation(ctx)) return;
       if (!safeToSchedule) {
         setLooperStatus(ctx, "skipped: a prepared GitHub claim requires operator reconciliation");
         completedSafely = true;
@@ -1783,6 +1821,7 @@ export default function (pi) {
       for (const automation of project.automations) {
         const entry = state.automations[automationStateKey(project, automation)] || {};
         state.automations[automationStateKey(project, automation)] = entry;
+        if (!codeIdentityAllowsAutomation(ctx)) return;
         if (deliverPendingDriverHandoff(entry, state, automation.name, deps)) {
           if (active === schedulerRun && ownsLock && !stopRequested) deps.saveState(state);
           completedSafely = true;
@@ -1790,8 +1829,10 @@ export default function (pi) {
         }
       }
 
+      if (!codeIdentityAllowsAutomation(ctx)) return;
       const selected = reconcileAndSelectDueAutomation(project, state.automations, Date.now());
       if (selected) {
+        if (!codeIdentityAllowsAutomation(ctx)) return;
         await runAutomation(pi, ctx, project, selected.automation, selected.dueSlot, state, deps);
         if (active === schedulerRun && ownsLock && !stopRequested) updateStatus(ctx, project, state);
       }
@@ -1800,7 +1841,7 @@ export default function (pi) {
       completedSafely = true;
     } finally {
       try {
-        if (completedSafely) await completeFirstSchedulerStart(project);
+        if (completedSafely) await completeFirstSchedulerStart(project, assertCodeIdentityCurrent, loadedCodeIdentityForWrite());
       } finally {
         running = false;
       }
@@ -1881,6 +1922,13 @@ export default function (pi) {
   }
 
   function startScheduler(ctx, project) {
+    try {
+      assertCodeIdentityCurrent();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      setLooperStatus(ctx, `stopped: ${reason}`);
+      return { started: false, reason };
+    }
     if (process.env.DEADLOOP === "off") {
       return { started: false, reason: "scheduler startup is suppressed by DEADLOOP=off" };
     }
@@ -1948,6 +1996,7 @@ export default function (pi) {
         ctx.ui.setStatus(progressKey, "deadloop: enabling…");
       }
       try {
+        assertCodeIdentityCurrent();
         (pi.testing?.schedulerLockCapabilityPreflight || preflightSchedulerLockCapability)();
         let enabledAt;
         const disableGenerations = await withEnablementStateLock(async () => loadDisableGenerations(STATE_DIR));
@@ -2005,7 +2054,7 @@ export default function (pi) {
           throw new Error("base branch changed during enablement");
         }
         if (showProgress) ctx.ui.setStatus(progressKey, "deadloop: checking GitHub access and labels…");
-        const automationLogin = await prepareGithub(pi, identity, primaryRepoPath, enableAttemptToken, disableGeneration);
+        const automationLogin = await prepareGithub(pi, identity, primaryRepoPath, enableAttemptToken, disableGeneration, assertCodeIdentityCurrent);
         await withEnablementStateLock(async () => {
           if (
             !ownsEnableAttempt(primaryRepoPath, enableAttemptToken) ||
@@ -2036,7 +2085,8 @@ export default function (pi) {
             enableAttemptToken,
           );
           enabledAt = findEnabledProject(next, identity)?.enabledAt;
-          saveEnablementState(next);
+          assertCodeIdentityCurrent();
+          saveEnablementState(next, loadedCodeIdentityForWrite());
           enablementSaved = true;
         });
         finishEnableAttempt(primaryRepoPath, enableAttemptToken);
@@ -2052,7 +2102,7 @@ export default function (pi) {
           };
           assertSavedAutomationAuthority(identity, expectedAuthority);
           const projects = loadProjects(ctx.cwd);
-          project = await activeSchedulerProject(ctx.cwd, projects);
+          project = await activeSchedulerProject(ctx.cwd, projects, assertCodeIdentityCurrent, loadedCodeIdentityForWrite());
           if (!project) throw new Error("enabled repository configuration could not be resolved safely");
           if (!requiredVerificationMatches(project.requiredVerification, preflightProject.requiredVerification)) {
             throw new Error("required verification contract changed before scheduler startup");
@@ -2070,7 +2120,7 @@ export default function (pi) {
           });
         } catch (error) {
           if (schedulerStartedForAttempt) await stopScheduler(ctx);
-          await rollbackSavedEnablementAttempt(identity, enabledAt, enableAttemptToken, previousEnabledProject);
+          await rollbackSavedEnablementAttempt(identity, enabledAt, enableAttemptToken, previousEnabledProject, assertCodeIdentityCurrent, loadedCodeIdentityForWrite());
           throw error;
         }
         const owner = ownsLock ? "this session" : `another session (pid ${readLock(projectLockPath(project))?.pid || "unknown"})`;
@@ -2082,7 +2132,7 @@ export default function (pi) {
         else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
       } catch (error) {
         if (!enablementSaved && identity && previousEnabledAt !== undefined && primaryRepoPath) {
-          await rollbackFailedEnablementAttempt(identity, previousEnabledAt, primaryRepoPath, enableAttemptToken);
+          await rollbackFailedEnablementAttempt(identity, previousEnabledAt, primaryRepoPath, enableAttemptToken, assertCodeIdentityCurrent, loadedCodeIdentityForWrite());
         }
         if (primaryRepoPath) finishEnableAttempt(primaryRepoPath, enableAttemptToken);
         const message = `deadloop was not enabled: ${error?.message || error}`;
@@ -2098,6 +2148,7 @@ export default function (pi) {
     description: "Disable local deadloop scheduling for this repository without stopping active agents",
     handler: async (_args, ctx) => {
       try {
+        assertCodeIdentityCurrent();
         let message;
         const repoPath = await detectPrimaryCheckout(pi, ctx.cwd, true);
         advanceDisableGeneration(STATE_DIR, repoPath, writeJsonFile);
@@ -2110,7 +2161,8 @@ export default function (pi) {
           }
           const state = loadEnablementState();
           const enabled = state.projects.find((project) => project.repoPath === path.resolve(repoPath) && project.enabled !== false);
-          saveEnablementState(removeEnabledProjectAtPath(state, repoPath));
+          assertCodeIdentityCurrent();
+          saveEnablementState(removeEnabledProjectAtPath(state, repoPath), loadedCodeIdentityForWrite());
           if (active?.project?.repoPath && path.resolve(active.project.repoPath) === path.resolve(repoPath)) {
             invalidateSchedulerRun(ctx, active);
           }
@@ -2131,7 +2183,7 @@ export default function (pi) {
   pi.on("session_start", async (_event, ctx) => {
     if (ctx.mode === "print" || ctx.mode === "json") return;
     try {
-      const project = await activeSchedulerProject(ctx.cwd, loadProjects(ctx.cwd));
+      const project = await activeSchedulerProject(ctx.cwd, loadProjects(ctx.cwd), assertCodeIdentityCurrent, loadedCodeIdentityForWrite());
       debugLog("session_start", "cwd", ctx.cwd, "mode", ctx.mode, "project", project?.id || null);
       if (project) startScheduler(ctx, project);
     } catch (error) {
