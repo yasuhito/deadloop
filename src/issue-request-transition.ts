@@ -570,6 +570,11 @@ function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTrans
  * The receipt is last on purpose: an interruption anywhere in here leaves a still-prepared attempt
  * that reconciliation owns, never a durably claimed attempt with no workspace. A block or a newer
  * request observed after the active state exists releases that state again and stops.
+ *
+ * An active state this attempt did not create is never adopted. GitHub exposes no attempt identity
+ * on a label, so a pre-existing `agent:in-progress` may belong to another host that consumed the
+ * other role in the same gap. Adopting it would let two attempts launch and would let this stop
+ * delete their state, so an unproven active state fails closed and is left untouched.
  */
 function createActiveState(
   input: ConsumeIssueRequestInput,
@@ -577,9 +582,10 @@ function createActiveState(
 ): IssueRequestTransitionOutcome {
   let observation: IssueRequestObservation;
   try {
-    if (!observeRequest(input).labels.has(input.inProgressLabel)) {
-      input.github.addIssueLabel(input.repository, input.issueNumber, input.inProgressLabel);
+    if (observeRequest(input).labels.has(input.inProgressLabel)) {
+      return blockAmbiguousConsumption(input, true);
     }
+    input.github.addIssueLabel(input.repository, input.issueNumber, input.inProgressLabel);
     observation = observeRequest(input);
   } catch {
     return blockAmbiguousConsumption(input, !releaseActiveState(input));
@@ -612,7 +618,8 @@ function createActiveState(
  *
  * A stop must never be reported beside a live active state: the caller releases the prepared
  * attempt, so an Issue left in progress would carry no live and no durable attempt. When removal
- * cannot be proven the stop says so instead of claiming a clean release.
+ * cannot be proven the stop says so instead of claiming a clean release. Only the label this
+ * transition created is removed; the unbound case never reaches here.
  */
 function releaseActiveState(input: ConsumeIssueRequestInput): boolean {
   try {

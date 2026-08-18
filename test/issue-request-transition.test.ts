@@ -342,13 +342,26 @@ describe("Issue Agent request transition", () => {
       .not.toContain("agent:in-progress");
   });
 
-  it("reuses an active state left by an interrupted attempt", () => {
+  it("fails closed on an active state this attempt did not create", () => {
+    expect(scenario({ activeStateAlreadyPresent: true }).outcome.kind).toBe("ambiguous_blocked");
+  });
+
+  it("does not adopt an active state this attempt did not create", () => {
     expect(scenario({ activeStateAlreadyPresent: true }).trace.filter((entry) => entry === "add:agent:in-progress"))
       .toHaveLength(0);
   });
 
-  it("consumes a request whose active state an interrupted attempt already created", () => {
-    expect(scenario({ activeStateAlreadyPresent: true }).outcome.kind).toBe("consumed");
+  it("leaves an active state it does not own in place", () => {
+    expect(scenario({ activeStateAlreadyPresent: true }).labels).toContain("agent:in-progress");
+  });
+
+  it("writes no durable receipt for an active state it does not own", () => {
+    expect(scenario({ activeStateAlreadyPresent: true }).persisted).toBe(false);
+  });
+
+  it("names the foreign active state in its stop explanation", () => {
+    expect(scenario({ activeStateAlreadyPresent: true }).comments[0].body)
+      .toContain("--remove-label 'agent:in-progress'");
   });
 
   it("removes the active state when the durable receipt fails", () => {
