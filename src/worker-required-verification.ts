@@ -38,6 +38,13 @@ type Runtime = {
     projectRepo: string,
     localConfigPath?: string,
   ) => RequiredVerificationContract;
+  assertRequiredVerificationAuthorized: (
+    attempt: AttemptRecord,
+    targetCommit: string,
+    record: RequiredVerificationRecord | undefined,
+    currentContract: RequiredVerificationContract,
+    allowedRoles: AttemptRecord["role"][],
+  ) => { outputRevision: string; record: RequiredVerificationRecord };
   assertWorkerCompletionAuthorized: (
     attempt: AttemptRecord,
     report: CompletionReportV1,
@@ -54,4 +61,5 @@ export const readRequiredVerificationRecord = runtime.readRequiredVerificationRe
 export const writeRequiredVerificationRecord = runtime.writeRequiredVerificationRecord;
 export const requiredVerificationBinding = runtime.requiredVerificationBinding;
 export const assertCurrentWorkerContract = runtime.assertCurrentWorkerContract;
+export const assertRequiredVerificationAuthorized = runtime.assertRequiredVerificationAuthorized;
 export const assertWorkerCompletionAuthorized = runtime.assertWorkerCompletionAuthorized;

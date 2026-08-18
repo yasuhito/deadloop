@@ -130,13 +130,13 @@ Start with `false`. Enable `true` only after verifying branch protection, CI, pe
 
 ## Merge-conflict recovery
 
-Automatic branch updates are currently unavailable. deadloop detects merge conflicts but does not update the branch until #241 connects the `agent:update-branch` request to its worker. The existing non-force, exact-head, required-verification, and normal-merge safety contracts remain required.
+Automatic branch updates are currently unavailable. deadloop detects merge conflicts but does not update the branch until #241 connects the `agent:update-branch` request to its worker. The existing exact-head, required-verification, and normal-merge safety contracts remain required, and the finalizer push stays bound to the verified head by an expected-object-ID lease.
 
 The behavior below describes the safety contract for that future connection, not behavior that can currently run.
 
 The worker merges the selected base commit into the existing PR branch. It never rebases.
 
-The worker runs the configured checks. It atomically updates the branch only if the PR head still equals the validated commit, then returns the PR to normal review.
+The worker must produce a passed record bound to its fixed required-verification contract and output commit. It atomically updates the branch only if the PR head still equals the validated commit, then returns the PR to normal review.
 
 Review labels remain in place during the update. No extra label is required.
 
@@ -156,7 +156,7 @@ During repair, deadloop preserves `agent:in-progress` without adding another wor
 
 The worker receives only the findings.
 
-The finalizer runs the configured checks for every repair, regardless of how many files changed. It atomically updates the exact branch only if the branch head still equals the validated commit.
+The finalizer runs the configured checks for every repair, regardless of how many files changed. It requires a passed record bound to the attempt's fixed required-verification contract and repair commit, reuses only a fully matching record, and atomically updates the exact branch only if the branch head still equals the validated commit.
 
 The finalizer never replaces another head or changes GitHub workflow state.
 

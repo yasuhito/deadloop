@@ -316,6 +316,7 @@ function launchRepairBoundary(workspaceId: string) {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cucumber-review-repair-"));
   const env = repairEnvironment({
     projectId: "demo", repoPath: "/repo", githubRepo: "owner/repo", worktreeRoot: root, stateDir: root,
+    requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "a".repeat(40) },
   });
   const branch = "agent/issue-12";
   const findings = [{ title: "Bounded defect", body: "Repair the selected defect", path: "src/a.ts", severity: "major" }];
@@ -360,6 +361,7 @@ function launchBranchUpdateBoundary(workspaceId: string) {
     const env = reviewerEnvironment({
       DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: repoPath, DEADLOOP_GITHUB_REPO: "owner/repo",
       DEADLOOP_WORKTREE_ROOT: worktreeRoot, DEADLOOP_STATE_DIR: stateDir, DEADLOOP_ENABLED_AT: String(enabledAt),
+      DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "a".repeat(40) }),
       DEADLOOP_GITHUB_REPOSITORY_ID: "R_fixture", DEADLOOP_AUTOMATION_LOGIN: "deadloop-bot",
       DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
     });

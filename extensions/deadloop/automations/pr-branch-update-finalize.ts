@@ -1,22 +1,28 @@
 #!/usr/bin/env node
 // Run the configured check, revalidate the exact PR head, and perform the only
-// push allowed to a branch-update worker. It re-checks the validated PR head,
-// then performs a normal fast-forward push of the immutable candidate.
+// push allowed to a branch-update worker. It re-checks the validated PR head, then
+// pushes the immutable candidate bound to that exact head by an expected-object-ID
+// lease, so a remote change after the check stops the push instead of overwriting
+// it. The lease can only fast-forward because the candidate is required to contain
+// the verified head.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
-const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { assertLocallyEnabled, MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
+const { ensureFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { assertAuthorizedSource } = require("./guarded-push.ts");
 
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
   repo: string;
+  projectId: string;
   projectRepo: string;
   githubRepo: string;
+  attemptRecord: string;
   pr: string;
   branch: string;
   expectedHead: string;
@@ -28,11 +34,12 @@ type FinalizeArgs = {
   checkCommand: string;
   resultFile: string;
 };
-type CommandResult = { status: number; stdout: string; stderr: string };
+type CommandResult = { status: number | null; stdout: string; stderr: string; signal?: NodeJS.Signals | null; timedOut?: boolean };
 type EnabledProject = { githubRepo: string; githubRepositoryId: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => EnabledProject;
+  ensureVerification?: (args: FinalizeArgs, candidateOid: string, repositoryId: string, run: FinalizeOps["run"]) => Promise<JsonObject>;
 };
 
 function defaultRun(args: string[], timeoutMs?: number): CommandResult {
@@ -41,7 +48,13 @@ function defaultRun(args: string[], timeoutMs?: number): CommandResult {
     stdio: ["ignore", "pipe", "pipe"],
     ...(timeoutMs === undefined ? {} : { timeout: timeoutMs, killSignal: "SIGKILL" }),
   });
-  return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
+  return {
+    status: result.status,
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    signal: result.signal,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+  };
 }
 
 function checked(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
@@ -69,7 +82,7 @@ function pushConditionally(
   }
   recheck();
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return { pushed: true, currentRemoteHeadOid: candidateOid.toLowerCase() };
@@ -88,7 +101,7 @@ function decidePushGuard(pr: JsonObject, expectedBranch: string, expectedHead: s
   return { action: "push", reason: "head_unchanged" };
 }
 
-function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): JsonObject {
+async function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): Promise<JsonObject> {
   checked(ops, ["git", "check-ref-format", "--branch", args.branch]);
   const candidateOid = checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS);
   if (candidateOid.toLowerCase() === args.expectedHead.toLowerCase()) {
@@ -99,16 +112,11 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   const baseIsAncestor = ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedBase, candidateOid]);
   if (baseIsAncestor.status !== 0) throw new Error("updated branch does not contain the selected base head");
 
-  checked(ops, [
-    "node",
-    path.join(args.automationDir, "run-project-check.ts"),
-    "--cwd",
-    args.repo,
-    "--command",
-    args.checkCommand,
-    "--quarantine-root",
-    path.join(args.stateDir, "check-quarantine"),
-  ]);
+  const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
+  const initiallyEnabled = ops.assertEnabled ? ops.assertEnabled(project) : assertLocallyEnabled(project);
+  const verify = ops.ensureVerification
+    || ((input: FinalizeArgs, oid: string, repositoryId: string, run: FinalizeOps["run"]) => ensureFinalizerRequiredVerification(input, "branch-update", oid, repositoryId, run));
+  const verification = await verify(args, candidateOid, initiallyEnabled.githubRepositoryId, ops.run);
   if (hasUncommittedWork(checked(ops, ["git", "-C", args.repo, ...UNCOMMITTED_WORK_STATUS_ARGS]))) {
     throw new Error("branch-update worktree is dirty after checks");
   }
@@ -116,8 +124,8 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     throw new Error("branch-update HEAD changed during checks");
   }
 
-  const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
-  const guardAndPush = (enabled: EnabledProject, recheck: () => void = () => {}) => {
+  const guardAndPush = async (enabled: EnabledProject, recheck: () => void = () => {}) => {
+    await verify(args, candidateOid, enabled.githubRepositoryId, ops.run);
     assertAuthorizedSource(
       { projectRepo: args.projectRepo, worktree: args.repo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt, remote: args.remote, branch: args.branch },
       enabled,
@@ -166,7 +174,7 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       originalHeadOid: args.expectedHead.toLowerCase(),
       baseHeadOid: args.expectedBase.toLowerCase(),
       headOid: candidateOid.toLowerCase(),
-      checks: [{ command: args.checkCommand, result: "passed" }],
+      checks: [{ command: verification.record?.binding?.command || args.checkCommand, result: "passed" }],
     };
   };
   if (ops.assertEnabled) {
@@ -190,8 +198,10 @@ function parseArgs(argv: string[]): FinalizeArgs {
   }
   return {
     repo: required(values, "repo"),
+    projectId: required(values, "projectId"),
     projectRepo: required(values, "projectRepo"),
     githubRepo: required(values, "githubRepo"),
+    attemptRecord: required(values, "attemptRecord"),
     pr: required(values, "pr"),
     branch: required(values, "branch"),
     expectedHead: required(values, "expectedHead"),
@@ -227,13 +237,13 @@ function argumentValue(argv: string[], flag: string): string {
   return index >= 0 ? String(argv[index + 1] || "") : "";
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const fallbackResultFile = argumentValue(argv, "--result-file");
   let args: FinalizeArgs | undefined;
   try {
     args = parseArgs(argv);
-    const result = finalizeBranchUpdate(args);
+    const result = await finalizeBranchUpdate(args);
     writeResult(args.resultFile, result);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (result.action === "blocked") process.exitCode = 3;
@@ -257,6 +267,6 @@ function main(): void {
   }
 }
 
-if (require.main === module) main();
+if (require.main === module) void main();
 
 module.exports = { decidePushGuard, finalizeBranchUpdate, parseArgs };
