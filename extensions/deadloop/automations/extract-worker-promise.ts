@@ -21,7 +21,7 @@ const SUCCESSFUL_ATTEMPT_PHASES = new Set([
   "github_persisted",
   "workspace_closed",
 ]);
-const ATTEMPT_ROLES = new Set(["worker", "reviewer", "review-repair", "branch-update"]);
+const ATTEMPT_ROLES = new Set(["worker", "explorer", "reviewer", "review-repair", "branch-update"]);
 
 function validFinding(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -116,7 +116,7 @@ function validNonEmptyString(value: unknown): boolean {
 function validV1Report(promise: PromiseValidation): string | undefined {
   if (!VALID_PROMISE_STATUSES.has(promise.status)) return "invalid_status";
   if (!validNonEmptyString(promise.attemptId)) return "invalid_attempt_id";
-  if (!["worker", "reviewer", "review-repair", "branch-update"].includes(promise.role)) return "invalid_role";
+  if (!["worker", "explorer", "reviewer", "review-repair", "branch-update"].includes(promise.role)) return "invalid_role";
   if (!validObject(promise.target) || !validNonEmptyString(promise.target.repository)) return "invalid_target";
   if (!["issue", "pull-request"].includes(promise.target.kind) || !Number.isInteger(promise.target.number) || promise.target.number < 1) return "invalid_target";
   if (!validObject(promise.inputRevision) || !validCommitSha(promise.inputRevision.head)) return "invalid_input_revision";
@@ -131,6 +131,15 @@ function validV1Report(promise: PromiseValidation): string | undefined {
   if (promise.role === "worker") {
     return validCommitSha(promise.result.outputRevision) && validStringList(promise.evidence.validations)
       ? undefined : "worker_requires_output_and_validation";
+  }
+  if (promise.role === "explorer") {
+    if (!["low", "medium", "high"].includes(promise.result.difficulty)) return "invalid_explorer_difficulty";
+    for (const field of ["relevantFiles", "verifiedClaims", "disprovedClaims", "openQuestions"]) {
+      if (!Array.isArray(promise.result[field]) || !promise.result[field].every((value: unknown) => typeof value === "string" && Boolean(value.trim()))) return `invalid_explorer_${field}`;
+    }
+    if (promise.result.approach !== undefined && !validNonEmptyString(promise.result.approach)) return "invalid_explorer_approach";
+    return Array.isArray(promise.evidence.commands) && promise.evidence.commands.every((value: unknown) => typeof value === "string" && Boolean(value.trim()))
+      ? undefined : "invalid_explorer_commands";
   }
   if (promise.role === "reviewer") {
     if (!["approved", "changes_requested", "human_required"].includes(promise.result.outcome)) return "invalid_reviewer_outcome";

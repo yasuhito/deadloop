@@ -7,8 +7,9 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { planPrRequestAction } = require("./pr-reviewer-flow.ts");
-const { blockedPrLabelMove, orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.ts");
-const { CLAIM_BOUND_AGENT_ROLES, launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
+const { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.ts");
+const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.ts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { decideBranchUpdateLive } = require("./pr-branch-update-decision.ts");
@@ -33,22 +34,10 @@ const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
 const { requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 const {
-  advancePrHistoryAfterDeterministicComment,
   comparePrHistoryObservations,
   observePrHistory,
   writePrHistoryObservation,
 } = require("../../../src/pr-review-history.ts");
-const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
-const {
-  activeReviewRequest,
-  claimContractMatchesConfiguration,
-  parseGithubRestDate,
-  parseReviewClaim,
-  readGithubRestResponseHeaders,
-  renderReviewClaimComment,
-  reviewClaimCommentMatchesContract,
-  selectReviewClaimWinner,
-} = require("./pr-review-claim.ts");
 
 import type { AttemptAgentRunner } from "../../../src/attempt-runtime-observation";
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
@@ -60,13 +49,7 @@ type GithubEffect =
   | { operation: "comment_pr"; repo: string; prNumber: string; body: string }
   | { operation: "move_pr_labels"; repo: string; prNumber: string; move: LabelMove };
 const SCRIPT_DIR = __dirname;
-class ReviewClaimLostError extends StaleLaunchError {
-  constructor(message: string) { super(message); }
-}
-class ReviewClaimPreemptedError extends ReviewClaimLostError {
-  constructor(message: string) { super(message); }
-}
-class ReviewServerTimeError extends StaleLaunchError {
+class RequestConsumptionError extends StaleLaunchError {
   constructor(message: string) { super(message); }
 }
 const commandRunner = createCommandRunner();
@@ -100,9 +83,7 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     githubRepositoryId: source.DEADLOOP_GITHUB_REPOSITORY_ID || "",
     automationLogin: source.DEADLOOP_AUTOMATION_LOGIN || "",
     authorizedAutomationLogins: String(source.DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS || "").split(",").map((value) => value.trim()).filter(Boolean),
-    claimOwner: source.DEADLOOP_CLAIM_OWNER || `${os.hostname()}:${process.pid}`,
     reviewerMaxRuntimeSeconds: Number(source.DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS || 86_400),
-    claimCleanupGraceSeconds: Number(source.DEADLOOP_CLAIM_CLEANUP_GRACE_SECONDS || 300),
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
@@ -157,7 +138,7 @@ function exposePostBlockReviewRequests(
     if (!names.has(env.blockedLabel) || !requestLabels.some((label) => names.has(label))) return pr;
     const events = github.listPrTimelineEvents(env.githubRepo, Number(pr.number || 0));
     const recovered = requestLabels.some((label) => {
-      const latestRequest = activeReviewRequest(events, label);
+      const latestRequest = latestPrRequestEvent(events, label);
       return Boolean(latestRequest) && names.has(label) && postBlockRequestIsEligible({
         request: latestRequest,
         events,
@@ -221,17 +202,27 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
       effects.labels[String(number)] = [...labels];
       githubEffects?.push({ operation: "move_pr_labels", repo, prNumber: String(number), move });
     },
-    replacePrLabels: (_repo: string, number: string | number, labels: string[]) => {
-      effects.labelReplacements ||= [];
-      effects.labelReplacements.push({ number: Number(number), labels: [...labels] });
+    addPrLabel: (_repo: string, number: string | number, label: string) => {
+      effects.labelMutations ||= [];
+      effects.labelMutations.push({ operation: "add", number: Number(number), label });
       const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
-      if (pr && !fixture.postMutationMismatch) pr.labels = labels.map((name) => ({ name }));
+      const labels = new Set((pr?.labels || []).map((item: JsonObject) => String(item.name)));
+      labels.add(label);
+      if (pr && !fixture.postMutationMismatch) pr.labels = [...labels].map((name) => ({ name }));
       effects.labels[String(number)] = [...labels];
-      return { names: labels };
+      return [...labels].map((name) => ({ name }));
     },
-    readRestResponseHeaders: () => fixture.restResponseHeaders === undefined
-      ? "HTTP/2 200\r\ndate: Wed, 08 Jul 2026 00:00:00 GMT\r\n"
-      : String(fixture.restResponseHeaders),
+    deletePrLabel: (_repo: string, number: string | number, label: string) => {
+      effects.labelMutations ||= [];
+      effects.labelMutations.push({ operation: "delete", number: Number(number), label });
+      const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
+      const labels = new Set((pr?.labels || []).map((item: JsonObject) => String(item.name)));
+      const status = labels.has(label) ? 200 : 404;
+      if (status === 200) labels.delete(label);
+      if (pr && !fixture.postMutationMismatch) pr.labels = [...labels].map((name) => ({ name }));
+      effects.labels[String(number)] = [...labels];
+      return { status };
+    },
     listPrLabels: (_repo: string, number: string | number) => {
       const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
       return pr?.labels || [];
@@ -247,21 +238,6 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
     createPrComment: (_repo: string, number: string | number, body: string) => {
       const pr = (fixture.prs || []).find((candidate: JsonObject) => Number(candidate.number) === Number(number));
       const comment = { id: Number(pr?.comments?.length || 0) + 10_000, createdAt: "2026-07-08T00:00:00Z", updatedAt: "2026-07-08T00:00:00Z", author: { login: String(fixture.automationLogin || "deadloop-bot") }, body };
-      if (pr && fixture.winningForeignClaimOwner) {
-        const own = parseReviewClaim(body);
-        const foreignBinding = {
-          repositoryId: own.repositoryId,
-          repository: own.repository,
-          targetNumber: own.targetNumber,
-          requestEventId: own.requestEventId,
-          role: own.role,
-          revision: own.revision,
-          owner: String(fixture.winningForeignClaimOwner),
-          authority: own.authority,
-          activeState: own.activeState,
-        };
-        (pr.comments ||= []).push({ ...comment, id: 9_999, createdAt: "2026-07-07T23:59:59Z", updatedAt: "2026-07-07T23:59:59Z", body: renderReviewClaimComment(foreignBinding) });
-      }
       if (pr) (pr.comments ||= []).push(comment);
       effects.githubComments.push({ number: Number(number), body });
       return comment;
@@ -294,7 +270,7 @@ type DriverLaunchInput = {
   autoMergePolicy?: boolean;
   requiredVerification?: JsonObject;
   reviewHistoryRequired?: boolean;
-  reviewClaim?: JsonObject;
+  requestEventId?: string;
   renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
 };
 
@@ -323,6 +299,7 @@ function launchWithAdapters(
   if (fixture && !operations?.agentLaunchOps) {
     revalidate();
     mutate(() => {});
+    revalidate();
     fixtureEffects(fixture).herdrStarts.push({
       name: input.workspaceLabel,
       agent: input.agent,
@@ -346,9 +323,9 @@ function launchWithAdapters(
   const launch = (recheck: () => void) => launchAgentFlow(input, { ...ops, beforeAgentStart: recheck });
   return withEnabledDriverLaunch(env, mutate, launch, {
     revalidate,
-    claimBeforePrepare: CLAIM_BOUND_AGENT_ROLES.includes(input.role),
+    revalidateAfterMutation: revalidate,
     prepareAttempt: () => prepareAgentLaunchFlow(input, ops),
-    recordClaim: () => recordAgentLaunchGithubClaimed(input),
+    recordGithubMutation: () => recordAgentLaunchGithubClaimed(input),
   });
 }
 
@@ -551,26 +528,26 @@ function applyPrTransition(
   }
 }
 
-/** Claims one waiting Agent request under the current enablement and configuration authority. */
-function claimRequestWithAuthority(
+/** Consumes one waiting Agent request and binds the transition to its exact event id. */
+function consumeRequestWithIdentity(
   github: ReturnType<typeof githubOperations>,
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
   fixture: JsonObject | null,
   role: string,
   enabled: EnabledIdentity = {},
+  expectedRequestEventIds: Record<string, string> = {},
+  currentAttemptId = "",
 ): JsonObject {
   const enabledAutomationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
-  return claimReviewRequest(
+  return consumeRequestEvent(
     github,
     pr,
     env,
     role,
     fixture ? () => env.automationLogin : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
-    fixture ? undefined : (currentClaim) => {
-      const authenticated = assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
-      return assertCurrentReviewClaimAuthority(currentClaim, env.stateDir, enabled, authenticated);
-    },
+    expectedRequestEventIds,
+    currentAttemptId,
   );
 }
 
@@ -589,7 +566,7 @@ function consumeRequest(
   nextLabel: string,
 ): { comment: string; applied: boolean } {
   const applied = applyPrTransition(pr, env, fixture, stillApplicable, (github, live, enabled) => {
-    claimRequestWithAuthority(github, live, env, fixture, role, enabled);
+    consumeRequestWithIdentity(github, live, env, fixture, role, enabled);
     github.commentPr(env.githubRepo, Number(live.number || 0), comment);
     github.movePrLabels(env.githubRepo, Number(live.number || 0), { remove: env.inProgressLabel, add: nextLabel });
   });
@@ -678,6 +655,7 @@ type BranchUpdateTargetObservation = {
   agents?: () => JsonObject;
   decisionFor?: (live: JsonObject) => JsonObject;
   reauthorize?: () => JsonObject;
+  request?: () => JsonObject;
 };
 
 function assertBranchUpdateTargetUnchanged(
@@ -722,25 +700,29 @@ function assertBranchUpdateRequestSelectable(
  * target. The attempt marker this launch just published belongs to this attempt, so a repeated
  * attempt is no longer a stop condition here.
  */
-function assertBranchUpdateClaimHeld(
+function assertBranchUpdateRequestConsumed(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
   headOid: string,
   baseOid: string,
-  claim: JsonObject,
+  requestEventId: string,
   observe: BranchUpdateTargetObservation = {},
+  requestEventIds: Record<string, string> = {},
 ): void {
   const number = Number(pr.number || 0);
-  const live = (observe.reauthorize
-    || (() => reauthorizeClaimedReview(githubOperations(), pr, env, claim, undefined, {
-      githubRepositoryId: env.githubRepositoryId,
-      githubRepo: env.githubRepo,
-    })))();
+  const github = githubOperations();
+  const live = (observe.reauthorize || (() => github.getPr(env.githubRepo, number)))();
+  assertSamePrRevision(pr, live);
   const labels = new Set(labelNames(live));
-  const managed = reviewClaimManagedLabels(env).filter((label) => labels.has(label));
+  const managed = managedWorkflowLabels(env).filter((label) => labels.has(label));
   if (managed.length !== 1 || managed[0] !== env.inProgressLabel) {
-    throw new StaleLaunchError(`PR #${number} no longer has the exact claimed branch-update state`);
+    throw new StaleLaunchError(`PR #${number} no longer has the exact consumed branch-update state`);
   }
+  const request = (observe.request || (() => currentReviewRequest(github, env, number, env.updateBranchLabel)))();
+  if (String(request.id || request.node_id || "") !== requestEventId) {
+    throw new StaleLaunchError(`PR #${number} branch-update request generation changed before launch`);
+  }
+  if (!observe.request) assertLatestRequestEventIds(github, env, number, requestEventIds);
   const decisionFor = observe.decisionFor || ((candidate: JsonObject) => branchUpdateDecision(candidate, env, null));
   assertBranchUpdateTargetUnchanged(live, headOid, baseOid, decisionFor);
 }
@@ -759,19 +741,39 @@ function launchBranchUpdate(
   const headOid = plan.input.inputRevision.head;
   const baseOid = String(plan.input.inputRevision.base || "");
   if (!fixture) runText(["git", "check-ref-format", "--branch", branch]);
-  let claim: JsonObject | null = null;
+  let requestEventId = "";
+  let requestEventIds: Record<string, string> = {};
   let enabledIdentity: EnabledIdentity = {};
   const launch = launchWithAdapters(
     env,
     fixture,
     plan.input,
     (github) => {
-      claim = claimRequestWithAuthority(github, pr, env, fixture, "branch-update", enabledIdentity);
-      plan.input.reviewClaim = claim;
+      const consumed = consumeRequestWithIdentity(
+        github, pr, env, fixture, "branch-update", enabledIdentity, requestEventIds, plan.input.uuid,
+      );
+      requestEventId = String(consumed.requestEventId || "");
+      requestEventIds = consumed.requestEventIds || {};
+      plan.input.requestEventId = requestEventId;
       github.commentPr(env.githubRepo, number, `Starting one guarded merge update for the current PR/base pair.\n\n${marker}`);
     },
     (enabled) => {
-      if (fixture) return;
+      if (fixture) {
+        if (!requestEventId) {
+          const observed = observeRequestConsumption(
+            fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations>,
+            pr,
+            env,
+            orderedPrRequestLabels(prRequestLabels(env)),
+            () => env.automationLogin,
+          );
+          requestEventIds = Object.fromEntries(observed.requestEventIds);
+          requestEventId = String(requestEventIds[env.updateBranchLabel] || "");
+          if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.updateBranchLabel} request event`);
+          plan.input.requestEventId = requestEventId;
+        }
+        return;
+      }
       enabledIdentity = {
         repoPath: enabled?.repoPath,
         baseBranch: enabled?.baseBranch,
@@ -782,12 +784,24 @@ function launchBranchUpdate(
       // Revalidation runs on both sides of the claim. Before it, the waiting request proves the
       // target; after it, the request is consumed and only the claim can, so asking for the request
       // label again would make this launch fail on its own transition.
-      if (!claim) {
+      if (!requestEventId) {
         assertBranchUpdateRequestSelectable(pr, env, headOid, baseOid);
+        const github = githubOperations();
+        const observed = observeRequestConsumption(
+          github,
+          pr,
+          env,
+          orderedPrRequestLabels(prRequestLabels(env)),
+          () => assertAuthenticatedReviewIdentity(env, enabledIdentity.automationLogin),
+        );
+        requestEventIds = Object.fromEntries(observed.requestEventIds);
+        requestEventId = String(requestEventIds[env.updateBranchLabel] || "");
+        if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.updateBranchLabel} request event`);
+        plan.input.requestEventId = requestEventId;
         return;
       }
       try {
-        assertBranchUpdateClaimHeld(pr, env, headOid, baseOid, claim);
+        assertBranchUpdateRequestConsumed(pr, env, headOid, baseOid, requestEventId, {}, requestEventIds);
       } catch (error) {
         // Mark the failure so the caller can say the request was already consumed.
         if (error instanceof Error) (error as Error & { claimed?: boolean }).claimed = true;
@@ -796,7 +810,7 @@ function launchBranchUpdate(
     },
     operations,
   );
-  return { updaterName: plan.updaterName, headRefName: branch, retryKey: key, claim, ...launch, ...(fixture && !operations?.agentLaunchOps ? { simulated: true } : {}) };
+  return { updaterName: plan.updaterName, headRefName: branch, retryKey: key, requestEventId, ...launch, ...(fixture && !operations?.agentLaunchOps ? { simulated: true } : {}) };
 }
 
 function reviewerRequiredVerificationContract(env: ReturnType<typeof envConfig>, targetHead: string) {
@@ -854,18 +868,16 @@ function prReviewerLaunchPlan(
   };
 }
 
-function launchClaimedPrReviewerFlow(
+function launchRequestBoundPrReviewerFlow(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
   reason: string,
-  reviewClaim: JsonObject,
+  requestEventId: string,
   ops: Parameters<typeof launchAgentFlow>[1],
 ): JsonObject {
-  if (!reviewClaim || typeof reviewClaim !== "object" || Array.isArray(reviewClaim)) {
-    throw new Error("immutable review claim is required before reviewer launch");
-  }
+  if (!requestEventId) throw new Error("request event id is required before reviewer launch");
   const plan = prReviewerLaunchPlan(pr, env, reason, randomUUID());
-  plan.input.reviewClaim = reviewClaim;
+  plan.input.requestEventId = requestEventId;
   prepareAgentLaunchFlow(plan.input, ops);
   recordAgentLaunchGithubClaimed(plan.input);
   const launch = launchAgentFlow(plan.input, ops);
@@ -895,7 +907,7 @@ function assertTrustedReviewIdentity(
   if (!authenticated || !trusted || authenticated !== trusted
     || authenticated !== env.automationLogin.toLowerCase()
     || !env.authorizedAutomationLogins.includes(authenticated)) {
-    throw new ReviewClaimLostError("authenticated GitHub identity does not match current enablement and trusted review configuration");
+    throw new RequestConsumptionError("authenticated GitHub identity does not match current enablement and trusted automation configuration");
   }
   return authenticated;
 }
@@ -925,18 +937,9 @@ function assertReviewRepositoryIdentity(
   if (!observedId || !observedName
     || observedId !== env.githubRepositoryId || observedId !== enabledId
     || observedName !== configuredName || observedName !== enabledName) {
-    throw new ReviewClaimLostError("current enabled, configured, and live GitHub repository identities do not match");
+    throw new RequestConsumptionError("current enabled, configured, and live GitHub repository identities do not match");
   }
   return identity;
-}
-
-function reviewClaimAuthoritySeconds(env: ReturnType<typeof envConfig>): number {
-  const seconds = env.reviewerMaxRuntimeSeconds + env.claimCleanupGraceSeconds;
-  if (!Number.isFinite(env.reviewerMaxRuntimeSeconds) || env.reviewerMaxRuntimeSeconds <= 0
-    || !Number.isFinite(env.claimCleanupGraceSeconds) || env.claimCleanupGraceSeconds < 0) {
-    throw new Error("review claim runtime and cleanup grace must be finite positive durations");
-  }
-  return seconds;
 }
 
 function currentReviewRequest(
@@ -945,212 +948,175 @@ function currentReviewRequest(
   number: number,
   requestLabel: string,
 ): JsonObject {
-  const request = activeReviewRequest(github.listPrTimelineEvents(env.githubRepo, number), requestLabel);
+  const request = latestPrRequestEvent(github.listPrTimelineEvents(env.githubRepo, number), requestLabel);
   if (!request) throw new StaleLaunchError(`PR #${number} has no ${requestLabel} request event`);
   return request;
 }
 
-function claimedRequestLabel(env: ReturnType<typeof envConfig>, claim: JsonObject): string {
-  return requestLabelForRole(env, String(claim.binding?.role || ""));
+function managedWorkflowLabels(env: ReturnType<typeof envConfig>): string[] {
+  return [env.reviewLabel, env.implementLabel, env.updateBranchLabel, env.inProgressLabel, env.blockedLabel];
 }
 
-function freshServerNow(
+function assertLatestRequestEventIds(
   github: ReturnType<typeof githubOperations>,
   env: ReturnType<typeof envConfig>,
-  evidence: JsonObject[],
-): Date {
-  const latestEvidence = Math.max(...evidence.map((value) => Date.parse(String(value.createdAt || value.created_at || ""))));
-  const headers = typeof (github as any).readRestResponseHeaders === "function"
-    ? (github as any).readRestResponseHeaders(env.githubRepo)
-    : readGithubRestResponseHeaders(commandRunner, env.githubRepo);
-  const serverNow = parseGithubRestDate(headers, new Date(latestEvidence));
-  if (!serverNow) throw new ReviewServerTimeError("fresh GitHub REST Date evidence is missing, malformed, or older than the protected observation");
-  return serverNow;
-}
-
-function blockUnverifiableClaim(
-  github: ReturnType<typeof githubOperations>,
-  pr: JsonObject,
-  env: ReturnType<typeof envConfig>,
-  reason: string,
-  expectedRequestEventId: string,
-  claim: JsonObject,
-  authorizeCurrent: () => void = () => {},
+  number: number,
+  expected: Record<string, string>,
 ): void {
-  const number = Number(pr.number || 0);
-  const hasBoundClaim = (): boolean => {
-    const identity = assertReviewRepositoryIdentity(github, env);
-    if (String(claim.binding?.repositoryId || "") !== String(identity.id || "")
-      || String(claim.binding?.repository || "").toLowerCase() !== String(identity.nameWithOwner || "").toLowerCase()) return false;
-    const comments = github.listPrComments(env.githubRepo, number);
-    const comment = comments.find((candidate: JsonObject) => String(candidate.id || candidate.databaseId || "") === String(claim.commentId || ""));
-    return Boolean(comment) && reviewClaimCommentMatchesContract(comment, claim);
-  };
-  const requestLabel = claimedRequestLabel(env, claim);
-  const beforeComment = github.getPr(env.githubRepo, number);
-  assertSamePrRevision(pr, beforeComment);
-  const requestBeforeComment = currentReviewRequest(github, env, number, requestLabel);
-  if (String(requestBeforeComment.id || requestBeforeComment.node_id || "") !== expectedRequestEventId || !hasBoundClaim()) return;
-  authorizeCurrent();
-  github.commentPr(env.githubRepo, number, `deadloop stopped this ${requestLabel} claim because ${reason}. Add \`${requestLabel}\` again after GitHub server-time evidence is available; \`${env.blockedLabel}\` clears when the next attempt starts.`);
-
-  const beforeLabels = github.getPr(env.githubRepo, number);
-  assertSamePrRevision(pr, beforeLabels);
-  const requestBeforeLabels = currentReviewRequest(github, env, number, requestLabel);
-  if (String(requestBeforeLabels.id || requestBeforeLabels.node_id || "") !== expectedRequestEventId || !hasBoundClaim()) return;
-  authorizeCurrent();
-  github.movePrLabels(env.githubRepo, number, { add: env.blockedLabel });
+  if (Object.keys(expected).length === 0) return;
+  const events = github.listPrTimelineEvents(env.githubRepo, number);
+  for (const label of orderedPrRequestLabels(prRequestLabels(env))) {
+    const event = latestPrRequestEvent(events, label);
+    if (String(event?.id || event?.node_id || "") !== String(expected[label] || "")) {
+      throw new StaleLaunchError(`PR #${number} ${label} request generation changed before launch`);
+    }
+  }
 }
 
-function assertActiveReviewClaim(
+type RequestConsumptionObservation = {
+  requestEventIds: Map<string, string>;
+  currentRequestEvents: Map<string, JsonObject | null>;
+  labels: Set<string>;
+};
+
+function observeRequestConsumption(
   github: ReturnType<typeof githubOperations>,
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
-  claim: JsonObject,
-  authenticate: () => string = () => commandRunner.runText(["gh", "api", "user", "--jq", ".login"]),
-  enabledIdentity: { githubRepositoryId?: string; githubRepo?: string } = {},
-  authorizeCurrent?: (claim: JsonObject) => JsonObject | void,
-): JsonObject {
+  requestLabels: string[],
+  authenticate: () => string,
+): RequestConsumptionObservation {
   const number = Number(pr.number || 0);
-  const requestLabel = claimedRequestLabel(env, claim);
-  if (!claimContractMatchesConfiguration(claim, {
-    authoritySeconds: reviewClaimAuthoritySeconds(env),
-    managedLabels: reviewClaimManagedLabels(env),
-    requestLabel,
-    requiredLabels: [env.inProgressLabel],
-  })) {
-    throw new ReviewClaimLostError(`PR #${number} saved review claim no longer matches the current activation contract`);
-  }
-  if (!enabledIdentity.githubRepositoryId || !enabledIdentity.githubRepo) {
-    throw new ReviewClaimLostError(`PR #${number} current enablement repository identity is unavailable`);
-  }
-  const repositoryIdentity = assertReviewRepositoryIdentity(github, env, enabledIdentity);
-  if (String(claim.binding?.repositoryId || "") !== String(repositoryIdentity.id || "")
-    || String(claim.binding?.repository || "").toLowerCase() !== String(repositoryIdentity.nameWithOwner || "").toLowerCase()) {
-    throw new ReviewClaimLostError(`PR #${number} saved review claim does not match the live repository identity`);
-  }
-  const live = github.getPr(env.githubRepo, number);
-  assertSamePrRevision(pr, live);
-  const request = currentReviewRequest(github, env, number, requestLabel);
-  if (String(request.id || request.node_id || "") !== claim.binding.requestEventId) {
-    throw new StaleLaunchError(`PR #${number} ${requestLabel} request generation changed`);
-  }
+  assertReviewRepositoryIdentity(github, env);
   const authenticatedLogin = authenticate().trim().toLowerCase();
   if (!authenticatedLogin || authenticatedLogin !== env.automationLogin.toLowerCase()
     || !env.authorizedAutomationLogins.includes(authenticatedLogin)) {
-    throw new ReviewClaimLostError(`PR #${number} authenticated identity no longer has review authority`);
+    throw new RequestConsumptionError(`PR #${number} authenticated identity no longer has label-transition authority`);
   }
-  const comments = github.listPrComments(env.githubRepo, number);
-  const claimedComment = comments.find((comment: JsonObject) => String(comment.id || comment.databaseId) === claim.commentId);
-  if (!claimedComment || !reviewClaimCommentMatchesContract(claimedComment, claim)) {
-    throw new ReviewClaimLostError(`PR #${number} no longer has the bound immutable review claim comment`);
-  }
-  const currentConfiguration = authorizeCurrent?.(claim);
-  const authorizedLogins = currentConfiguration && Array.isArray(currentConfiguration.authorizedLogins)
-    ? currentConfiguration.authorizedLogins
-    : env.authorizedAutomationLogins;
-  const now = freshServerNow(github, env, [request, claimedComment]);
-  const winner = selectReviewClaimWinner(comments, claim.binding, authorizedLogins, now, claim.authoritySeconds);
-  if (String(winner?.id || winner?.databaseId || "") !== claim.commentId) {
-    if (winner) throw new ReviewClaimPreemptedError(`PR #${number} active review claim was preempted by an earlier authorized claim`);
-    throw new ReviewClaimLostError(`PR #${number} no longer has the active review claim`);
-  }
-  return live;
-}
-
-function restorePreemptedReviewRequest(
-  github: ReturnType<typeof githubOperations>,
-  pr: JsonObject,
-  env: ReturnType<typeof envConfig>,
-  claim: JsonObject,
-  authenticate: () => string,
-  authorizeCurrent?: (claim: JsonObject) => JsonObject | void,
-): void {
-  const number = Number(pr.number || 0);
-  const observePreemptingWinner = (requiredManaged: string[]): void => {
-    const live = github.getPr(env.githubRepo, number);
-    assertSamePrRevision(pr, live);
-    const labels = new Set(labelNames({ labels: github.listPrLabels(env.githubRepo, number) }));
-    const managed = reviewClaimManagedLabels(env).filter((label) => labels.has(label));
-    if (JSON.stringify(managed.sort()) !== JSON.stringify([...requiredManaged].sort())) {
-      throw new ReviewClaimLostError(`PR #${number} preempted review state changed during recovery`);
-    }
-    const authenticatedLogin = authenticate().trim().toLowerCase();
-    if (!authenticatedLogin || authenticatedLogin !== env.automationLogin.toLowerCase()
-      || !env.authorizedAutomationLogins.includes(authenticatedLogin)) {
-      throw new ReviewClaimLostError(`PR #${number} authenticated identity no longer has recovery authority`);
-    }
-    const current = authorizeCurrent?.(claim);
-    const authorizedLogins = current && Array.isArray(current.authorizedLogins)
-      ? current.authorizedLogins
-      : env.authorizedAutomationLogins;
-    const comments = github.listPrComments(env.githubRepo, number);
-    const ownComment = comments.find((comment: JsonObject) => String(comment.id || comment.databaseId || "") === claim.commentId);
-    if (!ownComment || !reviewClaimCommentMatchesContract(ownComment, claim)) {
-      throw new ReviewClaimLostError(`PR #${number} bound review claim changed during recovery`);
-    }
-    const requestEvent = (github.listPrTimelineEvents(env.githubRepo, number) as JsonObject[])
-      .find((event) => String(event.id || event.node_id || "") === String(claim.binding?.requestEventId || ""));
-    if (!requestEvent) throw new ReviewClaimLostError(`PR #${number} review request evidence changed during recovery`);
-    const serverNow = freshServerNow(github, env, [requestEvent, ownComment]);
-    const winner = selectReviewClaimWinner(comments, claim.binding, authorizedLogins, serverNow, claim.authoritySeconds);
-    if (!winner || String(winner.id || winner.databaseId || "") === claim.commentId) {
-      throw new ReviewClaimLostError(`PR #${number} preempting review claim changed during recovery`);
-    }
+  assertSamePrRevision(pr, liveExposedPr(number, env, github));
+  const events = github.listPrTimelineEvents(env.githubRepo, number);
+  const requestEventIds = new Map(requestLabels.map((label) => {
+    const event = latestPrRequestEvent(events, label);
+    return [label, String(event?.id || event?.node_id || "")];
+  }));
+  const currentRequestEvents = new Map(requestLabels.map((label) => {
+    const matching = events.filter((event: JsonObject) =>
+      String(event.label?.name || "") === label
+      && ["labeled", "unlabeled"].includes(String(event.event || "").toLowerCase()),
+    ).sort(compareGithubTimelineEvents);
+    return [label, matching.at(-1) || null];
+  }));
+  return {
+    requestEventIds,
+    currentRequestEvents,
+    labels: new Set(labelNames({ labels: github.listPrLabels(env.githubRepo, number) })),
   };
-
-  const requestLabel = claimedRequestLabel(env, claim);
-  observePreemptingWinner([env.inProgressLabel]);
-  github.movePrLabels(env.githubRepo, number, { add: requestLabel });
-  // Restore first: if any later recovery step fails, the GitHub request remains visible.
-  observePreemptingWinner([env.inProgressLabel, requestLabel]);
-  github.movePrLabels(env.githubRepo, number, { remove: env.inProgressLabel });
 }
 
-function reauthorizeClaimedReview(
-  github: ReturnType<typeof githubOperations>,
-  pr: JsonObject,
+function sameRequestEventIds(left: Map<string, string>, right: Map<string, string>): boolean {
+  return [...left].every(([label, id]) => right.get(label) === id);
+}
+
+function assertConsumptionObservation(
+  observation: RequestConsumptionObservation,
+  baselineIds: Map<string, string>,
+  expectedManagedLabels: Set<string>,
   env: ReturnType<typeof envConfig>,
-  claim: JsonObject,
-  authenticate?: () => string,
-  enabledIdentity?: { githubRepositoryId?: string; githubRepo?: string },
-  authorizeCurrent?: (claim: JsonObject) => JsonObject | void,
-): JsonObject {
-  try {
-    return assertActiveReviewClaim(github, pr, env, claim, authenticate, enabledIdentity, authorizeCurrent);
-  } catch (error) {
-    if (error instanceof ReviewServerTimeError) {
-      blockUnverifiableClaim(
-        github, pr, env, error.message, String(claim.binding?.requestEventId || ""), claim,
-        () => authorizeCurrent?.(claim),
-      );
-    } else if (error instanceof ReviewClaimPreemptedError) {
-      restorePreemptedReviewRequest(
-        github, pr, env, claim,
-        authenticate || (() => commandRunner.runText(["gh", "api", "user", "--jq", ".login"])),
-        authorizeCurrent,
-      );
-    }
-    throw error;
+  number: number,
+): void {
+  if (!sameRequestEventIds(baselineIds, observation.requestEventIds)) {
+    const changed = [...baselineIds].find(([label, id]) => observation.requestEventIds.get(label) !== id);
+    const label = changed?.[0] || "Agent";
+    const current = observation.currentRequestEvents.get(label);
+    const currentAction = String(current?.event || "unknown").toLowerCase();
+    const live = observation.labels.has(label) ? "present" : "absent";
+    throw new StaleLaunchError(`PR #${number} ${label} request generation changed during consumption; current event is ${currentAction} and label is ${live}`);
+  }
+  const liveManaged = new Set([...observation.labels].filter((label) => managedWorkflowLabels(env).includes(label)));
+  if (JSON.stringify([...liveManaged].sort()) !== JSON.stringify([...expectedManagedLabels].sort())) {
+    throw new StaleLaunchError(`PR #${number} managed labels changed during consumption`);
   }
 }
 
-function reviewClaimManagedLabels(env: ReturnType<typeof envConfig>): string[] {
-  return [
-    env.reviewLabel,
-    env.implementLabel,
-    env.updateBranchLabel,
-    env.inProgressLabel,
-    env.blockedLabel,
-  ];
-}
+/**
+ * Consume one exact request generation with granular label operations. `agent:in-progress` is made
+ * visible first; baseline managed labels are then normalized one at a time. The selected request's
+ * successful documented HTTP 200 DELETE is the final linearization point.
+ */
+function consumeRequestEvent(
+  github: ReturnType<typeof githubOperations>,
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  role: string,
+  authenticate: () => string = () => assertAuthenticatedReviewIdentity(env),
+  expectedRequestEventIds: Record<string, string> = {},
+  currentAttemptId = "",
+): JsonObject {
+  const number = Number(pr.number || 0);
+  const requestLabel = requestLabelForRole(env, role);
+  const requestLabels = orderedPrRequestLabels(prRequestLabels(env));
+  const baseline = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+  const requestEventId = baseline.requestEventIds.get(requestLabel) || "";
+  if (Object.keys(expectedRequestEventIds).length > 0
+    && !sameRequestEventIds(new Map(Object.entries(expectedRequestEventIds)), baseline.requestEventIds)) {
+    throw new StaleLaunchError(`PR #${number} request generation changed after attempt preparation`);
+  }
+  if (!requestEventId || !baseline.labels.has(requestLabel)) {
+    throw new StaleLaunchError(`PR #${number} has no stable ${requestLabel} request event`);
+  }
 
+  const expectedManaged = new Set([...baseline.labels].filter((label) => managedWorkflowLabels(env).includes(label)));
+  github.addPrLabel(env.githubRepo, number, env.inProgressLabel);
+  expectedManaged.add(env.inProgressLabel);
+  let observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+  assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
+
+  const labelsToNormalize = [
+    ...requestLabels.filter((label) => label !== requestLabel && baseline.labels.has(label)),
+    ...(baseline.labels.has(env.blockedLabel) ? [env.blockedLabel] : []),
+  ];
+  for (const label of labelsToNormalize) {
+    observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+    assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
+    const deleted = github.deletePrLabel(env.githubRepo, number, label);
+    observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+    if (deleted.status !== 200) {
+      throw new RequestConsumptionError(`PR #${number} ${label} DELETE did not return the documented 200 response`);
+    }
+    expectedManaged.delete(label);
+    assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
+  }
+
+  observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+  assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
+  const consumed = github.deletePrLabel(env.githubRepo, number, requestLabel);
+  observed = observeRequestConsumption(github, pr, env, requestLabels, authenticate);
+  if (consumed.status !== 200) {
+    throw new RequestConsumptionError(`PR #${number} ${requestLabel} DELETE did not return the documented 200 response`);
+  }
+  expectedManaged.delete(requestLabel);
+  assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
+
+  takeWorkAuthorityFromRetainedAttempts({
+    stateDir: env.stateDir,
+    projectId: env.projectId,
+    githubRepo: env.githubRepo,
+    prNumber: number,
+    currentAttemptId,
+  });
+  return {
+    requestEventId,
+    requestEventIds: Object.fromEntries(baseline.requestEventIds),
+    labels: [...observed.labels],
+  };
+}
 
 type WorkAuthorityTakeover = {
   stateDir: string;
   projectId: string;
   githubRepo: string;
   prNumber: number;
+  currentAttemptId?: string;
 };
 
 function retainedAttemptsForPr(input: WorkAuthorityTakeover): Array<{ runDir: string; record: JsonObject }> {
@@ -1167,6 +1133,7 @@ function retainedAttemptsForPr(input: WorkAuthorityTakeover): Array<{ runDir: st
     try { record = readAttemptRecord(runDir); } catch { continue; }
     if (record.project !== input.projectId || record.repository !== input.githubRepo) continue;
     if (record.target?.kind !== "pull-request" || Number(record.target?.number) !== input.prNumber) continue;
+    if (input.currentAttemptId && record.attemptId === input.currentAttemptId) continue;
     if (releasesAttemptOwnership(record.phase)) continue;
     retained.push({ runDir, record: { ...record, runDir } });
   }
@@ -1213,243 +1180,18 @@ function attemptStoppedForTakeover(record: JsonObject, runner?: AttemptAgentRunn
   }
 }
 
-function claimReviewRequest(
-  github: ReturnType<typeof githubOperations>,
-  pr: JsonObject,
-  env: ReturnType<typeof envConfig>,
-  role: string,
-  authenticate: () => string = () => assertAuthenticatedReviewIdentity(env),
-  authorizeCurrent?: (claim: JsonObject) => JsonObject | void,
-): JsonObject {
-  const number = Number(pr.number || 0);
-  const requestLabel = requestLabelForRole(env, role);
-  assertReviewRepositoryIdentity(github, env);
-  const request = currentReviewRequest(github, env, number, requestLabel);
-  const requestEventId = String(request.id || request.node_id || "");
-  const authoritySeconds = reviewClaimAuthoritySeconds(env);
-  const managedLabels = reviewClaimManagedLabels(env);
-  const binding = {
-    repositoryId: env.githubRepositoryId,
-    repository: env.githubRepo,
-    targetNumber: number,
-    requestEventId,
-    role,
-    revision: String(pr.headRefOid || ""),
-    owner: env.claimOwner,
-    authority: { durationSeconds: authoritySeconds },
-    activeState: { managedLabels, requestLabel, requiredLabels: [env.inProgressLabel] },
-  };
-  if (!binding.repositoryId || !binding.revision || !binding.owner) throw new Error("review claim identity is incomplete");
-  const authorized = [...new Set(env.authorizedAutomationLogins.map((login) => login.toLowerCase()).filter(Boolean))];
-  const claim = {
-    binding,
-    commentId: "",
-    authorizedLogins: authorized,
-    automationLogin: env.automationLogin.trim().toLowerCase(),
-    reviewerAgent: env.reviewerAgent,
-    reviewerMaxRuntimeSeconds: env.reviewerMaxRuntimeSeconds,
-    cleanupGraceSeconds: env.claimCleanupGraceSeconds,
-    authoritySeconds,
-    requestLabel,
-    inProgressLabel: env.inProgressLabel,
-    blockedLabel: env.blockedLabel,
-  };
-  authorizeCurrent?.(claim);
-  const currentAuthorizedLogins = (): string[] => {
-    const current = authorizeCurrent?.(claim);
-    const values = current && Array.isArray(current.authorizedLogins) ? current.authorizedLogins : authorized;
-    const normalized = values.map((login: unknown) => String(login).trim().toLowerCase()).filter(Boolean);
-    return [...new Set<string>(normalized)];
-  };
-  const posted = github.createPrComment(env.githubRepo, number, renderReviewClaimComment(binding));
-  claim.commentId = String(posted.id || posted.databaseId);
-  const live = liveExposedPr(number, env, github);
-  assertSameLaunchTarget(pr, live, "pr");
-  const refreshedRequest = currentReviewRequest(github, env, number, requestLabel);
-  if (String(refreshedRequest.id || refreshedRequest.node_id || "") !== requestEventId) {
-    throw new StaleLaunchError(`PR #${number} received a newer ${requestLabel} request`);
-  }
-  const requireBoundComment = (comments: JsonObject[], phase: string): JsonObject => {
-    const comment = comments.find((candidate) => String(candidate.id || candidate.databaseId || "") === claim.commentId);
-    if (!comment || !reviewClaimCommentMatchesContract(comment, claim)) {
-      throw new ReviewClaimLostError(`PR #${number} bound review claim comment is invalid ${phase}`);
-    }
-    return comment;
-  };
-  const comments = github.listPrComments(env.githubRepo, number);
-  const claimedComment = requireBoundComment(comments, "after posting");
-  const authoritativeNow = (evidence: JsonObject[]): Date => {
-    try {
-      return freshServerNow(github, env, evidence);
-    } catch (error) {
-      if (error instanceof ReviewServerTimeError) {
-        blockUnverifiableClaim(github, pr, env, error.message, requestEventId, claim, () => authorizeCurrent?.(claim));
-      }
-      throw error;
-    }
-  };
-  const now = authoritativeNow([request, claimedComment]);
-  const winner = selectReviewClaimWinner(comments, binding, currentAuthorizedLogins(), now, authoritySeconds);
-  const winnerMarker = winner && parseReviewClaim(winner.body);
-  if (!winner || winnerMarker?.owner !== env.claimOwner || String(winner.id || winner.databaseId) !== String(posted.id || posted.databaseId)) {
-    throw new ReviewClaimLostError(`PR #${number} ${requestLabel} request was claimed by another Automation host`);
-  }
-
-  // Re-fetch immediately before the one full-label mutation so unrelated
-  // labels and the latest request generation come from the freshest snapshot.
-  const beforeTransition = liveExposedPr(number, env, github);
-  assertSameLaunchTarget(live, beforeTransition, "pr");
-  const beforeTransitionEvents = github.listPrTimelineEvents(env.githubRepo, number);
-  const beforeTransitionEventIds = new Set(beforeTransitionEvents.map((event: JsonObject) => String(event.id || event.node_id || "")));
-  const beforeTransitionRequest = activeReviewRequest(beforeTransitionEvents, requestLabel);
-  if (!beforeTransitionRequest) throw new StaleLaunchError(`PR #${number} has no ${requestLabel} request event`);
-  if (String(beforeTransitionRequest.id || beforeTransitionRequest.node_id || "") !== requestEventId) {
-    throw new StaleLaunchError(`PR #${number} ${requestLabel} request changed before label transition`);
-  }
-  const authenticatedLogin = authenticate().trim().toLowerCase();
-  if (!authenticatedLogin || authenticatedLogin !== env.automationLogin.toLowerCase()
-    || !env.authorizedAutomationLogins.includes(authenticatedLogin)) {
-    throw new ReviewClaimLostError(`PR #${number} authenticated identity no longer has label-transition authority`);
-  }
-  const beforeTransitionComments = github.listPrComments(env.githubRepo, number);
-  const beforeTransitionClaim = requireBoundComment(beforeTransitionComments, "before label transition");
-  const beforeTransitionAuthorizedLogins = currentAuthorizedLogins();
-  const beforeTransitionNow = authoritativeNow([beforeTransitionRequest, beforeTransitionClaim]);
-  const beforeTransitionWinner = selectReviewClaimWinner(
-    beforeTransitionComments, binding, beforeTransitionAuthorizedLogins, beforeTransitionNow, authoritySeconds,
-  );
-  if (String(beforeTransitionWinner?.id || beforeTransitionWinner?.databaseId || "") !== String(posted.id || posted.databaseId)) {
-    throw new ReviewClaimLostError(`PR #${number} ${requestLabel} request was claimed before label transition`);
-  }
-  const managed = new Set(managedLabels);
-  // Read the replacement snapshot after the timeline baseline so a label
-  // change is either already represented here or appears as a post-baseline event.
-  const beforeTransitionLabels = github.listPrLabels(env.githubRepo, number);
-  const nextLabels = labelNames({ labels: beforeTransitionLabels }).filter((label) => !managed.has(label));
-  nextLabels.push(env.inProgressLabel);
-  github.replacePrLabels(env.githubRepo, number, nextLabels);
-
-  const transitioned = github.getPr(env.githubRepo, number);
-  assertSamePrRevision(pr, transitioned);
-  const labelsAfterReplacement = new Set(labelNames({ labels: github.listPrLabels(env.githubRepo, number) }));
-  const finalEvents = github.listPrTimelineEvents(env.githubRepo, number);
-  const finalRequest = activeReviewRequest(finalEvents, requestLabel);
-  if (!finalRequest) throw new StaleLaunchError(`PR #${number} has no ${requestLabel} request event`);
-
-  const racedEvents = finalEvents
-    .filter((event: JsonObject) => !beforeTransitionEventIds.has(String(event.id || event.node_id || "")))
-    .filter((event: JsonObject) => {
-      const action = String(event.event || "").toLowerCase();
-      const label = String(event.label?.name || "");
-      const actor = String(event.actor?.login || "").toLowerCase();
-      const transitionEffect = actor === authenticatedLogin
-        && ((action === "labeled" && nextLabels.includes(label))
-          || (action === "unlabeled" && !nextLabels.includes(label)));
-      return label && !managed.has(label) && ["labeled", "unlabeled"].includes(action) && !transitionEffect;
-    })
-    .sort((left: JsonObject, right: JsonObject) => {
-      const time = Date.parse(String(left.created_at || left.createdAt || ""))
-        - Date.parse(String(right.created_at || right.createdAt || ""));
-      return time || String(left.id || left.node_id || "").localeCompare(
-        String(right.id || right.node_id || ""), undefined, { numeric: true },
-      );
-    });
-  const racedLabelState = new Map<string, boolean>();
-  for (const event of racedEvents) {
-    racedLabelState.set(String(event.label?.name || ""), String(event.event || "").toLowerCase() === "labeled");
-  }
-
-  const finalRequestId = String(finalRequest.id || finalRequest.node_id || "");
-  const newerRequest = finalRequestId !== requestEventId && !beforeTransitionEventIds.has(finalRequestId);
-  if (newerRequest) {
-    // Restore the new generation before any other recovery. If a later call
-    // fails, the request remains visible and the old exact-state guard stops launch.
-    github.movePrLabels(env.githubRepo, number, { add: requestLabel });
-    labelsAfterReplacement.add(requestLabel);
-    github.movePrLabels(env.githubRepo, number, { remove: env.inProgressLabel });
-    labelsAfterReplacement.delete(env.inProgressLabel);
-  }
-
-  const unrelatedToAdd = [...racedLabelState]
-    .filter(([label, present]) => present && !labelsAfterReplacement.has(label))
-    .map(([label]) => label);
-  const unrelatedToRemove = [...racedLabelState]
-    .filter(([label, present]) => !present && labelsAfterReplacement.has(label))
-    .map(([label]) => label);
-  if (unrelatedToAdd.length > 0) github.movePrLabels(env.githubRepo, number, { add: unrelatedToAdd });
-  if (unrelatedToRemove.length > 0) github.movePrLabels(env.githubRepo, number, { remove: unrelatedToRemove });
-
-  if (finalRequestId !== requestEventId) {
-    throw new StaleLaunchError(`PR #${number} ${requestLabel} request changed after label transition`);
-  }
-
-  const expectedLabelSet = new Set(nextLabels);
-  for (const [label, present] of racedLabelState) {
-    if (present) expectedLabelSet.add(label);
-    else expectedLabelSet.delete(label);
-  }
-  const finalLiveLabels = new Set(labelNames({ labels: github.listPrLabels(env.githubRepo, number) }));
-  const expectedLabels = [...expectedLabelSet].sort();
-  if (JSON.stringify([...finalLiveLabels].sort()) !== JSON.stringify(expectedLabels)
-    || !finalLiveLabels.has(env.inProgressLabel)
-    || finalLiveLabels.has(requestLabel)
-    || finalLiveLabels.has(env.blockedLabel)) {
-    throw new StaleLaunchError(`PR #${number} ${requestLabel} claim label transition did not persist`);
-  }
-  const finalComments = github.listPrComments(env.githubRepo, number);
-  const finalClaim = requireBoundComment(finalComments, "after label transition");
-  const finalNow = authoritativeNow([finalRequest, finalClaim]);
-  const finalWinner = selectReviewClaimWinner(
-    finalComments, binding, currentAuthorizedLogins(), finalNow, authoritySeconds,
-  );
-  if (String(finalWinner?.id || finalWinner?.databaseId || "") !== String(posted.id || posted.databaseId)) {
-    if (finalWinner) restorePreemptedReviewRequest(github, pr, env, claim, authenticate, authorizeCurrent);
-    throw new StaleLaunchError(`PR #${number} review claim changed after label transition`);
-  }
-  // Winning the request is the moment work authority moves. Take it from the retained attempts the
-  // runtime reports stopped, before this attempt writes a journal of its own. The result stays out
-  // of the claim contract, which is persisted verbatim in the attempt journal.
-  takeWorkAuthorityFromRetainedAttempts({
-    stateDir: env.stateDir,
-    projectId: env.projectId,
-    githubRepo: env.githubRepo,
-    prNumber: number,
-  });
-  return { ...claim, labels: [...finalLiveLabels] };
-}
-
-/**
- * The review history a launch bound itself to is still the one on GitHub.
- *
- * A claim posts a comment, and conversation comments are part of that history, so a launch that
- * observed the history before claiming would always find it changed afterwards by its own comment.
- * `createdComment` names that comment, and the deterministic advance accepts exactly it — a
- * different author, a different body, a second addition, or any other part of the history moving
- * all stay stale.
- */
+/** The review history observed before request consumption must remain unchanged before launch. */
 function assertReviewHistoryUnchanged(
   env: ReturnType<typeof envConfig>,
   number: number,
   history: JsonObject | null,
-  claimCommentId?: string,
 ): JsonObject | null {
   if (!history) return history;
   const currentHistory = observePrHistory(env.githubRepo, number, commandRunner);
-  // The claim's own comment is read out of the observation this check already holds, so the two
-  // sides of the advance describe the same moment. Fetching it separately would compare a history
-  // against a comment from a different read.
-  const createdComment = claimCommentId
-    ? currentHistory.history.conversationComments.find((comment: JsonObject) => String(comment.id) === String(claimCommentId))
-    : undefined;
-  const advancement = createdComment
-    ? advancePrHistoryAfterDeterministicComment(history, currentHistory, createdComment)
-    : (comparePrHistoryObservations(history, currentHistory).kind === "unchanged"
-      ? { kind: "accepted" as const, observation: currentHistory }
-      : { kind: "stale" as const });
-  if (advancement.kind !== "accepted") {
+  if (comparePrHistoryObservations(history, currentHistory).kind !== "unchanged") {
     throw new StaleLaunchError(`PR #${number} review history changed before reviewer launch`);
   }
-  return advancement.observation;
+  return currentHistory;
 }
 
 function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null, reason: string): JsonObject {
@@ -1460,50 +1202,49 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
   const historyFile = path.join(env.stateDir, "runs", uuid, "pr-review-history.json");
   if (history) writePrHistoryObservation(historyFile, history);
   const { reviewerName, headRefName } = plan;
-  let claim: JsonObject | null = null;
-  let launch: JsonObject;
+  let requestEventId = "";
+  let requestEventIds: Record<string, string> = {};
   let enabledAutomationLogin = "";
-  let enabledRepositoryIdentity: { repoPath?: string; baseBranch?: string; githubRepositoryId?: string; githubRepo?: string; automationLogin?: string } = {};
-  try {
-    launch = launchWithAdapters(
+  const launch = launchWithAdapters(
       env,
       fixture,
       plan.input,
       (github) => {
-        claim = claimReviewRequest(
+        const consumed = consumeRequestEvent(
           github,
           pr,
           env,
           "reviewer",
           fixture ? () => env.automationLogin : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
-          fixture ? undefined : (currentClaim) => {
-            const authenticated = assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
-            return assertCurrentReviewClaimAuthority(currentClaim, env.stateDir, enabledRepositoryIdentity, authenticated);
-          },
+          requestEventIds,
+          plan.input.uuid,
         );
-        plan.input.reviewClaim = claim;
+        requestEventId = String(consumed.requestEventId || "");
+        requestEventIds = consumed.requestEventIds || {};
+        plan.input.requestEventId = requestEventId;
       },
       (enabled) => {
-        if (fixture) return;
+        if (fixture) {
+          if (!requestEventId) {
+            const observed = observeRequestConsumption(
+              fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations>,
+              pr,
+              env,
+              orderedPrRequestLabels(prRequestLabels(env)),
+              () => env.automationLogin,
+            );
+            requestEventIds = Object.fromEntries(observed.requestEventIds);
+            requestEventId = String(requestEventIds[env.reviewLabel] || "");
+            if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.reviewLabel} request event`);
+            plan.input.requestEventId = requestEventId;
+          }
+          return;
+        }
         enabledAutomationLogin = String(enabled?.automationLogin || enabledAutomationLogin).trim().toLowerCase();
-        enabledRepositoryIdentity = {
-          repoPath: enabled?.repoPath,
-          baseBranch: enabled?.baseBranch,
-          githubRepositoryId: enabled?.githubRepositoryId,
-          githubRepo: enabled?.githubRepo,
-          automationLogin: enabled?.automationLogin,
-        };
         assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
-        if (claim) {
-          // Everything past the claim runs on a request this launch already consumed, so a failure
-          // here leaves GitHub changed. The caller has to say so instead of reporting an untouched
-          // workflow, which is the same mark the branch-update launch carries.
+        if (requestEventId) {
           try {
-            const claimed = reauthorizeClaimedReviewerLaunch(pr, env, number, claim, history, enabledAutomationLogin, enabledRepositoryIdentity);
-            // The completion dispatcher judges the finished review against this record, so it has to
-            // hold the history as it stands after the claim. Leaving the pre-claim record in place
-            // makes every completed review read as a changed conversation and be thrown away.
-            if (claimed) writePrHistoryObservation(historyFile, claimed);
+            revalidateConsumedReviewerLaunch(pr, env, number, requestEventId, history, requestEventIds);
           } catch (error) {
             if (error instanceof Error) (error as Error & { claimed?: boolean }).claimed = true;
             throw error;
@@ -1517,63 +1258,57 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
         if (branchUpdateDecision(livePlan.pr, env, null).action !== "no_update") {
           throw new StaleLaunchError(`PR #${number} branch-update state changed before reviewer launch`);
         }
+        const github = githubOperations();
+        const observed = observeRequestConsumption(
+          github,
+          pr,
+          env,
+          orderedPrRequestLabels(prRequestLabels(env)),
+          () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
+        );
+        requestEventIds = Object.fromEntries(observed.requestEventIds);
+        requestEventId = String(requestEventIds[env.reviewLabel] || "");
+        if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.reviewLabel} request event`);
+        plan.input.requestEventId = requestEventId;
       },
     );
-  } catch (error) {
-    if (error instanceof ReviewClaimLostError) {
-      fs.rmSync(path.join(env.stateDir, "runs", uuid), { recursive: true, force: true });
-    }
-    throw error;
-  }
-  return { reviewerName, headRefName, reason, claim, ...launch, ...(fixture ? { simulated: true } : {}) };
+  return { reviewerName, headRefName, reason, requestEventId, ...launch, ...(fixture ? { simulated: true } : {}) };
 }
 
 /**
  * What a stopped reviewer launch tells its reader.
  *
  * The stale check that stopped the launch names itself, and only it can say which state moved.
- * Replacing it with one summary loses both the reason and the difference between a launch that
- * touched nothing and one whose own claim already consumed the request.
+ * Replacing it with one summary loses both the reason and the difference between a launch whose
+ * consumption was never confirmed and one whose selected DELETE was fully confirmed.
  */
 function staleReviewerLaunchSummary(error: unknown, requestConsumed: boolean): string {
   const reason = error instanceof Error ? error.message : String(error);
-  return `${reason}; ${requestConsumed ? "the request was already consumed" : "no workflow state was mutated"}`;
+  return `${reason}; ${requestConsumed ? "the request was already consumed" : "request consumption was not confirmed; any prepared or in-progress evidence remains for reconciliation"}`;
 }
 
-/**
- * The checks a reviewer launch must still pass once its own claim consumed the request, and the
- * review history as it stands after that claim.
- */
-function reauthorizeClaimedReviewerLaunch(
+/** Revalidate the exact request event and live target after its label has been consumed. */
+function revalidateConsumedReviewerLaunch(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
   number: number,
-  claim: JsonObject,
+  requestEventId: string,
   history: JsonObject | null,
-  enabledAutomationLogin: string,
-  enabledRepositoryIdentity: { repoPath?: string; baseBranch?: string; githubRepositoryId?: string; githubRepo?: string; automationLogin?: string },
+  requestEventIds: Record<string, string> = {},
 ): JsonObject | null {
   const github = githubOperations();
-  const live = reauthorizeClaimedReview(
-    github, pr, env, claim, undefined, enabledRepositoryIdentity,
-    (currentClaim) => {
-      const authenticated = assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
-      return assertCurrentReviewClaimAuthority(currentClaim, env.stateDir, enabledRepositoryIdentity, authenticated);
-    },
-  );
-  const labels = new Set(labelNames(live));
-  const managedLabels = reviewClaimManagedLabels(env).filter((label) => labels.has(label));
+  const live = github.getPr(env.githubRepo, number);
+  assertSamePrRevision(pr, live);
+  const managedLabels = managedWorkflowLabels(env).filter((label) => new Set(labelNames(live)).has(label));
   if (managedLabels.length !== 1 || managedLabels[0] !== env.inProgressLabel) {
-    throw new StaleLaunchError(`PR #${number} no longer has the exact claimed review state`);
+    throw new StaleLaunchError(`PR #${number} no longer has the exact consumed review state`);
   }
   const request = currentReviewRequest(github, env, number, env.reviewLabel);
-  if (String(request.id || request.node_id || "") !== claim.binding.requestEventId) {
+  if (String(request.id || request.node_id || "") !== requestEventId) {
     throw new StaleLaunchError(`PR #${number} review request changed before reviewer launch`);
   }
-  // The claim posted one comment, so the history this launch bound itself to has moved by exactly
-  // that comment. Naming it lets the deterministic advance accept it and nothing else; leaving it
-  // unnamed would make every launch fail on its own claim.
-  return assertReviewHistoryUnchanged(env, number, history, String(claim.commentId || ""));
+  assertLatestRequestEventIds(github, env, number, requestEventIds);
+  return assertReviewHistoryUnchanged(env, number, history);
 }
 
 function drive(fixturePath: string | undefined): DriverResult {
@@ -1771,7 +1506,6 @@ function driveSelectedTarget(
         updateBranchLabel: env.updateBranchLabel,
         inProgressLabel: env.inProgressLabel,
         blockedLabel: env.blockedLabel,
-        reviewClaim: launch.claim,
       };
       return driverResult("needs_llm", `Launched branch-update worker for PR #${plan.decision.number}`, {
         driverAction: "branch_update_monitor_request",
@@ -1791,7 +1525,7 @@ function driveSelectedTarget(
         const consumed = Boolean((error as Error & { claimed?: boolean }).claimed);
         return driverResult("skip", consumed
           ? `PR #${plan.decision.number} changed after its branch-update request was claimed; the claim and ${env.inProgressLabel} remain for reconciliation`
-          : `PR #${plan.decision.number} changed before branch-update launch; no workflow state was mutated`, {
+          : `PR #${plan.decision.number} changed before branch-update launch; request consumption was not confirmed and any prepared or in-progress evidence remains for reconciliation`, {
           driverAction: consumed ? "branch_update_launch_stale_after_claim" : "branch_update_launch_stale",
           prNumber: plan.decision.number,
         });
@@ -1869,6 +1603,7 @@ function reviewOnlyDrive(
     automationDir: env.automationDir,
     promiseFile: String(launch.promiseFile || ""),
     attemptRecordFile: String(launch.attemptRecordFile || ""),
+    requestEventId: String(launch.requestEventId || ""),
     actorName: "reviewer",
     projectId: env.projectId,
     repoPath: env.repoPath,
@@ -1893,7 +1628,6 @@ function reviewOnlyDrive(
     reviewLabel: env.reviewLabel,
     inProgressLabel: env.inProgressLabel,
     blockedLabel: env.blockedLabel,
-    reviewClaim: launch.claim,
   };
   return driverResult("needs_llm", `Launched reviewer agent for PR #${decision.number}`, {
     driverAction: "reviewer_monitor_request",
@@ -1921,4 +1655,17 @@ function main(): void {
 if (require.main === module) main();
 
 module.exports = {
-  resolveAuthorizedAutomationLogins, staleReviewerLaunchSummary, assertAuthenticatedReviewIdentity, takeWorkAuthorityFromRetainedAttempts, assertBranchUpdateClaimHeld, assertBranchUpdateRequestSelectable, assertTrustedReviewIdentity, blockUnverifiableClaim, claimReviewRequest, envConfig, exposePostBlockReviewRequests, launchBranchUpdate, launchClaimedPrReviewerFlow, reauthorizeClaimedReview };
+  resolveAuthorizedAutomationLogins,
+  staleReviewerLaunchSummary,
+  assertAuthenticatedReviewIdentity,
+  takeWorkAuthorityFromRetainedAttempts,
+  assertBranchUpdateRequestConsumed,
+  assertBranchUpdateRequestSelectable,
+  assertTrustedReviewIdentity,
+  consumeRequestEvent,
+  envConfig,
+  exposePostBlockReviewRequests,
+  launchBranchUpdate,
+  launchRequestBoundPrReviewerFlow,
+  revalidateConsumedReviewerLaunch,
+};

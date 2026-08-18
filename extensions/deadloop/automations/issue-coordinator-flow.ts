@@ -11,6 +11,7 @@ type JsonObject = Record<string, any>;
 
 type IssueCoordinatorFlowEnv = {
   readyLabel: string;
+  exploreLabel: string;
   implementLabel: string;
   inProgressLabel: string;
   blockedLabel: string;
@@ -23,6 +24,7 @@ type IssueCoordinatorPlan =
   | { kind: "skip_no_candidate"; decision: JsonObject }
   | { kind: "contract_missing"; decision: JsonObject; issue: JsonObject }
   | { kind: "planning_blocked"; decision: JsonObject; issue: JsonObject }
+  | { kind: "explorer_required"; decision: JsonObject; issue: JsonObject }
   | { kind: "worker_required"; decision: JsonObject; issue: JsonObject };
 
 const CONTRACT_BRIEF_RE = /^##\s*(?:Agent Brief|What to build)\b/im;
@@ -35,6 +37,7 @@ const TASK_LIST_MIN_ITEMS = 2;
 function issueDecisionConfig(env: IssueCoordinatorFlowEnv): JsonObject {
   return defaultIssueDecisionConfig({
     readyLabel: env.readyLabel,
+    exploreLabel: env.exploreLabel,
     implementLabel: env.implementLabel,
     inProgressLabel: env.inProgressLabel,
     blockedLabel: env.blockedLabel,
@@ -85,6 +88,7 @@ function planIssueCoordinatorAction(issues: JsonObject[], decision: JsonObject):
   if (!decision.selected) return { kind: "skip_no_candidate", decision };
 
   const issue = selectedIssue(issues, Number(decision.number || 0));
+  if (decision.role === "explorer") return { kind: "explorer_required", decision, issue };
   if (!hasImplementationContract(issue)) return { kind: "contract_missing", decision, issue };
   if (isBlockedPlanningIssue(issue)) return { kind: "planning_blocked", decision, issue };
   return { kind: "worker_required", decision, issue };

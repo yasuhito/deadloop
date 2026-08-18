@@ -11,6 +11,7 @@ type IssueDecisionRecord = Record<string, any>;
 
 type IssueDecisionConfig = {
   readyLabel: string;
+  exploreLabel: string;
   implementLabel: string;
   inProgressLabel: string;
   blockedLabel: string;
@@ -20,6 +21,7 @@ type IssueDecisionConfig = {
 };
 
 const DEFAULT_READY_LABEL = "ready-for-agent";
+const DEFAULT_EXPLORE_LABEL = "agent:explore";
 const DEFAULT_IMPLEMENT_LABEL = "agent:implement";
 const DEFAULT_IN_PROGRESS_LABEL = "agent:in-progress";
 const DEFAULT_BLOCKED_LABEL = "agent:blocked";
@@ -49,6 +51,7 @@ function remainingIssueDecisionTimeout(deadline: number | undefined, now = Date.
 function defaultIssueDecisionConfig(overrides: Partial<IssueDecisionConfig> = {}): IssueDecisionConfig {
   return {
     readyLabel: DEFAULT_READY_LABEL,
+    exploreLabel: DEFAULT_EXPLORE_LABEL,
     implementLabel: DEFAULT_IMPLEMENT_LABEL,
     inProgressLabel: DEFAULT_IN_PROGRESS_LABEL,
     blockedLabel: DEFAULT_BLOCKED_LABEL,
@@ -136,32 +139,40 @@ function selectIssueForImplementation(
   relationshipDependencies: (issue: IssueDecisionRecord) => Set<number>,
   dependencyState: (number: number) => string | null | undefined,
 ): IssueDecisionRecord {
-  const requiredLabels = [config.readyLabel, config.implementLabel];
   const skipLabels = [config.inProgressLabel, config.blockedLabel, config.needsInfoLabel, config.humanLabel, config.wontfixLabel];
   const skipped: IssueDecisionRecord[] = [];
+  const sorted = [...issues].sort((left, right) => issueNumberForDecision(left) - issueNumberForDecision(right));
 
-  for (const issue of [...issues].sort((left, right) => issueNumberForDecision(left) - issueNumberForDecision(right))) {
+  for (const request of [
+    { label: config.exploreLabel, role: "explorer" },
+    { label: config.implementLabel, role: "worker" },
+  ]) for (const issue of sorted) {
     const labels = labelsOfIssue(issue);
-    if (!requiredLabels.every((label) => labels.has(label))) {
+    if (!labels.has(request.label)) {
       skipped.push(skipIssueForDecision("missing_required_label", issue));
       continue;
     }
-    if (!passesIssueLabelGate(issue, { required: requiredLabels, blocked: skipLabels })) {
+    if (!passesIssueLabelGate(issue, { required: [request.label], blocked: skipLabels })) {
       skipped.push(skipIssueForDecision("skip_label", issue));
       continue;
     }
 
-    const dependencies = bodyDependencyNumbers(issue.body || "");
-    for (const number of relationshipDependencies(issue)) dependencies.add(number);
-    const { closed, openDependencies } = dependencyStatesClosed(dependencies, dependencyState);
-    if (!closed) {
-      skipped.push({ ...skipIssueForDecision("open_dependency", issue), dependencies: openDependencies });
-      continue;
+    const dependencies = new Set<number>();
+    if (request.role === "worker") {
+      for (const number of bodyDependencyNumbers(issue.body || "")) dependencies.add(number);
+      for (const number of relationshipDependencies(issue)) dependencies.add(number);
+      const { closed, openDependencies } = dependencyStatesClosed(dependencies, dependencyState);
+      if (!closed) {
+        skipped.push({ ...skipIssueForDecision("open_dependency", issue), dependencies: openDependencies });
+        continue;
+      }
     }
 
     return {
       selected: true,
       number: issue.number,
+      role: request.role,
+      requestLabel: request.label,
       reason: "selectable",
       dependencies: [...dependencies].sort((left, right) => left - right),
       skipped,
@@ -245,6 +256,7 @@ const ISSUE_DECISION_VALUE_FLAGS = new Set([
   "--fixture",
   "--repo",
   "--ready-label",
+  "--explore-label",
   "--implement-label",
   "--in-progress-label",
   "--blocked-label",
@@ -262,6 +274,7 @@ function issueDecisionHelp(): string {
     "  --fixture FILE                  Load issues and dependency states from fixture JSON.",
     "  --repo owner/name               GitHub repository for live dependency checks.",
     "  --ready-label LABEL             Ready label. Default: ready-for-agent.",
+    "  --explore-label LABEL           Explore label. Default: agent:explore.",
     "  --implement-label LABEL         Implement label. Default: agent:implement.",
     "  --in-progress-label LABEL       In-progress label. Default: agent:in-progress.",
     "  --blocked-label LABEL           Blocked label. Default: agent:blocked.",
@@ -300,6 +313,7 @@ function parseArgsForIssueDecision(argv: string[]): IssueDecisionRecord {
 function configFromIssueArgs(args: IssueDecisionRecord): IssueDecisionConfig {
   return defaultIssueDecisionConfig({
     readyLabel: args.readyLabel || process.env.DEADLOOP_READY_LABEL || DEFAULT_READY_LABEL,
+    exploreLabel: args.exploreLabel || process.env.DEADLOOP_EXPLORE_LABEL || DEFAULT_EXPLORE_LABEL,
     implementLabel: args.implementLabel || process.env.DEADLOOP_IMPLEMENT_LABEL || DEFAULT_IMPLEMENT_LABEL,
     inProgressLabel: args.inProgressLabel || process.env.DEADLOOP_IN_PROGRESS_LABEL || DEFAULT_IN_PROGRESS_LABEL,
     blockedLabel: args.blockedLabel || process.env.DEADLOOP_BLOCKED_LABEL || DEFAULT_BLOCKED_LABEL,

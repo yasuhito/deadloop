@@ -182,6 +182,18 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("DEADLOOP_WORKTREE_ROOT='/custom worktrees' DEADLOOP_STATE_DIR=/state");
   });
 
+  it("binds reviewer dispatch to the consumed request generation", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), requestEventId: "review-22", branch: "agent/issue-24",
+      automationDir: "/automation", promiseFile: "/state/promise.json", actorName: "reviewer",
+      repoPath: "/repo", worktreeRoot: "/worktrees", githubRepo: "owner/repo", stateDir: "/state",
+      checkCommand: "npm test", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch",
+      reviewLabel: "agent:review", blockedLabel: "agent:blocked",
+    });
+
+    expect(prompt).toContain("--request-event-id review-22");
+  });
+
   it("routes issue monitor mutations through the enablement guard", () => {
     const prompt = renderIssueMonitorPrompt({
       issueNumber: 12, automationDir: "/automation", promiseFile: "/state/promise.json", actorName: "Worker",
@@ -213,6 +225,17 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("handoff-reviewed-pr.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --history-observation /state/pr-review-history-accepted.json --review-label agent:review --implement-label agent:implement --update-branch-label agent:update-branch --in-progress-label agent:in-progress --blocked-label agent:blocked");
   });
 
+  it("binds guarded reviewer mutations to configured active-state labels", () => {
+    const prompt = renderReviewerMonitorPrompt({
+      prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
+      promiseFile: "/state/promise.json", actorName: "reviewer", repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state",
+      checkCommand: "npm test", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", reviewLabel: "agent:review",
+      inProgressLabel: "custom:active", blockedLabel: "custom:blocked",
+    });
+
+    expect(prompt).toContain("--target-kind pull-request --attempt-record /state/attempt.json --in-progress-label custom:active --blocked-label custom:blocked --");
+  });
+
   it("binds auto-merge to the reviewed PR head", () => {
     const prompt = renderReviewerMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), branch: "agent/issue-24", automationDir: "/automation",
@@ -224,13 +247,13 @@ describe("monitor prompts", () => {
     expect(prompt).toContain("merge-reviewed-pr.ts --attempt-record /state/attempt.json --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --history-observation /state/pr-review-history-accepted.json --in-progress-label agent:in-progress --blocked-label agent:blocked");
   });
 
-  it("prohibits branch-update monitor mutations without an active review claim", () => {    const prompt = renderBranchUpdateMonitorPrompt({
+  it("prohibits branch-update monitor mutations outside deterministic completion", () => {    const prompt = renderBranchUpdateMonitorPrompt({
       prNumber: 24, expectedHeadOid: "a".repeat(40), expectedBaseOid: "b".repeat(40), branch: "agent/issue-24",
       automationDir: "/automation", promiseFile: "/state/promise.json", actorName: "branch-update worker",
       repoPath: "/repo", githubRepo: "owner/repo", stateDir: "/state", reviewLabel: "agent:review", blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("no active review-claim contract");
+    expect(prompt).toContain("no mutation authority");
   });
 
   it("routes repair blocked handling through the enablement guard", () => {

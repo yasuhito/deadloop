@@ -155,8 +155,75 @@ exit 2
     }
   });
 
+  it("selects exploration before implementation", () => {
+    expect(runDriverFixture("driver-explore.json").driverAction).toBe("explorer_monitor_request");
+  });
+
+  it("binds exploration to the selected request generation", () => {
+    expect(runDriverFixture("driver-explore.json").launch.agentRequest.eventId).toBe("2");
+  });
+
+  it("records exploration consumption before launch", () => {
+    expect(runDriverFixture("driver-explore.json").launch.attemptPhase).toBe("github_claimed");
+  });
+
+  it("consumes only the exploration request", () => {
+    expect(runDriverFixture("driver-explore.json").launch.issueLabels).not.toContain("agent:explore");
+  });
+
+  it("leaves implementation queued after exploration consumption", () => {
+    expect(runDriverFixture("driver-explore.json").launch.issueLabels).toContain("agent:implement");
+  });
+
+  it("creates no Issue comment while launching exploration", () => {
+    expect(runDriverFixture("driver-explore.json").launch.comments).toEqual([]);
+  });
+
+  it("forbids repository and GitHub mutations in the explorer prompt", () => {
+    expect(runDriverFixture("driver-explore.json").launch.instructions).toContain("Do not edit, create, delete, rename, or format repository files");
+  });
+
   it("reports the deterministic Worker name", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
+  });
+
+  it("launches implementation without ready-for-agent", () => {
+    expect(runDriverFixture("driver-ready-worker.json").driverAction).toBe("worker_monitor_request");
+  });
+
+  it("binds the durable attempt to the selected request generation", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.agentRequest.eventId).toBe("1");
+  });
+
+  it("records consumption before the simulated Worker launch", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.attemptPhase).toBe("github_claimed");
+  });
+
+  it("preserves an unrelated Issue label", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.issueLabels).toContain("customer:urgent");
+  });
+
+  it("consumes the selected implementation request", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.issueLabels).not.toContain("agent:implement");
+  });
+
+  it("enters in-progress only after request consumption", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.issueLabels).toContain("agent:in-progress");
+  });
+
+  it("emits the selected request's unlabeled event", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.timelineEvents).toContainEqual(expect.objectContaining({ event: "unlabeled", label: { name: "agent:implement" } }));
+  });
+
+  it("emits the in-progress labeled event", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.timelineEvents).toContainEqual(expect.objectContaining({ event: "labeled", label: { name: "agent:in-progress" } }));
+  });
+
+  it("adds in-progress after the request consumption event", () => {
+    expect(runDriverFixture("driver-ready-worker.json").launch.timelineEvents.slice(-2).map((event: any) => `${event.event}:${event.label.name}`)).toEqual([
+      "unlabeled:agent:implement",
+      "labeled:agent:in-progress",
+    ]);
   });
 
   const blockedVerificationResolution = JSON.stringify({
@@ -238,7 +305,7 @@ exit 2
 
     expect(
       runDriverFixture("driver-ready-worker.json", { DEADLOOP_STATE_DIR: stateDir }).launch.promiseFile,
-    ).toBe(path.join(stateDir, "runs/fixture-worker-uuid/promise.json"));
+    ).toBe(path.join(stateDir, "runs/fixture-worker-demo-12/promise.json"));
   });
 
   it("isolates runtime artifacts during monitor validation", () => {

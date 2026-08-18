@@ -1538,6 +1538,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         "--implement-label", labels.implement,
         "--in-progress-label", labels.inProgress,
         "--review-label", labels.review,
+        "--update-branch-label", labels.updateBranch,
         "--blocked-label", labels.blocked,
       ], null);
       if (claimResult?.action === "error") debugLog("prepared attempt claim reconciliation blocked", claimResult.reason || claimResult.driverAction);

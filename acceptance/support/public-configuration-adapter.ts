@@ -35,14 +35,14 @@ const {
 };
 const {
   envConfig: reviewerEnvironment,
-  launchClaimedPrReviewerFlow,
+  launchRequestBoundPrReviewerFlow,
 } = require("../../extensions/deadloop/automations/pr-reviewer-driver.ts") as {
   envConfig: (source: NodeJS.ProcessEnv) => Record<string, any>;
-  launchClaimedPrReviewerFlow: (
+  launchRequestBoundPrReviewerFlow: (
     pr: Record<string, unknown>,
     env: Record<string, any>,
     reason: string,
-    reviewClaim: Record<string, unknown>,
+    requestEventId: string,
     ops: Record<string, unknown>,
   ) => unknown;
 };
@@ -124,14 +124,11 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
           baseRevision: "a".repeat(40),
         }),
       });
-      launchClaimedPrReviewerFlow(
+      launchRequestBoundPrReviewerFlow(
         { number: 24, headRefName: "agent/configuration-observation", headRefOid: "a".repeat(40) },
         env,
         "configuration observation",
-        {
-          binding: { repository: project.githubRepo || "owner/repo", targetNumber: 24, revision: "a".repeat(40) },
-          commentId: "acceptance-claim",
-        },
+        "request-22",
         ops,
       );
     }

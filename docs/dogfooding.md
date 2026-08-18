@@ -96,10 +96,7 @@ gh label create needs-triage --repo yasuhito/deadloop --color f9d0c4 || true
 
 ## 試験運用用 Issue の書き方
 
-Issue coordinator が拾うには、Issue に次の両方のラベルを付けます。
-
-- `ready-for-agent`
-- `agent:implement`
+Issue coordinator に実装を依頼するには、Issue に `agent:implement` を付けます。`ready-for-agent` は任意のトリアージ用ラベルです。
 
 Issue 本文には、少なくとも `## Agent Brief` または `## What to build` と、`## Acceptance criteria` または `## 受け入れ条件` を含めます。詳しい Gate 条件は README の「エージェントに渡せる Issue の書き方」と `extensions/deadloop/automations/issue-coordinator.prompt.md` の `### 3. Gate` 節に合わせます。
 
