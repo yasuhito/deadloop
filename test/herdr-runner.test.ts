@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 
 const { RunnerAdapterError, createAsyncHerdrRunner, createHerdrRunner, normalizeHerdrWorktreeRecord } = require("../src/herdr-runner.ts");
 
-const workspaceList075 = JSON.parse(fs.readFileSync("test/fixtures/herdr-0.7.5-workspace-list.json", "utf8"));
-const agentList075 = JSON.parse(fs.readFileSync("test/fixtures/herdr-0.7.5-agent-list.json", "utf8"));
+const workspaceList075 = JSON.parse(fs.readFileSync("test/fixtures/herdr-workspace-list.json", "utf8"));
+const agentList075 = JSON.parse(fs.readFileSync("test/fixtures/herdr-agent-list.json", "utf8"));
 
 const opened = {
   result: {
@@ -213,12 +213,12 @@ describe("selected Herdr runner", () => {
     expect(attempts).toBe(1);
   });
 
-  it("normalizes nested 0.7.5 workspace ownership and layout counts", () => {
+  it("normalizes nested 0.8.0 workspace ownership and layout counts", () => {
     const runner = createHerdrRunner({ runJson: () => workspaceList075, runText: () => "" });
     expect(runner.listWorkspaces()).toEqual([{ ...workspaceList075.result.workspaces[0], workspaceId: "w-issue-12", worktreePath: "/worktrees/issue-12", paneCount: 1, tabCount: 1 }]);
   });
 
-  it("uses the argument-free 0.7.5 workspace list command", () => {
+  it("uses the argument-free 0.8.0 workspace list command", () => {
     const commands: unknown[] = [];
     const runner = createHerdrRunner({
       runJson: (command: string, args: string[]) => (commands.push([command, ...args]), workspaceList075),
@@ -259,12 +259,12 @@ describe("selected Herdr runner", () => {
     expect(() => runner.listWorkspaces()).toThrow(RunnerAdapterError);
   });
 
-  it("normalizes the 0.7.5 agent terminal, pane ownership, status, and cwd", () => {
+  it("normalizes the 0.8.0 agent terminal, pane ownership, status, and cwd", () => {
     const runner = createHerdrRunner({ runJson: () => agentList075, runText: () => "" });
     expect(runner.listAgents()).toEqual([{ ...agentList075.result.agents[0], agentId: "terminal-1", paneId: "w-issue-12:p1", status: "done", cwd: "/worktrees/issue-12" }]);
   });
 
-  it("uses the argument-free 0.7.5 agent list command", () => {
+  it("uses the argument-free 0.8.0 agent list command", () => {
     const commands: unknown[] = [];
     const runner = createHerdrRunner({
       runJson: (command: string, args: string[]) => (commands.push([command, ...args]), agentList075),

@@ -4,8 +4,9 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, createHerdrRunnerFromCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { abandonPersistedAttempt, readAttemptRecord, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const {
   assertAttemptProjectBinding,
@@ -153,7 +154,7 @@ function abandonLocked(args: JsonObject, dependencies: RecoveryDependencies, rec
   if (worktree.head.toLowerCase() !== record.inputRevision.head.toLowerCase()) {
     return manualReview("the linked worktree HEAD changed after the recorded launch input");
   }
-  if (worktree.status.trim()) return manualReview("the linked worktree contains changes");
+  if (hasUncommittedWork(worktree.status)) return manualReview("the linked worktree contains changes");
   if (dependencies.otherAttemptOwnsCheckout(record, runDir)) {
     return manualReview("another nonterminal attempt owns the recorded checkout");
   }
@@ -181,7 +182,7 @@ function abandonLocked(args: JsonObject, dependencies: RecoveryDependencies, rec
     if (worktreeAfterClose.head.toLowerCase() !== record.inputRevision.head.toLowerCase()) {
       return manualReview("the linked worktree HEAD changed while closing the workspace");
     }
-    if (worktreeAfterClose.status.trim()) {
+    if (hasUncommittedWork(worktreeAfterClose.status)) {
       return manualReview("the linked worktree changed while closing the workspace");
     }
     const targetAfterClose = dependencies.observeTarget(record);
@@ -218,7 +219,6 @@ function productionDependencies(args: JsonObject, commandRunner: ReturnType<type
     implement: String(args.implementLabel || "agent:implement"),
     inProgress: String(args.inProgressLabel || "agent:in-progress"),
     review: String(args.reviewLabel || "agent:review"),
-    reviewing: String(args.reviewingLabel || "agent:reviewing"),
     blocked: String(args.blockedLabel || "agent:blocked"),
     human: String(args.humanLabel || "ready-for-human"),
   };
@@ -241,7 +241,7 @@ function productionDependencies(args: JsonObject, commandRunner: ReturnType<type
       || labels.has(configured.blocked) || labels.has(configured.human) || !labels.has(configured.review)) {
       return { state: "unsafe", reason: "the pull request head, branch, state, or safety labels changed" };
     }
-    return labels.has(configured.reviewing) ? { state: "claimed" } : { state: "requeued" };
+    return labels.has(configured.inProgress) ? { state: "claimed" } : { state: "requeued" };
   }
 
   return {
@@ -250,7 +250,7 @@ function productionDependencies(args: JsonObject, commandRunner: ReturnType<type
     inspectWorktree: (record) => {
       assertWorktreeBelongsToProject(commandRunner, record, args);
       const head = commandRunner.runText(["git", "-C", record.worktreePath, "rev-parse", "HEAD"]).trim();
-      const status = commandRunner.runText(["git", "-C", record.worktreePath, "status", "--porcelain"]);
+      const status = commandRunner.runText(["git", "-C", record.worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]);
       const retained = runner.listWorktrees(String(args.projectRepo)).some((worktree: JsonObject) =>
         worktree.branch === record.branch && samePath(worktree.path, record.worktreePath));
       return { head, status, retained };
@@ -284,7 +284,7 @@ function productionDependencies(args: JsonObject, commandRunner: ReturnType<type
           "--remove-label", configured.inProgress, "--add-label", configured.ready, "--add-label", configured.implement]);
       } else {
         commandRunner.runText(["gh", "pr", "edit", String(record.target.number), "-R", record.repository,
-          "--remove-label", configured.reviewing]);
+          "--remove-label", configured.inProgress]);
       }
     },
   };
@@ -292,7 +292,7 @@ function productionDependencies(args: JsonObject, commandRunner: ReturnType<type
 
 async function abandon(args: JsonObject) {
   const commandRunner = createCommandRunner();
-  runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
+  runHerdrPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   const location = canonicalAttemptLocation(args);
   const record = readAttemptRecord(location.runDir);
   assertAttemptProjectBinding(record, args);

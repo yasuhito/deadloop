@@ -52,6 +52,28 @@ Given("A blocking reason is recorded for an Issue with `agent:blocked`", functio
   });
 });
 
+const requiredVerificationStopComment = "<!-- deadloop:required-verification-blocked:v1 target=issue-8 fingerprint=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->";
+
+Given("An Issue was stopped by unresolved required verification", function (this: DoctorWorld) {
+  setInput(this, { issues: [{ number: 8, labels: ["agent:blocked"], comments: [{ body: requiredVerificationStopComment }] }] });
+});
+
+Given("An Issue was stopped by required verification that is now resolved", function (this: DoctorWorld) {
+  const resolvedProject = normalizeProject({ ...project, checkCommand: "npm run check" }, {
+    localPath: "/state/projects.json",
+    repoPolicyPath: "deadloop.json",
+    repoPolicyBaseBranch: "origin/main",
+    repoPolicyStatus: "loaded",
+    repoPolicyAppliedKeys: ["checkCommand"],
+    repoPolicyBaseRevision: "a".repeat(40),
+    repoPolicyCheckCommand: "npm run check",
+  });
+  setInput(this, {
+    projects: [resolvedProject],
+    issues: [{ number: 8, labels: ["agent:blocked"], comments: [{ body: requiredVerificationStopComment }] }],
+  });
+});
+
 Given("A worktree exists for an Issue with `agent:in-progress` whose updates stopped more than 24 hours ago", function (this: DoctorWorld) {
   setInput(this, {
     issues: [{ number: 2, labels: ["agent:in-progress"], updatedAt: "2026-07-03T23:59:59Z" }],
@@ -140,27 +162,27 @@ Given("Claude trust configuration cannot be read for a worktree", function (this
   setInput(this, { projects: [normalizeProject({ ...project, workerAgent: "claude" })], claudeConfig: { ok: false } });
 });
 
-Given("A pull request has `agent:reviewing` but no active review agent", function (this: DoctorWorld) {
-  setInput(this, { openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:reviewing"] }] });
+Given("A pull request has `agent:in-progress` but no active review agent", function (this: DoctorWorld) {
+  setInput(this, { openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:in-progress"] }] });
 });
 
-Given("A pull request has `agent:reviewing` and a retained launch-failed attempt", function (this: DoctorWorld) {
+Given("A pull request has `agent:in-progress` and a retained launch-failed attempt", function (this: DoctorWorld) {
   setInput(this, {
-    openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:reviewing"] }],
+    openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:in-progress"] }],
     retainedClaims: [{ kind: "pull-request", number: 10 }],
   });
 });
 
-Given("A pull request has `agent:reviewing` and ownership of its retained attempt record cannot be determined", function (this: DoctorWorld) {
+Given("A pull request has `agent:in-progress` and ownership of its retained attempt record cannot be determined", function (this: DoctorWorld) {
   setInput(this, {
-    openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:reviewing"] }],
+    openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:in-progress"] }],
     retainedClaimOwnershipAmbiguous: true,
   });
 });
 
-Given("A pull request has `agent:reviewing` and an active review agent", function (this: DoctorWorld) {
+Given("A pull request has `agent:in-progress` and an active review agent", function (this: DoctorWorld) {
   setInput(this, {
-    openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:reviewing"] }],
+    openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:in-progress"] }],
     agents: [{ name: "deadloop-pr-10-reviewer", agent_status: "working" }],
   });
 });
@@ -191,6 +213,14 @@ Then("doctor shows a command to requeue the Issue", function (this: DoctorWorld)
 
 Then("doctor displays the latest blocking reason", function (this: DoctorWorld) {
   assert.match(this.report || "", /BLOCKED: missing API token\./);
+});
+
+Then("doctor does not show its requeue command", function (this: DoctorWorld) {
+  assert.doesNotMatch(this.report || "", /gh issue edit 8 .*--add-label agent:implement/);
+});
+
+Then("doctor shows its target-specific requeue command", function (this: DoctorWorld) {
+  assert.match(this.report || "", /gh issue edit 8 --remove-label agent:blocked --add-label agent:implement/);
 });
 
 Then("doctor shows a command to inspect changes in the stale worktree", function (this: DoctorWorld) {
@@ -242,11 +272,11 @@ Then("doctor shows a command to inspect Claude trust configuration", function (t
 });
 
 Then("doctor shows a command to release the review claim", function (this: DoctorWorld) {
-  assert.match(this.report || "", /gh pr edit 10 -R owner\/repo --remove-label agent:reviewing/);
+  assert.match(this.report || "", /gh pr edit 10 -R owner\/repo --remove-label agent:in-progress/);
 });
 
 Then("doctor does not show a command that releases only the review claim", function (this: DoctorWorld) {
-  assert.doesNotMatch(this.report || "", /gh pr edit 10 .*--remove-label agent:reviewing/);
+  assert.doesNotMatch(this.report || "", /gh pr edit 10 .*--remove-label agent:in-progress/);
 });
 
 Then("doctor shows a command to inspect commits in the worktree", function (this: DoctorWorld) {

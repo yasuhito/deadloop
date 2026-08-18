@@ -19,15 +19,17 @@ const completionReport = "pending\n";
 const diagnosticReport = "diagnostic output\n";
 const checkMarker = ".deadloop-check-ran";
 
-function runtimePath(projectRoot: string, directory: string, file: string): string {
-  return path.join(projectRoot, directory, file);
+function scratchPath(projectRoot: string, scratchArea: string, file: string): string {
+  return path.join(projectRoot, scratchArea, file);
 }
 
-function writeRuntimeArtifacts(projectRoot: string): void {
-  fs.mkdirSync(path.join(projectRoot, ".deadloop"));
-  fs.writeFileSync(runtimePath(projectRoot, ".deadloop", "promise.json"), completionReport);
-  fs.mkdirSync(path.join(projectRoot, ".pi-subagents"));
-  fs.writeFileSync(runtimePath(projectRoot, ".pi-subagents", "metadata.json"), diagnosticReport);
+function writeAgentScratchAreas(projectRoot: string): void {
+  fs.mkdirSync(path.join(projectRoot, ".pi", "subagents"), { recursive: true });
+  fs.writeFileSync(scratchPath(projectRoot, ".pi/subagents", "promise.json"), completionReport);
+  fs.writeFileSync(scratchPath(projectRoot, ".pi/subagents", "transcript.json"), diagnosticReport);
+  // A second scratch area, so the round trip covers more than one entry in the list.
+  fs.mkdirSync(path.join(projectRoot, ".pi", "npm"), { recursive: true });
+  fs.writeFileSync(scratchPath(projectRoot, ".pi/npm", "installed.json"), "{}\n");
 }
 
 function projectRoot(world: SafetyWorld): string {
@@ -73,7 +75,7 @@ visit(process.cwd());
 });
 
 Given("The project contains untracked runtime artifacts", function (this: SafetyWorld) {
-  writeRuntimeArtifacts(projectRoot(this));
+  writeAgentScratchAreas(projectRoot(this));
 });
 
 Given("The project contains an invalid tracked file", function (this: SafetyWorld) {
@@ -81,11 +83,11 @@ Given("The project contains an invalid tracked file", function (this: SafetyWorl
   fs.writeFileSync(path.join(root, "package.json"), "broken product JSON\n");
 });
 
-Given("The `.deadloop` directory contains a tracked file", function (this: SafetyWorld) {
+Given("An agent scratch area contains a tracked file", function (this: SafetyWorld) {
   const root = projectRoot(this);
-  fs.mkdirSync(path.join(root, ".deadloop"));
-  fs.writeFileSync(path.join(root, ".deadloop", "product.json"), "tracked product data\n");
-  execFileSync("git", ["-C", root, "add", ".deadloop/product.json"]);
+  fs.mkdirSync(path.join(root, ".pi", "subagents"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".pi", "subagents", "product.json"), "tracked product data\n");
+  execFileSync("git", ["-C", root, "add", ".pi/subagents/product.json"]);
 });
 
 When("deadloop runs recursive verification", function (this: SafetyWorld) {
@@ -132,7 +134,7 @@ When("The deadloop project-check CLI is interrupted", async function (this: Safe
     ],
     { cwd: process.cwd(), stdio: "ignore" },
   );
-  while (fs.existsSync(path.join(root, ".pi-subagents"))) {
+  while (fs.existsSync(path.join(root, ".pi", "subagents"))) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   child.kill("SIGTERM");
@@ -156,7 +158,7 @@ Then("Recursive verification succeeds", function (this: SafetyWorld) {
 });
 
 Then("The completion report is restored with its original contents", function (this: SafetyWorld) {
-  assert.equal(fs.readFileSync(runtimePath(projectRoot(this), ".deadloop", "promise.json"), "utf8"), completionReport);
+  assert.equal(fs.readFileSync(scratchPath(projectRoot(this), ".pi/subagents", "promise.json"), "utf8"), completionReport);
 });
 
 Then("Recursive verification fails", function (this: SafetyWorld) {
@@ -172,7 +174,7 @@ Then("The project check returns a failure result", function (this: SafetyWorld) 
 });
 
 Then("The diagnostic information is restored with its original contents", function (this: SafetyWorld) {
-  assert.equal(fs.readFileSync(runtimePath(projectRoot(this), ".pi-subagents", "metadata.json"), "utf8"), diagnosticReport);
+  assert.equal(fs.readFileSync(scratchPath(projectRoot(this), ".pi/subagents", "transcript.json"), "utf8"), diagnosticReport);
 });
 
 Then("The timed-out project check terminates promptly", function (this: SafetyWorld) {

@@ -12,10 +12,11 @@ const {
   transitionPersistedAttempt,
 } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { parseAttemptPersistenceMarkers } = require("../../../src/attempt-persistence-marker.cjs");
 const { evaluateCompletionPersistence } = require("../../../src/attempt-workspace-predicates.cjs");
+const { isExactRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.ts");
 const {
   assertAttemptProjectBinding,
   assertWorktreeBelongsToProject,
@@ -57,7 +58,9 @@ function same(left: unknown, right: unknown): boolean {
 }
 
 function outputRevision(report: CompletionReportV1): string | undefined {
-  return report.status === "complete" && report.role !== "reviewer" ? report.result.outputRevision : undefined;
+  return report.status === "complete" && ["worker", "review-repair", "branch-update"].includes(report.role)
+    ? (report.result as { outputRevision: string }).outputRevision
+    : undefined;
 }
 
 function persistedMarker(comments: JsonObject[], record: AttemptRecord): JsonObject | undefined {
@@ -81,7 +84,7 @@ function completionMarkerFromPersisted(marker: JsonObject | undefined) {
 function prView(runner: ReturnType<typeof createCommandRunner>, record: AttemptRecord): JsonObject {
   return runner.runJson([
     "gh", "pr", "view", String(record.target.number), "-R", record.repository,
-    "--json", "number,state,headRefName,headRefOid,baseRefName,body,labels,comments,closingIssuesReferences",
+    "--json", "number,state,isDraft,headRefName,headRefOid,baseRefName,body,labels,comments,closingIssuesReferences",
   ]);
 }
 
@@ -130,6 +133,7 @@ function reviewerObservation(record: AttemptRecord, report: CompletionReportV1, 
     target: record.target,
     headSha: String(pr.headRefOid || ""),
     labels: labelsOf(pr),
+    draft: pr.isDraft === true,
     ...(persisted ? {
       reviewPersistence: {
         repository: record.repository,
@@ -187,11 +191,17 @@ function safeRunnerCall<T>(operation: () => T): { ok: true; value: T } | { ok: f
   catch (error) { return { ok: false, detail: error instanceof Error ? error.message : String(error) }; }
 }
 
+type CompletionStopExpectation = {
+  resolution: Record<string, unknown>;
+  labels: { ready: string; implement: string; inProgress: string; blocked: string };
+};
+
 function completeLocked(
   args: JsonObject,
   commandRunner: ReturnType<typeof createCommandRunner>,
   recheck: () => void,
   authorizeWorker?: (record: AttemptRecord, report: CompletionReportV1, args: JsonObject) => void,
+  completionStop?: CompletionStopExpectation,
 ) {
   const authorizeWorkerCompletion = authorizeWorker || assertWorkerPersistenceAuthorized;
   const { attemptRecord, runDir, runsRoot } = canonicalAttemptLocation(args);
@@ -252,7 +262,10 @@ function completeLocked(
       assertWorktreeBelongsToProject(commandRunner, record, args);
       record = recordPersistedCompletionReport(runDir, report);
     }
-    if (report.status === "blocked" || (report.role === "reviewer" && report.status === "complete" && report.result.outcome === "human_required")) {
+    // A stop without a completion report keeps its workspace for inspection. A completed review
+    // that asks for a person does not: its result is on the pull request and the handoff is what
+    // the person acts on, so leaving the workspace open would only block the next attempt.
+    if (report.status === "blocked") {
       return driverResult("done", "attempt workspace retained for inspection", { driverAction: "workspace_retained" });
     }
 
@@ -261,10 +274,10 @@ function completeLocked(
     if (record.role !== "worker" && (!same(pr?.headRefOid, outputRevision(report) || record.inputRevision.head))) {
       return driverResult("done", "attempt workspace retained because the live PR head differs", { driverAction: "workspace_retained" });
     }
-    if (record.role === "worker") github = workerObservation(commandRunner, record, report, {
+    if (record.role === "worker" && !completionStop) github = workerObservation(commandRunner, record, report, {
       ready: String(args.workerReadyLabel || ""), implement: String(args.workerImplementLabel || ""),
     });
-    else github = record.role === "reviewer"
+    else if (record.role !== "worker") github = record.role === "reviewer"
       ? reviewerObservation(record, report, pr as JsonObject)
       : writerObservation(record, report, pr as JsonObject);
   }
@@ -280,7 +293,7 @@ function completeLocked(
       ? cleanupPending("attempt workspace cleanup is pending because ownership is ambiguous")
       : driverResult("done", "attempt workspace retained because workspace ownership is ambiguous", { driverAction: "workspace_retained" });
   }
-  if (record.phase === "report_received" && workspaceMatches.length !== 1) {
+  if (record.phase === "report_received" && workspaceMatches.length !== 1 && !completionStop) {
     return driverResult("done", "attempt workspace retained because exact workspace ownership is no longer present", { driverAction: "workspace_retained" });
   }
 
@@ -309,22 +322,32 @@ function completeLocked(
   }
 
   if (record.phase !== "github_persisted") {
-    const decision = evaluateCompletionPersistence({
-      record,
-      report: { kind: "v1", promisePath: record.promiseFile, report },
-      github,
-      context: {
-        workerReadyLabel: String(args.workerReadyLabel || ""),
-        workerImplementLabel: String(args.workerImplementLabel || ""),
-        workerReviewLabel: String(args.workerReviewLabel || ""),
-        reviewerExpectedLabels: args.expectedLabel || [],
-        reviewerManagedLabels: args.managedLabel?.length ? args.managedLabel : args.expectedLabel || [],
-      },
-    });
+    let completionStopConfirmed = false;
+    if (completionStop) {
+      const issue = commandRunner.runJson([
+        "gh", "issue", "view", String(record.target.number), "-R", record.repository,
+        "--json", "number,state,labels,comments",
+      ]);
+      completionStopConfirmed = isExactRequiredVerificationStop(issue, completionStop.resolution, completionStop.labels);
+    }
+    const decision = completionStop
+      ? { action: completionStopConfirmed ? "close" as const : "retain" as const }
+      : evaluateCompletionPersistence({
+        record,
+        report: { kind: "v1", promisePath: record.promiseFile, report },
+        github,
+        context: {
+          workerReadyLabel: String(args.workerReadyLabel || ""),
+          workerImplementLabel: String(args.workerImplementLabel || ""),
+          workerReviewLabel: String(args.workerReviewLabel || ""),
+          reviewerExpectedLabels: args.expectedLabel || [],
+          reviewerManagedLabels: args.managedLabel?.length ? args.managedLabel : args.expectedLabel || [],
+        },
+      });
     if (decision.action !== "close") {
       return driverResult("done", "attempt workspace retained because GitHub persistence is not confirmed", { driverAction: "workspace_retained" });
     }
-    if (record.role === "worker") {
+    if (record.role === "worker" && !completionStopConfirmed) {
       try { authorizeWorkerCompletion(record, report as CompletionReportV1, { ...args, attemptRecord }); }
       catch (error) {
         return driverResult("done", "attempt workspace retained because required verification is not authoritative", {
@@ -363,9 +386,22 @@ function completeLocked(
   });
 }
 
+function closeCompletionStoppedWorkerAttempt(
+  args: JsonObject,
+  commandRunner: ReturnType<typeof createCommandRunner>,
+  recheck: () => void,
+  expectation: CompletionStopExpectation,
+) {
+  const record = readAttemptRecord(canonicalAttemptLocation(args).runDir) as AttemptRecord;
+  if (record.role !== "worker" || record.target.kind !== "issue") {
+    throw new Error("completion-stop workspace closure requires an Issue Worker attempt");
+  }
+  return completeLocked(args, commandRunner, recheck, undefined, expectation);
+}
+
 async function complete(args: JsonObject) {
   const commandRunner = createCommandRunner();
-  runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
+  runHerdrPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   const project = {
     id: String(args.projectId),
     repoPath: path.resolve(String(args.projectRepo)),
@@ -384,4 +420,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { assertWorkerPersistenceAuthorized, complete, completeLocked, parseArgs, persistedMarker, workerObservation, reviewerObservation, writerObservation };
+module.exports = { assertWorkerPersistenceAuthorized, closeCompletionStoppedWorkerAttempt, complete, completeLocked, parseArgs, persistedMarker, workerObservation, reviewerObservation, writerObservation };

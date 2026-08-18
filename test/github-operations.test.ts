@@ -38,7 +38,7 @@ describe("GitHub operations", () => {
       "--limit",
       "200",
       "--json",
-      "number,title,body,labels,updatedAt,url",
+      "number,title,body,labels,updatedAt,url,state,comments",
     ]);
   });
 
@@ -67,6 +67,67 @@ describe("GitHub operations", () => {
     github.moveIssueLabels("owner/repo", 12, { remove: "agent:implement", add: "needs-triage" });
 
     expect(commands[0]).toEqual(["gh", "issue", "edit", "12", "-R", "owner/repo", "--remove-label", "agent:implement", "--add-label", "needs-triage"]);
+  });
+
+  it("adds one PR label without replacing the live label set", () => {
+    const commands: string[][] = [];
+    const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), []) });
+
+    github.addPrLabel("owner/repo", 24, "agent:in-progress");
+
+    expect(commands[0]).toEqual([
+      "gh", "api", "--method", "POST", "repos/owner/repo/issues/24/labels", "--input", "-",
+    ]);
+  });
+
+  it("accepts the documented 200 response from one PR-label DELETE", () => {
+    const github = createGithubOperations({ runText: () => "HTTP/2.0 200 OK\r\ncontent-type: application/json\r\n\r\n[]\n", runJson: () => [] });
+
+    expect(github.deletePrLabel("owner/repo", 24, "agent:review").status).toBe(200);
+  });
+
+  it("returns a documented 404 PR-label DELETE response for fail-closed handling", () => {
+    const github = createGithubOperations({ runText: () => "HTTP/2 404 Not Found\n", runJson: () => [] });
+
+    expect(github.deletePrLabel("owner/repo", 24, "agent:review").status).toBe(404);
+  });
+
+  it("treats an ambiguous PR-label DELETE response as non-success", () => {
+    const github = createGithubOperations({ runText: () => "[]\n", runJson: () => [] });
+
+    expect(github.deletePrLabel("owner/repo", 24, "agent:review").status).toBe(0);
+  });
+
+  it("targets one encoded PR label for DELETE", () => {
+    const commands: string[][] = [];
+    const github = createGithubOperations({ runText: (args: string[]) => (commands.push(args), "HTTP/2 200 OK\n"), runJson: () => [] });
+
+    github.deletePrLabel("owner/repo", 24, "agent:review");
+
+    expect(commands[0].at(-1)).toBe("repos/owner/repo/issues/24/labels/agent%3Areview");
+  });
+
+  it("deletes one Issue label with a status-bearing response", () => {
+    const commands: string[][] = [];
+    const github = createGithubOperations({ runText: (args: string[]) => (commands.push(args), "HTTP/2 200 OK\n"), runJson: () => [] });
+
+    github.deleteIssueLabel("owner/repo", 12, "agent:implement");
+
+    expect(commands[0]).toEqual([
+      "gh", "api", "--method", "DELETE", "--include", "repos/owner/repo/issues/12/labels/agent%3Aimplement",
+    ]);
+  });
+
+  it("paginates live Issue events", () => {
+    const commands: string[][] = [];
+    const github = createGithubOperations({ runText: () => "", runJson: (args: string[]) => (commands.push(args), [[{ id: 1 }], [{ id: 2 }]]) });
+
+    const events = github.listIssueTimelineEvents("owner/repo", 12);
+
+    expect({ command: commands[0], events }).toEqual({
+      command: ["gh", "api", "--paginate", "--slurp", "repos/owner/repo/issues/12/events"],
+      events: [{ id: 1 }, { id: 2 }],
+    });
   });
 
   it("paginates live PR labels", () => {

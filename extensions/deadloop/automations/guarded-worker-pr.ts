@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// Create the Worker PR only after authoritative output-commit verification.
+// Create the Worker PR only after authoritative output-commit verification. The PR is a draft: it
+// carries a review request, not a claim that people should look at it, and only an approved review
+// marks it ready.
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
@@ -49,12 +51,12 @@ type WorkerPrOps = {
   recheck: () => void;
   authorize: () => void;
 };
-function assertWorkerPrReadyForReview(
+function assertWorkerPrAwaitingReview(
   pr: Record<string, any>,
   attempt: { branch: string; baseBranch?: string; target: { number: number } },
   outputRevision: string,
 ): void {
-  if (pr.state !== "OPEN" || pr.isDraft !== false) throw new Error("Worker PR must be open and non-draft before the success label");
+  if (pr.state !== "OPEN" || pr.isDraft !== true) throw new Error("Worker PR must be an open draft before the review request");
   if (String(pr.headRefOid || "").toLowerCase() !== outputRevision.toLowerCase()) throw new Error("Worker PR head changed before the success label");
   if (String(pr.headRefName || "") !== attempt.branch) throw new Error("Worker PR head branch does not match the verified Worker branch");
   if (String(pr.baseRefName || "") !== String(attempt.baseBranch || "origin/main").replace(/^origin\//, "")) throw new Error("Worker PR base branch does not match the Worker target branch");
@@ -79,7 +81,7 @@ function ensureWorkerPr(
   if (ops.remoteHead().toLowerCase() !== outputRevision.toLowerCase()) throw new Error("remote Worker branch changed at the PR creation boundary");
   ops.authorize();
   if (ops.remoteHead().toLowerCase() !== outputRevision.toLowerCase()) throw new Error("remote Worker branch changed during PR creation authorization");
-  const url = ops.gh(["pr", "create", "-R", args.githubRepo, "--base", String(attempt.baseBranch || "origin/main").replace(/^origin\//, ""), "--head", attempt.branch, "--title", args.title, "--body", `Closes #${attempt.target.number}`]);
+  const url = ops.gh(["pr", "create", "-R", args.githubRepo, "--draft", "--base", String(attempt.baseBranch || "origin/main").replace(/^origin\//, ""), "--head", attempt.branch, "--title", args.title, "--body", `Closes #${attempt.target.number}`]);
   const match = String(url).match(/\/(\d+)\/?$/);
   if (!match) throw new Error("created Worker PR number was not returned");
   const number = Number(match[1]);
@@ -99,16 +101,16 @@ function addWorkerReviewLabel(
 ): void {
   ops.recheck();
   const observedBeforeLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "state,isDraft,headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
-  assertWorkerPrReadyForReview(observedBeforeLabel, attempt, outputRevision);
+  assertWorkerPrAwaitingReview(observedBeforeLabel, attempt, outputRevision);
   ops.authorize();
   const observedAfterAuthorization = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "state,isDraft,headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
-  assertWorkerPrReadyForReview(observedAfterAuthorization, attempt, outputRevision);
+  assertWorkerPrAwaitingReview(observedAfterAuthorization, attempt, outputRevision);
   const reviewLabelAlreadyPresent = Array.isArray(observedAfterAuthorization.labels)
     && observedAfterAuthorization.labels.some((label: any) => (typeof label === "string" ? label : label?.name) === args.reviewLabel);
   ops.gh(["pr", "edit", String(number), "-R", args.githubRepo, "--add-label", args.reviewLabel]);
   const observedAfterLabel = ops.gh(["pr", "view", String(number), "-R", args.githubRepo, "--json", "state,isDraft,headRefName,headRefOid,baseRefName,closingIssuesReferences,labels"], true);
   try {
-    assertWorkerPrReadyForReview(observedAfterLabel, attempt, outputRevision);
+    assertWorkerPrAwaitingReview(observedAfterLabel, attempt, outputRevision);
     const reviewLabelPersisted = Array.isArray(observedAfterLabel.labels)
       && observedAfterLabel.labels.some((label: any) => (typeof label === "string" ? label : label?.name) === args.reviewLabel);
     if (!reviewLabelPersisted) throw new Error("Worker PR success label was not persisted");
@@ -157,4 +159,4 @@ function run(args: Args): number {
 }
 function main() { try { process.exitCode = run(parseArgs(process.argv.slice(2))); } catch (error) { console.error(`guarded-worker-pr.ts: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 2; } }
 if (require.main === module) main();
-module.exports = { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrReadyForReview, ensureWorkerPr, parseArgs, run, verified };
+module.exports = { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrAwaitingReview, ensureWorkerPr, parseArgs, run, verified };

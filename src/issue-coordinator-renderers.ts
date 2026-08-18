@@ -21,6 +21,16 @@ type IssueBlockedCommentInput = {
   branch?: string;
 };
 
+type IssueExplorerPromptInput = {
+  issueNumber: number;
+  issueTitle: string;
+  issueUrl: string;
+  githubRepo: string;
+  workerInstructions: string;
+  promiseFile: string;
+  reportIdentity: { attemptId: string; inputRevision: { head: string } };
+};
+
 type IssueWorkerPromptInput = {
   launchReason: string;
   issueNumber: number;
@@ -130,12 +140,44 @@ herdr workspace list
 herdr worktree list --cwd ${shellQuoteForRenderer(input.repoPath)} --json
 git -C ${shellQuoteForRenderer(input.repoPath)} worktree list
 git -C ${shellQuoteForRenderer(input.repoPath)} branch --list ${shellQuoteForRenderer(branchPattern)}
-git -C ${shellQuoteForRenderer(worktreePath)} status --short
+git -C ${shellQuoteForRenderer(worktreePath)} status --short --untracked-files=all
 \`\`\`
 3. Re-queue the issue after fixing the cause.
    \`\`\`bash
 gh issue edit ${issue} -R ${shellQuoteForRenderer(input.githubRepo)} --remove-label ${shellQuoteForRenderer(input.blockedLabel)} --add-label ${shellQuoteForRenderer(input.implementLabel)}
 \`\`\``;
+}
+
+function renderIssueExplorerPrompt(input: IssueExplorerPromptInput): string {
+  const reportBase = JSON.stringify({
+    schemaVersion: 1,
+    attemptId: input.reportIdentity.attemptId,
+    role: "explorer",
+    target: { repository: input.githubRepo, kind: "issue", number: input.issueNumber },
+    inputRevision: input.reportIdentity.inputRevision,
+  });
+  return `Explore Issue #${input.issueNumber}: ${oneLineForRenderer(input.issueTitle)}
+
+Target:
+- GitHub repo: ${input.githubRepo}
+- Issue URL: ${input.issueUrl}
+
+Read the Issue body and all comments, CONTEXT.md when present, relevant ADRs and repository standards, source, tests, and useful git history. ${oneLineForRenderer(input.workerInstructions)}
+You may run read-only inspection and verification commands such as focused tests, typecheck, git log, and git blame.
+
+Hard limits:
+- Do not edit, create, delete, rename, or format repository files.
+- Do not commit or push.
+- Do not create, edit, or close pull requests.
+- Do not edit labels or post GitHub comments.
+- Do not run destructive commands. The Automation host alone validates and posts the result.
+
+Promise report:
+- Write one JSON object to \`${markdownCode(input.promiseFile)}\` before stopping.
+- Start with this exact identity: \`${markdownCode(reportBase)}\`.
+- On success add \`"status":"complete"\`, a concise \`summary\`, \`"result":{"difficulty":"low|medium|high","relevantFiles":["path"],"verifiedClaims":["claim"],"disprovedClaims":[],"openQuestions":[],"approach":"optional approach"}\`, and \`"evidence":{"commands":["command and result"]}\`.
+- On failure add \`"status":"blocked"\`, \`summary\`, \`"result":{"reason":"typed_reason_code","explanation":"what failed","recovery":"safe next step"}\`, and \`"evidence":{}\`.
+- Always write the promise file; do not exit silently.`;
 }
 
 function renderIssueWorkerPrompt(input: IssueWorkerPromptInput): string {
@@ -194,4 +236,4 @@ function pathForProjectCheck(automationDir: string): string {
   return `${automationDir.replace(/\/$/, "")}/run-project-check.ts`;
 }
 
-module.exports = { renderIssueBlockedComment, renderIssuePlanningComment, renderIssueWorkerPrompt };
+module.exports = { renderIssueBlockedComment, renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt };

@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { hasUncommittedWork } from "./agent-scratch-area.cjs";
 import type { CodeIdentityDecision } from "./code-identity";
 import { automationStateKey, nextSlotAfter, type NormalizedProject, type AutomationStateEntry } from "./core";
 import { formatRequiredVerification } from "./required-verification";
@@ -146,7 +147,7 @@ function isWorkerWorktree(worktree: HerdrWorktree, project: NormalizedProject): 
 }
 
 function isClean(status: unknown): boolean {
-  return String(status || "").trim() === "";
+  return !hasUncommittedWork(status);
 }
 
 function localHeadMatchesClosedPr(worktree: HerdrWorktree, pr: GithubItem, gitHeads: Record<string, string>): boolean {
@@ -265,7 +266,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
 
   const openPrs = input.openPrs || [];
   const reviewTarget = openPrs.filter((pr) => labelsOf(pr).has(project.labels.review));
-  const reviewing = openPrs.filter((pr) => labelsOf(pr).has(project.labels.reviewing));
+  const reviewing = openPrs.filter((pr) => labelsOf(pr).has(project.labels.inProgress));
 
   const workerWorktrees = (input.worktrees || []).filter((worktree) => isWorkerWorktree(worktree, project));
   const cleanupCandidates = selectCleanupCandidates(

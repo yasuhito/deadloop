@@ -2,11 +2,11 @@
 
 Handle review findings and conflicts safely without repeating the same change or overwriting another change.
 
-## Scenario: Fail closed before a conflict-recovery claim exists
+## Scenario: Turn a merge conflict into a branch-update request
 
 * Given A pull request has a conflict that can be recovered
 * When deadloop checks the pull request
-* Then deadloop leaves the conflicted pull request untouched before claim
+* Then deadloop requests a branch update instead of recovering from local state
 
 ## Scenario: Do not start conflict recovery twice for the same pull request head and base
 
@@ -14,23 +14,17 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop checks the pull request
 * Then deadloop does not start another dedicated conflict-recovery attempt
 
-## Scenario: Do not relabel a repeated conflict-recovery request before claim
+## Scenario: Block a repeated conflict-recovery request instead of attempting it again
 
 * Given Conflict recovery was already attempted for the same pull request head and base
 * When deadloop checks the pull request
-* Then deadloop leaves the conflicted pull request untouched before claim
+* Then deadloop blocks the repeated conflict-recovery request
 
-## Scenario: Do not comment on a repeated conflict-recovery request before claim
-
-* Given Conflict recovery was already attempted for the same pull request head and base
-* When deadloop checks the pull request
-* Then deadloop leaves the conflicted pull request untouched before claim
-
-## Scenario: Do not launch repeated conflict recovery before claim
+## Scenario: Explain a repeated conflict-recovery request on the pull request
 
 * Given Conflict recovery was already attempted for the same pull request head and base
 * When deadloop checks the pull request
-* Then deadloop leaves the conflicted pull request untouched before claim
+* Then deadloop leaves recovery guidance for the repeated conflict-recovery request
 
 ## Scenario: Return a pull request with a conflict-recovery head update to normal review
 
@@ -50,11 +44,11 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop checks the pull request
 * Then The selection reason after conflict recovery is repair re-review
 
-## Scenario: Preserve all shared state before a conflict-recovery claim
+## Scenario: Launch no agent from the review request of a conflicted pull request
 
 * Given A pull request has a conflict that can be recovered
 * When deadloop checks the pull request
-* Then deadloop leaves the conflicted pull request untouched before claim
+* Then deadloop does not start another dedicated conflict-recovery attempt
 
 ## Scenario: Start a dedicated repair attempt for the first actionable review findings
 
@@ -80,11 +74,11 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop processes the review result
 * Then deadloop does not start another dedicated repair attempt
 
-## Scenario: Keep the new head under review when the same findings remain after repair
+## Scenario: Leave no waiting request when the same findings remain after repair
 
 * Given The same review findings remain on the new head after repair
 * When deadloop processes the review result
-* Then deadloop keeps the pull request under review
+* Then deadloop leaves no waiting request on the pull request
 
 ## Scenario: Escalate the new head for human handling when the same findings remain after repair
 
@@ -116,11 +110,11 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop processes the review result
 * Then deadloop does not start normal review
 
-## Scenario: Keep the pull request under review after a second technical review failure
+## Scenario: Leave no waiting request after a second technical review failure
 
 * Given A pull request already had one technical review failure
 * When deadloop processes the review result
-* Then deadloop keeps the pull request under review
+* Then deadloop leaves no waiting request on the pull request
 
 ## Scenario: Escalate a second technical review failure for human handling
 

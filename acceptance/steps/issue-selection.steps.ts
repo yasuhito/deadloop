@@ -81,7 +81,7 @@ function runClosedIssuePrecheck(): number | null {
   }
 }
 
-Given("An eligible Issue has the `ready-for-agent` and `agent:implement` labels", function (this: IssueSelectionWorld) {
+Given("An eligible Issue has the `agent:implement` request without `ready-for-agent`", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-ready-implement.json";
 });
 
@@ -89,7 +89,7 @@ Given("An Issue with all required public labels is closed", function (this: Issu
   this.precheckMode = "closed-issue";
 });
 
-Given("An unprepared Issue lacks required public labels", function (this: IssueSelectionWorld) {
+Given("An Issue lacks the required implementation request", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-missing-required-label.json";
 });
 

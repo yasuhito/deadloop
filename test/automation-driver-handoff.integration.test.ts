@@ -42,6 +42,7 @@ describe("real driver handoff across disable and re-enable", () => {
         enabledAt: () => 1,
         isEnabled: () => enabled,
         now: () => 456,
+        prepareExecutionSupply: () => ({ codeIdentity: "a".repeat(40), lockHash: "b".repeat(64), packageRoot: "/snapshot", automationDir: "/snapshot/automations", dependencyRoot: "/dependencies" }),
         readPrompt: () => "unused",
         resolveAutomationFileInDir: (_kind, _automation, requested) => foundFile(requested),
         runDriver: async () => {

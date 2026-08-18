@@ -2,11 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { RequiredVerificationContract } from "./required-verification";
+import type { PriorRequiredFindingDisposition } from "./reviewer-outcome-contract";
+
+const { isPriorRequiredFindingDisposition } = require("./reviewer-outcome-contract.ts");
 
 export const ATTEMPT_RECORD_FILE = "attempt.json";
 const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
 
-export type AttemptRole = "worker" | "reviewer" | "review-repair" | "branch-update";
+export type AttemptRole = "worker" | "explorer" | "reviewer" | "review-repair" | "branch-update";
 export type AttemptTargetKind = "issue" | "pull-request";
 export type AttemptPhase =
   | "prepared"
@@ -17,10 +20,11 @@ export type AttemptPhase =
   | "github_persisted"
   | "workspace_closed"
   | "launch_failed"
-  | "abandoned";
+  | "abandoned"
+  | "authority_released";
 
 export function releasesAttemptOwnership(phase: AttemptPhase): boolean {
-  return phase === "workspace_closed" || phase === "abandoned";
+  return phase === "workspace_closed" || phase === "abandoned" || phase === "authority_released";
 }
 
 export type AttemptTarget = {
@@ -52,6 +56,9 @@ export type ReviewerFinding = {
   severity?: "blocker" | "major" | "minor";
 };
 
+/** An optional improvement the reviewer leaves behind; never part of the repair contract. */
+export type ReviewerAdvisory = Omit<ReviewerFinding, "severity">;
+
 export type ValidationCheck = { command: string; result: "passed" };
 export type RepairOutcome = { title: string; summary: string; paths: string[] };
 export type BlockedCompletionResult = {
@@ -71,12 +78,30 @@ export type CompletionReportV1 = {
   | { role: AttemptRole; status: "blocked"; result: BlockedCompletionResult; evidence: Record<string, unknown> }
   | { role: "worker"; status: "complete"; result: { outputRevision: string }; evidence: { validations: string[] } }
   | {
+      role: "explorer";
+      status: "complete";
+      result: {
+        difficulty: "low" | "medium" | "high";
+        relevantFiles: string[];
+        verifiedClaims: string[];
+        disprovedClaims: string[];
+        openQuestions: string[];
+        approach?: string;
+      };
+      evidence: { commands: string[] };
+    }
+  | {
       role: "reviewer";
       status: "complete";
       result: {
         outcome: "approved" | "changes_requested" | "human_required";
         reviewedHead: string;
+        /** Required findings. They are the entire automatic-repair contract. */
         findings?: ReviewerFinding[];
+        /** Advisory observations. They never reach automatic repair. */
+        advisories?: ReviewerAdvisory[];
+        /** How the reviewer disposed of the required findings raised before this review. */
+        priorRequiredFindings?: PriorRequiredFindingDisposition;
       };
       evidence: { reviewed: string[] };
     }
@@ -105,8 +130,6 @@ type CompletionReportEnvelope = Omit<CompletionReportV1, "role" | "status" | "re
   evidence: unknown;
 };
 
-export type CompletionReportStrength = "strong" | "legacy-weak";
-
 export type ValidatedCompletionReport = {
   strength: "strong";
   report: CompletionReportV1;
@@ -115,6 +138,18 @@ export type ValidatedCompletionReport = {
 export type AttemptAbandonment = {
   reason: "launch_failed_no_agent";
   abandonedAt: string;
+};
+
+export type AttemptAuthorityRelease = {
+  reason: "github_authority_lost" | "never_launched";
+  releasedAt: string;
+  cutoffEventId?: string;
+};
+
+export type AgentRequestBinding = {
+  role: "worker" | "explorer";
+  label: string;
+  eventId: string;
 };
 
 export type AttemptRecord = AttemptIdentity & {
@@ -126,7 +161,7 @@ export type AttemptRecord = AttemptIdentity & {
   promptFile: string;
   promiseFile: string;
   phase: AttemptPhase;
-  lastSuccessfulPhase: Exclude<AttemptPhase, "launch_failed" | "abandoned">;
+  lastSuccessfulPhase: Exclude<AttemptPhase, "launch_failed" | "abandoned" | "authority_released">;
   launchError?: string;
   workspaceId?: string;
   tabId?: string;
@@ -135,8 +170,10 @@ export type AttemptRecord = AttemptIdentity & {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
-  reviewClaim?: Record<string, unknown>;
+  requestEventId?: string;
+  agentRequest?: AgentRequestBinding;
   abandonment?: AttemptAbandonment;
+  authorityRelease?: AttemptAuthorityRelease;
 };
 
 export type PreparedAttemptInput = AttemptIdentity & {
@@ -150,10 +187,11 @@ export type PreparedAttemptInput = AttemptIdentity & {
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
-  reviewClaim?: Record<string, unknown>;
+  requestEventId?: string;
+  agentRequest?: AgentRequestBinding;
 };
 
-const SUCCESSFUL_PHASES: Exclude<AttemptPhase, "launch_failed" | "abandoned">[] = [
+const SUCCESSFUL_PHASES: Exclude<AttemptPhase, "launch_failed" | "abandoned" | "authority_released">[] = [
   "prepared",
   "github_claimed",
   "workspace_opened",
@@ -201,7 +239,7 @@ function parseRequiredVerification(value: unknown, required: boolean): RequiredV
   const source = contract.source;
   if (!source || typeof source !== "object" || Array.isArray(source)) fail("requiredVerification.source must be an object");
   const sourceValue = source as Record<string, unknown>;
-  if (sourceValue.kind !== "local" && sourceValue.kind !== "repo_policy") fail("requiredVerification.source.kind is invalid");
+  if (sourceValue.kind !== "local" && sourceValue.kind !== "repo_policy" && sourceValue.kind !== "default") fail("requiredVerification.source.kind is invalid");
   const command = nonEmptyString(contract.command, "requiredVerification.command");
   const parsed: RequiredVerificationContract = {
     repository: nonEmptyString(contract.repository, "requiredVerification.repository"),
@@ -228,18 +266,18 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("record must be an object");
   const record = value as Record<string, unknown>;
   const role = record.role;
-  if (role !== "worker" && role !== "reviewer" && role !== "review-repair" && role !== "branch-update")
+  if (role !== "worker" && role !== "explorer" && role !== "reviewer" && role !== "review-repair" && role !== "branch-update")
     fail("role is invalid");
   const phase = record.phase;
-  if (!SUCCESSFUL_PHASES.includes(phase as Exclude<AttemptPhase, "launch_failed" | "abandoned">)
-    && phase !== "launch_failed" && phase !== "abandoned") fail("phase is invalid");
+  if (!SUCCESSFUL_PHASES.includes(phase as Exclude<AttemptPhase, "launch_failed" | "abandoned" | "authority_released">)
+    && phase !== "launch_failed" && phase !== "abandoned" && phase !== "authority_released") fail("phase is invalid");
   const lastSuccessfulPhase = record.lastSuccessfulPhase;
-  if (!SUCCESSFUL_PHASES.includes(lastSuccessfulPhase as Exclude<AttemptPhase, "launch_failed" | "abandoned">))
+  if (!SUCCESSFUL_PHASES.includes(lastSuccessfulPhase as Exclude<AttemptPhase, "launch_failed" | "abandoned" | "authority_released">))
     fail("lastSuccessfulPhase is invalid");
   if ((phase === "launch_failed" || phase === "abandoned") && typeof record.launchError !== "string") {
     fail(`${phase} requires launchError`);
   }
-  if (phase !== "launch_failed" && phase !== "abandoned" && phase !== lastSuccessfulPhase) {
+  if (phase !== "launch_failed" && phase !== "abandoned" && phase !== "authority_released" && phase !== lastSuccessfulPhase) {
     fail("successful phase must equal lastSuccessfulPhase");
   }
   let abandonment: AttemptAbandonment | undefined;
@@ -261,6 +299,18 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
   } else if (record.abandonment !== undefined) {
     fail("abandonment evidence requires abandoned phase");
   }
+  let authorityRelease: AttemptAuthorityRelease | undefined;
+  if (phase === "authority_released") {
+    if (!record.authorityRelease || typeof record.authorityRelease !== "object" || Array.isArray(record.authorityRelease)) {
+      fail("authority_released requires authorityRelease evidence");
+    }
+    const evidence = record.authorityRelease as Record<string, unknown>;
+    if (evidence.reason !== "github_authority_lost" && evidence.reason !== "never_launched") fail("authorityRelease.reason is invalid");
+    const releasedAt = nonEmptyString(evidence.releasedAt, "authorityRelease.releasedAt");
+    if (!Number.isFinite(Date.parse(releasedAt))) fail("authorityRelease.releasedAt must be an ISO timestamp");
+    const cutoffEventId = evidence.cutoffEventId === undefined ? undefined : nonEmptyString(evidence.cutoffEventId, "authorityRelease.cutoffEventId");
+    authorityRelease = { reason: evidence.reason, releasedAt, ...(cutoffEventId ? { cutoffEventId } : {}) };
+  } else if (record.authorityRelease !== undefined) fail("authorityRelease evidence requires authority_released phase");
 
   return {
     attemptId: nonEmptyString(record.attemptId, "attemptId"),
@@ -278,7 +328,7 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     promptFile: nonEmptyString(record.promptFile, "promptFile"),
     promiseFile: nonEmptyString(record.promiseFile, "promiseFile"),
     phase: phase as AttemptPhase,
-    lastSuccessfulPhase: lastSuccessfulPhase as Exclude<AttemptPhase, "launch_failed" | "abandoned">,
+    lastSuccessfulPhase: lastSuccessfulPhase as Exclude<AttemptPhase, "launch_failed" | "abandoned" | "authority_released">,
     ...(record.launchError === undefined ? {} : { launchError: nonEmptyString(record.launchError, "launchError") }),
     ...(record.workspaceId === undefined ? {} : { workspaceId: nonEmptyString(record.workspaceId, "workspaceId") }),
     ...(record.tabId === undefined ? {} : { tabId: nonEmptyString(record.tabId, "tabId") }),
@@ -295,12 +345,20 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(parseRequiredVerification(record.requiredVerification, false)
       ? { requiredVerification: parseRequiredVerification(record.requiredVerification, true) }
       : {}),
-    ...(record.reviewClaim === undefined
+    ...(record.requestEventId === undefined ? {} : { requestEventId: nonEmptyString(record.requestEventId, "requestEventId") }),
+    ...(record.agentRequest === undefined
       ? {}
-      : record.reviewClaim && typeof record.reviewClaim === "object" && !Array.isArray(record.reviewClaim)
-        ? { reviewClaim: record.reviewClaim as Record<string, unknown> }
-        : fail("reviewClaim must be an object")),
+      : record.agentRequest && typeof record.agentRequest === "object" && !Array.isArray(record.agentRequest)
+        && ((record.agentRequest as Record<string, unknown>).role === "worker"
+          || (record.agentRequest as Record<string, unknown>).role === "explorer")
+        ? { agentRequest: {
+          role: (record.agentRequest as Record<string, unknown>).role as "worker" | "explorer",
+          label: nonEmptyString((record.agentRequest as Record<string, unknown>).label, "agentRequest.label"),
+          eventId: nonEmptyString((record.agentRequest as Record<string, unknown>).eventId, "agentRequest.eventId"),
+        } }
+        : fail("agentRequest must be an Issue request binding")),
     ...(abandonment ? { abandonment } : {}),
+    ...(authorityRelease ? { authorityRelease } : {}),
   };
 }
 
@@ -350,12 +408,21 @@ function assertRecordAdvance(current: AttemptRecord, next: AttemptRecord): void 
     if (current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
-  if (current.reviewClaim !== undefined && JSON.stringify(current.reviewClaim) !== JSON.stringify(next.reviewClaim)) throw new Error("Attempt record reviewClaim cannot change");
+  if (current.requestEventId !== next.requestEventId) throw new Error("Attempt record requestEventId cannot change");
+  if (JSON.stringify(current.agentRequest) !== JSON.stringify(next.agentRequest)) throw new Error("Attempt record agentRequest cannot change");
   for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"] as const) {
     if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }
   if (current.abandonment !== undefined && JSON.stringify(current.abandonment) !== JSON.stringify(next.abandonment)) {
     throw new Error("Attempt record abandonment evidence cannot change");
+  }
+  if (current.authorityRelease !== undefined && JSON.stringify(current.authorityRelease) !== JSON.stringify(next.authorityRelease)) {
+    throw new Error("Attempt record authority-release evidence cannot change");
+  }
+  if (next.phase === "authority_released") {
+    if (!next.authorityRelease) throw new Error("authority_released requires authority-release evidence");
+    if (current.lastSuccessfulPhase !== next.lastSuccessfulPhase) throw new Error("Attempt record lastSuccessfulPhase cannot change");
+    return;
   }
   if (current.phase === "launch_failed" && next.phase === "abandoned") {
     if (!next.abandonment) throw new Error("abandoned requires abandonment evidence");
@@ -412,7 +479,7 @@ const NEXT_SUCCESS_PHASE: Partial<Record<AttemptPhase, AttemptPhase>> = {
 /** Advances a record by exactly one modeled successful phase, or records a launch failure. */
 export function transitionAttempt(record: AttemptRecord, nextPhase: AttemptPhase, launchError?: string): AttemptRecord {
   parseAttemptRecord(record);
-  if (record.phase === "launch_failed" || record.phase === "workspace_closed" || record.phase === "abandoned") {
+  if (record.phase === "launch_failed" || record.phase === "workspace_closed" || record.phase === "abandoned" || record.phase === "authority_released") {
     throw new Error(`Attempt phase ${record.phase} is terminal`);
   }
   if (nextPhase === "launch_failed") {
@@ -420,6 +487,7 @@ export function transitionAttempt(record: AttemptRecord, nextPhase: AttemptPhase
     return { ...record, phase: "launch_failed", launchError, lastSuccessfulPhase: record.lastSuccessfulPhase };
   }
   if (nextPhase === "abandoned") throw new Error("Use abandonPersistedAttempt for abandoned transitions");
+  if (nextPhase === "authority_released") throw new Error("Use releasePersistedAttemptAuthority for authority release");
   if (NEXT_SUCCESS_PHASE[record.phase] !== nextPhase) {
     throw new Error(`Attempt phase ${record.phase} cannot transition to ${nextPhase}`);
   }
@@ -431,14 +499,37 @@ export function recordPersistedCompletionReport(runDir: string, report: Completi
   const current = readAttemptRecord(runDir);
   validateCompletionReportBinding(current, report);
   if (current.phase !== "agent_started") throw new Error(`Attempt phase ${current.phase} cannot receive a report`);
-  const outputRevision = report.status === "complete" && report.role !== "reviewer"
-    ? report.result.outputRevision
+  const outputRevision = report.status === "complete" && ["worker", "review-repair", "branch-update"].includes(report.role)
+    ? (report.result as { outputRevision: string }).outputRevision
     : undefined;
   const next: AttemptRecord = {
     ...current,
     ...(outputRevision ? { outputRevision } : {}),
     phase: "report_received",
     lastSuccessfulPhase: "report_received",
+  };
+  writeAttemptRecordAtomically(attemptRecordPath(runDir), next);
+  return next;
+}
+
+export function releasePersistedAttemptAuthority(
+  runDir: string,
+  releasedAt: string,
+  cutoffEventId?: string,
+  reason: AttemptAuthorityRelease["reason"] = "github_authority_lost",
+): AttemptRecord {
+  const current = readAttemptRecord(runDir);
+  if (current.phase === "authority_released") return current;
+  if (releasesAttemptOwnership(current.phase)) throw new Error(`Attempt phase ${current.phase} already released ownership`);
+  if (!Number.isFinite(Date.parse(releasedAt))) throw new Error("releasedAt must be an ISO timestamp");
+  const next: AttemptRecord = {
+    ...current,
+    phase: "authority_released",
+    authorityRelease: {
+      reason,
+      releasedAt,
+      ...(cutoffEventId ? { cutoffEventId } : {}),
+    },
   };
   writeAttemptRecordAtomically(attemptRecordPath(runDir), next);
   return next;
@@ -492,7 +583,7 @@ export function parseCompletionReportV1(value: unknown): CompletionReportEnvelop
   const report = value as Record<string, unknown>;
   if (report.schemaVersion !== 1) throw new Error("Completion report schemaVersion is not V1");
   const role = report.role;
-  if (role !== "worker" && role !== "reviewer" && role !== "review-repair" && role !== "branch-update") {
+  if (role !== "worker" && role !== "explorer" && role !== "reviewer" && role !== "review-repair" && role !== "branch-update") {
     throw new Error("Completion report role is invalid");
   }
   if (!report.target || typeof report.target !== "object") throw new Error("Completion report target is invalid");
@@ -636,6 +727,15 @@ function validateCompleteResult(report: CompletionReportEnvelope): void {
     if (!nonEmptyStringArray(evidence.validations)) throw new Error("Worker completion requires validation evidence");
     return;
   }
+  if (report.role === "explorer") {
+    if (!["low", "medium", "high"].includes(String(result.difficulty))) throw new Error("Explorer completion difficulty is invalid");
+    for (const field of ["relevantFiles", "verifiedClaims", "disprovedClaims", "openQuestions"]) {
+      if (!Array.isArray(result[field]) || !result[field].every((value: unknown) => typeof value === "string" && Boolean(value.trim()))) throw new Error(`Explorer completion ${field} is invalid`);
+    }
+    if (result.approach !== undefined && (typeof result.approach !== "string" || !result.approach.trim())) throw new Error("Explorer completion approach is invalid");
+    if (!Array.isArray(evidence.commands) || !evidence.commands.every((value: unknown) => typeof value === "string" && Boolean(value.trim()))) throw new Error("Explorer completion command evidence is invalid");
+    return;
+  }
   if (report.role === "reviewer") {
     if (result.outcome !== "approved" && result.outcome !== "changes_requested" && result.outcome !== "human_required") {
       throw new Error("Reviewer completion outcome is invalid");
@@ -648,6 +748,18 @@ function validateCompleteResult(report: CompletionReportEnvelope): void {
     }
     if (result.outcome === "changes_requested" && (!Array.isArray(result.findings) || result.findings.length === 0)) {
       throw new Error("Reviewer changes_requested requires findings with severity");
+    }
+    if (result.outcome === "approved" && Array.isArray(result.findings) && result.findings.length > 0) {
+      throw new Error("Reviewer approved requires no required findings");
+    }
+    if (result.advisories !== undefined && (!Array.isArray(result.advisories) || !result.advisories.every((advisory) => validFinding(advisory, false)))) {
+      throw new Error("Reviewer completion has an invalid advisory observation");
+    }
+    if (result.priorRequiredFindings !== undefined && !isPriorRequiredFindingDisposition(result.priorRequiredFindings)) {
+      throw new Error("Reviewer completion has an invalid priorRequiredFindings disposition");
+    }
+    if (result.outcome === "changes_requested" && result.priorRequiredFindings === undefined) {
+      throw new Error("Reviewer changes_requested requires a priorRequiredFindings disposition");
     }
     if (!nonEmptyStringArray(evidence.reviewed)) throw new Error("Reviewer completion requires review evidence");
     return;

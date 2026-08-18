@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-// Reconcile the non-atomic GitHub-claim / local-journal boundary without replaying a claim.
+// Reconcile the non-atomic GitHub request-consumption / local-journal boundary without replaying it.
 const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
-const { runHerdrCompatibilityPreflight } = require("../../../src/herdr-preflight.cjs");
-const { readAttemptRecord, transitionPersistedAttempt } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
+const { consumeIssueRequest } = require("../../../src/issue-request-transition.ts");
+const { readAttemptRecord, releasePersistedAttemptAuthority, transitionPersistedAttempt } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
 type JsonObject = Record<string, any>;
@@ -19,7 +21,7 @@ function parseArgs(argv: string[]): JsonObject {
   }
   for (const name of [
     "attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "enabledAt", "readyLabel", "implementLabel",
-    "inProgressLabel", "reviewLabel", "reviewingLabel", "blockedLabel",
+    "inProgressLabel", "reviewLabel", "updateBranchLabel", "blockedLabel",
   ]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
@@ -31,22 +33,29 @@ function labelNames(item: JsonObject): Set<string> {
     typeof label === "string" ? label : String(label?.name || "")));
 }
 
-function hasExactClaim(record: JsonObject, item: JsonObject, args: JsonObject): boolean {
+function hasExactRequestConsumption(record: JsonObject, item: JsonObject, args: JsonObject, events: JsonObject[] = []): boolean {
   const labels = labelNames(item);
   if (record.role === "worker") {
     return String(item.state || "").toUpperCase() === "OPEN"
-      && labels.has(String(args.readyLabel))
+      && (record.agentRequest || labels.has(String(args.readyLabel)))
       && labels.has(String(args.inProgressLabel))
       && !labels.has(String(args.implementLabel))
       && !labels.has(String(args.blockedLabel));
   }
+  const requestBound = record.role === "reviewer" || record.role === "branch-update";
   const exactPullRequest = String(item.state || "").toUpperCase() === "OPEN"
     && String(item.headRefName || "") === String(record.branch)
     && String(item.headRefOid || "").toLowerCase() === String(record.inputRevision.head).toLowerCase()
-    && labels.has(String(args.reviewLabel))
-    && labels.has(String(args.reviewingLabel))
-    && !labels.has(String(args.blockedLabel));
+    && labels.has(String(args.inProgressLabel))
+    && !labels.has(String(args.blockedLabel))
+    && (!requestBound || (
+      !labels.has(String(args.implementLabel))
+      && !labels.has(String(args.reviewLabel))
+      && !labels.has(String(args.updateBranchLabel))
+    ));
   if (!exactPullRequest) return false;
+  if (requestBound
+    && !events.some((event) => String(event.id || event.node_id || "") === String(record.requestEventId || ""))) return false;
   const comments = (item.comments || []).map((comment: JsonObject) => String(comment?.body || ""));
   if (record.role === "branch-update") {
     return comments.some((body: string) => body.includes(
@@ -61,36 +70,78 @@ function hasExactClaim(record: JsonObject, item: JsonObject, args: JsonObject): 
   return record.role === "reviewer";
 }
 
-function reconcileLocked(args: JsonObject, runner: ReturnType<typeof createCommandRunner>): JsonObject {
+function reconcileLocked(
+  args: JsonObject,
+  runner: ReturnType<typeof createCommandRunner>,
+  enabled: { automationLogin?: string } = {},
+  recheck: () => void = () => {},
+  requestGithub?: ReturnType<typeof createGithubOperations>,
+): JsonObject {
   const { runDir } = canonicalAttemptLocation(args);
   const record = readAttemptRecord(runDir);
   assertAttemptProjectBinding(record, args);
   if (record.phase !== "prepared") {
     return driverResult("done", `attempt is already ${record.phase}`, { driverAction: "claim_already_reconciled" });
   }
-  const item = record.role === "worker"
+  const item = record.role === "worker" || record.role === "explorer"
     ? runner.runJson(["gh", "issue", "view", String(record.target.number), "-R", record.repository, "--json", "number,state,labels"])
     : runner.runJson(["gh", "pr", "view", String(record.target.number), "-R", record.repository,
       "--json", "number,state,headRefName,headRefOid,labels,comments"]);
-  if (!hasExactClaim(record, item, args)) {
-    return driverResult("done", "prepared attempt retained because the exact GitHub claim is absent or changed", {
-      driverAction: "prepared_claim_blocked",
+  const labels = labelNames(item);
+  if ((record.role === "worker" || record.role === "explorer") && record.agentRequest && !labels.has(String(record.agentRequest.label))) {
+    const github = requestGithub || createGithubOperations(runner, recheck);
+    const outcome = consumeIssueRequest({
+      github,
+      repository: String(record.repository),
+      issueNumber: Number(record.target.number),
+      requestLabel: String(record.agentRequest.label),
+      requestEventId: String(record.agentRequest.eventId),
+      inProgressLabel: String(args.inProgressLabel),
+      blockedLabel: String(args.blockedLabel),
+      automationLogin: String(enabled.automationLogin || ""),
+      attemptId: String(record.attemptId),
+      persistConsumed: () => { throw new Error("prepared attempt has no durable consumption receipt"); },
+    });
+    releasePersistedAttemptAuthority(runDir, new Date().toISOString(), String(record.agentRequest.eventId), "never_launched");
+    return driverResult("done", `prepared Issue request consumption was ${outcome.kind}`, {
+      driverAction: outcome.kind === "ambiguous_blocked"
+        ? "prepared_request_consumption_ambiguous"
+        : `prepared_request_${outcome.kind}`,
     });
   }
-  const claimed = transitionPersistedAttempt(runDir, "github_claimed");
-  return driverResult("done", "prepared attempt GitHub claim reconciled", {
-    driverAction: "prepared_claim_reconciled", record: claimed,
+  if (record.role === "explorer") {
+    return driverResult("done", "prepared exploration retained while its request still awaits consumption", {
+      driverAction: "prepared_request_waiting",
+    });
+  }
+  const events = record.role === "worker" ? [] : runner.runJson([
+    "gh", "api", "--paginate", "--slurp", `repos/${record.repository}/issues/${record.target.number}/events`,
+  ]).flat();
+  if (!hasExactRequestConsumption(record, item, args, events)) {
+    return driverResult("done", "prepared attempt retained because the exact GitHub request consumption is absent or changed", {
+      driverAction: "prepared_request_consumption_blocked",
+    });
+  }
+  if (record.role === "reviewer" || record.role === "branch-update") {
+    return driverResult("done", "prepared request-bound attempt retained because the confirmed HTTP 200 result was not durably phase-advanced", {
+      driverAction: "prepared_request_consumption_blocked",
+    });
+  }
+  const consumed = transitionPersistedAttempt(runDir, "github_claimed");
+  return driverResult("done", "prepared attempt GitHub request consumption reconciled", {
+    driverAction: "prepared_request_consumption_reconciled", record: consumed,
   });
 }
 
 function reconcile(args: JsonObject): JsonObject {
   const runner = createCommandRunner();
-  runHerdrCompatibilityPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
+  runHerdrPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
   const project = {
     id: String(args.projectId), repoPath: path.resolve(String(args.projectRepo)), githubRepo: String(args.githubRepo),
     stateDir: path.resolve(String(args.stateDir)), enabledAt: Number(args.enabledAt),
   };
-  return withEnabledDriverLock(project, () => reconcileLocked(args, runner));
+  return withEnabledDriverLock(project, (enabled: { automationLogin?: string }, recheck: () => void) =>
+    reconcileLocked(args, runner, enabled, recheck));
 }
 
 function main(): void {
@@ -100,4 +151,4 @@ function main(): void {
   }
 }
 if (require.main === module) main();
-module.exports = { hasExactClaim, parseArgs, reconcile, reconcileLocked };
+module.exports = { hasExactRequestConsumption, parseArgs, reconcile, reconcileLocked };

@@ -11,11 +11,8 @@ deadloop 自体の開発も、deadloop で回します。
 For public users, use the same safe rollout model:
 
 1. **Issue coordination only** — enable `issue-coordinator` first. It may create implementation PRs, but humans still review and merge.
-2. **PR reviewer without auto-merge** — add `pr-reviewer` only after issue coordination is reliable. Keep `autoMerge: false` so reviewed PRs are handed to `ready-for-human`.
+2. **PR reviewer without auto-merge** — add `pr-reviewer` only after issue coordination is reliable. Keep `autoMerge: false` so an approved PR becomes ready with no agent workflow label left.
 3. **Conditional auto-merge** — consider `autoMerge: true` only after branch protection, CI, review expectations, manual approval/dry-run practices, and stop conditions are proven.
-
-See [public-package-setup.md](public-package-setup.md) for the first-time setup checklist.
-
 
 1. **Phase 1: 実装 PR 作成まで**
    - `issue-coordinator` だけを有効にする。
@@ -62,7 +59,7 @@ See [public-package-setup.md](public-package-setup.md) for the first-time setup 
 }
 ```
 
-`pr-reviewer` を使う場合も最初は `autoMerge: false` のままにし、レビューエージェントの確認と検証が終わった PR を `ready-for-human` に渡す運用で試します。`autoMerge: true` は Phase 3 まで使いません。
+`pr-reviewer` を使う場合も最初は `autoMerge: false` のままにし、レビューエージェントの確認と検証が終わった PR を ready へ変えて agent 系ワークフローラベルを残さない運用で試します。`autoMerge: true` は Phase 3 まで使いません。
 
 ## 起動方法
 
@@ -81,8 +78,6 @@ cd /home/yasuhito/Work/deadloop
 pi -e /home/yasuhito/Work/deadloop
 ```
 
-別の設定ファイルを使う場合だけ `DEADLOOP_CONFIG=/path/to/projects.json` を指定します。
-
 ## 必要なラベル
 
 最初に GitHub 側へラベルを作成します。
@@ -92,7 +87,7 @@ gh label create ready-for-agent --repo yasuhito/deadloop --color 0e8a16 || true
 gh label create agent:implement --repo yasuhito/deadloop --color 1d76db || true
 gh label create agent:in-progress --repo yasuhito/deadloop --color fbca04 || true
 gh label create agent:review --repo yasuhito/deadloop --color 5319e7 || true
-gh label create agent:reviewing --repo yasuhito/deadloop --color c2e0c6 || true
+gh label create agent:update-branch --repo yasuhito/deadloop --color 006b75 || true
 gh label create agent:blocked --repo yasuhito/deadloop --color b60205 || true
 gh label create ready-for-human --repo yasuhito/deadloop --color d93f0b || true
 gh label create needs-info --repo yasuhito/deadloop --color fef2c0 || true
@@ -101,10 +96,7 @@ gh label create needs-triage --repo yasuhito/deadloop --color f9d0c4 || true
 
 ## 試験運用用 Issue の書き方
 
-Issue coordinator が拾うには、Issue に次の両方のラベルを付けます。
-
-- `ready-for-agent`
-- `agent:implement`
+Issue coordinator に実装を依頼するには、Issue に `agent:implement` を付けます。`ready-for-agent` は任意のトリアージ用ラベルです。
 
 Issue 本文には、少なくとも `## Agent Brief` または `## What to build` と、`## Acceptance criteria` または `## 受け入れ条件` を含めます。詳しい Gate 条件は README の「エージェントに渡せる Issue の書き方」と `extensions/deadloop/automations/issue-coordinator.prompt.md` の `### 3. Gate` 節に合わせます。
 
@@ -136,7 +128,7 @@ deadloop の試験運用を安全に進めるため、PR reviewer の自動マ�
 
 ## What to build
 - project 設定に `autoMerge` または同等の安全フラグを追加する。
-- `pr-reviewer` プロンプトに、そのフラグが無効の場合はマージせず `ready-for-human` に渡す方針を反映する。
+- `pr-reviewer` プロンプトに、そのフラグが無効の場合はマージせず ready の PR として人間へ渡す方針を反映する。
 - 既定値は安全側に倒す。
 - README または docs に設定例を追記する。
 

@@ -8,7 +8,7 @@ const runtime = require("../src/attempt-workspace-predicates.cjs");
 const lifecycleRuntime = require("../src/attempt-lifecycle-runtime.cjs");
 import { readAttemptRecord, transitionAttempt, validateCompletionReportBinding } from "../src/attempt-lifecycle";
 
-const fixtures = [workerFixture(), reviewerFixture("approved"), reviewerFixture("changes_requested"), repairFixture(), repairFixture("stale_head"), branchUpdateFixture(), branchUpdateFixture("stale_head")];
+const fixtures = [workerFixture(), reviewerFixture("approved"), reviewerFixture("human_required"), reviewerFixture("changes_requested"), reviewerFixture("changes_requested", "persisted"), reviewerFixture("changes_requested", "regressed"), reviewerFixture("changes_requested", "mixed"), reviewerFixture("changes_requested", "none"), repairFixture(), repairFixture("stale_head"), branchUpdateFixture(), branchUpdateFixture("stale_head")];
 
 describe("direct Node runtime parity", () => {
   it.each(fixtures.map((fixture, index) => [index, fixture] as const))("matches the typed completion predicate for fixture %s", (_index, fixture) => {
@@ -35,7 +35,6 @@ describe("direct Node runtime parity", () => {
 
   it.each([
     ["missing report", (input: any) => ({ ...input, report: { kind: "missing" } })],
-    ["legacy report", (input: any) => ({ ...input, report: { kind: "legacy", promisePath: input.record.promiseFile, report: {} } })],
     ["malformed report", (input: any) => ({ ...input, report: { ...input.report, report: { schemaVersion: 1 } } })],
     ["blocked evidence", (input: any) => ({ ...input, report: { ...input.report, report: { ...input.report.report, status: "blocked", result: { reason: "stop", explanation: "blocked" }, evidence: [] } } })],
     ["attempt identity", (input: any) => ({ ...input, report: { ...input.report, report: { ...input.report.report, attemptId: "other" } } })],
@@ -59,6 +58,16 @@ describe("direct Node runtime parity", () => {
     expect(lifecycleRuntime.validateCompletionReportBinding(fixture.record, fixture.report)).toEqual(
       validateCompletionReportBinding(fixture.record, fixture.report),
     );
+  });
+
+  it("accepts the built-in required-verification source in both parsers", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-attempt-parity-"));
+    try {
+      const fixture = workerFixture().record;
+      const record = { ...fixture, requiredVerification: { ...fixture.requiredVerification!, source: { kind: "default" as const, location: "deadloop" } } };
+      writeFileSync(path.join(root, "attempt.json"), JSON.stringify(record));
+      expect(lifecycleRuntime.readAttemptRecord(root)).toEqual(readAttemptRecord(root));
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it("normalizes unknown record fields identically to the typed parser", () => {

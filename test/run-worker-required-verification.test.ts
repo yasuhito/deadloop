@@ -4,20 +4,25 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { assertCleanOutput, run, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
+const { applyCompletionRequiredVerificationStop, assertCleanOutput, completionStopDiagnosis, run, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.ts");
 const { inspectUnresolvedProjectCheckFailures } = require("../src/project-check.ts");
 const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 const roots: string[] = [];
-function verificationAttempt() {
+function verificationAttempt(source: "repo_policy" | "default" = "repo_policy") {
   const fixture = repository();
   const stateDir = `${fixture.root}-state`; roots.push(stateDir);
   const runDir = path.join(stateDir, "runs", "attempt-1"); mkdirSync(runDir, { recursive: true });
   const trusted = `${fixture.root}-trusted.git`; roots.push(trusted); execFileSync("git", ["init", "--bare", "--quiet", trusted]);
-  writeFileSync(path.join(fixture.root, "deadloop.json"), '{"checkCommand":"true"}\n'); execFileSync("git", ["-C", fixture.root, "add", "."]); execFileSync("git", ["-C", fixture.root, "commit", "--quiet", "-m", "policy"]);
+  if (source === "repo_policy") {
+    writeFileSync(path.join(fixture.root, "deadloop.json"), '{"checkCommand":"true"}\n');
+    execFileSync("git", ["-C", fixture.root, "add", "."]);
+    execFileSync("git", ["-C", fixture.root, "commit", "--quiet", "-m", "policy"]);
+  }
   execFileSync("git", ["-C", fixture.root, "remote", "add", "trusted", trusted]); execFileSync("git", ["-C", fixture.root, "push", "--quiet", "trusted", "HEAD:main"]);
   const head = execFileSync("git", ["-C", fixture.root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const promiseFile = path.join(runDir, "promise.json");
-  const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command: "true", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head }, branch: "agent/issue-1", baseBranch: "trusted/main", worktreePath: fixture.root, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile, phase: "agent_started", lastSuccessfulPhase: "agent_started" };
+  const command = source === "default" ? "npm run check" : "true";
+  const attempt = { attemptId: "attempt-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role: "worker", target: { kind: "issue", number: 1 }, inputRevision: { head }, requiredVerification: { repository: "owner/repo", command, source: { kind: source, location: source === "default" ? "deadloop" : "deadloop.json" }, baseRevision: head }, branch: "agent/issue-1", baseBranch: "trusted/main", worktreePath: fixture.root, agentName: "dl-w-1-abcdef123456", workspaceLabel: "worker", promptFile: path.join(runDir, "prompt.md"), promiseFile, phase: "agent_started", lastSuccessfulPhase: "agent_started" };
   writeWorkerContractSnapshot(runDir, attempt);
   writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt));
   writeFileSync(promiseFile, JSON.stringify({ schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head }, status: "complete", summary: "done", result: { outputRevision: head }, evidence: { validations: ["additional check"] } }));
@@ -38,6 +43,40 @@ function repository() {
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("Worker required-verification checkout binding", () => {
+  it("binds completion-stop enablement to the configured project repository path", () => {
+    let lockedProject: Record<string, unknown> | undefined;
+    applyCompletionRequiredVerificationStop(
+      { attemptRecord: "/state/runs/attempt/attempt.json", projectId: "demo", projectRepo: "/repo", githubRepo: "owner/repo", stateDir: "/state", enabledAt: 1, worktree: "/worktree", quarantineRoot: "/quarantine" },
+      { target: { kind: "issue", number: 42 } },
+      new Error("required verification blocked: stale_policy"),
+      (project: Record<string, unknown>) => { lockedProject = project; },
+    );
+
+    expect(lockedProject?.repoPath).toBe("/repo");
+  });
+
+  it("reports both fixed-contract sources when a local override becomes stale", () => {
+    const attempt = {
+      repository: "owner/repo",
+      inputRevision: { head: "a".repeat(40) },
+      requiredVerification: {
+        command: "npm run local-check",
+        source: { kind: "local", location: "projects.json#project=demo" },
+        baseRevision: "a".repeat(40),
+        override: { source: { kind: "repo_policy", location: "deadloop.json" }, command: "npm run check" },
+      },
+    };
+    expect(completionStopDiagnosis(attempt, new Error("required verification blocked: stale_policy")).sources).toHaveLength(2);
+  });
+
+  it("reports current inspected sources when stale-policy diagnosis provides them", () => {
+    const error = Object.assign(new Error("required verification blocked: stale_policy"), {
+      requiredVerificationSources: [{ kind: "repo_policy", location: "deadloop.json", command: "npm run changed-check" }],
+    });
+    const diagnosis = completionStopDiagnosis({ repository: "owner/repo", inputRevision: { head: "a".repeat(40) }, requiredVerification: {} }, error);
+    expect(diagnosis.sources[0].command).toBe("npm run changed-check");
+  });
+
   it("accepts a clean checkout at the reported output commit", () => {
     const fixture = repository();
     expect(() => assertCleanOutput(fixture.root, fixture.head)).not.toThrow();
@@ -56,13 +95,22 @@ describe("Worker required-verification checkout binding", () => {
     expect(() => assertCleanOutput(fixture.root, fixture.head)).toThrow("index flags");
   });
 
-  it("allows only quarantinable runtime artifacts in an otherwise clean checkout", () => {
+  it("allows an agent scratch area in an otherwise clean checkout", () => {
     const fixture = repository();
-    mkdirSync(path.join(fixture.root, ".deadloop"));
-    writeFileSync(path.join(fixture.root, ".deadloop", "state.json"), "{}\n");
-    mkdirSync(path.join(fixture.root, ".pi-subagents"));
-    writeFileSync(path.join(fixture.root, ".pi-subagents", "log"), "runtime\n");
+    mkdirSync(path.join(fixture.root, ".pi", "subagents"), { recursive: true });
+    writeFileSync(path.join(fixture.root, ".pi", "subagents", "log"), "runtime\n");
     expect(() => assertCleanOutput(fixture.root, fixture.head)).not.toThrow();
+  });
+
+  it("rejects a tracked change under an agent scratch area", () => {
+    const fixture = repository();
+    mkdirSync(path.join(fixture.root, ".pi", "subagents"), { recursive: true });
+    writeFileSync(path.join(fixture.root, ".pi", "subagents", "report.md"), "first\n");
+    execFileSync("git", ["-C", fixture.root, "add", ".pi/subagents/report.md"]);
+    execFileSync("git", ["-C", fixture.root, "commit", "-qm", "track scratch report"]);
+    const head = execFileSync("git", ["-C", fixture.root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(path.join(fixture.root, ".pi", "subagents", "report.md"), "edited\n");
+    expect(() => assertCleanOutput(fixture.root, head)).toThrow("must be clean");
   });
 
   it("rejects a normal untracked file", () => {
@@ -86,6 +134,34 @@ describe("Worker required-verification checkout binding", () => {
       async (input: { signal?: AbortSignal }) => ({ code: 130, stdout: "", stderr: "", timedOut: false, interrupted: input.signal?.aborted, signal: "SIGTERM" }),
     );
     expect(result.check.interrupted).toBe(true);
+  });
+
+  it("accepts the built-in default when current policy has no override", async () => {
+    const fixture = verificationAttempt("default");
+    let command = "";
+
+    await run(fixture.args, undefined, async (input: { command: string }) => {
+      command = input.command;
+      return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
+    }, () => ({}));
+
+    expect(command).toBe("npm run check");
+  });
+
+  it("stops the Issue when a local override is added after a default-backed launch", async () => {
+    const fixture = verificationAttempt("default");
+    writeFileSync(path.join(fixture.args.stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "true" }] }));
+    let stopped = false;
+
+    const result = await run(
+      fixture.args,
+      undefined,
+      async () => ({ check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } }),
+      () => ({}),
+      () => { stopped = true; },
+    );
+
+    expect({ status: result.status, stopped }).toEqual({ status: "blocked", stopped: true });
   });
 
   it("reruns verification when a passed attempt-local record already exists", async () => {
@@ -120,17 +196,15 @@ describe("Worker required-verification checkout binding", () => {
       .rejects.toThrow("host-persisted launch snapshot");
   });
 
-  it("rejects policy changes made while required verification is running", async () => {
+  it("stops the Issue when policy changes while required verification is running", async () => {
     const fixture = verificationAttempt();
-    let rejected = false;
-    try {
-      await run(fixture.args, undefined, async () => {
-        writeFileSync(path.join(fixture.args.stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "false" }] }));
-        return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
-      }, () => ({}));
-    } catch { rejected = true; }
+    let stopped = false;
+    const result = await run(fixture.args, undefined, async () => {
+      writeFileSync(path.join(fixture.args.stateDir, "projects.json"), JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "false" }] }));
+      return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
+    }, () => ({}), () => { stopped = true; });
 
-    expect(rejected).toBe(true);
+    expect({ status: result.status, stopped }).toEqual({ status: "blocked", stopped: true });
   });
 
   it("does not follow a pre-existing verification-log symlink", async () => {

@@ -32,24 +32,16 @@ function withEnabledDriverLaunch(project, mutateWorkflowState, launchAgent, opti
   return withEnabledProjectLock(project, (_enabled, recheck) => {
     options.revalidate?.(_enabled);
     recheck();
-    if (options.claimBeforePrepare) {
-      // Review claims are the authority source: a losing host must not leave a
-      // journal, workspace, branch, or runner mutation behind.
-      mutateWorkflowState(recheck, _enabled);
-      recheck();
-      // Re-observe the persisted GitHub claim before creating any local
-      // attempt, workspace, branch, or runner state.
-      options.revalidate?.(_enabled);
-      recheck();
-      options.prepareAttempt?.();
-    } else {
-      // Non-review launches retain their existing crash-recovery contract.
-      options.prepareAttempt?.();
-      recheck();
-      mutateWorkflowState(recheck, _enabled);
-    }
-    // The winning claim is durable before any runner/workspace operation.
-    options.recordClaim?.();
+    // Every attempt publishes its exact prepared intent before the first GitHub mutation. A
+    // request-bound launch therefore supplies its selected request event during revalidation.
+    options.prepareAttempt?.();
+    recheck();
+    mutateWorkflowState(recheck, _enabled);
+    recheck();
+    options.revalidateAfterMutation?.(_enabled);
+    recheck();
+    // The fully revalidated GitHub transition is journaled before any runner/workspace operation.
+    options.recordGithubMutation?.();
     recheck();
     return launchAgent(recheck);
   }, options);

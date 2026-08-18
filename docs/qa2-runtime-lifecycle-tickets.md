@@ -1,6 +1,6 @@
 # Runtime lifecycle implementation tickets
 
-> **Superseded:** The reviewer-tab replacement and `closeTab` work below is historical. The selected contract is [Disposable Herdr workspace lifecycle](herdr-attempt-workspace-lifecycle-spec.md): every attempt gets a fresh workspace and launch-unique agent, and successful cleanup closes the workspace rather than replacing a tab or same-name agent. Project-check isolation and safe merged/closed-worktree cleanup requirements remain applicable.
+> **Superseded:** The reviewer-tab replacement and `closeTab` work below is historical. The selected contract is [ADR 0013](adr/0013-disposable-herdr-attempt-workspaces.md): every attempt gets a fresh workspace and launch-unique agent, and successful cleanup closes the workspace rather than replacing a tab or same-name agent. Project-check isolation and safe merged/closed-worktree cleanup requirements remain applicable.
 
 ## Ticket 1 — Safely replace completed reviewers
 
@@ -20,7 +20,7 @@
 **Depends on:** none
 
 - Add packaged `run-project-check.ts` with a durable recovery manifest.
-- Isolate only `.deadloop/` and `.pi-subagents/` on the same filesystem.
+- Isolate only the agent scratch areas on the same filesystem.
 - Preserve exact command status and restore evidence on every supported exit path.
 - Recover abandoned manifests and fail closed on restoration conflicts.
 - Route issue-worker and reviewer validation instructions through the helper.

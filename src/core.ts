@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { AGENT_KINDS, type AgentKind, isAgentKind } from "./agent-profiles.cjs";
 import {
+  DEFAULT_REQUIRED_VERIFICATION_COMMAND,
   resolveRequiredVerification,
   type RequiredVerificationResolution,
 } from "./required-verification";
@@ -14,8 +15,7 @@ export function isLinkedGitWorktree(cwd: string, gitDir: string, gitCommonDir: s
   return path.resolve(cwd, gitDir) !== path.resolve(cwd, gitCommonDir);
 }
 
-export const DEFAULT_CHECK_COMMAND =
-  "git diff --check && node -e \"const fs=require('fs'),cp=require('child_process');if(!fs.existsSync('package.json'))process.exit(0);const s=JSON.parse(fs.readFileSync('package.json','utf8')).scripts||{};const skip='echo \\\"Error: no test specified\\\" && exit 1';const names=s.check?['check']:['test','lint','typecheck'].filter((n)=>s[n]&&s[n]!==skip);for(const n of names)cp.execFileSync('npm',['run',n],{stdio:'inherit'});\"";
+export const DEFAULT_CHECK_COMMAND = DEFAULT_REQUIRED_VERIFICATION_COMMAND;
 
 export const DEFAULT_WORKER_INSTRUCTION_FILES = ["AGENTS.md", "CONTEXT.md", "README.md"] as const;
 
@@ -41,11 +41,12 @@ export const CANONICAL_GITHUB_LABELS = [
 
 export type LabelConfig = {
   ready?: string;
+  explore?: string;
   implement?: string;
+  updateBranch?: string;
   inProgress?: string;
   blocked?: string;
   review?: string;
-  reviewing?: string;
   human?: string;
   needsInfo?: string;
   wontfix?: string;
@@ -114,7 +115,6 @@ export type NormalizedExternalReviewConfig = {
 
 export type RawProject = {
   id?: string;
-  enabled?: boolean;
   repoPath?: string;
   githubRepo?: string;
   baseBranch?: string;
@@ -243,11 +243,12 @@ export function sanitizeId(value: unknown): string {
 export function normalizeLabels(labels: LabelConfig = {}): NormalizedLabels {
   return {
     ready: labels.ready || "ready-for-agent",
+    explore: labels.explore || "agent:explore",
     implement: labels.implement || "agent:implement",
+    updateBranch: labels.updateBranch || "agent:update-branch",
     inProgress: labels.inProgress || "agent:in-progress",
     blocked: labels.blocked || "agent:blocked",
     review: labels.review || "agent:review",
-    reviewing: labels.reviewing || "agent:reviewing",
     human: labels.human || "ready-for-human",
     needsInfo: labels.needsInfo || "needs-info",
     wontfix: labels.wontfix || "wontfix",
@@ -314,11 +315,12 @@ const REPO_POLICY_PROJECT_KEYS = new Set([
 ]);
 const REPO_POLICY_LABEL_KEYS = new Set([
   "ready",
+  "explore",
   "implement",
+  "updateBranch",
   "inProgress",
   "blocked",
   "review",
-  "reviewing",
   "human",
   "needsInfo",
   "wontfix",
@@ -780,11 +782,12 @@ function automationRuntimeValues(
     reviewerAgent: project.reviewerAgent,
     reviewerModel: project.reviewerModel || "",
     readyLabel: project.labels.ready,
+    exploreLabel: project.labels.explore,
     implementLabel: project.labels.implement,
+    updateBranchLabel: project.labels.updateBranch,
     inProgressLabel: project.labels.inProgress,
     blockedLabel: project.labels.blocked,
     reviewLabel: project.labels.review,
-    reviewingLabel: project.labels.reviewing,
     humanLabel: project.labels.human,
     needsInfoLabel: project.labels.needsInfo,
     wontfixLabel: project.labels.wontfix,
@@ -828,6 +831,7 @@ export function automationEnvironment(
     DEADLOOP_REQUIRED_VERIFICATION: project.requiredVerification.status === "resolved"
       ? JSON.stringify(project.requiredVerification.contract)
       : undefined,
+    DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify(project.requiredVerification),
     DEADLOOP_WORKER_AGENT: envText(values.workerAgent),
     DEADLOOP_WORKER_MODEL: envText(values.workerModel),
     DEADLOOP_WORKER_INSTRUCTIONS: envText(values.workerInstructions),
@@ -837,9 +841,6 @@ export function automationEnvironment(
     DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS: automation.driverFile === "pr-reviewer-driver.ts"
       ? envText(values.automationMaxRuntimeSeconds)
       : undefined,
-    DEADLOOP_CLAIM_CLEANUP_GRACE_SECONDS: automation.driverFile === "pr-reviewer-driver.ts"
-      ? envText(values.automationShutdownGraceSeconds)
-      : undefined,
     DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: envText(project.automationLogins.join(",")),
     DEADLOOP_AUTO_MERGE: envText(values.autoMerge),
     DEADLOOP_CI_FALLBACK_ENABLED: envText(values.ciFallbackEnabled),
@@ -848,11 +849,12 @@ export function automationEnvironment(
     DEADLOOP_EXTERNAL_REVIEW_ENABLED: envText(values.externalReviewEnabled),
     DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS: envText(values.externalReviewWaitSeconds),
     DEADLOOP_READY_LABEL: envText(values.readyLabel),
+    DEADLOOP_EXPLORE_LABEL: envText(values.exploreLabel),
     DEADLOOP_IMPLEMENT_LABEL: envText(values.implementLabel),
+    DEADLOOP_UPDATE_BRANCH_LABEL: envText(values.updateBranchLabel),
     DEADLOOP_IN_PROGRESS_LABEL: envText(values.inProgressLabel),
     DEADLOOP_BLOCKED_LABEL: envText(values.blockedLabel),
     DEADLOOP_REVIEW_LABEL: envText(values.reviewLabel),
-    DEADLOOP_REVIEWING_LABEL: envText(values.reviewingLabel),
     DEADLOOP_HUMAN_LABEL: envText(values.humanLabel),
     DEADLOOP_NEEDS_INFO_LABEL: envText(values.needsInfoLabel),
     DEADLOOP_WONTFIX_LABEL: envText(values.wontfixLabel),

@@ -1,0 +1,18 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 12,
+      "state": "OPEN",
+      "title": "Implement small feature",
+      "body": "## Agent Brief\nBuild a focused feature.\n\n## Acceptance criteria\n- Tests pass.",
+      "url": "https://github.com/owner/repo/issues/12",
+      "labels": [{"name": "ready-for-agent"}, {"name": "agent:implement"}],
+      "comments": [
+        {
+          "body": "<!-- deadloop:required-verification-blocked:v1 target=issue-12 fingerprint=771d45d2d808fd425b3ce17fcdc799b1fcb16a75532d03108427d76abd06e49e -->\n## Required verification blocked"
+        }
+      ]
+    }
+  ]
+}

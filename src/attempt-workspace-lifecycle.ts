@@ -7,23 +7,22 @@ import {
   validateCompletionReportBinding,
 } from "./attempt-lifecycle";
 
+const { decideReviewTransition } = require("./reviewer-outcome-contract.ts");
+
 export type RetentionReason =
   | "active_attempt"
   | "blocked"
-  | "human_required"
   | "missing_report"
   | "invalid_report"
-  | "legacy_report"
   | "github_persistence_not_confirmed"
   | "launch_failed"
   | "cleanup_pending"
   | "ownership_mismatch"
   | "newer_live_owner"
-  | "herdr_incompatible";
+  | "herdr_unsupported";
 
 export type AttemptReportObservation =
   | { kind: "missing" }
-  | { kind: "legacy"; promisePath: string; report: unknown }
   | { kind: "v1"; promisePath: string; report: unknown };
 
 export type RunnerUncertaintyReason = "timeout" | "protocol_error" | "malformed_response" | "unreachable" | "ambiguous";
@@ -81,6 +80,7 @@ export type ReviewerGithubObservation = BoundGithubObservation & {
   role: "reviewer";
   headSha: string;
   labels: string[];
+  draft: boolean;
   reviewPersistence?: BoundGithubObservation & {
     headSha: string;
     marker: CompletionMarker;
@@ -176,7 +176,7 @@ function sameTarget(left: AttemptTarget, right: AttemptTarget): boolean {
 }
 
 function roleMatchesTarget(role: AttemptRole, target: AttemptTarget): boolean {
-  return role === "worker" ? target.kind === "issue" : target.kind === "pull-request";
+  return role === "worker" || role === "explorer" ? target.kind === "issue" : target.kind === "pull-request";
 }
 
 function sameOptionalSha(left: string | undefined, right: string | undefined): boolean {
@@ -247,7 +247,18 @@ export function workerCompletionPersisted(
   );
 }
 
-/** Pure reviewer rows, including the non-closing human-required outcome. */
+/**
+ * Pure reviewer rows.
+ *
+ * A human-required outcome is a completed review like any other: the review ran, its result is
+ * recorded on the pull request, and what is left belongs to a person. It closes on the same proof
+ * the other outcomes need, and the state that proof describes is its caller's expected label set —
+ * for a human handoff, one that keeps no agent workflow label at all.
+ *
+ * A handoff has two halves, and the empty expected set names only one of them. A pull request left
+ * as a draft is not handed over however few labels it carries, so an expected set that waits on no
+ * agent request has to see the draft gone as well.
+ */
 export function reviewerCompletionPersisted(
   record: AttemptRecord,
   report: ReviewerReport,
@@ -255,10 +266,11 @@ export function reviewerCompletionPersisted(
   expectedLabels: readonly string[],
   managedLabels: readonly string[] = expectedLabels,
 ): boolean {
-  if (report.result.outcome === "human_required") return false;
+  const transition = decideReviewTransition(report.result).transition;
   if (!boundToRecord(github, record) || !sameSha(github.headSha, record.inputRevision.head)) return false;
   const managed = new Set(managedLabels);
   if (!sameStringSet(github.labels.filter((label) => managed.has(label)), expectedLabels)) return false;
+  if (expectedLabels.length === 0 && github.draft) return false;
   const persistence = github.reviewPersistence;
   if (
     !persistence ||
@@ -268,7 +280,7 @@ export function reviewerCompletionPersisted(
   ) {
     return false;
   }
-  if (report.result.outcome === "changes_requested") {
+  if (transition === "repair") {
     return persistence.boundedRepairAttemptMarked && sameFindings(persistence.findings, report.result.findings ?? []);
   }
   return true;
@@ -362,7 +374,7 @@ function rolePredicate(
 
 /**
  * Validates the launch-unique path and the V1 report against the durable record before consulting
- * the role predicate. Legacy transport can never reach a closing decision.
+ * the role predicate.
  */
 export function evaluateCompletionPersistence(input: {
   record: AttemptRecord;
@@ -381,7 +393,6 @@ export function evaluateCompletionPersistence(input: {
   if (input.report.promisePath !== input.record.promiseFile) {
     return { action: "preserve", reason: "ownership_mismatch" };
   }
-  if (input.report.kind === "legacy") return { action: "preserve", reason: "legacy_report" };
 
   let report: CompletionReportV1;
   try {
@@ -390,13 +401,10 @@ export function evaluateCompletionPersistence(input: {
     return { action: "preserve", reason: "invalid_report" };
   }
   if (report.status === "blocked") return { action: "preserve", reason: "blocked" };
-  if (report.role !== "reviewer") {
-    if (!input.record.outputRevision || !sameSha(input.record.outputRevision, report.result.outputRevision)) {
+  if (["worker", "review-repair", "branch-update"].includes(report.role)) {
+    if (!input.record.outputRevision || !sameSha(input.record.outputRevision, (report.result as { outputRevision: string }).outputRevision)) {
       return { action: "preserve", reason: "invalid_report" };
     }
-  }
-  if (report.role === "reviewer" && report.result.outcome === "human_required") {
-    return { action: "preserve", reason: "human_required" };
   }
   if (input.github.kind === "uncertain") {
     return { action: "preserve", reason: "github_persistence_not_confirmed" };
@@ -692,16 +700,14 @@ export type AttemptWorkspaceDoctorFinding = {
 const DOCTOR_TITLES: Record<RetentionReason, string> = {
   active_attempt: "active attempt",
   blocked: "intentionally retained blocker",
-  human_required: "human-required outcome",
   missing_report: "missing completion report",
   invalid_report: "malformed or mismatched completion report",
-  legacy_report: "legacy completion report",
   github_persistence_not_confirmed: "GitHub persistence not confirmed",
   launch_failed: "launch failed after partial mutation",
   cleanup_pending: "cleanup pending after confirmed persistence",
   ownership_mismatch: "workspace ownership mismatch",
   newer_live_owner: "newer live attempt owns the checkout",
-  herdr_incompatible: "unsupported or protocol-incompatible Herdr",
+  herdr_unsupported: "unsupported or unsupported Herdr",
 };
 
 /** Data-only diagnostic; callers may render it, but no destructive operation is exposed. */

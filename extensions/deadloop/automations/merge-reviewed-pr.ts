@@ -12,13 +12,8 @@ const {
   observePrHistory,
   readPrHistoryObservation,
 } = require("../../../src/pr-review-history.ts");
-const {
-  classifyActiveReviewClaim,
-  parsePaginatedGithubJson,
-  savedReviewClaimContract,
-  visiblyBlockReviewClaimTimeFailure,
-} = require("./pr-review-claim.ts");
-const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
 type MergeArgs = {
   attemptRecord: string;
@@ -32,7 +27,6 @@ type MergeArgs = {
   inProgressLabel: string;
   blockedLabel: string;
   historyObservation: string;
-  reviewClaim: Record<string, unknown>;
 };
 type EnabledProject = {
   repoPath: string;
@@ -48,8 +42,7 @@ type CommandResult = { status: number; stdout: string; stderr: string };
 type PromiseValidation = { status?: unknown; promise?: Record<string, unknown> };
 type MergeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
-  loadSavedReviewClaim?: typeof savedReviewClaimContract;
-  loadCurrentReviewClaimConfiguration?: (...args: unknown[]) => Record<string, unknown>;
+  loadAttemptRecord?: (args: MergeArgs) => Record<string, any>;
   isAutoMergeEnabled?: (args: MergeArgs) => boolean;
   validateReviewPromise?: (file: string) => PromiseValidation;
   assertReviewHistoryFresh?: (args: MergeArgs) => void;
@@ -186,26 +179,31 @@ function assertReviewHistoryFresh(args: MergeArgs, ops: MergeOps): void {
   }
 }
 
-function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
+type MergeTargetPr = {
+  state?: unknown;
+  isDraft?: unknown;
+  headRefOid?: unknown;
+  mergeable?: unknown;
+  mergeStateStatus?: unknown;
+  statusCheckRollup?: unknown;
+  labels?: unknown;
+};
+
+function readMergeTargetPr(args: MergeArgs, ops: MergeOps): MergeTargetPr {
   const result = ops.run([
     "gh", "pr", "view", args.pr, "-R", args.githubRepo,
     "--json", "state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,labels",
   ], MAX_GUARDED_OPERATION_MS);
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || "PR state could not be revalidated").trim());
-  let pr: {
-    state?: unknown;
-    isDraft?: unknown;
-    headRefOid?: unknown;
-    mergeable?: unknown;
-    mergeStateStatus?: unknown;
-    statusCheckRollup?: unknown;
-    labels?: unknown;
-  };
   try {
-    pr = JSON.parse(result.stdout || "{}");
+    return JSON.parse(result.stdout || "{}");
   } catch {
     throw new Error("PR state response was invalid; automatic merge stopped");
   }
+}
+
+/** The identity and ownership a merge target must keep, whether or not it is still a draft. */
+function assertMergeTargetUnchanged(pr: MergeTargetPr, args: MergeArgs): void {
   const labels = new Set(
     Array.isArray(pr.labels)
       ? pr.labels.map((label: unknown) => label && typeof label === "object" ? (label as { name?: unknown }).name : undefined)
@@ -213,27 +211,45 @@ function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
       : [],
   );
   if (pr.state !== "OPEN") throw new Error("PR is no longer open; automatic merge stopped");
-  if (pr.isDraft !== false) throw new Error("PR is draft or its draft state is unknown; automatic merge stopped");
   if (pr.headRefOid !== args.expectedHead) throw new Error("PR head changed; automatic merge stopped");
-  if (pr.mergeable !== "MERGEABLE") throw new Error("PR mergeability is not confirmed; automatic merge stopped");
-  if (pr.mergeStateStatus !== "CLEAN") throw new Error("PR merge state is not clean; automatic merge stopped");
-  assertChecksPassed(pr.statusCheckRollup);
   if (!labels.has(args.inProgressLabel)) {
-    throw new Error("required in-progress claim label is no longer present; automatic merge stopped");
+    throw new Error("required in-progress label is no longer present; automatic merge stopped");
   }
   if (labels.has(args.blockedLabel)) throw new Error("PR is blocked; automatic merge stopped");
 }
 
+/**
+ * A Worker PR is a draft until a review approves it, and GitHub both refuses to merge a draft and
+ * reports its merge state as DRAFT, so no merge gate can be evaluated before this step. The
+ * approved head therefore becomes ready inside the same guarded run that merges it, while the
+ * in-progress label stays in place: readiness is a step of the merge, not a handoff.
+ */
+function markReadyForMerge(args: MergeArgs, ops: MergeOps): void {
+  const pr = readMergeTargetPr(args, ops);
+  assertMergeTargetUnchanged(pr, args);
+  if (pr.isDraft === false) return;
+  if (pr.isDraft !== true) throw new Error("PR draft state is unknown; automatic merge stopped");
+  const ready = ops.run(["gh", "pr", "ready", args.pr, "-R", args.githubRepo], MAX_GUARDED_OPERATION_MS);
+  if (ready.status !== 0) throw new Error((ready.stderr || ready.stdout || "approved PR could not be marked ready").trim());
+}
+
+function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
+  const pr = readMergeTargetPr(args, ops);
+  assertMergeTargetUnchanged(pr, args);
+  if (pr.isDraft !== false) throw new Error("PR is draft or its draft state is unknown; automatic merge stopped");
+  if (pr.mergeable !== "MERGEABLE") throw new Error("PR mergeability is not confirmed; automatic merge stopped");
+  if (pr.mergeStateStatus !== "CLEAN") throw new Error("PR merge state is not clean; automatic merge stopped");
+  assertChecksPassed(pr.statusCheckRollup);
+}
+
 function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): number {
-  if (!args.reviewClaim) throw new Error("active review claim is required before automatic merge");
-  const savedClaim = (ops.loadSavedReviewClaim || savedReviewClaimContract)(args.attemptRecord, args.reviewClaim, {
-    stateDir: args.stateDir,
-    githubRepo: args.githubRepo,
-    targetNumber: Number(args.pr),
-  });
-  if (String(savedClaim.inProgressLabel || "") !== args.inProgressLabel
-    || String(savedClaim.blockedLabel || "") !== args.blockedLabel) {
-    throw new Error("merge label arguments do not exactly match the saved review claim contract");
+  const record = ops.loadAttemptRecord
+    ? ops.loadAttemptRecord(args)
+    : readAttemptRecord(canonicalAttemptLocation({ stateDir: args.stateDir, attemptRecord: args.attemptRecord }).runDir);
+  if (record.role !== "reviewer" || record.repository !== args.githubRepo
+    || record.target?.kind !== "pull-request" || Number(record.target?.number) !== Number(args.pr)
+    || String(record.inputRevision?.head || "").toLowerCase() !== args.expectedHead.toLowerCase()) {
+    throw new Error("reviewer attempt record does not match the automatic merge target");
   }
   const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
   const operation = (enabled: EnabledProject & { automationLogin?: string }, recheck: () => void = () => {}) => {
@@ -242,8 +258,8 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     assertMergeAuthorized(enabled);
     assertReviewApproved(args, ops);
     assertReviewHistoryFresh(args, ops);
-    assertCurrentPrEligible(args, ops);
-    const reauthorizeClaim = () => {
+    assertMergeTargetUnchanged(readMergeTargetPr(args, ops), args);
+    const revalidateMergeTarget = () => {
       const automationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
       const authenticatedResult = ops.run(["gh", "api", "user", "--jq", ".login"], MAX_GUARDED_OPERATION_MS);
       if (authenticatedResult.status !== 0 || !automationLogin
@@ -251,91 +267,27 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
         throw new Error("current authenticated GitHub identity does not match enablement authority; automatic merge stopped");
       }
       recheck();
-      const currentConfiguration = assertCurrentReviewClaimAuthority(
-        savedClaim, args.stateDir, enabled, automationLogin, ops.loadCurrentReviewClaimConfiguration,
-      );
       const repositoryResult = ops.run(["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS);
-      const prResult = ops.run(["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefOid,labels"], MAX_GUARDED_OPERATION_MS);
-      const eventsResult = ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS);
-      const commentsResult = ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS);
-      const dateResult = ops.run(["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
-      const authoritativeClaim = { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins };
-      const classifyObservation = (
-        repositoryObservation: CommandResult,
-        prObservation: CommandResult,
-        eventObservation: CommandResult,
-        commentObservation: CommandResult,
-        headers: string,
-      ) => {
-        if ([repositoryObservation, prObservation, eventObservation, commentObservation].some((result) => result.status !== 0)) {
-          return { kind: "binding_mismatch", comments: [], labels: [] };
-        }
-        try {
-          const repository = JSON.parse(repositoryObservation.stdout || "{}");
-          const livePr = JSON.parse(prObservation.stdout || "{}");
-          const comments = parsePaginatedGithubJson(commentObservation.stdout);
-          const identityMatches = String(enabled.githubRepositoryId || "") === String(repository.id || "")
-            && String(enabled.githubRepo || "") === String(repository.nameWithOwner || "");
-          return {
-            ...(identityMatches
-              ? classifyActiveReviewClaim(
-                  livePr,
-                  parsePaginatedGithubJson(eventObservation.stdout),
-                  comments,
-                  headers,
-                  authoritativeClaim,
-                  { repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr) },
-                )
-              : { kind: "binding_mismatch" }),
-            comments,
-            labels: (livePr.labels || []).map((label: Record<string, unknown> | string) => typeof label === "string" ? label : String(label.name || "")),
-          };
-        } catch {
-          return { kind: "binding_mismatch", comments: [], labels: [] };
-        }
-      };
-      const authority = classifyObservation(repositoryResult, prResult, eventsResult, commentsResult, dateResult.status === 0 ? dateResult.stdout : "");
-      if (authority.kind === "server_time_unverifiable") {
-        visiblyBlockReviewClaimTimeFailure({
-          contract: authoritativeClaim,
-          blockedLabel: args.blockedLabel,
-          observe: () => {
-            recheck();
-            const loginResult = ops.run(["gh", "api", "user", "--jq", ".login"], MAX_GUARDED_OPERATION_MS);
-            const login = String(loginResult.stdout || "").trim().toLowerCase();
-            try {
-              if (loginResult.status !== 0 || !login || login !== automationLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
-              assertCurrentReviewClaimAuthority(savedClaim, args.stateDir, enabled, login, ops.loadCurrentReviewClaimConfiguration);
-            } catch {
-              return { kind: "binding_mismatch", comments: [], labels: [] };
-            }
-            return classifyObservation(
-              ops.run(["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS),
-              ops.run(["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefOid,labels"], MAX_GUARDED_OPERATION_MS),
-              ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS),
-              ops.run(["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS),
-              "",
-            );
-          },
-          comment: (body: string) => {
-            const result = ops.run(["gh", "pr", "comment", args.pr, "-R", args.githubRepo, "--body", body], MAX_GUARDED_OPERATION_MS);
-            if (result.status !== 0) throw new Error("visible review claim block comment failed; automatic merge stopped");
-          },
-          addBlocked: () => {
-            const result = ops.run(["gh", "pr", "edit", args.pr, "-R", args.githubRepo, "--add-label", args.blockedLabel], MAX_GUARDED_OPERATION_MS);
-            if (result.status !== 0) throw new Error("visible review claim blocked label failed; automatic merge stopped");
-          },
-        });
-        throw new Error("active review claim server time could not be verified; automatic merge stopped");
+      let repository: Record<string, unknown> = {};
+      try { repository = JSON.parse(repositoryResult.stdout || "{}"); } catch {}
+      if (repositoryResult.status !== 0 || enabled.githubRepo !== args.githubRepo
+        || String(repository.id || "") !== enabled.githubRepositoryId
+        || String(repository.nameWithOwner || "") !== enabled.githubRepo) {
+        throw new Error("enabled repository identity changed; automatic merge stopped");
       }
-      if (authority.kind !== "authorized") throw new Error("active review claim could not be reauthorized; automatic merge stopped");
+      assertMergeTargetUnchanged(readMergeTargetPr(args, ops), args);
     };
-    reauthorizeClaim();
+    revalidateMergeTarget();
+    // GitHub reports a draft pull request as mergeStateStatus DRAFT, so the merge gate can only be
+    // evaluated once the approved head is ready. Readiness therefore precedes every gate below.
+    markReadyForMerge(args, ops);
+    assertCurrentPrEligible(args, ops);
+    revalidateMergeTarget();
     const autoMergeStillEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
     if (!autoMergeStillEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
     assertReviewHistoryFresh(args, ops);
     assertCurrentPrEligible(args, ops);
-    reauthorizeClaim();
+    revalidateMergeTarget();
     const result = ops.run([
       "gh", "pr", "merge", args.pr, "-R", args.githubRepo,
       "--squash", "--delete-branch", "--match-head-commit", args.expectedHead,
@@ -355,8 +307,8 @@ function parseArgs(argv: string[]): MergeArgs {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   const enabledAt = Number(values.enabledAt);
-  if (!values.attemptRecord || !values.projectRepo || !values.githubRepo || !values.stateDir || !values.pr || !values.expectedHead || !values.reviewPromise || !values.historyObservation || !values.inProgressLabel || !values.blockedLabel || !values.reviewClaim || !Number.isFinite(enabledAt)) {
-    throw new Error("--attempt-record, --project-repo, --github-repo, --state-dir, --enabled-at, --pr, --expected-head, --review-promise, --history-observation, --in-progress-label, --blocked-label, and --review-claim are required");
+  if (!values.attemptRecord || !values.projectRepo || !values.githubRepo || !values.stateDir || !values.pr || !values.expectedHead || !values.reviewPromise || !values.historyObservation || !values.inProgressLabel || !values.blockedLabel || !Number.isFinite(enabledAt)) {
+    throw new Error("--attempt-record, --project-repo, --github-repo, --state-dir, --enabled-at, --pr, --expected-head, --review-promise, --history-observation, --in-progress-label, --blocked-label are required");
   }
   return {
     attemptRecord: values.attemptRecord,
@@ -370,7 +322,6 @@ function parseArgs(argv: string[]): MergeArgs {
     inProgressLabel: values.inProgressLabel,
     blockedLabel: values.blockedLabel,
     historyObservation: values.historyObservation,
-    reviewClaim: JSON.parse(values.reviewClaim),
   };
 }
 

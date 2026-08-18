@@ -6,7 +6,7 @@
     "isDraft": false,
     "labels": [
       { "name": "agent:review" },
-      { "name": "agent:reviewing" },
+      { "name": "agent:in-progress" },
       { "name": "agent:blocked" }
     ],
     "statusCheckRollup": [],

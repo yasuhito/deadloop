@@ -40,8 +40,8 @@ describe("attempt workspace doctor classifications", () => {
     writeAttempt(record, undefined);
     expect(retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath }], [{ name: record.agentName, status: "working" }])[0].title).toContain("active");
   });
-  it("proves doctor ownership from a normalized 0.7.5 nested WorkspaceInfo worktree", () => {
-    const payload = JSON.parse(readFileSync("test/fixtures/herdr-0.7.5-workspace-list.json", "utf8"));
+  it("proves doctor ownership from a normalized 0.8.0 nested WorkspaceInfo worktree", () => {
+    const payload = JSON.parse(readFileSync("test/fixtures/herdr-workspace-list.json", "utf8"));
     const workspaces = createHerdrRunner({ runJson: () => payload, runText: () => "" }).listWorkspaces();
     const fixture = workerFixture();
     const record = {
@@ -62,17 +62,14 @@ describe("attempt workspace doctor classifications", () => {
     const fixture = workerFixture(); const report = { ...fixture.report, status: "blocked", result: { reason: "unsafe", explanation: "stopped", recovery: "inspect" }, evidence: {} };
     expect(classify(fixture.record, report, [{ workspaceId: fixture.record.workspaceId, worktreePath: fixture.record.worktreePath }])).toContain("blocked");
   });
-  it("classifies a human-required review", () => {
+  it("classifies a human-required review as awaiting its handoff, not as intentionally retained", () => {
     const fixture = reviewerFixture("approved"); const report = { ...fixture.report, result: { ...fixture.report.result, outcome: "human_required" } };
-    expect(classify(fixture.record, report, [{ workspaceId: fixture.record.workspaceId, worktreePath: fixture.record.worktreePath }])).toContain("human_required");
+    const record = { ...fixture.record, phase: "agent_started", lastSuccessfulPhase: "agent_started" };
+    expect(classify(record, report, [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath }])).toContain("persistence_unconfirmed");
   });
   it("classifies malformed report JSON", () => {
     const fixture = workerFixture();
     expect(classify(fixture.record, "malformed", [{ workspaceId: fixture.record.workspaceId, worktreePath: fixture.record.worktreePath }])).toContain("malformed_report");
-  });
-  it("classifies a legacy report", () => {
-    const fixture = workerFixture();
-    expect(classify(fixture.record, { schemaVersion: 0 }, [{ workspaceId: fixture.record.workspaceId, worktreePath: fixture.record.worktreePath }])).toContain("legacy_report");
   });
   it("classifies unconfirmed GitHub persistence", () => {
     const fixture = workerFixture();
@@ -92,14 +89,14 @@ describe("attempt workspace doctor classifications", () => {
     const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
     writeAttempt(record, undefined);
     const findings = retainedAttemptDoctorFindings(
-      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", reviewing: "agent:reviewing", blocked: "agent:blocked", human: "ready-for-human" } },
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" } },
       [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath, tabCount: 1, paneCount: 1 }],
       [],
       {
         worktrees: [{ branch: record.branch, path: record.worktreePath, workspaceId: record.workspaceId }],
         gitStatuses: { [record.worktreePath]: "" },
         gitHeads: { [record.worktreePath]: record.inputRevision.head },
-        openPrs: [{ number: record.target.number, headRefName: record.branch, headRefOid: record.inputRevision.head, labels: ["agent:review", "agent:reviewing"] }],
+        openPrs: [{ number: record.target.number, headRefName: record.branch, headRefOid: record.inputRevision.head, labels: ["agent:review", "agent:in-progress"] }],
       },
     );
     expect(findings[0].commands).toEqual([`/deadloop-abandon-attempt ${record.attemptId}`]);
@@ -109,7 +106,7 @@ describe("attempt workspace doctor classifications", () => {
     const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
     writeAttempt(record, undefined);
     const findings = retainedAttemptDoctorFindings(
-      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", reviewing: "agent:reviewing", blocked: "agent:blocked", human: "ready-for-human" } },
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" } },
       [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath, tabCount: 1, paneCount: 1 }],
       [{ name: record.agentName, paneId: record.rootPaneId, status: "working" }],
       {},
@@ -142,10 +139,10 @@ describe("attempt workspace doctor classifications", () => {
     let commandArgs: string[] = [];
     await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { commandArgs = args; return { code: 0, stdout: '{"action":"done"}' }; } }, {
       id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1, autoMerge: true,
-      labels: { ready: "ready", implement: "implement", inProgress: "progress", review: "review", reviewing: "reviewing", blocked: "blocked", human: "human" },
+      labels: { ready: "ready", implement: "implement", inProgress: "progress", review: "review", blocked: "blocked", human: "human" },
     });
     expect(commandArgs.flatMap((value, index) => value === "--managed-label" ? [commandArgs[index + 1]] : [])).toEqual([
-      "review", "reviewing", "blocked", "human",
+      "review", "progress", "blocked", "human",
     ]);
   });
 
@@ -155,7 +152,7 @@ describe("attempt workspace doctor classifications", () => {
     let commandArgs: string[] = [];
     await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { commandArgs = args; return { code: 0, stdout: '{"action":"done"}' }; } }, {
       id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1, autoMerge: true,
-      labels: { ready: "ready", implement: "implement", inProgress: "progress", review: "review", reviewing: "reviewing", blocked: "blocked", human: "human" },
+      labels: { ready: "ready", implement: "implement", inProgress: "progress", review: "review", blocked: "blocked", human: "human" },
     });
     expect(commandArgs.slice(commandArgs.indexOf("--auto-merge"), commandArgs.indexOf("--auto-merge") + 2)).toEqual(["--auto-merge", "false"]);
   });

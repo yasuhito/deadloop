@@ -20,5 +20,5 @@
     "acceptance/**/*.ts",
     "test/**/*.ts"
   ],
-  "exclude": ["node_modules", ".pi-subagents"]
+  "exclude": ["node_modules", ".pi/subagents", ".pi/npm", ".pi/git"]
 }
