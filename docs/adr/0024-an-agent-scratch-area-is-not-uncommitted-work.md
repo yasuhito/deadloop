@@ -26,7 +26,7 @@ Deadloop already held this rule, in three places, with three different meanings,
 |---|---|---|
 | `cleanup-completed-worker-worktrees.cts` | regex over `git status` lines, accepts `??` only | still blocks |
 | `run-worker-required-verification.cts` | pathspec `:(exclude)` | hidden |
-| `project-check.ts` (ADR 0010 quarantine) | move out, run, move back | refuses to hide |
+| `project-check.cts` (ADR 0010 quarantine) | move out, run, move back | refuses to hide |
 
 All three listed `.deadloop` and `.pi-subagents`. Seven of the nine gates that read `git status` to ask "does someone else have unsaved work here" never had the rule at all — among them the repair dispatch above, the branch-update decision, and the checkout alignment that runs immediately before every launch.
 

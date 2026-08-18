@@ -16,7 +16,7 @@ omp: ts keys: []            cts keys: [ "hello" ]
 pi : ts keys: [ "hello" ]   cts keys: [ "hello" ]
 ```
 
-Observed in the product: `/deadloop-status` under omp first failed to load the extension (`module is not defined` in `src/monitor-prompts.ts`), then, once the hybrid modules were fixed, failed with `normalizeEnablementStateValue is not a function` because `require("./enablement-state.ts")` returned nothing.
+Observed in the product, before the rename: `/deadloop-status` under omp first failed to load the extension (`module is not defined` in the module now named `src/monitor-prompts.cts`), then, once the hybrid modules were fixed, failed with `normalizeEnablementStateValue is not a function` because requiring the module now named `src/enablement-state.cts` under its old `.ts` name returned nothing.
 
 This blocks the project direction recorded in `AGENTS.md`: deadloop should not be tied to one execution host. Today the package silently depends on pi's loader implementation.
 

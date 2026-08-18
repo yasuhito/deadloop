@@ -27,7 +27,7 @@ All configured `checkCommand` executions launched by deadloop must go through a 
 
 The helper must:
 
-1. operate only on the exact agent scratch areas under the selected worktree, as named by `src/agent-scratch-area.ts`;
+1. operate only on the exact agent scratch areas under the selected worktree, as named by `src/agent-scratch-area.cjs`;
 2. atomically rename existing directories to unique holding paths on the same filesystem;
 3. write an external recovery manifest before running the project command;
 4. execute the original command in the worktree and preserve its exit result;
