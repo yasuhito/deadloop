@@ -86,13 +86,15 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     reviewerMaxRuntimeSeconds: Number(source.DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS || 86_400),
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
+    requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION
+      ? JSON.parse(source.DEADLOOP_REQUIRED_VERIFICATION)
+      : undefined,
     worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
     automationDir: SCRIPT_DIR,
     stateDir:
       source.DEADLOOP_STATE_DIR ||
       path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
-    requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION || "",
     reviewerAgent: source.DEADLOOP_REVIEWER_AGENT || "pi",
     reviewerModel: source.DEADLOOP_REVIEWER_MODEL || "",
     branchUpdateAgent: source.DEADLOOP_WORKER_AGENT || "pi",
@@ -251,7 +253,7 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
 }
 
 type DriverLaunchInput = {
-  worktree: { mode: "open"; branch: string; remote: string };
+  worktree: { mode: "open"; branch: string; baseBranch?: string; remote: string };
   repoPath: string;
   automationDir: string;
   stateDir: string;
@@ -268,7 +270,8 @@ type DriverLaunchInput = {
   inputRevision: { head: string; base?: string };
   intendedWorktreePath: string;
   autoMergePolicy?: boolean;
-  requiredVerification?: JsonObject;
+  baseBranch?: string;
+  requiredVerification?: import("../../../src/required-verification").RequiredVerificationContract;
   reviewHistoryRequired?: boolean;
   requestEventId?: string;
   renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
@@ -399,6 +402,8 @@ function branchUpdateWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-branch-update-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-id",
+    shellQuote(env.projectId),
     "--project-repo",
     shellQuote(env.repoPath),
     "--github-repo",
@@ -421,6 +426,8 @@ function branchUpdateWorkerPrompt(
     String(env.enabledAt),
     "--check-command",
     shellQuote(env.checkCommand),
+    "--attempt-record",
+    shellQuote(path.join(path.dirname(promiseFile), "attempt.json")),
     "--result-file",
     shellQuote(path.join(path.dirname(promiseFile), "finalizer-result.json")),
   ].join(" ");
@@ -438,7 +445,7 @@ Safety contract:
 - Merge ${baseOid} into the existing PR branch. Use git merge, never rebase, and never rewrite existing commits.
 - Resolve only conflicts caused by this merge. Do not widen the PR's scope.
 - Commit the merge resolution before finalization.
-- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted normal non-force push to the driver-selected branch:
+- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted push to the driver-selected branch, leased to the validated head:
   ${finalizeCommand}
 - Never force-push. Never push another ref. Never edit labels, create or edit a PR, merge a PR, close an issue, or delete a branch.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state so the next cycle can re-evaluate.
@@ -478,7 +485,7 @@ function branchUpdateDecision(pr: JsonObject, env: ReturnType<typeof envConfig>,
 function branchUpdateBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>, reason: string): string {
   return `## What happened
 - Automatic branch update for PR #${Number(pr.number || 0)} stopped because ${reason}.
-- No force-push was attempted. A human must inspect the existing PR branch before re-queueing it.
+- Nothing was pushed and no history was rewritten. A human must inspect the existing PR branch before re-queueing it.
 
 ## Recovery steps
 1. Inspect the PR head, checks, and branch-update comments.
@@ -628,7 +635,7 @@ function branchUpdateLaunchPlan(
     retryKey: key,
     marker: renderBranchUpdateMarker(headOid, baseOid),
     input: {
-      worktree: { mode: "open", branch, remote: env.branchUpdateRemote },
+      worktree: { mode: "open", branch, baseBranch: env.baseBranch, remote: env.branchUpdateRemote },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
       stateDir: env.stateDir,
@@ -643,6 +650,7 @@ function branchUpdateLaunchPlan(
       role: "branch-update",
       target: { kind: "pull-request", number },
       inputRevision: { head: headOid, base: baseOid },
+      requiredVerification: env.requiredVerification,
       intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid, uuid),
@@ -815,9 +823,7 @@ function launchBranchUpdate(
 
 function reviewerRequiredVerificationContract(env: ReturnType<typeof envConfig>, targetHead: string) {
   if (env.requiredVerification) {
-    let contract: JsonObject;
-    try { contract = JSON.parse(env.requiredVerification); }
-    catch { throw new Error("DEADLOOP_REQUIRED_VERIFICATION must be valid JSON"); }
+    const contract = env.requiredVerification;
     requiredVerificationBinding(contract, targetHead);
     if (contract.repository !== env.githubRepo) throw new Error("required verification contract repository does not match the review repository");
     return contract;
@@ -1662,6 +1668,7 @@ module.exports = {
   assertBranchUpdateRequestConsumed,
   assertBranchUpdateRequestSelectable,
   assertTrustedReviewIdentity,
+  branchUpdateLaunchPlan,
   consumeRequestEvent,
   envConfig,
   exposePostBlockReviewRequests,

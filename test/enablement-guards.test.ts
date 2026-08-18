@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -246,6 +246,20 @@ describe("enablement mutation guards", () => {
     });
 
     expect(events).toEqual(["mutated-after-reenable"]);
+  });
+
+  it("holds the enablement lock until an asynchronous operation settles", async () => {
+    const project = fixture();
+    writeState(project, { enabledAt: 1 });
+    const lockPath = path.join(project.stateDir, "enabled-projects.json.lock");
+    let heldDuringOperation = false;
+
+    await withEnabledProjectLock({ ...project, enabledAt: 1 }, async () => {
+      await Promise.resolve();
+      heldDuringOperation = existsSync(lockPath);
+    });
+
+    expect({ heldDuringOperation, heldAfterOperation: existsSync(lockPath) }).toEqual({ heldDuringOperation: true, heldAfterOperation: false });
   });
 
   it.each(["issue worker", "PR reviewer", "branch update", "review repair"])(

@@ -25,8 +25,10 @@ function finalizeWith(
   return finalizeBranchUpdate(
     {
       repo: "/worktree",
+      projectId: "demo",
       projectRepo: "/repo",
       githubRepo: "owner/repo",
+      attemptRecord: "/state/runs/attempt/attempt.json",
       pr: "31",
       branch: "agent/issue-31",
       expectedHead: head,
@@ -38,6 +40,7 @@ function finalizeWith(
       checkCommand: "npm test",
     },
     {
+      ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, run: (args: string[]) => unknown) => run(["node", "/automation/run-project-check.ts"]),
       assertEnabled: () => {
         if (headAfterAuthorization) observedHead = headAfterAuthorization;
         return { githubRepo: "owner/repo", githubRepositoryId: "R_repo" };
@@ -86,13 +89,13 @@ function finalizeWith(
   );
 }
 
-function finalizeWhileDisabled() {
+async function finalizeWhileDisabled() {
   const commands: string[][] = [];
   let error = "";
   try {
-    finalizeBranchUpdate(
+    await finalizeBranchUpdate(
       {
-        repo: "/worktree", projectRepo: "/repo", githubRepo: "owner/repo", pr: "31",
+        repo: "/worktree", projectId: "demo", projectRepo: "/repo", githubRepo: "owner/repo", attemptRecord: "/state/runs/attempt/attempt.json", pr: "31",
         branch: "agent/issue-31", expectedHead: head, expectedBase: base, remote: "origin",
         automationDir: "/automation", stateDir: "/state", enabledAt: 1, checkCommand: "npm test",
       },
@@ -145,25 +148,25 @@ describe("PR branch-update safety", () => {
     ).toBe("blocked");
   });
 
-  it("runs the configured check before querying the PR head", () => {
+  it("runs the configured check before querying the PR head", async () => {
     const commands: string[][] = [];
-    finalizeWith(commands);
+    await finalizeWith(commands);
 
     expect(commands.findIndex((command) => command[0] === "node")).toBeLessThan(commands.findIndex((command) => command[0] === "gh"));
   });
 
-  it("bounds every command after authorization while holding the enablement lock", () => {
+  it("bounds every command after authorization while holding the enablement lock", async () => {
     const commands: string[][] = [];
     const timeouts: Array<number | undefined> = [];
-    finalizeWith(commands, head, undefined, timeouts);
+    await finalizeWith(commands, head, undefined, timeouts);
     const firstGuardedCommand = commands.findIndex((command) => command[0] === "gh");
 
     expect(timeouts.slice(firstGuardedCommand)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 25_000]);
   });
 
-  it("pushes the selected branch without forcing", () => {
+  it("leases the verified head on the push to the selected branch", async () => {
     const commands: string[][] = [];
-    finalizeWith(commands);
+    await finalizeWith(commands);
 
     expect(commands.find((command) => command.includes("push"))).toEqual([
       "git",
@@ -171,121 +174,122 @@ describe("PR branch-update safety", () => {
       "/worktree",
       "push",
       "--porcelain",
+      `--force-with-lease=refs/heads/agent/issue-31:${head}`,
       "https://github.com/owner/repo.git",
       "cccccccccccccccccccccccccccccccccccccccc:refs/heads/agent/issue-31",
     ]);
   });
 
-  it("pushes when the only untracked path is the agent's own scratch area", () => {
-    expect(finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { scratchArea: true }).action).toBe("pushed");
+  it("pushes when the only untracked path is the agent's own scratch area", async () => {
+    expect((await finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { scratchArea: true })).action).toBe("pushed");
   });
 
-  it("rejects a branch-update source from a foreign Git common directory", () => {
-    expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { worktreeCommonDir: "/foreign" })).toThrow(
+  it("rejects a branch-update source from a foreign Git common directory", async () => {
+    await expect(finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { worktreeCommonDir: "/foreign" })).rejects.toThrow(
       "does not belong to the enabled checkout",
     );
   });
 
-  it("rejects a branch-update source with the wrong checked-out branch", () => {
-    expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { checkedOutBranch: "agent/issue-999" })).toThrow(
+  it("rejects a branch-update source with the wrong checked-out branch", async () => {
+    await expect(finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { checkedOutBranch: "agent/issue-999" })).rejects.toThrow(
       "does not match the requested branch",
     );
   });
 
-  it("rejects a branch update that produces no new commit", () => {
-    expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { candidate: head })).toThrow(
+  it("rejects a branch update that produces no new commit", async () => {
+    await expect(finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { candidate: head })).rejects.toThrow(
       "branch update produced no new commit",
     );
   });
 
-  it("rejects HEAD changing during configured checks", () => {
-    expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { afterChecks: "d".repeat(40) })).toThrow(
+  it("rejects HEAD changing during configured checks", async () => {
+    await expect(finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { afterChecks: "d".repeat(40) })).rejects.toThrow(
       "branch-update HEAD changed during checks",
     );
   });
 
-  it("rejects HEAD changing immediately before push", () => {
-    expect(() => finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { beforePush: "d".repeat(40) })).toThrow(
+  it("rejects HEAD changing immediately before push", async () => {
+    await expect(finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, undefined, { beforePush: "d".repeat(40) })).rejects.toThrow(
       "branch-update HEAD changed immediately before push",
     );
   });
 
-  it("rejects a branch-update push remote for another repository", () => {
-    expect(() => finalizeWith([], head, undefined, [], "https://github.com/other/repo.git")).toThrow(
+  it("rejects a branch-update push remote for another repository", async () => {
+    await expect(finalizeWith([], head, undefined, [], "https://github.com/other/repo.git")).rejects.toThrow(
       "push remote origin does not resolve exclusively to owner/repo",
     );
   });
 
-  it("accepts a renamed-repository alias recorded by locked enablement", () => {
+  it("accepts a renamed-repository alias recorded by locked enablement", async () => {
     const commands: string[][] = [];
-    finalizeWith(commands, head, undefined, [], "https://github.com/old/repo.git");
+    await finalizeWith(commands, head, undefined, [], "https://github.com/old/repo.git");
 
     expect(commands.find((command) => command.includes("push"))).toContain("https://github.com/old/repo.git");
   });
 
-  it("rejects a recorded branch-update alias when its repository name has been reused", () => {
-    expect(() => finalizeWith([], head, undefined, [], "https://github.com/old/repo.git", { "old/repo": "R_reused" })).toThrow(
+  it("rejects a recorded branch-update alias when its repository name has been reused", async () => {
+    await expect(finalizeWith([], head, undefined, [], "https://github.com/old/repo.git", { "old/repo": "R_reused" })).rejects.toThrow(
       "push remote origin does not resolve exclusively to owner/repo",
     );
   });
 
-  it("pins the verified branch-update destination before a mutable remote can redirect the push", () => {
+  it("pins the verified branch-update destination before a mutable remote can redirect the push", async () => {
     const commands: string[][] = [];
-    finalizeWith(commands);
+    await finalizeWith(commands);
 
     expect(commands.find((command) => command.includes("push"))).toContain("https://github.com/owner/repo.git");
   });
 
-  it("reports stale when a concurrent remote update rejects the push", () => {
+  it("reports stale when a concurrent remote update rejects the push", async () => {
     const commands: string[][] = [];
-    const result = finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, base);
+    const result = await finalizeWith(commands, head, undefined, [], "https://github.com/owner/repo.git", {}, base);
 
     expect(result.action).toBe("stale_head");
   });
 
-  it("records the current remote head in a stale branch-update receipt", () => {
-    const result = finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, base);
+  it("records the current remote head in a stale branch-update receipt", async () => {
+    const result = await finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, base);
 
     expect(result.currentRemoteHeadOid).toBe(base);
   });
 
-  it("names the pushed branch-update outcome", () => {
-    const result = finalizeWith([]);
+  it("names the pushed branch-update outcome", async () => {
+    const result = await finalizeWith([]);
 
     expect(result.reason).toBe("branch_update_pushed");
   });
 
-  it("rejects a concurrent rewind to an ancestor with an exact-head lease", () => {
-    const result = finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, "0".repeat(40));
+  it("rejects a concurrent rewind found by the remote-head guard", async () => {
+    const result = await finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, "0".repeat(40));
 
     expect(result.action).toBe("stale_head");
   });
 
-  it("does not recreate a concurrently deleted remote branch", () => {
-    const result = finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, null);
+  it("does not recreate a concurrently deleted remote branch", async () => {
+    const result = await finalizeWith([], head, undefined, [], "https://github.com/owner/repo.git", {}, null);
 
     expect(result.action).toBe("stale_head");
   });
 
-  it("does not push when the immediate PR-head check is stale", () => {
+  it("does not push when the immediate PR-head check is stale", async () => {
     const commands: string[][] = [];
-    finalizeWith(commands, base);
+    await finalizeWith(commands, base);
 
     expect(commands.some((command) => command.includes("push"))).toBe(false);
   });
 
-  it("rechecks the PR head after waiting for the enablement lock", () => {
+  it("rechecks the PR head after waiting for the enablement lock", async () => {
     const commands: string[][] = [];
-    finalizeWith(commands, head, base);
+    await finalizeWith(commands, head, base);
 
     expect(commands.some((command) => command.includes("push"))).toBe(false);
   });
 
-  it("reports disabled enablement before finalization", () => {
-    expect(finalizeWhileDisabled().error).toBe("deadloop is disabled for this repository");
+  it("reports disabled enablement before finalization", async () => {
+    expect((await finalizeWhileDisabled()).error).toBe("deadloop is disabled for this repository");
   });
 
-  it("does not push when deadloop is disabled before finalization", () => {
-    expect(finalizeWhileDisabled().commands.some((command) => command.includes("push"))).toBe(false);
+  it("does not push when deadloop is disabled before finalization", async () => {
+    expect((await finalizeWhileDisabled()).commands.some((command) => command.includes("push"))).toBe(false);
   });
 });

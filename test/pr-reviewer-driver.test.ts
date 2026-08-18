@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const {
+  branchUpdateLaunchPlan,
   consumeRequestEvent,
   resolveAuthorizedAutomationLogins,
 } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
@@ -207,5 +208,27 @@ describe("PR request consumption", () => {
 
   it("does not reach selected consumption after a request race at the blocked-label stage", () => {
     expect(failedScenario({ races: [{ stage: "delete-blocked", label: "agent:update-branch", action: "labeled" }] }).operations).not.toContain("delete:agent:review");
+  });
+});
+
+describe("branch update launch plan", () => {
+  const launchEnv = {
+    projectId: "demo", baseBranch: "origin/main", repoPath: "/repo", automationDir: "/automation", stateDir: "/state",
+    worktreeRoot: "/worktrees", githubRepo: "owner/repo", branchUpdateAgent: "pi", branchUpdateModel: "",
+    branchUpdateRemote: "origin", enabledAt: 1, checkCommand: "npm test", requiredVerification: {},
+  };
+  const pr = { number: 31, headRefName: "agent/issue-31", headRefOid: "a".repeat(40) };
+  const decision = { headOid: "a".repeat(40), baseOid: "b".repeat(40) };
+
+  it("persists a custom base branch in the branch-update worktree request", () => {
+    const plan = branchUpdateLaunchPlan(pr, { ...launchEnv, baseBranch: "origin/develop" }, decision, "launch-uuid");
+
+    expect(plan.input.worktree.baseBranch).toBe("origin/develop");
+  });
+
+  it("describes the finalizer leased push without allowing direct force-push", () => {
+    const plan = branchUpdateLaunchPlan(pr, launchEnv, decision, "launch-uuid");
+
+    expect(plan.input.renderPrompt({ promiseFile: "/state/runs/x/promise.json", worktreePath: "/worktree" })).toContain("only permitted push to the driver-selected branch, leased to the validated head");
   });
 });

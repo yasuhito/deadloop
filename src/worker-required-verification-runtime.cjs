@@ -213,7 +213,8 @@ function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repo
   if (!isDeepStrictEqual(current, contract)) throw stalePolicyError("current policy differs from the fixed attempt contract", currentSources);
   return current;
 }
-function assertPassedRecord(attempt, record, currentContract, targetCommit) {
+function assertRequiredVerificationAuthorized(attempt, targetCommit, record, currentContract, allowedRoles) {
+  if (!Array.isArray(allowedRoles) || !allowedRoles.includes(attempt.role)) throw new Error("required verification gate does not authorize this attempt role");
   assertContract(attempt.requiredVerification); assertContract(currentContract);
   if (!isDeepStrictEqual(attempt.requiredVerification, currentContract)) throw new Error("required verification blocked: stale_policy; start a new attempt");
   if (attempt.requiredVerification.repository !== attempt.repository) throw new Error("required verification persisted contract repository does not match attempt");
@@ -235,19 +236,18 @@ function assertPassedRecord(attempt, record, currentContract, targetCommit) {
       throw new Error("required verification host execution authenticity is missing");
     }
   }
-  return record;
+  return { outputRevision: targetCommit, record };
 }
 function assertWorkerCompletionAuthorized(attempt, report, record, currentContract) {
   if (attempt.role !== "worker" || report.role !== "worker" || report.status !== "complete") throw new Error("Worker completion gate requires a complete Worker report");
-  assertPassedRecord(attempt, record, currentContract, report.result.outputRevision);
-  return { outputRevision: report.result.outputRevision, record };
+  return assertRequiredVerificationAuthorized(attempt, report.result.outputRevision, record, currentContract, ["worker"]);
 }
 function assertReviewApprovalAuthorized(attempt, report, record, currentContract) {
   if (attempt.role !== "reviewer" || report.role !== "reviewer" || report.status !== "complete" || report.result?.outcome !== "approved") {
     throw new Error("review approval gate requires a complete approved reviewer report");
   }
   if (report.result.reviewedHead !== attempt.inputRevision.head) throw new Error("reviewed head does not match the fixed review head");
-  assertPassedRecord(attempt, record, currentContract, report.result.reviewedHead);
+  assertRequiredVerificationAuthorized(attempt, report.result.reviewedHead, record, currentContract, ["reviewer"]);
   return { reviewedHead: report.result.reviewedHead, record };
 }
 /**
@@ -270,4 +270,4 @@ function reauthorizeReviewWrite(attempt, options) {
   );
   return contract;
 }
-module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertReviewApprovalAuthorized, assertWorkerCompletionAuthorized, isRequiredVerificationPolicyBlock, persistHostVerificationEvidence, readRequiredVerificationRecord, readWorkerContractSnapshot, reauthorizeReviewWrite, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };
+module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertRequiredVerificationAuthorized, assertReviewApprovalAuthorized, assertWorkerCompletionAuthorized, isRequiredVerificationPolicyBlock, persistHostVerificationEvidence, readRequiredVerificationRecord, readWorkerContractSnapshot, reauthorizeReviewWrite, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };

@@ -5,8 +5,13 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+const {
+  persistHostVerificationEvidence,
+  requiredVerificationBinding,
+  workerRequiredVerificationPath,
+  writeWorkerContractSnapshot,
+} = require("../src/worker-required-verification-runtime.cjs");
 const { assertRepairCompletionRepositoryIdentity } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
-
 const roots: string[] = [];
 const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
@@ -23,8 +28,11 @@ function runCompletion(options: {
   receipt?: Record<string, unknown> | string;
   comments?: { body: string; author?: { login: string } }[];
   liveHead?: string;
+  headAfterAuthorization?: string;
   state?: string;
   labels?: { name: string }[];
+  verificationRecord?: "authenticated" | "legacy" | "missing";
+  headAfterPosting?: string;
   currentProject?: Record<string, unknown>;
   authenticatedLogin?: string;
   enabled?: boolean;
@@ -42,6 +50,8 @@ function runCompletion(options: {
   const contractFile = path.join(runDir, "review-contract.json");
   const postedFile = path.join(root, "posted.txt");
   const actionsFile = path.join(root, "actions.txt");
+  const viewsFile = path.join(root, "views.txt");
+  const retractedFile = path.join(root, "retracted.txt");
   const authLoginFile = path.join(root, "authenticated-login");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(runDir, { recursive: true });
@@ -57,6 +67,7 @@ function runCompletion(options: {
   const branchName = spawnSync("git", ["-C", projectRepo, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).stdout.trim();
   const baseBranch = `origin/${branchName}`;
   spawnSync("git", ["-C", projectRepo, "update-ref", `refs/remotes/${baseBranch}`, "HEAD"]);
+  const baseRevision = spawnSync("git", ["-C", projectRepo, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   const enabledProjectsFile = path.join(stateDir, "enabled-projects.json");
   const projectsFile = path.join(stateDir, "projects.json");
@@ -67,7 +78,7 @@ function runCompletion(options: {
     autoMergeAcknowledged: false, enabled: options.enabled ?? true,
   }] }));
   fs.writeFileSync(projectsFile, JSON.stringify({ projects: [{
-    id: "demo", repoPath: projectRepo, githubRepo: "owner/repo", baseBranch, ...options.currentProject,
+    id: "demo", repoPath: projectRepo, githubRepo: "owner/repo", baseBranch, checkCommand: "npm test", ...options.currentProject,
   }] }));
   const outcome = String(options.promise.reason || "");
   const strongPromise = {
@@ -83,13 +94,25 @@ function runCompletion(options: {
       : outcome === "stale_head" ? { finalizer: options.receipt } : options.promise.evidence || {},
   };
   fs.writeFileSync(promiseFile, JSON.stringify(strongPromise));
-  fs.writeFileSync(attemptFile, JSON.stringify({
+  const requiredVerification = {
+    repository: "owner/repo", command: "npm test",
+    source: { kind: "local", location: `${path.join(stateDir, "projects.json")}#project=demo` }, baseRevision,
+  };
+  const attempt = {
     schemaVersion: 1, attemptId: key, launchUuid: "repair-run", project: "demo", repository: "owner/repo",
     role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
-    branch: "agent/issue-24", worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
-    workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
+    branch: "agent/issue-24", baseBranch: baseRevision, worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
+    workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile, requiredVerification,
     phase: "agent_started", lastSuccessfulPhase: "agent_started", requestEventId: "22",
-  }));
+  };
+  fs.writeFileSync(attemptFile, JSON.stringify(attempt));
+  writeWorkerContractSnapshot(runDir, attempt);
+  const verificationRecord = {
+    version: 1, binding: requiredVerificationBinding(requiredVerification, newHead), outcome: "passed", exitCode: 0,
+    startedAt: "2026-01-01T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "required-verification.log"),
+  };
+  if (options.verificationRecord === "legacy") fs.writeFileSync(workerRequiredVerificationPath(attemptFile), JSON.stringify({ command: "npm test", result: "passed" }));
+  else if (options.verificationRecord !== "missing") persistHostVerificationEvidence(workerRequiredVerificationPath(attemptFile), verificationRecord);
   fs.writeFileSync(
     contractFile,
     JSON.stringify({ attemptKey: key, expectedHead: oldHead, findingTitles: ["Unsafe fallback"] }),
@@ -105,9 +128,19 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
 else if (args[0] === "api" && args[1] === "user") process.stdout.write(fs.readFileSync(process.env.AUTH_LOGIN_FILE, "utf8"));
-else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:"${options.liveHead || newHead}",isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:in-progress" }])},comments:${JSON.stringify(options.comments || [])}}));
+else if (args[0] === "api" && args.includes("DELETE")) { fs.appendFileSync(process.env.RETRACTED_FILE, args.join(" ") + "\\n"); fs.rmSync(process.env.POSTED_FILE, {force:true}); }
+else if (args[0] === "pr" && args[1] === "view") {
+  const views = fs.existsSync(process.env.VIEWS_FILE) ? Number(fs.readFileSync(process.env.VIEWS_FILE, "utf8")) : 0;
+  fs.writeFileSync(process.env.VIEWS_FILE, String(views + 1));
+  const posted = fs.existsSync(process.env.POSTED_FILE);
+  const comments = ${JSON.stringify(options.comments || [])};
+  if (posted) comments.push({body:fs.readFileSync(process.env.POSTED_FILE, "utf8"),author:{login:"deadloop-bot"}});
+  const head = posted && ${JSON.stringify(Boolean(options.headAfterPosting))} ? ${JSON.stringify(options.headAfterPosting || "")} : views >= 2 ? "${options.headAfterAuthorization || options.liveHead || newHead}" : "${options.liveHead || newHead}";
+  process.stdout.write(JSON.stringify({state:${JSON.stringify(options.state || "OPEN")},headRefName:"agent/issue-24",headRefOid:head,isCrossRepository:false,labels:${JSON.stringify(options.labels || [{ name: "agent:in-progress" }])},comments}));
+}
 else if (args[0] === "pr" && args[1] === "comment") {
   fs.writeFileSync(process.env.POSTED_FILE, args[args.indexOf("--body") + 1]);
+  process.stdout.write("https://github.com/owner/repo/pull/24#issuecomment-9901\\n");
   if (process.env.RACE_AFTER_COMMENT === "authenticated login") fs.writeFileSync(process.env.AUTH_LOGIN_FILE, "other-bot\\n");
   else if (process.env.RACE_AFTER_COMMENT === "enablement") {
     const data = JSON.parse(fs.readFileSync(process.env.ENABLED_PROJECTS_FILE, "utf8"));
@@ -169,7 +202,8 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
     ],
     { cwd: process.cwd(), encoding: "utf8", env: {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
-      POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile, AUTH_LOGIN_FILE: authLoginFile,
+      POSTED_FILE: postedFile, ACTIONS_FILE: actionsFile, VIEWS_FILE: viewsFile, RETRACTED_FILE: retractedFile,
+      AUTH_LOGIN_FILE: authLoginFile,
       ENABLED_PROJECTS_FILE: enabledProjectsFile, PROJECTS_FILE: projectsFile,
       RACE_AFTER_COMMENT: options.raceAfterComment || "",
     } },
@@ -180,6 +214,7 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
     output,
     posted: fs.existsSync(postedFile) ? fs.readFileSync(postedFile, "utf8") : "",
     actions: fs.existsSync(actionsFile) ? fs.readFileSync(actionsFile, "utf8") : "",
+    retracted: fs.existsSync(retractedFile) ? fs.readFileSync(retractedFile, "utf8") : "",
   };
 }
 
@@ -210,6 +245,7 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   const branchName = spawnSync("git", ["-C", projectRepo, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).stdout.trim();
   const baseBranch = `origin/${branchName}`;
   spawnSync("git", ["-C", projectRepo, "update-ref", `refs/remotes/${baseBranch}`, "HEAD"]);
+  const baseRevision = spawnSync("git", ["-C", projectRepo, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
     repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch, automationLogin: "deadloop-bot", enabledAt: 1,
@@ -226,13 +262,26 @@ async function runConcurrentSuccessRetries(): Promise<number> {
     evidence: { finalizer: receipt, validations: checks },
   }));
   fs.writeFileSync(resultFile, JSON.stringify(receipt));
-  fs.writeFileSync(attemptFile, JSON.stringify({
+  fs.writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{
+    id: "demo", repoPath: projectRepo, githubRepo: "owner/repo", baseBranch, checkCommand: "npm test",
+  }] }));
+  const requiredVerification = {
+    repository: "owner/repo", command: "npm test",
+    source: { kind: "local", location: `${path.join(stateDir, "projects.json")}#project=demo` }, baseRevision,
+  };
+  const attempt = {
     schemaVersion: 1, attemptId: key, launchUuid: "repair-run", project: "demo", repository: "owner/repo",
     role: "review-repair", target: { kind: "pull-request", number: 24 }, inputRevision: { head: oldHead },
-    branch: "agent/issue-24", worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
-    workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile,
+    branch: "agent/issue-24", baseBranch: baseRevision, worktreePath: projectRepo, agentName: "dl-x-24-abcdef123456",
+    workspaceLabel: "repair", promptFile: path.join(runDir, "prompt.md"), promiseFile, requiredVerification,
     phase: "agent_started", lastSuccessfulPhase: "agent_started", requestEventId: "22",
-  }));
+  };
+  fs.writeFileSync(attemptFile, JSON.stringify(attempt));
+  writeWorkerContractSnapshot(runDir, attempt);
+  persistHostVerificationEvidence(workerRequiredVerificationPath(attemptFile), {
+    version: 1, binding: requiredVerificationBinding(requiredVerification, newHead), outcome: "passed", exitCode: 0,
+    startedAt: "2026-01-01T00:00:00.000Z", durationMs: 1, logPath: path.join(runDir, "required-verification.log"),
+  });
   fs.writeFileSync(contractFile, JSON.stringify({ attemptKey: key, expectedHead: oldHead, findingTitles: ["Unsafe fallback"] }));
   fs.writeFileSync(commentsFile, "[]");
   const gh = path.join(bin, "gh");
@@ -295,6 +344,28 @@ describe("review repair deterministic completion", () => {
     });
 
     expect(result.posted).toContain(`New commit: \`${newHead}\``);
+  });
+
+  it("rejects repair success when the authenticated verification record is missing", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      verificationRecord: "missing",
+    });
+
+    expect(result.posted).toBe("");
+  });
+
+  it("rejects repair success when only legacy verification evidence exists", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: { status: "complete", reason: "repair_pushed", summary: "fixed", repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }], checks },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      verificationRecord: "legacy",
+    });
+
+    expect(result.posted).toBe("");
   });
 
   it("returns successful repair to a fresh review request", () => {
@@ -386,6 +457,38 @@ describe("review repair deterministic completion", () => {
     });
 
     expect(result.output.driverAction).toBe("repair_human_blocked");
+  });
+
+  it("does not post success when the PR head changes during authorization", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: {
+        status: "complete", reason: "repair_pushed", summary: "fixed",
+        repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }], checks,
+      },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      headAfterAuthorization: "c".repeat(40),
+    });
+
+    expect({ action: result.output.driverAction, posted: result.posted }).toEqual({ action: "repair_target_changed", posted: "" });
+  });
+
+  it("retracts the success comment when the head changes during posting", () => {
+    const checks = [{ command: "npm test", result: "passed" }];
+    const result = runCompletion({
+      promise: {
+        status: "complete", reason: "repair_pushed", summary: "fixed",
+        repairs: [{ title: "Unsafe fallback", summary: "Removed fallback", paths: ["src/review.ts"] }], checks,
+      },
+      receipt: { action: "pushed", originalHeadOid: oldHead, headOid: newHead, checks },
+      headAfterPosting: "c".repeat(40),
+    });
+
+    expect({
+      action: result.output.driverAction,
+      retracted: result.retracted.includes("DELETE") && result.retracted.includes("issues/comments/9901"),
+      labelMutations: result.actions,
+    }).toEqual({ action: "repair_target_changed", retracted: true, labelMutations: "" });
   });
 
   it("does not duplicate an existing repair result comment", () => {
