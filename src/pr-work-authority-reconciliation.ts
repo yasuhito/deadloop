@@ -1,14 +1,8 @@
+const { compareGithubTimelineEvents } = require("./github-timeline-order.ts");
+
 type JsonObject = Record<string, any>;
 
-type ClaimObservation =
-  | { kind: "authorized" }
-  | { kind: "expired" }
-  | { kind: "missing" }
-  | { kind: "malformed" }
-  | { kind: "ambiguous" }
-  | { kind: "superseded" }
-  | { kind: "server_time_unverifiable" };
-
+type RequestObservation = { kind: "current" | "superseded" | "missing" | "ambiguous" };
 type RuntimeObservation =
   | { kind: "live_matching_owner" }
   | { kind: "stopped_owned" }
@@ -17,9 +11,8 @@ type RuntimeObservation =
 
 type ReconciliationInput = {
   pr: { number: number; headRefOid: string; labels: Array<string | { name?: string }> };
-  claim: ClaimObservation;
+  request: RequestObservation;
   runtime: RuntimeObservation;
-  requestEvents?: JsonObject[];
   requestLabels: string[];
   inProgressLabel: string;
   blockedLabel: string;
@@ -27,105 +20,47 @@ type ReconciliationInput = {
 
 type ReconciliationDecision =
   | { action: "keep_active"; cleanup: "none" }
-  | { action: "keep_superseded"; labels: string[]; cleanup: "none" }
-  | { action: "release_for_request"; reason: "request_superseded_active_attempt"; labels: string[]; cleanup: "close_owned_workspace" | "preserve_workspace" }
-  | {
-      action: "block";
-      reason: "claim_expired" | "claim_missing" | "claim_malformed" | "claim_ambiguous" | "server_time_unverifiable" | "runtime_unreachable" | "runtime_ambiguous" | "runtime_owner_stopped";
-      labels: string[];
-      cleanup: "none" | "close_owned_workspace" | "preserve_workspace";
-      invalidatesRequests: boolean;
-    };
+  | { action: "release_for_request"; reason: "request_superseded_stopped_attempt"; labels: string[]; cleanup: "close_owned_workspace" }
+  | { action: "block"; reason: "attempt_missing" | "attempt_ambiguous" | "runtime_unreachable" | "runtime_ambiguous" | "runtime_owner_stopped"; labels: string[]; cleanup: "none" | "close_owned_workspace" | "preserve_workspace"; invalidatesRequests: boolean };
 
 function labelNames(labels: Array<string | { name?: string }>): string[] {
   return labels.map((label) => typeof label === "string" ? label : String(label.name || "")).filter(Boolean);
 }
 
-function unique(values: string[]): string[] {
-  return [...new Set(values)];
-}
+function unique(values: string[]): string[] { return [...new Set(values)]; }
 
 function blockLabels(input: ReconciliationInput, preserveRequests = false): string[] {
   const managed = new Set([...input.requestLabels, input.inProgressLabel, input.blockedLabel]);
-  const requests = preserveRequests
-    ? labelNames(input.pr.labels).filter((label) => input.requestLabels.includes(label))
-    : [];
-  return unique([
-    ...labelNames(input.pr.labels).filter((label) => !managed.has(label)),
-    ...requests,
-    input.blockedLabel,
-  ]);
+  const requests = preserveRequests ? labelNames(input.pr.labels).filter((label) => input.requestLabels.includes(label)) : [];
+  return unique([...labelNames(input.pr.labels).filter((label) => !managed.has(label)), ...requests, input.blockedLabel]);
 }
 
 function releaseLabels(input: ReconciliationInput): string[] {
-  return labelNames(input.pr.labels).filter((label) => label !== input.inProgressLabel && label !== input.blockedLabel);
+  return labelNames(input.pr.labels).filter((label) => label !== input.inProgressLabel);
 }
 
-/**
- * Pure GitHub/workspace policy. Callers apply the returned label set in one API mutation, then
- * bind expiry invalidation to the resulting authenticated blocked event. A decision carrying
- * `invalidatesRequests` must be applied as a full replacement so a request queued during the
- * mutation cannot survive its own cutoff; the other transitions preserve concurrent requests.
- *
- * A full replacement carries the unrelated labels its immediately preceding read observed, and the
- * caller verifies they survived. A label added after that read is outside the replacement and is
- * not restored here, unlike the review-claim transition, which repairs raced labels from the
- * timeline.
- */
+/** Runtime alone answers liveness; request event ids only detect a later generation to expose. */
 function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDecision {
-  if (input.claim.kind === "authorized" && input.runtime.kind === "live_matching_owner") {
-    return { action: "keep_active", cleanup: "none" };
+  if (input.runtime.kind === "live_matching_owner") return { action: "keep_active", cleanup: "none" };
+  if (input.request.kind === "superseded" && input.runtime.kind === "stopped_owned") {
+    return { action: "release_for_request", reason: "request_superseded_stopped_attempt", labels: releaseLabels(input), cleanup: "close_owned_workspace" };
   }
-  if (input.claim.kind === "superseded") {
-    if (input.runtime.kind === "live_matching_owner") {
-      return { action: "keep_superseded", labels: labelNames(input.pr.labels), cleanup: "none" };
-    }
-    if (input.runtime.kind === "stopped_owned") {
-      return {
-        action: "release_for_request",
-        reason: "request_superseded_active_attempt",
-        labels: releaseLabels(input),
-        cleanup: "close_owned_workspace",
-      };
-    }
-    const reason = input.runtime.kind === "unreachable" ? "runtime_unreachable" : "runtime_ambiguous";
-    return {
-      action: "block",
-      reason,
-      labels: blockLabels(input, true),
-      cleanup: "preserve_workspace",
-      invalidatesRequests: false,
-    };
-  }
-
-  const cleanup = input.runtime.kind === "stopped_owned"
-    ? "close_owned_workspace"
-    : input.runtime.kind === "ambiguous" || input.runtime.kind === "unreachable"
-      ? "preserve_workspace"
-      : "none";
-  const reason = input.claim.kind === "expired" ? "claim_expired"
-    : input.claim.kind === "missing" ? "claim_missing"
-      : input.claim.kind === "malformed" ? "claim_malformed"
-        : input.claim.kind === "ambiguous" ? "claim_ambiguous"
-          : input.claim.kind === "server_time_unverifiable" ? "server_time_unverifiable"
-            : input.runtime.kind === "unreachable" ? "runtime_unreachable"
-            : input.runtime.kind === "ambiguous" ? "runtime_ambiguous"
-              : "runtime_owner_stopped";
-  return { action: "block", reason, labels: blockLabels(input), cleanup, invalidatesRequests: true };
-}
-
-function eventTime(event: JsonObject): number {
-  return Date.parse(String(event.created_at || event.createdAt || ""));
+  const preserveRequests = input.request.kind === "superseded";
+  const cleanup = input.runtime.kind === "stopped_owned" ? "close_owned_workspace"
+    : input.runtime.kind === "unreachable" || input.runtime.kind === "ambiguous" ? "preserve_workspace" : "none";
+  const reason = input.request.kind === "missing" ? "attempt_missing"
+    : input.request.kind === "ambiguous" ? "attempt_ambiguous"
+      : input.runtime.kind === "unreachable" ? "runtime_unreachable"
+        : input.runtime.kind === "ambiguous" ? "runtime_ambiguous" : "runtime_owner_stopped";
+  return { action: "block", reason, labels: blockLabels(input, preserveRequests), cleanup, invalidatesRequests: !preserveRequests };
 }
 
 function eventId(event: JsonObject): string {
   return String(event.id || event.node_id || "");
 }
 
-/** GitHub event order: server timestamp first and immutable event ID as the tie-breaker. */
-function compareGithubEvents(left: JsonObject, right: JsonObject): number {
-  const time = eventTime(left) - eventTime(right);
-  return time || eventId(left).localeCompare(eventId(right), undefined, { numeric: true });
+function eventTime(event: JsonObject): number {
+  return Date.parse(String(event.created_at || event.createdAt || ""));
 }
 
 /**
@@ -165,7 +100,7 @@ function latestBlockedEvent(
     && eventLabel(event) === blockedLabel
     && (owner === undefined || eventActor(event) === owner)
     && eventId(event))
-    .sort(compareGithubEvents)
+    .sort(compareGithubTimelineEvents)
     .at(-1) || null;
 }
 
@@ -176,11 +111,8 @@ function recoveryMarker(number: number, head: string, reason: string, cutoffEven
 
 function recoveryComment(number: number, head: string, reason: string, cutoffEventId: string): string {
   const readable: Record<string, string> = {
-    claim_expired: "the active claim expired",
-    claim_missing: "the active claim comment or journal was missing",
-    claim_malformed: "the active claim evidence was malformed",
-    claim_ambiguous: "more than one possible owner or claim was observed",
-    server_time_unverifiable: "GitHub server time for the active claim could not be verified",
+    attempt_missing: "the active attempt journal was missing",
+    attempt_ambiguous: "the active attempt could not be identified uniquely",
     runtime_unreachable: "the execution runtime could not be reached",
     runtime_ambiguous: "workspace ownership could not be proven",
     runtime_owner_stopped: "the recorded owner had stopped",
@@ -212,7 +144,7 @@ async function applyPrWorkAuthorityReconciliation(
   operations: ReconciliationOperations,
 ): Promise<{ action: string; cutoffEventId?: string; cleanup: string }> {
   const decision = reconcilePrWorkAuthority(input);
-  if (decision.action === "keep_active" || decision.action === "keep_superseded") return { action: decision.action, cleanup: "none" };
+  if (decision.action === "keep_active") return { action: decision.action, cleanup: "none" };
 
   const currentLabels = labelNames(input.pr.labels);
   const labelsChange = !sameLabels(currentLabels, decision.labels);
@@ -289,10 +221,12 @@ function postBlockRequestIsEligible(input: {
   events: JsonObject[];
   blockedLabel: string;
 }): boolean {
-  // Counting only blocks deadloop explained would let the repair path's own request label carry a
-  // pull request past the stop that path just asked a person to resolve, and would leave a block
-  // nobody explained impossible to recover from at all. The timeline is fully paginated, so a
-  // blocked pull request with no blocked event is evidence this host cannot trust.
+  // Deadloop's own blocks leave no request behind, so this ordering only ever decides requests a
+  // person left in place — and a person stopping a pull request by hand writes a block deadloop
+  // never explained. Counting a block whoever applied it is what lets that stop outrank the
+  // requests that preceded it, and what keeps such a block recoverable at all. The timeline is
+  // fully paginated, so a blocked pull request with no blocked event is evidence this host cannot
+  // trust.
   const cutoff = latestBlockedEvent(input.events, input.blockedLabel);
   return cutoff !== null && requestAfterInvalidationCutoff(input.request, cutoff);
 }

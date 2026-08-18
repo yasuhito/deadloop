@@ -21,7 +21,7 @@ type DriverResult = {
   prNumber?: number;
   decision?: { skipped?: Array<{ number?: number; reason?: string }> };
   githubEffects?: GithubEffect[];
-  testAdapterEffects?: { herdrStarts?: unknown[]; githubComments?: unknown[]; labelReplacements?: unknown[] };
+  testAdapterEffects?: { herdrStarts?: unknown[]; githubComments?: unknown[]; labelMutations?: unknown[] };
 };
 type SelectionWorld = {
   fixtureName?: string;
@@ -231,7 +231,7 @@ Then("deadloop leaves external-review request state untouched before claim", fun
   assert.deepEqual({
     action: this.driverResult?.driverAction,
     comments: this.driverResult?.testAdapterEffects?.githubComments?.length ?? 0,
-    labels: this.driverResult?.testAdapterEffects?.labelReplacements?.length ?? 0,
+    labels: this.driverResult?.testAdapterEffects?.labelMutations?.length ?? 0,
     starts: this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0,
   }, { action: "external_review_unclaimed", comments: 0, labels: 0, starts: 0 });
 });
@@ -244,7 +244,7 @@ Then("deadloop waits for external review without mutation", function (this: Sele
   assert.deepEqual({
     action: this.driverResult?.driverAction,
     comments: this.driverResult?.testAdapterEffects?.githubComments?.length ?? 0,
-    labels: this.driverResult?.testAdapterEffects?.labelReplacements?.length ?? 0,
+    labels: this.driverResult?.testAdapterEffects?.labelMutations?.length ?? 0,
     starts: this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0,
   }, { action: "wait", comments: 0, labels: 0, starts: 0 });
 });
@@ -260,7 +260,7 @@ Then("deadloop starts the Reviewer for normal review", function (this: Selection
 Then("deadloop claims the draft pull request's review request", function (this: SelectionWorld) {
   assert.deepEqual({
     action: this.driverResult?.driverAction,
-    labels: this.driverResult?.testAdapterEffects?.labelReplacements?.length ?? 0,
+    labels: this.driverResult?.testAdapterEffects?.labelMutations?.length ?? 0,
     starts: this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0,
-  }, { action: "reviewer_monitor_request", labels: 1, starts: 1 });
+  }, { action: "reviewer_monitor_request", labels: 2, starts: 1 });
 });

@@ -188,7 +188,7 @@ Exactly one automatic repair for this review result will now start and will chan
         summary: "Choose whether empty reviews should pass.",
         reviewFingerprint: "2".repeat(20),
       }),
-    ).toContain("Resolve the decision above, push a new commit if code changes are needed, then remove `agent:blocked`");
+    ).toContain("Resolve the decision above, push a new commit if code changes are needed, then add `agent:review`");
   });
 
   it("renders every structured repair and check from the fixture", () => {
@@ -210,7 +210,7 @@ Exactly one automatic repair for this review result will now start and will chan
 - \`npm run typecheck\`: passed
 
 ## Next step
-The new head will be reviewed again. The review queue label remains in place while the active-review claim is released.
+The new head will be reviewed again. The review queue label remains in place while the prior in-progress state is released.
 
 <!-- deadloop:review-repair-result key=abcdef1234567890abcd head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->`);
   });

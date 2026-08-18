@@ -1,5 +1,5 @@
 const { createHash } = require("node:crypto");
-const ROLE_CODES = { worker: "w", reviewer: "r", "review-repair": "x", "branch-update": "u" };
+const ROLE_CODES = { worker: "w", explorer: "e", reviewer: "r", "review-repair": "x", "branch-update": "u" };
 const MAX_TARGET = 2147483647;
 const AGENT_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 function deriveHerdrAgentName(input) {

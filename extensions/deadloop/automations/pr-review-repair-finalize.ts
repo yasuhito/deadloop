@@ -8,15 +8,11 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { assertAuthorizedSource } = require("./guarded-push.ts");
-const {
-  classifyActiveReviewClaim,
-  parsePaginatedGithubJson,
-  savedReviewClaimContract,
-  visiblyBlockReviewClaimTimeFailure,
-} = require("./pr-review-claim.ts");
-const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
@@ -33,14 +29,14 @@ type FinalizeArgs = {
   enabledAt: number;
   checkCommand: string;
   resultFile: string;
-  reviewClaim: JsonObject;
+  inProgressLabel: string;
+  blockedLabel: string;
 };
 type CommandResult = { status: number; stdout: string; stderr: string };
 type EnabledProject = { repoPath?: string; baseBranch?: string; githubRepo: string; githubRepositoryId: string; automationLogin?: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
-  loadSavedReviewClaim?: typeof savedReviewClaimContract;
-  loadCurrentReviewClaimConfiguration?: (...args: unknown[]) => Record<string, unknown>;
+  loadAttemptRecord?: (args: FinalizeArgs) => JsonObject;
   assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => EnabledProject;
 };
 
@@ -102,12 +98,14 @@ function decideRepairPushGuard(pr: JsonObject, expectedBranch: string, expectedH
 }
 
 function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): JsonObject {
-  if (!args.reviewClaim) throw new Error("active review claim is required before repair push");
-  const savedClaim = (ops.loadSavedReviewClaim || savedReviewClaimContract)(args.attemptRecord, args.reviewClaim, {
-    stateDir: args.stateDir,
-    githubRepo: args.githubRepo,
-    targetNumber: Number(args.pr),
-  });
+  const record = ops.loadAttemptRecord
+    ? ops.loadAttemptRecord(args)
+    : readAttemptRecord(canonicalAttemptLocation({ stateDir: args.stateDir, attemptRecord: args.attemptRecord }).runDir);
+  if (record.role !== "review-repair" || record.repository !== args.githubRepo
+    || record.target?.kind !== "pull-request" || Number(record.target?.number) !== Number(args.pr)
+    || String(record.inputRevision?.head || "").toLowerCase() !== args.expectedHead.toLowerCase()) {
+    throw new Error("repair attempt record does not match the finalizer target");
+  }
   checked(ops, ["git", "check-ref-format", "--branch", args.branch]);
   const candidateOid = checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS);
   if (ops.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", args.expectedHead, candidateOid]).status !== 0) {
@@ -116,7 +114,9 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   if (candidateOid.toLowerCase() === args.expectedHead.toLowerCase()) {
     throw new Error("repair did not create a new commit");
   }
-  if (checked(ops, ["git", "-C", args.repo, "status", "--porcelain"])) throw new Error("repair worktree is dirty before checks");
+  if (hasUncommittedWork(checked(ops, ["git", "-C", args.repo, ...UNCOMMITTED_WORK_STATUS_ARGS]))) {
+    throw new Error("repair worktree is dirty before checks");
+  }
 
   checked(ops, [
     "node",
@@ -128,7 +128,9 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     "--quarantine-root",
     path.join(args.stateDir, "check-quarantine"),
   ]);
-  if (checked(ops, ["git", "-C", args.repo, "status", "--porcelain"])) throw new Error("repair worktree is dirty after checks");
+  if (hasUncommittedWork(checked(ops, ["git", "-C", args.repo, ...UNCOMMITTED_WORK_STATUS_ARGS]))) {
+    throw new Error("repair worktree is dirty after checks");
+  }
   if (checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS).toLowerCase() !== candidateOid.toLowerCase()) {
     throw new Error("repair HEAD changed during checks");
   }
@@ -166,56 +168,25 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       enabled.githubRepositoryId,
       MAX_GUARDED_OPERATION_MS,
     );
-    const reauthorizeImmediatelyBeforePush = () => {
+    const revalidateImmediatelyBeforePush = () => {
       recheck();
       const automationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
       const authenticated = checked(ops, ["gh", "api", "user", "--jq", ".login"], MAX_GUARDED_OPERATION_MS).toLowerCase();
       if (!automationLogin || authenticated !== automationLogin) {
         throw new Error("current authenticated GitHub identity does not match enablement authority before repair push");
       }
-      const currentConfiguration = assertCurrentReviewClaimAuthority(
-        savedClaim, args.stateDir, enabled, authenticated, ops.loadCurrentReviewClaimConfiguration,
-      );
-      const authoritativeClaim = { ...savedClaim, authorizedLogins: currentConfiguration.authorizedLogins };
-      const observe = () => {
-        const repository = JSON.parse(checked(ops, ["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS));
-        const currentPr = JSON.parse(checked(ops, ["gh", "pr", "view", args.pr, "-R", args.githubRepo, "--json", "state,headRefName,headRefOid,isCrossRepository,labels"], MAX_GUARDED_OPERATION_MS));
-        const events = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/events`], MAX_GUARDED_OPERATION_MS));
-        const comments = parsePaginatedGithubJson(checked(ops, ["gh", "api", "--paginate", "--slurp", `repos/${args.githubRepo}/issues/${args.pr}/comments`], MAX_GUARDED_OPERATION_MS));
-        return (headers: string) => ({
-          ...classifyActiveReviewClaim(currentPr, events, comments, headers, authoritativeClaim, {
-            repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr),
-          }),
-          comments,
-          labels: (currentPr.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")),
-        });
-      };
-      const classifyObservation = observe();
-      const dateResult = ops.run(["gh", "api", "--include", `repos/${args.githubRepo}`], MAX_GUARDED_OPERATION_MS);
-      const authority = classifyObservation(dateResult.status === 0 ? dateResult.stdout : "");
-      if (authority.kind === "server_time_unverifiable") {
-        visiblyBlockReviewClaimTimeFailure({
-          contract: authoritativeClaim,
-          blockedLabel: String(savedClaim.blockedLabel || "agent:blocked"),
-          observe: () => {
-            recheck();
-            const login = checked(ops, ["gh", "api", "user", "--jq", ".login"], MAX_GUARDED_OPERATION_MS).toLowerCase();
-            try {
-              if (!automationLogin || login !== automationLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
-              assertCurrentReviewClaimAuthority(savedClaim, args.stateDir, enabled, login, ops.loadCurrentReviewClaimConfiguration);
-              return observe()("");
-            } catch {
-              return { kind: "binding_mismatch", comments: [], labels: [] };
-            }
-          },
-          comment: (body: string) => { checked(ops, ["gh", "pr", "comment", args.pr, "-R", args.githubRepo, "--body", body], MAX_GUARDED_OPERATION_MS); },
-          addBlocked: () => { checked(ops, ["gh", "pr", "edit", args.pr, "-R", args.githubRepo, "--add-label", String(savedClaim.blockedLabel || "agent:blocked")], MAX_GUARDED_OPERATION_MS); },
-        });
-        throw new Error("active review claim server time could not be verified before repair push");
+      const currentPr = JSON.parse(checked(ops, [
+        "gh", "pr", "view", args.pr, "-R", args.githubRepo,
+        "--json", "state,headRefName,headRefOid,isCrossRepository,labels",
+      ], MAX_GUARDED_OPERATION_MS));
+      const currentGuard = decideRepairPushGuard(currentPr, args.branch, args.expectedHead);
+      const labels = (currentPr.labels || []).map((label: JsonObject | string) =>
+        typeof label === "string" ? label : String(label.name || ""));
+      if (currentGuard.action !== "push" || !labels.includes(args.inProgressLabel) || labels.includes(args.blockedLabel)) {
+        throw new Error("repair push target changed immediately before push");
       }
-      if (authority.kind !== "authorized") throw new Error("active review claim could not be reauthorized before repair push");
     };
-    const push = pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid, reauthorizeImmediatelyBeforePush);
+    const push = pushConditionally(ops, args.repo, pushDestination, args.branch, args.expectedHead, candidateOid, revalidateImmediatelyBeforePush);
     if (!push.pushed) {
       return {
         action: "stale_head",
@@ -276,7 +247,8 @@ function parseArgs(argv: string[]): FinalizeArgs {
     enabledAt: Number(required(values, "enabledAt")),
     checkCommand: required(values, "checkCommand"),
     resultFile: required(values, "resultFile"),
-    reviewClaim: JSON.parse(required(values, "reviewClaim")),
+    inProgressLabel: required(values, "inProgressLabel"),
+    blockedLabel: required(values, "blockedLabel"),
   };
 }
 

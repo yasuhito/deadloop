@@ -210,21 +210,6 @@ function attemptJournalsForPrReviewer(stateDir: string): AnyRecord[] {
   return attempts;
 }
 
-function reviewerClaimKey(prNumber: number, headOid: string): string {
-  return `${prNumber}:${headOid.toLowerCase()}`;
-}
-
-function claimedReviewerHeads(projectId: string, attempts: AnyRecord[] = [], githubRepo = ""): Set<string> {
-  const claimed = new Set<string>();
-  for (const attempt of attempts) {
-    if (attempt.project !== projectId || (githubRepo && attempt.repository !== githubRepo)) continue;
-    if (attempt.role !== "reviewer" || attempt.target?.kind !== "pull-request" || !Number.isInteger(attempt.target?.number)) continue;
-    const head = String(attempt.inputRevision?.head || "");
-    if (head) claimed.add(reviewerClaimKey(Number(attempt.target.number), head));
-  }
-  return claimed;
-}
-
 function workingReviewerPrNumbers(
   _agents: unknown,
   projectId: string,
@@ -267,7 +252,6 @@ function selectPrRequestTarget(
   prs: AnyRecord[],
   config: ReviewDecisionConfig = defaultDecisionConfig(),
   workingReviewerPrs: Set<number> = new Set(),
-  claimedReviewerHeadKeys: Set<string> = new Set(),
 ): AnyRecord {
   const skipped: AnyRecord[] = [];
 
@@ -304,8 +288,9 @@ function selectPrRequestTarget(
     if (request.role !== "reviewer") {
       return { ...selection, reason: hasInProgressLabel ? "stale_reclaim" : "selectable", staleReclaim: hasInProgressLabel };
     }
-    const currentHeadWasClaimed = claimedReviewerHeadKeys.has(reviewerClaimKey(prNumberForPrReviewer(pr), String(pr.headRefOid || "")));
-    const repairRereview = hasRepairRereviewProvenance(pr, config.automationLogin) && !currentHeadWasClaimed;
+    // What a re-review answers is written on the pull request: a repair result deadloop published
+    // for this exact head. Local attempt journals take no part in the launch decision (ADR 0020).
+    const repairRereview = hasRepairRereviewProvenance(pr, config.automationLogin);
     const staleReclaim = hasInProgressLabel && !repairRereview;
     if (config.externalReviewEnabled && hasCopilotReviewRequest(pr) && !externalReviewWaitIsStale(pr, config)) {
       skipped.push(skipForPrReviewer("external_review_wait", pr));
@@ -408,7 +393,6 @@ function main(argv: string[] = process.argv.slice(2)): number {
       loadPrs(args.input),
       config,
       workingReviewerPrNumbers(loadAgents(args.agents), config.projectId, attempts, args.githubRepo || ""),
-      claimedReviewerHeads(config.projectId, attempts, args.githubRepo || ""),
     );
   process.stdout.write(`${JSON.stringify(decision)}\n`);
   return args.exitCode && !decision.selected ? 1 : 0;
@@ -429,5 +413,4 @@ module.exports = {
   selectPrRequestTarget,
   attemptJournalsForPrReviewer,
   workingReviewerPrNumbers,
-  claimedReviewerHeads,
 };

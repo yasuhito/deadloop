@@ -1,87 +1,167 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { describe, expect, it } from "vitest";
 
-import { afterEach, describe, expect, it } from "vitest";
+const {
+  assertBranchUpdateAttemptBinding,
+  assertBranchUpdateCompletionObservation,
+  assertBranchUpdateRepositoryIdentity,
+  parseArgs,
+  waitForPushedHeadVisibility,
+} = require("../extensions/deadloop/automations/pr-branch-update-complete.ts");
+const head = "a".repeat(40);
 
-const { parseArgs, pushedRevision } = require("../extensions/deadloop/automations/pr-branch-update-complete.ts");
-
-const originalHead = "a".repeat(40);
-const baseHead = "c".repeat(40);
-const updatedHead = "b".repeat(40);
-const checks = [{ command: "npm run check", result: "passed" }];
-const roots: string[] = [];
-
-function promiseFile(promise: Record<string, unknown>): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-branch-update-complete-"));
-  roots.push(root);
-  const file = path.join(root, "promise.json");
-  fs.writeFileSync(file, JSON.stringify(promise));
-  return file;
+function args() {
+  return [
+    "--promise", "/state/runs/one/promise.json", "--attempt-record", "/state/runs/one/attempt.json",
+    "--project-id", "demo", "--project-repo", "/repo", "--github-repo", "owner/repo",
+    "--state-dir", "/state", "--enabled-at", "1", "--pr", "24", "--expected-head", head,
+    "--review-label", "agent:review", "--implement-label", "agent:implement",
+    "--update-branch-label", "agent:update-branch", "--in-progress-label", "agent:in-progress",
+    "--blocked-label", "agent:blocked",
+  ];
 }
 
-const pushedPromise = {
-  schemaVersion: 1,
-  attemptId: "branch-update-31",
-  role: "branch-update",
-  status: "complete",
-  target: { kind: "pull-request", number: 31, repository: "owner/repo" },
-  inputRevision: { head: originalHead, base: baseHead },
-  summary: "merged the base head into the PR branch",
-  result: { outcome: "branch_update_pushed", outputRevision: updatedHead },
-  evidence: {
-    finalizer: {
-      action: "pushed", reason: "branch_update_pushed", originalHeadOid: originalHead,
-      baseHeadOid: baseHead, headOid: updatedHead, checks,
-    },
-    validations: checks,
-  },
-};
+function idempotentObservation(overrides: Record<string, unknown> = {}) {
+  return {
+    pr: { state: "OPEN", headRefName: "agent/issue-24", headRefOid: "b".repeat(40), ...overrides },
+    branch: "agent/issue-24",
+    labels: ["agent:review"],
+    revision: "b".repeat(40),
+    authenticatedLogin: "deadloop-bot",
+    enabledLogin: "deadloop-bot",
+    reviewLabel: "agent:review",
+    implementLabel: "agent:implement",
+    updateBranchLabel: "agent:update-branch",
+    inProgressLabel: "agent:in-progress",
+    blockedLabel: "agent:blocked",
+    mode: "already-applied",
+  };
+}
 
-afterEach(() => {
-  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+describe("branch update completion arguments", () => {
+  it("does not require a review claim", () => {
+    expect(parseArgs(args()).pr).toBe("24");
+  });
+
+  it("still requires the exact expected head", () => {
+    const values = args();
+    const index = values.indexOf("--expected-head");
+    expect(() => parseArgs(values.filter((_value, item) => item !== index && item !== index + 1))).toThrow("--expected-head is required");
+  });
 });
 
-describe("branch update completion", () => {
-  it("reads the pushed head from a complete branch-update report", () => {
-    expect(pushedRevision(promiseFile(pushedPromise))).toBe(updatedHead);
+describe("branch update completion attempt", () => {
+  const record = {
+    project: "demo",
+    repository: "owner/repo",
+    role: "branch-update",
+    target: { kind: "pull-request", number: 24 },
+    branch: "agent/issue-24",
+    inputRevision: { head },
+  };
+
+  it("rejects an attempt for another pull request", () => {
+    expect(() => assertBranchUpdateAttemptBinding(record, {
+      projectId: "demo", githubRepo: "owner/repo", pr: "25", expectedHead: head,
+    })).toThrow("does not match");
   });
 
-  it("reads no pushed head from a blocked report", () => {
-    expect(pushedRevision(promiseFile({
-      ...pushedPromise,
-      status: "blocked",
-      result: { reason: "merge_conflict", explanation: "unresolved", recovery: "resolve by hand" },
-    }))).toBe("");
+  it("rejects an attempt for another branch", () => {
+    expect(() => assertBranchUpdateCompletionObservation({
+      ...idempotentObservation({ headRefName: "agent/issue-25" }),
+      branch: "agent/issue-24",
+    })).toThrow("target changed");
   });
 
-  it("reads no pushed head from a stale-head report", () => {
-    expect(pushedRevision(promiseFile({
-      ...pushedPromise,
-      result: { outcome: "stale_head", outputRevision: updatedHead },
-      evidence: {
-        finalizer: {
-          action: "stale_head", reason: "stale_head", originalHeadOid: originalHead,
-          baseHeadOid: baseHead, currentRemoteHeadOid: updatedHead, checks,
-        },
-        validations: checks,
-      },
-    }))).toBe("");
+  it("rejects a changed repository identity", () => {
+    expect(() => assertBranchUpdateRepositoryIdentity(
+      { id: "R_other", nameWithOwner: "owner/repo" },
+      { githubRepositoryId: "R_repo", githubRepo: "owner/repo" },
+    )).toThrow("repository identity changed");
+  });
+});
+
+describe("branch update head visibility", () => {
+  it("waits through the original head until GitHub exposes the pushed head", () => {
+    const observations = [
+      { pr: { state: "OPEN", headRefName: "agent/issue-24", headRefOid: head }, labels: ["agent:in-progress"] },
+      { pr: { state: "OPEN", headRefName: "agent/issue-24", headRefOid: "b".repeat(40) }, labels: ["agent:in-progress"] },
+    ];
+    expect(waitForPushedHeadVisibility({
+      observe: () => observations.shift(),
+      pause: () => {},
+      branch: "agent/issue-24",
+      originalHead: head,
+      pushedHead: "b".repeat(40),
+      attempts: 2,
+    }).pr.headRefOid).toBe("b".repeat(40));
   });
 
-  it("reads no pushed head from a report whose output revision is not a commit", () => {
-    expect(pushedRevision(promiseFile({
-      ...pushedPromise,
-      result: { outcome: "branch_update_pushed", outputRevision: "HEAD" },
-    }))).toBe("");
+  it("rejects a head that is neither the original nor the proven pushed revision", () => {
+    expect(() => waitForPushedHeadVisibility({
+      observe: () => ({
+        pr: { state: "OPEN", headRefName: "agent/issue-24", headRefOid: "c".repeat(40) },
+        labels: ["agent:in-progress"],
+      }),
+      pause: () => {},
+      branch: "agent/issue-24",
+      originalHead: head,
+      pushedHead: "b".repeat(40),
+    })).toThrow("target changed");
   });
 
-  it("requires the review claim argument", () => {
-    expect(() => parseArgs([
-      "--promise", "/p", "--attempt-record", "/a", "--project-id", "demo", "--project-repo", "/repo",
-      "--github-repo", "owner/repo", "--state-dir", "/state", "--enabled-at", "1", "--pr", "31",
-      "--expected-head", originalHead, "--review-label", "agent:review",
-      "--in-progress-label", "agent:in-progress", "--blocked-label", "agent:blocked",
-    ])).toThrow("--review-claim is required");
+  it("fails when the pushed head remains invisible", () => {
+    expect(() => waitForPushedHeadVisibility({
+      observe: () => ({
+        pr: { state: "OPEN", headRefName: "agent/issue-24", headRefOid: head },
+        labels: ["agent:in-progress"],
+      }),
+      pause: () => {},
+      branch: "agent/issue-24",
+      originalHead: head,
+      pushedHead: "b".repeat(40),
+      attempts: 2,
+    })).toThrow("not yet visible");
+  });
+});
+
+describe("idempotent branch update completion", () => {
+  it("accepts an exact already-applied retry", () => {
+    expect(() => assertBranchUpdateCompletionObservation(idempotentObservation())).not.toThrow();
+  });
+
+  it("rejects an already-applied retry on a changed head", () => {
+    expect(() => assertBranchUpdateCompletionObservation(
+      idempotentObservation({ headRefOid: "c".repeat(40) }),
+    )).toThrow("target changed");
+  });
+
+  it("rejects an already-applied retry under a changed authenticated login", () => {
+    expect(() => assertBranchUpdateCompletionObservation({
+      ...idempotentObservation(), authenticatedLogin: "other-bot",
+    })).toThrow("identity lost");
+  });
+
+  it("rejects an already-applied retry after the pull request closes", () => {
+    expect(() => assertBranchUpdateCompletionObservation(
+      idempotentObservation({ state: "CLOSED" }),
+    )).toThrow("target changed");
+  });
+
+  it("rejects an already-applied retry carrying the blocked label", () => {
+    expect(() => assertBranchUpdateCompletionObservation({
+      ...idempotentObservation(), labels: ["agent:review", "agent:blocked"],
+    })).toThrow("managed state");
+  });
+
+  it("rejects an already-applied retry carrying in-progress too", () => {
+    expect(() => assertBranchUpdateCompletionObservation({
+      ...idempotentObservation(), labels: ["agent:review", "agent:in-progress"],
+    })).toThrow("managed state");
+  });
+
+  it("rejects an already-applied retry carrying another managed request", () => {
+    expect(() => assertBranchUpdateCompletionObservation({
+      ...idempotentObservation(), labels: ["agent:review", "agent:implement"],
+    })).toThrow("managed state");
   });
 });

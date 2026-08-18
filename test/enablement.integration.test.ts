@@ -517,8 +517,8 @@ async function interruptedEnablementCommandObservation(trigger: "disable" | "shu
   const extension = await loadExtension(root, {
     beforeEnablementProjectCheck: async (candidate) => {
       worktreePath = candidate;
-      mkdirSync(path.join(candidate, ".deadloop"));
-      writeFileSync(path.join(candidate, ".deadloop", "evidence"), "restored\n");
+      mkdirSync(path.join(candidate, ".pi", "subagents"), { recursive: true });
+      writeFileSync(path.join(candidate, ".pi", "subagents", "evidence"), "restored\n");
       projectCheckStarted();
     },
   });
@@ -539,7 +539,7 @@ async function interruptedEnablementCommandObservation(trigger: "disable" | "shu
   const attemptDir = path.join(attemptsRoot, readdirSync(attemptsRoot)[0]);
   return {
     outcome: JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome,
-    restoredArtifact: readFileSync(path.join(worktreePath, ".deadloop", "evidence"), "utf8"),
+    restoredArtifact: readFileSync(path.join(worktreePath, ".pi", "subagents", "evidence"), "utf8"),
     message: extension.messages.find((message) => message.startsWith("deadloop was not enabled:")),
   };
 }

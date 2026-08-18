@@ -41,10 +41,7 @@ pi install git:github.com/yasuhito/deadloop
    /deadloop-enable
    ```
 
-3. deadloop に任せる Issue に、次のラベルを両方付けます。
-
-   - `ready-for-agent`
-   - `agent:implement`
+3. 実装を依頼する Issue に `agent:implement` を付けます。`ready-for-agent` は任意のトリアージ用ラベルであり、作業開始には不要です。
 
 これだけで利用を開始できます。有効化すると、deadloop は `npm run check` を実行し、不足している標準ラベルを作成して、自動マージを無効にした状態で動き始めます。リポジトリに `npm run check` スクリプトがない場合は、[詳細設定](#詳細設定)に従って `deadloop.json` に別の `checkCommand` を指定してください。
 
@@ -55,9 +52,9 @@ Issue にラベルを付けると、ループが始まります。実装中と�
 ```mermaid
 flowchart TD
     I["`**実装待ちの Issue**
-    ready-for-agent + agent:implement`"]
+    agent:implement`"]
     W["`**実装中**
-    ready-for-agent + agent:in-progress`"]
+    agent:in-progress`"]
     R["`**PR のレビュー待ち**
     draft PR + agent:review`"]
     V["`**レビューと修正**
@@ -83,9 +80,9 @@ flowchart TD
     V -. 問題発生 .-> B
 ```
 
-1. **実装を依頼する** — `ready-for-agent` は、エージェントが対応できる Issue であることを示します。`agent:implement` を付けると実装を依頼できます。deadloop が Issue を取得する前に `agent:implement` を外すと、依頼を取り消せます。
-2. **deadloop に任せる** — deadloop は依頼ラベルを `agent:in-progress` に置き換え、`agent:review` を付けた draft PR を作成します。必要に応じて、レビューと修正を繰り返します。PR の作業は要求ラベルだけが待ち行列になり、`agent:update-branch`、`agent:implement`、`agent:review` の順に一度に 1 件ずつ処理されます。
-3. **完了または対応する** — 承認された PR は、自動マージが無効なら ready へ変わり agent 系ワークフローラベルが外れます。有効ならマージされます。`ready-for-human` は Issue の分類用ラベルであり、PR には付きません。`agent:blocked` が付くとループは止まります。Issue または PR のコメントに記載された原因を解消し、案内された復旧手順に従ってください。
+1. **実装を依頼する** — `agent:implement` を付けると実装を依頼できます。`ready-for-agent` は任意のトリアージ情報です。deadloop が選択した要求世代を消費する前に `agent:implement` を外すと、依頼を取り消せます。
+2. **deadloop に任せる** — deadloop は試行を永続化し、選択した要求だけを消費してから `agent:in-progress` を付け、Worker を起動します。その後、`agent:review` を付けた draft PR を作成し、必要に応じてレビューと修正を繰り返します。PR の作業は要求ラベルだけが待ち行列になり、`agent:update-branch`、`agent:implement`、`agent:review` の順に一度に 1 件ずつ処理されます。
+3. **完了または対応する** — 承認された PR は、自動マージが無効なら ready へ変わり agent 系ワークフローラベルが外れます。有効ならマージされます。`ready-for-human` は Issue の分類用ラベルであり、PR には付きません。`agent:blocked` が付くとループは止まり、止まった PR には agent への要求が 1 つも残りません。Issue または PR のコメントに記載された原因を解消し、次に実行したい役割の要求ラベルを追加してください。`agent:blocked` はその試行が始まった時点で消えます。
 
 ## 運用コマンド
 
@@ -119,6 +116,8 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 `projects.json` にはローカルのパスや運用設定が含まれます。リポジトリにはコミットしないでください。共有してレビューする方針は、リポジトリ内の `deadloop.json` に記載することを推奨します。
 
+実装 Issue が必須検証停止になった場合、deadloop は無関係なトリアージ用ラベルを残し、実装要求または進行中を示すラベルを外して、理由別の復旧案内とともに `agent:blocked` を付けます。同じ復旧内容の案内は重複させず、設定変更だけでは再投入しません。必須検証が解決した後に限り、`/deadloop-doctor` が対象 Issue の再投入コマンドを表示します。
+
 ## 安全装置
 
 `autoMerge` は、レビュー済みの PR を deadloop が自動的にマージするかを制御します。
@@ -145,7 +144,7 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 PR の先頭コミットが変わっていた場合は、push せずに停止します。deadloop は次の周期で PR を再評価します。
 
-更新に失敗した場合や安全を確認できない場合は、復旧情報とともに `agent:blocked` を付けます。
+更新に失敗した場合や安全を確認できない場合は、復旧情報とともに `agent:blocked` を付け、agent への要求は 1 つも残しません。
 
 安全契約については [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) を参照してください。
 
@@ -153,7 +152,7 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 
 組み込みのレビューエージェントが構造化された修正可能な指摘を返すと、deadloop は既存の PR ブランチで、一度だけ専用の修正用作業エージェントを起動できます。
 
-修正中は、有効な取得を示す `agent:in-progress` を維持し、別の作業状態ラベルは追加しません。修正完了までは新しい `agent:review` 要求を作りません。
+修正中は、`agent:in-progress` を維持し、別の作業状態ラベルは追加しません。修正完了までは新しい `agent:review` 要求を作りません。
 
 作業エージェントには、指摘事項だけを渡します。
 
@@ -163,7 +162,7 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 
 レビュー結果は、読みやすい PR コメントとして記録します。コメントには、対象コミット、判断理由、指摘事項、次の操作を記載します。
 
-各レビューは、PR のコミット列、正確な差分、会話コメント、送信済みレビュー、行コメントを全ページ取得した観測結果にも結び付けます。追加、編集、削除、head または base の変更、差分の変更があれば、進行中のレビュー要求を解除して新しいレビューを必要とします。コメント本文は、信頼できない証拠としてのみ扱います。
+各レビューは、PR のコミット列、正確な差分、会話コメント、送信済みレビュー、行コメントを全ページ取得した観測結果にも結び付けます。追加、編集、削除、head または base の変更、差分の変更があれば、PR を新しいレビュー要求へ戻します。コメント本文は、信頼できない証拠としてのみ扱います。
 
 修正の push を確認した後は、結果を別のコメントに記録します。コメントには、指摘ごとの変更内容、新しいコミット、検査結果、再レビューへの引き渡しを記載します。
 
@@ -173,7 +172,7 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 
 先頭コミットがすでに変わっていた場合は、push もラベル変更も行わずに停止します。
 
-上限付きの試行後も同じ指摘が残った場合は、復旧情報とともに `agent:blocked` を付けます。人間の判断が必要な場合や、技術上または安全上の再試行を使い切った場合も同様です。
+上限付きの試行後も同じ指摘が残った場合は、復旧情報とともに `agent:blocked` を付け、要求ラベルを全て外します。技術上または安全上の再試行を使い切った場合も同様です。人間の判断が必要だと報告したレビューは完走したレビューとして扱い、結果を記録したうえで draft を ready へ変え、agent 系ワークフローラベルを全て外します。PR は人間を待つ状態になり、agent への要求は残りません。
 
 詳しくは [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) を参照してください。
 

@@ -6,31 +6,16 @@ import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
 
+import { fixtureStateDir } from "../support/fixture-state-dir";
+
 const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
 const { renderRepairMarker, renderTechnicalFailureMarker, reviewResultFingerprint } = require("../../extensions/deadloop/automations/pr-review-repair-state.ts");
 const { finalizeReviewRepair } = require("../../extensions/deadloop/automations/pr-review-repair-finalize.ts");
-const { renderReviewClaimComment } = require("../../extensions/deadloop/automations/pr-review-claim.ts");
-
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const repairedHead = "cccccccccccccccccccccccccccccccccccccccc";
 const branch = "agent/issue-31";
 const findings = [{ title: "Lint contract failure", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
-const activeReviewState = {
-  managedLabels: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
-  requestLabel: "agent:review",
-  requiredLabels: ["agent:in-progress"],
-};
-const reviewClaimBinding = {
-  repositoryId: "R_repo", repository: "owner/repo", targetNumber: 31, requestEventId: "22", role: "reviewer", revision: head, owner: "host-a",
-  authority: { durationSeconds: 86700 }, activeState: activeReviewState,
-};
-const reviewClaim = {
-  binding: reviewClaimBinding, commentId: "101", authorizedLogins: ["deadloop-bot"],
-  automationLogin: "deadloop-bot", reviewerAgent: "pi", reviewerMaxRuntimeSeconds: 86400,
-  cleanupGraceSeconds: 300, authoritySeconds: 86700,
-  requestLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
-};
 
 type RecoveryWorld = {
   case?: string;
@@ -71,7 +56,7 @@ function reviewerDriver(fixture: string): Record<string, unknown> {
       env: {
         ...process.env,
         DEADLOOP_PROJECT_ID: "demo",
-        DEADLOOP_STATE_DIR: path.join(process.cwd(), "test/fixtures/pr-reviewer-driver/state"),
+        DEADLOOP_STATE_DIR: fixtureStateDir(),
         DEADLOOP_REPO_PATH: "/repo",
         DEADLOOP_GITHUB_REPO: "owner/repo",
         DEADLOOP_REVIEWER_AGENT: "pi",
@@ -126,8 +111,6 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     );
     const blocked = testCase === "first-technical-failure" || testCase === "repeated-technical-failure";
     const currentHead = testCase === "repeated-repair" ? repairedHead : head;
-    const activeReviewClaimBinding = { ...reviewClaimBinding, revision: currentHead };
-    const activeReviewClaim = { ...reviewClaim, binding: activeReviewClaimBinding };
     const reportBase = {
       schemaVersion: 1, attemptId: "reviewer", role: "reviewer",
       target: { repository: "owner/repo", kind: "pull-request", number: 31 }, inputRevision: { head: currentHead },
@@ -152,12 +135,8 @@ function repairDispatch(testCase: string): Record<string, unknown> {
       target: { kind: "pull-request", number: 31 }, inputRevision: { head: currentHead }, branch,
       worktreePath: worktree, agentName: "reviewer", workspaceLabel: "reviewer",
       promptFile: path.join(runDir, "prompt.md"), promiseFile: promise,
-      phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", reviewClaim: activeReviewClaim,
+      phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", requestEventId: "22",
     }));
-    const claimComment = {
-      id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z",
-      user: { login: "deadloop-bot" }, body: renderReviewClaimComment(activeReviewClaimBinding),
-    };
     const comments = testCase === "repeated-repair"
       ? [{ body: renderRepairMarker(head, reviewResultFingerprint(findings)), author: { login: "deadloop-bot" } }]
       : testCase === "repeated-technical-failure"
@@ -175,7 +154,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
 else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
-else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(JSON.stringify([[${JSON.stringify(claimComment)}]]));
+else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(JSON.stringify([[]]));
 else if (args[0] === "api" && args.includes("--include")) process.stdout.write("date: Mon, 20 Jul 2026 10:03:00 GMT");
 else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.stringify({
   number: 31, state: "OPEN", headRefName: "${branch}", headRefOid: "${currentHead}", isCrossRepository: false,
@@ -206,6 +185,8 @@ else {
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("get-url")) process.stdout.write("https://github.com/owner/repo.git\\n");
+// The checkout already carries the expected head, so alignment finds nothing to do.
+else if (args.includes("rev-parse") && args.includes("HEAD")) process.stdout.write("${currentHead}\\n");
 else if (args.includes("rev-parse") && args.some(arg => arg.endsWith("^{commit}"))) process.stdout.write("${"f".repeat(40)}\\n");
 else if (args.includes("show") && args.some(arg => arg.endsWith(":deadloop.json"))) process.exit(1);
 `,
@@ -228,7 +209,7 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
     );
     const result = spawnSync(
       "node",
-      ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attemptRecord, "--pr", "31", "--expected-head", currentHead, "--branch", branch],
+      ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attemptRecord, "--request-event-id", "22", "--pr", "31", "--expected-head", currentHead, "--branch", branch],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -242,7 +223,6 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
           DEADLOOP_GITHUB_REPO: "owner/repo",
           DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
-          DEADLOOP_REVIEW_CLAIM: JSON.stringify(activeReviewClaim),
           TEST_COMMENTS_FILE: commentsFile,
           TEST_GITHUB_LOG: githubLog,
           TEST_HERDR_LOG: herdrLog,
@@ -281,12 +261,9 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
 
 function finalizerOps(commands: string[][], actualHead = head, isCrossRepository = false) {
   return {
-    loadSavedReviewClaim: () => reviewClaim,
-    loadCurrentReviewClaimConfiguration: () => ({
-      reviewerMaxRuntimeSeconds: 86400, cleanupGraceSeconds: 300, authoritySeconds: 86700,
-      managedLabels: activeReviewState.managedLabels, requestLabel: "agent:review", requiredLabels: ["agent:in-progress"],
-      repositoryId: "R_repo", repository: "owner/repo", authorizedLogins: ["deadloop-bot"],
-      authenticatedLogin: "deadloop-bot", reviewerAgent: "pi",
+    loadAttemptRecord: () => ({
+      role: "review-repair", repository: "owner/repo", target: { kind: "pull-request", number: 31 },
+      inputRevision: { head },
     }),
     assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot" }),
     run: (args: string[]) => {
@@ -298,7 +275,6 @@ function finalizerOps(commands: string[][], actualHead = head, isCrossRepository
       if (args[0] === "gh" && args[1] === "api" && args[2] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
       if (args[0] === "gh" && args[1] === "repo") return { status: 0, stdout: JSON.stringify({ id: "R_repo", nameWithOwner: "owner/repo" }), stderr: "" };
       if (args[0] === "gh" && args.some((arg) => arg.endsWith("/events"))) return { status: 0, stdout: JSON.stringify([[{ id: 22, event: "labeled", created_at: "2026-07-20T10:00:00Z", label: { name: "agent:review" } }]]), stderr: "" };
-      if (args[0] === "gh" && args.some((arg) => arg.endsWith("/comments"))) return { status: 0, stdout: JSON.stringify([[{ id: 101, created_at: "2026-07-20T10:01:00Z", updated_at: "2026-07-20T10:01:00Z", user: { login: "deadloop-bot" }, body: renderReviewClaimComment(reviewClaimBinding) }]]), stderr: "" };
       if (args[0] === "gh" && args.includes("--include")) return { status: 0, stdout: "date: Mon, 20 Jul 2026 10:03:00 GMT", stderr: "" };
       if (args[0] === "gh") {
         return {
@@ -328,7 +304,9 @@ function repairFinalizer(commands: string[][], actualHead = head) {
       stateDir: "/state",
       enabledAt: 1,
       checkCommand: "npm test",
-      reviewClaim,
+      inProgressLabel: "agent:in-progress",
+      blockedLabel: "agent:blocked",
+      resultFile: "/state/runs/reviewer/finalizer-result.json",
     },
     finalizerOps(commands, actualHead, false),
   );
@@ -484,8 +462,16 @@ Then("deadloop does not start another dedicated repair attempt", function (this:
   assert.equal(loggedAgentStartCount(this.result), 0);
 });
 
-Then("deadloop keeps the pull request under review", function (this: RecoveryWorld) {
-  assert.equal(observedLabels(this.result).includes("agent:review"), true);
+const PR_REQUEST_LABELS = ["agent:update-branch", "agent:implement", "agent:review"];
+
+Then("deadloop leaves no waiting request on the pull request", function (this: RecoveryWorld) {
+  assert.equal(observedLabels(this.result).some((label) => PR_REQUEST_LABELS.includes(label)), false);
+});
+
+const AGENT_WORKFLOW_LABELS = [...PR_REQUEST_LABELS, "agent:in-progress", "agent:blocked"];
+
+Then("deadloop leaves no agent workflow label on the pull request", function (this: RecoveryWorld) {
+  assert.equal(observedLabels(this.result).some((label) => AGENT_WORKFLOW_LABELS.includes(label)), false);
 });
 
 Then("deadloop escalates the pull request for human handling", function (this: RecoveryWorld) {

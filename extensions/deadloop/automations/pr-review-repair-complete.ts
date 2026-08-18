@@ -13,14 +13,7 @@ const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
-const {
-  classifyActiveReviewClaim,
-  classifyPushedHeadAuthorityTransition,
-  readGithubRestResponseHeaders,
-  savedReviewClaimContract,
-  visiblyBlockReviewClaimTimeFailure,
-} = require("./pr-review-claim.ts");
-const { assertCurrentReviewClaimAuthority } = require("./current-review-claim-authority.ts");
+const { blockedPrLabelMove } = require("../../../src/pr-request-selection.ts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
 
@@ -32,10 +25,22 @@ function parseArgs(argv: string[]): JsonObject {
     if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs");
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
-  for (const name of ["promise", "attemptRecord", "projectId", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "inProgressLabel", "blockedLabel", "reviewClaim"]) {
+  for (const name of ["promise", "attemptRecord", "projectId", "result", "contract", "projectRepo", "githubRepo", "stateDir", "enabledAt", "pr", "branch", "expectedHead", "attemptKey", "reviewLabel", "implementLabel", "updateBranchLabel", "inProgressLabel", "blockedLabel"]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
   return values;
+}
+
+function stoppedRepairLabelMove(args: JsonObject): { remove: string[]; add: string[] } {
+  return blockedPrLabelMove(
+    {
+      updateBranch: String(args.updateBranchLabel),
+      implement: String(args.implementLabel),
+      review: String(args.reviewLabel),
+    },
+    String(args.inProgressLabel),
+    String(args.blockedLabel),
+  );
 }
 
 function recoveryComment(args: JsonObject, reason: string, summary: string): string {
@@ -46,7 +51,7 @@ function recoveryComment(args: JsonObject, reason: string, summary: string): str
 - Detail: ${publicText(summary, "The bounded repair could not safely complete.")}
 
 ## Recovery steps
-Inspect the current PR head and checks, correct the branch without rewriting published history, push a new commit, then remove \`${args.blockedLabel}\` so review can resume.
+Inspect the current PR head and checks, correct the branch without rewriting published history, push a new commit, then add \`${args.reviewLabel}\` so review can resume. \`${args.blockedLabel}\` clears when the next attempt starts.
 
 <!-- deadloop:review-repair-stop key=${String(args.attemptKey).toLowerCase()} -->`;
 }
@@ -67,35 +72,22 @@ function sameFindingTitles(repairs: JsonObject[], findingTitles: unknown): boole
   return JSON.stringify(actual) === JSON.stringify(expected);
 }
 
-function completion(args: JsonObject): DriverResult {
-  if (!args.reviewClaim) throw new Error("active review claim is required before repair completion");
-  let suppliedReviewClaim: JsonObject;
-  try {
-    suppliedReviewClaim = typeof args.reviewClaim === "string" ? JSON.parse(args.reviewClaim) : args.reviewClaim;
-  } catch {
-    throw new Error("active review claim must be valid JSON before repair completion");
+function assertRepairCompletionRepositoryIdentity(
+  identity: JsonObject,
+  enabled: { githubRepositoryId?: string; githubRepo?: string },
+): void {
+  if (String(identity.id || "") !== String(enabled.githubRepositoryId || "")
+    || String(identity.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
+    throw new Error("live repository identity changed before repair completion");
   }
+}
+
+function completion(args: JsonObject): DriverResult {
   const runner = createCommandRunner();
   runHerdrPreflight({ run: (command: string, commandArgs: string[]) => runner.runText([command, ...commandArgs]) });
   const location = canonicalAttemptLocation(args);
   const record = readAttemptRecord(location.runDir);
   assertAttemptProjectBinding(record, args);
-  const reviewClaim = savedReviewClaimContract(location.attemptRecord, suppliedReviewClaim, {
-    stateDir: String(args.stateDir),
-    githubRepo: String(args.githubRepo),
-    projectId: String(args.projectId),
-    targetNumber: Number(args.pr),
-  });
-  for (const field of ["inProgressLabel", "blockedLabel"] as const) {
-    if (String(reviewClaim[field] || "") !== String(args[field] || "")) {
-      throw new Error(`${field} does not exactly match the saved review claim contract`);
-    }
-  }
-  // The label this completion adds is a workflow decision, not the request the claim consumed, so
-  // it is bound to the claim's managed set rather than to the claim's own request label.
-  if (!(reviewClaim.binding?.activeState?.managedLabels || []).includes(String(args.reviewLabel || ""))) {
-    throw new Error("reviewLabel is not managed by the saved review claim contract");
-  }
   for (const [field, value, basename] of [
     ["promise", args.promise, "promise.json"],
     ["result", args.result, "finalizer-result.json"],
@@ -139,6 +131,10 @@ function completion(args: JsonObject): DriverResult {
   return withEnabledDriverLock(project, (enabled: { githubRepositoryId?: string; githubRepo?: string; automationLogin?: string }, recheck: () => void) => {
     const enabledLogin = String(enabled.automationLogin || "").trim().toLowerCase();
     if (!enabledLogin) throw new Error("enablement authority has no authenticated GitHub identity");
+    assertRepairCompletionRepositoryIdentity(
+      runner.runJson(["gh", "repo", "view", String(args.githubRepo), "--json", "id,nameWithOwner"]),
+      enabled,
+    );
     const pr = runner.runJson([
       "gh", "pr", "view", String(args.pr), "-R", String(args.githubRepo),
       "--json", "state,headRefName,headRefOid,isCrossRepository,labels,comments",
@@ -175,65 +171,25 @@ function completion(args: JsonObject): DriverResult {
     }
 
     const comments = (pr.comments || []) as JsonObject[];
-    const observation = createGithubOperations(runner);
     const reauthorize = () => {
+      recheck();
+      assertRepairCompletionRepositoryIdentity(
+        runner.runJson(["gh", "repo", "view", String(args.githubRepo), "--json", "id,nameWithOwner"]),
+        enabled,
+      );
       const authenticatedLogin = runner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
       if (!authenticatedLogin || authenticatedLogin !== enabledLogin) {
         throw new Error("current authenticated GitHub identity does not match enablement authority");
       }
-      const currentConfiguration = assertCurrentReviewClaimAuthority(reviewClaim, String(args.stateDir), enabled, authenticatedLogin);
-      const authoritativeClaim = { ...reviewClaim, authorizedLogins: currentConfiguration.authorizedLogins };
-      const observe = () => {
-        const current = observation.getPr(String(args.githubRepo), String(args.pr));
-        const repository = runner.runJson(["gh", "repo", "view", String(args.githubRepo), "--json", "id,nameWithOwner"]);
-        const liveTarget = {
-          repositoryId: String(repository.id || ""), repository: String(repository.nameWithOwner || ""), targetNumber: Number(args.pr),
-        };
-        const currentComments = observation.listPrComments(String(args.githubRepo), String(args.pr));
-        const events = observation.listPrTimelineEvents(String(args.githubRepo), String(args.pr));
-        return (headers: string) => {
-          const enabledIdentityMatches = String(enabled.githubRepositoryId || "") === liveTarget.repositoryId
-            && String(enabled.githubRepo || "") === liveTarget.repository;
-          const validation = !enabledIdentityMatches || String(current.headRefOid || "").toLowerCase() !== liveHead
-            ? { kind: "binding_mismatch" }
-            : liveHead === String(reviewClaim.binding?.revision || "").toLowerCase()
-              ? classifyActiveReviewClaim(current, events, currentComments, headers, authoritativeClaim, liveTarget)
-              : successfulReceipt
-                ? classifyPushedHeadAuthorityTransition(current, events, currentComments, headers, authoritativeClaim, liveTarget, receipt || {})
-                : { kind: "binding_mismatch" };
-          return {
-            ...validation,
-            comments: currentComments,
-            labels: (current.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")),
-          };
-        };
-      };
-      const classifyObservation = observe();
-      let restHeaders = "";
-      try { restHeaders = readGithubRestResponseHeaders(runner, String(args.githubRepo)); } catch {}
-      const authority = classifyObservation(restHeaders);
-      if (authority.kind === "server_time_unverifiable") {
-        const visibleGithub = createGithubOperations(runner);
-        visiblyBlockReviewClaimTimeFailure({
-          contract: authoritativeClaim,
-          blockedLabel: String(args.blockedLabel),
-          observe: () => {
-            recheck();
-            const login = runner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
-            try {
-              if (!login || login !== enabledLogin) return { kind: "binding_mismatch", comments: [], labels: [] };
-              assertCurrentReviewClaimAuthority(reviewClaim, String(args.stateDir), enabled, login);
-              return observe()("");
-            } catch {
-              return { kind: "binding_mismatch", comments: [], labels: [] };
-            }
-          },
-          comment: (body: string) => visibleGithub.commentPr(String(args.githubRepo), String(args.pr), body),
-          addBlocked: () => visibleGithub.movePrLabels(String(args.githubRepo), String(args.pr), { add: String(args.blockedLabel) }),
-        });
-        throw new Error("active review claim server time could not be verified before repair completion mutation");
+      const current = createGithubOperations(runner).getPr(String(args.githubRepo), String(args.pr));
+      const currentLabels = (current.labels || []).map((label: JsonObject | string) =>
+        typeof label === "string" ? label : String(label.name || ""));
+      if (String(current.state || "").toUpperCase() !== "OPEN"
+        || String(current.headRefOid || "").toLowerCase() !== liveHead
+        || !currentLabels.includes(String(args.inProgressLabel))
+        || currentLabels.includes(String(args.blockedLabel))) {
+        throw new Error("repair completion target changed before GitHub mutation");
       }
-      if (authority.kind !== "authorized") throw new Error("active review claim could not be reauthorized before repair completion mutation");
     };
     reauthorize();
     const github = createGithubOperations(runner, () => { recheck(); reauthorize(); });
@@ -266,20 +222,14 @@ function completion(args: JsonObject): DriverResult {
 
     const stopMarker = `<!-- deadloop:review-repair-stop key=${String(args.attemptKey).toLowerCase()} -->`;
     if (comments.some((comment) => String(comment?.body || "").includes(stopMarker))) {
-      github.movePrLabels(String(args.githubRepo), String(args.pr), {
-        remove: String(args.inProgressLabel),
-        add: [String(args.reviewLabel), String(args.blockedLabel)],
-      });
+      github.movePrLabels(String(args.githubRepo), String(args.pr), stoppedRepairLabelMove(args));
       return driverResult("done", `PR #${args.pr} repair stop was already posted`, { driverAction: "repair_stop_duplicate" });
     }
     const reason = validation.promise?.reason || validation.error || receipt?.reason || "inconclusive_repair_completion";
     const summary = validation.promise?.summary || "The finalizer receipt and structured repair report did not confirm the same successful push.";
     const comment = recoveryComment(args, reason, summary);
     github.commentPr(String(args.githubRepo), String(args.pr), comment);
-    github.movePrLabels(String(args.githubRepo), String(args.pr), {
-      remove: String(args.inProgressLabel),
-      add: [String(args.reviewLabel), String(args.blockedLabel)],
-    });
+    github.movePrLabels(String(args.githubRepo), String(args.pr), stoppedRepairLabelMove(args));
     return driverResult("done", `PR #${args.pr} repair requires human recovery`, { driverAction: "repair_human_blocked", comment });
   });
 }
@@ -296,4 +246,11 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { completion, parseArgs, readJson, recoveryComment, sameFindingTitles };
+module.exports = {
+  assertRepairCompletionRepositoryIdentity,
+  completion,
+  parseArgs,
+  readJson,
+  recoveryComment,
+  sameFindingTitles,
+};

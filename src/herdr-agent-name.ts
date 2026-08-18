@@ -4,6 +4,7 @@ import type { AttemptRole } from "./attempt-lifecycle";
 
 const ROLE_CODES: Record<AttemptRole, string> = {
   worker: "w",
+  explorer: "e",
   reviewer: "r",
   "review-repair": "x",
   "branch-update": "u",

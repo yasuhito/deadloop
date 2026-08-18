@@ -7,8 +7,14 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
+const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
 const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
-const { renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
+const { renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.ts");
+const {
+  applyIssueRequiredVerificationStop,
+  planIssueRequiredVerificationStop,
+} = require("../../../src/issue-required-verification-stop.ts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.ts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.ts");
 const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.ts");
@@ -20,10 +26,11 @@ const {
   parseFixtureArg,
 } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
+const { activeIssueRequestEvent, consumeIssueRequest } = require("../../../src/issue-request-transition.ts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
-const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { readAttemptRecord, releasePersistedAttemptAuthority } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertCurrentWorkerContract, requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
@@ -56,6 +63,47 @@ function issueList(fixture: JsonObject | null, repo: string): JsonObject[] {
   return githubOperations().listOpenIssues(repo);
 }
 
+function reconcileAmbiguousPreparedWorkerConsumption(
+  issues: JsonObject[],
+  env: ReturnType<typeof envConfig>,
+): { issueNumber: number; attemptId: string } | null {
+  const runsRoot = path.join(env.stateDir, "runs");
+  let entries: string[];
+  try { entries = fs.readdirSync(runsRoot); } catch { return null; }
+  for (const entry of entries.sort()) {
+    const runDir = path.join(runsRoot, entry);
+    let attempt: JsonObject;
+    try { attempt = readAttemptRecord(runDir); } catch { continue; }
+    if (attempt.project !== env.projectId || attempt.repository !== env.githubRepo
+      || (attempt.role !== "worker" && attempt.role !== "explorer") || attempt.target?.kind !== "issue" || attempt.phase !== "prepared"
+      || attempt.agentRequest?.role !== attempt.role) continue;
+    const issue = issues.find((candidate) => Number(candidate.number) === Number(attempt.target.number));
+    if (!issue) continue;
+    const labels = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
+    if (labels.has(String(attempt.agentRequest.label))) continue;
+    const outcome = withEnabledDriverLock(env, (enabled: { automationLogin?: string }, recheck: () => void) => {
+      const transition = consumeIssueRequest({
+        github: githubOperations(recheck),
+        repository: env.githubRepo,
+        issueNumber: Number(issue.number),
+        requestLabel: String(attempt.agentRequest.label),
+        requestEventId: String(attempt.agentRequest.eventId),
+        inProgressLabel: env.inProgressLabel,
+        blockedLabel: env.blockedLabel,
+        automationLogin: String(enabled.automationLogin || ""),
+        attemptId: String(attempt.attemptId),
+        persistConsumed: () => { throw new Error("prepared attempt has no durable consumption receipt"); },
+      });
+      releasePersistedAttemptAuthority(runDir, new Date().toISOString(), String(attempt.agentRequest.eventId), "never_launched");
+      return transition;
+    });
+    if (outcome.kind === "ambiguous_blocked") {
+      return { issueNumber: Number(issue.number), attemptId: String(attempt.attemptId) };
+    }
+  }
+  return null;
+}
+
 function gateMissingContractComment(issue: JsonObject): string {
   return [
     "deadloop skipped automated implementation because the issue is missing an implementation contract.",
@@ -70,7 +118,7 @@ function gateMissingContractComment(issue: JsonObject): string {
 
 function applyIssueTransition(
   issue: JsonObject,
-  expectedKind: "contract_missing" | "planning_blocked",
+  expectedKind: "contract_missing" | "planning_blocked" | "worker_required",
   env: ReturnType<typeof envConfig>,
   fixture: JsonObject | null,
   mutate: (github: ReturnType<typeof githubOperations>, live: JsonObject) => void,
@@ -120,6 +168,90 @@ function applyBlocked(issue: JsonObject, env: ReturnType<typeof envConfig>, comm
     const number = String(live.number);
     github.moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.blockedLabel });
     github.commentIssue(env.githubRepo, number, comment);
+  });
+}
+
+function parsedRequiredVerificationResolution(env: ReturnType<typeof envConfig>): JsonObject | null {
+  if (!env.requiredVerificationResolution) return null;
+  let resolution: JsonObject;
+  try { resolution = JSON.parse(env.requiredVerificationResolution); }
+  catch { throw new Error("DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION must be valid JSON"); }
+  if (resolution.status !== "resolved" && resolution.status !== "blocked") {
+    throw new Error("DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION has an invalid status");
+  }
+  return resolution;
+}
+
+function applyRequiredVerificationStop(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  resolution: JsonObject,
+  fixture: JsonObject | null,
+): { applied: boolean; comment?: string; fingerprint?: string } {
+  let result: { applied: boolean; comment?: string; fingerprint?: string } = { applied: false };
+  const applied = applyIssueTransition(issue, "worker_required", env, fixture, (github, live) => {
+    const plan = planIssueRequiredVerificationStop({
+      issue: live,
+      resolution,
+      phase: "before_launch",
+      labels: { implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel },
+    });
+    applyIssueRequiredVerificationStop(github, env.githubRepo, live.number, plan);
+    result = { applied: true, ...(plan.comment ? { comment: plan.comment } : {}), fingerprint: plan.fingerprint };
+  });
+  if (fixture && applied) {
+    const plan = planIssueRequiredVerificationStop({
+      issue,
+      resolution,
+      phase: "before_launch",
+      labels: { implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel },
+    });
+    result = { applied: true, ...(plan.comment ? { comment: plan.comment } : {}), fingerprint: plan.fingerprint };
+  }
+  return applied ? result : { applied: false };
+}
+
+function requiredVerificationStopFingerprint(issue: JsonObject): string | undefined {
+  const issueNumber = Number(issue.number);
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) return undefined;
+  const marker = new RegExp(`<!-- deadloop:required-verification-blocked:v1 target=issue-${issueNumber} fingerprint=([0-9a-f]{64}) -->`);
+  for (const comment of issue.comments || []) {
+    const match = marker.exec(String(comment?.body || ""));
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+function isExactDurableRequiredVerificationStop(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+): boolean {
+  const names = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label?.name || "")));
+  return String(issue.state || "").toUpperCase() === "OPEN"
+    && names.has(env.blockedLabel)
+    && !names.has(env.implementLabel)
+    && !names.has(env.inProgressLabel)
+    && requiredVerificationStopFingerprint(issue) !== undefined;
+}
+
+function resumeRequiredVerificationStop(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fingerprint: string,
+): { fingerprint: string } {
+  return withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+    const github = githubOperations(recheck);
+    const live = github.getIssue(env.githubRepo, issue.number);
+    if (String(live.state || "").toUpperCase() !== "OPEN" || requiredVerificationStopFingerprint(live) !== fingerprint) {
+      throw new StaleLaunchError(`Issue #${issue.number} required-verification stop changed`);
+    }
+    const names = new Set((live.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label?.name || "")));
+    applyIssueRequiredVerificationStop(github, env.githubRepo, live.number, {
+      removeLabels: [env.implementLabel, env.inProgressLabel].filter((label) => names.has(label)),
+      addLabels: names.has(env.blockedLabel) ? [] : [env.blockedLabel],
+      fingerprint,
+    });
+    return { fingerprint };
   });
 }
 
@@ -192,7 +324,7 @@ function assertRecoverableWorkerCheckout(
   })) throw new Error("abandoned Worker checkout is still occupied by an agent");
   const head = ops.runText(["git", "-C", checkout.worktreePath, "rev-parse", "--verify", "HEAD^{commit}"]).trim();
   if (head.toLowerCase() !== checkout.inputHead.toLowerCase()) throw new Error("abandoned Worker checkout HEAD changed");
-  if (ops.runText(["git", "-C", checkout.worktreePath, "status", "--porcelain"]).trim()) {
+  if (hasUncommittedWork(ops.runText(["git", "-C", checkout.worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]))) {
     throw new Error("abandoned Worker checkout contains changes");
   }
 }
@@ -232,6 +364,7 @@ function issueWorkerLaunchPlan(
   baseHead: string,
   recovery: AbandonedWorkerCheckout | null = null,
   verificationBaseHead: string = baseHead,
+  agentRequest?: { role: "worker"; label: string; eventId: string },
 ) {
   const number = Number(issue.number || 0);
   const workerName = `${env.projectId}-issue-${number}-worker`;
@@ -259,6 +392,7 @@ function issueWorkerLaunchPlan(
       target: { kind: "issue" as const, number },
       inputRevision: { head: baseHead },
       requiredVerification: requiredVerificationContract(env, verificationBaseHead),
+      ...(agentRequest ? { agentRequest } : {}),
       intendedWorktreePath,
       resolveWorktreeHead: true,
       renderPrompt: ({ promiseFile, worktreePath, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
@@ -325,18 +459,71 @@ function launchIssueWorkerFlow(
 
 function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
   const number = Number(issue.number || 0);
-  const uuid = shouldSimulateLaunch(fixture) ? "fixture-worker-uuid" : randomUUID();
+  const uuid = shouldSimulateLaunch(fixture) ? `fixture-worker-${slugForBranch(env.projectId)}-${number}` : randomUUID();
   const recovery = shouldSimulateLaunch(fixture) ? null : abandonedWorkerCheckout(number, env);
   const currentBaseHead = shouldSimulateLaunch(fixture)
     ? "f".repeat(40)
     : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
   const baseHead = recovery?.inputHead || currentBaseHead;
-  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery, currentBaseHead);
+  const requestEvents = fixture
+    ? (issue.timelineEvents || [{ id: "1", event: "labeled", created_at: "2026-08-16T00:00:00Z", actor: { login: "fixture-user" }, label: { name: env.implementLabel } }])
+    : githubOperations().listIssueTimelineEvents(env.githubRepo, number);
+  const requestEvent = activeIssueRequestEvent(requestEvents, env.implementLabel);
+  if (!requestEvent) throw new StaleLaunchError(`Issue #${number} has no active ${env.implementLabel} request event`);
+  const agentRequest = {
+    role: "worker" as const,
+    label: env.implementLabel,
+    eventId: String(requestEvent.id || requestEvent.node_id || ""),
+  };
+  if (!agentRequest.eventId) throw new StaleLaunchError(`Issue #${number} request event has no immutable ID`);
+  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery, currentBaseHead, agentRequest);
   const { workerName, branch } = plan;
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
 
   if (shouldSimulateLaunch(fixture)) {
-    const promiseFile = `${env.stateDir}/runs/${uuid}/promise.json`;
+    const prepared = prepareAgentLaunchFlow(plan.input, {
+      mkdirSync: fs.mkdirSync,
+      runText: () => "",
+      writeFileSync: fs.writeFileSync,
+    });
+    const labels = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
+    const events = [...requestEvents];
+    const comments: JsonObject[] = [];
+    let nextEventId = events.length + 100;
+    const emit = (event: "labeled" | "unlabeled", label: string) => events.push({
+      id: String(nextEventId++), event, created_at: "2026-08-16T00:00:01Z",
+      actor: { login: "fixture-automation" }, label: { name: label },
+    });
+    const fixtureGithub = {
+      listIssueLabels: () => [...labels].map((name) => ({ name })),
+      listIssueTimelineEvents: () => events,
+      listIssueComments: () => comments,
+      addIssueLabel: (_repository: string, _issueNumber: number, label: string) => {
+        if (!labels.has(label)) { labels.add(label); emit("labeled", label); }
+        return {};
+      },
+      deleteIssueLabel: (_repository: string, _issueNumber: number, label: string) => {
+        if (!labels.delete(label)) return { status: 404 };
+        emit("unlabeled", label);
+        return { status: 200 };
+      },
+      commentIssue: (_repository: string, _issueNumber: number, body: string) => comments.push({ body }),
+    };
+    const requestTransition = consumeIssueRequest({
+      github: fixtureGithub,
+      repository: env.githubRepo,
+      issueNumber: number,
+      requestLabel: env.implementLabel,
+      requestEventId: agentRequest.eventId,
+      inProgressLabel: env.inProgressLabel,
+      blockedLabel: env.blockedLabel,
+      automationLogin: "fixture-automation",
+      attemptId: uuid,
+      persistConsumed: () => recordAgentLaunchGithubClaimed(plan.input),
+    });
+    if (requestTransition.kind !== "consumed") throw new StaleLaunchError(`fixture request was ${requestTransition.kind}`);
+    fixtureGithub.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
+    const promiseFile = prepared.promiseFile;
     return {
       workerName,
       branch,
@@ -344,9 +531,14 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       tabId: "fixture-tab-worker",
       rootPaneId: "fixture-pane-worker",
       worktreePath: simulatedWorktreePath,
-      promptFile: `${env.stateDir}/runs/${uuid}/worker-prompt.md`,
+      promptFile: prepared.promptFile,
       promiseFile,
-      attemptRecordFile: `${env.stateDir}/runs/${uuid}/attempt.json`,
+      attemptRecordFile: path.join(prepared.runDir, "attempt.json"),
+      agentRequest,
+      requestTransition,
+      issueLabels: [...labels],
+      timelineEvents: events,
+      attemptPhase: readAttemptRecord(prepared.runDir).phase,
       instructions: plan.input.renderPrompt({ promiseFile, worktreePath: simulatedWorktreePath, worktreeHead: baseHead }),
       simulated: true,
     };
@@ -355,9 +547,29 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   const runner = herdrRunner();
   const launch = withEnabledDriverLaunch(
     env,
-    (recheck: () => void, enabled: { githubRepositoryId?: string }) => {
+    (recheck: () => void, enabled: { githubRepositoryId?: string; automationLogin?: string }) => {
       assertPreparedWorkerContractCurrent(plan.input, env, enabled.githubRepositoryId);
-      githubOperations(recheck).moveIssueLabels(env.githubRepo, number, { remove: env.implementLabel, add: env.inProgressLabel });
+      const github = githubOperations(recheck);
+      const outcome = consumeIssueRequest({
+        github,
+        repository: env.githubRepo,
+        issueNumber: number,
+        requestLabel: env.implementLabel,
+        requestEventId: agentRequest.eventId,
+        inProgressLabel: env.inProgressLabel,
+        blockedLabel: env.blockedLabel,
+        automationLogin: String(enabled.automationLogin || ""),
+        attemptId: uuid,
+        persistConsumed: () => recordAgentLaunchGithubClaimed(plan.input),
+      });
+      if (outcome.kind !== "consumed") {
+        const runDir = path.join(env.stateDir, "runs", path.basename(uuid));
+        releasePersistedAttemptAuthority(runDir, new Date().toISOString(), agentRequest.eventId, "never_launched");
+        const error = new StaleLaunchError(`Issue #${number} implementation request was ${outcome.kind}`) as Error & { requestTransition?: string };
+        error.requestTransition = outcome.kind;
+        throw error;
+      }
+      github.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
     },
     (recheck: () => void) => launchAgentFlow(
       plan.input,
@@ -368,7 +580,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         plan.input,
         { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync },
       ),
-      recordClaim: () => recordAgentLaunchGithubClaimed(plan.input),
+      recordGithubMutation: () => recordAgentLaunchGithubClaimed(plan.input),
       revalidate: () => {
         const deadline = issueDecisionDeadline();
         const liveIssue = githubOperations().getIssue(env.githubRepo, number);
@@ -386,11 +598,179 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
   return { workerName, branch, ...launch };
 }
 
+function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
+  const number = Number(issue.number || 0);
+  const uuid = fixture ? `fixture-explorer-${slugForBranch(env.projectId)}-${number}` : randomUUID();
+  const baseHead = fixture
+    ? "e".repeat(40)
+    : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
+  const branch = `agent/explore-${number}-${uuid.slice(-8)}`;
+  const intendedWorktreePath = path.join(env.worktreeRoot, branch.replace(/\//g, "-"));
+  const requestEvents = fixture
+    ? (issue.timelineEvents || [{ id: "1", event: "labeled", created_at: "2026-08-16T00:00:00Z", actor: { login: "fixture-user" }, label: { name: env.exploreLabel } }])
+    : githubOperations().listIssueTimelineEvents(env.githubRepo, number);
+  const requestEvent = activeIssueRequestEvent(requestEvents, env.exploreLabel);
+  if (!requestEvent) throw new StaleLaunchError(`Issue #${number} has no active ${env.exploreLabel} request event`);
+  const agentRequest = {
+    role: "explorer" as const,
+    label: env.exploreLabel,
+    eventId: String(requestEvent.id || requestEvent.node_id || ""),
+  };
+  if (!agentRequest.eventId) throw new StaleLaunchError(`Issue #${number} exploration request event has no immutable ID`);
+  const input = {
+    worktree: { mode: "create" as const, branch, baseBranch: env.baseBranch },
+    repoPath: env.repoPath,
+    automationDir: env.automationDir,
+    stateDir: env.stateDir,
+    workspaceLabel: `${env.projectId}-issue-${number}-explorer`,
+    agent: env.workerAgent,
+    model: env.workerModel,
+    level: "medium",
+    uuid,
+    promptFilePrefix: "explorer-prompt",
+    project: env.projectId,
+    repository: env.githubRepo,
+    role: "explorer" as const,
+    target: { kind: "issue" as const, number },
+    inputRevision: { head: baseHead },
+    agentRequest,
+    intendedWorktreePath,
+    resolveWorktreeHead: true,
+    renderPrompt: ({ promiseFile, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
+      if (!worktreeHead) throw new Error("Explorer prompt requires the exact created worktree HEAD");
+      return renderIssueExplorerPrompt({
+        issueNumber: number,
+        issueTitle: String(issue.title || ""),
+        issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
+        githubRepo: env.githubRepo,
+        workerInstructions: env.workerInstructions,
+        promiseFile,
+        reportIdentity: { attemptId: uuid, inputRevision: { head: worktreeHead } },
+      });
+    },
+  };
+
+  if (fixture) {
+    const prepared = prepareAgentLaunchFlow(input, {
+      mkdirSync: fs.mkdirSync,
+      runText: () => "",
+      writeFileSync: fs.writeFileSync,
+    });
+    const labels = new Set((issue.labels || []).map((label: JsonObject | string) => typeof label === "string" ? label : String(label.name || "")));
+    const events = [...requestEvents];
+    const comments: JsonObject[] = [];
+    let nextEventId = events.length + 100;
+    const emit = (event: "labeled" | "unlabeled", label: string) => events.push({
+      id: String(nextEventId++), event, created_at: "2026-08-16T00:00:02Z",
+      actor: { login: "fixture-automation" }, label: { name: label },
+    });
+    const fixtureGithub = {
+      listIssueLabels: () => [...labels].map((name) => ({ name })),
+      listIssueTimelineEvents: () => events,
+      listIssueComments: () => comments,
+      addIssueLabel: (_repository: string, _issueNumber: number, label: string) => {
+        if (!labels.has(label)) { labels.add(label); emit("labeled", label); }
+        return {};
+      },
+      deleteIssueLabel: (_repository: string, _issueNumber: number, label: string) => {
+        if (!labels.delete(label)) return { status: 404 };
+        emit("unlabeled", label);
+        return { status: 200 };
+      },
+      commentIssue: (_repository: string, _issueNumber: number, body: string) => comments.push({ body }),
+    };
+    const requestTransition = consumeIssueRequest({
+      github: fixtureGithub,
+      repository: env.githubRepo,
+      issueNumber: number,
+      requestLabel: env.exploreLabel,
+      requestEventId: agentRequest.eventId,
+      inProgressLabel: env.inProgressLabel,
+      blockedLabel: env.blockedLabel,
+      automationLogin: "fixture-automation",
+      attemptId: uuid,
+      persistConsumed: () => recordAgentLaunchGithubClaimed(input),
+    });
+    if (requestTransition.kind !== "consumed") throw new StaleLaunchError(`fixture exploration request was ${requestTransition.kind}`);
+    fixtureGithub.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
+    return {
+      branch,
+      workspaceId: "fixture-workspace-explorer",
+      tabId: "fixture-tab-explorer",
+      rootPaneId: "fixture-pane-explorer",
+      worktreePath: intendedWorktreePath,
+      promptFile: prepared.promptFile,
+      promiseFile: prepared.promiseFile,
+      attemptRecordFile: path.join(prepared.runDir, "attempt.json"),
+      agentRequest,
+      requestTransition,
+      issueLabels: [...labels],
+      timelineEvents: events,
+      comments,
+      attemptPhase: readAttemptRecord(prepared.runDir).phase,
+      instructions: input.renderPrompt({ promiseFile: prepared.promiseFile, worktreePath: intendedWorktreePath, worktreeHead: baseHead }),
+      simulated: true,
+    };
+  }
+
+  const runner = herdrRunner();
+  const launch = withEnabledDriverLaunch(
+    env,
+    (recheck: () => void, enabled: { automationLogin?: string }) => {
+      const github = githubOperations(recheck);
+      const outcome = consumeIssueRequest({
+        github,
+        repository: env.githubRepo,
+        issueNumber: number,
+        requestLabel: env.exploreLabel,
+        requestEventId: agentRequest.eventId,
+        inProgressLabel: env.inProgressLabel,
+        blockedLabel: env.blockedLabel,
+        automationLogin: String(enabled.automationLogin || ""),
+        attemptId: uuid,
+        persistConsumed: () => recordAgentLaunchGithubClaimed(input),
+      });
+      if (outcome.kind !== "consumed") {
+        const runDir = path.join(env.stateDir, "runs", path.basename(uuid));
+        releasePersistedAttemptAuthority(runDir, new Date().toISOString(), agentRequest.eventId, "never_launched");
+        const error = new StaleLaunchError(`Issue #${number} exploration request was ${outcome.kind}`) as Error & { requestTransition?: string };
+        error.requestTransition = outcome.kind;
+        throw error;
+      }
+      github.addIssueLabel(env.githubRepo, number, env.inProgressLabel);
+    },
+    (recheck: () => void) => launchAgentFlow(
+      input,
+      { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync, beforeAgentStart: recheck },
+    ),
+    {
+      prepareAttempt: () => prepareAgentLaunchFlow(
+        input,
+        { mkdirSync: fs.mkdirSync, runner, runText, writeFileSync: fs.writeFileSync },
+      ),
+      recordClaim: () => recordAgentLaunchGithubClaimed(input),
+      revalidate: () => {
+        const deadline = issueDecisionDeadline();
+        const liveIssue = githubOperations().getIssue(env.githubRepo, number);
+        const livePlan = planIssueCoordinatorAction(
+          [liveIssue],
+          decisionForIssues(undefined, [liveIssue], env.githubRepo, env, deadline),
+        );
+        if (livePlan.kind !== "explorer_required") throw new StaleLaunchError("selected issue is no longer eligible for exploration");
+        assertSameLaunchTarget(issue, livePlan.issue, "issue");
+        assertWorkerLaunchBaseCurrent(env, baseHead, runText);
+      },
+    },
+  );
+  return { branch, agentRequest, ...launch };
+}
+
 function envConfig(source: NodeJS.ProcessEnv = process.env) {
   return {
     projectId: source.DEADLOOP_PROJECT_ID || "project",
     repoPath: source.DEADLOOP_REPO_PATH || ".",
     githubRepo: source.DEADLOOP_GITHUB_REPO || "",
+    githubRepositoryId: source.DEADLOOP_GITHUB_REPOSITORY_ID || "",
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
     worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
@@ -400,12 +780,14 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
       path.join(source.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     checkCommand: source.DEADLOOP_CHECK_COMMAND || "git diff --check",
     requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION || "",
+    requiredVerificationResolution: source.DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION || "",
     configPath: source.DEADLOOP_CONFIG || "",
     fixtureMode: source.DEADLOOP_FIXTURE_MODE === "1",
     workerInstructions: source.DEADLOOP_WORKER_INSTRUCTIONS || "Read AGENTS.md and follow the issue contract.",
     workerAgent: source.DEADLOOP_WORKER_AGENT || "pi",
     workerModel: source.DEADLOOP_WORKER_MODEL || "",
     readyLabel: source.DEADLOOP_READY_LABEL || "ready-for-agent",
+    exploreLabel: source.DEADLOOP_EXPLORE_LABEL || "agent:explore",
     implementLabel: source.DEADLOOP_IMPLEMENT_LABEL || "agent:implement",
     inProgressLabel: source.DEADLOOP_IN_PROGRESS_LABEL || "agent:in-progress",
     blockedLabel: source.DEADLOOP_BLOCKED_LABEL || "agent:blocked",
@@ -436,11 +818,76 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
 
   const issues = issueList(fixture, env.githubRepo);
+  const ambiguousPrepared = fixture ? null : reconcileAmbiguousPreparedWorkerConsumption(issues, env);
+  if (ambiguousPrepared) {
+    return driverResult("done", `Issue #${ambiguousPrepared.issueNumber} request consumption was ambiguous; blocked with recovery guidance`, {
+      driverAction: "ambiguous_request_consumption_blocked",
+      issueNumber: ambiguousPrepared.issueNumber,
+      attemptId: ambiguousPrepared.attemptId,
+    });
+  }
+  const verificationResolution = parsedRequiredVerificationResolution(env);
+  const resumableStop = verificationResolution?.status === "blocked"
+    ? issues.find((candidate) => {
+      const existingFingerprint = requiredVerificationStopFingerprint(candidate);
+      if (!existingFingerprint || isExactDurableRequiredVerificationStop(candidate, env)) return false;
+      const currentFingerprint = planIssueRequiredVerificationStop({
+        issue: candidate,
+        resolution: verificationResolution,
+        phase: "before_launch",
+        labels: { implement: env.implementLabel, inProgress: env.inProgressLabel, blocked: env.blockedLabel },
+      }).fingerprint;
+      return existingFingerprint === currentFingerprint;
+    })
+    : undefined;
+  if (resumableStop) {
+    const fingerprint = requiredVerificationStopFingerprint(resumableStop) as string;
+    const stopped = fixture ? { fingerprint } : resumeRequiredVerificationStop(resumableStop, env, fingerprint);
+    return driverResult("done", `Issue #${resumableStop.number} required-verification stop was resumed`, {
+      driverAction: "required_verification_blocked", issueNumber: resumableStop.number,
+      ...(verificationResolution?.reason ? { reason: verificationResolution.reason } : {}), fingerprint: stopped.fingerprint,
+    });
+  }
   const decision = decisionForIssues(fixturePath, issues, env.githubRepo, env);
   const issuePlan = planIssueCoordinatorAction(issues, decision);
   if (issuePlan.kind === "skip_no_candidate") return driverResult("skip", "No target issue", { driverAction: "no_candidate", decision });
 
   const issue = issuePlan.issue;
+  // Locking a target needs the repository it belongs to. The identity is immutable and rendered
+  // into every automation's environment, so its absence is a configuration fault, not a target to
+  // dispatch without exclusion.
+  const repositoryId = env.githubRepositoryId
+    || (fixture ? String(fixture.githubRepositoryId || "fixture-repository-id") : "");
+  if (!repositoryId) {
+    return driverResult("error", "immutable GitHub repository identity is unavailable", { driverAction: "configuration_error" });
+  }
+
+  // The dispatch decision for one target runs while this process holds that target's lock. Unlike
+  // the pull-request driver, a refused lock ends the tick rather than selecting again: issue
+  // selection resolves dependencies against GitHub, so re-selecting per held target would repeat
+  // those round trips. The next tick selects again anyway.
+  const decided = withDispatchLock({
+    stateDir: env.stateDir,
+    repositoryId,
+    target: { kind: "issue", number: Number(issue.number) },
+  }, () => driveSelectedIssue(issuePlan, issue, env, fixture, verificationResolution));
+  if (decided === null) {
+    return driverResult("skip", `Issue #${issue.number} is held by another dispatch decision`, {
+      driverAction: "target_dispatch_locked", issueNumber: issue.number,
+    });
+  }
+  return decided;
+}
+
+/** One issue's dispatch decision, run under that issue's lock. */
+function driveSelectedIssue(
+  issuePlan: JsonObject,
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  verificationResolution: JsonObject | null,
+): DriverResult {
+
   if (issuePlan.kind === "contract_missing") {
     if (!applyContractMissing(issue, env, fixture)) {
       return driverResult("skip", `Issue #${issue.number} changed before the contract gate; no workflow state was mutated`, {
@@ -468,10 +915,82 @@ function drive(fixturePath: string | undefined): DriverResult {
     });
   }
 
+  if (issuePlan.kind === "explorer_required") {
+    let launch: JsonObject;
+    try {
+      launch = launchIssueExplorer(issue, env, fixture);
+    } catch (error) {
+      const transition = (error as Error & { requestTransition?: string }).requestTransition;
+      if (transition === "ambiguous_blocked") {
+        return driverResult("done", `Issue #${issue.number} exploration request consumption was ambiguous; blocked with recovery guidance`, {
+          driverAction: "ambiguous_request_consumption_blocked",
+          issueNumber: issue.number,
+        });
+      }
+      if (transition === "cancelled" || transition === "raced") {
+        return driverResult("skip", transition === "cancelled"
+          ? `Issue #${issue.number} exploration request was cancelled before consumption`
+          : `Issue #${issue.number} received a newer exploration request; the selected attempt did not launch`, {
+          driverAction: transition === "cancelled" ? "exploration_request_cancelled" : "exploration_request_raced",
+          issueNumber: issue.number,
+        });
+      }
+      if (isStaleLaunchError(error)) {
+        return driverResult("skip", `Issue #${issue.number} changed before exploration launch; no workflow state was mutated`, {
+          driverAction: "explorer_launch_stale",
+          issueNumber: issue.number,
+        });
+      }
+      throw error;
+    }
+    const prompt = [
+      `A read-only explorer is running for Issue #${issue.number}.`,
+      `Monitor only the promise file at ${launch.promiseFile}. Do not launch another agent.`,
+      "Do not mutate the repository or GitHub. The deterministic completion path will validate and persist the result.",
+    ].join("\n");
+    return driverResult("needs_llm", `Launched read-only explorer for Issue #${issue.number}`, {
+      driverAction: "explorer_monitor_request",
+      issueNumber: issue.number,
+      launch,
+      prompt,
+    });
+  }
+
+  if (verificationResolution?.status === "blocked") {
+    const stopped = applyRequiredVerificationStop(issue, env, verificationResolution, fixture);
+    if (!stopped.applied) {
+      return driverResult("skip", `Issue #${issue.number} changed before the required-verification stop; no workflow state was mutated`, {
+        driverAction: "required_verification_blocked_stale", issueNumber: issue.number,
+      });
+    }
+    return driverResult("done", `Issue #${issue.number} was stopped before Worker launch because required verification is blocked`, {
+      driverAction: "required_verification_blocked",
+      issueNumber: issue.number,
+      reason: verificationResolution.reason,
+      ...(stopped.comment ? { comment: stopped.comment } : {}),
+      fingerprint: stopped.fingerprint,
+    });
+  }
+
   let launch: JsonObject;
   try {
     launch = launchIssueWorker(issue, env, fixture);
   } catch (error) {
+    const transition = (error as Error & { requestTransition?: string }).requestTransition;
+    if (transition === "ambiguous_blocked") {
+      return driverResult("done", `Issue #${issue.number} request consumption was ambiguous; blocked with recovery guidance`, {
+        driverAction: "ambiguous_request_consumption_blocked",
+        issueNumber: issue.number,
+      });
+    }
+    if (transition === "cancelled" || transition === "raced") {
+      return driverResult("skip", transition === "cancelled"
+        ? `Issue #${issue.number} implementation request was cancelled before consumption`
+        : `Issue #${issue.number} received a newer implementation request; the selected attempt did not launch`, {
+        driverAction: transition === "cancelled" ? "implementation_request_cancelled" : "implementation_request_raced",
+        issueNumber: issue.number,
+      });
+    }
     if (isStaleLaunchError(error)) {
       return driverResult("skip", `Issue #${issue.number} changed before launch; no workflow state was mutated`, {
         driverAction: "worker_launch_stale",
@@ -532,4 +1051,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { assertPreparedWorkerContractCurrent, assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };
+module.exports = { assertPreparedWorkerContractCurrent, assertRecoverableWorkerCheckout, assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };

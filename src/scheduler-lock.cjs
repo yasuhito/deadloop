@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const { processStartIdentity } = require("./enablement-lock.cjs");
+const { tryFlock: tryFlockWith } = require("./kernel-file-lock.cjs");
 
 // Tokens retain the open file description on which the kernel flock lives.
 // The operating system releases these descriptors on process exit, so a dead
@@ -43,17 +44,6 @@ function preflightSchedulerLockCapability(options = {}) {
     fs.closeSync(fd);
     remove(root, { recursive: true, force: true });
   }
-}
-
-function tryFlockWith(fd, run) {
-  const result = run("flock", ["--nonblock", "3"], {
-    encoding: "utf8",
-    stdio: ["ignore", "ignore", "pipe", fd],
-  });
-  if (result.error) throw new Error(`OS file locking is unavailable: ${result.error.message}`);
-  if (result.status === 0) return true;
-  if (result.status === 1) return false;
-  throw new Error(String(result.stderr || "flock failed").trim());
 }
 
 function writeMetadata(fd, metadata) {

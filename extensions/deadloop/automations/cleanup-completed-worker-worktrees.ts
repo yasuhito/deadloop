@@ -6,6 +6,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const { AGENT_SCRATCH_AREAS, hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { createHerdrRunner, normalizeHerdrWorktreeRecord } = require("../../../src/herdr-runner.ts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
@@ -96,18 +97,6 @@ function isUnderRootForCleanup(candidatePath: string, root: string): boolean {
   const absoluteRoot = normPathForCleanup(root);
   const relative = path.relative(absoluteRoot, absolutePath);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function isGeneratedAgentArtifactStatusLine(line: string): boolean {
-  return /^\?\?\s+\.(?:deadloop|pi-subagents)(?:\/|$)/.test(line.trim());
-}
-
-function isCleanStatusForCleanup(status: unknown): boolean {
-  return String(status || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .every(isGeneratedAgentArtifactStatusLine);
 }
 
 function localHeadMatchesClosedPr(
@@ -201,7 +190,7 @@ function selectCleanupPlan({
     let status = gitStatuses[worktreePath];
     if (status === undefined && live) {
       try {
-        status = runCleanupText(["git", "-C", worktreePath, "status", "--short"]);
+        status = runCleanupText(["git", "-C", worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]);
       } catch {
         skipped.push(skipCleanup("status_unavailable", pr, worktree));
         continue;
@@ -211,7 +200,7 @@ function selectCleanupPlan({
       skipped.push(skipCleanup("status_unavailable", pr, worktree));
       continue;
     }
-    if (!isCleanStatusForCleanup(status)) {
+    if (hasUncommittedWork(status)) {
       skipped.push(skipCleanup("dirty_worktree", pr, worktree));
       continue;
     }
@@ -315,17 +304,17 @@ function withCleanupMutation<T>(config: CleanupConfig, mutation: () => T): T {
   });
 }
 
-function removeGeneratedAgentArtifacts(worktreePath: string, config: CleanupConfig): void {
-  const tracked = runCleanupText(["git", "-C", worktreePath, "ls-files", "-z", "--", ".deadloop", ".pi-subagents"])
+function removeAgentScratchAreas(worktreePath: string, config: CleanupConfig): void {
+  const tracked = runCleanupText(["git", "-C", worktreePath, "ls-files", "-z", "--", ...AGENT_SCRATCH_AREAS])
     .split("\0")
     .filter(Boolean);
-  if (tracked.length) throw new Error(`runtime-named directories contain tracked files; refusing cleanup: ${tracked.join(", ")}`);
+  if (tracked.length) throw new Error(`agent scratch areas contain tracked files; refusing cleanup: ${tracked.join(", ")}`);
 
-  const currentStatus = runCleanupText(["git", "-C", worktreePath, "status", "--short"]);
-  if (!isCleanStatusForCleanup(currentStatus)) throw new Error("worktree became dirty after cleanup planning; refusing removal");
+  const currentStatus = runCleanupText(["git", "-C", worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]);
+  if (hasUncommittedWork(currentStatus)) throw new Error("worktree became dirty after cleanup planning; refusing removal");
 
-  for (const directory of [".deadloop", ".pi-subagents"]) {
-    withCleanupMutation(config, () => fs.rmSync(path.join(worktreePath, directory), { recursive: true, force: true }));
+  for (const scratchArea of AGENT_SCRATCH_AREAS) {
+    withCleanupMutation(config, () => fs.rmSync(path.join(worktreePath, scratchArea), { recursive: true, force: true }));
   }
 }
 
@@ -338,8 +327,10 @@ function applyCleanupPlan(plan: { candidates: CleanupRecord[]; skipped: CleanupR
     try {
       const worktreePath = String(item.path || "");
       if (!worktreePath) throw new Error("missing worktree path; refusing cleanup");
-      removeGeneratedAgentArtifacts(worktreePath, config);
-      const remainingStatus = runCleanupText(["git", "-C", worktreePath, "status", "--short"]);
+      removeAgentScratchAreas(worktreePath, config);
+      // Stricter than the planning gate on purpose: the scratch areas are gone
+      // now, so anything left is somebody's work, not something to look past.
+      const remainingStatus = runCleanupText(["git", "-C", worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]);
       if (remainingStatus.trim()) throw new Error("worktree became dirty after cleanup planning; refusing removal");
       withCleanupMutation(config, () => cleanupHerdrRunner().removeWorktree({
         repoPath: config.repoPath,

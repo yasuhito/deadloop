@@ -62,9 +62,10 @@ describe("attempt workspace doctor classifications", () => {
     const fixture = workerFixture(); const report = { ...fixture.report, status: "blocked", result: { reason: "unsafe", explanation: "stopped", recovery: "inspect" }, evidence: {} };
     expect(classify(fixture.record, report, [{ workspaceId: fixture.record.workspaceId, worktreePath: fixture.record.worktreePath }])).toContain("blocked");
   });
-  it("classifies a human-required review", () => {
+  it("classifies a human-required review as awaiting its handoff, not as intentionally retained", () => {
     const fixture = reviewerFixture("approved"); const report = { ...fixture.report, result: { ...fixture.report.result, outcome: "human_required" } };
-    expect(classify(fixture.record, report, [{ workspaceId: fixture.record.workspaceId, worktreePath: fixture.record.worktreePath }])).toContain("human_required");
+    const record = { ...fixture.record, phase: "agent_started", lastSuccessfulPhase: "agent_started" };
+    expect(classify(record, report, [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath }])).toContain("persistence_unconfirmed");
   });
   it("classifies malformed report JSON", () => {
     const fixture = workerFixture();
