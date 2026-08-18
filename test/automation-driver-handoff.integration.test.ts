@@ -30,7 +30,7 @@ describe("real driver handoff across disable and re-enable", () => {
         id: "demo:issue-coordinator",
         name: "issue coordinator",
         precheckFile: "issue-coordinator.precheck.sh",
-        driverFile: "issue-coordinator-driver.ts",
+        driverFile: "issue-coordinator-driver.cts",
       }],
     });
     const state: AutomationState = { automations: {} };
@@ -49,7 +49,7 @@ describe("real driver handoff across disable and re-enable", () => {
           const result = spawnSync(
             "node",
             [
-              "extensions/deadloop/automations/issue-coordinator-driver.ts",
+              "extensions/deadloop/automations/issue-coordinator-driver.cts",
               "--fixture",
               "test/fixtures/issue-coordinator/driver-ready-worker.json",
             ],

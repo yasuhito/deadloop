@@ -2,7 +2,7 @@
 //
 // Agent launch profiles — the single source of truth for how each agent kind
 // (pi / claude) is launched. `src/core.ts` derives the workerAgent enum from
-// AGENT_KINDS, and `extensions/deadloop/automations/launch-agent.ts` builds the
+// AGENT_KINDS, and `extensions/deadloop/automations/launch-agent.cts` builds the
 // launch argv from AGENT_PROFILES. See docs/adr/0004-agent-launcher.md.
 //
 // Authored as CommonJS + JSDoc (not an ESM `.ts`) so the launcher can be run by

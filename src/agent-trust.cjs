@@ -1,7 +1,7 @@
 // @ts-check
 //
 // Claude workspace trust — the shared trust judgment used by both the doctor
-// diagnostics (src/doctor.ts) and the launcher (launch-agent.ts). Reading
+// diagnostics (src/doctor.ts) and the launcher (launch-agent.cts). Reading
 // ~/.claude.json and deciding whether a workspace is trusted is a deterministic
 // check, so it lives here as one function rather than being duplicated.
 //

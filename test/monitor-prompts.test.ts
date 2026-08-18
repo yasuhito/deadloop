@@ -28,7 +28,7 @@ describe("monitor prompts", () => {
       blockedLabel: "custom:blocked",
     });
 
-    expect(prompt).toMatch(/persist-attempt-result\.ts[^`]+--review-label custom:review/);
+    expect(prompt).toMatch(/persist-attempt-result\.cts[^`]+--review-label custom:review/);
   });
 
   it("passes configured Worker labels to the completion proof", () => {
@@ -120,7 +120,7 @@ describe("monitor prompts", () => {
       githubRepo: "owner/repo", stateDir: "/state", enabledAt: 123, autoMerge: false, checkCommand: "npm test",
       implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", reviewLabel: "agent:review", blockedLabel: "agent:blocked",
     });
-    expect(prompt).toContain("handoff-reviewed-pr.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/runs/one/promise.json --history-observation /state/runs/one/pr-review-history-accepted.json");
+    expect(prompt).toContain("handoff-reviewed-pr.cts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/runs/one/promise.json --history-observation /state/runs/one/pr-review-history-accepted.json");
   });
 
   it("renders no completion label when automatic merge is disabled", () => {
@@ -141,7 +141,7 @@ describe("monitor prompts", () => {
       implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", reviewLabel: "agent:review",
       inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     });
-    expect(prompt).toMatch(/complete-attempt-workspace\.ts[^`]+--expected-label agent:in-progress(?![^`]+--expected-label)/);
+    expect(prompt).toMatch(/complete-attempt-workspace\.cts[^`]+--expected-label agent:in-progress(?![^`]+--expected-label)/);
   });
 
   it("routes reviewer changes_requested through a self-contained repair dispatcher command", () => {
@@ -201,7 +201,7 @@ describe("monitor prompts", () => {
       checkCommand: "npm test", reviewLabel: "agent:review", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("guarded-operation.ts");
+    expect(prompt).toContain("guarded-operation.cts");
   });
 
   it("routes only approved non-merge reviewer mutations through the generic enablement guard", () => {
@@ -211,7 +211,7 @@ describe("monitor prompts", () => {
       checkCommand: "npm test", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", reviewLabel: "agent:review", blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("Never pass merge, push, branch deletion, `gh api`, or arbitrary commands through `guarded-operation.ts`");
+    expect(prompt).toContain("Never pass merge, push, branch deletion, `gh api`, or arbitrary commands through `guarded-operation.cts`");
   });
 
   it("binds ready handoff to the reviewed PR head and approval evidence", () => {
@@ -222,7 +222,7 @@ describe("monitor prompts", () => {
       implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("handoff-reviewed-pr.ts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --history-observation /state/pr-review-history-accepted.json --review-label agent:review --implement-label agent:implement --update-branch-label agent:update-branch --in-progress-label agent:in-progress --blocked-label agent:blocked");
+    expect(prompt).toContain("handoff-reviewed-pr.cts --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --history-observation /state/pr-review-history-accepted.json --review-label agent:review --implement-label agent:implement --update-branch-label agent:update-branch --in-progress-label agent:in-progress --blocked-label agent:blocked");
   });
 
   it("binds guarded reviewer mutations to configured active-state labels", () => {
@@ -244,7 +244,7 @@ describe("monitor prompts", () => {
       blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("merge-reviewed-pr.ts --attempt-record /state/attempt.json --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --history-observation /state/pr-review-history-accepted.json --in-progress-label agent:in-progress --blocked-label agent:blocked");
+    expect(prompt).toContain("merge-reviewed-pr.cts --attempt-record /state/attempt.json --project-repo /repo --github-repo owner/repo --state-dir /state --enabled-at 123 --pr 24 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --review-promise /state/promise.json --history-observation /state/pr-review-history-accepted.json --in-progress-label agent:in-progress --blocked-label agent:blocked");
   });
 
   it("prohibits branch-update monitor mutations outside deterministic completion", () => {    const prompt = renderBranchUpdateMonitorPrompt({
@@ -281,6 +281,6 @@ describe("monitor prompts", () => {
       blockedLabel: "agent:blocked",
     });
 
-    expect(prompt).toContain("pr-review-repair-complete.ts");
+    expect(prompt).toContain("pr-review-repair-complete.cts");
   });
 });

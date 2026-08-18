@@ -12,7 +12,7 @@ const ops = {
   },
 };
 
-const { completion } = require("../extensions/deadloop/automations/pr-review-complete.ts");
+const { completion } = require("../extensions/deadloop/automations/pr-review-complete.cts");
 
 const head = "a".repeat(40);
 const otherHead = "b".repeat(40);

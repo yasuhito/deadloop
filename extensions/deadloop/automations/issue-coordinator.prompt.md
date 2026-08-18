@@ -6,12 +6,12 @@ You are `{{projectId}} issue coordinator`. This is a thin driver-first front end
 - GitHub repo: `{{githubRepo}}`
 - Base branch: `{{baseBranch}}`
 - Automation dir: `{{automationDir}}`
-- Driver: `{{automationDir}}/issue-coordinator-driver.ts --json`
+- Driver: `{{automationDir}}/issue-coordinator-driver.cts --json`
 
 ## Driver contract
 
 ```bash
-{{automationDir}}/issue-coordinator-driver.ts --json
+{{automationDir}}/issue-coordinator-driver.cts --json
 ```
 
 Handle the JSON action exactly:

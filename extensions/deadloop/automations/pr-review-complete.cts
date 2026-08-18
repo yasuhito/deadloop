@@ -19,8 +19,8 @@ const path = require("node:path") as typeof import("node:path");
 
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.cts");
-const { provenReviewCompletion } = require("./attempt-completion-proof.ts");
-const { dispatch } = require("./pr-review-repair-dispatch.ts");
+const { provenReviewCompletion } = require("./attempt-completion-proof.cts");
+const { dispatch } = require("./pr-review-repair-dispatch.cts");
 
 type JsonObject = Record<string, any>;
 

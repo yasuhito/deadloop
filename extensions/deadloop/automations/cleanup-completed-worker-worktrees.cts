@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Deterministically clean completed deadloop Herdr worker worktrees.
-// CommonJS-shaped so it can run directly with `node cleanup-completed-worker-worktrees.ts`.
+// CommonJS-shaped so it can run directly with `node cleanup-completed-worker-worktrees.cts`.
 
 const fs = require("node:fs") as typeof import("node:fs");
 const os = require("node:os") as typeof import("node:os");
@@ -387,7 +387,7 @@ function parseCleanupArgs(argv: string[]): CleanupRecord {
 }
 
 function cleanupHelp(): string {
-  return "Usage: cleanup-completed-worker-worktrees.ts [--plan|--apply] [--json] [--fixture FILE]";
+  return "Usage: cleanup-completed-worker-worktrees.cts [--plan|--apply] [--json] [--fixture FILE]";
 }
 
 function main(argv: string[] = process.argv.slice(2)): number {
@@ -425,7 +425,7 @@ if (require.main === module) {
   try {
     process.exitCode = main();
   } catch (error) {
-    console.error(`cleanup-completed-worker-worktrees.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`cleanup-completed-worker-worktrees.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

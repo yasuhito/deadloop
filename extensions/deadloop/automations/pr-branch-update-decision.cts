@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Decide whether a PR branch can be updated mechanically or needs one worker.
-// CommonJS-shaped so it can run directly with `node pr-branch-update-decision.ts`.
+// CommonJS-shaped so it can run directly with `node pr-branch-update-decision.cts`.
 
 const fs = require("node:fs") as typeof import("node:fs");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
@@ -138,8 +138,8 @@ function parseBranchUpdateArgs(argv: string[]): BranchUpdateDecision {
 
 function branchUpdateHelp(): string {
   return [
-    "Usage: pr-branch-update-decision.ts --fixture FILE",
-    "   or: pr-branch-update-decision.ts --repo PATH --head REF --base REF [--expected-head-ref REF]",
+    "Usage: pr-branch-update-decision.cts --fixture FILE",
+    "   or: pr-branch-update-decision.cts --repo PATH --head REF --base REF [--expected-head-ref REF]",
   ].join("\n");
 }
 
@@ -163,7 +163,7 @@ if (require.main === module) {
   try {
     process.exitCode = main();
   } catch (error) {
-    console.error(`pr-branch-update-decision.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`pr-branch-update-decision.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

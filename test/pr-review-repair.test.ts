@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-const { decideRepairPushGuard, parseArgs: parseFinalizerArgs } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
-const { recoveryComment, sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
-const { repairWorkerPrompt, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
-const { renderRepairMarker, repairAttempts, reviewResultFingerprint, selectRepairAttempt } = require("../extensions/deadloop/automations/pr-review-repair-state.ts");
+const { decideRepairPushGuard, parseArgs: parseFinalizerArgs } = require("../extensions/deadloop/automations/pr-review-repair-finalize.cts");
+const { recoveryComment, sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.cts");
+const { repairWorkerPrompt, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
+const { renderRepairMarker, repairAttempts, reviewResultFingerprint, selectRepairAttempt } = require("../extensions/deadloop/automations/pr-review-repair-state.cts");
 
 const head = "a".repeat(40);
 const automationLogin = "deadloop-bot";

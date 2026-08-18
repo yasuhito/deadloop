@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-const { planIssueCoordinatorAction } = require("../extensions/deadloop/automations/issue-coordinator-flow.ts");
+const { planIssueCoordinatorAction } = require("../extensions/deadloop/automations/issue-coordinator-flow.cts");
 
 const fixtureDir = path.join(process.cwd(), "test/fixtures/issue-coordinator");
 

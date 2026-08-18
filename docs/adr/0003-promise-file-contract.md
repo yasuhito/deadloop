@@ -11,7 +11,7 @@ Worker の完了検知はこれまで「assistant テキストに `<promise>COMP
 - 司令塔は Worker 起動ごとに一意な promise ファイルパスを採番し、worker prompt で指示する。現在の配置は [ADR 0010](0010-runtime-artifact-isolation.md) に従い `<deadloopStateDir>/runs/<uuid>/promise.json` とする。uuid は claude の `--session-id` と共用し、同一 issue のリトライ起動時に前回 worker の古い報告を誤読することを構造的に排除する(Orca の dispatchId 権威に相当)。
 - 完了報告は ADR 0006 の V1 正規化報告（`schemaVersion`、試行との結び付き、役割別の結果と証拠）だけを使う。PR レビュー結果と構造化された `findings` の詳細は [ADR 0012](0012-automatic-pr-review-repair.md) に従う。
 - 規約: **失敗も必ず書く。黙って終了しない**(blocked も promise である)。
-- `extract-worker-promise.ts` の前身にあった session JSONL パース・`--pane-id` 解決は廃止し、「指定パスの JSON を読んで検証する」薄い helper に置き換える。`<promise>` テキスト規約も廃止する。
+- `extract-worker-promise.cts` の前身にあった session JSONL パース・`--pane-id` 解決は廃止し、「指定パスの JSON を読んで検証する」薄い helper に置き換える。`<promise>` テキスト規約も廃止する。
 - エージェントの session ファイル・pane 出力・Herdr `agent_status` は完了判定に使わない(監視ヒントのみ)。
 
 ## Considered Options

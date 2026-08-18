@@ -5,7 +5,7 @@ const {
   reconcilePrWorkAuthority,
   recoveryComment,
 } = require("../src/pr-work-authority-reconciliation.cts");
-const { classifyRequest } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
+const { classifyRequest } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.cts");
 
 const base = {
   pr: { number: 24, headRefOid: "a".repeat(40), labels: ["agent:in-progress", "customer:keep"] },

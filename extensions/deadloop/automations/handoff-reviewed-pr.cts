@@ -11,8 +11,8 @@ const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { reauthorizeReviewWrite } = require("../../../src/worker-required-verification-runtime.cjs");
-const { currentAutoMergeEnabled } = require("./merge-reviewed-pr.ts");
-const { validatePromise } = require("./extract-worker-promise.ts");
+const { currentAutoMergeEnabled } = require("./merge-reviewed-pr.cts");
+const { validatePromise } = require("./extract-worker-promise.cts");
 const {
   comparePrHistoryObservations,
   observePrHistory,
@@ -240,7 +240,7 @@ function main(): void {
   try {
     process.stdout.write(`${JSON.stringify(handoffReviewedPr(parseArgs(process.argv.slice(2))))}\n`);
   } catch (error) {
-    console.error(`handoff-reviewed-pr.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`handoff-reviewed-pr.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

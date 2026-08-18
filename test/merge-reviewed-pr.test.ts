@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { mergeReviewedPr } = require("../extensions/deadloop/automations/merge-reviewed-pr.ts");
+const { mergeReviewedPr } = require("../extensions/deadloop/automations/merge-reviewed-pr.cts");
 
 const expectedHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const eligiblePr = {

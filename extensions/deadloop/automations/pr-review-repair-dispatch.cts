@@ -6,20 +6,20 @@ const fs = require("node:fs") as typeof import("node:fs");
 const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
-const { validatePromise } = require("./extract-worker-promise.ts");
+const { validatePromise } = require("./extract-worker-promise.cts");
 const {
   decideTechnicalReviewFailure,
   renderTechnicalFailureMarker,
   reviewOutcomeFingerprint,
   selectRepairAttempt,
-} = require("./pr-review-repair-state.ts");
+} = require("./pr-review-repair-state.cts");
 const {
   publicText,
   renderApprovedReviewComment,
   renderChangesRequestedComment,
   renderHumanRequiredComment,
   reviewCommentExists,
-} = require("./pr-review-comments.ts");
+} = require("./pr-review-comments.cts");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.cts");
 const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.cts");
@@ -377,7 +377,7 @@ function repairWorkerPrompt(
 ): string {
   const finalizer = [
     "node",
-    shellQuote(path.join(env.automationDir, "pr-review-repair-finalize.ts")),
+    shellQuote(path.join(env.automationDir, "pr-review-repair-finalize.cts")),
     "--repo",
     shellQuote(worktreePath),
     "--project-id",
@@ -1186,7 +1186,7 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
       writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
     }
     const closed = commandRunner.runJson([
-      "node", path.join(env.automationDir, "complete-attempt-workspace.ts"),
+      "node", path.join(env.automationDir, "complete-attempt-workspace.cts"),
       "--attempt-record", String(args.attemptRecord),
       "--project-id", env.projectId,
       "--project-repo", env.repoPath,

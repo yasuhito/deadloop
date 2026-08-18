@@ -2,7 +2,7 @@
 
 ## Problem
 
-deadloop's runtime modules are CommonJS TypeScript: a `.ts` file assigns `module.exports`, and callers read it with `require("....ts")`. Node loads these with type stripping only, which is what lets `extensions/deadloop/automations/launch-agent.ts` and the other driver scripts run under bare `node` with no build step (see [ADR 0004](adr/0004-agent-launcher.md)).
+deadloop's runtime modules are CommonJS TypeScript: a `.ts` file assigns `module.exports`, and callers read it with `require("....ts")`. Node loads these with type stripping only, which is what lets `extensions/deadloop/automations/launch-agent.cts` and the other driver scripts run under bare `node` with no build step (see [ADR 0004](adr/0004-agent-launcher.md)).
 
 The pi host resolves those files as CommonJS. The omp (Oh My Pi) host does not. Its extension loader (`src/extensibility/plugins/legacy-pi-compat.ts`, `isCommonJsModulePath`) only classifies `.cjs`, `.cts`, and `type: commonjs` `.js`/`.jsx` as CommonJS; every other TypeScript file in the module graph is loaded as ESM. Two failure modes follow:
 

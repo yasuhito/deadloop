@@ -1,4 +1,4 @@
-const { renderRepairMarker } = require("./pr-review-repair-state.ts");
+const { renderRepairMarker } = require("./pr-review-repair-state.cts");
 
 type JsonObject = Record<string, any>;
 

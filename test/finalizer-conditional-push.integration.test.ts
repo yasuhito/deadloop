@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { finalizeReviewRepair } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
+const { finalizeReviewRepair } = require("../extensions/deadloop/automations/pr-review-repair-finalize.cts");
 const { createPreparedAttempt } = require("../src/attempt-lifecycle-runtime.cjs");
-const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
-const { finalizeBranchUpdate } = require("../extensions/deadloop/automations/pr-branch-update-finalize.ts");
+const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
+const { finalizeBranchUpdate } = require("../extensions/deadloop/automations/pr-branch-update-finalize.cts");
 const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 
 type JsonObject = Record<string, any>;
@@ -148,8 +148,8 @@ afterEach(() => {
 
 describe("finalizer exact-head pushes against real remotes", () => {
   it.each([
-    ["review repair", "pr-review-repair-finalize.ts"],
-    ["branch update", "pr-branch-update-finalize.ts"],
+    ["review repair", "pr-review-repair-finalize.cts"],
+    ["branch update", "pr-branch-update-finalize.cts"],
   ] as const)("atomically writes a blocked receipt when %s finalizer argument validation fails", (_name, script) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-finalizer-receipt-"));
     sandboxes.push(root);

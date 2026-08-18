@@ -5,7 +5,7 @@
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { assertLocallyEnabled, MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const path = require("node:path") as typeof import("node:path");
-const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
+const { resolveVerifiedPushDestination } = require("./verified-push-destination.cts");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
@@ -159,7 +159,7 @@ function main(): void {
   try {
     process.exitCode = runGuardedPush(parseArgs(process.argv.slice(2)));
   } catch (error) {
-    console.error(`guarded-push.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`guarded-push.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

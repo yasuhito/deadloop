@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 // Deterministic PR reviewer driver. Keep this CLI CommonJS-shaped so it can run
-// directly under this package's `type: commonjs`, matching launch-agent.ts.
+// directly under this package's `type: commonjs`, matching launch-agent.cts.
 
 const fs = require("node:fs") as typeof import("node:fs");
 const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
-const { planPrRequestAction } = require("./pr-reviewer-flow.ts");
+const { planPrRequestAction } = require("./pr-reviewer-flow.cts");
 const { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.cts");
 const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.cts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.cts");
 const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.cts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.cts");
-const { decideBranchUpdateLive } = require("./pr-branch-update-decision.ts");
-const { branchUpdateAttemptExists, branchUpdateRetryKey, renderBranchUpdateMarker } = require("./pr-branch-update-state.ts");
+const { decideBranchUpdateLive } = require("./pr-branch-update-decision.cts");
+const { branchUpdateAttemptExists, branchUpdateRetryKey, renderBranchUpdateMarker } = require("./pr-branch-update-state.cts");
 const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
@@ -399,7 +399,7 @@ function branchUpdateWorkerPrompt(
   const reportBase = JSON.stringify({ schemaVersion: 1, attemptId, role: "branch-update", target: { repository: env.githubRepo, kind: "pull-request", number }, inputRevision: { head: headOid, base: baseOid } });
   const finalizeCommand = [
     "node",
-    shellQuote(path.join(env.automationDir, "pr-branch-update-finalize.ts")),
+    shellQuote(path.join(env.automationDir, "pr-branch-update-finalize.cts")),
     "--repo",
     shellQuote(worktreePath),
     "--project-id",

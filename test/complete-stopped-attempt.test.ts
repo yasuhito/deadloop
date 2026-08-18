@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { completeProvenStoppedAttempt } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
+const { completeProvenStoppedAttempt } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.cts");
 
 const startHead = "a".repeat(40);
 const pushedHead = "b".repeat(40);

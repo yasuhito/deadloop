@@ -4,9 +4,9 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
-const { validatePromise } = require("./extract-worker-promise.ts");
-const { authorizeFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
-const { publicText, renderRepairSuccessComment, repairResultCommentExists } = require("./pr-review-comments.ts");
+const { validatePromise } = require("./extract-worker-promise.cts");
+const { authorizeFinalizerRequiredVerification } = require("./finalizer-required-verification.cts");
+const { publicText, renderRepairSuccessComment, repairResultCommentExists } = require("./pr-review-comments.cts");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.cts");
 const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");

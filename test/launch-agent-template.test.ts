@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const automationDir = path.join(process.cwd(), "extensions/deadloop/automations");
-const driverScript = path.join(automationDir, "issue-coordinator-driver.ts");
+const driverScript = path.join(automationDir, "issue-coordinator-driver.cts");
 
 function readTemplate(name: string): string {
   return fs.readFileSync(path.join(automationDir, name), "utf8");
@@ -72,6 +72,6 @@ describe("agent launch template", () => {
   });
 
   it("keeps issue coordinator fallback focused on the driver", () => {
-    expect(readTemplate("issue-coordinator.prompt.md")).toMatch(/issue-coordinator-driver\.ts/);
+    expect(readTemplate("issue-coordinator.prompt.md")).toMatch(/issue-coordinator-driver\.cts/);
   });
 });

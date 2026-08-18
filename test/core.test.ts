@@ -459,9 +459,9 @@ describe("deterministic extension core", () => {
   });
 
   it("preserves an automation driver file from project config", () => {
-    const project = normalizeProject({ automations: [{ driverFile: "issue-coordinator-driver.ts" }] });
+    const project = normalizeProject({ automations: [{ driverFile: "issue-coordinator-driver.cts" }] });
 
-    expect(project.automations[0].driverFile).toBe("issue-coordinator-driver.ts");
+    expect(project.automations[0].driverFile).toBe("issue-coordinator-driver.cts");
   });
 
   it("uses reloaded project settings during tick resolution", () => {
@@ -562,12 +562,12 @@ describe("deterministic extension core", () => {
       {
         repoPolicyProvider: () => ({
           status: "loaded",
-          text: JSON.stringify({ automations: [{ id: "demo:auto", driverFile: "issue-coordinator-driver.ts" }] }),
+          text: JSON.stringify({ automations: [{ id: "demo:auto", driverFile: "issue-coordinator-driver.cts" }] }),
         }),
       },
     );
 
-    expect(result.ok && result.projects[0].automations[0].driverFile).toBe("issue-coordinator-driver.ts");
+    expect(result.ok && result.projects[0].automations[0].driverFile).toBe("issue-coordinator-driver.cts");
   });
 
   it("uses trusted repo policy external review settings", () => {

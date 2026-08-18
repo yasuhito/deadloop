@@ -6,7 +6,7 @@ import path from "node:path";
 import { Given, Then, When } from "@cucumber/cucumber";
 import { runPrReviewerDriverFixture } from "../support/pr-reviewer-driver";
 
-const { defaultDecisionConfig, selectPrRequestTarget, workingReviewerPrNumbers } = require("../../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+const { defaultDecisionConfig, selectPrRequestTarget, workingReviewerPrNumbers } = require("../../extensions/deadloop/automations/pr-reviewer-decisions.cts");
 
 type PullRequest = Record<string, unknown>;
 type GithubEffect = {

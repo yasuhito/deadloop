@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const script = "extensions/deadloop/automations/pr-reviewer-decisions.ts";
+const script = "extensions/deadloop/automations/pr-reviewer-decisions.cts";
 const stateDirs: string[] = [];
 
 afterEach(() => {
@@ -97,7 +97,7 @@ describe("PR reviewer stale reviewing reclaim", () => {
   });
 
   it("does not trust a copied repair result marker", () => {
-    const { defaultDecisionConfig, selectPrRequestTarget } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const { defaultDecisionConfig, selectPrRequestTarget } = require("../extensions/deadloop/automations/pr-reviewer-decisions.cts");
     const prs = structuredClone(require("./fixtures/pr-reviewer/precheck-repair-rereview.json"));
     prs[0].comments[0].author.login = "attacker";
     expect(selectPrRequestTarget(prs, defaultDecisionConfig({ automationLogin: "deadloop-bot" })).reason).toBe("selectable");
@@ -110,7 +110,7 @@ describe("PR reviewer stale reviewing reclaim", () => {
   });
 
   it("suppresses a queued review while its retained in-progress owner is active", () => {
-    const { defaultDecisionConfig, selectPrRequestTarget } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const { defaultDecisionConfig, selectPrRequestTarget } = require("../extensions/deadloop/automations/pr-reviewer-decisions.cts");
     const prs = [{
       number: 42,
       headRefOid: "a".repeat(40),
@@ -120,7 +120,7 @@ describe("PR reviewer stale reviewing reclaim", () => {
   });
 
   it("does not suppress an ordinary GitHub request from a retained journal alone", () => {
-    const { defaultDecisionConfig, selectPrRequestTarget, workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const { defaultDecisionConfig, selectPrRequestTarget, workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.cts");
     const owners = workingReviewerPrNumbers({}, "demo", [{
       project: "demo", repository: "owner/repo", role: "review-repair",
       target: { kind: "pull-request", number: 7 }, phase: "report_received", agentName: "dl-x-7-222222222222",
@@ -130,7 +130,7 @@ describe("PR reviewer stale reviewing reclaim", () => {
   });
 
   it("allows reselection only after the project-bound attempt journal reaches workspace_closed", () => {
-    const { workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const { workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.cts");
     expect(workingReviewerPrNumbers({}, "demo", [{
       project: "demo", repository: "owner/repo", role: "reviewer",
       target: { kind: "pull-request", number: 13 }, phase: "workspace_closed", agentName: "dl-r-13-111111111111",
@@ -138,7 +138,7 @@ describe("PR reviewer stale reviewing reclaim", () => {
   });
 
   it("does not let another project's journal suppress selection", () => {
-    const { workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+    const { workingReviewerPrNumbers } = require("../extensions/deadloop/automations/pr-reviewer-decisions.cts");
     expect(workingReviewerPrNumbers({}, "demo", [{
       project: "other", repository: "owner/repo", role: "reviewer",
       target: { kind: "pull-request", number: 13 }, phase: "agent_started", agentName: "dl-r-13-111111111111",

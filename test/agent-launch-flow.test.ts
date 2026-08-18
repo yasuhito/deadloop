@@ -6,7 +6,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../src/agent-launch-flow.cts");
-const { assertPreparedWorkerContractCurrent, assertWorkerLaunchBaseCurrent, issueWorkerLaunchPlan } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
+const { assertPreparedWorkerContractCurrent, assertWorkerLaunchBaseCurrent, issueWorkerLaunchPlan } = require("../extensions/deadloop/automations/issue-coordinator-driver.cts");
 const { transitionPersistedAttempt } = require("../src/attempt-lifecycle-runtime.cjs");
 
 function input(root: string, role: "worker" | "reviewer" = "worker") {

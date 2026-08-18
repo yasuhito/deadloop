@@ -325,7 +325,7 @@ function reviewerFixtureRepository(): { root: string; repoPath: string } {
       name: "demo PR reviewer",
       promptFile: "pr-reviewer.prompt.md",
       precheckFile: "pr-reviewer.precheck.sh",
-      driverFile: "pr-reviewer-driver.ts",
+      driverFile: "pr-reviewer-driver.cts",
     }],
   }));
   git(repoPath, ["add", "deadloop.json"]);
@@ -1169,10 +1169,10 @@ describe("enablement command integration", () => {
       authenticatedLogin: "Deadloop-Bot",
       runAutomationScript: async (args) => {
         const command = args.join(" ");
-        if (command.includes("pr-reviewer-driver.ts")) reviewerCommand = command;
+        if (command.includes("pr-reviewer-driver.cts")) reviewerCommand = command;
         return {
           code: 0,
-          stdout: command.includes("pr-reviewer-driver.ts") ? JSON.stringify({ action: "skip", summary: "fixture" }) : "",
+          stdout: command.includes("pr-reviewer-driver.cts") ? JSON.stringify({ action: "skip", summary: "fixture" }) : "",
           stderr: "",
         };
       },

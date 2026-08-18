@@ -9,7 +9,7 @@ const { isDeepStrictEqual } = require("node:util") as typeof import("node:util")
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
-const { writeVerificationLog } = require("./run-worker-required-verification.ts");
+const { writeVerificationLog } = require("./run-worker-required-verification.cts");
 const {
   assertCurrentWorkerContract,
   assertRequiredVerificationAuthorized,

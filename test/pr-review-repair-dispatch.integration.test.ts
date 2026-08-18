@@ -14,7 +14,7 @@ process.env.DEADLOOP_REQUIRED_VERIFICATION = JSON.stringify({
 });
 
 const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.cts");
-const { assertReviewerDispatchAttemptBinding, blockedClaimMove, repairLaunchInput, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
+const { assertReviewerDispatchAttemptBinding, blockedClaimMove, repairLaunchInput, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
 const {
   persistHostVerificationEvidence,
   requiredVerificationBinding,
@@ -285,7 +285,7 @@ else process.stdout.write(JSON.stringify({ok:true}));
   const result = spawnSync(
     "node",
     [
-      "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+      "extensions/deadloop/automations/pr-review-repair-dispatch.cts",
       "--promise",
       promise,
       "--attempt-record",
@@ -422,7 +422,7 @@ else if (args[0] === "agent" && args[1] === "start") {
   const result = spawnSync(
     "node",
     [
-      "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+      "extensions/deadloop/automations/pr-review-repair-dispatch.cts",
       "--promise",
       promise,
       "--attempt-record",
@@ -516,7 +516,7 @@ if (args.includes("get-url")) process.stdout.write("https://github.com/owner/rep
 `);
   supportedHerdr(bin);
   const result = spawnSync("node", [
-    "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+    "extensions/deadloop/automations/pr-review-repair-dispatch.cts",
     "--promise", promise, "--attempt-record", attempt, "--request-event-id", "22",
     "--pr", "243", "--expected-head", "a".repeat(40), "--branch", "agent/issue-243",
   ], { cwd: process.cwd(), encoding: "utf8", env: {
@@ -570,7 +570,7 @@ if (args.includes("get-url")) process.stdout.write("https://github.com/owner/rep
 `);
   supportedHerdr(bin);
   const args = [
-    "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+    "extensions/deadloop/automations/pr-review-repair-dispatch.cts",
     "--promise", promise, "--attempt-record", attempt, "--request-event-id", "22", "--pr", "243", "--expected-head", "a".repeat(40), "--branch", "agent/issue-243",
   ];
   const env = {
@@ -726,7 +726,7 @@ else if(a[0]==="worktree"&&a[1]==="open"){s.workspace="repair-workspace";fs.writ
 else if(a[0]==="agent"&&a[1]==="list") process.stdout.write(JSON.stringify({result:{agents:s.agent?[s.agent]:[]}}));
 else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"terminal-1",name:a[2],agent_status:"working",cwd:process.env.WORKTREE,pane_id:a[a.indexOf("--pane")+1]};fs.writeFileSync(f,JSON.stringify(s));process.stdout.write("started");}
 `);
-  const argv = ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attempt,
+  const argv = ["extensions/deadloop/automations/pr-review-repair-dispatch.cts", "--promise", promise, "--attempt-record", attempt,
     "--request-event-id", "22", "--pr", "243", "--expected-head", head, "--branch", "agent/issue-243"];
   const env = {
     ...process.env,
@@ -848,7 +848,7 @@ const a=process.argv.slice(2);if(a.includes("get-url")) process.stdout.write("ht
 `);
   supportedHerdr(bin);
   const result = spawnSync("node", [
-    "extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attempt,
+    "extensions/deadloop/automations/pr-review-repair-dispatch.cts", "--promise", promise, "--attempt-record", attempt,
     "--request-event-id", "22", "--pr", "243", "--expected-head", head, "--branch", "agent/issue-243",
   ], { cwd: process.cwd(), encoding: "utf8", env: {
     ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
@@ -1380,7 +1380,7 @@ else if (args[0] === "agent" && args[1] === "start") {
     const result = spawnSync(
       "node",
       [
-        "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+        "extensions/deadloop/automations/pr-review-repair-dispatch.cts",
         "--promise",
         promise,
         "--attempt-record",
@@ -1497,13 +1497,13 @@ else if (args[0] === "agent" && args[1] === "start") {
 `,
     );
 
-    const { reviewResultFingerprint, repairAttemptKey } = require("../extensions/deadloop/automations/pr-review-repair-state.ts");
+    const { reviewResultFingerprint, repairAttemptKey } = require("../extensions/deadloop/automations/pr-review-repair-state.cts");
     const findings = [{ title: "Lint contract", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
     const attemptKey = repairAttemptKey(head, reviewResultFingerprint(findings));
     const result = spawnSync(
       "node",
       [
-        "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+        "extensions/deadloop/automations/pr-review-repair-dispatch.cts",
         "--promise",
         promise,
         "--attempt-record",
@@ -1563,7 +1563,7 @@ else if (args[0] === "agent" && args[1] === "start") {
     const launchAttempted = path.join(root, "launch-attempted");
     const head = "a".repeat(40);
     const finding = { title: "Lint contract", body: "Format src/a.ts", path: "src/a.ts", severity: "major" };
-    const { renderRepairMarker, reviewResultFingerprint } = require("../extensions/deadloop/automations/pr-review-repair-state.ts");
+    const { renderRepairMarker, reviewResultFingerprint } = require("../extensions/deadloop/automations/pr-review-repair-state.cts");
     const fingerprint = reviewResultFingerprint([finding]);
     const marker = renderRepairMarker(head, fingerprint);
     const attemptKey = marker.match(/key=([0-9a-f]+)/)?.[1];
@@ -1612,7 +1612,7 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
     const result = spawnSync(
       "node",
       [
-        "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+        "extensions/deadloop/automations/pr-review-repair-dispatch.cts",
         "--promise",
         promise,
         "--attempt-record",
@@ -1670,7 +1670,7 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
     const herdrCalled = path.join(root, "herdr-called");
     const head = "a".repeat(40);
     const finding = { title: "Lint contract", body: "Format src/a.ts", path: "src/a.ts", severity: "major" };
-    const { renderRepairMarker, reviewResultFingerprint } = require("../extensions/deadloop/automations/pr-review-repair-state.ts");
+    const { renderRepairMarker, reviewResultFingerprint } = require("../extensions/deadloop/automations/pr-review-repair-state.cts");
     const marker = renderRepairMarker(head, reviewResultFingerprint([finding]));
     fs.mkdirSync(bin);
     fs.mkdirSync(path.dirname(promise), { recursive: true });
@@ -1702,7 +1702,7 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
     const result = spawnSync(
       "node",
       [
-        "extensions/deadloop/automations/pr-review-repair-dispatch.ts",
+        "extensions/deadloop/automations/pr-review-repair-dispatch.cts",
         "--promise",
         promise,
         "--attempt-record",

@@ -7,8 +7,8 @@ const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertLocallyEnabled } = require("../../../src/enabled-operation.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { validatePromise } = require("./extract-worker-promise.ts");
-const { authorizeFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
+const { validatePromise } = require("./extract-worker-promise.cts");
+const { authorizeFinalizerRequiredVerification } = require("./finalizer-required-verification.cts");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {

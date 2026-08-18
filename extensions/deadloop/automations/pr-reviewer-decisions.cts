@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Deterministic decisions for pr-reviewer automation. CommonJS-shaped so the
-// script can run directly with `node pr-reviewer-decisions.ts` in this package.
+// script can run directly with `node pr-reviewer-decisions.cts` in this package.
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
@@ -402,7 +402,7 @@ if (require.main === module) {
   try {
     process.exitCode = main();
   } catch (error) {
-    console.error(`pr-reviewer-decisions.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`pr-reviewer-decisions.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

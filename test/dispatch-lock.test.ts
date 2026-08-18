@@ -26,7 +26,7 @@ function target(number: number, kind = "pull-request") {
 
 describe("dispatch lock path", () => {
   it("wires the pull-request dispatch decision through the lock", () => {
-    const driver = fs.readFileSync("extensions/deadloop/automations/pr-reviewer-driver.ts", "utf8");
+    const driver = fs.readFileSync("extensions/deadloop/automations/pr-reviewer-driver.cts", "utf8");
 
     expect(driver).toContain("withDispatchLock(");
   });

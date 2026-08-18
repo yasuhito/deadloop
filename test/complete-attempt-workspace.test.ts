@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createPreparedAttempt, readAttemptRecord, releasesAttemptOwnership, transitionPersistedAttempt } from "../src/attempt-lifecycle";
 
-const { assertWorkerPersistenceAuthorized, closeCompletionStoppedWorkerAttempt, completeLocked: completeLockedRaw } = require("../extensions/deadloop/automations/complete-attempt-workspace.ts");
+const { assertWorkerPersistenceAuthorized, closeCompletionStoppedWorkerAttempt, completeLocked: completeLockedRaw } = require("../extensions/deadloop/automations/complete-attempt-workspace.cts");
 const completeLocked = (args: any, runner: any, recheck: () => void, authorizeWorker?: (...values: any[]) => void) =>
   completeLockedRaw(args, runner, recheck, authorizeWorker || (() => {}));
 const { renderAttemptPersistenceMarker } = require("../src/attempt-persistence-marker.cjs");

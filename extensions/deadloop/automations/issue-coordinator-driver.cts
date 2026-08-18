@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // Deterministic issue-coordinator driver. CommonJS-shaped so it can run directly
-// under this package's `type: commonjs`, matching launch-agent.ts.
+// under this package's `type: commonjs`, matching launch-agent.cts.
 
 const fs = require("node:fs") as typeof import("node:fs");
 const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
-const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.ts");
+const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.cts");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
-const { issueDecisionDeadline } = require("./issue-coordinator-decisions.ts");
+const { issueDecisionDeadline } = require("./issue-coordinator-decisions.cts");
 const { renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt } = require("../../../src/issue-coordinator-renderers.cts");
 const {
   applyIssueRequiredVerificationStop,
@@ -36,7 +36,7 @@ const { assertCurrentWorkerContract, requiredVerificationBinding } = require("..
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
 
 const SCRIPT_DIR = __dirname;
-const CLEANUP_SCRIPT = path.join(SCRIPT_DIR, "cleanup-completed-worker-worktrees.ts");
+const CLEANUP_SCRIPT = path.join(SCRIPT_DIR, "cleanup-completed-worker-worktrees.cts");
 const commandRunner = createCommandRunner();
 const { runText, runJson } = commandRunner;
 

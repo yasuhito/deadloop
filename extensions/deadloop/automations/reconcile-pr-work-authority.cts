@@ -9,8 +9,8 @@ const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.cts");
 const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.cts");
-const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
-const { provenAttemptCompletion } = require("./attempt-completion-proof.ts");
+const { provenPushedHeadTransition } = require("./pushed-head-proof.cts");
+const { provenAttemptCompletion } = require("./attempt-completion-proof.cts");
 
 type JsonObject = Record<string, any>;
 
@@ -135,15 +135,15 @@ function latestConfiguredRequest(events: JsonObject[], currentLabels: string[], 
 /** Every role whose completion is still owed to GitHub, and the handler that owes it. */
 const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonObject, runDir: string) => JsonObject }> = {
   "branch-update": {
-    module: "./pr-branch-update-complete.ts",
+    module: "./pr-branch-update-complete.cts",
     args: () => ({}),
   },
   reviewer: {
-    module: "./pr-review-complete.ts",
+    module: "./pr-review-complete.cts",
     args: () => ({}),
   },
   "review-repair": {
-    module: "./pr-review-repair-complete.ts",
+    module: "./pr-review-repair-complete.cts",
     args: (record, runDir) => ({
       result: path.join(runDir, "finalizer-result.json"),
       contract: path.join(runDir, "review-contract.json"),
@@ -274,7 +274,7 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     stateDir: args.stateDir,
     enabledAt: Number(args.enabledAt),
   };
-  const guarded = <T>(operation: () => T): T => withEnabledDriverLock(enabledEnv, (_enabled: unknown, recheck: () => void) => {
+  const guarded = <T,>(operation: () => T): T => withEnabledDriverLock(enabledEnv, (_enabled: unknown, recheck: () => void) => {
     recheck();
     return operation();
   });

@@ -39,7 +39,7 @@ const {
   agentOccupiesAttemptWorkspace,
   readWorkspaceCloseStartedReceipt,
   workspaceProof,
-} = require("./automations/abandon-launch-failed-attempt.ts");
+} = require("./automations/abandon-launch-failed-attempt.cts");
 const { readAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
 const {
@@ -47,7 +47,7 @@ const {
   issueBlockedByNumbers,
   liveDependencyState,
   selectIssueForImplementation,
-} = require("./automations/issue-coordinator-decisions.ts");
+} = require("./automations/issue-coordinator-decisions.cts");
 const { loadAutomationState, saveAutomationState } = require("../../src/automation-state.cjs");
 const { acquireLock, releaseOwned } = require("../../src/enablement-lock.cjs");
 const {
@@ -1482,7 +1482,7 @@ async function reconcilePrWorkAuthority(pi, project): Promise<{ reconciled: bool
   const enabled = findEnabledProject(loadEnablementState(), project);
   if (!enabled?.automationLogin) return { reconciled: false, reason: "the enabled record names no Automation host login" };
   const result = await execJson(pi, "node", [
-    path.join(AUTOMATION_DIR, "reconcile-pr-work-authority.ts"),
+    path.join(AUTOMATION_DIR, "reconcile-pr-work-authority.cts"),
     "--project-id", project.id,
     "--project-repo", project.repoPath,
     "--github-repo", project.githubRepo,
@@ -1527,7 +1527,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
     const labels = projectLabels(project);
     if (record.phase === "prepared") {
       const claimResult = await execJson(pi, "node", [
-        path.join(AUTOMATION_DIR, "reconcile-prepared-attempt.ts"),
+        path.join(AUTOMATION_DIR, "reconcile-prepared-attempt.cts"),
         "--attempt-record", attemptRecord,
         "--project-id", project.id,
         "--project-repo", project.repoPath,
@@ -1568,7 +1568,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         : []
       : [];
     const args = [
-      path.join(AUTOMATION_DIR, "complete-attempt-workspace.ts"),
+      path.join(AUTOMATION_DIR, "complete-attempt-workspace.cts"),
       "--attempt-record", attemptRecord,
       "--project-id", project.id,
       "--project-repo", project.repoPath,
@@ -1648,7 +1648,7 @@ export default function (pi) {
         const attemptRecord = attemptRecordForId(project, attemptId);
         const labels = projectLabels(project);
         const commandArgs = [
-          path.join(AUTOMATION_DIR, "abandon-launch-failed-attempt.ts"),
+          path.join(AUTOMATION_DIR, "abandon-launch-failed-attempt.cts"),
           "--attempt-record", attemptRecord,
           "--project-id", project.id,
           "--project-repo", project.repoPath,

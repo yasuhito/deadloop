@@ -8,11 +8,11 @@
 // prompt text containing quotes, `$`, or backticks reaches the agent as one
 // intact argument. herdr's result JSON is written to stdout unchanged.
 //
-// Run directly with `node launch-agent.ts` — node strips the type annotations,
+// Run directly with `node launch-agent.cts` — node strips the type annotations,
 // so there is no build step. See docs/adr/0004-agent-launcher.md.
 //
 // Usage:
-//   node launch-agent.ts --agent <pi|claude> --name <name> --cwd <path>
+//   node launch-agent.cts --agent <pi|claude> --name <name> --cwd <path>
 //     --pane <rootPaneId> --level <low|medium|high> --prompt-file <path>
 //     [--model <model>] [--uuid <uuid>] [--repo-path <path>]
 

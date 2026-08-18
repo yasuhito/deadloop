@@ -20,10 +20,10 @@ import { evaluateCompletionPersistence, orchestrateFreshAttemptWorkspace, reconc
 import { runScheduledAutomation } from "../../src/automation-runner";
 import { normalizeProject } from "../../src/core";
 
-const { envConfig: workerEnvironment, launchIssueWorkerFlow } = require("../../extensions/deadloop/automations/issue-coordinator-driver.ts");
-const { envConfig: reviewerEnvironment, launchBranchUpdate, launchRequestBoundPrReviewerFlow } = require("../../extensions/deadloop/automations/pr-reviewer-driver.ts");
-const { envConfig: repairEnvironment, launchRepair, recordRepairLaunchGithubClaim } = require("../../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
-const { selectCleanupPlan } = require("../../extensions/deadloop/automations/cleanup-completed-worker-worktrees.ts");
+const { envConfig: workerEnvironment, launchIssueWorkerFlow } = require("../../extensions/deadloop/automations/issue-coordinator-driver.cts");
+const { envConfig: reviewerEnvironment, launchBranchUpdate, launchRequestBoundPrReviewerFlow } = require("../../extensions/deadloop/automations/pr-reviewer-driver.cts");
+const { envConfig: repairEnvironment, launchRepair, recordRepairLaunchGithubClaim } = require("../../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
+const { selectCleanupPlan } = require("../../extensions/deadloop/automations/cleanup-completed-worker-worktrees.cts");
 
 const inputHead = "a".repeat(40);
 const outputHead = "b".repeat(40);

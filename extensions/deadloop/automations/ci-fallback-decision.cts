@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Decide whether failed GitHub checks may use local CI fallback. CommonJS-shaped
-// so it can run directly with `node ci-fallback-decision.ts`.
+// so it can run directly with `node ci-fallback-decision.cts`.
 
 const fs = require("node:fs") as typeof import("node:fs");
 
@@ -294,7 +294,7 @@ function parseCiArgs(argv: string[]): CiRecord {
 }
 
 function ciFallbackHelp(): string {
-  return "Usage: ci-fallback-decision.ts [--input FILE] [--jobs FILE] [--log-file FILE...] [--enabled BOOL] [--mode billing-only]";
+  return "Usage: ci-fallback-decision.cts [--input FILE] [--jobs FILE] [--log-file FILE...] [--enabled BOOL] [--mode billing-only]";
 }
 
 function main(argv: string[] = process.argv.slice(2)): number {
@@ -319,7 +319,7 @@ if (require.main === module) {
   try {
     process.exitCode = main();
   } catch (error) {
-    console.error(`ci-fallback-decision.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`ci-fallback-decision.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

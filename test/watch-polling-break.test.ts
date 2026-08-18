@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const automationDir = path.join(process.cwd(), "extensions/deadloop/automations");
-const driverScript = path.join(automationDir, "issue-coordinator-driver.ts");
+const driverScript = path.join(automationDir, "issue-coordinator-driver.cts");
 
 
 // The dispatch lock writes under the state directory, so a fixture run needs one of its own rather

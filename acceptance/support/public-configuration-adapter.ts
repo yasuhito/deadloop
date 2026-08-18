@@ -13,7 +13,7 @@ import type { RunnerAdapter } from "../../src/runner";
 import { buildDoctorSnapshot, formatDoctorReport } from "../../src/doctor";
 import { buildStatusSnapshot, formatStatusReport } from "../../src/status";
 
-const { decideCiFallback } = require("../../extensions/deadloop/automations/ci-fallback-decision.ts") as {
+const { decideCiFallback } = require("../../extensions/deadloop/automations/ci-fallback-decision.cts") as {
   decideCiFallback: (
     data: unknown,
     jobsData: unknown,
@@ -23,20 +23,20 @@ const { decideCiFallback } = require("../../extensions/deadloop/automations/ci-f
     maxImmediateSeconds: number,
   ) => Record<string, unknown>;
 };
-const { main: launchAgent } = require("../../extensions/deadloop/automations/launch-agent.ts") as {
+const { main: launchAgent } = require("../../extensions/deadloop/automations/launch-agent.cts") as {
   main: (argv: string[], options: Record<string, unknown>) => string;
 };
 const {
   envConfig: workerEnvironment,
   launchIssueWorkerFlow,
-} = require("../../extensions/deadloop/automations/issue-coordinator-driver.ts") as {
+} = require("../../extensions/deadloop/automations/issue-coordinator-driver.cts") as {
   envConfig: (source: NodeJS.ProcessEnv) => Record<string, any>;
   launchIssueWorkerFlow: (issue: Record<string, unknown>, env: Record<string, any>, ops: Record<string, unknown>) => unknown;
 };
 const {
   envConfig: reviewerEnvironment,
   launchRequestBoundPrReviewerFlow,
-} = require("../../extensions/deadloop/automations/pr-reviewer-driver.ts") as {
+} = require("../../extensions/deadloop/automations/pr-reviewer-driver.cts") as {
   envConfig: (source: NodeJS.ProcessEnv) => Record<string, any>;
   launchRequestBoundPrReviewerFlow: (
     pr: Record<string, unknown>,
@@ -94,7 +94,7 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
 
   try {
     if (role === "worker") {
-      const automation = selectedAutomation(project, "issue-coordinator-driver.ts");
+      const automation = selectedAutomation(project, "issue-coordinator-driver.cts");
       const env = workerEnvironment({
         ...process.env,
         ...automationEnvironment(project, automation),
@@ -110,7 +110,7 @@ function observeAgentLaunch(project: NormalizedProject, role: "worker" | "review
       });
       launchIssueWorkerFlow({ number: 12, title: "configuration observation" }, env, ops);
     } else {
-      const automation = selectedAutomation(project, "pr-reviewer-driver.ts");
+      const automation = selectedAutomation(project, "pr-reviewer-driver.cts");
       const env = reviewerEnvironment({
         ...process.env,
         ...automationEnvironment(project, automation),
@@ -183,7 +183,7 @@ export function observeReviewerLaunch(project: NormalizedProject): string[] {
 }
 
 export function observeCiFallbackDecision(project: NormalizedProject): Record<string, unknown> {
-  const automation = selectedAutomation(project, "pr-reviewer-driver.ts");
+  const automation = selectedAutomation(project, "pr-reviewer-driver.cts");
   const environment = automationEnvironment(project, automation);
   const fixture = path.join(process.cwd(), "test/fixtures/ci-fallback/qorraq-all-jobs-immediate-failure.json");
   const input = JSON.parse(fs.readFileSync(fixture, "utf8")) as unknown;

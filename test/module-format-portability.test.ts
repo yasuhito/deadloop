@@ -33,16 +33,24 @@ describe("module format portability", () => {
   });
 });
 
+function commonJsPlainTypescriptFiles(relativeRoot: string): string[] {
+  return typescriptFiles(relativeRoot)
+    .filter((relativePath) => !relativePath.endsWith(".cts"))
+    .filter((relativePath) => {
+      const lines = fs.readFileSync(path.join(process.cwd(), relativePath), "utf8").split("\n");
+      return lines.some((line) => line.startsWith("module.exports"));
+    })
+    .sort();
+}
+
 describe("src CommonJS module extensions", () => {
   it("keeps every src module.exports file in a .cts file", () => {
-    const commonJsPlainTypescript = typescriptFiles("src")
-      .filter((relativePath) => !relativePath.endsWith(".cts"))
-      .filter((relativePath) => {
-        const lines = fs.readFileSync(path.join(process.cwd(), relativePath), "utf8").split("\n");
-        return lines.some((line) => line.startsWith("module.exports"));
-      })
-      .sort();
+    expect(commonJsPlainTypescriptFiles("src")).toEqual([]);
+  });
+});
 
-    expect(commonJsPlainTypescript).toEqual([]);
+describe("extension CommonJS module extensions", () => {
+  it("keeps every extension module.exports file in a .cts file", () => {
+    expect(commonJsPlainTypescriptFiles("extensions/deadloop")).toEqual([]);
   });
 });

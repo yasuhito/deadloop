@@ -330,7 +330,7 @@ function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): 
 
     ops.beforeAgentStart?.();
     const launchOutput = ops.runText([
-      "node", path.join(input.automationDir, "launch-agent.ts"),
+      "node", path.join(input.automationDir, "launch-agent.cts"),
       "--agent", input.agent,
       "--name", prepared.agentName,
       "--cwd", launch.worktreePath,

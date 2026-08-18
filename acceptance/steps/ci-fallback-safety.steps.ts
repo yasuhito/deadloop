@@ -22,7 +22,7 @@ function decideCiFallback(world: CiFallbackWorld): void {
   const result = spawnSync(
     "node",
     [
-      "extensions/deadloop/automations/ci-fallback-decision.ts",
+      "extensions/deadloop/automations/ci-fallback-decision.cts",
       "--input",
       path.join(fixtureDirectory, world.fixtureName),
       ...enabledArgs,

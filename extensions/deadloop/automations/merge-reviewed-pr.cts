@@ -6,7 +6,7 @@ const { spawnSync } = require("node:child_process") as typeof import("node:child
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
-const { validatePromise } = require("./extract-worker-promise.ts");
+const { validatePromise } = require("./extract-worker-promise.cts");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { reauthorizeReviewWrite } = require("../../../src/worker-required-verification-runtime.cjs");
 const {
@@ -352,7 +352,7 @@ function main(): void {
   try {
     process.exitCode = mergeReviewedPr(parseArgs(process.argv.slice(2)));
   } catch (error) {
-    console.error(`merge-reviewed-pr.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`merge-reviewed-pr.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

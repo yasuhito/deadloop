@@ -24,7 +24,7 @@ Neither reference system writes ownership to the tracker. Deadloop is the only o
 
 Deadloop's requirement genuinely differs in one respect. Symphony can discard ownership because re-dispatch is cheap: the workspace is per-issue and reused, and a repeat is one more agent turn. A deadloop attempt pushes, moves labels, comments, and merges, so a duplicate dispatch is not free. That difference is real, and it is why deadloop cannot simply copy the discard.
 
-It is not, however, a reason to write ownership to GitHub. Deadloop already holds the primitive that makes ownership unnecessary at the point where it would do damage. `pushConditionally` reads the remote ref, refuses to push unless it still equals the expected head, pushes an immutable candidate that Git will reject as a non-fast-forward, and re-reads on failure to report `stale_head`. That is a compare-and-swap. `merge-reviewed-pr.ts` takes an exact expected head. The dangerous operations are already safe without knowing who owns the work.
+It is not, however, a reason to write ownership to GitHub. Deadloop already holds the primitive that makes ownership unnecessary at the point where it would do damage. `pushConditionally` reads the remote ref, refuses to push unless it still equals the expected head, pushes an immutable candidate that Git will reject as a non-fast-forward, and re-reads on failure to report `stale_head`. That is a compare-and-swap. `merge-reviewed-pr.cts` takes an exact expected head. The dangerous operations are already safe without knowing who owns the work.
 
 ## Decision
 

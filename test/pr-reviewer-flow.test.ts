@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-const { planPrRequestAction } = require("../extensions/deadloop/automations/pr-reviewer-flow.ts");
+const { planPrRequestAction } = require("../extensions/deadloop/automations/pr-reviewer-flow.cts");
 
 const fixtureDir = path.join(process.cwd(), "test/fixtures/pr-reviewer-driver");
 

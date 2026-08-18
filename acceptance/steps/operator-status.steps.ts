@@ -38,8 +38,8 @@ function statusReport(input: StatusReportInput): string {
 function runDriverFixture(target: StoppedTarget): string {
   const isIssue = target === "issue";
   const script = isIssue
-    ? "extensions/deadloop/automations/issue-coordinator-driver.ts"
-    : "extensions/deadloop/automations/pr-reviewer-driver.ts";
+    ? "extensions/deadloop/automations/issue-coordinator-driver.cts"
+    : "extensions/deadloop/automations/pr-reviewer-driver.cts";
   const fixturePath = isIssue
     ? "test/fixtures/issue-coordinator/driver-blocked-prd.json"
     : "test/fixtures/pr-reviewer-driver/draft-pr.json";

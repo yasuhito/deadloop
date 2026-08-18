@@ -5,7 +5,7 @@
 // This handler never pushes, comments, or launches work.
 
 const path = require("node:path") as typeof import("node:path");
-const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
+const { provenPushedHeadTransition } = require("./pushed-head-proof.cts");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.cts");
 const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");

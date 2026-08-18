@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-const { persistAuthorizedApproval } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
-const { handoffReviewedPr } = require("../extensions/deadloop/automations/handoff-reviewed-pr.ts");
+const { persistAuthorizedApproval } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
+const { handoffReviewedPr } = require("../extensions/deadloop/automations/handoff-reviewed-pr.cts");
 
 const head = "a".repeat(40);
 const acceptedHistory = { repository: "owner/repo", pullRequestNumber: 24, revision: "accepted", history: {} };

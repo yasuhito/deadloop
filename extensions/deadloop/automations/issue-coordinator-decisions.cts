@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Deterministic decisions for issue-coordinator automation. CommonJS-shaped so
-// it can run directly with `node issue-coordinator-decisions.ts`.
+// it can run directly with `node issue-coordinator-decisions.cts`.
 
 const fs = require("node:fs") as typeof import("node:fs");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
@@ -267,7 +267,7 @@ const ISSUE_DECISION_VALUE_FLAGS = new Set([
 
 function issueDecisionHelp(): string {
   return [
-    "Usage: issue-coordinator-decisions.ts [--input FILE | --fixture FILE] [--repo owner/name] [--json] [--exit-code]",
+    "Usage: issue-coordinator-decisions.cts [--input FILE | --fixture FILE] [--repo owner/name] [--json] [--exit-code]",
     "",
     "Options:",
     "  --input FILE                    Path to issue JSON. Defaults to stdin.",
@@ -356,7 +356,7 @@ if (require.main === module) {
   try {
     process.exitCode = main();
   } catch (error) {
-    console.error(`issue-coordinator-decisions.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`issue-coordinator-decisions.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

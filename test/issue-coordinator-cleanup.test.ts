@@ -5,8 +5,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const cleanupScript = "extensions/deadloop/automations/cleanup-completed-worker-worktrees.ts";
-const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.ts";
+const cleanupScript = "extensions/deadloop/automations/cleanup-completed-worker-worktrees.cts";
+const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.cts";
 
 // The dispatch lock writes under the state directory, so a fixture run needs one of its own rather
 // than the operator's live deadloop state.
@@ -273,7 +273,7 @@ describe("issue coordinator cleanup", () => {
   });
 
   it("keeps worker launch out of the monitoring prompt", () => {
-    expect(runDriverFixture("driver-ready-worker.json").prompt).not.toContain("launch-agent.ts");
+    expect(runDriverFixture("driver-ready-worker.json").prompt).not.toContain("launch-agent.cts");
   });
 
   it("does not document workspace split startup for workers", () => {

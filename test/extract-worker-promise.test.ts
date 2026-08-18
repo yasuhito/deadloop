@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-const helperPath = "extensions/deadloop/automations/extract-worker-promise.ts";
+const helperPath = "extensions/deadloop/automations/extract-worker-promise.cts";
 
 function runPromise(filePath: string, style: "separate" | "equals" = "separate") {
   const args = style === "equals" ? [helperPath, `--file=${filePath}`] : [helperPath, "--file", filePath];

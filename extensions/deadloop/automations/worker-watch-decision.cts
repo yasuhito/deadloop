@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Decide whether issue-coordinator should keep watching a Worker. CommonJS-shaped
-// so it can run directly with `node worker-watch-decision.ts`.
+// so it can run directly with `node worker-watch-decision.cts`.
 
 const fs = require("node:fs") as typeof import("node:fs");
 
@@ -255,7 +255,7 @@ function parseWorkerWatchArgs(argv: string[]): WorkerWatchObservation {
 }
 
 function workerWatchHelp(): string {
-  return "Usage: worker-watch-decision.ts [--input FILE] [--now ISO_TIMESTAMP]";
+  return "Usage: worker-watch-decision.cts [--input FILE] [--now ISO_TIMESTAMP]";
 }
 
 function main(argv: string[] = process.argv.slice(2)): number {
@@ -274,7 +274,7 @@ if (require.main === module) {
   try {
     process.exitCode = main();
   } catch (error) {
-    console.error(`worker-watch-decision.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`worker-watch-decision.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

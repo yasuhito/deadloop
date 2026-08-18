@@ -11,9 +11,9 @@ const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { assertLocallyEnabled, MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
-const { ensureFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
-const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
-const { assertAuthorizedSource } = require("./guarded-push.ts");
+const { ensureFinalizerRequiredVerification } = require("./finalizer-required-verification.cts");
+const { resolveVerifiedPushDestination } = require("./verified-push-destination.cts");
+const { assertAuthorizedSource } = require("./guarded-push.cts");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
@@ -286,10 +286,10 @@ async function main(): Promise<void> {
           originalHeadOid: String(args?.expectedHead || argumentValue(argv, "--expected-head")).toLowerCase(),
         });
       } catch (writeError) {
-        console.error(`pr-review-repair-finalize.ts: could not write result receipt: ${writeError instanceof Error ? writeError.message : String(writeError)}`);
+        console.error(`pr-review-repair-finalize.cts: could not write result receipt: ${writeError instanceof Error ? writeError.message : String(writeError)}`);
       }
     }
-    console.error(`pr-review-repair-finalize.ts: ${message}`);
+    console.error(`pr-review-repair-finalize.cts: ${message}`);
     process.exitCode = 2;
   }
 }

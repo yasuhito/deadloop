@@ -32,7 +32,7 @@ const APPROVED_GH_OPERATIONS = new Map<string, ApprovedOperation>([
 
 function assertApprovedCommand(command: string[], githubRepo: string): string {
   if (!/(^|[/\\])gh(?:\.exe)?$/.test(command[0] || "")) {
-    throw new Error("guarded-operation.ts accepts only approved gh mutations; use dedicated helpers for push or branch operations");
+    throw new Error("guarded-operation.cts accepts only approved gh mutations; use dedicated helpers for push or branch operations");
   }
   const approved = APPROVED_GH_OPERATIONS.get(`${command[1] || ""} ${command[2] || ""}`);
   if (!approved) {
@@ -189,7 +189,7 @@ function main(): void {
   try {
     process.exitCode = runGuarded(parseArgs(process.argv.slice(2)));
   } catch (error) {
-    console.error(`guarded-operation.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`guarded-operation.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

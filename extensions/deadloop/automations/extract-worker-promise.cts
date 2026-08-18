@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Validate a worker promise JSON file. CommonJS-shaped so it can run directly
-// with `node extract-worker-promise.ts`.
+// with `node extract-worker-promise.cts`.
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
@@ -308,7 +308,7 @@ function parsePromiseArgs(argv: string[]): PromiseValidation {
 }
 
 function promiseHelp(): string {
-  return "Usage: extract-worker-promise.ts --file FILE [--attempt-record FILE]";
+  return "Usage: extract-worker-promise.cts --file FILE [--attempt-record FILE]";
 }
 
 function main(argv: string[] = process.argv.slice(2)): number {
@@ -327,7 +327,7 @@ if (require.main === module) {
   try {
     process.exitCode = main();
   } catch (error) {
-    console.error(`extract-worker-promise.ts: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`extract-worker-promise.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

@@ -7,7 +7,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { assertLocallyEnabled, withEnabledProjectLock, MAX_GUARDED_OPERATION_MS } = require("../../../src/enabled-operation.cjs");
-const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
+const { resolveVerifiedPushDestination } = require("./verified-push-destination.cts");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { createCommandRunner } = require("../../../src/automation-driver-kit.cts");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
@@ -157,6 +157,6 @@ function run(args: Args): number {
     },
   );
 }
-function main() { try { process.exitCode = run(parseArgs(process.argv.slice(2))); } catch (error) { console.error(`guarded-worker-pr.ts: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 2; } }
+function main() { try { process.exitCode = run(parseArgs(process.argv.slice(2))); } catch (error) { console.error(`guarded-worker-pr.cts: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 2; } }
 if (require.main === module) main();
 module.exports = { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrAwaitingReview, ensureWorkerPr, parseArgs, run, verified };

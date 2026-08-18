@@ -18,6 +18,7 @@
     "src/**/*.cjs",
     "extensions/deadloop/index.ts",
     "extensions/deadloop/automations/*.ts",
+    "extensions/deadloop/automations/*.cts",
     "acceptance/**/*.ts",
     "test/**/*.ts"
   ],

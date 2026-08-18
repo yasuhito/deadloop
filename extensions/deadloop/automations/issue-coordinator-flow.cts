@@ -5,7 +5,7 @@ const {
   issueNumberForDecision,
   liveDependencyState,
   selectIssueForImplementation,
-} = require("./issue-coordinator-decisions.ts");
+} = require("./issue-coordinator-decisions.cts");
 
 type JsonObject = Record<string, any>;
 

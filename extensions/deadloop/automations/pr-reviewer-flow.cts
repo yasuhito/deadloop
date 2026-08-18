@@ -4,7 +4,7 @@ const {
   selectPrRequestTarget,
   attemptJournalsForPrReviewer,
   workingReviewerPrNumbers,
-} = require("./pr-reviewer-decisions.ts");
+} = require("./pr-reviewer-decisions.cts");
 
 type JsonObject = Record<string, any>;
 

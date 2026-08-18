@@ -13,8 +13,8 @@
  * proof still describes the head in front of it. Currency is deliberately left to that caller.
  */
 
-const { provenPushedHeadTransition } = require("./pushed-head-proof.ts");
-const { validatePromise } = require("./extract-worker-promise.ts");
+const { provenPushedHeadTransition } = require("./pushed-head-proof.cts");
+const { validatePromise } = require("./extract-worker-promise.cts");
 
 const path = require("node:path") as typeof import("node:path");
 

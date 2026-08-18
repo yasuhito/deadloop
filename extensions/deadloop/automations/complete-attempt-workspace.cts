@@ -11,7 +11,7 @@ const {
   releasesAttemptOwnership,
   transitionPersistedAttempt,
 } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { validatePromise } = require("./extract-worker-promise.ts");
+const { validatePromise } = require("./extract-worker-promise.cts");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { parseAttemptPersistenceMarkers } = require("../../../src/attempt-persistence-marker.cjs");

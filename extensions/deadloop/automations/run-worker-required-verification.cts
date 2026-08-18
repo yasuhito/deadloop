@@ -7,7 +7,7 @@ const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../s
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { createCommandRunner } = require("../../../src/automation-driver-kit.cts");
 const { createGithubOperations } = require("../../../src/github-operations.cts");
-const { closeCompletionStoppedWorkerAttempt } = require("./complete-attempt-workspace.ts");
+const { closeCompletionStoppedWorkerAttempt } = require("./complete-attempt-workspace.cts");
 const { applyIssueRequiredVerificationStop, hasRequiredVerificationStopMarker, planIssueRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
@@ -253,7 +253,7 @@ async function main() {
   process.once("SIGINT", interrupt);
   process.once("SIGTERM", interrupt);
   try { process.stdout.write(`${JSON.stringify(await run(parseArgs(process.argv.slice(2)), controller.signal))}\n`); }
-  catch (error) { console.error(`run-worker-required-verification.ts: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 2; }
+  catch (error) { console.error(`run-worker-required-verification.cts: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 2; }
   finally {
     process.removeListener("SIGINT", interrupt);
     process.removeListener("SIGTERM", interrupt);
