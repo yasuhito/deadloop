@@ -19,7 +19,6 @@ const {
   observePrHistory,
   readPrHistoryObservation,
 } = require("../../../src/pr-review-history.ts");
-const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
 type MergeArgs = {
