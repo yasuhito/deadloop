@@ -38,6 +38,11 @@ const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cj
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.ts");
 const {
+  isRequiredVerificationPolicyBlock,
+  reauthorizeReviewWrite,
+} = require("../../../src/worker-required-verification-runtime.cjs");
+const { assertLocallyEnabled } = require("../../../src/enabled-operation.cjs");
+const {
   advancePrHistoryAfterDeterministicComment,
   comparePrHistoryObservations,
   observePrHistory,
@@ -62,6 +67,9 @@ function envConfig(args: JsonObject = {}) {
     repoPath: configValue(args, "repoPath", process.env.DEADLOOP_REPO_PATH, "."),
     worktreeRoot: configValue(args, "worktreeRoot", process.env.DEADLOOP_WORKTREE_ROOT, path.join(os.homedir(), ".herdr", "worktrees", configValue(args, "projectId", process.env.DEADLOOP_PROJECT_ID, "project"))),
     githubRepo: configValue(args, "githubRepo", process.env.DEADLOOP_GITHUB_REPO, ""),
+    baseBranch: configValue(args, "baseBranch", process.env.DEADLOOP_BASE_BRANCH, "origin/main"),
+    requiredVerification: args.requiredVerification
+      || (process.env.DEADLOOP_REQUIRED_VERIFICATION ? JSON.parse(process.env.DEADLOOP_REQUIRED_VERIFICATION) : undefined),
     enabledAt: Number(configValue(args, "enabledAt", process.env.DEADLOOP_ENABLED_AT, "")),
     stateDir: configValue(
       args,
@@ -78,6 +86,10 @@ function envConfig(args: JsonObject = {}) {
     implementLabel: configValue(args, "implementLabel", process.env.DEADLOOP_IMPLEMENT_LABEL, "agent:implement"),
     updateBranchLabel: configValue(args, "updateBranchLabel", process.env.DEADLOOP_UPDATE_BRANCH_LABEL, "agent:update-branch"),
     inProgressLabel: configValue(args, "inProgressLabel", process.env.DEADLOOP_IN_PROGRESS_LABEL, "agent:in-progress"),
+    // Every guarded write of this dispatch re-reads the bound reviewer attempt from here, so the
+    // attempt's fixed required-verification contract can be re-authenticated against the current
+    // trusted policy immediately before the write.
+    attemptRecordFile: configValue(args, "attemptRecord", undefined, ""),
     requestEventId: "",
     automationDir,
   };
@@ -178,6 +190,28 @@ function requireManagedPr(pr: JsonObject, env: ReturnType<typeof envConfig>): vo
   }
 }
 
+/**
+ * Re-authenticate the bound reviewer attempt's fixed required-verification contract against the
+ * current trusted policy.
+ *
+ * A failing review result is reportable without any verification record, so this requires no
+ * success record. It requires only currency: whatever contract the attempt fixed must still be the
+ * current trusted policy, so a policy change during the attempt produces no GitHub write and no
+ * repair launch. The attempt is re-read from disk because this runs immediately before a write,
+ * after every external observation.
+ */
+function assertAttemptContractCurrent(
+  env: { attemptRecordFile: string; repoPath: string; stateDir: string },
+  enabled: { githubRepositoryId?: string },
+): void {
+  if (!env.attemptRecordFile) throw new Error("bound reviewer attempt is missing before review repair mutation");
+  reauthorizeReviewWrite(readAttemptRecord(path.dirname(env.attemptRecordFile)), {
+    projectRepo: env.repoPath,
+    localConfigPath: process.env.DEADLOOP_CONFIG || path.join(env.stateDir, "projects.json"),
+    repositoryId: enabled.githubRepositoryId,
+  });
+}
+
 function revalidateManagedPr(
   prNumber: string,
   env: ReturnType<typeof envConfig>,
@@ -200,6 +234,8 @@ function revalidateManagedPr(
     throw new StaleLaunchError(`PR #${prNumber} review repair target changed before mutation`);
   }
   requireManagedPr(livePr, env);
+  // The last gate is local, so no external observation stands between it and the write it guards.
+  assertAttemptContractCurrent(env, enabled);
 }
 
 function withRevalidatedPrMutation(
@@ -344,6 +380,8 @@ function repairWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-review-repair-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-id",
+    shellQuote(env.projectId),
     "--attempt-record",
     shellQuote(path.join(path.dirname(promiseFile), "attempt.json")),
     "--project-repo",
@@ -381,7 +419,7 @@ Exact target:
 - Expected PR head: ${expectedHead}
 - Worktree: ${worktreePath}
 
-Bounded findings contract:
+Required findings contract:
 \`\`\`json
 ${JSON.stringify(findings, null, 2)}
 \`\`\`
@@ -389,7 +427,7 @@ ${JSON.stringify(findings, null, 2)}
 Safety contract:
 - Change only what is needed to resolve every listed finding. Do not add features, reinterpret the issue, or widen scope.
 - Run focused tests while editing, then commit the repair normally. Never amend, rebase, reset published history, or force-push.
-- Do not run git push directly. After committing, run exactly this finalizer; it runs configured checks, immediately re-checks the PR head, and performs the only permitted non-force push to the exact branch:
+- Do not run git push directly. After committing, run exactly this finalizer; it runs configured checks, immediately re-checks the PR head, and performs the only permitted push to the exact branch, leased to that exact head:
   ${finalizer}
 - Never edit labels or PR metadata, create a PR, merge, close an issue, delete a branch, or invoke another agent.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state.
@@ -512,7 +550,7 @@ function repairLaunchInput(
   uuid: string,
 ) {
   return {
-    worktree: { mode: "open" as const, branch, remote: env.remote },
+    worktree: { mode: "open" as const, branch, baseBranch: env.baseBranch, remote: env.remote },
     repoPath: env.repoPath,
     automationDir: env.automationDir,
     stateDir: env.stateDir,
@@ -528,6 +566,7 @@ function repairLaunchInput(
     role: "review-repair" as const,
     target: { kind: "pull-request" as const, number: Number(prNumber) },
     inputRevision: { head: expectedHead },
+    requiredVerification: env.requiredVerification,
     requestEventId: env.requestEventId || undefined,
     intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
     renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
@@ -605,6 +644,24 @@ function launchRepair(
   }
 }
 
+function persistAuthorizedApproval<T extends unknown[]>(
+  withMutation: (callback: (...args: T) => void) => void,
+  authorize: () => void,
+  persist: (...args: T) => void,
+): unknown {
+  let authorizationError: unknown;
+  withMutation((...callbackArgs) => {
+    try {
+      authorize();
+    } catch (error) {
+      authorizationError = error;
+      return;
+    }
+    persist(...callbackArgs);
+  });
+  return authorizationError;
+}
+
 function persistedReviewBody(
   comments: JsonObject[],
   head: string,
@@ -633,7 +690,22 @@ function assertReviewerDispatchAttemptBinding(record: JsonObject, input: JsonObj
   }
 }
 
+/**
+ * A trusted-policy change during the attempt is a race, not a failure of this result: every write
+ * boundary refuses it, so the attempt reports it and leaves GitHub untouched for a fresh review.
+ */
 function dispatch(args: JsonObject): DriverResult {
+  try {
+    return dispatchReviewResult(args);
+  } catch (error) {
+    if (!isRequiredVerificationPolicyBlock(error)) throw error;
+    return driverResult("done", `PR #${String(args.pr)} required verification policy changed during the attempt; left GitHub state untouched`, {
+      driverAction: "review_policy_changed",
+    });
+  }
+}
+
+function dispatchReviewResult(args: JsonObject): DriverResult {
   runHerdrPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
   const env = envConfig(args);
   if (!env.githubRepo) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
@@ -746,6 +818,7 @@ function dispatch(args: JsonObject): DriverResult {
     reason: promise.reason || "",
     summary: promise.summary || "",
     findings,
+    additionalValidations: Array.isArray(promise.checks) ? promise.checks : [],
     advisories,
     priorRequiredFindings,
     transitionReason: review.reason,
@@ -760,32 +833,83 @@ function dispatch(args: JsonObject): DriverResult {
     let persistedBody = "";
     let createdComment: { id: string; author: string; body: string } | undefined;
     let observedStaleComparison: JsonObject | undefined;
+    let authorizationError: unknown;
+    let headChangedDuringAuthorization = false;
     try {
-      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
-        if (historyFile && fs.existsSync(historyFile)) {
-          const expectedHistory = readPrHistoryObservation(historyFile);
-          const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
-          const comparison = comparePrHistoryObservations(expectedHistory, currentHistory);
-          if (comparison.kind !== "unchanged") {
-            observedStaleComparison = comparison;
-            throw new StaleLaunchError(`PR #${prNumber} review history changed before result persistence`);
-          }
-        }
-        persistedBody = persistedReviewBody(livePr.comments || [], expectedHead, reviewFingerprint, outcome,
-          renderApprovedReviewComment(commentInput), persistenceMarker, attemptRecord?.attemptId);
-        if (persistedBody) {
+      authorizationError = persistAuthorizedApproval(
+        (persist: (guardedGithub: ReturnType<typeof createGithubOperations>, refreshed: JsonObject, livePr: JsonObject) => void) => {
+          withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
+            if (historyFile && fs.existsSync(historyFile)) {
+              const expectedHistory = readPrHistoryObservation(historyFile);
+              const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
+              const comparison = comparePrHistoryObservations(expectedHistory, currentHistory);
+              if (comparison.kind !== "unchanged") {
+                observedStaleComparison = comparison;
+                throw new StaleLaunchError(`PR #${prNumber} review history changed before result persistence`);
+              }
+            }
+            const refreshed = readLivePr(env.githubRepo, prNumber);
+            if (String(refreshed.state || "").toUpperCase() !== "OPEN"
+              || String(refreshed.headRefOid || "").toLowerCase() !== expectedHead) {
+              headChangedDuringAuthorization = true;
+              return;
+            }
+            persist(guardedGithub, refreshed, livePr);
+          });
+        },
+        // This runs after the last PR head observation and immediately before the comment, so the
+        // fixed contract, the current trusted policy and the success record bound to this exact
+        // head are all re-authenticated with nothing observable left to change.
+        () => {
+          if (!attemptRecord || !rawReport) throw new Error("bound reviewer attempt is missing");
+          const enabled = assertLocallyEnabled({ repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt });
+          reauthorizeReviewWrite(attemptRecord, {
+            projectRepo: env.repoPath,
+            localConfigPath: process.env.DEADLOOP_CONFIG || path.join(env.stateDir, "projects.json"),
+            repositoryId: enabled.githubRepositoryId,
+            report: rawReport,
+            attemptRecordFile: String(args.attemptRecord),
+          });
+        },
+        (guardedGithub, refreshed, livePr) => {
+          persistedBody = persistedReviewBody(refreshed.comments || livePr.comments || [], expectedHead, reviewFingerprint, outcome,
+            renderApprovedReviewComment(commentInput), persistenceMarker, attemptRecord?.attemptId);
+          if (!persistedBody) return;
           const output = guardedGithub.commentPr(env.githubRepo, prNumber, persistedBody);
           if (historyFile && fs.existsSync(historyFile)) {
             const automationLogin = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim();
             createdComment = createdCommentIdentity(output, automationLogin, persistedBody);
           }
-        }
-      });
+        },
+      );
     } catch (error) {
       if (!isStaleLaunchError(error) || !observedStaleComparison) throw error;
       const freshness = releaseObservedStaleReviewHistory(prNumber, env, observedStaleComparison, expectedHead);
       return driverResult("done", `PR #${prNumber} review history changed before result persistence; released the active claim`, {
         driverAction: "review_stale_history", historyComparison: freshness.comparison,
+      });
+    }
+    if (headChangedDuringAuthorization) {
+      return driverResult("done", `PR #${prNumber} head changed during approval authorization; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
+    }
+    if (authorizationError) {
+      const explanation = publicText(authorizationError instanceof Error ? authorizationError.message : String(authorizationError), "required verification evidence is missing or invalid");
+      const marker = `<!-- deadloop:review-verification-blocked head=${expectedHead} -->`;
+      let comment = "Required-verification stop comment already exists.";
+      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
+        if (!(livePr.comments || []).some((item: JsonObject) => String(item.body || "").includes(marker))) {
+          comment = `## Review approval stopped\n\n- Reviewed commit: \`${expectedHead}\`\n- Required verification: ${explanation}\n- The review result was retained, but this head was not approved for handoff or merge.\n\n## Recovery steps\nRun the fixed required verification for this exact head and retry approval processing.\n\n${marker}`;
+          guardedGithub.commentPr(env.githubRepo, prNumber, comment);
+        }
+        const labels = labelNames(livePr.labels);
+        if (labels.includes(env.inProgressLabel)
+          || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
+          guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
+        }
+      });
+      return driverResult("done", `PR #${prNumber} approval stopped by required verification`, {
+        driverAction: "review_verification_blocked",
+        comment,
       });
     }
     if (historyFile && fs.existsSync(historyFile)) {
@@ -909,23 +1033,6 @@ function dispatch(args: JsonObject): DriverResult {
   const automationLogin = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim();
   if (!automationLogin) throw new Error("authenticated GitHub identity is unavailable");
   const selection = selectRepairAttempt(refreshedPr.comments || [], expectedHead, findings, automationLogin);
-  if (selection.cumulativeLimitExceeded) {
-    const block = applyHumanBlock(
-      prNumber,
-      env,
-      refreshedPr,
-      "the PR exceeded the cumulative limit of three automatic repair attempts",
-      "Inspect the current head and correct the branch without rewriting history before removing the blocked label.",
-      "",
-      historyFile,
-    );
-    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before cumulative-limit block");
-    return driverResult("done", `PR #${prNumber} exceeded the cumulative repair limit; marked blocked`, {
-      driverAction: "review_repair_limit_reached",
-      selection,
-      comment: block.comment,
-    });
-  }
   if (selection.action === "already_attempted") {
     let recoveredLaunch = readLaunchEvidence(prNumber, branch, expectedHead, selection.key, env);
     const retained = findRunMetadata(expectedHead, selection.key, env);
@@ -943,7 +1050,7 @@ function dispatch(args: JsonObject): DriverResult {
             recordGithubMutation: () => recordRepairLaunchGithubClaim(
               prNumber, branch, expectedHead, findings, selection.key, env, resumeUuid,
             ),
-            revalidate: (enabled: { automationLogin?: string }) => {
+            revalidate: (enabled: { automationLogin?: string; githubRepositoryId?: string }) => {
               const livePr = readLivePr(env.githubRepo, prNumber);
               assertSameLaunchTarget(refreshedPr, livePr, "pr");
               requireManagedPr(livePr, env);
@@ -962,13 +1069,11 @@ function dispatch(args: JsonObject): DriverResult {
               }
               const labels = labelNames(livePr.labels);
               const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
-              if (liveSelection.cumulativeLimitExceeded) {
-                throw new Error("cumulative_repair_limit_exceeded_before_recovery");
-              }
               if (!labels.includes(env.inProgressLabel) || labels.includes(env.blockedLabel)
                 || liveSelection.action !== "already_attempted" || liveSelection.key !== selection.key) {
                 throw new StaleLaunchError(`PR #${prNumber} interrupted repair is no longer resumable`);
               }
+              assertAttemptContractCurrent(env, enabled);
             },
           },
         );
@@ -984,22 +1089,7 @@ function dispatch(args: JsonObject): DriverResult {
             driverAction: "review_stale_history", historyComparison: freshness.comparison,
           });
         }
-        if (!(error instanceof Error) || error.message !== "cumulative_repair_limit_exceeded_before_recovery") throw error;
-        const latestPr = readLivePr(env.githubRepo, prNumber);
-        const block = applyHumanBlock(
-          prNumber,
-          env,
-          latestPr,
-          "the PR exceeded the cumulative limit of three automatic repair attempts before recovery",
-          "Inspect the current head and correct the branch without rewriting history before removing the blocked label.",
-          "",
-          fs.existsSync(acceptedHistoryFile) ? acceptedHistoryFile : historyFile,
-        );
-        if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before recovery cumulative-limit block");
-        return driverResult("done", `PR #${prNumber} exceeded the cumulative repair limit; marked blocked`, {
-          driverAction: "review_repair_limit_reached",
-          comment: block.comment,
-        });
+        throw error;
       }
       recoveredLaunch = { repairName: resumed.agentName, promiseFile: resumed.promiseFile, launchUuid: resumeUuid, phase: "agent_started" };
       recordLaunchEvidence(prNumber, branch, expectedHead, selection.key, recoveredLaunch, env);
@@ -1051,39 +1141,6 @@ function dispatch(args: JsonObject): DriverResult {
     }
     return driverResult("done", `PR #${prNumber} repair dispatch was interrupted; marked blocked`, { driverAction: "review_repair_dispatch_interrupted", selection, comment });
   }
-  if (selection.action !== "launch_repair") {
-    let comment = "Review result comment already exists.";
-    const staleComparison = withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
-      if (!reviewCommentExists(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
-        comment = renderChangesRequestedComment({
-          ...commentInput,
-          reviewFingerprint: selection.reviewFingerprint,
-          repairUnavailable: true,
-          repairUnavailableReason: selection.reason,
-        });
-        guardedGithub.commentPr(env.githubRepo, prNumber, comment);
-      }
-      const labels = labelNames(livePr.labels);
-      if (labels.includes(env.inProgressLabel)
-        || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
-        guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
-      }
-    }, historyFile);
-    if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before non-launch repair block");
-    const cumulativeLimitReached = selection.reason === "cumulative_repair_limit";
-    return driverResult(
-      "done",
-      cumulativeLimitReached
-        ? `PR #${prNumber} reached the cumulative repair limit; marked blocked`
-        : `PR #${prNumber} repeated the same findings; marked blocked`,
-      {
-        driverAction: cumulativeLimitReached ? "review_repair_limit_reached" : "review_repair_repeated",
-        selection,
-        comment,
-      },
-    );
-  }
-
   if (hasAttemptRecord) {
     let persistedBody = "";
     let createdComment: { id: string; author: string; body: string } | undefined;
@@ -1181,7 +1238,7 @@ function dispatch(args: JsonObject): DriverResult {
         recordGithubMutation: () => recordRepairLaunchGithubClaim(
           prNumber, branch, expectedHead, findings, selection.key, env, repairLaunchUuid,
         ),
-        revalidate: (enabled: { automationLogin?: string }) => {
+        revalidate: (enabled: { automationLogin?: string; githubRepositoryId?: string }) => {
           const livePr = readLivePr(env.githubRepo, prNumber);
           assertSameLaunchTarget(refreshedPr, livePr, "pr");
           requireManagedPr(livePr, env);
@@ -1212,12 +1269,11 @@ function dispatch(args: JsonObject): DriverResult {
                 && preparedRecord.attemptId === selection.key
                 && ["prepared", "github_claimed"].includes(preparedRecord.phase);
             })();
-          if (liveSelection.cumulativeLimitExceeded) {
-            throw new Error("cumulative_repair_limit_exceeded_before_launch");
-          }
           if ((liveSelection.action !== "launch_repair" || liveSelection.key !== selection.key) && !markerOwnedByPreparedRepair) {
             throw new StaleLaunchError(`PR #${prNumber} repair attempt state changed before launch`);
           }
+          // Local and last, so the launch cannot start on a contract the policy no longer matches.
+          assertAttemptContractCurrent(env, enabled);
         },
       },
     );
@@ -1234,23 +1290,6 @@ function dispatch(args: JsonObject): DriverResult {
       return driverResult("done", `PR #${prNumber} changed before repair launch; left workflow state untouched`, { driverAction: "review_repair_launch_stale" });
     }
     if (error instanceof Error && error.message.includes("deadloop is disabled")) throw error;
-    if (error instanceof Error && error.message === "cumulative_repair_limit_exceeded_before_launch") {
-      const latestPr = readLivePr(env.githubRepo, prNumber);
-      const block = applyHumanBlock(
-        prNumber,
-        env,
-        latestPr,
-        "the PR exceeded the cumulative limit of three automatic repair attempts before launch",
-        "Inspect the current head and correct the branch without rewriting history before removing the blocked label.",
-        "",
-        fs.existsSync(acceptedHistoryFile) ? acceptedHistoryFile : historyFile,
-      );
-      if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before launch cumulative-limit block");
-      return driverResult("done", `PR #${prNumber} exceeded the cumulative repair limit; marked blocked`, {
-        driverAction: "review_repair_limit_reached",
-        comment: block.comment,
-      });
-    }
     const failedLaunch = (error as Error & { launch?: JsonObject }).launch;
     let recovered = false;
     if (failedLaunch) {
@@ -1317,8 +1356,10 @@ module.exports = {
   envConfig,
   launchRepair,
   parseArgs,
+  persistAuthorizedApproval,
   readLivePr,
   recordRepairLaunchGithubClaim,
+  repairLaunchInput,
   repairWorkerPrompt,
   requireManagedPr,
 };

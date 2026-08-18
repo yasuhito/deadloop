@@ -7,12 +7,13 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { validatePromise } = require("./extract-worker-promise.ts");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { reauthorizeReviewWrite } = require("../../../src/worker-required-verification-runtime.cjs");
 const {
   comparePrHistoryObservations,
   observePrHistory,
   readPrHistoryObservation,
 } = require("../../../src/pr-review-history.ts");
-const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
 type MergeArgs = {
@@ -45,6 +46,7 @@ type MergeOps = {
   loadAttemptRecord?: (args: MergeArgs) => Record<string, any>;
   isAutoMergeEnabled?: (args: MergeArgs) => boolean;
   validateReviewPromise?: (file: string) => PromiseValidation;
+  assertReviewVerification?: (args: MergeArgs, enabled: EnabledProject) => void;
   assertReviewHistoryFresh?: (args: MergeArgs) => void;
   withLock?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }, operation: (enabled: EnabledProject, recheck: () => void) => number) => number;
 };
@@ -109,6 +111,20 @@ function assertMergeAuthorized(enabled: EnabledProject): void {
   if (enabled.firstEnableAutoMerge && !enabled.autoMergeAcknowledged) {
     throw new Error("autoMerge has not been acknowledged after enablement; automatic merge stopped");
   }
+}
+
+function assertRequiredVerificationApproved(args: MergeArgs, enabled: EnabledProject): void {
+  const attemptRecordFile = path.join(path.dirname(args.reviewPromise), "attempt.json");
+  const attempt = readAttemptRecord(path.dirname(attemptRecordFile));
+  const report = JSON.parse(fs.readFileSync(args.reviewPromise, "utf8"));
+  reauthorizeReviewWrite(attempt, {
+    projectRepo: args.projectRepo,
+    localConfigPath: process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"),
+    repositoryId: enabled.githubRepositoryId,
+    report,
+    attemptRecordFile,
+  });
+  if (report.result.reviewedHead !== args.expectedHead) throw new Error("required verification reviewed head changed; automatic merge stopped");
 }
 
 function assertReviewApproved(args: MergeArgs, ops: MergeOps): void {
@@ -257,6 +273,8 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     if (!autoMergeEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
     assertMergeAuthorized(enabled);
     assertReviewApproved(args, ops);
+    const assertVerification = ops.assertReviewVerification || assertRequiredVerificationApproved;
+    assertVerification(args, enabled);
     assertReviewHistoryFresh(args, ops);
     assertMergeTargetUnchanged(readMergeTargetPr(args, ops), args);
     const revalidateMergeTarget = () => {
@@ -285,9 +303,14 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     revalidateMergeTarget();
     const autoMergeStillEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
     if (!autoMergeStillEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
-    assertReviewHistoryFresh(args, ops);
     assertCurrentPrEligible(args, ops);
     revalidateMergeTarget();
+    // Nothing external is observed between here and the merge: the accepted review history is the
+    // last GitHub read and the fixed contract, current policy and current-head success record are
+    // re-authenticated last, so a policy or history change during the reads above cannot merge on
+    // stale authorization.
+    assertReviewHistoryFresh(args, ops);
+    assertVerification(args, enabled);
     const result = ops.run([
       "gh", "pr", "merge", args.pr, "-R", args.githubRepo,
       "--squash", "--delete-branch", "--match-head-commit", args.expectedHead,

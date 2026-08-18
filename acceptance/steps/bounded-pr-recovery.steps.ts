@@ -11,6 +11,7 @@ import { fixtureStateDir } from "../support/fixture-state-dir";
 const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
 const { renderRepairMarker, renderTechnicalFailureMarker, reviewResultFingerprint } = require("../../extensions/deadloop/automations/pr-review-repair-state.ts");
 const { finalizeReviewRepair } = require("../../extensions/deadloop/automations/pr-review-repair-finalize.ts");
+const { writeWorkerContractSnapshot } = require("../../src/worker-required-verification-runtime.cjs");
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const repairedHead = "cccccccccccccccccccccccccccccccccccccccc";
@@ -125,18 +126,26 @@ function repairDispatch(testCase: string): Record<string, unknown> {
           outcome: "changes_requested",
           reviewedHead: currentHead,
           findings,
-          // The repeated-repair case keeps reporting repair progress, so the
-          // fingerprint guard stays the thing that stops the second repair.
-          priorRequiredFindings: testCase === "repeated-repair" ? "all_resolved" : "none",
+          // A persisted prior finding requires human handling before repair
+          // selection; the historical marker remains evidence only.
+          priorRequiredFindings: testCase === "repeated-repair" ? "persisted" : "none",
         },
       }));
+    // Every reviewer launch fixes a required-verification contract, and this fixture's policy
+    // resolves to the deadloop default because its project configures no check command.
     fs.writeFileSync(attemptRecord, JSON.stringify({
       attemptId: "reviewer", launchUuid: "reviewer", project: "demo", repository: "owner/repo", role: "reviewer",
       target: { kind: "pull-request", number: 31 }, inputRevision: { head: currentHead }, branch,
+      baseBranch: "origin/main",
       worktreePath: worktree, agentName: "reviewer", workspaceLabel: "reviewer",
       promptFile: path.join(runDir, "prompt.md"), promiseFile: promise,
       phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", requestEventId: "22",
+      requiredVerification: {
+        repository: "owner/repo", command: "npm run check",
+        source: { kind: "default", location: "deadloop" }, baseRevision: "f".repeat(40),
+      },
     }));
+    writeWorkerContractSnapshot(runDir, JSON.parse(fs.readFileSync(attemptRecord, "utf8")));
     const comments = testCase === "repeated-repair"
       ? [{ body: renderRepairMarker(head, reviewResultFingerprint(findings)), author: { login: "deadloop-bot" } }]
       : testCase === "repeated-technical-failure"
@@ -223,6 +232,7 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
           DEADLOOP_GITHUB_REPO: "owner/repo",
           DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
+          DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head }),
           TEST_COMMENTS_FILE: commentsFile,
           TEST_GITHUB_LOG: githubLog,
           TEST_HERDR_LOG: herdrLog,
@@ -261,6 +271,7 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
 
 function finalizerOps(commands: string[][], actualHead = head, isCrossRepository = false) {
   return {
+    ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, run: (args: string[]) => unknown) => run(["node", "/automation/run-project-check.ts"]),
     loadAttemptRecord: () => ({
       role: "review-repair", repository: "owner/repo", target: { kind: "pull-request", number: 31 },
       inputRevision: { head },
@@ -293,6 +304,7 @@ function repairFinalizer(commands: string[][], actualHead = head) {
   return finalizeReviewRepair(
     {
       repo: "/worktree",
+      projectId: "demo",
       attemptRecord: "/state/runs/reviewer/attempt.json",
       projectRepo: "/repo",
       githubRepo: "owner/repo",
@@ -316,8 +328,10 @@ function branchUpdateFinalizer(commands: string[][], actualHead = head, isCrossR
   return finalizeBranchUpdate(
     {
       repo: "/worktree",
+      projectId: "demo",
       projectRepo: "/repo",
       githubRepo: "owner/repo",
+      attemptRecord: "/state/runs/attempt/attempt.json",
       pr: "31",
       branch,
       expectedHead: head,
@@ -402,20 +416,20 @@ When("deadloop starts the review repair", function (this: RecoveryWorld) {
   this.result = repairDispatch(this.case);
 });
 
-When("The pull request head changes immediately before push", function (this: RecoveryWorld) {
+When("The pull request head changes immediately before push", async function (this: RecoveryWorld) {
   this.commands = [];
-  if (this.case === "repair-finalize") this.result = repairFinalizer(this.commands, base);
-  if (this.case === "branch-update-finalize") this.result = branchUpdateFinalizer(this.commands, base);
+  if (this.case === "repair-finalize") this.result = await repairFinalizer(this.commands, base);
+  if (this.case === "branch-update-finalize") this.result = await branchUpdateFinalizer(this.commands, base);
 });
 
-When("deadloop completes the repair", function (this: RecoveryWorld) {
+When("deadloop completes the repair", async function (this: RecoveryWorld) {
   this.commands = [];
-  this.result = repairFinalizer(this.commands, head);
+  this.result = await repairFinalizer(this.commands, head);
 });
 
-When("deadloop completes conflict recovery", function (this: RecoveryWorld) {
+When("deadloop completes conflict recovery", async function (this: RecoveryWorld) {
   this.commands = [];
-  this.result = branchUpdateFinalizer(this.commands, head, this.case === "cross-repository-branch-update");
+  this.result = await branchUpdateFinalizer(this.commands, head, this.case === "cross-repository-branch-update");
 });
 
 Then("deadloop requests a branch update instead of recovering from local state", function (this: RecoveryWorld) {
@@ -468,6 +482,12 @@ Then("deadloop leaves no waiting request on the pull request", function (this: R
   assert.equal(observedLabels(this.result).some((label) => PR_REQUEST_LABELS.includes(label)), false);
 });
 
+const AGENT_WORKFLOW_LABELS = [...PR_REQUEST_LABELS, "agent:in-progress", "agent:blocked"];
+
+Then("deadloop leaves no agent workflow label on the pull request", function (this: RecoveryWorld) {
+  assert.equal(observedLabels(this.result).some((label) => AGENT_WORKFLOW_LABELS.includes(label)), false);
+});
+
 Then("deadloop escalates the pull request for human handling", function (this: RecoveryWorld) {
   assert.equal(observedLabels(this.result).includes("agent:blocked"), true);
 });
@@ -494,8 +514,8 @@ Then("deadloop does not push to the branch", function (this: RecoveryWorld) {
   assert.equal(this.commands?.some((command) => command.includes("push")), false);
 });
 
-Then("deadloop pushes non-forcibly to the verified branch", function (this: RecoveryWorld) {
-  assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
+Then("deadloop pushes to the verified branch under a lease on the verified head", function (this: RecoveryWorld) {
+  assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", `--force-with-lease=refs/heads/${branch}:${head}`, "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
 });
 
 Then("deadloop runs the configured checks before the final pull request head check", function (this: RecoveryWorld) {
@@ -504,8 +524,8 @@ Then("deadloop runs the configured checks before the final pull request head che
   assert.ok(checkIndex >= 0 && checkIndex < headCheckIndex);
 });
 
-Then("deadloop pushes non-forcibly to the conflict-recovery branch", function (this: RecoveryWorld) {
-  assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
+Then("deadloop pushes to the conflict-recovery branch under a lease on the verified head", function (this: RecoveryWorld) {
+  assert.deepEqual(this.commands?.find((command) => command.includes("push")), ["git", "-C", "/worktree", "push", "--porcelain", `--force-with-lease=refs/heads/${branch}:${head}`, "https://github.com/owner/repo.git", `${repairedHead}:refs/heads/${branch}`]);
 });
 
 Then("deadloop runs the configured checks before the final conflict-recovery pull request head check", function (this: RecoveryWorld) {

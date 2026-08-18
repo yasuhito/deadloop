@@ -29,15 +29,15 @@ function input(root: string, role: "worker" | "reviewer" = "worker") {
     role,
     target: { kind: role === "worker" ? "issue" as const : "pull-request" as const, number },
     inputRevision: { head: "a".repeat(40) },
+    requiredVerification: {
+      repository: "owner/repo",
+      command: "npm test",
+      source: { kind: "repo_policy" as const, location: "deadloop.json" },
+      baseRevision: "a".repeat(40),
+    },
     ...(role === "reviewer" ? { requestEventId: "request-22" } : {}),
     ...(role === "worker" ? {
       agentRequest: { role: "worker" as const, label: "agent:implement", eventId: "request-1" },
-      requiredVerification: {
-        repository: "owner/repo",
-        command: "npm test",
-        source: { kind: "repo_policy" as const, location: "deadloop.json" },
-        baseRevision: "a".repeat(40),
-      },
     } : {}),
     intendedWorktreePath: role === "worker" ? "/wt/worker" : "/wt/review",
     resolveWorktreeHead: role === "worker",
@@ -116,6 +116,22 @@ describe("0.8.0 エージェント起動フロー", () => {
     try {
       const prepared = prepareAgentLaunchFlow(input(root), operations(root, "worker", []));
       expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).requiredVerification.command).toBe("npm test");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("最初の外部副作用より前に Reviewer の必須検証契約を固定する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const prepared = prepareAgentLaunchFlow(input(root, "reviewer"), operations(root, "reviewer", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).requiredVerification.command).toBe("npm test");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("Reviewer の必須検証契約に選択済み基準 revision を固定する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-"));
+    try {
+      const prepared = prepareAgentLaunchFlow(input(root, "reviewer"), operations(root, "reviewer", []));
+      expect(JSON.parse(readFileSync(path.join(prepared.runDir, "attempt.json"), "utf8")).requiredVerification.baseRevision).toBe("a".repeat(40));
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -318,6 +334,7 @@ describe("0.8.0 エージェント起動フロー", () => {
           ...base, uuid: `chain-${roles[index]}`, role: roles[index], project: "demo", intendedWorktreePath: "/wt/shared",
           worktree: index === 0 ? { mode: "create", branch: "feature/shared", baseBranch: "origin/main" } : { mode: "open", branch: "feature/shared", remote: "origin" },
           target: index === 0 ? { kind: "issue", number: 1 } : { kind: "pull-request", number: 44 }, resolveWorktreeHead: false,
+          ...(roles[index] === "review-repair" ? { requiredVerification: input(root, "worker").requiredVerification } : {}),
         };
         const ops: any = operations(root, roles[index] === "worker" ? "worker" : "reviewer", []);
         ops.runner.createWorktree = () => ({ workspaceId: identities[index][0], tabId: identities[index][1], rootPaneId: identities[index][2], worktreePath: "/wt/shared" });

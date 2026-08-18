@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 // Validate and push a review repair. This is the repair worker's only push path.
-// It re-checks the open PR head, then performs a normal fast-forward push of
-// the immutable repair commit.
+// It re-checks the open PR head, then pushes the immutable repair commit bound to
+// that exact head by an expected-object-ID lease, so a remote change after the
+// check stops the push instead of overwriting it. The lease can only fast-forward
+// because the repair commit is required to contain the verified head.
 
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
-const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { assertLocallyEnabled, MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
+const { ensureFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.ts");
 const { assertAuthorizedSource } = require("./guarded-push.ts");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
@@ -17,9 +20,10 @@ const { canonicalAttemptLocation } = require("../../../src/attempt-project-confi
 type JsonObject = Record<string, any>;
 type FinalizeArgs = {
   repo: string;
-  attemptRecord: string;
+  projectId: string;
   projectRepo: string;
   githubRepo: string;
+  attemptRecord: string;
   pr: string;
   branch: string;
   expectedHead: string;
@@ -32,12 +36,13 @@ type FinalizeArgs = {
   inProgressLabel: string;
   blockedLabel: string;
 };
-type CommandResult = { status: number; stdout: string; stderr: string };
+type CommandResult = { status: number | null; stdout: string; stderr: string; signal?: NodeJS.Signals | null; timedOut?: boolean };
 type EnabledProject = { repoPath?: string; baseBranch?: string; githubRepo: string; githubRepositoryId: string; automationLogin?: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   loadAttemptRecord?: (args: FinalizeArgs) => JsonObject;
   assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => EnabledProject;
+  ensureVerification?: (args: FinalizeArgs, candidateOid: string, repositoryId: string, run: FinalizeOps["run"]) => Promise<JsonObject>;
 };
 
 function defaultRun(args: string[], timeoutMs?: number): CommandResult {
@@ -46,7 +51,13 @@ function defaultRun(args: string[], timeoutMs?: number): CommandResult {
     stdio: ["ignore", "pipe", "pipe"],
     ...(timeoutMs === undefined ? {} : { timeout: timeoutMs, killSignal: "SIGKILL" }),
   });
-  return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
+  return {
+    status: result.status,
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    signal: result.signal,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+  };
 }
 
 function checkedRaw(ops: FinalizeOps, args: string[], timeoutMs?: number): string {
@@ -78,7 +89,7 @@ function pushConditionally(
   }
   beforePush();
   const push = ops.run(
-    ["git", "-C", repo, "push", "--porcelain", destination, `${candidateOid}:${ref}`],
+    ["git", "-C", repo, "push", "--porcelain", `--force-with-lease=${ref}:${expectedHead}`, destination, `${candidateOid}:${ref}`],
     MAX_GUARDED_OPERATION_MS,
   );
   if (push.status === 0) return { pushed: true, currentRemoteHeadOid: candidateOid.toLowerCase() };
@@ -97,7 +108,7 @@ function decideRepairPushGuard(pr: JsonObject, expectedBranch: string, expectedH
   return { action: "push", reason: "head_unchanged" };
 }
 
-function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): JsonObject {
+async function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): Promise<JsonObject> {
   const record = ops.loadAttemptRecord
     ? ops.loadAttemptRecord(args)
     : readAttemptRecord(canonicalAttemptLocation({ stateDir: args.stateDir, attemptRecord: args.attemptRecord }).runDir);
@@ -118,16 +129,11 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     throw new Error("repair worktree is dirty before checks");
   }
 
-  checked(ops, [
-    "node",
-    path.join(args.automationDir, "run-project-check.ts"),
-    "--cwd",
-    args.repo,
-    "--command",
-    args.checkCommand,
-    "--quarantine-root",
-    path.join(args.stateDir, "check-quarantine"),
-  ]);
+  const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
+  const initiallyEnabled = ops.assertEnabled ? ops.assertEnabled(project) : assertLocallyEnabled(project);
+  const verify = ops.ensureVerification
+    || ((input: FinalizeArgs, oid: string, repositoryId: string, run: FinalizeOps["run"]) => ensureFinalizerRequiredVerification(input, "review-repair", oid, repositoryId, run));
+  const verification = await verify(args, candidateOid, initiallyEnabled.githubRepositoryId, ops.run);
   if (hasUncommittedWork(checked(ops, ["git", "-C", args.repo, ...UNCOMMITTED_WORK_STATUS_ARGS]))) {
     throw new Error("repair worktree is dirty after checks");
   }
@@ -135,8 +141,8 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     throw new Error("repair HEAD changed during checks");
   }
 
-  const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
-  const guardAndPush = (enabled: EnabledProject & { automationLogin?: string }, recheck: () => void = () => {}) => {
+  const guardAndPush = async (enabled: EnabledProject & { automationLogin?: string }, recheck: () => void = () => {}) => {
+    await verify(args, candidateOid, enabled.githubRepositoryId, ops.run);
     assertAuthorizedSource(
       { projectRepo: args.projectRepo, worktree: args.repo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt, remote: args.remote, branch: args.branch },
       enabled,
@@ -200,7 +206,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
       reason: "repair_pushed",
       originalHeadOid: args.expectedHead.toLowerCase(),
       headOid: candidateOid.toLowerCase(),
-      checks: [{ command: args.checkCommand, result: "passed" }],
+      checks: [{ command: verification.record?.binding?.command || args.checkCommand, result: "passed" }],
     };
   };
   if (ops.assertEnabled) {
@@ -235,6 +241,7 @@ function parseArgs(argv: string[]): FinalizeArgs {
   }
   return {
     repo: required(values, "repo"),
+    projectId: required(values, "projectId"),
     attemptRecord: required(values, "attemptRecord"),
     projectRepo: required(values, "projectRepo"),
     githubRepo: required(values, "githubRepo"),
@@ -257,13 +264,13 @@ function argumentValue(argv: string[], flag: string): string {
   return index >= 0 ? String(argv[index + 1] || "") : "";
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const fallbackResultFile = argumentValue(argv, "--result-file");
   let args: FinalizeArgs | undefined;
   try {
     args = parseArgs(argv);
-    const result = finalizeReviewRepair(args);
+    const result = await finalizeReviewRepair(args);
     writeResult(args.resultFile, result);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (result.action === "blocked") process.exitCode = 3;
@@ -287,6 +294,6 @@ function main(): void {
   }
 }
 
-if (require.main === module) main();
+if (require.main === module) void main();
 
 module.exports = { decideRepairPushGuard, finalizeReviewRepair, parseArgs };

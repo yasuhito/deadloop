@@ -5,6 +5,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { validatePromise } = require("./extract-worker-promise.ts");
+const { authorizeFinalizerRequiredVerification } = require("./finalizer-required-verification.ts");
 const { publicText, renderRepairSuccessComment, repairResultCommentExists } = require("./pr-review-comments.ts");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.ts");
 const { createGithubOperations } = require("../../../src/github-operations.ts");
@@ -195,7 +196,40 @@ function completion(args: JsonObject): DriverResult {
     const github = createGithubOperations(runner, () => { recheck(); reauthorize(); });
 
     if (successfulReceipt) {
-      if (repairResultCommentExists(comments, String(args.attemptKey), receiptHead, enabledLogin)) {
+      recheck();
+      authorizeFinalizerRequiredVerification(
+        {
+          attemptRecord: location.attemptRecord,
+          projectId: String(args.projectId),
+          projectRepo: String(args.projectRepo),
+          githubRepo: String(args.githubRepo),
+          repo: String(record.worktreePath),
+          branch: String(record.branch),
+          stateDir: String(args.stateDir),
+        },
+        "review-repair",
+        receiptHead,
+        String(enabled.githubRepositoryId),
+      );
+      const readAuthorizedTarget = () => runner.runJson([
+        "gh", "pr", "view", String(args.pr), "-R", String(args.githubRepo),
+        "--json", "state,headRefName,headRefOid,isCrossRepository,labels,comments",
+      ]);
+      const isAuthorizedTarget = (snapshot: JsonObject) => {
+        const currentLabels = (snapshot.labels || []).map((label: JsonObject) => String(label.name || label));
+        return String(snapshot.state || "").toUpperCase() === "OPEN"
+          && !Boolean(snapshot.isCrossRepository)
+          && String(snapshot.headRefName || "") === String(args.branch)
+          && String(snapshot.headRefOid || "").toLowerCase() === receiptHead
+          && currentLabels.includes(String(args.inProgressLabel))
+          && !currentLabels.includes(String(args.blockedLabel));
+      };
+      const authorizedTarget = readAuthorizedTarget();
+      if (!isAuthorizedTarget(authorizedTarget)) {
+        return driverResult("done", `PR #${args.pr} repair completion was superseded after authorization; left untouched`, { driverAction: "repair_target_changed" });
+      }
+      const authorizedComments = (authorizedTarget.comments || []) as JsonObject[];
+      if (repairResultCommentExists(authorizedComments, String(args.attemptKey), receiptHead, enabledLogin)) {
         github.movePrLabels(String(args.githubRepo), String(args.pr), {
           remove: String(args.inProgressLabel), add: String(args.reviewLabel),
         });
@@ -213,7 +247,14 @@ function completion(args: JsonObject): DriverResult {
         repairs: validation.promise.repairs,
         checks: receipt.checks,
       })}${marker ? `\n${marker}` : ""}`;
-      github.commentPr(String(args.githubRepo), String(args.pr), comment);
+      const postedCommentUrl = github.commentPr(String(args.githubRepo), String(args.pr), comment);
+      const postedTarget = readAuthorizedTarget();
+      const postedComments = (postedTarget.comments || []) as JsonObject[];
+      if (!isAuthorizedTarget(postedTarget)
+        || !repairResultCommentExists(postedComments, String(args.attemptKey), receiptHead, enabledLogin)) {
+        retractSupersededRepairComment(runner, args, postedCommentUrl);
+        return driverResult("done", `PR #${args.pr} repair result was retracted because the target changed during posting`, { driverAction: "repair_target_changed" });
+      }
       github.movePrLabels(String(args.githubRepo), String(args.pr), {
         remove: String(args.inProgressLabel), add: String(args.reviewLabel),
       });
@@ -232,6 +273,16 @@ function completion(args: JsonObject): DriverResult {
     github.movePrLabels(String(args.githubRepo), String(args.pr), stoppedRepairLabelMove(args));
     return driverResult("done", `PR #${args.pr} repair requires human recovery`, { driverAction: "repair_human_blocked", comment });
   });
+}
+
+function retractSupersededRepairComment(
+  runner: ReturnType<typeof createCommandRunner>,
+  args: JsonObject,
+  postedCommentUrl: string,
+): void {
+  const commentId = String(postedCommentUrl || "").trim().match(/#issuecomment-(\d+)\/?$/)?.[1];
+  if (!commentId) throw new Error("posted repair success comment could not be identified for retraction");
+  runner.runText(["gh", "api", "--method", "DELETE", `repos/${args.githubRepo}/issues/comments/${commentId}`]);
 }
 
 function main(): void {

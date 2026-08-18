@@ -32,6 +32,7 @@ const { observeAttemptLiveness } = require("../../../src/attempt-runtime-observa
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.ts");
+const { requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 const {
   comparePrHistoryObservations,
   observePrHistory,
@@ -85,6 +86,9 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     reviewerMaxRuntimeSeconds: Number(source.DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS || 86_400),
     enabledAt: Number(source.DEADLOOP_ENABLED_AT),
     baseBranch: source.DEADLOOP_BASE_BRANCH || "origin/main",
+    requiredVerification: source.DEADLOOP_REQUIRED_VERIFICATION
+      ? JSON.parse(source.DEADLOOP_REQUIRED_VERIFICATION)
+      : undefined,
     worktreeRoot: source.DEADLOOP_WORKTREE_ROOT || path.join(os.homedir(), ".herdr", "worktrees", source.DEADLOOP_PROJECT_ID || "project"),
     automationDir: SCRIPT_DIR,
     stateDir:
@@ -249,7 +253,7 @@ function fixtureGithubOperations(fixture: JsonObject, githubEffects?: GithubEffe
 }
 
 type DriverLaunchInput = {
-  worktree: { mode: "open"; branch: string; remote: string };
+  worktree: { mode: "open"; branch: string; baseBranch?: string; remote: string };
   repoPath: string;
   automationDir: string;
   stateDir: string;
@@ -266,6 +270,8 @@ type DriverLaunchInput = {
   inputRevision: { head: string; base?: string };
   intendedWorktreePath: string;
   autoMergePolicy?: boolean;
+  baseBranch?: string;
+  requiredVerification?: import("../../../src/required-verification").RequiredVerificationContract;
   reviewHistoryRequired?: boolean;
   requestEventId?: string;
   renderPrompt: (input: { promiseFile: string; worktreePath: string }) => string;
@@ -370,9 +376,9 @@ Promise report:
 - Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
 - Separate the two kinds of observation: findings are the required corrections and the repair worker's entire contract, while advisories are optional observations that are published for humans and never repaired. Each advisory is {title,body,path?,line?}.
 - priorRequiredFindings states how the required findings raised by earlier reviews of this PR stand on the reviewed head: "none" when no earlier review raised one, "all_resolved" when every earlier one is fixed, "persisted" when at least one is still unresolved, "regressed" when a fixed one came back, "mixed" when unresolved earlier ones stand next to new ones. An earlier advisory that later became a required correction counts as a new required finding.
-- If no required correction remains, write a V1 report with a three-sentence summary, status="complete", result={outcome:"approved",reviewedHead:"${String(pr.headRefOid || "")}",findings:[],advisories:<advisory observations, may be empty>}, and evidence={reviewed:["diff and configured checks"]}. approved requires an empty findings list.
-- If required corrections exist, include a three-sentence summary and use result={outcome:"changes_requested",reviewedHead:"${String(pr.headRefOid || "")}",findings:[{title:"concise defect",body:"bounded required correction and evidence",path:"optional/repo/path",line:1,severity:"blocker|major|minor"}],advisories:<advisory observations, may be empty>,priorRequiredFindings:"none|all_resolved"} with non-empty evidence.reviewed. Only "none" or "all_resolved" may accompany changes_requested, because automatic repair continues only on reported repair progress.
-- Use outcome=human_required when a persisted, regressed, or mixed prior required finding leaves no repair progress to report, or when a product/spec/safety decision cannot be repaired within the PR. Include a three-sentence summary and write result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:<required findings, may be empty>,advisories:<advisory observations, may be empty>,priorRequiredFindings:"persisted|regressed|mixed|all_resolved|none"}, and evidence={reviewed:["decision boundary and supporting evidence"]}.
+- If no required correction remains, write a V1 report with a three-sentence summary, status="complete", result={outcome:"approved",reviewedHead:"${String(pr.headRefOid || "")}",findings:[],advisories:<advisory observations, may be empty>}, and evidence={reviewed:["diff and configured checks"],validations:["optional additional validation and result"]}. approved requires an empty findings list. The host independently runs required verification; validations are display-only additional evidence.
+- If required corrections exist, include a three-sentence summary and use result={outcome:"changes_requested",reviewedHead:"${String(pr.headRefOid || "")}",findings:[{title:"concise defect",body:"bounded required correction and evidence",path:"optional/repo/path",line:1,severity:"blocker|major|minor"}],advisories:<advisory observations, may be empty>,priorRequiredFindings:"none|all_resolved"} with non-empty evidence.reviewed and optional evidence.validations. Only "none" or "all_resolved" may accompany changes_requested, because automatic repair continues only on reported repair progress.
+- Use outcome=human_required when a persisted, regressed, or mixed prior required finding leaves no repair progress to report, or when a product/spec/safety decision cannot be repaired within the PR. Include a three-sentence summary and write result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:<required findings, may be empty>,advisories:<advisory observations, may be empty>,priorRequiredFindings:"persisted|regressed|mixed|all_resolved|none"}, and evidence={reviewed:["decision boundary and supporting evidence"],validations:["optional additional validation and result"]}.
 - For blocked reports include a three-sentence summary, result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
 - Include only verified defects as findings; #243-style lint or repository-contract failures are changes_requested, not blocked.
 - The reason, summary, and the titles, bodies, and paths of both findings and advisories can be published in a PR comment. Keep them human-readable and never include prompts, promise paths, absolute/local paths, internal agent names, or other runtime details.
@@ -396,6 +402,8 @@ function branchUpdateWorkerPrompt(
     shellQuote(path.join(env.automationDir, "pr-branch-update-finalize.ts")),
     "--repo",
     shellQuote(worktreePath),
+    "--project-id",
+    shellQuote(env.projectId),
     "--project-repo",
     shellQuote(env.repoPath),
     "--github-repo",
@@ -418,6 +426,8 @@ function branchUpdateWorkerPrompt(
     String(env.enabledAt),
     "--check-command",
     shellQuote(env.checkCommand),
+    "--attempt-record",
+    shellQuote(path.join(path.dirname(promiseFile), "attempt.json")),
     "--result-file",
     shellQuote(path.join(path.dirname(promiseFile), "finalizer-result.json")),
   ].join(" ");
@@ -435,7 +445,7 @@ Safety contract:
 - Merge ${baseOid} into the existing PR branch. Use git merge, never rebase, and never rewrite existing commits.
 - Resolve only conflicts caused by this merge. Do not widen the PR's scope.
 - Commit the merge resolution before finalization.
-- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted normal non-force push to the driver-selected branch:
+- Do not run git push directly. After resolving and committing, run exactly this finalizer; it runs all configured checks, rechecks the validated PR head, and performs the only permitted push to the driver-selected branch, leased to the validated head:
   ${finalizeCommand}
 - Never force-push. Never push another ref. Never edit labels, create or edit a PR, merge a PR, close an issue, or delete a branch.
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state so the next cycle can re-evaluate.
@@ -475,7 +485,7 @@ function branchUpdateDecision(pr: JsonObject, env: ReturnType<typeof envConfig>,
 function branchUpdateBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>, reason: string): string {
   return `## What happened
 - Automatic branch update for PR #${Number(pr.number || 0)} stopped because ${reason}.
-- No force-push was attempted. A human must inspect the existing PR branch before re-queueing it.
+- Nothing was pushed and no history was rewritten. A human must inspect the existing PR branch before re-queueing it.
 
 ## Recovery steps
 1. Inspect the PR head, checks, and branch-update comments.
@@ -625,7 +635,7 @@ function branchUpdateLaunchPlan(
     retryKey: key,
     marker: renderBranchUpdateMarker(headOid, baseOid),
     input: {
-      worktree: { mode: "open", branch, remote: env.branchUpdateRemote },
+      worktree: { mode: "open", branch, baseBranch: env.baseBranch, remote: env.branchUpdateRemote },
       repoPath: env.repoPath,
       automationDir: env.automationDir,
       stateDir: env.stateDir,
@@ -640,6 +650,7 @@ function branchUpdateLaunchPlan(
       role: "branch-update",
       target: { kind: "pull-request", number },
       inputRevision: { head: headOid, base: baseOid },
+      requiredVerification: env.requiredVerification,
       intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid, uuid),
@@ -810,6 +821,19 @@ function launchBranchUpdate(
   return { updaterName: plan.updaterName, headRefName: branch, retryKey: key, requestEventId, ...launch, ...(fixture && !operations?.agentLaunchOps ? { simulated: true } : {}) };
 }
 
+function reviewerRequiredVerificationContract(env: ReturnType<typeof envConfig>, targetHead: string) {
+  if (env.requiredVerification) {
+    const contract = env.requiredVerification;
+    requiredVerificationBinding(contract, targetHead);
+    if (contract.repository !== env.githubRepo) throw new Error("required verification contract repository does not match the review repository");
+    return contract;
+  }
+  if (process.env.NODE_ENV === "test" || process.env.DEADLOOP_TEST_ADAPTER === "1") {
+    return { repository: env.githubRepo, command: env.checkCommand, source: { kind: "local", location: "fixture" }, baseRevision: targetHead };
+  }
+  throw new Error("DEADLOOP_REQUIRED_VERIFICATION is required before reviewer launch");
+}
+
 function prReviewerLaunchPlan(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -842,6 +866,7 @@ function prReviewerLaunchPlan(
       reviewHistoryRequired: true,
       target: { kind: "pull-request", number },
       inputRevision: { head: String(pr.headRefOid || "") },
+      requiredVerification: reviewerRequiredVerificationContract(env, String(pr.headRefOid || "")),
       intendedWorktreePath: path.join(env.worktreeRoot, headRefName.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         reviewAgentPrompt(pr, env, promiseFile, reason, worktreePath, uuid, historyFile, historyRevision),
@@ -1589,6 +1614,7 @@ function reviewOnlyDrive(
     projectId: env.projectId,
     repoPath: env.repoPath,
     worktreeRoot: env.worktreeRoot,
+    worktreePath: String(launch.worktreePath || ""),
     githubRepo: env.githubRepo,
     stateDir: env.stateDir,
     enabledAt: env.enabledAt,
@@ -1642,6 +1668,7 @@ module.exports = {
   assertBranchUpdateRequestConsumed,
   assertBranchUpdateRequestSelectable,
   assertTrustedReviewIdentity,
+  branchUpdateLaunchPlan,
   consumeRequestEvent,
   envConfig,
   exposePostBlockReviewRequests,

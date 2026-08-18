@@ -141,7 +141,7 @@ export function runAcceptanceTests(cwd = process.cwd(), options: { quiet?: boole
     const executable = path.resolve(path.dirname(require.resolve("@cucumber/cucumber")), "../bin/cucumber.js");
     const result = spawnSync(process.execPath, [executable], {
       cwd,
-      env: { ...process.env, DEADLOOP_CUCUMBER_MESSAGE_PATH: messagePath },
+      env: { ...process.env, DEADLOOP_CUCUMBER_MESSAGE_PATH: messagePath, DEADLOOP_TEST_ADAPTER: "1" },
       stdio: options.quiet ? "ignore" : "inherit",
     });
     if (result.error) {

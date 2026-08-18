@@ -139,6 +139,15 @@ function stalePolicyError(message, sources) {
     sources ? { requiredVerificationSources: sources } : {},
   );
 }
+/**
+ * A trusted-policy currency failure, as opposed to a tampered host snapshot. The snapshot mismatch
+ * is deliberately excluded: it is never a legitimate concurrent policy change, so it must surface.
+ */
+function isRequiredVerificationPolicyBlock(error) {
+  return error instanceof Error
+    && error.message.startsWith("required verification blocked:")
+    && !error.message.includes("host-persisted launch snapshot");
+}
 function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repositoryId) {
   const contract = readWorkerContractSnapshot(attempt); const baseBranch = attempt.baseBranch || "origin/main";
   const remoteRef = baseBranch.startsWith("refs/remotes/") ? baseBranch.slice("refs/remotes/".length) : baseBranch;
@@ -204,15 +213,15 @@ function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repo
   if (!isDeepStrictEqual(current, contract)) throw stalePolicyError("current policy differs from the fixed attempt contract", currentSources);
   return current;
 }
-function assertWorkerCompletionAuthorized(attempt, report, record, currentContract) {
-  if (attempt.role !== "worker" || report.role !== "worker" || report.status !== "complete") throw new Error("Worker completion gate requires a complete Worker report");
+function assertRequiredVerificationAuthorized(attempt, targetCommit, record, currentContract, allowedRoles) {
+  if (!Array.isArray(allowedRoles) || !allowedRoles.includes(attempt.role)) throw new Error("required verification gate does not authorize this attempt role");
   assertContract(attempt.requiredVerification); assertContract(currentContract);
   if (!isDeepStrictEqual(attempt.requiredVerification, currentContract)) throw new Error("required verification blocked: stale_policy; start a new attempt");
   if (attempt.requiredVerification.repository !== attempt.repository) throw new Error("required verification persisted contract repository does not match attempt");
   if (!record || typeof record !== "object" || Array.isArray(record) || record.version !== 1) throw new Error("required verification passed record is missing");
   if (!nonEmpty(record.startedAt) || !Number.isFinite(record.durationMs) || record.durationMs < 0 || !nonEmpty(record.logPath)) throw new Error("required verification record is invalid");
   if (record.outcome !== "passed" || record.exitCode !== 0) throw new Error("required verification record did not pass");
-  if (!isDeepStrictEqual(record.binding, requiredVerificationBinding(attempt.requiredVerification, report.result.outputRevision))) throw new Error("required verification record does not match the Worker output commit and fixed contract");
+  if (!isDeepStrictEqual(record.binding, requiredVerificationBinding(attempt.requiredVerification, targetCommit))) throw new Error("required verification record does not match the output commit/current target commit and fixed contract");
   if (!authenticatedRecords.has(record)) {
     const provenance = record.provenance;
     if (!provenance || provenance.kind !== "host_gate_execution" || !nonEmpty(provenance.recordPath) || !nonEmpty(attempt.promiseFile)) {
@@ -227,6 +236,38 @@ function assertWorkerCompletionAuthorized(attempt, report, record, currentContra
       throw new Error("required verification host execution authenticity is missing");
     }
   }
-  return { outputRevision: report.result.outputRevision, record };
+  return { outputRevision: targetCommit, record };
 }
-module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertWorkerCompletionAuthorized, persistHostVerificationEvidence, readRequiredVerificationRecord, readWorkerContractSnapshot, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };
+function assertWorkerCompletionAuthorized(attempt, report, record, currentContract) {
+  if (attempt.role !== "worker" || report.role !== "worker" || report.status !== "complete") throw new Error("Worker completion gate requires a complete Worker report");
+  return assertRequiredVerificationAuthorized(attempt, report.result.outputRevision, record, currentContract, ["worker"]);
+}
+function assertReviewApprovalAuthorized(attempt, report, record, currentContract) {
+  if (attempt.role !== "reviewer" || report.role !== "reviewer" || report.status !== "complete" || report.result?.outcome !== "approved") {
+    throw new Error("review approval gate requires a complete approved reviewer report");
+  }
+  if (report.result.reviewedHead !== attempt.inputRevision.head) throw new Error("reviewed head does not match the fixed review head");
+  assertRequiredVerificationAuthorized(attempt, report.result.reviewedHead, record, currentContract, ["reviewer"]);
+  return { reviewedHead: report.result.reviewedHead, record };
+}
+/**
+ * Re-authenticate one review attempt immediately before a GitHub write, after its last external
+ * observation.
+ *
+ * Every write an attempt makes stands on the policy the attempt fixed, so the fixed contract must
+ * still be the current trusted policy at the moment of the write. A failing review result needs no
+ * passed verification record; supplying `report` adds the passing requirement, the host-executed
+ * success record bound to the exact reviewed head.
+ */
+function reauthorizeReviewWrite(attempt, options) {
+  const contract = assertCurrentWorkerContract(attempt, options.projectRepo, options.localConfigPath, options.repositoryId);
+  if (!options.report) return contract;
+  assertReviewApprovalAuthorized(
+    attempt,
+    options.report,
+    readRequiredVerificationRecord(workerRequiredVerificationPath(options.attemptRecordFile)),
+    contract,
+  );
+  return contract;
+}
+module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertRequiredVerificationAuthorized, assertReviewApprovalAuthorized, assertWorkerCompletionAuthorized, isRequiredVerificationPolicyBlock, persistHostVerificationEvidence, readRequiredVerificationRecord, readWorkerContractSnapshot, reauthorizeReviewWrite, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };
