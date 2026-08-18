@@ -11,7 +11,7 @@ type MonitorPromptBaseInput = {
   enabledAt?: number;
 };
 
-export type IssueMonitorPromptInput = MonitorPromptBaseInput & {
+type IssueMonitorPromptInput = MonitorPromptBaseInput & {
   issueNumber: number;
   issueTitle?: string;
   worktreePath: string;
@@ -27,7 +27,7 @@ export type IssueMonitorPromptInput = MonitorPromptBaseInput & {
   wontfixLabel?: string;
 };
 
-export type BranchUpdateMonitorPromptInput = MonitorPromptBaseInput & {
+type BranchUpdateMonitorPromptInput = MonitorPromptBaseInput & {
   prNumber: number;
   expectedHeadOid: string;
   expectedBaseOid: string;
@@ -39,7 +39,7 @@ export type BranchUpdateMonitorPromptInput = MonitorPromptBaseInput & {
   blockedLabel: string;
 };
 
-export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
+type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   worktreeRoot: string;
   worktreePath?: string;
   autoMerge?: boolean;
@@ -60,7 +60,7 @@ export type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   blockedLabel: string;
 };
 
-export type RepairMonitorPromptInput = MonitorPromptBaseInput & {
+type RepairMonitorPromptInput = MonitorPromptBaseInput & {
   prNumber: number;
   expectedHeadOid: string;
   branch: string;

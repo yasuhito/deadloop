@@ -39,8 +39,8 @@ const {
   writePrHistoryObservation,
 } = require("../../../src/pr-review-history.ts");
 
-import type { AttemptAgentRunner } from "../../../src/attempt-runtime-observation";
-import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
+import type { AttemptAgentRunner } from "../../../src/attempt-runtime-observation-types";
+import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
 import type { RunnerAdapter } from "../../../src/runner";
 
 type LabelMove = { remove?: string | string[]; add?: string | string[] };

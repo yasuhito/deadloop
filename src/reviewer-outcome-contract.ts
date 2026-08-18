@@ -7,22 +7,11 @@
  * given that structured judgment, which transition is allowed.
  */
 
-/** How the review agent disposed of the required findings raised before this review. */
-export type PriorRequiredFindingDisposition =
-  /** No required finding existed before this review. */
-  | "none"
-  /** Every prior required finding is resolved on the reviewed head. */
-  | "all_resolved"
-  /** At least one prior required finding is still unresolved. */
-  | "persisted"
-  /** A previously resolved required finding came back. */
-  | "regressed"
-  /** Unresolved prior required findings stand next to new ones. */
-  | "mixed";
+import type { PriorRequiredFindingDisposition } from "./reviewer-outcome-contract-types";
 
-export type ReviewTransition = "approve" | "repair" | "human_required";
+type ReviewTransition = "approve" | "repair" | "human_required";
 
-export type ReviewTransitionReason =
+type ReviewTransitionReason =
   | "no_required_findings"
   | "repair_progress_reported"
   | "reviewer_human_required"
@@ -31,7 +20,7 @@ export type ReviewTransitionReason =
   | "prior_and_new_required_findings_mixed"
   | "repair_progress_not_reported";
 
-export type ReviewTransitionDecision = {
+type ReviewTransitionDecision = {
   transition: ReviewTransition;
   reason: ReviewTransitionReason;
 };
@@ -41,7 +30,7 @@ export type ReviewTransitionDecision = {
  * result may be passed; only the outcome and the prior-finding disposition take
  * part in the decision, so the remaining fields are named but ignored.
  */
-export type ReviewerResultJudgment = {
+type ReviewerResultJudgment = {
   outcome?: unknown;
   priorRequiredFindings?: unknown;
   reviewedHead?: unknown;

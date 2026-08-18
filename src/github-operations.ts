@@ -1,4 +1,4 @@
-import type { CommandRunner } from "./automation-driver-kit";
+import type { CommandRunner } from "./automation-driver-kit-types";
 
 type JsonObject = Record<string, any>;
 

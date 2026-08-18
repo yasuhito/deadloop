@@ -31,7 +31,7 @@ const {
 
 import type { AttemptRecord, CompletionReportV1 } from "../../../src/attempt-lifecycle";
 import type { GithubCompletionObservation } from "../../../src/attempt-workspace-lifecycle";
-import type { JsonObject } from "../../../src/automation-driver-kit";
+import type { JsonObject } from "../../../src/automation-driver-kit-types";
 
 function parseArgs(argv: string[]): JsonObject {
   const values: JsonObject = { expectedLabel: [], managedLabel: [] };

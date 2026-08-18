@@ -16,7 +16,7 @@ const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../..
 const { renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { blockedPrLabelMove } = require("../../../src/pr-request-selection.ts");
 
-import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
+import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
 
 function parseArgs(argv: string[]): JsonObject {
   const values: JsonObject = {};

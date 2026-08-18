@@ -2,20 +2,8 @@ const fs = require("node:fs") as typeof import("node:fs");
 const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { createHerdrRunner } = require("./herdr-runner.ts");
 
+import type { CommandRunner, DriverResult, JsonObject } from "./automation-driver-kit-types";
 import type { RunnerAdapter } from "./runner";
-
-export type JsonObject = Record<string, any>;
-
-export type DriverResult = {
-  action: "skip" | "done" | "needs_llm" | "error";
-  summary: string;
-  [key: string]: any;
-};
-
-export type CommandRunner = {
-  runText(args: string[], options?: { input?: string; check?: boolean }): string;
-  runJson(args: string[], options?: { input?: string }): any;
-};
 
 const COMMAND_TIMEOUT_MS = 20_000;
 

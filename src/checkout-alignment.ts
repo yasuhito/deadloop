@@ -21,11 +21,11 @@ const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("./agent-sc
 
 type CommandResult = { status: number; stdout: string; stderr: string };
 
-export type CheckoutAlignmentOps = {
+type CheckoutAlignmentOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
 };
 
-export type CheckoutAlignmentInput = {
+type CheckoutAlignmentInput = {
   worktreePath: string;
   expectedHead: string;
   remote: string;

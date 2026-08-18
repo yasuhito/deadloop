@@ -9,7 +9,7 @@ type PromiseValidation = Record<string, any>;
 
 const VALID_PROMISE_STATUSES = new Set(["complete", "blocked"]);
 const VALID_FINDING_SEVERITIES = new Set(["blocker", "major", "minor"]);
-// Mirrors PriorRequiredFindingDisposition in src/reviewer-outcome-contract.ts.
+// Mirrors PriorRequiredFindingDisposition in src/reviewer-outcome-contract-types.ts.
 // This helper stays dependency-free so it can validate a promise on its own.
 const VALID_PRIOR_FINDING_DISPOSITIONS = new Set(["none", "all_resolved", "persisted", "regressed", "mixed"]);
 const SUCCESSFUL_ATTEMPT_PHASES = new Set([

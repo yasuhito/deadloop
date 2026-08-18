@@ -6,7 +6,7 @@ import type {
   WorkerGithubObservation,
   WriterGithubObservation,
 } from "../../src/attempt-workspace-lifecycle";
-import type { PriorRequiredFindingDisposition } from "../../src/reviewer-outcome-contract";
+import type { PriorRequiredFindingDisposition } from "../../src/reviewer-outcome-contract-types";
 
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.ts");
 

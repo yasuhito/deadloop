@@ -2,7 +2,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { createHash } = require("node:crypto") as typeof import("node:crypto");
 
-import type { CommandRunner, JsonObject } from "./automation-driver-kit";
+import type { CommandRunner, JsonObject } from "./automation-driver-kit-types";
 
 class IncompletePrHistoryObservationError extends Error {
   readonly code = "incomplete_pr_history_observation";

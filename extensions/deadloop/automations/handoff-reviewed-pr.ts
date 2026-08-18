@@ -19,7 +19,7 @@ const {
   readPrHistoryObservation,
 } = require("../../../src/pr-review-history.ts");
 
-import type { JsonObject } from "../../../src/automation-driver-kit";
+import type { JsonObject } from "../../../src/automation-driver-kit-types";
 
 type HandoffArgs = {
   projectRepo: string;

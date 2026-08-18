@@ -15,7 +15,7 @@ const {
 } = require("../../../src/attempt-project-confinement.cjs");
 
 import type { AttemptRecord } from "../../../src/attempt-lifecycle";
-import type { JsonObject } from "../../../src/automation-driver-kit";
+import type { JsonObject } from "../../../src/automation-driver-kit-types";
 
 type TargetObservation = { state: "claimed" | "requeued" } | { state: "unsafe"; reason: string };
 type RecoveryDependencies = {

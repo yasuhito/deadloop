@@ -14,7 +14,7 @@ const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cj
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const { labelNames } = require("../../../src/launch-revalidation.ts");
 
-import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
+import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
 
 const REQUIRED_ARGUMENTS = [
   "promise", "attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "enabledAt",

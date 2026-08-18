@@ -50,7 +50,7 @@ const {
   writePrHistoryObservation,
 } = require("../../../src/pr-review-history.ts");
 
-import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
+import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
 import type { RunnerAdapter } from "../../../src/runner";
 
 const commandRunner = createCommandRunner();

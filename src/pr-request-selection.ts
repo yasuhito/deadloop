@@ -11,16 +11,16 @@ const { compareGithubTimelineEvents } = require("./github-timeline-order.ts");
  */
 
 /** The role a request hands the work to. */
-export type PrRequestRole = "branch-update" | "review-repair" | "reviewer";
+type PrRequestRole = "branch-update" | "review-repair" | "reviewer";
 
 /** The configured request-label names, one per role. */
-export type PrRequestLabels = {
+type PrRequestLabels = {
   updateBranch: string;
   implement: string;
   review: string;
 };
 
-export type PrRequest = {
+type PrRequest = {
   role: PrRequestRole;
   label: string;
 };

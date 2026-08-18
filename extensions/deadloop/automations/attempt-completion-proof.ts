@@ -20,7 +20,7 @@ const path = require("node:path") as typeof import("node:path");
 
 type JsonObject = Record<string, any>;
 
-export type ProvenCompletion = { expectedHead: string; currentHeadOid: string };
+type ProvenCompletion = { expectedHead: string; currentHeadOid: string };
 
 const ATTEMPT_RECORD_FILE = "attempt.json";
 

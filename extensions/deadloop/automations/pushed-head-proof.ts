@@ -18,7 +18,7 @@ const { validatePromise } = require("./extract-worker-promise.ts");
 
 type JsonObject = Record<string, any>;
 
-export type PushedHeadTransition = { originalHeadOid: string; headOid: string };
+type PushedHeadTransition = { originalHeadOid: string; headOid: string };
 
 const FINALIZER_RECEIPT_FILE = "finalizer-result.json";
 const ATTEMPT_RECORD_FILE = "attempt.json";

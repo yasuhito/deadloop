@@ -10,23 +10,16 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 
+import type { AttemptAgentRunner, AttemptRuntimeRunner } from "./attempt-runtime-observation-types";
+
 type JsonObject = Record<string, any>;
 
-export type AttemptRuntimeRunner = {
-  listWorkspaces(): JsonObject[];
-  listAgents(): JsonObject[];
-  listWorktrees(projectRepo: string): JsonObject[];
-};
-
-/** The runtime a liveness question needs: an attempt is alive through its agent, not its workspace. */
-export type AttemptAgentRunner = Pick<AttemptRuntimeRunner, "listAgents">;
-
-export type AttemptRuntimeObservation =
+type AttemptRuntimeObservation =
   | { kind: "live_matching_owner" }
   | { kind: "stopped_owned" }
   | { kind: "ambiguous" };
 
-export type AttemptLivenessObservation =
+type AttemptLivenessObservation =
   | { kind: "live" }
   | { kind: "stopped" }
   | { kind: "ambiguous" };

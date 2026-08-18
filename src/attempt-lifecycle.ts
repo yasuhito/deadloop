@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { RequiredVerificationContract } from "./required-verification";
-import type { PriorRequiredFindingDisposition } from "./reviewer-outcome-contract";
+import type { PriorRequiredFindingDisposition } from "./reviewer-outcome-contract-types";
 
 const { isPriorRequiredFindingDisposition } = require("./reviewer-outcome-contract.ts");
 

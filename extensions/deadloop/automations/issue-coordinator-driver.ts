@@ -33,7 +33,7 @@ const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require
 const { readAttemptRecord, releasePersistedAttemptAuthority } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertCurrentWorkerContract, requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 
-import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit";
+import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
 
 const SCRIPT_DIR = __dirname;
 const CLEANUP_SCRIPT = path.join(SCRIPT_DIR, "cleanup-completed-worker-worktrees.ts");
