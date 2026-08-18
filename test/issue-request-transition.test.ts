@@ -21,6 +21,7 @@ function scenario(options: {
   duringDelete?: (state: ReturnType<typeof createState>) => void;
   afterActiveState?: (state: ReturnType<typeof createState>) => void;
   activeStateAlreadyPresent?: boolean;
+  activeStateReleaseFails?: boolean;
   deleteStatus?: number;
   persistError?: string;
   blockDuringObservation?: boolean;
@@ -60,6 +61,7 @@ function scenario(options: {
     },
     deleteIssueLabel: (_repo: string, _number: number, label: string) => {
       trace.push(`delete:${label}`);
+      if (label === "agent:in-progress" && options.activeStateReleaseFails) return { status: 500 };
       options.beforeDelete?.(state);
       if (!state.labels.has(label)) return { status: 404 };
       state.unlabel(label, "deadloop-bot");
@@ -338,6 +340,36 @@ describe("Issue Agent request transition", () => {
 
   it("consumes a request whose active state an interrupted attempt already created", () => {
     expect(scenario({ activeStateAlreadyPresent: true }).outcome.kind).toBe("consumed");
+  });
+
+  it("removes the active state when the durable receipt fails", () => {
+    expect(scenario({ persistError: "interrupted" }).labels).not.toContain("agent:in-progress");
+  });
+
+  it("reports a consumed-request stop when it cannot remove the active state beside a block", () => {
+    expect(scenario({
+      afterActiveState: (state) => state.label("agent:blocked", "human"),
+      activeStateReleaseFails: true,
+    }).outcome.kind).toBe("blocked_after_consumption");
+  });
+
+  it("names the active state it could not remove beside a block", () => {
+    expect(scenario({
+      afterActiveState: (state) => state.label("agent:blocked", "human"),
+      activeStateReleaseFails: true,
+    }).comments[0].body).toContain("--remove-label 'agent:in-progress'");
+  });
+
+  it("does not report a race beside an active state it could not remove", () => {
+    expect(scenario({
+      afterActiveState: (state) => state.label("agent:implement", "human"),
+      activeStateReleaseFails: true,
+    }).outcome.kind).toBe("ambiguous_blocked");
+  });
+
+  it("names the active state left behind by a failed receipt release", () => {
+    expect(scenario({ persistError: "interrupted", activeStateReleaseFails: true }).comments[0].body)
+      .toContain("--remove-label 'agent:in-progress'");
   });
 
   it("treats a request removed at the mutation boundary as cancellation", () => {

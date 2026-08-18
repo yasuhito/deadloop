@@ -121,7 +121,18 @@ function quoteShell(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-function ambiguousComment(input: ConsumeIssueRequestInput): string {
+function leftoverActiveStateGuidance(input: ConsumeIssueRequestInput): string[] {
+  return [
+    "",
+    `deadloop could not prove removal of \`${input.inProgressLabel}\`, so this stop and that active state are visible together. Remove the active state before requesting a new attempt:`,
+    "",
+    "```bash",
+    `gh issue edit ${input.issueNumber} -R ${quoteShell(input.repository)} --remove-label ${quoteShell(input.inProgressLabel)}`,
+    "```",
+  ];
+}
+
+function ambiguousComment(input: ConsumeIssueRequestInput, leftoverActiveState = false): string {
   return [
     `<!-- deadloop:ambiguous-request-consumption:v1 attempt=${input.attemptId} -->`,
     "## Agent request consumption could not be proven",
@@ -134,10 +145,11 @@ function ambiguousComment(input: ConsumeIssueRequestInput): string {
     "```bash",
     `gh issue edit ${input.issueNumber} -R ${quoteShell(input.repository)} --add-label ${quoteShell(input.requestLabel)}`,
     "```",
+    ...(leftoverActiveState ? leftoverActiveStateGuidance(input) : []),
   ].join("\n");
 }
 
-function blockedConsumptionComment(input: ConsumeIssueRequestInput): string {
+function blockedConsumptionComment(input: ConsumeIssueRequestInput, leftoverActiveState = false): string {
   return [
     `<!-- deadloop:blocked-request-consumption:v1 attempt=${input.attemptId} -->`,
     "## Agent request was consumed before a stop",
@@ -150,6 +162,7 @@ function blockedConsumptionComment(input: ConsumeIssueRequestInput): string {
     "```bash",
     `gh issue edit ${input.issueNumber} -R ${quoteShell(input.repository)} --add-label ${quoteShell(input.requestLabel)}`,
     "```",
+    ...(leftoverActiveState ? leftoverActiveStateGuidance(input) : []),
   ].join("\n");
 }
 
@@ -177,9 +190,12 @@ function automationAuthoredActiveBlock(
     && String(latest?.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase();
 }
 
-function blockAmbiguousConsumption(input: ConsumeIssueRequestInput): IssueRequestTransitionOutcome {
+function blockAmbiguousConsumption(
+  input: ConsumeIssueRequestInput,
+  leftoverActiveState = false,
+): IssueRequestTransitionOutcome {
   if (!input.automationLogin.trim()) throw new Error("authorized Automation host login is required");
-  const body = ambiguousComment(input);
+  const body = ambiguousComment(input, leftoverActiveState);
   let observation = observeStopState(input);
   if (!automationAuthoredActiveBlock(observation, input)) {
     if (observation.labels.has(input.blockedLabel)) {
@@ -209,9 +225,12 @@ function blockAmbiguousConsumption(input: ConsumeIssueRequestInput): IssueReques
  * Agent request. The stop label is owned by whoever raised it; this seam only proves its own exact
  * recovery explanation and never mutates a label.
  */
-function stopConsumedRequest(input: ConsumeIssueRequestInput): IssueRequestTransitionOutcome {
+function stopConsumedRequest(
+  input: ConsumeIssueRequestInput,
+  leftoverActiveState = false,
+): IssueRequestTransitionOutcome {
   if (!input.automationLogin.trim()) throw new Error("authorized Automation host login is required");
-  const body = blockedConsumptionComment(input);
+  const body = blockedConsumptionComment(input, leftoverActiveState);
   let observation = observeStopState(input);
   if (!trustedExactComment(observation.comments, input.automationLogin, body)) {
     input.github.commentIssue(input.repository, input.issueNumber, body);
@@ -573,8 +592,9 @@ function createActiveState(
       && String(event.label?.name || "") === input.requestLabel
       && eventId(event) !== input.requestEventId);
   if (blocked || newerRequest || !observation.labels.has(input.inProgressLabel)) {
-    releaseActiveState(input);
-    if (blocked) return stopConsumedRequest(input);
+    const released = releaseActiveState(input);
+    if (blocked) return stopConsumedRequest(input, !released);
+    if (!released) return blockAmbiguousConsumption(input, true);
     if (newerRequest) return { kind: "raced", requestEventId: input.requestEventId };
     return blockAmbiguousConsumption(input);
   }
@@ -582,18 +602,26 @@ function createActiveState(
   try {
     input.persistConsumed();
   } catch {
-    return blockAmbiguousConsumption(input);
+    return blockAmbiguousConsumption(input, !releaseActiveState(input));
   }
   return { kind: "consumed", requestEventId: input.requestEventId };
 }
 
-function releaseActiveState(input: ConsumeIssueRequestInput): void {
+/**
+ * Remove the active state this transition created and prove it is gone.
+ *
+ * A stop must never be reported beside a live active state: the caller releases the prepared
+ * attempt, so an Issue left in progress would carry no live and no durable attempt. When removal
+ * cannot be proven the stop says so instead of claiming a clean release.
+ */
+function releaseActiveState(input: ConsumeIssueRequestInput): boolean {
   try {
-    if (!observeRequest(input).labels.has(input.inProgressLabel)) return;
-    input.github.deleteIssueLabel(input.repository, input.issueNumber, input.inProgressLabel);
+    if (!observeRequest(input).labels.has(input.inProgressLabel)) return true;
+    const deletion = input.github.deleteIssueLabel(input.repository, input.issueNumber, input.inProgressLabel);
+    if (deletion.status !== 200 && deletion.status !== 404) return false;
+    return !observeRequest(input).labels.has(input.inProgressLabel);
   } catch {
-    // The stop that follows explains the state deadloop could observe; a failed release must not
-    // replace that explanation with an exception.
+    return false;
   }
 }
 
