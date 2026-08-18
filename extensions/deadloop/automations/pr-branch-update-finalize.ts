@@ -36,7 +36,7 @@ type EnabledProject = { githubRepo: string; githubRepositoryId: string };
 type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => EnabledProject;
-  ensureVerification?: (args: FinalizeArgs, candidateOid: string, repositoryId: string, run: FinalizeOps["run"]) => JsonObject;
+  ensureVerification?: (args: FinalizeArgs, candidateOid: string, repositoryId: string, run: FinalizeOps["run"]) => Promise<JsonObject>;
 };
 
 function defaultRun(args: string[], timeoutMs?: number): CommandResult {
@@ -98,7 +98,7 @@ function decidePushGuard(pr: JsonObject, expectedBranch: string, expectedHead: s
   return { action: "push", reason: "head_unchanged" };
 }
 
-function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): JsonObject {
+async function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): Promise<JsonObject> {
   checked(ops, ["git", "check-ref-format", "--branch", args.branch]);
   const candidateOid = checked(ops, ["git", "-C", args.repo, "rev-parse", "HEAD"], MAX_GUARDED_OPERATION_MS);
   if (candidateOid.toLowerCase() === args.expectedHead.toLowerCase()) {
@@ -113,7 +113,7 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   const initiallyEnabled = ops.assertEnabled ? ops.assertEnabled(project) : assertLocallyEnabled(project);
   const verify = ops.ensureVerification
     || ((input: FinalizeArgs, oid: string, repositoryId: string, run: FinalizeOps["run"]) => ensureFinalizerRequiredVerification(input, "branch-update", oid, repositoryId, run));
-  const verification = verify(args, candidateOid, initiallyEnabled.githubRepositoryId, ops.run);
+  const verification = await verify(args, candidateOid, initiallyEnabled.githubRepositoryId, ops.run);
   if (hasUncommittedWork(checked(ops, ["git", "-C", args.repo, ...UNCOMMITTED_WORK_STATUS_ARGS]))) {
     throw new Error("branch-update worktree is dirty after checks");
   }
@@ -121,8 +121,8 @@ function finalizeBranchUpdate(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     throw new Error("branch-update HEAD changed during checks");
   }
 
-  const guardAndPush = (enabled: EnabledProject, recheck: () => void = () => {}) => {
-    verify(args, candidateOid, enabled.githubRepositoryId, ops.run);
+  const guardAndPush = async (enabled: EnabledProject, recheck: () => void = () => {}) => {
+    await verify(args, candidateOid, enabled.githubRepositoryId, ops.run);
     assertAuthorizedSource(
       { projectRepo: args.projectRepo, worktree: args.repo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt, remote: args.remote, branch: args.branch },
       enabled,
@@ -234,13 +234,13 @@ function argumentValue(argv: string[], flag: string): string {
   return index >= 0 ? String(argv[index + 1] || "") : "";
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const fallbackResultFile = argumentValue(argv, "--result-file");
   let args: FinalizeArgs | undefined;
   try {
     args = parseArgs(argv);
-    const result = finalizeBranchUpdate(args);
+    const result = await finalizeBranchUpdate(args);
     writeResult(args.resultFile, result);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (result.action === "blocked") process.exitCode = 3;
@@ -264,6 +264,6 @@ function main(): void {
   }
 }
 
-if (require.main === module) main();
+if (require.main === module) void main();
 
 module.exports = { decidePushGuard, finalizeBranchUpdate, parseArgs };

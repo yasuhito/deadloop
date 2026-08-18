@@ -40,7 +40,7 @@ type FinalizeOps = {
   run(args: string[], timeoutMs?: number): CommandResult;
   loadAttemptRecord?: (args: FinalizeArgs) => JsonObject;
   assertEnabled?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }) => EnabledProject;
-  ensureVerification?: (args: FinalizeArgs, candidateOid: string, repositoryId: string, run: FinalizeOps["run"]) => JsonObject;
+  ensureVerification?: (args: FinalizeArgs, candidateOid: string, repositoryId: string, run: FinalizeOps["run"]) => Promise<JsonObject>;
 };
 
 function defaultRun(args: string[], timeoutMs?: number): CommandResult {
@@ -106,7 +106,7 @@ function decideRepairPushGuard(pr: JsonObject, expectedBranch: string, expectedH
   return { action: "push", reason: "head_unchanged" };
 }
 
-function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): JsonObject {
+async function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defaultRun }): Promise<JsonObject> {
   const record = ops.loadAttemptRecord
     ? ops.loadAttemptRecord(args)
     : readAttemptRecord(canonicalAttemptLocation({ stateDir: args.stateDir, attemptRecord: args.attemptRecord }).runDir);
@@ -131,7 +131,7 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
   const initiallyEnabled = ops.assertEnabled ? ops.assertEnabled(project) : assertLocallyEnabled(project);
   const verify = ops.ensureVerification
     || ((input: FinalizeArgs, oid: string, repositoryId: string, run: FinalizeOps["run"]) => ensureFinalizerRequiredVerification(input, "review-repair", oid, repositoryId, run));
-  const verification = verify(args, candidateOid, initiallyEnabled.githubRepositoryId, ops.run);
+  const verification = await verify(args, candidateOid, initiallyEnabled.githubRepositoryId, ops.run);
   if (hasUncommittedWork(checked(ops, ["git", "-C", args.repo, ...UNCOMMITTED_WORK_STATUS_ARGS]))) {
     throw new Error("repair worktree is dirty after checks");
   }
@@ -139,8 +139,8 @@ function finalizeReviewRepair(args: FinalizeArgs, ops: FinalizeOps = { run: defa
     throw new Error("repair HEAD changed during checks");
   }
 
-  const guardAndPush = (enabled: EnabledProject & { automationLogin?: string }, recheck: () => void = () => {}) => {
-    verify(args, candidateOid, enabled.githubRepositoryId, ops.run);
+  const guardAndPush = async (enabled: EnabledProject & { automationLogin?: string }, recheck: () => void = () => {}) => {
+    await verify(args, candidateOid, enabled.githubRepositoryId, ops.run);
     assertAuthorizedSource(
       { projectRepo: args.projectRepo, worktree: args.repo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt, remote: args.remote, branch: args.branch },
       enabled,
@@ -262,13 +262,13 @@ function argumentValue(argv: string[], flag: string): string {
   return index >= 0 ? String(argv[index + 1] || "") : "";
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const fallbackResultFile = argumentValue(argv, "--result-file");
   let args: FinalizeArgs | undefined;
   try {
     args = parseArgs(argv);
-    const result = finalizeReviewRepair(args);
+    const result = await finalizeReviewRepair(args);
     writeResult(args.resultFile, result);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (result.action === "blocked") process.exitCode = 3;
@@ -292,6 +292,6 @@ function main(): void {
   }
 }
 
-if (require.main === module) main();
+if (require.main === module) void main();
 
 module.exports = { decideRepairPushGuard, finalizeReviewRepair, parseArgs };

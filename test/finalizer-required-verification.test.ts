@@ -180,9 +180,9 @@ describe("finalizer verification subprocess outcomes", () => {
 
 for (const role of ["review-repair", "branch-update"] as const) {
   describe(`${role} required-verification conformance`, () => {
-    it("runs required verification when the success record is missing", () => {
+    it("runs required verification when the success record is missing", async () => {
       let executions = 0;
-      ensureRequiredVerificationRecord(
+      await ensureRequiredVerificationRecord(
         { attempt: attempt(role), currentContract: contract, targetCommit: candidate, record: undefined },
         {
           execute: () => { executions += 1; return passedRecord(); },
@@ -194,9 +194,9 @@ for (const role of ["review-repair", "branch-update"] as const) {
       expect(executions).toBe(1);
     });
 
-    it("does not accept command-and-result legacy evidence", () => {
+    it("does not accept command-and-result legacy evidence", async () => {
       let executions = 0;
-      ensureRequiredVerificationRecord(
+      await ensureRequiredVerificationRecord(
         { attempt: attempt(role), currentContract: contract, targetCommit: candidate, record: { command: "npm test", result: "passed" } },
         {
           execute: () => { executions += 1; return passedRecord(); },
@@ -208,9 +208,9 @@ for (const role of ["review-repair", "branch-update"] as const) {
       expect(executions).toBe(1);
     });
 
-    it("reuses an exact authenticated success record", () => {
+    it("reuses an exact authenticated success record", async () => {
       let executions = 0;
-      ensureRequiredVerificationRecord(
+      await ensureRequiredVerificationRecord(
         { attempt: attempt(role), currentContract: contract, targetCommit: candidate, record: passedRecord() },
         {
           execute: () => { executions += 1; return passedRecord(); },
@@ -222,10 +222,10 @@ for (const role of ["review-repair", "branch-update"] as const) {
       expect(executions).toBe(0);
     });
 
-    it("reruns verification when exact-looking evidence is not authenticated", () => {
+    it("reruns verification when exact-looking evidence is not authenticated", async () => {
       let executions = 0;
       let authentications = 0;
-      ensureRequiredVerificationRecord(
+      await ensureRequiredVerificationRecord(
         { attempt: attempt(role), currentContract: contract, targetCommit: candidate, record: passedRecord() },
         {
           execute: () => { executions += 1; return passedRecord(); },
@@ -237,11 +237,11 @@ for (const role of ["review-repair", "branch-update"] as const) {
       expect(executions).toBe(1);
     });
 
-    it("persists failed evidence when a successful command fails post-check binding", () => {
+    it("persists failed evidence when a successful command fails post-check binding", async () => {
       let persisted: Record<string, unknown> | undefined;
       let message = "";
       try {
-        ensureRequiredVerificationRecord(
+        await ensureRequiredVerificationRecord(
           { attempt: attempt(role), currentContract: contract, targetCommit: candidate, record: undefined },
           {
             execute: () => passedRecord(),
@@ -257,9 +257,9 @@ for (const role of ["review-repair", "branch-update"] as const) {
       expect({ outcome: persisted?.outcome, message }).toEqual({ outcome: "failed", message: "HEAD changed during checks" });
     });
 
-    it("reruns verification when the target commit changes", () => {
+    it("reruns verification when the target commit changes", async () => {
       let executions = 0;
-      ensureRequiredVerificationRecord(
+      await ensureRequiredVerificationRecord(
         { attempt: attempt(role), currentContract: contract, targetCommit: "c".repeat(40), record: passedRecord() },
         {
           execute: () => { executions += 1; return passedRecord({ binding: { ...contract, targetCommit: "c".repeat(40) } }); },
@@ -271,9 +271,9 @@ for (const role of ["review-repair", "branch-update"] as const) {
       expect(executions).toBe(1);
     });
 
-    it("reruns verification when the record source changes", () => {
+    it("reruns verification when the record source changes", async () => {
       let executions = 0;
-      ensureRequiredVerificationRecord(
+      await ensureRequiredVerificationRecord(
         { attempt: attempt(role), currentContract: contract, targetCommit: candidate, record: passedRecord({ binding: { ...contract, source: { kind: "local", location: "/tmp/projects.json#project=demo" }, targetCommit: candidate } }) },
         {
           execute: () => { executions += 1; return passedRecord(); },
@@ -285,9 +285,9 @@ for (const role of ["review-repair", "branch-update"] as const) {
       expect(executions).toBe(1);
     });
 
-    it("reruns verification when the record base revision changes", () => {
+    it("reruns verification when the record base revision changes", async () => {
       let executions = 0;
-      ensureRequiredVerificationRecord(
+      await ensureRequiredVerificationRecord(
         { attempt: attempt(role), currentContract: contract, targetCommit: candidate, record: passedRecord({ binding: { ...contract, baseRevision: "d".repeat(40), targetCommit: candidate } }) },
         {
           execute: () => { executions += 1; return passedRecord(); },
@@ -301,53 +301,64 @@ for (const role of ["review-repair", "branch-update"] as const) {
   });
 }
 
-describe("finalizer interruption guard", () => {
-  function guardScenario(options: {
-    signal?: "SIGINT" | "SIGTERM";
-    pid?: number | null;
-    aliveFor?: number;
-  } = {}) {
-    const { guardFinalizerInterruption } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+describe("interruptible finalizer verification", () => {
+  const { withInterruptibleProjectCheck } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+
+  async function interruptedCheck(signal?: "SIGINT" | "SIGTERM") {
     const handlers = new Map<string, () => void>();
-    const killed: Array<{ pid: number; signal: string }> = [];
-    let aliveChecks = options.aliveFor ?? 0;
-    const guard = guardFinalizerInterruption("/state/check.pid", {
-      on: (signal: string, handler: () => void) => handlers.set(signal, handler),
-      off: (signal: string) => handlers.delete(signal),
-      kill: (pid: number, signal: string) => killed.push({ pid, signal }),
-      alive: () => (aliveChecks-- > 0),
-      sleep: () => {},
-      readPid: () => (options.pid === undefined ? 4242 : options.pid),
-    });
-    if (options.signal) handlers.get(options.signal)?.();
-    guard.forwardAndWait();
-    const observed = guard.observed();
-    guard.release();
-    return { observed, killed, listeners: handlers.size };
+    const forwarded: string[] = [];
+    let exit: (result: Record<string, unknown>) => void = () => {};
+    let recorded: { status: number | null; signalled: string | null; listeners: number } | undefined;
+    const pending = withInterruptibleProjectCheck(
+      ["node", "run-project-check.ts"],
+      60_000,
+      {
+        start: () => ({
+          kill: (received: string) => forwarded.push(received),
+          exited: new Promise((resolve) => { exit = resolve; }),
+        }),
+        on: (name: string, handler: () => void) => handlers.set(name, handler),
+        off: (name: string) => handlers.delete(name),
+      },
+      (result: { status: number | null }, signalled: string | null) => {
+        recorded = { status: result.status, signalled, listeners: handlers.size };
+        return "recorded";
+      },
+    );
+    if (signal) handlers.get(signal)?.();
+    const forwardedBeforeExit = [...forwarded];
+    const recordedBeforeExit = recorded;
+    exit({ status: 0, stdout: "", stderr: "", signal: null });
+    await pending;
+    return { forwardedBeforeExit, recordedBeforeExit, recorded, listeners: handlers.size };
   }
 
-  it("records the signal that interrupted the finalizer", () => {
-    expect(guardScenario({ signal: "SIGTERM" }).observed).toBe("SIGTERM");
+  it("forwards the signal to the checker while it is still running", async () => {
+    expect((await interruptedCheck("SIGTERM")).forwardedBeforeExit).toEqual(["SIGTERM"]);
   });
 
-  it("forwards the observed signal to the published checker pid", () => {
-    expect(guardScenario({ signal: "SIGTERM" }).killed).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+  it("waits for the checker to exit before recording the run", async () => {
+    expect((await interruptedCheck("SIGTERM")).recordedBeforeExit).toBeUndefined();
   });
 
-  it("waits for the checker to exit before returning", () => {
-    expect(guardScenario({ signal: "SIGINT", aliveFor: 3 }).killed).toHaveLength(1);
+  it("records the signal that interrupted the finalizer", async () => {
+    expect((await interruptedCheck("SIGINT")).recorded?.signalled).toBe("SIGINT");
   });
 
-  it("forwards nothing when no signal arrived", () => {
-    expect(guardScenario().killed).toHaveLength(0);
+  it("discards the checker verdict of a signaled run", async () => {
+    expect((await interruptedCheck("SIGTERM")).recorded?.status).toBeNull();
   });
 
-  it("tolerates a missing checker pid file", () => {
-    expect(guardScenario({ signal: "SIGTERM", pid: null }).killed).toHaveLength(0);
+  it("keeps its signal handlers installed until the evidence is recorded", async () => {
+    expect((await interruptedCheck("SIGTERM")).recorded?.listeners).toBe(2);
   });
 
-  it("releases its signal handlers", () => {
-    expect(guardScenario({ signal: "SIGTERM" }).listeners).toBe(0);
+  it("forwards nothing when no signal arrived", async () => {
+    expect((await interruptedCheck()).forwardedBeforeExit).toHaveLength(0);
+  });
+
+  it("releases its signal handlers", async () => {
+    expect((await interruptedCheck("SIGTERM")).listeners).toBe(0);
   });
 });
 

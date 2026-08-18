@@ -407,20 +407,20 @@ When("deadloop starts the review repair", function (this: RecoveryWorld) {
   this.result = repairDispatch(this.case);
 });
 
-When("The pull request head changes immediately before push", function (this: RecoveryWorld) {
+When("The pull request head changes immediately before push", async function (this: RecoveryWorld) {
   this.commands = [];
-  if (this.case === "repair-finalize") this.result = repairFinalizer(this.commands, base);
-  if (this.case === "branch-update-finalize") this.result = branchUpdateFinalizer(this.commands, base);
+  if (this.case === "repair-finalize") this.result = await repairFinalizer(this.commands, base);
+  if (this.case === "branch-update-finalize") this.result = await branchUpdateFinalizer(this.commands, base);
 });
 
-When("deadloop completes the repair", function (this: RecoveryWorld) {
+When("deadloop completes the repair", async function (this: RecoveryWorld) {
   this.commands = [];
-  this.result = repairFinalizer(this.commands, head);
+  this.result = await repairFinalizer(this.commands, head);
 });
 
-When("deadloop completes conflict recovery", function (this: RecoveryWorld) {
+When("deadloop completes conflict recovery", async function (this: RecoveryWorld) {
   this.commands = [];
-  this.result = branchUpdateFinalizer(this.commands, head, this.case === "cross-repository-branch-update");
+  this.result = await branchUpdateFinalizer(this.commands, head, this.case === "cross-repository-branch-update");
 });
 
 Then("deadloop requests a branch update instead of recovering from local state", function (this: RecoveryWorld) {

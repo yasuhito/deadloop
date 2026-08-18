@@ -25,10 +25,10 @@ type SafetyWorld = {
   trustRoot?: string;
 };
 
-function finalize(world: SafetyWorld): void {
+async function finalize(world: SafetyWorld): Promise<void> {
   const commands: string[][] = [];
   world.commands = commands;
-  world.finalizeResult = finalizeBranchUpdate(
+  world.finalizeResult = await finalizeBranchUpdate(
     {
       repo: "/worktree",
       projectId: "demo",
@@ -149,28 +149,28 @@ Given("The pull request head was verified before the update", function (this: Sa
   this.crossRepository = false;
 });
 
-When("The pull request head changes after the project check", function (this: SafetyWorld) {
+When("The pull request head changes after the project check", async function (this: SafetyWorld) {
   this.changeHeadAfterChecks = true;
-  finalize(this);
+  await finalize(this);
 });
 
 Given("The pull request comes from another repository", function (this: SafetyWorld) {
   this.crossRepository = true;
 });
 
-When("Tracked changes appear in the worktree after the project check", function (this: SafetyWorld) {
+When("Tracked changes appear in the worktree after the project check", async function (this: SafetyWorld) {
   this.trackedChangesAfterChecks = true;
   try {
-    finalize(this);
+    await finalize(this);
   } catch (error) {
     if (error instanceof Error && error.message.includes("worktree is dirty")) return;
     throw error;
   }
 });
 
-When("deadloop attempts to complete the branch update", function (this: SafetyWorld) {
+When("deadloop attempts to complete the branch update", async function (this: SafetyWorld) {
   try {
-    finalize(this);
+    await finalize(this);
   } catch (error) {
     if (this.trackedChangesAfterChecks && error instanceof Error && error.message.includes("worktree is dirty")) return;
     throw error;

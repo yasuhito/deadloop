@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +9,8 @@ const { createPreparedAttempt } = require("../src/attempt-lifecycle-runtime.cjs"
 const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
 const { finalizeBranchUpdate } = require("../extensions/deadloop/automations/pr-branch-update-finalize.ts");
 const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
+
+type JsonObject = Record<string, any>;
 
 const sandboxes: string[] = [];
 const branch = "agent/issue-1";
@@ -48,7 +50,7 @@ function fixture() {
   return { repo, remote, rootOid, expectedHead, advancedOid, configPath };
 }
 
-function runRace(finalizer: "repair" | "branch-update", race: "advance" | "delete" | "rewind") {
+async function runRace(finalizer: "repair" | "branch-update", race: "advance" | "delete" | "rewind") {
   const { repo, remote, rootOid, expectedHead, advancedOid, configPath } = fixture();
   const stateDir = path.dirname(repo);
   const runDir = path.join(stateDir, "runs", "attempt");
@@ -112,8 +114,8 @@ function runRace(finalizer: "repair" | "branch-update", race: "advance" | "delet
     assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot" }),
   };
   const result = finalizer === "repair"
-    ? finalizeReviewRepair(common, ops)
-    : finalizeBranchUpdate({ ...common, expectedBase: rootOid }, ops);
+    ? await finalizeReviewRepair(common, ops)
+    : await finalizeBranchUpdate({ ...common, expectedBase: rootOid }, ops);
   let remoteHead = "";
   try {
     remoteHead = execFileSync("git", ["--git-dir", remote, "rev-parse", "--verify", ref], { encoding: "utf8" }).trim();
@@ -141,7 +143,13 @@ describe("finalizer exact-head pushes against real remotes", () => {
     expect({ status: result.status, receipt: JSON.parse(readFileSync(resultFile, "utf8")).action }).toEqual({ status: 2, receipt: "blocked" });
   });
 
-  function runRenderedRepairFinalizer() {
+  // The configured check runs inside the worktree, so its markers go to the parent directory and
+  // leave the worktree clean for the post-check.
+  const startedMarker = "check-started";
+  const completedMarker = "check-completed";
+  const SLOW_CHECK = `touch ../${startedMarker} && sleep 30 && touch ../${completedMarker}`;
+
+  function renderedRepairFinalizer(checkCommand: string) {
     const { repo, remote, rootOid, expectedHead } = fixture();
     const root = path.dirname(repo);
     const bin = path.join(root, "bin");
@@ -159,7 +167,7 @@ describe("finalizer exact-head pushes against real remotes", () => {
       autoMergeAcknowledged: false, enabled: true,
     }] }));
     writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [{
-      id: "demo", repoPath: repo, githubRepo: "owner/repo", baseBranch, checkCommand: "true",
+      id: "demo", repoPath: repo, githubRepo: "owner/repo", baseBranch, checkCommand,
     }] }));
     const gitCommand = path.join(bin, "git");
     writeFileSync(gitCommand, `#!/usr/bin/env node
@@ -180,7 +188,7 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
     const promiseFile = path.join(runDir, "promise.json");
     const contract = {
       repository: "owner/repo",
-      command: "true",
+      command: checkCommand,
       source: { kind: "local", location: `${path.join(stateDir, "projects.json")}#project=demo` },
       baseRevision: expectedHead,
     };
@@ -194,7 +202,7 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
     createPreparedAttempt(runDir, attempt);
     const automationDir = path.resolve("extensions/deadloop/automations");
     const rendered = repairWorkerPrompt("1", branch, expectedHead, [{ title: "repair", body: "repair the file" }], "attempt", promiseFile, repo, {
-      projectId: "demo", repoPath: repo, githubRepo: "owner/repo", stateDir, checkCommand: "true",
+      projectId: "demo", repoPath: repo, githubRepo: "owner/repo", stateDir, checkCommand,
       baseBranch: expectedHead, requiredVerification: contract,
       workerAgent: "pi", workerModel: "", remote: "origin", reviewLabel: "agent:review",
       blockedLabel: "agent:blocked", inProgressLabel: "agent:in-progress",
@@ -202,13 +210,76 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
     });
     const command = rendered.match(/permitted non-force push to the exact branch:\n  (.+)\n- Never edit labels/)?.[1];
     if (!command) throw new Error("rendered finalizer command was not found");
-    const result = spawnSync("bash", ["-c", command], {
-      cwd: process.cwd(), encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
-    });
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: configDir, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    return { command, env, root, runDir, remote, expectedHead };
+  }
+
+  function runRenderedRepairFinalizer() {
+    const { command, env, runDir } = renderedRepairFinalizer("true");
+    const result = spawnSync("bash", ["-c", command], { cwd: process.cwd(), encoding: "utf8", env });
     const resultFile = path.join(runDir, "finalizer-result.json");
     const receipt = existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : { action: "missing" };
     return { result, receipt };
+  }
+
+  function remoteHeadOf(remote: string): string {
+    try {
+      return execFileSync("git", ["--git-dir", remote, "rev-parse", "--verify", ref], { encoding: "utf8" }).trim();
+    } catch {
+      return "";
+    }
+  }
+
+  // A real subprocess starts the configured check on its own clock, so the scenario polls the
+  // marker that check writes; a fake timer cannot advance another process.
+  async function waitForMarker(marker: string): Promise<void> {
+    for (let waited = 0; waited < 30_000 && !existsSync(marker); waited += 50) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  type SignaledFinalizer = {
+    stoppedWithinMs: number;
+    checkCompleted: boolean;
+    checkerInterrupted: boolean;
+    record: JsonObject;
+    receipt: JsonObject;
+    remoteHead: string;
+    expectedHead: string;
+  };
+
+  /**
+   * Signal the real finalizer process while its configured check is still running.
+   *
+   * `exec` makes the rendered command replace the shell, so SIGTERM reaches the finalizer itself
+   * and the scenario observes what a signaled finalizer leaves behind.
+   */
+  async function signalRenderedRepairFinalizer(): Promise<SignaledFinalizer> {
+    const { command, env, root, runDir, remote, expectedHead } = renderedRepairFinalizer(SLOW_CHECK);
+    const finalizer = spawn("bash", ["-c", `exec ${command}`], { cwd: process.cwd(), env, stdio: "ignore" });
+    await waitForMarker(path.join(root, startedMarker));
+    const signalledAt = Date.now();
+    finalizer.kill("SIGTERM");
+    await new Promise((resolve) => finalizer.once("close", resolve));
+    const stoppedWithinMs = Date.now() - signalledAt;
+    const structuredPath = path.join(runDir, "required-verification-check-result.json");
+    const recordPath = path.join(runDir, "required-verification.json");
+    const resultFile = path.join(runDir, "finalizer-result.json");
+    return {
+      stoppedWithinMs,
+      checkCompleted: existsSync(path.join(root, completedMarker)),
+      checkerInterrupted: existsSync(structuredPath) && JSON.parse(readFileSync(structuredPath, "utf8")).interrupted === true,
+      record: existsSync(recordPath) ? JSON.parse(readFileSync(recordPath, "utf8")) : {},
+      receipt: existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : { action: "missing" },
+      remoteHead: remoteHeadOf(remote),
+      expectedHead,
+    };
+  }
+
+  let signalled: SignaledFinalizer | undefined;
+  async function signaledRepairFinalizer(): Promise<SignaledFinalizer> {
+    signalled ??= await signalRenderedRepairFinalizer();
+    return signalled;
   }
 
   it("runs the rendered repair finalizer command without an error", () => {
@@ -221,11 +292,40 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
     expect({ status: result.status, receipt: receipt.action }).toEqual({ status: 0, receipt: "pushed" });
   });
 
+  // The scenario spawns the finalizer, waits for the configured check to start, and signals it, so
+  // whichever of these runs first pays for a real process launch.
+  const SIGNALED_SCENARIO_TIMEOUT_MS = 60_000;
+
+  it("stops the configured check when the repair finalizer is signaled", async () => {
+    expect((await signaledRepairFinalizer()).checkerInterrupted).toBe(true);
+  }, SIGNALED_SCENARIO_TIMEOUT_MS);
+
+  it("does not let the configured check finish after the repair finalizer is signaled", async () => {
+    expect((await signaledRepairFinalizer()).checkCompleted).toBe(false);
+  }, SIGNALED_SCENARIO_TIMEOUT_MS);
+
+  it("stops the signaled repair finalizer long before its configured check would end", async () => {
+    expect((await signaledRepairFinalizer()).stoppedWithinMs).toBeLessThan(10_000);
+  }, SIGNALED_SCENARIO_TIMEOUT_MS);
+
+  it("persists an interrupted required-verification record for the signaled repair finalizer", async () => {
+    expect((await signaledRepairFinalizer()).record.outcome).toBe("interrupted");
+  }, SIGNALED_SCENARIO_TIMEOUT_MS);
+
+  it("does not push when the repair finalizer is signaled", async () => {
+    const signaled = await signaledRepairFinalizer();
+    expect(signaled.remoteHead).toBe(signaled.expectedHead);
+  }, SIGNALED_SCENARIO_TIMEOUT_MS);
+
+  it("writes a blocked receipt naming the interruption for the signaled repair finalizer", async () => {
+    expect((await signaledRepairFinalizer()).receipt).toMatchObject({ action: "blocked", summary: expect.stringContaining("interrupted") });
+  }, SIGNALED_SCENARIO_TIMEOUT_MS);
+
   it.each([
     ["review repair", "repair"],
     ["branch update", "branch-update"],
-  ] as const)("rejects an advancing-ancestor race during %s finalization", (_name, finalizer) => {
-    const result = runRace(finalizer, "advance");
+  ] as const)("rejects an advancing-ancestor race during %s finalization", async (_name, finalizer) => {
+    const result = await runRace(finalizer, "advance");
     expect({ action: result.action, advancedHeadRetained: result.remoteHead === result.advancedOid }).toEqual({
       action: "stale_head",
       advancedHeadRetained: true,
@@ -235,16 +335,16 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
   it.each([
     ["review repair", "repair"],
     ["branch update", "branch-update"],
-  ] as const)("does not recreate a deleted branch during %s finalization", (_name, finalizer) => {
-    const result = runRace(finalizer, "delete");
+  ] as const)("does not recreate a deleted branch during %s finalization", async (_name, finalizer) => {
+    const result = await runRace(finalizer, "delete");
     expect({ action: result.action, remoteHead: result.remoteHead }).toEqual({ action: "stale_head", remoteHead: "" });
   });
 
   it.each([
     ["review repair", "repair"],
     ["branch update", "branch-update"],
-  ] as const)("does not replace a rewound branch during %s finalization", (_name, finalizer) => {
-    const result = runRace(finalizer, "rewind");
+  ] as const)("does not replace a rewound branch during %s finalization", async (_name, finalizer) => {
+    const result = await runRace(finalizer, "rewind");
     expect({ action: result.action, rewoundHeadRetained: result.remoteHead === result.rootOid }).toEqual({
       action: "stale_head",
       rewoundHeadRetained: true,
