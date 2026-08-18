@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,9 @@ import { fixtureStateDir } from "../support/fixture-state-dir";
 const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
 const { renderRepairMarker, renderTechnicalFailureMarker, reviewResultFingerprint } = require("../../extensions/deadloop/automations/pr-review-repair-state.ts");
 const { finalizeReviewRepair } = require("../../extensions/deadloop/automations/pr-review-repair-finalize.ts");
+const { renderChangesRequestedComment } = require("../../extensions/deadloop/automations/pr-review-comments.ts");
+const { comparePrHistoryObservations } = require("../../src/pr-review-history.ts");
+const { validateCompletionReportV1 } = require("../../src/attempt-lifecycle.ts");
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const repairedHead = "cccccccccccccccccccccccccccccccccccccccc";
@@ -19,8 +23,10 @@ const findings = [{ title: "Lint contract failure", body: "Format src/a.ts", pat
 
 type RecoveryWorld = {
   case?: string;
-  result?: Record<string, unknown>;
+  result?: Record<string, any>;
   commands?: string[][];
+  error?: Error;
+  originalComment?: string;
 };
 
 function adapterEffects(result: Record<string, unknown> | undefined): any {
@@ -111,6 +117,15 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     );
     const blocked = testCase === "first-technical-failure" || testCase === "repeated-technical-failure";
     const currentHead = testCase === "repeated-repair" ? repairedHead : head;
+    const priorRequiredFindings = testCase === "repeated-repair" || testCase === "persisted-finding"
+      ? "persisted"
+      : testCase === "regressed-finding"
+        ? "regressed"
+        : testCase === "mixed-findings"
+          ? "mixed"
+          : testCase === "fourth-progress-repair"
+            ? "all_resolved"
+            : "none";
     const reportBase = {
       schemaVersion: 1, attemptId: "reviewer", role: "reviewer",
       target: { repository: "owner/repo", kind: "pull-request", number: 31 }, inputRevision: { head: currentHead },
@@ -125,9 +140,9 @@ function repairDispatch(testCase: string): Record<string, unknown> {
           outcome: "changes_requested",
           reviewedHead: currentHead,
           findings,
-          // A persisted prior finding requires human handling before repair
-          // selection; the historical marker remains evidence only.
-          priorRequiredFindings: testCase === "repeated-repair" ? "persisted" : "none",
+          // The review agent owns this semantic judgment; dispatch only maps the
+          // structured disposition to the allowed production transition.
+          priorRequiredFindings,
         },
       }));
     fs.writeFileSync(attemptRecord, JSON.stringify({
@@ -137,11 +152,20 @@ function repairDispatch(testCase: string): Record<string, unknown> {
       promptFile: path.join(runDir, "prompt.md"), promiseFile: promise,
       phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", requestEventId: "22",
     }));
-    const comments = testCase === "repeated-repair"
-      ? [{ body: renderRepairMarker(head, reviewResultFingerprint(findings)), author: { login: "deadloop-bot" } }]
-      : testCase === "repeated-technical-failure"
-        ? [{ body: renderTechnicalFailureMarker(head) }]
-        : [];
+    const priorReviewComment = {
+      body: `## Earlier review\n\nThe required finding remained.\n\n${renderRepairMarker(head, reviewResultFingerprint(findings))}`,
+      author: { login: "deadloop-bot" },
+    };
+    const comments = testCase === "repeated-repair" || testCase === "persisted-finding"
+      ? [priorReviewComment]
+      : testCase === "fourth-progress-repair"
+        ? [1, 2, 3].map((index) => ({
+            body: renderRepairMarker(String(index).repeat(40).slice(0, 40), String(index).repeat(20)),
+            author: { login: "deadloop-bot" },
+          }))
+        : testCase === "repeated-technical-failure"
+          ? [{ body: renderTechnicalFailureMarker(head) }]
+          : [];
     fs.writeFileSync(commentsFile, JSON.stringify(comments));
     const executable = (file: string, content: string) => {
       fs.writeFileSync(file, content);
@@ -253,13 +277,14 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
       observedLabels: JSON.parse(fs.readFileSync(labelsFile, "utf8")),
       observedComments: JSON.parse(fs.readFileSync(commentsFile, "utf8")),
       retryCycleEffects,
+      originalComment: comments[0]?.body,
     };
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
-function finalizerOps(commands: string[][], actualHead = head, isCrossRepository = false) {
+function finalizerOps(commands: string[][], actualHead = head, isCrossRepository = false, checkFails = false) {
   return {
     loadAttemptRecord: () => ({
       role: "review-repair", repository: "owner/repo", target: { kind: "pull-request", number: 31 },
@@ -268,6 +293,9 @@ function finalizerOps(commands: string[][], actualHead = head, isCrossRepository
     assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot" }),
     run: (args: string[]) => {
       commands.push(args);
+      if (checkFails && args[0] === "node" && args.some((argument) => argument.endsWith("run-project-check.ts"))) {
+        return { status: 1, stdout: "", stderr: "required verification failed" };
+      }
       if (args.includes("get-url")) return { status: 0, stdout: "https://github.com/owner/repo.git\n", stderr: "" };
       if (args.includes("ls-remote")) return { status: 0, stdout: `${head}\trefs/heads/${branch}\n`, stderr: "" };
       if (args.includes("--git-common-dir")) return { status: 0, stdout: "/common\n", stderr: "" };
@@ -289,7 +317,7 @@ function finalizerOps(commands: string[][], actualHead = head, isCrossRepository
   };
 }
 
-function repairFinalizer(commands: string[][], actualHead = head) {
+function repairFinalizer(commands: string[][], actualHead = head, checkFails = false) {
   return finalizeReviewRepair(
     {
       repo: "/worktree",
@@ -308,7 +336,7 @@ function repairFinalizer(commands: string[][], actualHead = head) {
       blockedLabel: "agent:blocked",
       resultFile: "/state/runs/reviewer/finalizer-result.json",
     },
-    finalizerOps(commands, actualHead, false),
+    finalizerOps(commands, actualHead, false, checkFails),
   );
 }
 
@@ -348,8 +376,102 @@ Given("Conflict recovery changed a repaired pull request head", function (this: 
   this.case = "resolved-repaired-conflict";
 });
 
+Given("An approved review contains only advisory observations", function (this: RecoveryWorld) {
+  this.result = {
+    schemaVersion: 1,
+    attemptId: "reviewer",
+    role: "reviewer",
+    target: { repository: "owner/repo", kind: "pull-request", number: 31 },
+    inputRevision: { head },
+    status: "complete",
+    summary: "The review is complete. No required correction remains. One optional observation is recorded.",
+    result: {
+      outcome: "approved",
+      reviewedHead: head,
+      findings: [],
+      advisories: [{ title: "Clearer name", body: "A more descriptive name would help readers." }],
+    },
+    evidence: { reviewed: ["complete PR history"] },
+  };
+});
+
+Given("An approved review contains a required finding", function (this: RecoveryWorld) {
+  this.result = {
+    schemaVersion: 1,
+    attemptId: "reviewer",
+    role: "reviewer",
+    target: { repository: "owner/repo", kind: "pull-request", number: 31 },
+    inputRevision: { head },
+    status: "complete",
+    summary: "The review is complete. A required correction remains. Approval is therefore invalid.",
+    result: { outcome: "approved", reviewedHead: head, findings },
+    evidence: { reviewed: ["complete PR history"] },
+  };
+});
+
 Given("A pull request has actionable review findings for the first time", function (this: RecoveryWorld) {
   this.case = "first-repair";
+});
+
+Given("A pull request has three historical repairs and only new required findings", function (this: RecoveryWorld) {
+  this.case = "fourth-progress-repair";
+});
+
+Given("A prior required finding persists after repair", function (this: RecoveryWorld) {
+  this.case = "persisted-finding";
+});
+
+Given("A resolved required finding regresses after repair", function (this: RecoveryWorld) {
+  this.case = "regressed-finding";
+});
+
+Given("Prior and new required findings are mixed after repair", function (this: RecoveryWorld) {
+  this.case = "mixed-findings";
+});
+
+Given("A review result has an internal finding fingerprint", function (this: RecoveryWorld) {
+  const reviewFingerprint = "1234567890abcdef1234";
+  this.result = {
+    reviewFingerprint,
+    comment: renderChangesRequestedComment({
+      headOid: head,
+      reviewFingerprint,
+      priorRequiredFindings: "none",
+      findings,
+    }),
+  };
+});
+
+Given("A completed review has a recorded pull request history", function (this: RecoveryWorld) {
+  const history = {
+    pullRequest: { number: 31, state: "open", headRef: branch, headSha: head, baseRef: "main", baseSha: base },
+    commits: [{ sha: head }],
+    diff: { sha256: createHash("sha256").update("diff\n").digest("hex"), bytes: 5 },
+    conversationComments: [],
+    submittedReviews: [],
+    inlineReviewComments: [],
+  };
+  this.result = {
+    expected: {
+      schemaVersion: 1,
+      repository: "owner/repo",
+      pullRequestNumber: 31,
+      revision: createHash("sha256").update(`${JSON.stringify(history)}\n`).digest("hex"),
+      history,
+      evidence: { exactDiff: "diff\n" },
+    },
+  };
+});
+
+Given("The English and Japanese public documentation", function (this: RecoveryWorld) {
+  this.result = {
+    english: fs.readFileSync("README.md", "utf8"),
+    japanese: fs.readFileSync("README.ja.md", "utf8"),
+  };
+});
+
+Given("A verified repair necessarily changes twenty-one files", function (this: RecoveryWorld) {
+  this.case = "broad-repair-finalize";
 });
 
 Given("The same review findings remain on the new head after repair", function (this: RecoveryWorld) {
@@ -392,9 +514,56 @@ When("deadloop checks the pull request", function (this: RecoveryWorld) {
   if (this.case === "repaired-head") this.result = reviewerDriver("review-repair-pushed.json");
 });
 
+When("deadloop validates the review result", function (this: RecoveryWorld) {
+  try {
+    this.result = { validated: validateCompletionReportV1(this.result) };
+  } catch (error) {
+    this.error = error as Error;
+  }
+});
+
 When("deadloop processes the review result", function (this: RecoveryWorld) {
   if (!this.case) throw new Error("review recovery case is missing");
   this.result = repairDispatch(this.case);
+});
+
+When("deadloop renders the review comment", function (this: RecoveryWorld) {
+  // Rendering already occurred through the production comment seam in Given.
+});
+
+When("A conversation comment is added after review", function (this: RecoveryWorld) {
+  const expected = this.result?.expected;
+  const actualHistory = {
+    ...expected.history,
+    conversationComments: [{ id: "1", nodeId: "", author: "human", body: "New evidence", createdAt: "x", updatedAt: "x" }],
+  };
+  const actual = {
+    ...expected,
+    revision: createHash("sha256").update(`${JSON.stringify(actualHistory)}\n`).digest("hex"),
+    history: actualHistory,
+  };
+  this.result = comparePrHistoryObservations(expected, actual);
+});
+
+When("The review repair contracts are compared", function (this: RecoveryWorld) {
+  const english = String(this.result?.english || "");
+  const japanese = String(this.result?.japanese || "");
+  this.result = {
+    english: {
+      advisories: english.includes("may still include advisory observations"),
+      fourthRepair: english.includes("a fourth or later repair remains eligible"),
+      appendOnly: english.includes("chronological and append-only"),
+      untrustedEvidence: english.includes("untrusted evidence"),
+      requiredVerification: english.includes("Required-verification failure still blocks a repair push"),
+    },
+    japanese: {
+      advisories: japanese.includes("任意の参考所見は残せます"),
+      fourthRepair: japanese.includes("四回目以降の修復も実行できます"),
+      appendOnly: japanese.includes("投稿済みコメントを編集しません"),
+      untrustedEvidence: japanese.includes("信頼できない証拠"),
+      requiredVerification: japanese.includes("必須検証に失敗した修復は push しません"),
+    },
+  };
 });
 
 When("deadloop starts the review repair", function (this: RecoveryWorld) {
@@ -413,9 +582,46 @@ When("deadloop completes the repair", function (this: RecoveryWorld) {
   this.result = repairFinalizer(this.commands, head);
 });
 
+When("Required verification fails during repair completion", function (this: RecoveryWorld) {
+  this.commands = [];
+  try {
+    this.result = repairFinalizer(this.commands, head, true);
+  } catch (error) {
+    this.error = error as Error;
+  }
+});
+
 When("deadloop completes conflict recovery", function (this: RecoveryWorld) {
   this.commands = [];
   this.result = branchUpdateFinalizer(this.commands, head, this.case === "cross-repository-branch-update");
+});
+
+Then("The review result is accepted as approved", function (this: RecoveryWorld) {
+  assert.equal(this.result?.validated?.result?.outcome, "approved");
+});
+
+Then("The approved review result is rejected", function (this: RecoveryWorld) {
+  assert.match(String(this.error?.message || ""), /approved requires no required findings/);
+});
+
+Then("The human-readable review comment contains no finding fingerprint", function (this: RecoveryWorld) {
+  const visible = String(this.result?.comment || "").replace(/<!--[\s\S]*?-->/g, "");
+  assert.equal(visible.includes(String(this.result?.reviewFingerprint || "")), false);
+});
+
+Then("The completed review history is stale", function (this: RecoveryWorld) {
+  assert.equal(this.result?.kind, "stale");
+});
+
+Then("Both public documents describe the review-history repair contract", function (this: RecoveryWorld) {
+  assert.deepEqual(this.result, {
+    english: { advisories: true, fourthRepair: true, appendOnly: true, untrustedEvidence: true, requiredVerification: true },
+    japanese: { advisories: true, fourthRepair: true, appendOnly: true, untrustedEvidence: true, requiredVerification: true },
+  });
+});
+
+Then("deadloop does not edit the earlier review comment", function (this: RecoveryWorld) {
+  assert.equal(this.result?.observedComments?.[0]?.body, this.result?.originalComment);
 });
 
 Then("deadloop requests a branch update instead of recovering from local state", function (this: RecoveryWorld) {
