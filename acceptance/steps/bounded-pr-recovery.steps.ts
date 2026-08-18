@@ -126,9 +126,9 @@ function repairDispatch(testCase: string): Record<string, unknown> {
           outcome: "changes_requested",
           reviewedHead: currentHead,
           findings,
-          // The repeated-repair case keeps reporting repair progress, so the
-          // fingerprint guard stays the thing that stops the second repair.
-          priorRequiredFindings: testCase === "repeated-repair" ? "all_resolved" : "none",
+          // A persisted prior finding requires human handling before repair
+          // selection; the historical marker remains evidence only.
+          priorRequiredFindings: testCase === "repeated-repair" ? "persisted" : "none",
         },
       }));
     // Every reviewer launch fixes a required-verification contract, and this fixture's policy
@@ -475,6 +475,12 @@ const PR_REQUEST_LABELS = ["agent:update-branch", "agent:implement", "agent:revi
 
 Then("deadloop leaves no waiting request on the pull request", function (this: RecoveryWorld) {
   assert.equal(observedLabels(this.result).some((label) => PR_REQUEST_LABELS.includes(label)), false);
+});
+
+const AGENT_WORKFLOW_LABELS = [...PR_REQUEST_LABELS, "agent:in-progress", "agent:blocked"];
+
+Then("deadloop leaves no agent workflow label on the pull request", function (this: RecoveryWorld) {
+  assert.equal(observedLabels(this.result).some((label) => AGENT_WORKFLOW_LABELS.includes(label)), false);
 });
 
 Then("deadloop escalates the pull request for human handling", function (this: RecoveryWorld) {

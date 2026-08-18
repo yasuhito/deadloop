@@ -998,16 +998,16 @@ describe("review repair dispatch integration", () => {
     expect(runV1ChangesRequestedTwice({ attempts: 1 }).labelsPreserved).toEqual(["agent:in-progress"]);
   });
 
-  it("human-blocks when a third attempt appears before a fourth launch", () => {
+  it("launches a fourth progress-qualified repair when a third historical marker appears before launch", () => {
     const result = runV1ChangesRequestedTwice({ attempts: 1, injectCumulativeLimitRace: true });
 
     expect({ action: result.actions[0], launches: result.launches }).toEqual({
-      action: "review_repair_limit_reached",
-      launches: 0,
+      action: "review_repair_monitor_request",
+      launches: 1,
     });
   });
 
-  it("stops active review work when history changes before a cumulative-limit block", () => {
+  it("stops active review work when history changes before repair launch", () => {
     const result = runV1ChangesRequestedTwice({ attempts: 1, injectBlockingHistoryRace: true });
 
     expect({ action: result.actions[0], launches: result.launches }).toEqual({
