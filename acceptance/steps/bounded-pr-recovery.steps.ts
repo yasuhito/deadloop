@@ -26,7 +26,7 @@ type RecoveryWorld = {
   result?: Record<string, any>;
   commands?: string[][];
   error?: Error;
-  originalComment?: string;
+  originalComments?: Array<{ id: number; body: string }>;
 };
 
 function adapterEffects(result: Record<string, unknown> | undefined): any {
@@ -153,11 +153,17 @@ function repairDispatch(testCase: string): Record<string, unknown> {
       phase: "workspace_closed", lastSuccessfulPhase: "workspace_closed", requestEventId: "22",
     }));
     const priorReviewComment = {
+      id: 101,
       body: `## Earlier review\n\nThe required finding remained.\n\n${renderRepairMarker(head, reviewResultFingerprint(findings))}`,
       author: { login: "deadloop-bot" },
     };
+    const priorRepairResultComment = {
+      id: 102,
+      body: `## Automatic review repair completed\n\n<!-- deadloop:review-repair-result key=1234567890abcdef1234 head=${repairedHead} -->`,
+      author: { login: "deadloop-bot" },
+    };
     const comments = testCase === "repeated-repair" || testCase === "persisted-finding"
-      ? [priorReviewComment]
+      ? [priorReviewComment, priorRepairResultComment]
       : testCase === "fourth-progress-repair"
         ? [1, 2, 3].map((index) => ({
             body: renderRepairMarker(String(index).repeat(40).slice(0, 40), String(index).repeat(20)),
@@ -176,6 +182,8 @@ function repairDispatch(testCase: string): Record<string, unknown> {
       `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
+const methodFlag = args.includes("--method") ? "--method" : "-X";
+const mutationMethod = args[args.indexOf(methodFlag) + 1];
 if (args[0] === "api" && args[1] === "user") process.stdout.write("deadloop-bot\\n");
 else if (args.some((arg) => arg.endsWith("/events"))) process.stdout.write(JSON.stringify([[{id:22,event:"labeled",created_at:"2026-07-20T10:00:00Z",label:{name:"agent:review"}}]]));
 else if (args.some((arg) => arg.endsWith("/comments"))) process.stdout.write(JSON.stringify([[]]));
@@ -197,7 +205,27 @@ else {
   }
   if (args[0] === "pr" && args[1] === "comment") {
     const comments = JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"));
-    comments.push({body: args[args.indexOf("--body") + 1], author: {login: "deadloop-bot"}});
+    const body = args[args.indexOf("--body") + 1];
+    if (args.includes("--delete-last")) comments.pop();
+    else if (args.includes("--edit-last")) comments[comments.length - 1].body = body;
+    else comments.push({id: 1000 + comments.length, body, author: {login: "deadloop-bot"}});
+    fs.writeFileSync(process.env.TEST_COMMENTS_FILE, JSON.stringify(comments));
+  }
+  if (args[0] === "api" && ["PATCH", "PUT", "DELETE"].includes(mutationMethod)) {
+    const comments = JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"));
+    const endpoint = args.find(arg => /issues\\/comments\\/\\d+$/.test(arg));
+    const commentId = Number(endpoint && endpoint.split("/").pop());
+    const index = comments.findIndex(comment => comment.id === commentId);
+    if (index >= 0 && mutationMethod === "DELETE") comments.splice(index, 1);
+    else if (index >= 0) {
+      const bodyField = args.find(arg => arg.startsWith("body="));
+      comments[index].body = bodyField ? bodyField.slice("body=".length) : "edited through API";
+    }
+    fs.writeFileSync(process.env.TEST_COMMENTS_FILE, JSON.stringify(comments));
+  }
+  if (args[0] === "api" && args[1] === "graphql" && /(?:update|delete)IssueComment/.test(args.join(" "))) {
+    const comments = JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"));
+    if (comments.length > 0) comments[comments.length - 1].body = "mutated through GraphQL";
     fs.writeFileSync(process.env.TEST_COMMENTS_FILE, JSON.stringify(comments));
   }
   fs.appendFileSync(process.env.TEST_GITHUB_LOG, args.join(" ") + "\\n");
@@ -277,14 +305,21 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
       observedLabels: JSON.parse(fs.readFileSync(labelsFile, "utf8")),
       observedComments: JSON.parse(fs.readFileSync(commentsFile, "utf8")),
       retryCycleEffects,
-      originalComment: comments[0]?.body,
+      originalComments: comments.flatMap((comment) =>
+        "id" in comment ? [{ id: Number(comment.id), body: comment.body }] : []),
     };
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
-function finalizerOps(commands: string[][], actualHead = head, isCrossRepository = false, checkFails = false) {
+function finalizerOps(
+  commands: string[][],
+  actualHead = head,
+  isCrossRepository = false,
+  checkFails = false,
+  changedFiles: string[] = [],
+) {
   return {
     loadAttemptRecord: () => ({
       role: "review-repair", repository: "owner/repo", target: { kind: "pull-request", number: 31 },
@@ -295,6 +330,9 @@ function finalizerOps(commands: string[][], actualHead = head, isCrossRepository
       commands.push(args);
       if (checkFails && args[0] === "node" && args.some((argument) => argument.endsWith("run-project-check.ts"))) {
         return { status: 1, stdout: "", stderr: "required verification failed" };
+      }
+      if (args.includes("--name-only") && (args.includes("diff") || args.includes("diff-tree"))) {
+        return { status: 0, stdout: changedFiles.map((file) => `${file}\n`).join(""), stderr: "" };
       }
       if (args.includes("get-url")) return { status: 0, stdout: "https://github.com/owner/repo.git\n", stderr: "" };
       if (args.includes("ls-remote")) return { status: 0, stdout: `${head}\trefs/heads/${branch}\n`, stderr: "" };
@@ -317,7 +355,7 @@ function finalizerOps(commands: string[][], actualHead = head, isCrossRepository
   };
 }
 
-function repairFinalizer(commands: string[][], actualHead = head, checkFails = false) {
+function repairFinalizer(commands: string[][], actualHead = head, checkFails = false, changedFiles: string[] = []) {
   return finalizeReviewRepair(
     {
       repo: "/worktree",
@@ -336,7 +374,7 @@ function repairFinalizer(commands: string[][], actualHead = head, checkFails = f
       blockedLabel: "agent:blocked",
       resultFile: "/state/runs/reviewer/finalizer-result.json",
     },
-    finalizerOps(commands, actualHead, false, checkFails),
+    finalizerOps(commands, actualHead, false, checkFails, changedFiles),
   );
 }
 
@@ -579,7 +617,10 @@ When("The pull request head changes immediately before push", function (this: Re
 
 When("deadloop completes the repair", function (this: RecoveryWorld) {
   this.commands = [];
-  this.result = repairFinalizer(this.commands, head);
+  const changedFiles = this.case === "broad-repair-finalize"
+    ? Array.from({ length: 21 }, (_value, index) => `src/repair-${index + 1}.ts`)
+    : [];
+  this.result = repairFinalizer(this.commands, head, false, changedFiles);
 });
 
 When("Required verification fails during repair completion", function (this: RecoveryWorld) {
@@ -620,8 +661,14 @@ Then("Both public documents describe the review-history repair contract", functi
   });
 });
 
-Then("deadloop does not edit the earlier review comment", function (this: RecoveryWorld) {
-  assert.equal(this.result?.observedComments?.[0]?.body, this.result?.originalComment);
+Then("deadloop does not edit earlier review or repair-result comments", function (this: RecoveryWorld) {
+  const observedById = new Map(
+    (this.result?.observedComments || []).map((comment: { id: number; body: string }) => [comment.id, comment.body]),
+  );
+  assert.deepEqual(
+    this.result?.originalComments?.map((comment) => ({ id: comment.id, body: observedById.get(comment.id) })),
+    this.result?.originalComments,
+  );
 });
 
 Then("deadloop requests a branch update instead of recovering from local state", function (this: RecoveryWorld) {

@@ -96,7 +96,7 @@ Handle review findings and conflicts safely without arbitrary repair-count or ch
 
 * Given A prior required finding persists after repair
 * When deadloop processes the review result
-* Then deadloop does not edit the earlier review comment
+* Then deadloop does not edit earlier review or repair-result comments
 
 ## Scenario: Keep finding identifiers out of human-readable review text
 
