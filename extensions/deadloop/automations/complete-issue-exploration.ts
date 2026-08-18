@@ -268,6 +268,10 @@ function completeExplorationLocked(args: JsonObject, command: ReturnType<typeof 
       requestEventId: record.agentRequest.eventId,
       inProgressLabel: String(args.inProgressLabel),
       automationLogin: String(enabled.automationLogin || ""),
+      automationLogins: [...new Set([
+        ...String(args.automationLogins || "").split(",").map((value: string) => value.trim().toLowerCase()),
+        String(enabled.automationLogin || "").trim().toLowerCase(),
+      ].filter(Boolean))],
       attemptId: record.attemptId,
       persistGithub: () => { record = transitionPersistedAttempt(runDir, "github_persisted"); },
     };

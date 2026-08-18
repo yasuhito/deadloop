@@ -94,6 +94,10 @@ function reconcileLocked(
       github,
       repository: String(record.repository),
       issueNumber: Number(record.target.number),
+      automationLogins: [...new Set([
+        ...String(args.automationLogins || "").split(",").map((value: string) => value.trim().toLowerCase()),
+        String(enabled.automationLogin || "").trim().toLowerCase(),
+      ].filter(Boolean))],
       requestLabels: [String(args.exploreLabel), String(args.implementLabel)],
       requestLabel: String(record.agentRequest.label),
       requestEventId: String(record.agentRequest.eventId),

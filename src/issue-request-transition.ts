@@ -19,6 +19,7 @@ type ConsumeIssueRequestInput = {
   inProgressLabel: string;
   blockedLabel: string;
   automationLogin: string;
+  automationLogins: string[];
   attemptId: string;
   persistConsumed: () => void;
 };
@@ -40,6 +41,7 @@ type PersistSuccessfulExplorationInput = {
   requestEventId: string;
   inProgressLabel: string;
   automationLogin: string;
+  automationLogins: string[];
   attemptId: string;
   resultBody: string;
   persistGithub: () => void;
@@ -53,6 +55,20 @@ type PersistFailedExplorationInput = Omit<PersistSuccessfulExplorationInput, "re
 
 function eventId(event: JsonObject | null | undefined): string {
   return String(event?.id || event?.node_id || "");
+}
+
+/**
+ * Answer whether an authorized Automation host wrote this event.
+ *
+ * A repository may be served by a fleet of hosts with different GitHub identities, all listed in the
+ * project's authorized `automationLogins`. Attributing a timeline event to deadloop therefore means
+ * membership in that set, not equality with the identity of the host reading it: one host must
+ * recognize a peer's consumption and active state to arbitrate against it. A person's event belongs
+ * to no authorized identity and stays foreign.
+ */
+function authorizedAutomationEvent(event: JsonObject | null | undefined, automationLogins: string[]): boolean {
+  const login = String(event?.actor?.login || "").toLowerCase();
+  return Boolean(login) && automationLogins.some((authorized) => authorized.trim().toLowerCase() === login);
 }
 
 function eventTime(event: JsonObject): number {
@@ -211,7 +227,7 @@ function automationAuthoredActiveBlock(
   const latest = labelEvent(observation.events, input.blockedLabel);
   return observation.labels.has(input.blockedLabel)
     && String(latest?.event || "").toLowerCase() === "labeled"
-    && String(latest?.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase();
+    && authorizedAutomationEvent(latest, input.automationLogins);
 }
 
 function blockAmbiguousConsumption(
@@ -306,7 +322,22 @@ function trustedExplorationResultComment(
   return trustedExactComment(comments, input.automationLogin, explorationResultBody(input));
 }
 
-function observeExplorationCompletion(input: PersistSuccessfulExplorationInput | PersistFailedExplorationInput) {
+type ExplorationCompletionObservation = {
+  events: JsonObject[];
+  labels: Set<string>;
+  comments: JsonObject[];
+};
+
+type OwnedExplorationActiveState = {
+  request: JsonObject;
+  activation: JsonObject;
+  active: boolean;
+  removed: boolean;
+};
+
+function observeExplorationCompletion(
+  input: PersistSuccessfulExplorationInput | PersistFailedExplorationInput,
+): ExplorationCompletionObservation {
   const events = input.github.listIssueTimelineEvents(input.repository, input.issueNumber);
   const labels = new Set(input.github.listIssueLabels(input.repository, input.issueNumber).map(labelName).filter(Boolean));
   const comments = input.github.listIssueComments(input.repository, input.issueNumber);
@@ -314,9 +345,9 @@ function observeExplorationCompletion(input: PersistSuccessfulExplorationInput |
 }
 
 function ownedActiveState(
-  observation: ReturnType<typeof observeExplorationCompletion>,
+  observation: ExplorationCompletionObservation,
   input: PersistSuccessfulExplorationInput | PersistFailedExplorationInput,
-): { request: JsonObject; activation: JsonObject; active: boolean; removed: boolean } | null {
+): OwnedExplorationActiveState | null {
   const ordered = [...observation.events].sort(compareIssueTimelineEvents);
   const request = ordered.find((event) => eventId(event) === input.requestEventId
     && String(event.event || "").toLowerCase() === "labeled"
@@ -331,7 +362,7 @@ function ownedActiveState(
     compareIssueTimelineEvents(event, consumed) > 0
     && String(event.event || "").toLowerCase() === "labeled"
     && String(event.label?.name || "") === input.inProgressLabel
-    && String(event.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase(),
+    && authorizedAutomationEvent(event, input.automationLogins),
   );
   if (!request || !consumed || !activation) return null;
   const nextActiveStateEvent = ordered.find((event) =>
@@ -362,9 +393,30 @@ function failedExplorationBody(input: PersistFailedExplorationInput): string {
   ].join("\n");
 }
 
-function terminalBlockEvent(
-  observation: ReturnType<typeof observeExplorationCompletion>,
-  activeState: NonNullable<ReturnType<typeof ownedActiveState>>,
+/**
+ * Name this attempt's terminal block only while it is the live, newest stop on the Issue.
+ *
+ * The recorded block is evidence that a stop was written; it is not proof that the stop is still
+ * visible. A block removed between its addition and the next observation would otherwise keep being
+ * treated as terminal, so completion would clear the requests, release the active state, and then
+ * fail its final proof on every retry, leaving an Issue with no workflow label at all. The live
+ * block is also the request cutoff, which matches how recovery reads the newest block event.
+ */
+function liveTerminalBlockEvent(
+  observation: ExplorationCompletionObservation,
+  activeState: OwnedExplorationActiveState,
+  input: PersistFailedExplorationInput,
+): JsonObject | null {
+  if (!observation.labels.has(input.blockedLabel)) return null;
+  const latest = labelEvent(observation.events, input.blockedLabel);
+  return latest && compareIssueTimelineEvents(latest, activeState.activation) > 0
+    && String(latest.event || "").toLowerCase() === "labeled"
+    && authorizedAutomationEvent(latest, input.automationLogins) ? latest : null;
+}
+
+function recordedTerminalBlockEvent(
+  observation: ExplorationCompletionObservation,
+  activeState: OwnedExplorationActiveState,
   input: PersistFailedExplorationInput,
 ): JsonObject | null {
   return [...observation.events]
@@ -390,14 +442,19 @@ function persistFailedExploration(input: PersistFailedExplorationInput): { kind:
   let activeState = ownedActiveState(observation, input);
   if (!activeState) throw new Error("exploration active state is not owned by this attempt");
 
-  let block = terminalBlockEvent(observation, activeState, input);
+  // The stop must be live before anything else is cleared, and it is recreated when it was removed
+  // after this attempt already wrote it: a retry has to restore the visible terminal state instead of
+  // reusing an inactive historical block it can never prove again.
+  let block = liveTerminalBlockEvent(observation, activeState, input);
   if (!block) {
-    if (!activeState.active) throw new Error("exploration block is missing after active state removal");
+    if (!activeState.active && !recordedTerminalBlockEvent(observation, activeState, input)) {
+      throw new Error("exploration block is missing after active state removal");
+    }
     input.github.addIssueLabel(input.repository, input.issueNumber, input.blockedLabel);
     observation = observeExplorationCompletion(input);
     activeState = ownedActiveState(observation, input);
     if (!activeState) throw new Error("exploration active state changed while blocking");
-    block = terminalBlockEvent(observation, activeState, input);
+    block = liveTerminalBlockEvent(observation, activeState, input);
     if (!block) throw new Error("exploration terminal block could not be proven");
   }
 
@@ -523,11 +580,17 @@ function persistSuccessfulExploration(input: PersistSuccessfulExplorationInput):
  *
  * `requestLabels` names every Agent request label an Issue can carry, in priority order, because the
  * roles compete for one active state: the transition must recognize the other role's consumption and
- * its rank to stay exclusive and to keep exploration ahead of implementation.
+ * its rank to stay exclusive and to keep exploration ahead of implementation. `automationLogins` is
+ * the authorized automation identity set that arbitration attributes events to, so a fleet of hosts
+ * with different GitHub identities still resolves one winner; this host must belong to it.
  */
 function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTransitionOutcome {
   if (!input.requestLabels.includes(input.requestLabel)) {
     throw new Error("the selected Agent request label must be one of the Issue Agent request labels");
+  }
+  if (!input.automationLogin.trim()) throw new Error("authorized Automation host login is required");
+  if (!authorizedAutomationEvent({ actor: { login: input.automationLogin } }, input.automationLogins)) {
+    throw new Error("this Automation host login must be one of the authorized automation identities");
   }
   const before = observeRequest(input);
   const selected = selectedRequestEvent(before, input);
@@ -546,7 +609,7 @@ function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTrans
       compareIssueTimelineEvents(event, selected) > 0
       && String(event.event || "").toLowerCase() === "unlabeled"
       && String(event.label?.name || "") === input.requestLabel
-      && String(event.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase(),
+      && authorizedAutomationEvent(event, input.automationLogins),
     );
     return laterAutomationRemoval
       ? blockAmbiguousConsumption(input)
@@ -657,7 +720,7 @@ function activeStateOwner(
   const consumptions = events.filter((event) => eventId(event)
     && String(event.event || "").toLowerCase() === "unlabeled"
     && input.requestLabels.includes(String(event.label?.name || ""))
-    && String(event.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase()
+    && authorizedAutomationEvent(event, input.automationLogins)
     && compareIssueTimelineEvents(event, activeState) < 0
     && (!start || compareIssueTimelineEvents(event, start) > 0));
   consumptions.sort(compareIssueTimelineEvents);
@@ -711,8 +774,7 @@ function createActiveState(
   // addition. Only an automation-authored `labeled` event can belong to a request consumption, so a
   // foreign active state is never owned, never adopted, and never removed: it fails closed exactly
   // like an active state that was already visible before the addition.
-  if (liveActiveState
-    && String(latestActiveEvent?.actor?.login || "").toLowerCase() !== input.automationLogin.toLowerCase()) {
+  if (liveActiveState && !authorizedAutomationEvent(latestActiveEvent, input.automationLogins)) {
     return blockAmbiguousConsumption(input, true);
   }
   const activeState = liveActiveState ? latestActiveEvent : null;

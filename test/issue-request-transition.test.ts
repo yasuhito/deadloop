@@ -31,6 +31,7 @@ function scenario(options: {
   blockDuringObservation?: boolean;
   removeBlockAfterAdd?: boolean;
   copiedComment?: { body: string; login: string };
+  automationLogins?: string[];
   automationLogin?: string;
   retry?: boolean;
 } = {}) {
@@ -110,6 +111,7 @@ function scenario(options: {
     inProgressLabel: "agent:in-progress",
     blockedLabel: "agent:blocked",
     automationLogin,
+    automationLogins: options.automationLogins ?? [automationLogin],
     attemptId: "attempt-42",
     persistConsumed: () => {
       trace.push("persist");
@@ -170,11 +172,19 @@ function concurrentRolesScenario(options: {
   firstRole?: "agent:explore" | "agent:implement";
   copiedComment?: { body: string; login: string };
   racedGenerationAfterLoss?: boolean;
+  explorerLogin?: string;
+  implementLogin?: string;
 } = {}) {
   const state = createState();
-  const automationLogin = "deadloop-bot";
+  // Two hosts can serve one repository under different authorized GitHub identities, so each role
+  // writes as its own host and both identities are authorized for the project.
+  const explorerLogin = options.explorerLogin ?? "deadloop-bot";
+  const implementLogin = options.implementLogin ?? "deadloop-bot";
+  const automationLogins = [...new Set([explorerLogin, implementLogin])];
+  const loginFor = (role: string) => role === "agent:explore" ? explorerLogin : implementLogin;
   const firstRole = options.firstRole || "agent:explore";
   const secondRole = firstRole === "agent:explore" ? "agent:implement" : "agent:explore";
+  let actingLogin = loginFor(firstRole);
   if (options.copiedComment) {
     const timestamp = "2026-08-16T00:00:30Z";
     state.comments.push({
@@ -199,7 +209,8 @@ function concurrentRolesScenario(options: {
       requestEventId: role === "agent:explore" ? "2" : "1",
       inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked",
-      automationLogin,
+      automationLogin: loginFor(role),
+      automationLogins,
       attemptId: `attempt-${role}`,
       persistConsumed: () => { receipts.push(role); },
     };
@@ -212,7 +223,9 @@ function concurrentRolesScenario(options: {
       trace.push(`add:${label}`);
       if (label === "agent:in-progress" && !interleaved) {
         interleaved = true;
+        actingLogin = loginFor(secondRole);
         second = consumeIssueRequest(inputFor(secondRole));
+        actingLogin = loginFor(firstRole);
         // A person adds and cancels this role's request while the losing host is still deciding, so
         // the newest event for that label is no longer the removal it proved.
         if (options.racedGenerationAfterLoss) {
@@ -220,12 +233,12 @@ function concurrentRolesScenario(options: {
           state.unlabel(firstRole, "human");
         }
       }
-      state.label(label, automationLogin);
+      state.label(label, actingLogin);
     },
     deleteIssueLabel: (_repo: string, _number: number, label: string) => {
       trace.push(`delete:${label}`);
       if (!state.labels.has(label)) return { status: 404 };
-      state.unlabel(label, automationLogin);
+      state.unlabel(label, actingLogin);
       return { status: 200 };
     },
     commentIssue: (_repo: string, _number: number, body: string) => {
@@ -233,7 +246,7 @@ function concurrentRolesScenario(options: {
       state.comments.push({
         id: `comment-${state.comments.length + 1}`,
         body,
-        user: { login: automationLogin },
+        user: { login: actingLogin },
         created_at: timestamp,
         updated_at: timestamp,
       });
@@ -315,6 +328,7 @@ function explorationCompletionScenario(options: {
     requestEventId: "2",
     inProgressLabel: "agent:in-progress",
     automationLogin: "deadloop-bot",
+    automationLogins: ["deadloop-bot"],
     attemptId: "attempt-42",
     resultBody: "## deadloop exploration\n\nResult.",
     persistGithub: () => { persisted = true; },
@@ -329,6 +343,7 @@ function explorationCompletionScenario(options: {
 function failedExplorationScenario(options: {
   requestDuringBlock?: string;
   interruptAfterBlock?: boolean;
+  blockRemovedAfterAdd?: boolean;
   interruptAfterRequestDelete?: boolean;
   raceRequestDuringDelete?: string;
   retry?: boolean;
@@ -339,6 +354,7 @@ function failedExplorationScenario(options: {
   state.label("agent:in-progress", "deadloop-bot");
   let persisted = false;
   let blockInterrupted = false;
+  let blockRemoved = false;
   let requestDeleteInterrupted = false;
   const comments: Array<{ body: string; user: { login: string }; created_at: string; updated_at: string }> = [];
   const github = {
@@ -349,6 +365,12 @@ function failedExplorationScenario(options: {
       state.label(label, "deadloop-bot", options.eventTime);
       if (label === "agent:blocked" && options.requestDuringBlock) {
         state.label(options.requestDuringBlock, "human", options.eventTime);
+      }
+      // A person removes the terminal block between its addition and the next observation, so the
+      // recorded block event survives on the timeline while the stop itself is no longer visible.
+      if (label === "agent:blocked" && options.blockRemovedAfterAdd && !blockRemoved) {
+        blockRemoved = true;
+        state.unlabel(label, "human", options.eventTime);
       }
       if (label === "agent:blocked" && options.interruptAfterBlock && !blockInterrupted) {
         blockInterrupted = true;
@@ -383,6 +405,7 @@ function failedExplorationScenario(options: {
     inProgressLabel: "agent:in-progress",
     blockedLabel: "agent:blocked",
     automationLogin: "deadloop-bot",
+    automationLogins: ["deadloop-bot"],
     attemptId: "attempt-42",
     failure: {
       reason: "exploration_failed",
@@ -519,6 +542,31 @@ describe("Issue Agent request transition", () => {
   it("explains how to ask again when a superseded request cannot be restored", () => {
     expect(concurrentRolesScenario({ firstRole: "agent:implement", racedGenerationAfterLoss: true }).comments[0].body)
       .toContain("--add-label 'agent:implement'");
+  });
+
+  it("launches at most one when two authorized identities consume the two roles", () => {
+    expect(concurrentRolesScenario({ explorerLogin: "deadloop-explorer", implementLogin: "deadloop-worker" }).launches)
+      .toBe(1);
+  });
+
+  it("hands the active state to exploration across two authorized identities", () => {
+    expect(concurrentRolesScenario({ explorerLogin: "deadloop-explorer", implementLogin: "deadloop-worker" }).explore.kind)
+      .toBe("consumed");
+  });
+
+  it("supersedes a peer identity's implementation consumption instead of stopping it", () => {
+    expect(concurrentRolesScenario({ explorerLogin: "deadloop-explorer", implementLogin: "deadloop-worker" }).implement.kind)
+      .toBe("superseded");
+  });
+
+  it("leaves no stop beside the active state a peer identity created", () => {
+    expect(concurrentRolesScenario({ explorerLogin: "deadloop-explorer", implementLogin: "deadloop-worker" }).labels)
+      .not.toContain("agent:blocked");
+  });
+
+  it("rejects a host login outside the authorized automation identities", () => {
+    expect(() => scenario({ automationLogins: ["other-bot"] }))
+      .toThrow("this Automation host login must be one of the authorized automation identities");
   });
 
   it("fails closed on an active state a person created in the check-and-add gap", () => {
@@ -715,6 +763,22 @@ describe("failed Issue exploration transition", () => {
 
   it("posts one recovery explanation", () => {
     expect(failedExplorationScenario({ interruptAfterBlock: true, retry: true }).comments).toHaveLength(1);
+  });
+
+  it("restores the terminal block a person removed during persistence", () => {
+    expect(failedExplorationScenario({ blockRemovedAfterAdd: true, retry: true }).labels).toContain("agent:blocked");
+  });
+
+  it("persists the terminal exploration stop after its removed block is recreated", () => {
+    expect(failedExplorationScenario({ blockRemovedAfterAdd: true, retry: true }).persisted).toBe(true);
+  });
+
+  it("posts one recovery explanation when a removed block is recreated", () => {
+    expect(failedExplorationScenario({ blockRemovedAfterAdd: true, retry: true }).comments).toHaveLength(1);
+  });
+
+  it("keeps the active state until its terminal block is live", () => {
+    expect(failedExplorationScenario({ blockRemovedAfterAdd: true }).labels).toContain("agent:in-progress");
   });
 
   it("clears an implementation request that predates the terminal block", () => {

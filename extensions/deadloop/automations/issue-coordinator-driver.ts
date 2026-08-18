@@ -100,6 +100,7 @@ function reconcileAmbiguousPreparedWorkerConsumption(
         inProgressLabel: env.inProgressLabel,
         blockedLabel: env.blockedLabel,
         automationLogin: String(enabled.automationLogin || ""),
+        automationLogins: authorizedAutomationLogins(env, String(enabled.automationLogin || "")),
         attemptId: String(attempt.attemptId),
         persistConsumed: () => { throw new Error("prepared attempt has no durable consumption receipt"); },
       });
@@ -139,6 +140,13 @@ function clearIssueRecoveryBlock(
     || issueLabelIsActive(afterEvents, env.blockedLabel)) {
     throw new StaleLaunchError(`Issue #${issueNumber} was blocked again before request consumption`);
   }
+}
+
+// One repository may be served by a fleet of Automation hosts with different GitHub identities. The
+// enabled project already carries that authorized set, and enablement overlays the host's own
+// authenticated login onto it, so a single-host project resolves to exactly that one identity.
+function authorizedAutomationLogins(env: ReturnType<typeof envConfig>, automationLogin: string): string[] {
+  return [...new Set([...env.authorizedAutomationLogins, automationLogin.trim().toLowerCase()].filter(Boolean))];
 }
 
 function gateMissingContractComment(issue: JsonObject): string {
@@ -564,6 +572,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       inProgressLabel: env.inProgressLabel,
       blockedLabel: env.blockedLabel,
       automationLogin: "fixture-automation",
+      automationLogins: ["fixture-automation"],
       attemptId: uuid,
       persistConsumed: () => recordAgentLaunchGithubClaimed(plan.input),
     });
@@ -606,6 +615,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
         inProgressLabel: env.inProgressLabel,
         blockedLabel: env.blockedLabel,
         automationLogin: String(enabled.automationLogin || ""),
+        automationLogins: authorizedAutomationLogins(env, String(enabled.automationLogin || "")),
         attemptId: uuid,
         persistConsumed: () => recordAgentLaunchGithubClaimed(plan.input),
       });
@@ -742,6 +752,7 @@ function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig
       inProgressLabel: env.inProgressLabel,
       blockedLabel: env.blockedLabel,
       automationLogin: "fixture-automation",
+      automationLogins: ["fixture-automation"],
       attemptId: uuid,
       persistConsumed: () => recordAgentLaunchGithubClaimed(input),
     });
@@ -782,6 +793,7 @@ function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig
         inProgressLabel: env.inProgressLabel,
         blockedLabel: env.blockedLabel,
         automationLogin: String(enabled.automationLogin || ""),
+        automationLogins: authorizedAutomationLogins(env, String(enabled.automationLogin || "")),
         attemptId: uuid,
         persistConsumed: () => recordAgentLaunchGithubClaimed(input),
       });
@@ -855,6 +867,8 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     humanLabel: source.DEADLOOP_HUMAN_LABEL || "ready-for-human",
     needsInfoLabel: source.DEADLOOP_NEEDS_INFO_LABEL || "needs-info",
     wontfixLabel: source.DEADLOOP_WONTFIX_LABEL || "wontfix",
+    authorizedAutomationLogins: String(source.DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS || "")
+      .split(",").map((value) => value.trim().toLowerCase()).filter(Boolean),
     needsTriageLabel: source.DEADLOOP_NEEDS_TRIAGE_LABEL || "needs-triage",
   };
 }
