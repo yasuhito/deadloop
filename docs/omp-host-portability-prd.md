@@ -48,13 +48,13 @@ Declare CommonJS by extension: every runtime module that assigns `module.exports
 | pi extension loader | requires successfully |
 | omp extension loader (Bun) | requires successfully |
 
-Counted scope: 18 CommonJS modules under `src/`, 35 under `extensions/deadloop/automations/`, referenced from `require()` specifiers spread across roughly 100 files, plus manifest globs, `projects.json` `driverFile` / `precheckFile` values, and docs.
+Counted scope: 18 CommonJS modules under `src/`, 36 under `extensions/deadloop/automations/`, referenced from `require()` specifiers spread across roughly 100 files, plus manifest globs, `projects.json` `driverFile` / `precheckFile` values, and docs.
 
 ## Rollout plan
 
 0. Remove the hybrid form (top-level `export` plus `module.exports`) and add a guard test. Done: type-only declarations moved to `src/automation-driver-kit-types.ts`, `src/attempt-runtime-observation-types.ts`, and `src/reviewer-outcome-contract-types.ts`, following the existing types-only module `src/runner.ts`; `test/module-format-portability.test.ts` forbids the hybrid form.
 1. Rename the 18 `src/` CommonJS modules to `.cts` and update every specifier.
-2. Rename the 35 automation CommonJS modules to `.cts`, including the driver paths that are built as strings and therefore invisible to the type checker.
+2. Rename the 36 automation CommonJS modules to `.cts`, including the driver paths that are built as strings and therefore invisible to the type checker.
 3. Update `package.json` `files` and lint globs, `tsconfig.json`, `projects.example.json` driver/precheck names, and the docs that name these files. Record the one-line migration note for existing local `projects.json` files.
 4. Accept the result on both hosts and harden the guard to forbid `module.exports` in any `.ts`.
 

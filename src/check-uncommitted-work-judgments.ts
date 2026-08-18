@@ -107,7 +107,7 @@ function filesBelow(cwd: string, root: string): SourceFile[] {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
       if (entry.isDirectory()) visit(file);
-      else if (file.endsWith(".ts") || file.endsWith(".cjs")) {
+      else if (file.endsWith(".ts") || file.endsWith(".cts") || file.endsWith(".cjs")) {
         // Slash-separated so the recorded exceptions read the same on every platform.
         const relative = path.relative(cwd, file).split(path.sep).join("/");
         found.push({ path: relative, source: fs.readFileSync(file, "utf8") });
