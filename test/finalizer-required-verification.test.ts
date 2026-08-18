@@ -302,16 +302,26 @@ for (const role of ["review-repair", "branch-update"] as const) {
 }
 
 describe("interruptible finalizer verification", () => {
-  const { withInterruptibleProjectCheck } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+  const { withFinalizerInterruption } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
 
-  async function interruptedCheck(signal?: "SIGINT" | "SIGTERM") {
+  type GuardedRun = {
+    forwardedBeforeExit: string[];
+    duringCheck: string | null;
+    afterCheck: string | null;
+    listenersAfterCheck: number;
+    listenersAtEnd: number;
+  };
+
+  /**
+   * Drive one guarded verification: the checker exits, and the caller can deliver a signal while it
+   * runs or after it finished, which is the post-check window.
+   */
+  async function guardedRun(options: { duringCheck?: "SIGINT" | "SIGTERM"; afterCheck?: "SIGINT" | "SIGTERM" } = {}): Promise<GuardedRun> {
     const handlers = new Map<string, () => void>();
     const forwarded: string[] = [];
     let exit: (result: Record<string, unknown>) => void = () => {};
-    let recorded: { status: number | null; signalled: string | null; listeners: number } | undefined;
-    const pending = withInterruptibleProjectCheck(
-      ["node", "run-project-check.ts"],
-      60_000,
+    const observed: Partial<GuardedRun> = {};
+    const guarded = withFinalizerInterruption(
       {
         start: () => ({
           kill: (received: string) => forwarded.push(received),
@@ -320,45 +330,51 @@ describe("interruptible finalizer verification", () => {
         on: (name: string, handler: () => void) => handlers.set(name, handler),
         off: (name: string) => handlers.delete(name),
       },
-      (result: { status: number | null }, signalled: string | null) => {
-        recorded = { status: result.status, signalled, listeners: handlers.size };
-        return "recorded";
+      async (interruption: {
+        runCheck: (args: string[], timeoutMs: number) => Promise<unknown>;
+        observe: () => Promise<string | null>;
+      }) => {
+        await interruption.runCheck(["node", "run-project-check.ts"], 60_000);
+        observed.duringCheck = await interruption.observe();
+        observed.forwardedBeforeExit = [...forwarded];
+        if (options.afterCheck) handlers.get(options.afterCheck)?.();
+        observed.afterCheck = await interruption.observe();
+        observed.listenersAfterCheck = handlers.size;
+        return "verified";
       },
     );
-    if (signal) handlers.get(signal)?.();
-    const forwardedBeforeExit = [...forwarded];
-    const recordedBeforeExit = recorded;
+    if (options.duringCheck) handlers.get(options.duringCheck)?.();
     exit({ status: 0, stdout: "", stderr: "", signal: null });
-    await pending;
-    return { forwardedBeforeExit, recordedBeforeExit, recorded, listeners: handlers.size };
+    await guarded;
+    return { ...(observed as GuardedRun), listenersAtEnd: handlers.size };
   }
 
   it("forwards the signal to the checker while it is still running", async () => {
-    expect((await interruptedCheck("SIGTERM")).forwardedBeforeExit).toEqual(["SIGTERM"]);
+    expect((await guardedRun({ duringCheck: "SIGTERM" })).forwardedBeforeExit).toEqual(["SIGTERM"]);
   });
 
-  it("waits for the checker to exit before recording the run", async () => {
-    expect((await interruptedCheck("SIGTERM")).recordedBeforeExit).toBeUndefined();
+  it("reports the signal that interrupted the checker", async () => {
+    expect((await guardedRun({ duringCheck: "SIGINT" })).duringCheck).toBe("SIGINT");
   });
 
-  it("records the signal that interrupted the finalizer", async () => {
-    expect((await interruptedCheck("SIGINT")).recorded?.signalled).toBe("SIGINT");
+  it("reports a signal delivered after the checker finished", async () => {
+    expect((await guardedRun({ afterCheck: "SIGTERM" })).afterCheck).toBe("SIGTERM");
   });
 
-  it("discards the checker verdict of a signaled run", async () => {
-    expect((await interruptedCheck("SIGTERM")).recorded?.status).toBeNull();
-  });
-
-  it("keeps its signal handlers installed until the evidence is recorded", async () => {
-    expect((await interruptedCheck("SIGTERM")).recorded?.listeners).toBe(2);
+  it("keeps its signal handlers installed through the post-check window", async () => {
+    expect((await guardedRun({ afterCheck: "SIGTERM" })).listenersAfterCheck).toBe(2);
   });
 
   it("forwards nothing when no signal arrived", async () => {
-    expect((await interruptedCheck()).forwardedBeforeExit).toHaveLength(0);
+    expect((await guardedRun()).forwardedBeforeExit).toHaveLength(0);
+  });
+
+  it("reports no signal when none arrived", async () => {
+    expect((await guardedRun()).afterCheck).toBeNull();
   });
 
   it("releases its signal handlers", async () => {
-    expect((await interruptedCheck("SIGTERM")).listeners).toBe(0);
+    expect((await guardedRun({ duringCheck: "SIGTERM" })).listenersAtEnd).toBe(0);
   });
 });
 
@@ -381,17 +397,15 @@ it("keeps the checker verdict when no signal reached the finalizer", () => {
 });
 
 describe("finalizer signal handling before the checker starts", () => {
-  const { withInterruptibleProjectCheck } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+  const { withFinalizerInterruption } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
 
   async function signalDuringStartup() {
     const handlers = new Map<string, () => void>();
     const forwarded: string[] = [];
     let exit: (result: Record<string, unknown>) => void = () => {};
     let handlersAtStart = -1;
-    let recorded: { status: number | null; signalled: string | null } | undefined;
-    const pending = withInterruptibleProjectCheck(
-      ["node", "run-project-check.ts"],
-      60_000,
+    let observed: string | null = null;
+    const guarded = withFinalizerInterruption(
       {
         start: () => {
           handlersAtStart = handlers.size;
@@ -404,14 +418,18 @@ describe("finalizer signal handling before the checker starts", () => {
         on: (name: string, handler: () => void) => handlers.set(name, handler),
         off: (name: string) => handlers.delete(name),
       },
-      (result: { status: number | null }, signalled: string | null) => {
-        recorded = { status: result.status, signalled };
-        return "recorded";
+      async (interruption: {
+        runCheck: (args: string[], timeoutMs: number) => Promise<unknown>;
+        observe: () => Promise<string | null>;
+      }) => {
+        await interruption.runCheck(["node", "run-project-check.ts"], 60_000);
+        observed = await interruption.observe();
+        return "verified";
       },
     );
     exit({ status: 0, stdout: "", stderr: "", signal: null });
-    await pending;
-    return { handlersAtStart, forwarded, recorded };
+    await guarded;
+    return { handlersAtStart, forwarded, observed };
   }
 
   it("installs its signal handlers before starting the checker", async () => {
@@ -422,7 +440,7 @@ describe("finalizer signal handling before the checker starts", () => {
     expect((await signalDuringStartup()).forwarded).toEqual(["SIGTERM"]);
   });
 
-  it("records a startup-window signal as an interruption", async () => {
-    expect((await signalDuringStartup()).recorded?.signalled).toBe("SIGTERM");
+  it("reports a startup-window signal as an interruption", async () => {
+    expect((await signalDuringStartup()).observed).toBe("SIGTERM");
   });
 });

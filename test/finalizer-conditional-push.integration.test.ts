@@ -167,8 +167,14 @@ describe("finalizer exact-head pushes against real remotes", () => {
   const startedMarker = "check-started";
   const completedMarker = "check-completed";
   const SLOW_CHECK = `touch ../${startedMarker} && sleep 30 && touch ../${completedMarker}`;
+  const postCheckMarker = "post-check-started";
+  // The post-check's own `git status` is the second one the repair finalizer runs: the first proves
+  // the worktree was clean before the checks. Stalling that call, and nothing else, puts the
+  // finalizer inside post-check validation while the scenario signals it.
+  const POST_CHECK_STATUS_CALL = 2;
+  const POST_CHECK_STALL_SECONDS = 3;
 
-  function renderedRepairFinalizer(checkCommand: string) {
+  function renderedRepairFinalizer(checkCommand: string, stallPostCheck = false) {
     const { repo, remote, rootOid, expectedHead } = fixture();
     const root = path.dirname(repo);
     const bin = path.join(root, "bin");
@@ -190,8 +196,18 @@ describe("finalizer exact-head pushes against real remotes", () => {
     }] }));
     const gitCommand = path.join(bin, "git");
     writeFileSync(gitCommand, `#!/usr/bin/env node
+const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2).map((arg) => arg === "https://github.com/owner/repo.git" && (process.argv.includes("push") || process.argv.includes("ls-remote")) ? ${JSON.stringify(remote)} : arg);
+const stall = ${JSON.stringify(stallPostCheck ? { counter: path.join(root, "status-calls"), marker: path.join(root, postCheckMarker), call: POST_CHECK_STATUS_CALL, seconds: POST_CHECK_STALL_SECONDS } : null)};
+if (stall && args.includes("status") && args.includes("--porcelain")) {
+  const seen = Number(fs.existsSync(stall.counter) ? fs.readFileSync(stall.counter, "utf8") : "0") + 1;
+  fs.writeFileSync(stall.counter, String(seen));
+  if (seen === stall.call) {
+    fs.writeFileSync(stall.marker, "");
+    spawnSync("sleep", [String(stall.seconds)]);
+  }
+}
 const result = spawnSync("/usr/bin/git", args, {stdio:"inherit"});
 process.exit(result.status ?? 1);
 `);
@@ -301,6 +317,41 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
     return signalled;
   }
 
+  type PostCheckSignaledFinalizer = {
+    record: JsonObject;
+    receipt: JsonObject;
+    remoteHead: string;
+    expectedHead: string;
+  };
+
+  /**
+   * Signal the real finalizer process while it is inside post-check validation.
+   *
+   * The configured check has already passed here, so the run is only kept from authorizing a push
+   * by the interruption handling that must still be active while the post-check runs.
+   */
+  async function signalRenderedRepairFinalizerDuringPostCheck(): Promise<PostCheckSignaledFinalizer> {
+    const { command, env, root, runDir, remote, expectedHead } = renderedRepairFinalizer("true", true);
+    const finalizer = spawn("bash", ["-c", `exec ${command}`], { cwd: process.cwd(), env, stdio: "ignore" });
+    await waitForMarker(path.join(root, postCheckMarker));
+    finalizer.kill("SIGTERM");
+    await new Promise((resolve) => finalizer.once("close", resolve));
+    const recordPath = path.join(runDir, "required-verification.json");
+    const resultFile = path.join(runDir, "finalizer-result.json");
+    return {
+      record: existsSync(recordPath) ? JSON.parse(readFileSync(recordPath, "utf8")) : {},
+      receipt: existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : { action: "missing" },
+      remoteHead: remoteHeadOf(remote),
+      expectedHead,
+    };
+  }
+
+  let postCheckSignalled: PostCheckSignaledFinalizer | undefined;
+  async function postCheckSignaledRepairFinalizer(): Promise<PostCheckSignaledFinalizer> {
+    postCheckSignalled ??= await signalRenderedRepairFinalizerDuringPostCheck();
+    return postCheckSignalled;
+  }
+
   it("runs the rendered repair finalizer command without an error", () => {
     const { result, receipt } = runRenderedRepairFinalizer();
     expect(result.stderr || receipt.summary || "").toBe("");
@@ -338,6 +389,19 @@ else if (args[0] === "pr") process.stdout.write(JSON.stringify({state:"OPEN",isC
 
   it("writes a blocked receipt naming the interruption for the signaled repair finalizer", async () => {
     expect((await signaledRepairFinalizer()).receipt).toMatchObject({ action: "blocked", summary: expect.stringContaining("interrupted") });
+  }, SIGNALED_SCENARIO_TIMEOUT_MS);
+
+  it("persists an interrupted required-verification record when the repair finalizer is signaled during post-check validation", async () => {
+    expect((await postCheckSignaledRepairFinalizer()).record.outcome).toBe("interrupted");
+  }, SIGNALED_SCENARIO_TIMEOUT_MS);
+
+  it("does not push when the repair finalizer is signaled during post-check validation", async () => {
+    const signaled = await postCheckSignaledRepairFinalizer();
+    expect(signaled.remoteHead).toBe(signaled.expectedHead);
+  }, SIGNALED_SCENARIO_TIMEOUT_MS);
+
+  it("writes a blocked receipt when the repair finalizer is signaled during post-check validation", async () => {
+    expect((await postCheckSignaledRepairFinalizer()).receipt).toMatchObject({ action: "blocked", summary: expect.stringContaining("interrupted") });
   }, SIGNALED_SCENARIO_TIMEOUT_MS);
 
   it.each([

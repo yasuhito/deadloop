@@ -29,7 +29,7 @@ type Input = {
 type Operations = {
   execute: () => Promise<JsonObject>;
   validate?: (record: JsonObject) => void;
-  persist: (record: JsonObject) => JsonObject;
+  persist: (record: JsonObject) => Promise<JsonObject>;
   authenticate: (record: JsonObject) => void;
 };
 
@@ -74,10 +74,10 @@ async function ensureRequiredVerificationRecord(input: Input, operations: Operat
     operations.validate?.(executed);
   } catch (error) {
     const failed = { ...executed, outcome: "failed", postCheckFailure: error instanceof Error ? error.message : String(error) };
-    operations.persist(failed);
+    await operations.persist(failed);
     throw error;
   }
-  const persisted = operations.persist(executed);
+  const persisted = await operations.persist(executed);
   if (!isExactPassedRecord(input, persisted)) throw new Error("required verification execution did not produce a matching passed record");
   operations.authenticate(persisted);
   return { record: persisted, reused: false };
@@ -234,37 +234,52 @@ function defaultCheckProcessOps(): CheckProcessOps {
   };
 }
 
+type FinalizerInterruption = {
+  runCheck: (args: string[], timeoutMs: number) => Promise<CommandResult>;
+  observe: () => Promise<FinalizerSignal | null>;
+};
+
 /**
- * Run the project check so that a signal reaching the finalizer also reaches the checker.
+ * Hold SIGINT and SIGTERM for the whole verification, from before the checker starts until the
+ * typed record is durable.
  *
- * The finalizer awaits the checker instead of blocking on it, so an installed handler runs while
- * the checker is still alive: it replaces the default termination, forwards the same signal, and
- * the awaited exit is the checker's own restored end. The handlers stay installed until `record`
- * has written the evidence, so a signaled finalizer cannot exit with nothing persisted.
+ * Installing the handlers replaces the default termination, so a signal can no longer kill the
+ * finalizer between the checker's exit and the persisted evidence. Node dispatches a handler only
+ * when the event loop turns, and the post-check runs synchronous children, so a signal delivered
+ * there stays pending: `observe` turns the loop before reporting, and every decision that could
+ * authorize a push is taken after that report.
  */
-async function withInterruptibleProjectCheck<T>(
-  args: string[],
-  timeoutMs: number,
+async function withFinalizerInterruption<T>(
   ops: CheckProcessOps,
-  record: (result: CommandResult, signalled: FinalizerSignal | null) => T,
+  verify: (interruption: FinalizerInterruption) => Promise<T>,
 ): Promise<T> {
   let signalled: FinalizerSignal | null = null;
-  // Installed before the checker exists: a signal landing in the startup window would otherwise
-  // hit the default termination and leave the checker running with nothing persisted. The handler
-  // records the signal, and the pending kill is delivered as soon as the child is known.
-  let check: CheckProcess | null = null;
+  let running: CheckProcess | null = null;
   const handlers = FINALIZER_SIGNALS.map((signal) => {
     const handler = () => {
       signalled ||= signal;
-      check?.kill(signal);
+      running?.kill(signal);
     };
     ops.on(signal, handler);
     return { signal, handler };
   });
   try {
-    check = ops.start(args, timeoutMs);
-    if (signalled) check.kill(signalled);
-    return record(finalizerResultForSignal(await check.exited, signalled), signalled);
+    return await verify({
+      runCheck: async (args, timeoutMs) => {
+        running = ops.start(args, timeoutMs);
+        // A signal seen while the checker was starting had no child to reach; deliver it now.
+        if (signalled) running.kill(signalled);
+        try {
+          return await running.exited;
+        } finally {
+          running = null;
+        }
+      },
+      observe: async () => {
+        await new Promise((resolve) => { setImmediate(resolve); });
+        return signalled;
+      },
+    });
   } finally {
     for (const { signal, handler } of handlers) ops.off(signal, handler);
   }
@@ -280,6 +295,22 @@ function finalizerResultForSignal(result: CommandResult, signalled: FinalizerSig
   return signalled ? { ...result, status: null, signal: signalled } : result;
 }
 
+/**
+ * The evidence for a run that was signaled before its record became durable.
+ *
+ * A post-check or a persistence step reached while this process was already terminating proves
+ * nothing about the target, so the stored outcome is the interruption rather than the verdict.
+ */
+function interruptedVerificationRecord(record: JsonObject, signalled: FinalizerSignal): JsonObject {
+  return {
+    ...record,
+    outcome: "interrupted",
+    exitCode: null,
+    terminationReason: "interrupted",
+    terminationSignal: signalled,
+  };
+}
+
 function ensureFinalizerRequiredVerification(
   args: FinalizerArgs,
   role: "review-repair" | "branch-update",
@@ -288,64 +319,83 @@ function ensureFinalizerRequiredVerification(
   run: (args: string[], timeoutMs?: number) => CommandResult,
   checkOps: CheckProcessOps = defaultCheckProcessOps(),
 ): Promise<JsonObject> {
-  const location = canonicalAttemptLocation({ attemptRecord: args.attemptRecord, stateDir: args.stateDir });
-  const { input, recordFile } = finalizerVerificationInput(args, role, targetCommit, repositoryId);
-  const authenticate = (record: JsonObject) => {
-    assertRequiredVerificationAuthorized(input.attempt, targetCommit, record, input.currentContract, [role]);
-  };
-  return ensureRequiredVerificationRecord(input, {
-    authenticate,
-    execute: () => {
-      const started = Date.now();
-      const structuredResultPath = path.join(location.runDir, "required-verification-check-result.json");
-      fs.rmSync(structuredResultPath, { force: true });
-      return withInterruptibleProjectCheck([
-        "node",
-        path.join(args.automationDir, "run-project-check.ts"),
-        "--cwd",
-        args.repo,
-        "--timeout-ms",
-        String(FINALIZER_VERIFICATION_TIMEOUT_MS),
-        "--command",
-        input.currentContract.command,
-        "--quarantine-root",
-        path.join(args.stateDir, "check-quarantine"),
-        "--structured-result",
-        structuredResultPath,
-      ], FINALIZER_VERIFICATION_SUBPROCESS_TIMEOUT_MS, checkOps, (result, signalled) => {
+  return withFinalizerInterruption(checkOps, async (interruption) => {
+    const location = canonicalAttemptLocation({ attemptRecord: args.attemptRecord, stateDir: args.stateDir });
+    const { input, recordFile } = finalizerVerificationInput(args, role, targetCommit, repositoryId);
+    const authenticate = (record: JsonObject) => {
+      assertRequiredVerificationAuthorized(input.attempt, targetCommit, record, input.currentContract, [role]);
+    };
+    /**
+     * Persist this attempt's evidence.
+     *
+     * Every write goes through here, so a signal observed anywhere up to the durable record turns
+     * the stored outcome into an interruption; an interrupted run can never authorize a push, so
+     * persisting one also stops the finalizer.
+     */
+    const persistEvidence = async (record: JsonObject) => {
+      const signalled = await interruption.observe();
+      if (!signalled) return persistHostVerificationEvidence(recordFile, record);
+      const interrupted = persistHostVerificationEvidence(recordFile, interruptedVerificationRecord(record, signalled));
+      throw new Error(`required verification ${interrupted.outcome}; log: ${interrupted.logPath}`);
+    };
+    const verification = await ensureRequiredVerificationRecord(input, {
+      authenticate,
+      execute: async () => {
+        const started = Date.now();
+        const structuredResultPath = path.join(location.runDir, "required-verification-check-result.json");
+        fs.rmSync(structuredResultPath, { force: true });
+        const result = await interruption.runCheck([
+          "node",
+          path.join(args.automationDir, "run-project-check.ts"),
+          "--cwd",
+          args.repo,
+          "--timeout-ms",
+          String(FINALIZER_VERIFICATION_TIMEOUT_MS),
+          "--command",
+          input.currentContract.command,
+          "--quarantine-root",
+          path.join(args.stateDir, "check-quarantine"),
+          "--structured-result",
+          structuredResultPath,
+        ], FINALIZER_VERIFICATION_SUBPROCESS_TIMEOUT_MS);
+        const signalled = await interruption.observe();
         const logPath = path.join(location.runDir, "required-verification.log");
         writeVerificationLog(logPath, `${result.stdout || ""}${result.stderr || ""}`);
         const record = verificationRecordForResult(
           input,
           targetCommit,
-          result,
+          finalizerResultForSignal(result, signalled),
           started,
           logPath,
           signalled ? undefined : readStructuredCheckResult(structuredResultPath),
         );
         if (record.outcome !== "passed") {
-          persistHostVerificationEvidence(recordFile, record);
+          await persistEvidence(record);
           throw new Error(`required verification ${record.outcome}; log: ${logPath}`);
         }
         return record;
-      });
-    },
-    validate: () => {
-      const status = run(["git", "-C", args.repo, ...UNCOMMITTED_WORK_STATUS_ARGS]);
-      if (status.status !== 0 || hasUncommittedWork(status.stdout)) {
-        throw new Error("required verification post-check failed: worktree is dirty after checks");
-      }
-      const head = run(["git", "-C", args.repo, "rev-parse", "HEAD"]);
-      if (head.status !== 0 || head.stdout.trim().toLowerCase() !== targetCommit.toLowerCase()) {
-        throw new Error("required verification post-check failed: HEAD changed during checks");
-      }
-      const current = finalizerVerificationInput(args, role, targetCommit, repositoryId).input;
-      assertFixedContract(current);
-      if (!isDeepStrictEqual(current.currentContract, input.currentContract)) {
-        throw new Error("required verification post-check failed: contract changed during checks");
-      }
-    },
-    persist: (record: JsonObject) => persistHostVerificationEvidence(recordFile, record),
+      },
+      validate: () => {
+        const status = run(["git", "-C", args.repo, ...UNCOMMITTED_WORK_STATUS_ARGS]);
+        if (status.status !== 0 || hasUncommittedWork(status.stdout)) {
+          throw new Error("required verification post-check failed: worktree is dirty after checks");
+        }
+        const head = run(["git", "-C", args.repo, "rev-parse", "HEAD"]);
+        if (head.status !== 0 || head.stdout.trim().toLowerCase() !== targetCommit.toLowerCase()) {
+          throw new Error("required verification post-check failed: HEAD changed during checks");
+        }
+        const current = finalizerVerificationInput(args, role, targetCommit, repositoryId).input;
+        assertFixedContract(current);
+        if (!isDeepStrictEqual(current.currentContract, input.currentContract)) {
+          throw new Error("required verification post-check failed: contract changed during checks");
+        }
+      },
+      persist: persistEvidence,
+    });
+    // The record is durable and authenticated by now; a signal seen in that last window still means
+    // this finalizer is terminating, so persisting the interruption stops it instead of pushing.
+    if (await interruption.observe()) await persistEvidence(verification.record);
+    return verification;
   });
 }
 
@@ -354,7 +404,7 @@ module.exports = {
   ensureFinalizerRequiredVerification,
   finalizerResultForSignal,
   ensureRequiredVerificationRecord,
-  withInterruptibleProjectCheck,
+  withFinalizerInterruption,
   isExactPassedRecord,
   verificationRecordForResult,
 };
