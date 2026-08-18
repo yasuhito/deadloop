@@ -249,16 +249,21 @@ async function withInterruptibleProjectCheck<T>(
   record: (result: CommandResult, signalled: FinalizerSignal | null) => T,
 ): Promise<T> {
   let signalled: FinalizerSignal | null = null;
-  const check = ops.start(args, timeoutMs);
+  // Installed before the checker exists: a signal landing in the startup window would otherwise
+  // hit the default termination and leave the checker running with nothing persisted. The handler
+  // records the signal, and the pending kill is delivered as soon as the child is known.
+  let check: CheckProcess | null = null;
   const handlers = FINALIZER_SIGNALS.map((signal) => {
     const handler = () => {
       signalled ||= signal;
-      check.kill(signal);
+      check?.kill(signal);
     };
     ops.on(signal, handler);
     return { signal, handler };
   });
   try {
+    check = ops.start(args, timeoutMs);
+    if (signalled) check.kill(signalled);
     return record(finalizerResultForSignal(await check.exited, signalled), signalled);
   } finally {
     for (const { signal, handler } of handlers) ops.off(signal, handler);

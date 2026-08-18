@@ -379,3 +379,50 @@ it("keeps the checker verdict when no signal reached the finalizer", () => {
   const { finalizerResultForSignal } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
   expect(finalizerResultForSignal({ status: 0, stdout: "", stderr: "" }, null).status).toBe(0);
 });
+
+describe("finalizer signal handling before the checker starts", () => {
+  const { withInterruptibleProjectCheck } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+
+  async function signalDuringStartup() {
+    const handlers = new Map<string, () => void>();
+    const forwarded: string[] = [];
+    let exit: (result: Record<string, unknown>) => void = () => {};
+    let handlersAtStart = -1;
+    let recorded: { status: number | null; signalled: string | null } | undefined;
+    const pending = withInterruptibleProjectCheck(
+      ["node", "run-project-check.ts"],
+      60_000,
+      {
+        start: () => {
+          handlersAtStart = handlers.size;
+          handlers.get("SIGTERM")?.();
+          return {
+            kill: (received: string) => forwarded.push(received),
+            exited: new Promise((resolve) => { exit = resolve; }),
+          };
+        },
+        on: (name: string, handler: () => void) => handlers.set(name, handler),
+        off: (name: string) => handlers.delete(name),
+      },
+      (result: { status: number | null }, signalled: string | null) => {
+        recorded = { status: result.status, signalled };
+        return "recorded";
+      },
+    );
+    exit({ status: 0, stdout: "", stderr: "", signal: null });
+    await pending;
+    return { handlersAtStart, forwarded, recorded };
+  }
+
+  it("installs its signal handlers before starting the checker", async () => {
+    expect((await signalDuringStartup()).handlersAtStart).toBe(2);
+  });
+
+  it("forwards a signal that arrived while the checker was starting", async () => {
+    expect((await signalDuringStartup()).forwarded).toEqual(["SIGTERM"]);
+  });
+
+  it("records a startup-window signal as an interruption", async () => {
+    expect((await signalDuringStartup()).recorded?.signalled).toBe("SIGTERM");
+  });
+});
