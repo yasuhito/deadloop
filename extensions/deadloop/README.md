@@ -66,3 +66,20 @@ v0 requires stable Herdr 0.8.0 or newer. The host checks the client and server v
 Each Worker, reviewer, review-repair, or branch-update attempt uses one fresh workspace with the worktree's first tab and root pane. The launcher starts the configured agent directly in that root pane; it never creates a tab, splits a pane, replaces a same-name agent, or reuses a terminal. If that new root pane returns the exact structured `agent_pane_busy` pre-start error while its shell is still initializing, the runner retries the identical request every 100 ms within a 5-second monotonic grace period; each request has a 35-second wrapper timeout, and all other or persistent failures retain the workspace. Successful strongly bound attempts close only their workspace after role-specific GitHub persistence, while the linked worktree remains until the existing merged/closed-PR cleanup gate. Blocked, malformed, launch-failed, and ambiguous attempts remain visible and suppress another launch on the same checkout unless deterministic reconciliation proves a stopped owned workspace can be closed while retaining its evidence. For a Worker stopped by required verification, the completion gate closes the workspace only after re-reading the Issue and confirming the exact durable stop — the fingerprint comment together with the ready/blocked label state — as its persistence proof.
 
 `/deadloop-doctor` reports version, retention, and cleanup-pending findings without closing anything. For a Worker or reviewer `launch_failed` attempt, it prints `/deadloop-abandon-attempt <attempt-id>` only when the unchanged target, clean input revision, one owned disposable workspace, retained linked worktree, and absence of an agent in the recorded pane are all proven. That explicit operation holds the enablement lock, re-proves the same facts, closes only the attempt workspace, records the terminal `abandoned` evidence in the original journal, preserves the linked worktree, and then requeues the Issue or PR. Immediately before closing, the operation writes a bound `workspace_close_started` receipt beside the original journal. A retry after an interrupted close may continue only when that receipt matches and the recorded workspace and every workspace for the same checkout are confirmed absent. If any proof is missing, doctor requires manual review and prints no partial label-only recovery command. A requeued Worker opens the exact retained abandoned checkout in a fresh workspace instead of trying to create a duplicate linked worktree. Herdr-specific code remains behind runner/automation boundaries so future runners can be added without changing GitHub Issue / PR state semantics.
+
+## Automation hosts
+
+deadloop loads under the pi host and the omp (Oh My Pi) host with no host-specific branch. Module format is declared by file extension — `.cts` for the CommonJS runtime modules, `.ts` for ESM — and `test/module-format-portability.test.ts` fails if a `.ts` file under `src/` or `extensions/deadloop/` assigns `module.exports` or `exports.<name>`.
+
+Report acceptance on either host, from the primary checkout:
+
+```bash
+omp -p -e extensions/deadloop/index.ts "/deadloop-status"
+omp -p -e extensions/deadloop/index.ts "/deadloop-doctor"
+pi -p -e extensions/deadloop/index.ts "/deadloop-status"
+pi -p -e extensions/deadloop/index.ts "/deadloop-doctor"
+```
+
+Those report runs never start the scheduler: the `session_start` hook returns early in print and json mode. `/deadloop-enable` starts it in any mode. To accept the scheduler, start the host interactively in an enabled checkout: it takes `~/.pi/agent/deadloop/scheduler.<repository-id hash>.lock` with its own pid at startup, then rewrites `~/.pi/agent/deadloop/state.json` on a startup tick three seconds later and on a 30-second interval anchored to the same startup.
+
+Known host differences: none in the reports or in scheduler behavior. The scheduler lock is scoped to the GitHub repository ID and is host-agnostic, so starting a second host of either kind on the same repository leaves the first one driving and shows `skipped: repository is already served by Automation host pid <pid>` on the second.

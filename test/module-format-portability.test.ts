@@ -33,12 +33,18 @@ describe("module format portability", () => {
   });
 });
 
+// The omp extension loader classifies only `.cjs`, `.cts`, and `type: commonjs` `.js`/`.jsx` as
+// CommonJS, so any CommonJS export form left in a `.ts` file is evaluated as ESM, where neither
+// `module` nor `exports` is defined: the assignment throws `ReferenceError` and the extension fails
+// to load. Declaring the format by extension is the only host-neutral fix.
+const commonJsExportAssignment = /^\s*(?:module\.exports\b|exports(?:\.[A-Za-z_$]|\[)|Object\.assign\(\s*(?:module\.)?exports\b)/;
+
 function commonJsPlainTypescriptFiles(relativeRoot: string): string[] {
   return typescriptFiles(relativeRoot)
     .filter((relativePath) => !relativePath.endsWith(".cts"))
     .filter((relativePath) => {
       const lines = fs.readFileSync(path.join(process.cwd(), relativePath), "utf8").split("\n");
-      return lines.some((line) => line.startsWith("module.exports"));
+      return lines.some((line) => commonJsExportAssignment.test(line));
     })
     .sort();
 }

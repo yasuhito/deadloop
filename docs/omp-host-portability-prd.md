@@ -56,7 +56,7 @@ Counted scope: 18 CommonJS modules under `src/`, 36 under `extensions/deadloop/a
 1. Rename the 18 `src/` CommonJS modules to `.cts` and update every specifier.
 2. Rename the 36 automation CommonJS modules to `.cts`, including the driver paths that are built as strings and therefore invisible to the type checker.
 3. Update `package.json` `files` and lint globs, `tsconfig.json`, `projects.example.json` driver/precheck names, and the docs that name these files. Record the one-line migration note for existing local `projects.json` files.
-4. Accept the result on both hosts and harden the guard to forbid `module.exports` in any `.ts`.
+4. Accept the result on both hosts and harden the guard to forbid `module.exports` in any `.ts`. Done: the guard also forbids `exports.<name>` and `Object.assign(module.exports, …)` in `.ts` files, and `extensions/deadloop/README.md` records the host acceptance procedure and the shared scheduler-lock behavior.
 
 ## Acceptance criteria
 
