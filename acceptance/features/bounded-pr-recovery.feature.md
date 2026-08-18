@@ -80,11 +80,11 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop processes the review result
 * Then deadloop leaves no waiting request on the pull request
 
-## Scenario: Escalate the new head for human handling when the same findings remain after repair
+## Scenario: Hand the new head to a person when the same findings remain after repair
 
 * Given The same review findings remain on the new head after repair
 * When deadloop processes the review result
-* Then deadloop escalates the pull request for human handling
+* Then deadloop leaves no agent workflow label on the pull request
 
 ## Scenario: Leave recovery guidance when the same findings remain after repair
 

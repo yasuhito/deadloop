@@ -2,9 +2,38 @@ import { describe, expect, it } from "vitest";
 
 const { decideRepairPushGuard, parseArgs: parseFinalizerArgs } = require("../extensions/deadloop/automations/pr-review-repair-finalize.ts");
 const { recoveryComment, sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
-const { requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
+const { repairWorkerPrompt, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
+const { renderRepairMarker, repairAttempts, reviewResultFingerprint, selectRepairAttempt } = require("../extensions/deadloop/automations/pr-review-repair-state.ts");
 
 const head = "a".repeat(40);
+const automationLogin = "deadloop-bot";
+const findings = [{ title: "Lint contract failure", body: "Restore the lint gate", path: "src/a.ts", line: 4, severity: "blocker" }];
+
+function historicalRepairMarkers(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    body: renderRepairMarker(String(index + 1).padStart(40, "0"), String(index + 1).padStart(20, "0")),
+    author: { login: automationLogin },
+  }));
+}
+
+function repairContract(requiredFindings: Array<Record<string, unknown>>) {
+  const rendered = repairWorkerPrompt("243", "agent/issue-243", head, requiredFindings, "attempt-key", "/state/promise.json", "/worktree", {
+    projectId: "demo",
+    repoPath: "/repo",
+    githubRepo: "owner/repo",
+    stateDir: "/state",
+    checkCommand: "npm test",
+    workerAgent: "pi",
+    workerModel: "",
+    remote: "origin",
+    reviewLabel: "agent:review",
+    blockedLabel: "agent:blocked",
+    inProgressLabel: "agent:in-progress",
+    automationDir: "/automation",
+    enabledAt: 1,
+  });
+  return JSON.parse(rendered.match(/Required findings contract:\n```json\n([\s\S]*?)\n```/)?.[1] || "[]");
+}
 
 describe("automatic review repair", () => {
   it("permits a same-repository open PR at the exact head", () => {
@@ -37,5 +66,33 @@ describe("automatic review repair", () => {
 
   it("matches one repair result per required finding", () => {
     expect(sameFindingTitles([{ title: "A" }], ["A"])).toBe(true);
+  });
+
+  it("launches a later progress-qualified repair regardless of historical attempt count", () => {
+    expect(selectRepairAttempt(historicalRepairMarkers(20), head, findings, automationLogin).action).toBe("launch_repair");
+  });
+
+  it("does not relaunch the same exact review result after many historical attempts", () => {
+    const attempted = { body: renderRepairMarker(head, reviewResultFingerprint(findings)), author: { login: automationLogin } };
+
+    expect(selectRepairAttempt([...historicalRepairMarkers(20), attempted], head, findings, automationLogin).action).toBe("already_attempted");
+  });
+
+  it("ignores repair markers from untrusted authors", () => {
+    const untrusted = [{ body: renderRepairMarker(head, reviewResultFingerprint(findings)), author: { login: "untrusted-user" } }];
+
+    expect(selectRepairAttempt(untrusted, head, findings, automationLogin).action).toBe("launch_repair");
+  });
+
+  it("keeps historical repair markers with finding counts readable", () => {
+    const marker = renderRepairMarker(head, reviewResultFingerprint(findings)).replace(" -->", " findings=4 -->");
+
+    expect(repairAttempts([{ body: marker }])[0].findingCount).toBe(4);
+  });
+
+  it("passes all current required findings together in one repair contract", () => {
+    const second = { title: "Missing guard", body: "Reject stale input", path: "src/b.ts", line: 8, severity: "blocker" };
+
+    expect(repairContract([...findings, second]).map((finding: Record<string, unknown>) => finding.title)).toEqual(["Lint contract failure", "Missing guard"]);
   });
 });
