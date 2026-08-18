@@ -20,8 +20,8 @@ function parseArgs(argv: string[]): JsonObject {
     values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
   }
   for (const name of [
-    "attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "enabledAt", "readyLabel", "implementLabel",
-    "inProgressLabel", "reviewLabel", "updateBranchLabel", "blockedLabel",
+    "attemptRecord", "projectId", "projectRepo", "githubRepo", "stateDir", "enabledAt", "readyLabel", "exploreLabel",
+    "implementLabel", "inProgressLabel", "reviewLabel", "updateBranchLabel", "blockedLabel",
   ]) {
     if (!values[name]) throw new Error(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} is required`);
   }
@@ -94,6 +94,7 @@ function reconcileLocked(
       github,
       repository: String(record.repository),
       issueNumber: Number(record.target.number),
+      requestLabels: [String(args.exploreLabel), String(args.implementLabel)],
       requestLabel: String(record.agentRequest.label),
       requestEventId: String(record.agentRequest.eventId),
       inProgressLabel: String(args.inProgressLabel),

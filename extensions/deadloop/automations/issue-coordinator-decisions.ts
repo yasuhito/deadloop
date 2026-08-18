@@ -375,6 +375,13 @@ function issueRequestStopResult(
       driverAction: "request_consumed_before_stop",
     };
   }
+  if (kind === "superseded") {
+    return {
+      status: "done",
+      message: `Issue #${issueNumber} ${role} request was consumed by a concurrent attempt that owns the active state; left recovery guidance`,
+      driverAction: "request_consumed_by_concurrent_attempt",
+    };
+  }
   if (kind === "recovery_blocked") {
     return {
       status: "skip",

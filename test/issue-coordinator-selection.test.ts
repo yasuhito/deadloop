@@ -155,6 +155,16 @@ describe("issue request stop results", () => {
       .toBe("Issue #42 implementation request was consumed before a stop; left recovery guidance");
   });
 
+  it("reports a consumption superseded by a concurrent role with its own action", () => {
+    expect(issueRequestStopResult("superseded", "exploration", 42).driverAction)
+      .toBe("request_consumed_by_concurrent_attempt");
+  });
+
+  it("names the attempt that owns the active state when a consumption is superseded", () => {
+    expect(issueRequestStopResult("superseded", "exploration", 42).message)
+      .toBe("Issue #42 exploration request was consumed by a concurrent attempt that owns the active state; left recovery guidance");
+  });
+
   it("skips an Issue blocked again before its request was consumed", () => {
     expect(issueRequestStopResult("recovery_blocked", "exploration", 42).driverAction)
       .toBe("recovery_block_raced");

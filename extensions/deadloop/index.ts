@@ -1568,6 +1568,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         "--state-dir", STATE_DIR,
         "--enabled-at", String(project.enabledAt),
         "--ready-label", labels.ready,
+        "--explore-label", labels.explore,
         "--implement-label", labels.implement,
         "--in-progress-label", labels.inProgress,
         "--review-label", labels.review,

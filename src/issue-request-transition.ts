@@ -13,6 +13,7 @@ type ConsumeIssueRequestInput = {
   github: IssueRequestGithub;
   repository: string;
   issueNumber: number;
+  requestLabels: string[];
   requestLabel: string;
   requestEventId: string;
   inProgressLabel: string;
@@ -28,6 +29,7 @@ type IssueRequestTransitionOutcome =
   | { kind: "raced"; requestEventId: string }
   | { kind: "recovery_blocked"; requestEventId: string }
   | { kind: "blocked_after_consumption"; requestEventId: string }
+  | { kind: "superseded"; requestEventId: string }
   | { kind: "ambiguous_blocked"; requestEventId: string };
 
 type PersistSuccessfulExplorationInput = {
@@ -166,6 +168,22 @@ function blockedConsumptionComment(input: ConsumeIssueRequestInput, leftoverActi
   ].join("\n");
 }
 
+function supersededConsumptionComment(input: ConsumeIssueRequestInput): string {
+  return [
+    `<!-- deadloop:superseded-request-consumption:v1 attempt=${input.attemptId} -->`,
+    "## Agent request was consumed by a concurrent attempt",
+    "",
+    `deadloop consumed the selected \`${input.requestLabel}\` request, then proved that the live \`${input.inProgressLabel}\` state belongs to another Agent request consumed in the same moment. No agent was launched for this request, and the attempt that owns that state was left running.`,
+    "",
+    "The consumed request was not restored because the active attempt holds no waiting Agent request.",
+    "To ask for this work again, add a new Agent request after the active attempt reports:",
+    "",
+    "```bash",
+    `gh issue edit ${input.issueNumber} -R ${quoteShell(input.repository)} --add-label ${quoteShell(input.requestLabel)}`,
+    "```",
+  ].join("\n");
+}
+
 type IssueStopObservation = {
   events: JsonObject[];
   labels: Set<string>;
@@ -219,26 +237,33 @@ function blockAmbiguousConsumption(
 }
 
 /**
- * Explain a stop that raced in after the selected request was provably consumed.
+ * Prove this transition's own exact explanation for a request it already consumed.
  *
- * The consumed generation cannot be restored, so the operator-visible recovery interface is a new
- * Agent request. The stop label is owned by whoever raised it; this seam only proves its own exact
- * recovery explanation and never mutates a label.
+ * A consumed generation cannot be restored, so the operator-visible recovery interface is a new
+ * Agent request and the explanation is the only thing that keeps the consumption visible. The
+ * comment is deduplicated by authorized author and exact body, so a retry writes nothing new, and
+ * no label is mutated here: every label involved is owned by whoever raised it.
  */
-function stopConsumedRequest(
-  input: ConsumeIssueRequestInput,
-  leftoverActiveState = false,
-): IssueRequestTransitionOutcome {
+function proveConsumedRequestExplanation(input: ConsumeIssueRequestInput, body: string): void {
   if (!input.automationLogin.trim()) throw new Error("authorized Automation host login is required");
-  const body = blockedConsumptionComment(input, leftoverActiveState);
   let observation = observeStopState(input);
   if (!trustedExactComment(observation.comments, input.automationLogin, body)) {
     input.github.commentIssue(input.repository, input.issueNumber, body);
     observation = observeStopState(input);
   }
   if (!trustedExactComment(observation.comments, input.automationLogin, body)) {
-    throw new Error("consumed-request stop explanation could not be proven");
+    throw new Error("consumed-request explanation could not be proven");
   }
+}
+
+/**
+ * Explain a stop that raced in after the selected request was provably consumed.
+ */
+function stopConsumedRequest(
+  input: ConsumeIssueRequestInput,
+  leftoverActiveState = false,
+): IssueRequestTransitionOutcome {
+  proveConsumedRequestExplanation(input, blockedConsumptionComment(input, leftoverActiveState));
   return { kind: "blocked_after_consumption", requestEventId: input.requestEventId };
 }
 
@@ -489,8 +514,14 @@ function persistSuccessfulExploration(input: PersistSuccessfulExplorationInput):
  * The caller must have durably prepared the attempt and bound `requestEventId` before calling this
  * seam. Only the selected request label is deleted. The durable receipt is written only after the
  * resulting unlabeled event is observed and no newer generation has raced with it.
+ *
+ * `requestLabels` names every Agent request label an Issue can carry, because the roles compete for
+ * one active state: the transition must recognize the other role's consumption to stay exclusive.
  */
 function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTransitionOutcome {
+  if (!input.requestLabels.includes(input.requestLabel)) {
+    throw new Error("the selected Agent request label must be one of the Issue Agent request labels");
+  }
   const before = observeRequest(input);
   const selected = selectedRequestEvent(before, input);
   if (!selected) return { kind: "cancelled", requestEventId: input.requestEventId };
@@ -561,7 +592,39 @@ function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTrans
   }
   if (after.labels.has(input.requestLabel)) return { kind: "raced", requestEventId: input.requestEventId };
 
-  return createActiveState(input, selected);
+  return createActiveState(input, selected, ownRemoval);
+}
+
+/**
+ * Name the consumption that owns a live active state, using only stably ordered timeline facts.
+ *
+ * GitHub's label addition is idempotent: the second host to add `agent:in-progress` records no
+ * second `labeled` event, so the label cannot say who created it, and the request-consumption
+ * contract permits neither an ownership comment nor exclusion by comment time. What the timeline
+ * does order is every automation-authored removal of an Agent request label, and one consumption
+ * performs exactly one such removal immediately before it adds the active state. The last
+ * consumption ordered strictly before the active state's `labeled` event therefore owns it.
+ *
+ * Only that direction is safe. A host reads this timeline after its own removal and its own
+ * addition, so a competitor's earlier removal is already recorded and can only take a win away; a
+ * competitor whose removal lands later is ordered after the active state's event, so the same rule
+ * hands the state to the earlier consumption for both hosts. Role priority cannot arbitrate here:
+ * it would let the host that has not yet seen the other role's removal keep a win. A removal left
+ * by an abandoned attempt is ordered before this attempt's own removal, so it can never claim an
+ * active state created after it.
+ */
+function activeStateOwner(
+  events: JsonObject[],
+  input: ConsumeIssueRequestInput,
+  activeState: JsonObject,
+): JsonObject | null {
+  const consumptions = events.filter((event) => eventId(event)
+    && String(event.event || "").toLowerCase() === "unlabeled"
+    && input.requestLabels.includes(String(event.label?.name || ""))
+    && String(event.actor?.login || "").toLowerCase() === input.automationLogin.toLowerCase()
+    && compareIssueTimelineEvents(event, activeState) < 0);
+  consumptions.sort(compareIssueTimelineEvents);
+  return consumptions.at(-1) || null;
 }
 
 /**
@@ -571,14 +634,17 @@ function consumeIssueRequest(input: ConsumeIssueRequestInput): IssueRequestTrans
  * that reconciliation owns, never a durably claimed attempt with no workspace. A block or a newer
  * request observed after the active state exists releases that state again and stops.
  *
- * An active state this attempt did not create is never adopted. GitHub exposes no attempt identity
- * on a label, so a pre-existing `agent:in-progress` may belong to another host that consumed the
- * other role in the same gap. Adopting it would let two attempts launch and would let this stop
- * delete their state, so an unproven active state fails closed and is left untouched.
+ * An active state this attempt did not create is never adopted, and the check and the addition are
+ * separate operations, so the addition being idempotent is not proof of creation either. Exclusivity
+ * comes from the timeline instead: exploration and implementation can be consumed by two hosts in
+ * the same gap, and only the consumption this active state's event follows may launch. The loser
+ * keeps its hands off the winner: no receipt, no release of that state, and an idempotent
+ * explanation of its own consumed request.
  */
 function createActiveState(
   input: ConsumeIssueRequestInput,
   selected: JsonObject,
+  ownRemoval: JsonObject,
 ): IssueRequestTransitionOutcome {
   let observation: IssueRequestObservation;
   try {
@@ -590,6 +656,20 @@ function createActiveState(
   } catch {
     return blockAmbiguousConsumption(input, !releaseActiveState(input));
   }
+  const latestActiveEvent = labelEvent(observation.events, input.inProgressLabel);
+  const activeState = observation.labels.has(input.inProgressLabel)
+    && String(latestActiveEvent?.event || "").toLowerCase() === "labeled" ? latestActiveEvent : null;
+  if (activeState) {
+    const owner = activeStateOwner(observation.events, input, activeState);
+    if (!owner) return blockAmbiguousConsumption(input, true);
+    if (eventId(owner) !== eventId(ownRemoval)) {
+      // The winner is running, so nothing is mutated: a stop would clear an Issue of the state that
+      // attempt still needs, and releasing the state would strand its agent. Only the consumed
+      // request is explained, because an Agent request must never disappear without a trace.
+      proveConsumedRequestExplanation(input, supersededConsumptionComment(input));
+      return { kind: "superseded", requestEventId: input.requestEventId };
+    }
+  }
   const blocked = observation.labels.has(input.blockedLabel)
     || issueLabelIsActive(observation.events, input.blockedLabel);
   const newerRequest = observation.labels.has(input.requestLabel)
@@ -597,7 +677,7 @@ function createActiveState(
       && String(event.event || "").toLowerCase() === "labeled"
       && String(event.label?.name || "") === input.requestLabel
       && eventId(event) !== input.requestEventId);
-  if (blocked || newerRequest || !observation.labels.has(input.inProgressLabel)) {
+  if (blocked || newerRequest || !activeState) {
     const released = releaseActiveState(input);
     if (blocked) return stopConsumedRequest(input, !released);
     if (!released) return blockAmbiguousConsumption(input, true);

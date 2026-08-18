@@ -17,6 +17,7 @@ type Event = {
 
 function scenario(options: {
   requestLabel?: "agent:implement" | "agent:explore";
+  requestLabels?: string[];
   beforeDelete?: (state: ReturnType<typeof createState>) => void;
   duringDelete?: (state: ReturnType<typeof createState>) => void;
   afterActiveState?: (state: ReturnType<typeof createState>) => void;
@@ -93,6 +94,7 @@ function scenario(options: {
     github,
     repository: "owner/repo",
     issueNumber: 42,
+    requestLabels: options.requestLabels || ["agent:explore", "agent:implement"],
     requestLabel,
     requestEventId: requestLabel === "agent:explore" ? "2" : "1",
     inProgressLabel: "agent:in-progress",
@@ -148,6 +150,87 @@ function createState() {
         if (createdAt && events[before]) events[before].created_at = createdAt;
       }
     },
+  };
+}
+
+// Two Automation hosts consume the two Issue roles for one Issue at the same time. The interleaving
+// is the reported race: the first host passes its pre-add active-state check, the second host then
+// runs its whole transition, and only afterwards does the first host's idempotent addition land.
+function concurrentRolesScenario(options: {
+  firstRole?: "agent:explore" | "agent:implement";
+  copiedComment?: { body: string; login: string };
+} = {}) {
+  const state = createState();
+  const automationLogin = "deadloop-bot";
+  const firstRole = options.firstRole || "agent:explore";
+  const secondRole = firstRole === "agent:explore" ? "agent:implement" : "agent:explore";
+  if (options.copiedComment) {
+    const timestamp = "2026-08-16T00:00:30Z";
+    state.comments.push({
+      id: "copied-comment",
+      body: options.copiedComment.body,
+      user: { login: options.copiedComment.login },
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+  }
+  const trace: string[] = [];
+  const receipts: string[] = [];
+  let interleaved = false;
+  let second: { kind: string } | null = null;
+  function inputFor(role: string) {
+    return {
+      github,
+      repository: "owner/repo",
+      issueNumber: 42,
+      requestLabels: ["agent:explore", "agent:implement"],
+      requestLabel: role,
+      requestEventId: role === "agent:explore" ? "2" : "1",
+      inProgressLabel: "agent:in-progress",
+      blockedLabel: "agent:blocked",
+      automationLogin,
+      attemptId: `attempt-${role}`,
+      persistConsumed: () => { receipts.push(role); },
+    };
+  }
+  const github = {
+    listIssueLabels: () => [...state.labels].map((name) => ({ name })),
+    listIssueTimelineEvents: () => [...state.events],
+    listIssueComments: () => state.comments,
+    addIssueLabel: (_repo: string, _number: number, label: string) => {
+      trace.push(`add:${label}`);
+      if (label === "agent:in-progress" && !interleaved) {
+        interleaved = true;
+        second = consumeIssueRequest(inputFor(secondRole));
+      }
+      state.label(label, automationLogin);
+    },
+    deleteIssueLabel: (_repo: string, _number: number, label: string) => {
+      trace.push(`delete:${label}`);
+      if (!state.labels.has(label)) return { status: 404 };
+      state.unlabel(label, automationLogin);
+      return { status: 200 };
+    },
+    commentIssue: (_repo: string, _number: number, body: string) => {
+      const timestamp = "2026-08-16T00:01:00Z";
+      state.comments.push({
+        id: `comment-${state.comments.length + 1}`,
+        body,
+        user: { login: automationLogin },
+        created_at: timestamp,
+        updated_at: timestamp,
+      });
+    },
+  };
+  const first = consumeIssueRequest(inputFor(firstRole));
+  return {
+    interrupted: first as { kind: string },
+    nested: second as unknown as { kind: string },
+    launches: [first, second].filter((outcome) => outcome?.kind === "consumed").length,
+    receipts,
+    labels: [...state.labels],
+    comments: state.comments,
+    trace,
   };
 }
 
@@ -362,6 +445,49 @@ describe("Issue Agent request transition", () => {
   it("names the foreign active state in its stop explanation", () => {
     expect(scenario({ activeStateAlreadyPresent: true }).comments[0].body)
       .toContain("--remove-label 'agent:in-progress'");
+  });
+
+  it("launches at most one of two roles consumed in the same gap", () => {
+    expect(concurrentRolesScenario().launches).toBe(1);
+  });
+
+  it("launches at most one when implementation is consumed before exploration", () => {
+    expect(concurrentRolesScenario({ firstRole: "agent:implement" }).launches).toBe(1);
+  });
+
+  it("hands the active state to the consumption it follows", () => {
+    expect(concurrentRolesScenario().nested.kind).toBe("consumed");
+  });
+
+  it("supersedes the consumption the active state does not follow", () => {
+    expect(concurrentRolesScenario().interrupted.kind).toBe("superseded");
+  });
+
+  it("writes one durable receipt for two roles consumed in the same gap", () => {
+    expect(concurrentRolesScenario().receipts).toEqual(["agent:implement"]);
+  });
+
+  it("leaves the winning active state in place", () => {
+    expect(concurrentRolesScenario().labels).toContain("agent:in-progress");
+  });
+
+  it("never releases an active state another consumption owns", () => {
+    expect(concurrentRolesScenario().trace.filter((entry) => entry === "delete:agent:in-progress"))
+      .toHaveLength(0);
+  });
+
+  it("explains the request a superseded consumption removed", () => {
+    expect(concurrentRolesScenario().comments[0].body).toContain("--add-label 'agent:explore'");
+  });
+
+  it("does not trust a copied superseded explanation from another commenter", () => {
+    const body = concurrentRolesScenario().comments[0].body;
+    expect(concurrentRolesScenario({ copiedComment: { body, login: "intruder" } }).comments).toHaveLength(2);
+  });
+
+  it("rejects a selected request label outside the Issue Agent request labels", () => {
+    expect(() => scenario({ requestLabels: ["agent:explore"] }))
+      .toThrow("the selected Agent request label must be one of the Issue Agent request labels");
   });
 
   it("removes the active state when the durable receipt fails", () => {
