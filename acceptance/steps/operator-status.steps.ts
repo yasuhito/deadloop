@@ -71,6 +71,20 @@ Given("There is no Issue waiting for implementation.", function (this: OperatorS
   this.statusInput = { ...baseStatusInput(), issues: [] };
 });
 
+Given("An Issue has the `agent:implement` request without `ready-for-agent`", function (this: OperatorStatusWorld) {
+  this.statusInput = {
+    ...baseStatusInput(),
+    issues: [{ number: 14, title: "Requested without triage metadata", labels: [{ name: "agent:implement" }] }],
+  };
+});
+
+Given("An Issue has the `agent:implement` request and `ready-for-human`", function (this: OperatorStatusWorld) {
+  this.statusInput = {
+    ...baseStatusInput(),
+    issues: [{ number: 15, title: "Waiting for a person", labels: [{ name: "agent:implement" }, { name: "ready-for-human" }] }],
+  };
+});
+
 Given("Issue #13 is being implemented", function (this: OperatorStatusWorld) {
   this.statusInput = { ...baseStatusInput(), issues: fixture.issues };
 });
@@ -115,6 +129,14 @@ When("The operator requests deadloop status", function (this: OperatorStatusWorl
 
 Then("Status reports that no Issue is waiting for implementation", function (this: OperatorStatusWorld) {
   assert.match(this.report || "", /- eligible: none/);
+});
+
+Then("Status shows the Issue as waiting for implementation", function (this: OperatorStatusWorld) {
+  assert.match(this.report || "", /- eligible: #14 Requested without triage metadata/);
+});
+
+Then("Status shows the Issue as waiting for a person", function (this: OperatorStatusWorld) {
+  assert.match(this.report || "", /- waiting for a person: #15 Waiting for a person/);
 });
 
 Then("Status shows the target Issue", function (this: OperatorStatusWorld) {

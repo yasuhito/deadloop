@@ -8,6 +8,24 @@ The operator can inspect Issues, pull requests, worktrees, configuration conditi
 * When The operator requests deadloop status
 * Then Status reports that no Issue is waiting for implementation
 
+## Scenario: Show an Issue whose request carries no triage label
+
+* Given An Issue has the `agent:implement` request without `ready-for-agent`
+* When The operator requests deadloop status
+* Then Status shows the Issue as waiting for implementation
+
+## Scenario: Do not show an Issue that is waiting for a person as waiting for implementation
+
+* Given An Issue has the `agent:implement` request and `ready-for-human`
+* When The operator requests deadloop status
+* Then Status reports that no Issue is waiting for implementation
+
+## Scenario: Show an Issue that was handed back to a person
+
+* Given An Issue has the `agent:implement` request and `ready-for-human`
+* When The operator requests deadloop status
+* Then Status shows the Issue as waiting for a person
+
 ## Scenario: Show target Issue
 
 * Given Issue #13 is being implemented
