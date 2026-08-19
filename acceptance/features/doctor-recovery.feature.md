@@ -56,11 +56,11 @@ Operators can check blocked work simply by viewing `/deadloop-doctor`, clean up 
 * When The operator runs doctor
 * Then doctor shows no findings
 
-## Scenario: Show the command to enqueue a prepared Issue that has not been submitted
+## Scenario: Do not report a triage-only Issue as a problem
 
 * Given An Issue has only `ready-for-agent`
 * When The operator runs doctor
-* Then doctor shows a command to enqueue the Issue
+* Then doctor shows no findings
 
 ## Scenario: Show a command to inspect an Issue that needs triage
 

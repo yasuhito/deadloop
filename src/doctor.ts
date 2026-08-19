@@ -326,27 +326,14 @@ function buildOrphanWorktreeFindings(
     });
 }
 
+// `ready-for-agent` is optional triage metadata, not an implementation request: the request is the
+// latest active `agent:implement` generation, which a person adds when they are ready to let deadloop
+// start work. An Issue that carries only `ready-for-agent` is therefore waiting on a human decision,
+// not jammed, so doctor stays silent about it. `needs-triage` does need a person and is reported.
 function buildQueueJamFindings(project: NormalizedProject, issues: DoctorGithubItem[]): DoctorFinding[] {
   const findings: DoctorFinding[] = [];
   for (const issue of issues) {
     const labels = labelsOf(issue);
-    if (
-      labels.has(project.labels.ready) &&
-      !labels.has(project.labels.implement) &&
-      !labels.has(project.labels.blocked) &&
-      !labels.has(project.labels.inProgress) &&
-      !labels.has(project.labels.needsInfo) &&
-      !labels.has(project.labels.needsTriage) &&
-      !labels.has(project.labels.wontfix)
-    ) {
-      findings.push({
-        id: `ready-without-implement-${issue.number ?? "unknown"}`,
-        type: "queue_jam",
-        title: `ready issue missing implement label: ${issueRef(issue)}`,
-        summary: `${project.labels.ready} is present, but ${project.labels.implement} is missing. Workers will not pick up this issue.`,
-        commands: [`gh issue edit ${issue.number ?? "<number>"} --add-label ${shellArg(project.labels.implement)}`],
-      });
-    }
     if (labels.has(project.labels.needsTriage)) {
       findings.push({
         id: `needs-triage-${issue.number ?? "unknown"}`,

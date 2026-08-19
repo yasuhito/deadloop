@@ -239,10 +239,6 @@ Then("doctor shows a command to clean up the worktree", function (this: DoctorWo
   assert.match(this.report || "", /herdr worktree remove --workspace ws-3/);
 });
 
-Then("doctor shows a command to enqueue the Issue", function (this: DoctorWorld) {
-  assert.match(this.report || "", /gh issue edit 6 --add-label agent:implement/);
-});
-
 Then("doctor shows a command to inspect the Issue", function (this: DoctorWorld) {
   assert.match(this.report || "", /gh issue view 7/);
 });
