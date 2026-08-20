@@ -783,7 +783,7 @@ function assertBranchUpdateRequestSelectable(
   assertSameLaunchTarget(pr, livePlan.pr, "pr");
   const decisionFor = observe.decisionFor || ((live: JsonObject) => branchUpdateDecision(live, env, null));
   assertBranchUpdateTargetUnchanged(livePlan.pr, headOid, baseOid, decisionFor);
-  if (branchUpdateAttemptExists(livePlan.pr.comments || [], headOid, baseOid)) {
+  if (branchUpdatePairWasAttempted(livePlan.pr, env, headOid, baseOid)) {
     throw new StaleLaunchError(`PR #${number} branch-update target changed before launch`);
   }
 }
