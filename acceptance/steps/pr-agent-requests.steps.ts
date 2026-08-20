@@ -4,7 +4,7 @@ import path from "node:path";
 import { Given, Then, When } from "@cucumber/cucumber";
 import { runPrReviewerDriverFixture, type PrReviewerDriverResult } from "../support/pr-reviewer-driver";
 
-const { selectPrRequest } = require("../../src/pr-request-selection.ts");
+const { selectPrRequest } = require("../../src/pr-request-selection.cts");
 
 const requestLabels = {
   updateBranch: "agent:update-branch",

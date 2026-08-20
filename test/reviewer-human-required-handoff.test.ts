@@ -69,6 +69,6 @@ describe("completed human_required review handoff", () => {
   it("runs the completion handler for a review that completed with human_required", async () => {
     writeCompletedHumanRequiredReview();
     const commands = await reconcileWithRecordedCommands();
-    expect(commands.some((args) => String(args[0]).endsWith("complete-attempt-workspace.ts"))).toBe(true);
+    expect(commands.some((args) => String(args[0]).endsWith("complete-attempt-workspace.cts"))).toBe(true);
   });
 });

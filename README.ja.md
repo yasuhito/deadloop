@@ -21,6 +21,8 @@ pi install git:github.com/yasuhito/deadloop
 ## 現在の状態
 
 - v0 は Pi パッケージ／拡張として動作します。
+- 自動処理のホストは Pi と [omp](https://github.com/oh-my-pi/pi-coding-agent)（Oh My Pi）のどちらでも使えます。ホスト固有の設定はなく、どちらでも同じように読み込まれて自動処理が動きます。1 つのリポジトリを同時に駆動するのは 1 ホストだけです。スケジューラのロックは GitHub リポジトリ ID を単位とするため、後から起動した側は駆動せず、先に起動した側が続けます。
+- 作業担当とレビュー担当は `pi`、`claude`、`omp` から選べます。`workerAgent` と `reviewerAgent` で指定し、どのホストが自動処理を動かしているかとは独立です。
 - 既定の実行基盤は [Herdr](https://herdr.dev/) です。
 - 現在対応しているホスト環境は、互換性のある `flock` 実行ファイル（通常は util-linux が提供）と、非待機のファイル記述子ロックを利用できる Unix 系システムです。`/deadloop-enable` は自動処理を有効化する前に、この機能を検査します。
 

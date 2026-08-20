@@ -6,8 +6,10 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { AGENT_KINDS } from "../src/agent-profiles.cjs";
+
 const automationDir = path.join(process.cwd(), "extensions/deadloop/automations");
-const driverScript = path.join(automationDir, "issue-coordinator-driver.ts");
+const driverScript = path.join(automationDir, "issue-coordinator-driver.cts");
 
 function readTemplate(name: string): string {
   return fs.readFileSync(path.join(automationDir, name), "utf8");
@@ -27,9 +29,10 @@ function issueCoordinatorWorkerPrompt(): string {
   return issueCoordinatorWorkerResult().prompt;
 }
 
-// A raw agent-launch branch is a `herdr agent start ... -- pi`/`-- claude`
-// command that names the agent binary directly, which the launcher replaced.
-const rawLaunchBranch = /agent start[^\n]*--\s+(pi|claude)\b/;
+// A raw agent-launch branch is a `herdr agent start ... -- <agent binary>` command that names the
+// agent binary directly, which the launcher replaced. The alternation is derived from the profile
+// table so a newly profiled kind is guarded without editing this regex.
+const rawLaunchBranch = new RegExp(`agent start[^\\n]*--\\s+(${AGENT_KINDS.join("|")})\\b`);
 
 
 // The dispatch lock writes under the state directory, so a fixture run needs one of its own rather
@@ -72,6 +75,6 @@ describe("agent launch template", () => {
   });
 
   it("keeps issue coordinator fallback focused on the driver", () => {
-    expect(readTemplate("issue-coordinator.prompt.md")).toMatch(/issue-coordinator-driver\.ts/);
+    expect(readTemplate("issue-coordinator.prompt.md")).toMatch(/issue-coordinator-driver\.cts/);
   });
 });

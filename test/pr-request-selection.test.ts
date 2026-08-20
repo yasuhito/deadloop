@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, selectPrRequest } = require("../src/pr-request-selection.ts");
+const { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, selectPrRequest } = require("../src/pr-request-selection.cts");
 
 const requestLabels = {
   updateBranch: "agent:update-branch",

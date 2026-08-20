@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.ts";
+const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.cts";
 const { acquireLockSync, releaseOwned } = require("../src/enablement-lock.cjs");
 
 // The dispatch lock writes under the state directory, so a fixture run needs one of its own rather
@@ -184,7 +184,7 @@ exit 2
   });
 
   it("hands successful exploration to the deterministic completion path", () => {
-    expect(runDriverFixture("driver-explore.json").prompt).toContain("complete-issue-exploration.ts");
+    expect(runDriverFixture("driver-explore.json").prompt).toContain("complete-issue-exploration.cts");
   });
 
   it("launches a recovery request ordered after an Issue block", () => {
@@ -209,7 +209,7 @@ exit 2
   });
 
   it("does not consume a request when a newer block races with recovery", () => {
-    const { clearIssueRecoveryBlock } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
+    const { clearIssueRecoveryBlock } = require("../extensions/deadloop/automations/issue-coordinator-driver.cts");
     const events = [
       { id: "10", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } },
       { id: "11", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:explore" } },
@@ -340,7 +340,7 @@ exit 2
   });
 
   it("does not ask the LLM to run launch-agent", () => {
-    expect(runDriverFixture("driver-ready-worker.json").prompt).not.toContain("launch-agent.ts");
+    expect(runDriverFixture("driver-ready-worker.json").prompt).not.toContain("launch-agent.cts");
   });
 
   it("keeps promise files as the worker completion authority", () => {
@@ -388,7 +388,7 @@ describe("reusing an abandoned Worker checkout", () => {
 
   /** Every other proof passes, so the status line is the only thing under test. */
   function assertWith(status: string) {
-    const { assertRecoverableWorkerCheckout } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
+    const { assertRecoverableWorkerCheckout } = require("../extensions/deadloop/automations/issue-coordinator-driver.cts");
     return () => assertRecoverableWorkerCheckout(checkout, { repoPath: "/repo" }, {
       runner: {
         listWorktrees: () => [{ branch: checkout.branch, path: checkout.worktreePath, workspaceId: "" }],

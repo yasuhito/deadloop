@@ -6,12 +6,12 @@ import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
 
-const { loadFixtureCleanupPlan } = require("../../extensions/deadloop/automations/cleanup-completed-worker-worktrees.ts");
+const { loadFixtureCleanupPlan } = require("../../extensions/deadloop/automations/cleanup-completed-worker-worktrees.cts");
 
 type CleanupPlan = { candidates: unknown[] };
 type CleanupWorld = { fixtureName?: string; plan?: CleanupPlan; trackedFileExists?: boolean; trackedWorktree?: boolean };
 
-const cleanupScript = "extensions/deadloop/automations/cleanup-completed-worker-worktrees.ts";
+const cleanupScript = "extensions/deadloop/automations/cleanup-completed-worker-worktrees.cts";
 const fixtureDirectory = path.join("test", "fixtures", "issue-coordinator");
 
 function planFromFixture(fixtureName: string): CleanupPlan {

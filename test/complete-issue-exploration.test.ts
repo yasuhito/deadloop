@@ -13,7 +13,7 @@ const {
   readOnlyExplorationFailure,
   removeExplorationWorktree,
   renderExplorationResult,
-} = require("../extensions/deadloop/automations/complete-issue-exploration.ts");
+} = require("../extensions/deadloop/automations/complete-issue-exploration.cts");
 
 const record = {
   workspaceId: "workspace-1",

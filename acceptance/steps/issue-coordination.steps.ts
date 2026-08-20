@@ -18,7 +18,7 @@ type IssueCoordinationWorld = {
   result?: IssueCoordinationResult;
 };
 
-const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.ts";
+const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.cts";
 
 function coordinateIssue(fixtureName: string): IssueCoordinationResult {
   const result = spawnSync(

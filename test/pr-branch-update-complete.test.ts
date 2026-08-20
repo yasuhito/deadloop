@@ -6,7 +6,7 @@ const {
   assertBranchUpdateRepositoryIdentity,
   parseArgs,
   waitForPushedHeadVisibility,
-} = require("../extensions/deadloop/automations/pr-branch-update-complete.ts");
+} = require("../extensions/deadloop/automations/pr-branch-update-complete.cts");
 const head = "a".repeat(40);
 
 function args() {

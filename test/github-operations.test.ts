@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { createGithubOperations, labelArgs } = require("../src/github-operations.ts");
+const { createGithubOperations, labelArgs } = require("../src/github-operations.cts");
 
 describe("GitHub operations", () => {
   it("builds label transition args", () => {

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-const { decidePushGuard, finalizeBranchUpdate } = require("../extensions/deadloop/automations/pr-branch-update-finalize.ts");
+const { decidePushGuard, finalizeBranchUpdate } = require("../extensions/deadloop/automations/pr-branch-update-finalize.cts");
 const {
   branchUpdateAttemptExists,
   branchUpdateRetryKey,
   renderBranchUpdateMarker,
-} = require("../extensions/deadloop/automations/pr-branch-update-state.ts");
+} = require("../extensions/deadloop/automations/pr-branch-update-state.cts");
 
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

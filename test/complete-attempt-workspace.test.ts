@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createPreparedAttempt, readAttemptRecord, releasesAttemptOwnership, transitionPersistedAttempt } from "../src/attempt-lifecycle";
 
-const { assertWorkerPersistenceAuthorized, closeCompletionStoppedWorkerAttempt, completeLocked: completeLockedRaw } = require("../extensions/deadloop/automations/complete-attempt-workspace.ts");
+const { assertWorkerPersistenceAuthorized, closeCompletionStoppedWorkerAttempt, completeLocked: completeLockedRaw } = require("../extensions/deadloop/automations/complete-attempt-workspace.cts");
 const completeLocked = (args: any, runner: any, recheck: () => void, authorizeWorker?: (...values: any[]) => void) =>
   completeLockedRaw(args, runner, recheck, authorizeWorker || (() => {}));
 const { renderAttemptPersistenceMarker } = require("../src/attempt-persistence-marker.cjs");
@@ -167,7 +167,7 @@ describe("selected attempt workspace completion", () => {
   };
   const stopLabels = { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", blocked: "agent:blocked" };
   function exactStoppedIssue() {
-    const { requiredVerificationStopMarker } = require("../src/issue-required-verification-stop.ts");
+    const { requiredVerificationStopMarker } = require("../src/issue-required-verification-stop.cts");
     return {
       number: 12,
       state: "OPEN",

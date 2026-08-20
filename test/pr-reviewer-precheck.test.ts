@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-const decisionScript = "extensions/deadloop/automations/pr-reviewer-decisions.ts";
+const decisionScript = "extensions/deadloop/automations/pr-reviewer-decisions.cts";
 
 function runDecision(args: string[]) {
   return spawnSync("node", [decisionScript, ...args], { cwd: process.cwd(), encoding: "utf8" });

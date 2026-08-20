@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { observeAttemptLiveness, observeAttemptRuntime } = require("../src/attempt-runtime-observation.ts");
+const { observeAttemptLiveness, observeAttemptRuntime } = require("../src/attempt-runtime-observation.cts");
 
 const roots: string[] = [];
 
@@ -43,8 +43,8 @@ function closedWorkspaceRunDir(receipt: Record<string, unknown> = {}): string {
 }
 
 describe("attempt liveness observation", () => {
-  it("reports an attempt whose agent is gone stopped", () => {
-    expect(observeAttemptLiveness(runner(), attempt()).kind).toBe("stopped");
+  it("reports an attempt whose agent left the runtime owner absent", () => {
+    expect(observeAttemptLiveness(runner(), attempt()).kind).toBe("owner_absent");
   });
 
   it("reports the attempt's own working agent live", () => {
@@ -53,28 +53,46 @@ describe("attempt liveness observation", () => {
     expect(observeAttemptLiveness(working, attempt()).kind).toBe("live");
   });
 
-  it("reports the attempt's own finished agent stopped", () => {
+  it("reports the attempt's own agent awaiting input live", () => {
+    const awaiting = runner({ listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt", status: "idle" }] });
+
+    expect(observeAttemptLiveness(awaiting, attempt()).kind).toBe("live");
+  });
+
+  it("reports the attempt's own agent that finished its turn live", () => {
     const finished = runner({ listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt", status: "done" }] });
 
-    expect(observeAttemptLiveness(finished, attempt()).kind).toBe("stopped");
+    expect(observeAttemptLiveness(finished, attempt()).kind).toBe("live");
   });
 
-  it("reports an attempt stopped while its own workspace stays open", () => {
+  it("reports the attempt's own agent blocked on its own prompt live", () => {
+    const blocked = runner({ listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt", status: "blocked" }] });
+
+    expect(observeAttemptLiveness(blocked, attempt()).kind).toBe("live");
+  });
+
+  it("reports the attempt's own agent of unreadable status live", () => {
+    const unreadable = runner({ listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt", status: "unknown" }] });
+
+    expect(observeAttemptLiveness(unreadable, attempt()).kind).toBe("live");
+  });
+
+  it("reports owner absent while the attempt's own workspace stays open", () => {
     const openWorkspace = runner({ listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 1 }] });
 
-    expect(observeAttemptLiveness(openWorkspace, attempt()).kind).toBe("stopped");
+    expect(observeAttemptLiveness(openWorkspace, attempt()).kind).toBe("owner_absent");
   });
 
-  it("reports an attempt stopped after its workspace closed without a receipt", () => {
+  it("reports owner absent after the workspace closed without a receipt", () => {
     const closed = runner({ listWorkspaces: () => [], listWorktrees: () => [] });
 
-    expect(observeAttemptLiveness(closed, attempt()).kind).toBe("stopped");
+    expect(observeAttemptLiveness(closed, attempt()).kind).toBe("owner_absent");
   });
 
   it("does not ask the runtime about workspaces", () => {
     const workspacesRefused = runner({ listWorkspaces: () => { throw new Error("workspaces must not decide liveness"); } });
 
-    expect(observeAttemptLiveness(workspacesRefused, attempt()).kind).toBe("stopped");
+    expect(observeAttemptLiveness(workspacesRefused, attempt()).kind).toBe("owner_absent");
   });
 
   it("fails closed when another agent occupies the checkout", () => {
@@ -104,11 +122,6 @@ describe("attempt liveness observation", () => {
     expect(observeAttemptLiveness(renamed, attempt()).kind).toBe("ambiguous");
   });
 
-  it("fails closed when the attempt's own agent has an unknown status", () => {
-    const unknown = runner({ listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt", status: "paused-maybe" }] });
-
-    expect(observeAttemptLiveness(unknown, attempt()).kind).toBe("ambiguous");
-  });
 });
 
 describe("attempt runtime observation", () => {
@@ -118,17 +131,17 @@ describe("attempt runtime observation", () => {
     expect(observeAttemptRuntime(working, attempt()).kind).toBe("live_matching_owner");
   });
 
-  it("reports an attempt whose agent is gone stopped", () => {
-    expect(observeAttemptRuntime(runner(), attempt()).kind).toBe("stopped_owned");
+  it("reports an attempt whose agent left the runtime owner absent", () => {
+    expect(observeAttemptRuntime(runner(), attempt()).kind).toBe("owner_absent_owned");
   });
 
-  it("reports the attempt's own finished agent stopped", () => {
+  it("reports the attempt's own agent that finished its turn live", () => {
     const finished = runner({ listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt", status: "done" }] });
 
-    expect(observeAttemptRuntime(finished, attempt()).kind).toBe("stopped_owned");
+    expect(observeAttemptRuntime(finished, attempt()).kind).toBe("live_matching_owner");
   });
 
-  it("refuses stopped ownership when another workspace holds the checkout", () => {
+  it("refuses absent-owner ownership when another workspace holds the checkout", () => {
     const shared = runner({ listWorkspaces: () => [
       { workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 1 },
       { workspaceId: "workspace-2", worktreePath: "/wt", tabCount: 1, paneCount: 1 },
@@ -137,31 +150,31 @@ describe("attempt runtime observation", () => {
     expect(observeAttemptRuntime(shared, attempt()).kind).toBe("ambiguous");
   });
 
-  it("refuses stopped ownership when the workspace has an extra pane", () => {
+  it("refuses absent-owner ownership when the workspace has an extra pane", () => {
     const extraPane = runner({ listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 1, paneCount: 2 }] });
 
     expect(observeAttemptRuntime(extraPane, attempt()).kind).toBe("ambiguous");
   });
 
-  it("refuses stopped ownership when the workspace has an extra tab", () => {
+  it("refuses absent-owner ownership when the workspace has an extra tab", () => {
     const extraTab = runner({ listWorkspaces: () => [{ workspaceId: "workspace-1", worktreePath: "/wt", tabCount: 2, paneCount: 1 }] });
 
     expect(observeAttemptRuntime(extraTab, attempt()).kind).toBe("ambiguous");
   });
 
-  it("refuses stopped ownership when another agent occupies the checkout", () => {
+  it("refuses absent-owner ownership when another agent occupies the checkout", () => {
     const foreign = runner({ listAgents: () => [{ name: "foreign", paneId: "pane-2", cwd: "/wt", status: "working" }] });
 
     expect(observeAttemptRuntime(foreign, attempt()).kind).toBe("ambiguous");
   });
 
-  it("refuses stopped ownership when another agent occupies a nested checkout path", () => {
+  it("refuses absent-owner ownership when another agent occupies a nested checkout path", () => {
     const nested = runner({ listAgents: () => [{ name: "foreign", paneId: "pane-2", cwd: "/wt/src", status: "working" }] });
 
     expect(observeAttemptRuntime(nested, attempt()).kind).toBe("ambiguous");
   });
 
-  it("refuses stopped ownership when an agent reaches the checkout through a symlink", () => {
+  it("refuses absent-owner ownership when an agent reaches the checkout through a symlink", () => {
     const worktree = checkout();
     const link = path.join(path.dirname(worktree), `${path.basename(worktree)}-link`);
     fs.symlinkSync(worktree, link);
@@ -173,27 +186,27 @@ describe("attempt runtime observation", () => {
     expect(observeAttemptRuntime(linked, attempt({ worktreePath: worktree })).kind).toBe("ambiguous");
   });
 
-  it("fails closed when the matching owner has an unknown status", () => {
-    const unknown = runner({ listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt", status: "paused-maybe" }] });
+  it("reports the matching owner of unreadable status live", () => {
+    const unreadable = runner({ listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt", status: "unknown" }] });
 
-    expect(observeAttemptRuntime(unknown, attempt()).kind).toBe("ambiguous");
+    expect(observeAttemptRuntime(unreadable, attempt()).kind).toBe("live_matching_owner");
   });
 
-  it("reports an attempt stopped after its own workspace was closed with a receipt", () => {
+  it("reports the owner absent after its own workspace was closed with a receipt", () => {
     const runDir = closedWorkspaceRunDir();
     const closed = runner({ listWorkspaces: () => [] });
 
-    expect(observeAttemptRuntime(closed, attempt({ runDir }), process.cwd()).kind).toBe("stopped_owned");
+    expect(observeAttemptRuntime(closed, attempt({ runDir }), process.cwd()).kind).toBe("owner_absent_owned");
   });
 
-  it("refuses stopped ownership for a closed workspace whose worktree is gone", () => {
+  it("refuses absent-owner ownership for a closed workspace whose worktree is gone", () => {
     const runDir = closedWorkspaceRunDir();
     const discarded = runner({ listWorkspaces: () => [], listWorktrees: () => [] });
 
     expect(observeAttemptRuntime(discarded, attempt({ runDir }), process.cwd()).kind).toBe("ambiguous");
   });
 
-  it("refuses stopped ownership for a closed workspace without a matching receipt", () => {
+  it("refuses absent-owner ownership for a closed workspace without a matching receipt", () => {
     const runDir = closedWorkspaceRunDir({ attemptId: "other-attempt" });
     const closed = runner({ listWorkspaces: () => [] });
 
@@ -221,7 +234,7 @@ describe("attempt runtime observation", () => {
     expect(observeAttemptRuntime(unknown, attempt({ runDir }), process.cwd()).kind).toBe("ambiguous");
   });
 
-  it("refuses stopped ownership for a closed workspace without a project checkout to list", () => {
+  it("refuses absent-owner ownership for a closed workspace without a project checkout to list", () => {
     const runDir = closedWorkspaceRunDir();
     const closed = runner({ listWorkspaces: () => [] });
 

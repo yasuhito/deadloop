@@ -36,7 +36,7 @@ function runRace(kind: "issue" | "pr") {
   const completedIssue = { ...initialIssue, body: "## Agent Brief\nDo something.\n## Acceptance criteria\nDone." };
   const initialPr = { number: 23, title: "Conflicted PR", url: "https://github.com/owner/repo/pull/23", state: "OPEN", headRefName: "agent/issue-23-draft", headRefOid: "draftsha", isCrossRepository: false, isDraft: true, mergeable: "CONFLICTING", mergeStateStatus: "DIRTY", labels: [{ name: "agent:review" }], statusCheckRollup: [], comments: [], reviewRequests: [] };
   const readyPr = { ...initialPr, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" };
-  writeFileSync(path.join(bin, "node"), `#!/bin/sh\ncase "$1" in *cleanup-completed-worker-worktrees.ts) printf '{"candidates":[]}\\n' ;; *) exec ${JSON.stringify(process.execPath)} "$@" ;; esac\n`);
+  writeFileSync(path.join(bin, "node"), `#!/bin/sh\ncase "$1" in *cleanup-completed-worker-worktrees.cts) printf '{"candidates":[]}\\n' ;; *) exec ${JSON.stringify(process.execPath)} "$@" ;; esac\n`);
   writeFileSync(path.join(bin, "herdr"), `#!/bin/sh
 if [ "$1" = "--version" ]; then printf 'herdr 0.8.0\\n'
 elif [ "$1 $2" = "status server" ]; then printf 'version: 0.8.0\\n'
@@ -56,8 +56,8 @@ esac
 `);
   for (const executable of ["node", "herdr", "gh"]) chmodSync(path.join(bin, executable), 0o755);
   const script = kind === "issue"
-    ? "extensions/deadloop/automations/issue-coordinator-driver.ts"
-    : "extensions/deadloop/automations/pr-reviewer-driver.ts";
+    ? "extensions/deadloop/automations/issue-coordinator-driver.cts"
+    : "extensions/deadloop/automations/pr-reviewer-driver.cts";
   const result = spawnSync(process.execPath, [script], {
     cwd: process.cwd(),
     encoding: "utf8",

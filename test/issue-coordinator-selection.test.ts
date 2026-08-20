@@ -8,8 +8,8 @@ const {
   issueRequestStopResult,
   remainingIssueDecisionTimeout,
   selectIssueForImplementation,
-} = require("../extensions/deadloop/automations/issue-coordinator-decisions.ts");
-const decisionScript = "extensions/deadloop/automations/issue-coordinator-decisions.ts";
+} = require("../extensions/deadloop/automations/issue-coordinator-decisions.cts");
+const decisionScript = "extensions/deadloop/automations/issue-coordinator-decisions.cts";
 
 function runDecision(args: string[]) {
   return spawnSync("node", [decisionScript, ...args], { cwd: process.cwd(), encoding: "utf8" });

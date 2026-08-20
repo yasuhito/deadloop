@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { reviewerFixture, workerFixture } from "./fixtures/attempt-workspace";
 
-const { createHerdrRunner } = require("../src/herdr-runner.ts");
+const { createHerdrRunner } = require("../src/herdr-runner.cts");
 
 const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-doctor-attempt-"));
 const stateDir = path.join(root, "deadloop");
@@ -38,7 +38,12 @@ describe("attempt workspace doctor classifications", () => {
   it("classifies an active attempt", () => {
     const record = { ...workerFixture().record, phase: "agent_started", lastSuccessfulPhase: "agent_started", outputRevision: undefined };
     writeAttempt(record, undefined);
-    expect(retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath }], [{ name: record.agentName, status: "working" }])[0].title).toContain("active");
+    expect(retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath }], [{ name: record.agentName, paneId: record.rootPaneId, cwd: record.worktreePath, status: "working" }])[0].title).toContain("active");
+  });
+  it("classifies an attempt whose agent awaits input as active", () => {
+    const record = { ...workerFixture().record, phase: "agent_started", lastSuccessfulPhase: "agent_started", outputRevision: undefined };
+    writeAttempt(record, undefined);
+    expect(retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath }], [{ name: record.agentName, paneId: record.rootPaneId, cwd: record.worktreePath, status: "idle" }])[0].title).toContain("active");
   });
   it("proves doctor ownership from a normalized 0.8.0 nested WorkspaceInfo worktree", () => {
     const payload = JSON.parse(readFileSync("test/fixtures/herdr-workspace-list.json", "utf8"));

@@ -47,7 +47,7 @@ function runReviewDriver(world: RequeuedReviewWorld): void {
   ) {
     throw new Error("requeued pull request state is missing");
   }
-  const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts"], {
+  const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.cts"], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {

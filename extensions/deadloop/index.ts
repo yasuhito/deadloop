@@ -34,20 +34,21 @@ import {
   runScheduledAutomation,
 } from "../../src/automation-runner";
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../src/agent-scratch-area.cjs");
-const { createAsyncHerdrRunner } = require("../../src/herdr-runner.ts");
+const { createAsyncHerdrRunner } = require("../../src/herdr-runner.cts");
+const { observeAttemptLiveness } = require("../../src/attempt-runtime-observation.cts");
 const {
   agentOccupiesAttemptWorkspace,
   readWorkspaceCloseStartedReceipt,
   workspaceProof,
-} = require("./automations/abandon-launch-failed-attempt.ts");
+} = require("./automations/abandon-launch-failed-attempt.cts");
 const { readAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
-const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.ts");
+const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
 const {
   defaultIssueDecisionConfig,
   issueBlockedByNumbers,
   liveDependencyState,
   selectIssueForImplementation,
-} = require("./automations/issue-coordinator-decisions.ts");
+} = require("./automations/issue-coordinator-decisions.cts");
 const { loadAutomationState, saveAutomationState } = require("../../src/automation-state.cjs");
 const { acquireLock, releaseOwned } = require("../../src/enablement-lock.cjs");
 const {
@@ -78,7 +79,7 @@ type RetainedProjectCheckFailure = {
   recordPath: string;
   attemptRecordPath?: string;
 };
-const { inspectRetainedProjectCheckFailures, inspectUnresolvedProjectCheckFailures } = require("../../src/project-check.ts") as {
+const { inspectRetainedProjectCheckFailures, inspectUnresolvedProjectCheckFailures } = require("../../src/project-check.cts") as {
   inspectRetainedProjectCheckFailures: (stateDir: string, project?: { id: string; githubRepo: string }) => RetainedProjectCheckFailure[];
   inspectUnresolvedProjectCheckFailures: (stateDir: string) => RetainedProjectCheckFailure[];
 };
@@ -833,7 +834,7 @@ async function collectLiveSnapshotData(
           "--limit",
           "100",
           "--json",
-          "number,title,labels,updatedAt,headRefName,headRefOid",
+          "number,title,labels,updatedAt,headRefName,headRefOid,isDraft",
         ],
         [],
       )
@@ -1058,9 +1059,10 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
         }
       }
       if (!fs.existsSync(record.promiseFile)) {
-        const active = agents.some((agent) => agent.name === record.agentName
-          && !["done", "idle", "failed", "stopped"].includes(String(agent.status || "").toLowerCase()));
-        status = active ? "active" : "missing_report";
+        // The same judgment the authority reconciliation uses, so doctor never calls an agent that is
+        // merely awaiting input a Worker that failed to report.
+        const absent = observeAttemptLiveness({ listAgents: () => agents }, record).kind === "owner_absent";
+        status = absent ? "missing_report" : "active";
       } else {
         let report;
         try { report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8")); }
@@ -1403,12 +1405,30 @@ function revalidatePendingIssueHandoff(handoff) {
   }
 }
 
+function monitorHandoffIsTerminal(handoff) {
+  if (!handoff.input || typeof handoff.input !== "object") return false;
+  const input = handoff.input;
+  const attemptRecordFile = typeof input.attemptRecordFile === "string"
+    ? input.attemptRecordFile
+    : typeof input.promiseFile === "string"
+      ? path.join(path.dirname(input.promiseFile), "attempt.json")
+      : "";
+  if (!attemptRecordFile) return false;
+  try {
+    const record = readAttemptRecord(path.dirname(attemptRecordFile));
+    return record.phase === "github_persisted" || releasesAttemptOwnership(record.phase);
+  } catch {
+    return false;
+  }
+}
+
 function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => true) {
   const ownedAutomationKeys = project.automations.map((automation) => automationStateKey(project, automation));
   return {
     enabledAt: () => project.enabledAt,
     isEnabled: () => isCurrentSchedulerRun() && isProjectEnabled(project),
     isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
+    monitorHandoffIsTerminal,
     notify: (message, level) => {
       if (!isCurrentSchedulerRun()) return;
       try {
@@ -1489,7 +1509,7 @@ async function reconcilePrWorkAuthority(pi, project): Promise<{ reconciled: bool
   const enabled = findEnabledProject(loadEnablementState(), project);
   if (!enabled?.automationLogin) return { reconciled: false, reason: "the enabled record names no Automation host login" };
   const result = await execJson(pi, "node", [
-    path.join(AUTOMATION_DIR, "reconcile-pr-work-authority.ts"),
+    path.join(AUTOMATION_DIR, "reconcile-pr-work-authority.cts"),
     "--project-id", project.id,
     "--project-repo", project.repoPath,
     "--github-repo", project.githubRepo,
@@ -1560,7 +1580,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
     const labels = projectLabels(project);
     if (record.phase === "prepared") {
       const claimResult = await execJson(pi, "node", [
-        path.join(AUTOMATION_DIR, "reconcile-prepared-attempt.ts"),
+        path.join(AUTOMATION_DIR, "reconcile-prepared-attempt.cts"),
         "--attempt-record", attemptRecord,
         "--project-id", project.id,
         "--project-repo", project.repoPath,
@@ -1576,7 +1596,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         "--automation-logins", (project.automationLogins || []).join(","),
         "--blocked-label", labels.blocked,
       ], null);
-      if (claimResult?.action === "error") debugLog("prepared attempt claim reconciliation blocked", claimResult.reason || claimResult.driverAction);
+      if (claimResult?.action === "error") debugLog("prepared attempt claim reconciliation blocked", claimResult.reason || claimResult.driverAction, claimResult.summary);
       try { record = readAttemptRecord(runDir); }
       catch { safeToSchedule = false; continue; }
     }
@@ -1606,7 +1626,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       : [];
     const args = record.role === "explorer"
       ? [
-          path.join(AUTOMATION_DIR, "complete-issue-exploration.ts"),
+          path.join(AUTOMATION_DIR, "complete-issue-exploration.cts"),
           "--attempt-record", attemptRecord,
           "--project-id", project.id,
           "--project-repo", project.repoPath,
@@ -1620,13 +1640,15 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
           "--blocked-label", labels.blocked,
         ]
       : [
-          path.join(AUTOMATION_DIR, "complete-attempt-workspace.ts"),
+          path.join(AUTOMATION_DIR, "complete-attempt-workspace.cts"),
           "--attempt-record", attemptRecord,
           "--project-id", project.id,
           "--project-repo", project.repoPath,
           "--github-repo", project.githubRepo,
           "--state-dir", STATE_DIR,
           "--enabled-at", String(project.enabledAt),
+          "--worker-ready-label", labels.ready,
+          "--worker-implement-label", labels.implement,
           "--worker-review-label", labels.review,
           "--auto-merge", reviewerAutoMerge ? "true" : "false",
           ...expectedLabels.flatMap((label) => ["--expected-label", label]),
@@ -1634,7 +1656,9 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
             .flatMap((label) => ["--managed-label", label]),
         ];
     const result = await execJson(pi, "node", args, null);
-    if (result?.action === "error") debugLog("attempt reconciliation retained workspace", result.reason || result.driverAction);
+    // `driverResult` carries the failure text in `summary`, so logging only `reason` reduces every
+    // exception to the word "exception" and leaves a per-tick retry with nothing to diagnose it by.
+    if (result?.action === "error") debugLog("attempt reconciliation retained workspace", result.reason || result.driverAction, result.summary);
   }
   return safeToSchedule;
 }
@@ -1698,7 +1722,7 @@ export default function (pi) {
         const attemptRecord = attemptRecordForId(project, attemptId);
         const labels = projectLabels(project);
         const commandArgs = [
-          path.join(AUTOMATION_DIR, "abandon-launch-failed-attempt.ts"),
+          path.join(AUTOMATION_DIR, "abandon-launch-failed-attempt.cts"),
           "--attempt-record", attemptRecord,
           "--project-id", project.id,
           "--project-repo", project.repoPath,

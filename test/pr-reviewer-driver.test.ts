@@ -6,7 +6,7 @@ const {
   branchUpdateLaunchPlan,
   consumeRequestEvent,
   resolveAuthorizedAutomationLogins,
-} = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
+} = require("../extensions/deadloop/automations/pr-reviewer-driver.cts");
 
 type RaceStage = "add-in-progress" | "delete-implement" | "delete-blocked" | "delete-selected";
 type Race = { stage: RaceStage; label: string; action: "labeled" | "unlabeled"; actor?: string };

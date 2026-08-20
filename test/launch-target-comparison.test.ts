@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { assertSameLaunchTarget } = require("../src/launch-revalidation.ts");
+const { assertSameLaunchTarget } = require("../src/launch-revalidation.cts");
 
 const selected = {
   number: 14,

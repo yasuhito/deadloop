@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { takeWorkAuthorityFromRetainedAttempts } = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
+const { takeWorkAuthorityFromRetainedAttempts } = require("../extensions/deadloop/automations/pr-reviewer-driver.cts");
 const { readAttemptRecord } = require("../src/attempt-lifecycle-runtime.cjs");
 
 const attemptHead = "a".repeat(40);
@@ -50,10 +50,10 @@ function workspaceOf(index: number) {
 }
 
 /**
- * The runtime an Automation host sees for attempts whose agent is gone. The workspaces stay listed
+ * The runtime an Automation host sees for attempts whose agent left the list. The workspaces stay listed
  * on purpose: a workspace nobody works in is not a running attempt.
  */
-function stoppedRuntime(attempts = 1) {
+function absentOwnerRuntime(attempts = 1) {
   const indexes = Array.from({ length: attempts }, (_value, index) => index);
   return {
     listWorkspaces: () => indexes.map(workspaceOf),
@@ -65,19 +65,19 @@ function stoppedRuntime(attempts = 1) {
 /** The runtime an Automation host sees while the attempt's own agent is still working. */
 function liveRuntime(index = 0) {
   return {
-    ...stoppedRuntime(index + 1),
+    ...absentOwnerRuntime(index + 1),
     listAgents: () => [{ name: `dl-r-31-${index}`, paneId: `pane-${index}`, cwd: `/wt-${index}`, status: "working" }],
   };
 }
 
-function takeover(stateDir: string, runner: Record<string, unknown> = stoppedRuntime()) {
+function takeover(stateDir: string, runner: Record<string, unknown> = absentOwnerRuntime()) {
   return takeWorkAuthorityFromRetainedAttempts({
     stateDir, projectId: "demo", githubRepo: "owner/repo", prNumber: 31,
   }, { runner });
 }
 
 describe("work authority takeover at claim time", () => {
-  it("releases an attempt the runtime reports stopped", () => {
+  it("releases an attempt whose owner the runtime no longer lists", () => {
     const stateDir = stateDirWith([{}]);
 
     expect(takeover(stateDir)).toEqual(["attempt-0"]);
@@ -88,10 +88,10 @@ describe("work authority takeover at claim time", () => {
 
     expect(takeWorkAuthorityFromRetainedAttempts({
       stateDir, projectId: "demo", githubRepo: "owner/repo", prNumber: 31, currentAttemptId: "attempt-0",
-    }, { runner: stoppedRuntime() })).toEqual([]);
+    }, { runner: absentOwnerRuntime() })).toEqual([]);
   });
 
-  it("releases a stopped attempt whatever request event it consumed", () => {
+  it("releases an absent-owner attempt whatever request event it consumed", () => {
     const stateDir = stateDirWith([{ requestEventId: "req-2" }]);
 
     expect(takeover(stateDir)).toEqual(["attempt-0"]);
@@ -119,12 +119,12 @@ describe("work authority takeover at claim time", () => {
 
   it("releases an attempt whose agent is gone whatever its workspace holds", () => {
     const stateDir = stateDirWith([{}]);
-    const crowded = { ...stoppedRuntime(), listWorkspaces: () => [{ ...workspaceOf(0), tabCount: 3, paneCount: 4 }] };
+    const crowded = { ...absentOwnerRuntime(), listWorkspaces: () => [{ ...workspaceOf(0), tabCount: 3, paneCount: 4 }] };
 
     expect(takeover(stateDir, crowded)).toEqual(["attempt-0"]);
   });
 
-  it("releases a stopped attempt that never reported a completion", () => {
+  it("releases an absent-owner attempt that never reported a completion", () => {
     const stateDir = stateDirWith([{ phase: "agent_started", lastSuccessfulPhase: "agent_started" }]);
 
     expect(takeover(stateDir)).toEqual(["attempt-0"]);
@@ -132,14 +132,14 @@ describe("work authority takeover at claim time", () => {
 
   it("keeps an attempt whose checkout another agent occupies", () => {
     const stateDir = stateDirWith([{}]);
-    const occupied = { ...stoppedRuntime(), listAgents: () => [{ name: "other", paneId: "pane-9", cwd: "/wt-0", status: "working" }] };
+    const occupied = { ...absentOwnerRuntime(), listAgents: () => [{ name: "other", paneId: "pane-9", cwd: "/wt-0", status: "working" }] };
 
     expect(takeover(stateDir, occupied)).toEqual([]);
   });
 
   it("keeps an attempt whose runtime cannot be reached", () => {
     const stateDir = stateDirWith([{}]);
-    const unreachable = { ...stoppedRuntime(), listAgents: () => { throw new Error("connection refused"); } };
+    const unreachable = { ...absentOwnerRuntime(), listAgents: () => { throw new Error("connection refused"); } };
 
     expect(takeover(stateDir, unreachable)).toEqual([]);
   });
@@ -156,9 +156,9 @@ describe("work authority takeover at claim time", () => {
     expect(takeover(stateDir)).toEqual([]);
   });
 
-  it("releases every retained attempt the runtime reports stopped", () => {
+  it("releases every retained attempt whose owner the runtime no longer lists", () => {
     const stateDir = stateDirWith([{}, {}, {}]);
 
-    expect(takeover(stateDir, stoppedRuntime(3))).toEqual(["attempt-0", "attempt-1", "attempt-2"]);
+    expect(takeover(stateDir, absentOwnerRuntime(3))).toEqual(["attempt-0", "attempt-1", "attempt-2"]);
   });
 });

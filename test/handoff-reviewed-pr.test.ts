@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { handoffReviewedPr } = require("../extensions/deadloop/automations/handoff-reviewed-pr.ts");
+const { handoffReviewedPr } = require("../extensions/deadloop/automations/handoff-reviewed-pr.cts");
 
 const expectedHead = "a".repeat(40);
 const acceptedHistory = { repository: "owner/repo", pullRequestNumber: 24, revision: "accepted", history: {} };

@@ -18,7 +18,7 @@ describe("real driver handoff across disable and re-enable", () => {
     ["does not deliver the handoff while disabled", (result: { sentWhileDisabled: string[] }) => result.sentWhileDisabled, []],
     ["binds the monitor to the re-enabled generation", (result: { queuedCurrentGeneration: boolean }) => result.queuedCurrentGeneration, true],
     ["reports that the monitor was queued", (result: { lastResult: unknown }) => result.lastResult, "driver_needs_llm_queued"],
-    ["clears the pending handoff after queuing", (result: { pending: unknown }) => result.pending, undefined],
+    ["retains the queued monitor for recovery", (result: { pending?: { monitorHandoff?: { kind?: unknown } } }) => result.pending?.monitorHandoff?.kind, "issue"],
   ])("%s", async (_name, observation, expected) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-driver-handoff-"));
     const statePath = path.join(root, "state.json");
@@ -30,7 +30,7 @@ describe("real driver handoff across disable and re-enable", () => {
         id: "demo:issue-coordinator",
         name: "issue coordinator",
         precheckFile: "issue-coordinator.precheck.sh",
-        driverFile: "issue-coordinator-driver.ts",
+        driverFile: "issue-coordinator-driver.cts",
       }],
     });
     const state: AutomationState = { automations: {} };
@@ -49,7 +49,7 @@ describe("real driver handoff across disable and re-enable", () => {
           const result = spawnSync(
             "node",
             [
-              "extensions/deadloop/automations/issue-coordinator-driver.ts",
+              "extensions/deadloop/automations/issue-coordinator-driver.cts",
               "--fixture",
               "test/fixtures/issue-coordinator/driver-ready-worker.json",
             ],

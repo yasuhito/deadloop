@@ -24,9 +24,9 @@ Deadloop already held this rule, in three places, with three different meanings,
 
 | location | mechanism | tracked path under the same prefix |
 |---|---|---|
-| `cleanup-completed-worker-worktrees.ts` | regex over `git status` lines, accepts `??` only | still blocks |
-| `run-worker-required-verification.ts` | pathspec `:(exclude)` | hidden |
-| `project-check.ts` (ADR 0010 quarantine) | move out, run, move back | refuses to hide |
+| `cleanup-completed-worker-worktrees.cts` | regex over `git status` lines, accepts `??` only | still blocks |
+| `run-worker-required-verification.cts` | pathspec `:(exclude)` | hidden |
+| `project-check.cts` (ADR 0010 quarantine) | move out, run, move back | refuses to hide |
 
 All three listed `.deadloop` and `.pi-subagents`. Seven of the nine gates that read `git status` to ask "does someone else have unsaved work here" never had the rule at all — among them the repair dispatch above, the branch-update decision, and the checkout alignment that runs immediately before every launch.
 
@@ -43,7 +43,7 @@ An agent scratch area is not uncommitted work.
 
 An agent scratch area is an untracked directory that the launched agent CLI creates inside the target worktree for its own bookkeeping. It is neither an artifact of the target repository nor something the operator manages. One list names them, shared by every gate that consults it: `.pi/subagents`, `.pi/npm`, `.pi/git`.
 
-**Untracked only.** The rule is justified by "nobody owns this", so ownership ends it. A tracked path under a scratch prefix is uncommitted work and blocks, which is what `cleanup-completed-worker-worktrees.ts` already did and what `run-worker-required-verification.ts` did not. The pathspec form cannot express this and is replaced.
+**Untracked only.** The rule is justified by "nobody owns this", so ownership ends it. A tracked path under a scratch prefix is uncommitted work and blocks, which is what `cleanup-completed-worker-worktrees.cts` already did and what `run-worker-required-verification.cts` did not. The pathspec form cannot express this and is replaced.
 
 **Applied to everything that asks about someone else's unsaved work.** The gates: repair dispatch, the branch-update decision, the Issue coordinator's reuse of an abandoned checkout, attempt abandonment, checkout alignment, worktree cleanup, required verification. The ADR 0010 quarantine, which asks the same question of the same paths. And the host's own worktree-status snapshot, which `/deadloop-status`, `/deadloop-doctor`, and the local recovery guidance all read — otherwise the loop repairs a pull request while the operator asking about the same worktree is told it is changed, which is the original confusion moved one layer out.
 
@@ -65,6 +65,6 @@ Worktrees written before this change hold `.pi-subagents/` and now read as dirty
 
 The quarantine now moves a subdirectory of `.pi/` instead of a top-level directory. Moving `.pi/` whole would carry the project's own Pi settings, skills, and extensions out of the worktree for the duration of the check.
 
-`pr-review-comments.ts` keeps its own broader `.pi` pattern. It answers a different question — whether a path is internal enough to redact from a public comment — where over-redaction is the safe direction.
+`pr-review-comments.cts` keeps its own broader `.pi` pattern. It answers a different question — whether a path is internal enough to redact from a public comment — where over-redaction is the safe direction.
 
 The list is deadloop's model of what an external CLI writes, so it goes stale when that CLI moves, as it did here. It is one table now, and the symptom of staleness is a target that stops rather than one that proceeds unsafely.

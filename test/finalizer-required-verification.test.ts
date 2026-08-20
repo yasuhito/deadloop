@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const {
   ensureRequiredVerificationRecord,
   verificationRecordForResult,
-} = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+} = require("../extensions/deadloop/automations/finalizer-required-verification.cts");
 
 const contract = {
   repository: "owner/repo",
@@ -302,7 +302,7 @@ for (const role of ["review-repair", "branch-update"] as const) {
 }
 
 describe("interruptible finalizer verification", () => {
-  const { withFinalizerInterruption } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+  const { withFinalizerInterruption } = require("../extensions/deadloop/automations/finalizer-required-verification.cts");
 
   type GuardedRun = {
     forwardedBeforeExit: string[];
@@ -379,7 +379,7 @@ describe("interruptible finalizer verification", () => {
 });
 
 it("records an interruption even when the checker reported a passing exit", () => {
-  const { finalizerResultForSignal } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+  const { finalizerResultForSignal } = require("../extensions/deadloop/automations/finalizer-required-verification.cts");
   const record = verificationRecordForResult(
     { attempt: attempt("review-repair"), currentContract: contract, targetCommit: candidate },
     candidate,
@@ -392,12 +392,12 @@ it("records an interruption even when the checker reported a passing exit", () =
 });
 
 it("keeps the checker verdict when no signal reached the finalizer", () => {
-  const { finalizerResultForSignal } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+  const { finalizerResultForSignal } = require("../extensions/deadloop/automations/finalizer-required-verification.cts");
   expect(finalizerResultForSignal({ status: 0, stdout: "", stderr: "" }, null).status).toBe(0);
 });
 
 describe("finalizer signal handling before the checker starts", () => {
-  const { withFinalizerInterruption } = require("../extensions/deadloop/automations/finalizer-required-verification.ts");
+  const { withFinalizerInterruption } = require("../extensions/deadloop/automations/finalizer-required-verification.cts");
 
   async function signalDuringStartup() {
     const handlers = new Map<string, () => void>();

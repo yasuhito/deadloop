@@ -10,8 +10,8 @@ const {
   renderRepairSuccessComment,
   reviewCommentExists,
   repairResultCommentExists,
-} = require("../extensions/deadloop/automations/pr-review-comments.ts");
-const { sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
+} = require("../extensions/deadloop/automations/pr-review-comments.cts");
+const { sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.cts");
 
 function fixture(name: string) {
   return JSON.parse(fs.readFileSync(path.join("test/fixtures/pr-review-comments", name), "utf8"));

@@ -12,10 +12,10 @@ The implementation treated that third outcome as an unfinished attempt. Four ind
 
 - `reviewerCompletionPersisted` returned false for the transition, so a human-required review could never be persisted.
 - `evaluateCompletionPersistence` preserved it under its own retention reason, before any GitHub observation was read.
-- `complete-attempt-workspace.ts` retained the workspace "for inspection" alongside reports that stopped without completing.
+- `complete-attempt-workspace.cts` retained the workspace "for inspection" alongside reports that stopped without completing.
 - The reviewer dispatcher ended the outcome on `agent:review` plus `agent:blocked`, which is the state of work deadloop could not finish safely.
 
-The restart reconciler skipped the outcome entirely, and the shared completion contract in `reconcile-pr-work-authority.ts` had no reviewer row at all: its proof was a finalizer push receipt, which a review never produces. So the only path that could finish a human-required review ran from the reviewer's monitor prompt.
+The restart reconciler skipped the outcome entirely, and the shared completion contract in `reconcile-pr-work-authority.cts` had no reviewer row at all: its proof was a finalizer push receipt, which a review never produces. So the only path that could finish a human-required review ran from the reviewer's monitor prompt.
 
 PR #228 measured what that costs. The review ran to completion, wrote a report with two required findings, and stopped. Its monitor never ran the handoff. Nothing else could: the reconciler skipped the outcome, the shared contract had no proof for it, the workspace stayed open, ordinary reconciliation released the attempt's authority, `agent:review` came back, and the next launch collided with the workspace the first attempt still held. The review result reached no one.
 

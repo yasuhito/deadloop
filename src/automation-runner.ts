@@ -5,7 +5,9 @@ import {
   type NormalizedProject,
 } from "./core";
 const { passesIssueLabelGate } = require("./issue-eligibility.cjs");
-const { renderPendingMonitorHandoff } = require("./monitor-prompts.ts");
+const { renderPendingMonitorHandoff } = require("./monitor-prompts.cts");
+
+const MONITOR_HANDOFF_RETRY_MS = 60_000;
 
 export type AutomationExecResult = {
   code: number;
@@ -30,6 +32,7 @@ export type AutomationRunnerDeps = {
   enabledAt?: () => number;
   isEnabled?: () => boolean;
   isIdle?: () => boolean;
+  monitorHandoffIsTerminal?: (handoff: Record<string, unknown>) => boolean;
   notify?: (message: string, level: "info" | "warning" | "error") => void;
   now: () => number;
   prepareExecutionSupply: () => AutomationExecutionSupply | Promise<AutomationExecutionSupply>;
@@ -107,6 +110,7 @@ export function deliverPendingDriverHandoff(
     | "isEnabled"
     | "notify"
     | "now"
+    | "monitorHandoffIsTerminal"
     | "revalidatePendingDriverHandoff"
     | "saveState"
     | "sendUserMessage"
@@ -117,10 +121,11 @@ export function deliverPendingDriverHandoff(
   if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) return false;
   const payload = handoff as DriverPayload;
   const pendingPrompt = payload.prompt;
+  let monitorHandoff: Record<string, unknown> | undefined;
   let prompt = typeof pendingPrompt === "string" ? pendingPrompt : "";
   if (payload.monitorHandoff && typeof payload.monitorHandoff === "object" && !Array.isArray(payload.monitorHandoff)) {
     try {
-      const monitorHandoff = payload.monitorHandoff as Record<string, unknown>;
+      monitorHandoff = payload.monitorHandoff as Record<string, unknown>;
       const input = monitorHandoff.input;
       const persistedEnabledAt = input && typeof input === "object" && !Array.isArray(input)
         ? (input as Record<string, unknown>).enabledAt
@@ -136,6 +141,7 @@ export function deliverPendingDriverHandoff(
         generationsAreValid &&
         (!generationChanged ||
           (monitorHandoff.kind === "issue" && deps.revalidatePendingDriverHandoff?.(monitorHandoff) === true));
+      if (generationChanged) delete payload.monitorQueuedAt;
       if (!canRebind) {
         delete entry.pendingDriverHandoff;
         recordAutomationResult(entry, "driver_handoff_revalidation_required");
@@ -146,6 +152,21 @@ export function deliverPendingDriverHandoff(
         return true;
       }
       prompt = renderPendingMonitorHandoff(monitorHandoff, currentEnabledAt);
+      if (deps.monitorHandoffIsTerminal?.(monitorHandoff)) {
+        delete entry.pendingDriverHandoff;
+        recordAutomationResult(entry, "driver_monitor_settled");
+        entry.updatedAt = deps.now();
+        deps.saveState(state);
+        return true;
+      }
+      const monitorQueuedAt = payload.monitorQueuedAt;
+      if (
+        typeof monitorQueuedAt === "number" &&
+        Number.isFinite(monitorQueuedAt) &&
+        deps.now() - monitorQueuedAt < MONITOR_HANDOFF_RETRY_MS
+      ) {
+        return false;
+      }
     } catch (error) {
       delete entry.pendingDriverHandoff;
       recordAutomationResult(entry, "driver_invalid_result");
@@ -179,7 +200,8 @@ export function deliverPendingDriverHandoff(
       deps.saveState(state);
       return true;
     }
-    delete entry.pendingDriverHandoff;
+    if (monitorHandoff) payload.monitorQueuedAt = deps.now();
+    else delete entry.pendingDriverHandoff;
     recordAutomationResult(entry, "driver_needs_llm_queued");
     entry.lastQueuedAt = deps.now();
     entry.updatedAt = deps.now();

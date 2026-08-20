@@ -5,7 +5,7 @@ const {
   issueRecoveryBlockCanBeCleared,
   persistFailedExploration,
   persistSuccessfulExploration,
-} = require("../src/issue-request-transition.ts");
+} = require("../src/issue-request-transition.cts");
 
 type Event = {
   id: string;

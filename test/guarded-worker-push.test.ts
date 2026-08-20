@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.ts");
+const { runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.cts");
 const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 const roots: string[] = [];
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;

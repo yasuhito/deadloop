@@ -4,8 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPreparedAttempt, readAttemptRecord, releasesAttemptOwnership } from "../src/attempt-lifecycle";
 
-const { clearIssueRecoveryBlock } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
-const { hasExactRequestConsumption, reconcileLocked } = require("../extensions/deadloop/automations/reconcile-prepared-attempt.ts");
+const { clearIssueRecoveryBlock } = require("../extensions/deadloop/automations/issue-coordinator-driver.cts");
+const { hasExactRequestConsumption, reconcileLocked } = require("../extensions/deadloop/automations/reconcile-prepared-attempt.cts");
 
 const roots: string[] = [];
 function setup(input: "worker" | "reviewer" | { agentRequest?: boolean; role?: "worker" | "explorer" } = "worker") {
