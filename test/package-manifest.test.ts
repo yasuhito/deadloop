@@ -79,3 +79,11 @@ describe("package manifest files", () => {
     expect(packageJson.files).not.toContain("extensions/deadloop/projects.json");
   });
 });
+
+describe("project host settings", () => {
+  it("loads deadloop when omp starts from this checkout", () => {
+    const settings = JSON.parse(readFileSync(".omp/settings.json", "utf8")) as { extensions?: string[] };
+
+    expect(settings.extensions).toEqual(["extensions/deadloop/index.ts"]);
+  });
+});

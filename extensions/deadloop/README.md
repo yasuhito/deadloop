@@ -81,6 +81,12 @@ Each Worker, reviewer, review-repair, or branch-update attempt uses one fresh wo
 
 deadloop loads under the pi host and the omp (Oh My Pi) host with no host-specific branch. Module format is declared by file extension — `.cts` for the CommonJS runtime modules, `.ts` for ESM — and `test/module-format-portability.test.ts` fails if a `.ts` file under `src/` or `extensions/deadloop/` assigns `module.exports` or `exports.<name>`.
 
+When running directly from this source checkout, omp discovers the extension through
+`.omp/settings.json`. The package manifest remains the installed-package entry point for
+both hosts. Keep the project setting pointed at the same `extensions/deadloop/index.ts`
+entry so explicit `-e` report checks and normal interactive startup cannot load different
+implementations.
+
 Report acceptance on either host, from the primary checkout:
 
 ```bash
