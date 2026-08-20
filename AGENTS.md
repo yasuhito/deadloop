@@ -1,3 +1,5 @@
+最初に共通エージェント規約を読む。環境変数 `AGENT_KIT_AGENTS` が指すファイル、`$HOME/Work/agent-kit/AGENTS.MD`、`../agent-kit/AGENTS.MD` の順に存在確認し、最初に見つかったものを読む。なければスキップする。
+
 # AGENTS.md
 
 ## プロジェクトの目的
