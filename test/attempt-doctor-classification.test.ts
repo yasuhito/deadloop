@@ -2,12 +2,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { reviewerFixture, workerFixture } from "./fixtures/attempt-workspace";
+import { branchUpdateFixture, reviewerFixture, workerFixture } from "./fixtures/attempt-workspace";
 
 const { createHerdrRunner } = require("../src/herdr-runner.cts");
 
 const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-doctor-attempt-"));
 const stateDir = path.join(root, "deadloop");
+let monitorHandoffIsTerminal: (handoff: Record<string, unknown>) => boolean;
 let retainedAttemptDoctorFindings: (...args: any[]) => any[];
 let retainedAttemptClaimSnapshot: (...args: any[]) => { claims: unknown[]; ownershipAmbiguous: boolean };
 let reconcilePersistedAttemptJournals: (...args: any[]) => Promise<boolean>;
@@ -16,7 +17,7 @@ beforeAll(async () => {
   vi.stubEnv("PI_CODING_AGENT_DIR", root);
   vi.resetModules();
   // @ts-expect-error Vitest transforms this runtime extension import.
-  ({ retainedAttemptDoctorFindings, retainedAttemptClaimSnapshot, reconcilePersistedAttemptJournals } = await import("../extensions/deadloop/index"));
+  ({ monitorHandoffIsTerminal, retainedAttemptDoctorFindings, retainedAttemptClaimSnapshot, reconcilePersistedAttemptJournals } = await import("../extensions/deadloop/index"));
 });
 afterAll(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 
@@ -44,6 +45,33 @@ describe("attempt workspace doctor classifications", () => {
     const record = { ...workerFixture().record, phase: "agent_started", lastSuccessfulPhase: "agent_started", outputRevision: undefined };
     writeAttempt(record, undefined);
     expect(retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath }], [{ name: record.agentName, paneId: record.rootPaneId, cwd: record.worktreePath, status: "idle" }])[0].title).toContain("active");
+  });
+  it("settles a branch-update monitor after a bound blocked report", () => {
+    const fixture = branchUpdateFixture();
+    const promiseFile = writeAttempt(
+      {
+        ...fixture.record,
+        phase: "agent_started",
+        lastSuccessfulPhase: "agent_started",
+        outputRevision: undefined,
+      },
+      {
+        ...fixture.report,
+        status: "blocked",
+        summary: "Required verification failed",
+        result: {
+          reason: "required_verification_failed",
+          explanation: "npm test failed",
+          recovery: "fix the failing tests and request a new attempt",
+        },
+        evidence: {},
+      },
+    );
+
+    expect(monitorHandoffIsTerminal({
+      kind: "branch-update",
+      input: { promiseFile },
+    })).toBe(true);
   });
   it("proves doctor ownership from a normalized 0.8.0 nested WorkspaceInfo worktree", () => {
     const payload = JSON.parse(readFileSync("test/fixtures/herdr-workspace-list.json", "utf8"));
