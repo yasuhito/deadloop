@@ -656,8 +656,6 @@ function recoverableBlockedBranchUpdateHead(
   env: ReturnType<typeof envConfig>,
   operations: { runText: (args: string[]) => string } = { runText },
 ): string | undefined {
-  const labels = new Set(labelNames(pr));
-  if (!labels.has(env.blockedLabel) || !labels.has(env.updateBranchLabel)) return undefined;
   const number = Number(pr.number || 0);
   const branch = String(pr.headRefName || "");
   const remoteHead = String(pr.headRefOid || "").toLowerCase();
