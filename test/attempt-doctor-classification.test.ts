@@ -155,7 +155,7 @@ describe("attempt workspace doctor classifications", () => {
       id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
       labels: { ready: "ready", explore: "explore", implement: "implement", inProgress: "progress", review: "review", blocked: "blocked", human: "human" },
     });
-    expect(commandArgs[0]).toMatch(/complete-issue-exploration\.ts$/);
+    expect(commandArgs[0]).toMatch(/complete-issue-exploration\.cts$/);
   });
 
   it("reports successful explorer worktree cleanup pending after workspace closure", () => {
@@ -203,7 +203,7 @@ describe("attempt workspace doctor classifications", () => {
       id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
       labels: { ready: "ready", explore: "explore", implement: "implement", inProgress: "progress", review: "review", blocked: "blocked", human: "human" },
     });
-    expect(commandArgs[0]).toMatch(/complete-issue-exploration\.ts$/);
+    expect(commandArgs[0]).toMatch(/complete-issue-exploration\.cts$/);
   });
 
   it("stops routing explorer cleanup after a bound cleanup receipt is persisted", async () => {
@@ -274,7 +274,7 @@ describe("attempt workspace doctor classifications", () => {
       id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
       labels: { ready: "ready", explore: "explore", implement: "implement", inProgress: "progress", review: "review", blocked: "blocked", human: "human" },
     });
-    expect(commandArgs[0]).toMatch(/complete-issue-exploration\.ts$/);
+    expect(commandArgs[0]).toMatch(/complete-issue-exploration\.cts$/);
   });
 
   it("passes the complete configured managed reviewer label set separately during restart cleanup", async () => {
