@@ -28,6 +28,7 @@ type CheckoutAlignmentOps = {
 type CheckoutAlignmentInput = {
   worktreePath: string;
   expectedHead: string;
+  preservedHead?: string;
   remote: string;
   branch: string;
 };
@@ -68,7 +69,7 @@ function ensureExpectedCommit(input: CheckoutAlignmentInput, ops: CheckoutAlignm
   }
 }
 
-/** Leaves the checkout on `expectedHead`, or throws with what stopped it there. */
+/** Leaves the checkout on `expectedHead`, or on an explicitly proven descendant, or throws. */
 function alignOpenedCheckout(input: CheckoutAlignmentInput, ops: CheckoutAlignmentOps = { run: defaultRun }): void {
   const expectedHead = commitSha(input.expectedHead);
   if (!expectedHead) throw new Error("checkout alignment requires a commit identifier");
@@ -81,6 +82,16 @@ function alignOpenedCheckout(input: CheckoutAlignmentInput, ops: CheckoutAlignme
 
   ensureExpectedCommit(input, ops, expectedHead);
   const current = commitSha(git(["rev-parse", "HEAD"]));
+  if (input.preservedHead !== undefined) {
+    const preservedHead = commitSha(input.preservedHead);
+    if (!preservedHead || current !== preservedHead) {
+      throw new Error(`checkout alignment stopped: preserved head does not match ${current}`);
+    }
+    if (ops.run(["git", "-C", input.worktreePath, "merge-base", "--is-ancestor", expectedHead, current], MAX_ALIGNMENT_MS).status !== 0) {
+      throw new Error(`checkout alignment stopped: preserved head ${current} does not descend from ${expectedHead}`);
+    }
+    return;
+  }
   if (ops.run(["git", "-C", input.worktreePath, "merge-base", "--is-ancestor", current, expectedHead], MAX_ALIGNMENT_MS).status !== 0) {
     throw new Error(`checkout alignment stopped: cannot fast-forward ${current} to ${expectedHead}`);
   }

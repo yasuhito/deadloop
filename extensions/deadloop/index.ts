@@ -1416,7 +1416,11 @@ function monitorHandoffIsTerminal(handoff) {
   if (!attemptRecordFile) return false;
   try {
     const record = readAttemptRecord(path.dirname(attemptRecordFile));
-    return record.phase === "github_persisted" || releasesAttemptOwnership(record.phase);
+    if (record.phase === "github_persisted" || releasesAttemptOwnership(record.phase)) return true;
+    if (handoff.kind !== "branch-update") return false;
+    const report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
+    validateCompletionReportBinding(record, report);
+    return report.status === "blocked";
   } catch {
     return false;
   }
@@ -1663,7 +1667,13 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
   return safeToSchedule;
 }
 
-export { reconcilePersistedAttemptJournals, reconcilePrWorkAuthority, retainedAttemptClaimSnapshot, retainedAttemptDoctorFindings };
+export {
+  monitorHandoffIsTerminal,
+  reconcilePersistedAttemptJournals,
+  reconcilePrWorkAuthority,
+  retainedAttemptClaimSnapshot,
+  retainedAttemptDoctorFindings,
+};
 
 function attemptRecordForId(project, attemptId) {
   const runsDir = path.join(STATE_DIR, "runs");

@@ -27,12 +27,13 @@ const {
 const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { postBlockRequestIsEligible } = require("../../../src/pr-work-authority-reconciliation.cts");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
-const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { observeAttemptLiveness } = require("../../../src/attempt-runtime-observation.cts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.cts");
 const { requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
+const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const {
   comparePrHistoryObservations,
   observePrHistory,
@@ -268,6 +269,7 @@ type DriverLaunchInput = {
   role: "reviewer" | "branch-update";
   target: { kind: "pull-request"; number: number };
   inputRevision: { head: string; base?: string };
+  preservedCheckoutHead?: string;
   intendedWorktreePath: string;
   autoMergePolicy?: boolean;
   baseBranch?: string;
@@ -617,11 +619,91 @@ function applyBranchUpdateBlocked(
   return { comment, applied };
 }
 
+function branchUpdatePairWasAttempted(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  headOid: string,
+  baseOid: string,
+): boolean {
+  if (!branchUpdateAttemptExists(pr.comments || [], headOid, baseOid)) return false;
+  const runsRoot = path.join(env.stateDir, "runs");
+  let entries: string[];
+  try { entries = fs.readdirSync(runsRoot); } catch { return true; }
+  let matchingNeverLaunched = false;
+  for (const entry of entries) {
+    let record: JsonObject;
+    try { record = readAttemptRecord(path.join(runsRoot, entry)); } catch { continue; }
+    if (
+      record.project !== env.projectId ||
+      record.repository !== env.githubRepo ||
+      record.role !== "branch-update" ||
+      record.target?.kind !== "pull-request" ||
+      Number(record.target.number) !== Number(pr.number || 0) ||
+      String(record.inputRevision?.head || "") !== headOid ||
+      String(record.inputRevision?.base || "") !== baseOid
+    ) continue;
+    if (record.phase === "authority_released" && record.authorityRelease?.reason === "never_launched") {
+      matchingNeverLaunched = true;
+      continue;
+    }
+    return true;
+  }
+  return !matchingNeverLaunched;
+}
+
+function recoverableBlockedBranchUpdateHead(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  operations: { runText: (args: string[]) => string } = { runText },
+): string | undefined {
+  const number = Number(pr.number || 0);
+  const branch = String(pr.headRefName || "");
+  const remoteHead = String(pr.headRefOid || "").toLowerCase();
+  const worktreePath = path.join(env.worktreeRoot, branch.replace(/\//g, "-"));
+  const runsRoot = path.join(env.stateDir, "runs");
+  let entries: string[];
+  try { entries = fs.readdirSync(runsRoot); } catch { return undefined; }
+  let matchedReleasedAttempt = false;
+  for (const entry of entries) {
+    const runDir = path.join(runsRoot, entry);
+    let record: JsonObject;
+    let report: JsonObject;
+    try {
+      record = readAttemptRecord(runDir);
+      report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
+      validateCompletionReportBinding(record, report);
+    } catch {
+      continue;
+    }
+    if (
+      record.project !== env.projectId ||
+      record.repository !== env.githubRepo ||
+      record.role !== "branch-update" ||
+      record.target?.kind !== "pull-request" ||
+      Number(record.target.number) !== number ||
+      record.branch !== branch ||
+      path.resolve(String(record.worktreePath || "")) !== path.resolve(worktreePath) ||
+      record.phase !== "authority_released" ||
+      String(record.inputRevision?.head || "").toLowerCase() !== remoteHead ||
+      report.status !== "blocked"
+    ) continue;
+    matchedReleasedAttempt = true;
+    break;
+  }
+  if (!matchedReleasedAttempt) return undefined;
+  const current = operations.runText(["git", "-C", worktreePath, "rev-parse", "--verify", "HEAD^{commit}"]).trim().toLowerCase();
+  const status = operations.runText(["git", "-C", worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]);
+  if (hasUncommittedWork(status)) return undefined;
+  operations.runText(["git", "-C", worktreePath, "merge-base", "--is-ancestor", remoteHead, current]);
+  return current === remoteHead ? undefined : current;
+}
+
 function branchUpdateLaunchPlan(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
   decision: JsonObject,
   uuid: string,
+  preservedCheckoutHead?: string,
 ): { updaterName: string; headRefName: string; retryKey: string; marker: string; input: DriverLaunchInput } {
   const number = Number(pr.number || 0);
   const branch = String(pr.headRefName || "");
@@ -651,6 +733,7 @@ function branchUpdateLaunchPlan(
       target: { kind: "pull-request", number },
       inputRevision: { head: headOid, base: baseOid },
       requiredVerification: env.requiredVerification,
+      preservedCheckoutHead,
       intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
       renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
         branchUpdateWorkerPrompt(pr, env, promiseFile, worktreePath, headOid, baseOid, uuid),
@@ -698,7 +781,7 @@ function assertBranchUpdateRequestSelectable(
   assertSameLaunchTarget(pr, livePlan.pr, "pr");
   const decisionFor = observe.decisionFor || ((live: JsonObject) => branchUpdateDecision(live, env, null));
   assertBranchUpdateTargetUnchanged(livePlan.pr, headOid, baseOid, decisionFor);
-  if (branchUpdateAttemptExists(livePlan.pr.comments || [], headOid, baseOid)) {
+  if (branchUpdatePairWasAttempted(livePlan.pr, env, headOid, baseOid)) {
     throw new StaleLaunchError(`PR #${number} branch-update target changed before launch`);
   }
 }
@@ -744,7 +827,8 @@ function launchBranchUpdate(
 ): JsonObject {
   const number = Number(pr.number || 0);
   const uuid = fixture ? "fixture-branch-update-uuid" : randomUUID();
-  const plan = branchUpdateLaunchPlan(pr, env, decision, uuid);
+  const preservedCheckoutHead = fixture ? undefined : recoverableBlockedBranchUpdateHead(pr, env);
+  const plan = branchUpdateLaunchPlan(pr, env, decision, uuid, preservedCheckoutHead);
   const { headRefName: branch, retryKey: key, marker } = plan;
   const headOid = plan.input.inputRevision.head;
   const baseOid = String(plan.input.inputRevision.base || "");
@@ -1473,7 +1557,7 @@ function driveSelectedTarget(
       });
     }
     const marker = renderBranchUpdateMarker(headOid, baseOid);
-    if (branchUpdateAttemptExists(plan.pr.comments || [], headOid, baseOid)) {
+    if (branchUpdatePairWasAttempted(plan.pr, env, headOid, baseOid)) {
       const transition = applyBranchUpdateBlocked(
         plan.pr, env, fixture, "this exact PR head/base head pair already used its one attempt",
         (_livePlan, live) => {
@@ -1670,6 +1754,8 @@ module.exports = {
   assertBranchUpdateRequestConsumed,
   assertBranchUpdateRequestSelectable,
   assertTrustedReviewIdentity,
+  recoverableBlockedBranchUpdateHead,
+  branchUpdatePairWasAttempted,
   branchUpdateLaunchPlan,
   consumeRequestEvent,
   envConfig,

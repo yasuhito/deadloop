@@ -89,6 +89,22 @@ describe("opened checkout alignment", () => {
     expect(() => align(checkout, expectedHead)).toThrow("cannot fast-forward");
   });
 
+  it("keeps an explicitly preserved clean descendant checkout", () => {
+    const { checkout, expectedHead } = fixture();
+    align(checkout, expectedHead);
+    const preservedHead = commit(checkout, "reviewed recovery");
+
+    alignOpenedCheckout({
+      worktreePath: checkout,
+      expectedHead,
+      preservedHead,
+      remote: "origin",
+      branch,
+    });
+
+    expect(git(checkout, ["rev-parse", "HEAD"])).toBe(preservedHead);
+  });
+
   it("refuses a checkout with uncommitted work", () => {
     const { checkout, expectedHead } = fixture();
     writeFileSync(path.join(checkout, "file.txt"), "uncommitted\n");

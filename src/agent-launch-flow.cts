@@ -38,6 +38,7 @@ type AgentLaunchFlowInput = {
   target: AttemptTarget;
   inputRevision: InputRevision;
   intendedWorktreePath: string;
+  preservedCheckoutHead?: string;
   resolveWorktreeHead?: boolean;
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
@@ -53,7 +54,7 @@ type AgentLaunchFlowOps = {
   runText: (args: string[]) => string;
   writeFileSync: (file: string, text: string, encoding: "utf8") => void;
   beforeAgentStart?: () => void;
-  alignCheckout?: (input: { worktreePath: string; expectedHead: string; remote: string; branch: string }) => void;
+  alignCheckout?: (input: { worktreePath: string; expectedHead: string; preservedHead?: string; remote: string; branch: string }) => void;
 };
 
 type PreparedLaunch = {
@@ -265,6 +266,7 @@ function prepareWorktree(input: AgentLaunchFlowInput, runner: RunnerAdapter, ops
     (ops.alignCheckout || alignOpenedCheckout)({
       worktreePath: launch.worktreePath,
       expectedHead: input.inputRevision.head,
+      preservedHead: input.preservedCheckoutHead,
       remote: input.worktree.remote,
       branch: input.worktree.branch,
     });
