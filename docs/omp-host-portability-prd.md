@@ -75,3 +75,12 @@ The GitHub issues created from this PRD are intentionally not labeled `agent:imp
 - [#351](https://github.com/yasuhito/deadloop/issues/351) Move automation CommonJS TypeScript modules to .cts
 - [#352](https://github.com/yasuhito/deadloop/issues/352) Update manifests, globs, config, and docs for .cts modules
 - [#353](https://github.com/yasuhito/deadloop/issues/353) Accept deadloop on both pi and omp hosts and harden the module-format guard
+
+## Delivered
+
+Every acceptance criterion above is met, and the host contract was verified beyond the module format: `pi.exec`, `pi.sendUserMessage`, `ctx.isIdle`, `ctx.hasPendingMessages`, and `ctx.ui.setStatus` all work under omp, and an injected prompt starts a turn there, so a `needs_llm` driver result reaches the model rather than stalling with ticks still recorded. `extensions/deadloop/README.md` describes how to re-verify that contract after a host upgrade.
+
+Two follow-ups left this PRD's scope deliberately:
+
+- [#356](https://github.com/yasuhito/deadloop/issues/356) added `omp` as a Worker / Reviewer agent kind, which this PRD listed as a non-goal.
+- `/deadloop-enable` has been exercised only under the pi host. Its preflight, required-verification run, and label mutations are host-independent code, but the end-to-end path on omp is unverified; run it on a throwaway checkout before recommending omp for a first-time setup.
