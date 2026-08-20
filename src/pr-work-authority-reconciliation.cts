@@ -5,9 +5,11 @@ type JsonObject = Record<string, any>;
 type RequestObservation = { kind: "current" | "superseded" | "missing" | "ambiguous" };
 type RuntimeObservation =
   | { kind: "live_matching_owner" }
-  | { kind: "stopped_owned" }
+  | { kind: "owner_absent_owned" }
   | { kind: "unreachable" }
   | { kind: "ambiguous" };
+
+type CompletionObservation = { kind: "handoff_refused" | "none" };
 
 type ReconciliationInput = {
   pr: { number: number; headRefOid: string; labels: Array<string | { name?: string }> };
@@ -16,12 +18,13 @@ type ReconciliationInput = {
   requestLabels: string[];
   inProgressLabel: string;
   blockedLabel: string;
+  completion?: CompletionObservation;
 };
 
 type ReconciliationDecision =
   | { action: "keep_active"; cleanup: "none" }
-  | { action: "release_for_request"; reason: "request_superseded_stopped_attempt"; labels: string[]; cleanup: "close_owned_workspace" }
-  | { action: "block"; reason: "attempt_missing" | "attempt_ambiguous" | "runtime_unreachable" | "runtime_ambiguous" | "runtime_owner_stopped"; labels: string[]; cleanup: "none" | "close_owned_workspace" | "preserve_workspace"; invalidatesRequests: boolean };
+  | { action: "release_for_request"; reason: "request_superseded_absent_owner"; labels: string[]; cleanup: "close_owned_workspace" }
+  | { action: "block"; reason: "attempt_missing" | "attempt_ambiguous" | "runtime_unreachable" | "runtime_ambiguous" | "runtime_owner_absent" | "completion_handoff_refused"; labels: string[]; cleanup: "none" | "close_owned_workspace" | "preserve_workspace"; invalidatesRequests: boolean };
 
 function labelNames(labels: Array<string | { name?: string }>): string[] {
   return labels.map((label) => typeof label === "string" ? label : String(label.name || "")).filter(Boolean);
@@ -42,16 +45,19 @@ function releaseLabels(input: ReconciliationInput): string[] {
 /** Runtime alone answers liveness; request event ids only detect a later generation to expose. */
 function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDecision {
   if (input.runtime.kind === "live_matching_owner") return { action: "keep_active", cleanup: "none" };
-  if (input.request.kind === "superseded" && input.runtime.kind === "stopped_owned") {
-    return { action: "release_for_request", reason: "request_superseded_stopped_attempt", labels: releaseLabels(input), cleanup: "close_owned_workspace" };
+  if (input.request.kind === "superseded" && input.runtime.kind === "owner_absent_owned") {
+    return { action: "release_for_request", reason: "request_superseded_absent_owner", labels: releaseLabels(input), cleanup: "close_owned_workspace" };
   }
   const preserveRequests = input.request.kind === "superseded";
-  const cleanup = input.runtime.kind === "stopped_owned" ? "close_owned_workspace"
+  const cleanup = input.runtime.kind === "owner_absent_owned" ? "close_owned_workspace"
     : input.runtime.kind === "unreachable" || input.runtime.kind === "ambiguous" ? "preserve_workspace" : "none";
+  // A refused handoff is a completed attempt whose result the role's finalizer would not apply, so
+  // naming the absent owner there would contradict the review result already posted on the PR.
   const reason = input.request.kind === "missing" ? "attempt_missing"
     : input.request.kind === "ambiguous" ? "attempt_ambiguous"
       : input.runtime.kind === "unreachable" ? "runtime_unreachable"
-        : input.runtime.kind === "ambiguous" ? "runtime_ambiguous" : "runtime_owner_stopped";
+        : input.runtime.kind === "ambiguous" ? "runtime_ambiguous"
+          : input.completion?.kind === "handoff_refused" ? "completion_handoff_refused" : "runtime_owner_absent";
   return { action: "block", reason, labels: blockLabels(input, preserveRequests), cleanup, invalidatesRequests: !preserveRequests };
 }
 
@@ -115,7 +121,8 @@ function recoveryComment(number: number, head: string, reason: string, cutoffEve
     attempt_ambiguous: "the active attempt could not be identified uniquely",
     runtime_unreachable: "the execution runtime could not be reached",
     runtime_ambiguous: "workspace ownership could not be proven",
-    runtime_owner_stopped: "the recorded owner had stopped",
+    runtime_owner_absent: "the execution runtime no longer listed the recorded owner",
+    completion_handoff_refused: "the completion report could not be handed over for this pull request state",
   };
   return `deadloop blocked this PR because ${readable[reason] || reason}. No old completion report may update the PR; inspect the retained attempt evidence, then add a new Agent request after resolving the blocker.\n\n${recoveryMarker(number, head, reason, cutoffEventId)}`;
 }
@@ -135,7 +142,7 @@ type ReconciliationOperations = {
   comment(body: string): void | Promise<void>;
   recordReleaseStarted?(): void | Promise<void>;
   closeOwnedWorkspace?(): boolean | Promise<boolean>;
-  releaseLocalOwnership?(cutoffEventId?: string): void | Promise<void>;
+  releaseLocalOwnership?(cutoffEventId?: string, reason?: "owner_absent" | "superseded_by_request"): void | Promise<void>;
 };
 
 /** Executes only recovery effects. It exposes no push, ready, merge, or request-claim operation. */
@@ -155,7 +162,7 @@ async function applyPrWorkAuthorityReconciliation(
     // Keep the local owner recoverable until GitHub visibly exposes the queued request.
     // A retry can finish either side of this journaled transition idempotently.
     if (labelsChange) await operations.replaceLabels(decision.labels, { invalidatesRequests: false });
-    await operations.releaseLocalOwnership?.();
+    await operations.releaseLocalOwnership?.(undefined, "superseded_by_request");
     return { action: decision.action, cleanup: "ownership_released" };
   }
   const recordedTimelineEventIds = decision.action === "block" && operations.blockStarted?.reason === decision.reason

@@ -365,23 +365,11 @@ function agentCwdInside(agent: HerdrAgent, targetPath: string): boolean {
   return false;
 }
 
-function hasWorkingReviewer(
-  agents: HerdrAgent[],
-  reviewerName: string,
-  worktree: HerdrWorktree | null,
-): boolean {
+// Presence, not status: an agent between turns is reported `idle` or `done` by the runtime, and
+// reading either as an interruption would offer to release the claim of a live run (ADR 0027).
+function hasAgentNamed(agents: HerdrAgent[], agentName: string, worktree: HerdrWorktree | null): boolean {
   const worktreePathValue = worktree ? worktreePath(worktree) : "";
-  return agents.some((agent) => {
-    if (String(agent.agent_status || "") !== "working") return false;
-    return String(agent.name || "") === reviewerName || agentCwdInside(agent, worktreePathValue);
-  });
-}
-
-function hasWorkerAgent(agents: HerdrAgent[], workerName: string, worktree: HerdrWorktree | null): boolean {
-  const worktreePathValue = worktree ? worktreePath(worktree) : "";
-  return agents.some(
-    (agent) => String(agent.name || "") === workerName || agentCwdInside(agent, worktreePathValue),
-  );
+  return agents.some((agent) => String(agent.name || "") === agentName || agentCwdInside(agent, worktreePathValue));
 }
 
 function requeueImplementCommand(project: NormalizedProject, issueNumber: number | undefined): string {
@@ -403,13 +391,13 @@ function buildStuckReviewClaimFindings(
     .filter((pr) => {
       const reviewerName = `${project.id}-pr-${pr.number ?? "?"}-reviewer`;
       const worktree = findWorktreeForBranch(String(pr.headRefName || ""), worktrees);
-      return !hasWorkingReviewer(agents, reviewerName, worktree);
+      return !hasAgentNamed(agents, reviewerName, worktree);
     })
     .map((pr) => ({
       id: `stuck-review-state-${pr.number ?? "unknown"}`,
       type: "stuck_claim" as const,
       title: `stuck reviewing state: ${issueRef(pr)}`,
-      summary: `${project.labels.inProgress} is present, but the matching reviewer agent is not working in Herdr. This may be a stale interrupted review run.`,
+      summary: `${project.labels.inProgress} is present, but the matching reviewer agent is not present in Herdr. This may be a stale interrupted review run.`,
       commands: [`gh pr edit ${pr.number ?? "<number>"} -R ${shellArg(repo)} --remove-label ${shellArg(project.labels.inProgress)}`],
     }));
 }
@@ -442,7 +430,7 @@ function buildStuckImplementClaimFindings(
     .filter((issue) => {
       const workerName = `${project.id}-issue-${issue.number ?? "?"}-worker`;
       const worktree = issue.number ? findWorktreeForIssue(issue.number, worktrees) : null;
-      return !hasWorkerAgent(agents, workerName, worktree);
+      return !hasAgentNamed(agents, workerName, worktree);
     })
     .map((issue) => {
       const worktree = issue.number ? findWorktreeForIssue(issue.number, worktrees) : null;

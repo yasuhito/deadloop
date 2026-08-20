@@ -1162,25 +1162,27 @@ function takeWorkAuthorityFromRetainedAttempts(
 ): string[] {
   const released: string[] = [];
   for (const { runDir, record } of retainedAttemptsForPr(input)) {
-    if (!attemptStoppedForTakeover(record, observe.runner)) continue;
-    releasePersistedAttemptAuthority(runDir, new Date().toISOString());
+    if (!attemptOwnerAbsentForTakeover(record, observe.runner)) continue;
+    releasePersistedAttemptAuthority(runDir, new Date().toISOString(), undefined, "superseded_by_request");
     released.push(String(record.attemptId));
   }
   return released;
 }
 
 /**
- * Whether a retained attempt has stopped, asked of the execution runtime and nothing else.
+ * Whether a retained attempt's owner is absent, asked of the execution runtime and nothing else.
  *
- * ADR 0020 leaves one authority on this question, so the journal's phase, its claim marker, and the
- * receipts beside it do not take part: an attempt whose agent is gone has stopped even if its
- * completion was never handed to GitHub, and an attempt whose agent is working keeps its authority
- * however finished it looks on disk. A runtime that cannot be reached, or that reports an agent this
- * attempt cannot be told apart from, proves nothing, and an unproven attempt keeps its authority.
+ * ADR 0020 leaves one authority on this question, and ADR 0027 fixes what it is asked: whether the
+ * agent is listed at all. So the journal's phase, its claim marker, and the receipts beside it do not
+ * take part: an attempt whose agent is gone has ended even if its completion was never handed to
+ * GitHub, and an attempt whose agent is still listed keeps its authority however finished it looks on
+ * disk or however idle the runtime reports it. A runtime that cannot be reached, or that reports an
+ * agent this attempt cannot be told apart from, proves nothing, and an unproven attempt keeps its
+ * authority.
  */
-function attemptStoppedForTakeover(record: JsonObject, runner?: AttemptAgentRunner): boolean {
+function attemptOwnerAbsentForTakeover(record: JsonObject, runner?: AttemptAgentRunner): boolean {
   try {
-    return observeAttemptLiveness(runner || herdrRunner(), record).kind === "stopped";
+    return observeAttemptLiveness(runner || herdrRunner(), record).kind === "owner_absent";
   } catch {
     return false;
   }

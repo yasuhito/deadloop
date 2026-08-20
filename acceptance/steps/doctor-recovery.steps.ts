@@ -180,10 +180,10 @@ Given("A pull request has `agent:in-progress` and ownership of its retained atte
   });
 });
 
-Given("A pull request has `agent:in-progress` and an active review agent", function (this: DoctorWorld) {
+Given("A pull request has `agent:in-progress` and its review agent awaits input", function (this: DoctorWorld) {
   setInput(this, {
     openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:in-progress"] }],
-    agents: [{ name: "deadloop-pr-10-reviewer", agent_status: "working" }],
+    agents: [{ name: "deadloop-pr-10-reviewer", agent_status: "idle" }],
   });
 });
 

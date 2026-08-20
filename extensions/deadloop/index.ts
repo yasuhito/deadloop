@@ -35,6 +35,7 @@ import {
 } from "../../src/automation-runner";
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../src/agent-scratch-area.cjs");
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.cts");
+const { observeAttemptLiveness } = require("../../src/attempt-runtime-observation.cts");
 const {
   agentOccupiesAttemptWorkspace,
   readWorkspaceCloseStartedReceipt,
@@ -1051,9 +1052,10 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
         }
       }
       if (!fs.existsSync(record.promiseFile)) {
-        const active = agents.some((agent) => agent.name === record.agentName
-          && !["done", "idle", "failed", "stopped"].includes(String(agent.status || "").toLowerCase()));
-        status = active ? "active" : "missing_report";
+        // The same judgment the authority reconciliation uses, so doctor never calls an agent that is
+        // merely awaiting input a Worker that failed to report.
+        const absent = observeAttemptLiveness({ listAgents: () => agents }, record).kind === "owner_absent";
+        status = absent ? "missing_report" : "active";
       } else {
         let report;
         try { report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8")); }

@@ -21,15 +21,25 @@ describe("PR runtime reconciliation", () => {
     expect(reconcilePrWorkAuthority(base).action).toBe("keep_active");
   });
 
-  it("blocks a stopped attempt whose completion did not run", () => {
-    expect(reconcilePrWorkAuthority({ ...base, runtime: { kind: "stopped_owned" } }).action).toBe("block");
+  it("blocks an attempt whose owner left before completion ran", () => {
+    expect(reconcilePrWorkAuthority({ ...base, runtime: { kind: "owner_absent_owned" } }).action).toBe("block");
   });
 
-  it("preserves a later request when the prior attempt stopped", () => {
+  it("blocks a proven completion whose handoff was refused with its own reason", () => {
+    const decision = reconcilePrWorkAuthority({ ...base, runtime: { kind: "owner_absent_owned" }, completion: { kind: "handoff_refused" } });
+
+    expect(decision.reason).toBe("completion_handoff_refused");
+  });
+
+  it("explains a refused handoff without blaming a vanished owner", () => {
+    expect(recoveryComment(24, "a".repeat(40), "completion_handoff_refused", "event-30")).toContain("completion report could not be handed over");
+  });
+
+  it("preserves a later request when the prior attempt's owner left", () => {
     const decision = reconcilePrWorkAuthority({
       ...base,
       pr: { ...base.pr, labels: [...base.pr.labels, "agent:review"] },
-      request: { kind: "superseded" }, runtime: { kind: "stopped_owned" },
+      request: { kind: "superseded" }, runtime: { kind: "owner_absent_owned" },
     });
     expect(decision.labels).toContain("agent:review");
   });
@@ -49,15 +59,15 @@ describe("PR runtime reconciliation", () => {
   });
 
   it("keeps blocked recovery comments human readable", () => {
-    expect(recoveryComment(24, "a".repeat(40), "runtime_owner_stopped", "event-30")).toContain("recorded owner had stopped");
+    expect(recoveryComment(24, "a".repeat(40), "runtime_owner_absent", "event-30")).toContain("no longer listed the recorded owner");
   });
 
-  it("posts a blocked explanation for a stopped attempt", async () => {
+  it("posts a blocked explanation for an absent owner", async () => {
     const comments: string[] = [];
     const events = [{ id: "block-1", event: "labeled", created_at: "2026-07-20T10:02:00Z", label: { name: "agent:blocked" }, actor: { login: "deadloop-bot" } }];
     let timelineReads = 0;
     await applyPrWorkAuthorityReconciliation(
-      { ...base, runtime: { kind: "stopped_owned" } },
+      { ...base, runtime: { kind: "owner_absent_owned" } },
       {
         automationLogin: "deadloop-bot",
         listTimelineEvents: () => timelineReads++ === 0 ? [] : events,

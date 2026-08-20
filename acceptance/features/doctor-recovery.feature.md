@@ -158,9 +158,9 @@ Operators can check blocked work simply by viewing `/deadloop-doctor`, clean up 
 * When The operator runs doctor
 * Then doctor does not show a command that releases only the review claim
 
-## Scenario: Do not report a claim with an active review agent as a problem
+## Scenario: Do not report a review agent between turns as a problem
 
-* Given A pull request has `agent:in-progress` and an active review agent
+* Given A pull request has `agent:in-progress` and its review agent awaits input
 * When The operator runs doctor
 * Then doctor shows no findings
 

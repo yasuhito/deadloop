@@ -97,11 +97,24 @@ describe("direct Node runtime parity", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it.each(["owner_absent", "never_launched", "superseded_by_request"] as const)("normalizes the %s release reason identically", (reason) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-attempt-parity-"));
+    try {
+      const record = {
+        ...workerFixture().record, phase: "authority_released", lastSuccessfulPhase: "agent_started",
+        authorityRelease: { reason, releasedAt: "2026-08-01T10:00:00Z" },
+      };
+      writeFileSync(path.join(root, "attempt.json"), JSON.stringify(record));
+      expect(lifecycleRuntime.readAttemptRecord(root)).toEqual(readAttemptRecord(root));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it.each([
     ["array record", []],
     ["invalid target", { ...workerFixture().record, target: { kind: "issue", number: 0 } }],
     ["short output revision", { ...workerFixture().record, outputRevision: "abc" }],
     ["successful phase mismatch", { ...workerFixture().record, phase: "report_received", lastSuccessfulPhase: "agent_started" }],
+    ["release reason the contract dropped", { ...workerFixture().record, phase: "authority_released", lastSuccessfulPhase: "agent_started", authorityRelease: { reason: "github_authority_lost", releasedAt: "2026-08-01T10:00:00Z" } }],
   ] as const)("matches typed rejection for malformed %s fixture", (_name, record) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-attempt-parity-"));
     try {

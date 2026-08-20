@@ -12,6 +12,16 @@ Do not commit `projects.json`; it contains local paths and rollout choices.
 
 Automations name their driver by filename, so a local `~/.pi/agent/deadloop/projects.json` written before the CommonJS modules moved to `.cts` still carries the old `.ts` driver filenames. Rewrite each `driverFile` to the `.cts` name shipped in `projects.example.json`; the old names are not accepted. `precheckFile` values are unchanged shell scripts.
 
+An attempt journal released before the release reasons were named for the runtime observation carries `authorityRelease.reason: "github_authority_lost"`, which the current contract does not accept: the reasons are `owner_absent`, `never_launched`, and `superseded_by_request` (ADR 0027). Such a journal is a terminal record of a finished attempt, and deadloop reads it only to skip an attempt that already released ownership, so the fix is to delete its run directory rather than to rewrite it. Until it is deleted, `/deadloop-doctor` reports it as `malformed_journal` and reconciliation treats its pull request as ambiguous.
+
+```bash
+cd ~/.pi/agent/deadloop/runs
+for run in */; do
+  jq -e 'select(.phase == "authority_released" and .authorityRelease.reason == "github_authority_lost")' "$run/attempt.json" >/dev/null 2>&1 \
+    && rm -rf "$run"
+done
+```
+
 `deadloop.json` is an optional shared policy and `projects.json` is an optional local override; neither enables scheduling. `/deadloop-enable` resolves required verification from explicit overrides or the built-in `npm run check` default, journals a temporary Git worktree before creating it at the trusted base revision, and stores its record and log outside the repository. It does not use Herdr or start an agent for this preflight, and it removes only a proven-owned, revision-matched, clean temporary worktree. The command records execution permission in `~/.pi/agent/deadloop/enabled-projects.json` only after the baseline check passes and repository identity, primary checkout status, GitHub authentication, authenticated login, write permission, and missing-label creation succeed. The normalized authenticated login is persisted as an explicit authorized automation identity and overlaid onto runtime `automationLogins`; optional local `automationLogins` may add only other fleet identities whose GitHub login and operator control have been verified. The public example leaves this list empty. Each project overlays inferred or explicit local config, trusted base-branch repo policy, and package defaults. A later enablement reuses only a passed record whose repository, target commit, command, source identity, and base revision all match. `/deadloop-doctor` shows the journal, record, log, revision, path, and read-only confirmation command for every verification worktree retained after cleanup could not be proven safe. `/deadloop-disable` removes only that permission and lets running agents finish their promise reports. The repo policy file is `deadloop.json`. Repo policy is read only from the trusted `baseBranch` after `git fetch`, never from the PR branch being reviewed.
 
 ## Host lock requirement

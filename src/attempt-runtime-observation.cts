@@ -16,16 +16,18 @@ type JsonObject = Record<string, any>;
 
 type AttemptRuntimeObservation =
   | { kind: "live_matching_owner" }
-  | { kind: "stopped_owned" }
+  | { kind: "owner_absent_owned" }
   | { kind: "ambiguous" };
 
 type AttemptLivenessObservation =
   | { kind: "live" }
-  | { kind: "stopped" }
+  | { kind: "owner_absent" }
   | { kind: "ambiguous" };
 
-/** The statuses that say an agent has finished its turn and is no longer acting. */
-const TERMINAL_AGENT_STATUSES = ["done", "idle", "failed", "stopped"];
+// Herdr answers two separate questions: whether the agent is listed at all, and if it is, whether it
+// is mid-turn. Only the first says anything about the attempt's life. `idle`, `done`, and `blocked`
+// all mean the agent is waiting for input — `herdr agent wait` treats those three as the states to
+// wait for — so deriving a lifetime from them calls a live agent absent between its turns.
 
 function canonicalPath(value: unknown): string {
   const resolved = path.resolve(String(value || ""));
@@ -68,16 +70,14 @@ function relatedAgents(agents: JsonObject[], record: JsonObject): JsonObject[] {
 
 function livenessFromAgents(agents: JsonObject[], record: JsonObject): AttemptLivenessObservation {
   const related = relatedAgents(agents, record);
-  if (related.length === 0) return { kind: "stopped" };
+  if (related.length === 0) return { kind: "owner_absent" };
   const owned = related.filter((agent) => String(agent.name || "") === String(record.agentName || "")
     && String(agent.paneId || "") === String(record.rootPaneId || "")
     && canonicalPathContains(record.worktreePath, agent.cwd));
   // Anything in the checkout that is not this attempt's own agent could be the attempt under another
   // name, so the runtime is not describing one attempt and the answer is not readable.
   if (owned.length !== related.length || owned.length > 1) return { kind: "ambiguous" };
-  const status = String(owned[0].status || "").toLowerCase();
-  if (status === "working") return { kind: "live" };
-  return TERMINAL_AGENT_STATUSES.includes(status) ? { kind: "stopped" } : { kind: "ambiguous" };
+  return { kind: "live" };
 }
 
 /**
@@ -106,13 +106,13 @@ function observeAttemptRuntime(runner: AttemptRuntimeRunner, record: JsonObject,
   if (matchingWorkspaces.length === 0 && validCloseReceipt(record) && projectRepo) {
     const retained = worktreeIsRetained(runner, record, projectRepo);
     return retained && checkoutWorkspaces.length === 0 && relatedAgents(agents, record).length === 0
-      ? { kind: "stopped_owned" } : { kind: "ambiguous" };
+      ? { kind: "owner_absent_owned" } : { kind: "ambiguous" };
   }
   if (matchingWorkspaces.length !== 1 || checkoutWorkspaces.length !== 1
     || Number(matchingWorkspaces[0].tabCount) !== 1 || Number(matchingWorkspaces[0].paneCount) !== 1) return { kind: "ambiguous" };
   const liveness = livenessFromAgents(agents, record);
   if (liveness.kind === "ambiguous") return { kind: "ambiguous" };
-  return liveness.kind === "live" ? { kind: "live_matching_owner" } : { kind: "stopped_owned" };
+  return liveness.kind === "live" ? { kind: "live_matching_owner" } : { kind: "owner_absent_owned" };
 }
 
 module.exports = { canonicalPath, canonicalPathContains, closeReceiptPath, observeAttemptLiveness, observeAttemptRuntime };

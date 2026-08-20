@@ -326,6 +326,7 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     let request: { kind: string };
     let runtime: { kind: string };
     let record: JsonObject | undefined;
+    let completion: { kind: "handoff_refused" | "none" } = { kind: "none" };
 
     if (malformed.length || matching.length > 1) {
       request = { kind: "ambiguous" };
@@ -340,9 +341,9 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       catch { runtime = { kind: "unreachable" }; }
     }
 
-    // A stopped owner that left proof of a completed attempt is finished, not abandoned. Handing
-    // it over here is what keeps a successful attempt from being blocked for stopping on success.
-    if (record && runtime.kind === "stopped_owned") {
+    // An absent owner that left proof of a completed attempt is finished, not abandoned. Handing it
+    // over here is what keeps a successful attempt from being blocked for ending on success.
+    if (record && runtime.kind === "owner_absent_owned") {
       const completed = completeProvenStoppedAttempt(record, pr, args, {
         reviewLabel: args.reviewLabel || "agent:review",
         implementLabel: args.implementLabel || "agent:implement",
@@ -360,10 +361,11 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       }
       if (completed?.kind === "refused") {
         results.push({ number, action: "completion_refused", attemptId: record.attemptId, reason: completed.reason });
+        completion = { kind: "handoff_refused" };
       }
     }
 
-    const input = { pr: { ...pr, labels: labels(pr) }, request, runtime, requestLabels, inProgressLabel, blockedLabel };
+    const input = { pr: { ...pr, labels: labels(pr) }, request, runtime, requestLabels, inProgressLabel, blockedLabel, completion };
     let blockStarted: { reason: string; timelineEventIds: string[] } | undefined;
     try {
       const receipt = JSON.parse(fs.readFileSync(recoveryFile, "utf8"));
@@ -427,18 +429,18 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         headRefOid: String(pr.headRefOid || ""), attemptId: record!.attemptId,
         requestEventId: expectedRequestEventId,
       }) : undefined,
-      closeOwnedWorkspace: record && runtime.kind === "stopped_owned" ? () => guarded(() => {
-        if (observeAttemptRuntime(runner, record!, args.projectRepo).kind !== "stopped_owned") return false;
+      closeOwnedWorkspace: record && runtime.kind === "owner_absent_owned" ? () => guarded(() => {
+        if (observeAttemptRuntime(runner, record!, args.projectRepo).kind !== "owner_absent_owned") return false;
         writeJsonAtomically(closeReceiptPath(record!), {
           schemaVersion: 1, attemptId: record!.attemptId, workspaceId: record!.workspaceId,
           worktreePath: record!.worktreePath, startedAt: new Date().toISOString(),
         });
         const alreadyAbsent = !runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record!.workspaceId));
         if (!alreadyAbsent) runner.closeWorkspace(record!.workspaceId);
-        return observeAttemptRuntime(runner, record!, args.projectRepo).kind === "stopped_owned";
+        return observeAttemptRuntime(runner, record!, args.projectRepo).kind === "owner_absent_owned";
       }) : undefined,
-      releaseLocalOwnership: record ? (cutoffEventId?: string) => {
-        releasePersistedAttemptAuthority(record!.runDir, new Date().toISOString(), cutoffEventId);
+      releaseLocalOwnership: record ? (cutoffEventId?: string, reason: "owner_absent" | "superseded_by_request" = "owner_absent") => {
+        releasePersistedAttemptAuthority(record!.runDir, new Date().toISOString(), cutoffEventId, reason);
         fs.rmSync(recoveryFile, { force: true });
       } : undefined,
     });
