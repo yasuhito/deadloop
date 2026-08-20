@@ -170,6 +170,36 @@ Operators can check blocked work simply by viewing `/deadloop-doctor`, clean up 
 * When The operator runs doctor
 * Then doctor shows a command to inspect commits in the worktree
 
+## Scenario: Do not report an Issue whose work already became a pull request
+
+* Given An Issue with `agent:in-progress` has an open pull request for its branch
+* When The operator runs doctor
+* Then doctor shows no command that re-queues the Issue
+
+## Scenario: Show that the pull request of an in-progress Issue holds no Agent request
+
+* Given An Issue with `agent:in-progress` has an open pull request that holds no Agent request
+* When The operator runs doctor
+* Then doctor shows the pull request that holds no Agent request
+
+## Scenario: Do not report a pull request an agent is already working as holding no request
+
+* Given An Issue with `agent:in-progress` has a pull request that an agent already claimed
+* When The operator runs doctor
+* Then doctor shows no command that requests review
+
+## Scenario: Do not report a pull request handed to a person as holding no request
+
+* Given An Issue with `agent:in-progress` has a pull request that was handed to a person
+* When The operator runs doctor
+* Then doctor shows no command that requests review
+
+## Scenario: Do not adopt a pull request a person opened for the same Issue
+
+* Given An Issue with `agent:in-progress` has only a person's pull request naming it
+* When The operator runs doctor
+* Then doctor shows a command to inspect commits in the worktree
+
 ## Scenario: Do not report unclaimed targets as problems
 
 * Given An Issue and a pull request have no claim labels

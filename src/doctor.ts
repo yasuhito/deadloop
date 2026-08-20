@@ -49,6 +49,7 @@ export type DoctorGithubItem = GithubItem & {
   body?: string | null;
   updatedAt?: string | null;
   comments?: GithubComment[];
+  isDraft?: boolean | null;
 };
 
 type ClaudeProjectTrust = { hasTrustDialogAccepted?: boolean } | null | undefined;
@@ -413,16 +414,31 @@ function buildStuckReviewClaimFindings(
     }));
 }
 
+// A Worker that finished its job pushes a branch, opens a draft pull request, adds the review request,
+// and exits, so its absence from Herdr is the normal end state rather than an interruption. Only an
+// in-progress Issue with no pull request can still hold uncollected work, and only that one is safe to
+// re-queue: re-queueing an Issue whose work already became a pull request starts a second Worker on the
+// same task. Worker branches are always `agent/issue-<n>-<slug>`, so the prefix is matched exactly — a
+// person's branch that merely names the Issue is not that Issue's pull request, and adopting one would
+// both hide a genuinely interrupted Worker and point deadloop at human work.
+function openPrForIssue(issueNumber: number | undefined, openPrs: DoctorGithubItem[]): DoctorGithubItem | null {
+  if (!issueNumber) return null;
+  const prefix = `agent/issue-${issueNumber}-`;
+  return openPrs.find((pr) => String(pr.headRefName || "").startsWith(prefix)) || null;
+}
+
 function buildStuckImplementClaimFindings(
   project: NormalizedProject,
   issues: DoctorGithubItem[],
   worktrees: HerdrWorktree[],
   agents: HerdrAgent[],
   retainedClaims: Set<string>,
+  openPrs: DoctorGithubItem[],
 ): DoctorFinding[] {
   return issues
     .filter((issue) => labelsOf(issue).has(project.labels.inProgress))
     .filter((issue) => !retainedClaims.has(`issue:${issue.number}`))
+    .filter((issue) => !openPrForIssue(issue.number, openPrs))
     .filter((issue) => {
       const workerName = `${project.id}-issue-${issue.number ?? "?"}-worker`;
       const worktree = issue.number ? findWorktreeForIssue(issue.number, worktrees) : null;
@@ -443,6 +459,43 @@ function buildStuckImplementClaimFindings(
         summary: `${project.labels.inProgress} is present, but the matching Worker is not present in Herdr. This may be a stale interrupted implementation run. Check for uncollected commits before re-queueing.`,
         commands: [confirmCommand, requeueImplementCommand(project, issue.number)],
       };
+    });
+}
+
+// The counterpart of the rule above: a Worker's draft pull request advances only once it holds an Agent
+// request, and the two-step publish (open the draft, then add the request) can stop between those steps.
+// Two states that carry no request are not that failure and must stay silent: a pull request holding
+// `agent:in-progress` is claimed and an agent is working it, and a ready pull request with no managed
+// label is the human handoff ADR 0021 defines as a completed review. Suggesting a review request in
+// either case would queue a second review or restart a finished one.
+function buildUnrequestedPullRequestFindings(
+  project: NormalizedProject,
+  issues: DoctorGithubItem[],
+  openPrs: DoctorGithubItem[],
+): DoctorFinding[] {
+  const requestLabels = [project.labels.review, project.labels.implement, project.labels.explore, project.labels.updateBranch];
+  const stopLabels = [project.labels.blocked, project.labels.human, project.labels.needsInfo, project.labels.wontfix];
+  return issues
+    .filter((issue) => labelsOf(issue).has(project.labels.inProgress))
+    .flatMap((issue) => {
+      const pr = openPrForIssue(issue.number, openPrs);
+      if (!pr || pr.isDraft !== true) return [];
+      const labels = labelsOf(pr);
+      if (labels.has(project.labels.inProgress)) return [];
+      if (requestLabels.some((label) => labels.has(label))) return [];
+      if (stopLabels.some((label) => labels.has(label))) return [];
+      return [
+        {
+          id: `unrequested-pull-request-${pr.number ?? "unknown"}`,
+          type: "queue_jam" as const,
+          title: `pull request holds no Agent request: ${issueRef(pr)}`,
+          summary: `${issueRef(issue)} is ${project.labels.inProgress}, and its pull request holds no Agent request, so no agent will advance it. Add ${project.labels.review} when it is ready for review.`,
+          commands: [
+            `gh pr view ${pr.number ?? "<number>"}`,
+            `gh pr edit ${pr.number ?? "<number>"} --add-label ${shellArg(project.labels.review)}`,
+          ],
+        },
+      ];
     });
 }
 
@@ -596,7 +649,8 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
       ...buildOrphanWorktreeFindings(project, issues, openPrs, worktrees, gitStatuses),
       ...buildQueueJamFindings(project, issues),
       ...(retainedClaimOwnershipAmbiguous ? [] : buildStuckReviewClaimFindings(project, openPrs, worktrees, agents, retainedClaims)),
-      ...(retainedClaimOwnershipAmbiguous ? [] : buildStuckImplementClaimFindings(project, issues, worktrees, agents, retainedClaims)),
+      ...(retainedClaimOwnershipAmbiguous ? [] : buildStuckImplementClaimFindings(project, issues, worktrees, agents, retainedClaims, openPrs)),
+      ...buildUnrequestedPullRequestFindings(project, issues, openPrs),
       ...buildAutomationFindings(project, state, automationDir, statePath, nowMs),
       ...buildWorkspaceTrustFindings(project, input.claudeConfig),
     ],
