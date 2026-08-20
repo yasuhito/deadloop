@@ -1543,7 +1543,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         "--update-branch-label", labels.updateBranch,
         "--blocked-label", labels.blocked,
       ], null);
-      if (claimResult?.action === "error") debugLog("prepared attempt claim reconciliation blocked", claimResult.reason || claimResult.driverAction);
+      if (claimResult?.action === "error") debugLog("prepared attempt claim reconciliation blocked", claimResult.reason || claimResult.driverAction, claimResult.summary);
       try { record = readAttemptRecord(runDir); }
       catch { safeToSchedule = false; continue; }
     }
@@ -1586,7 +1586,9 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         .flatMap((label) => ["--managed-label", label]),
     ];
     const result = await execJson(pi, "node", args, null);
-    if (result?.action === "error") debugLog("attempt reconciliation retained workspace", result.reason || result.driverAction);
+    // `driverResult` carries the failure text in `summary`, so logging only `reason` reduces every
+    // exception to the word "exception" and leaves a per-tick retry with nothing to diagnose it by.
+    if (result?.action === "error") debugLog("attempt reconciliation retained workspace", result.reason || result.driverAction, result.summary);
   }
   return safeToSchedule;
 }
