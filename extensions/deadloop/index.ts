@@ -1398,12 +1398,30 @@ function revalidatePendingIssueHandoff(handoff) {
   }
 }
 
+function monitorHandoffIsTerminal(handoff) {
+  if (!handoff.input || typeof handoff.input !== "object") return false;
+  const input = handoff.input;
+  const attemptRecordFile = typeof input.attemptRecordFile === "string"
+    ? input.attemptRecordFile
+    : typeof input.promiseFile === "string"
+      ? path.join(path.dirname(input.promiseFile), "attempt.json")
+      : "";
+  if (!attemptRecordFile) return false;
+  try {
+    const record = readAttemptRecord(path.dirname(attemptRecordFile));
+    return record.phase === "github_persisted" || releasesAttemptOwnership(record.phase);
+  } catch {
+    return false;
+  }
+}
+
 function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => true) {
   const ownedAutomationKeys = project.automations.map((automation) => automationStateKey(project, automation));
   return {
     enabledAt: () => project.enabledAt,
     isEnabled: () => isCurrentSchedulerRun() && isProjectEnabled(project),
     isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
+    monitorHandoffIsTerminal,
     notify: (message, level) => {
       if (!isCurrentSchedulerRun()) return;
       try {
