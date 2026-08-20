@@ -90,7 +90,7 @@ deadloopが起動したエージェントCLIが、対象worktreeの中に自分�
 _Avoid_: 実行成果物(ADR 0010のdeadloop自身の出力を指すため)、エージェントCLIの設定ディレクトリ全体(共有される設定資産を含むため)、operatorの無視設定で吸収する対象
 
 **エージェント種別 (workerAgent)**:
-operator がプロジェクト設定で選ぶ、Worker を動かす CLI エージェントの種類(`pi` / `claude` の列挙)。起動構文・prompt の渡し方・session 形式・promise 抽出方法が連動して決まる分岐キーであり、モデル指定とは独立。未設定は `pi`。
+operator がプロジェクト設定で選ぶ、Worker を動かす CLI エージェントの種類(`pi` / `claude` / `omp` の列挙)。起動構文・prompt の渡し方・session 形式・promise 抽出方法が連動して決まる分岐キーであり、モデル指定とは独立。識別フラグを持たない CLI もある。未設定は `pi`。
 _Avoid_: 起動コマンドテンプレート、workerCommand
 
 **エージェントプロファイル (AgentProfile)**:

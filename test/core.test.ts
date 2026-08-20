@@ -301,6 +301,10 @@ describe("deterministic extension core", () => {
     expect(normalizeProject({ workerAgent: "claude" }).workerAgent).toBe("claude");
   });
 
+  it("preserves the omp worker agent selection", () => {
+    expect(normalizeProject({ workerAgent: "omp" }).workerAgent).toBe("omp");
+  });
+
   it("rejects invalid worker agent values", () => {
     expect(() => normalizeProject({ workerAgent: "codex" })).toThrow(/invalid workerAgent/);
   });
@@ -311,6 +315,10 @@ describe("deterministic extension core", () => {
 
   it("preserves the claude reviewer agent selection", () => {
     expect(normalizeProject({ reviewerAgent: "claude" }).reviewerAgent).toBe("claude");
+  });
+
+  it("preserves the omp reviewer agent selection", () => {
+    expect(normalizeProject({ reviewerAgent: "omp" }).reviewerAgent).toBe("omp");
   });
 
   it("rejects invalid reviewer agent values", () => {

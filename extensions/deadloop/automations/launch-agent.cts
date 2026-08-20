@@ -12,7 +12,7 @@
 // so there is no build step. See docs/adr/0004-agent-launcher.md.
 //
 // Usage:
-//   node launch-agent.cts --agent <pi|claude> --name <name> --cwd <path>
+//   node launch-agent.cts --agent <pi|claude|omp> --name <name> --cwd <path>
 //     --pane <rootPaneId> --level <low|medium|high> --prompt-file <path>
 //     [--model <model>] [--uuid <uuid>] [--repo-path <path>]
 

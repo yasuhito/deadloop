@@ -91,6 +91,19 @@ describe("launch-agent integration", () => {
     ]);
   });
 
+  it("passes the omp launch argv to herdr with its own kind", () => {
+    fs.writeFileSync(promptFile, "prompt body");
+    const { recorded } = run([
+      "--agent", "omp", "--name", "demo-worker", "--cwd", worktree, "--level", "medium",
+      "--prompt-file", promptFile, "--pane", "p1",
+    ]);
+
+    expect(recorded).toEqual([
+      "agent", "start", "demo-worker", "--kind", "omp", "--pane", "p1",
+      "--", "--thinking", "medium", "--auto-approve", `@${promptFile}`,
+    ]);
+  });
+
   it("retries the native launch entrypoint when a new root shell is transiently busy", () => {
     fs.writeFileSync(promptFile, "prompt body");
     const { status } = run([
