@@ -1,3 +1,4 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -5,6 +6,7 @@ import { describe, expect, it } from "vitest";
 const {
   branchUpdateLaunchPlan,
   consumeRequestEvent,
+  recoverableBlockedBranchUpdateHead,
   resolveAuthorizedAutomationLogins,
 } = require("../extensions/deadloop/automations/pr-reviewer-driver.cts");
 
@@ -230,5 +232,71 @@ describe("branch update launch plan", () => {
     const plan = branchUpdateLaunchPlan(pr, launchEnv, decision, "launch-uuid");
 
     expect(plan.input.renderPrompt({ promiseFile: "/state/runs/x/promise.json", worktreePath: "/worktree" })).toContain("only permitted push to the driver-selected branch, leased to the validated head");
+  });
+
+  it("carries a proven retained recovery head into checkout alignment", () => {
+    const preservedHead = "c".repeat(40);
+    const plan = branchUpdateLaunchPlan(pr, launchEnv, decision, "launch-uuid", preservedHead);
+
+    expect(plan.input.preservedCheckoutHead).toBe(preservedHead);
+  });
+
+  it("proves a clean descendant from a released blocked branch-update attempt", () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "deadloop-retained-update-"));
+    const runDir = path.join(stateDir, "runs", "attempt-1");
+    const promiseFile = path.join(runDir, "promise.json");
+    const expectedHead = "a".repeat(40);
+    const preservedHead = "c".repeat(40);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+      attemptId: "attempt-1",
+      launchUuid: "launch-1",
+      project: "demo",
+      repository: "owner/repo",
+      role: "branch-update",
+      target: { kind: "pull-request", number: 31 },
+      inputRevision: { head: expectedHead, base: "b".repeat(40) },
+      branch: "agent/issue-31",
+      baseBranch: "origin/main",
+      worktreePath: "/worktrees/agent-issue-31",
+      agentName: "dl-u-31-deadbeef0000",
+      workspaceLabel: "branch update",
+      promptFile: path.join(runDir, "prompt.md"),
+      promiseFile,
+      phase: "authority_released",
+      lastSuccessfulPhase: "agent_started",
+      workspaceId: "workspace-1",
+      tabId: "tab-1",
+      rootPaneId: "pane-1",
+      authorityRelease: { reason: "owner_absent", releasedAt: "2026-08-20T07:56:13Z" },
+    }));
+    writeFileSync(promiseFile, JSON.stringify({
+      schemaVersion: 1,
+      attemptId: "attempt-1",
+      role: "branch-update",
+      target: { repository: "owner/repo", kind: "pull-request", number: 31 },
+      inputRevision: { head: expectedHead, base: "b".repeat(40) },
+      status: "blocked",
+      summary: "Required verification failed",
+      result: {
+        reason: "required_verification_failed",
+        explanation: "npm test failed",
+        recovery: "fix and requeue",
+      },
+      evidence: {},
+    }));
+
+    try {
+      const recovered = recoverableBlockedBranchUpdateHead(
+        { ...pr, labels: [{ name: "agent:blocked" }, { name: "agent:update-branch" }] },
+        { ...launchEnv, stateDir, blockedLabel: "agent:blocked", updateBranchLabel: "agent:update-branch" },
+        {
+          runText: (args: string[]) => args.includes("rev-parse") ? preservedHead : "",
+        },
+      );
+      expect(recovered).toBe(preservedHead);
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });
