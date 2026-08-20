@@ -2,9 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+const { renderBranchUpdateMarker } = require("../extensions/deadloop/automations/pr-branch-update-state.cts");
 
 const {
   branchUpdateLaunchPlan,
+  branchUpdatePairWasAttempted,
   consumeRequestEvent,
   recoverableBlockedBranchUpdateHead,
   resolveAuthorizedAutomationLogins,
@@ -295,6 +297,46 @@ describe("branch update launch plan", () => {
         },
       );
       expect(recovered).toBe(preservedHead);
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not exhaust a head/base pair whose matching attempt never launched", () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "deadloop-never-launched-update-"));
+    const runDir = path.join(stateDir, "runs", "attempt-1");
+    const headOid = "a".repeat(40);
+    const baseOid = "b".repeat(40);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+      attemptId: "attempt-1",
+      launchUuid: "launch-1",
+      project: "demo",
+      repository: "owner/repo",
+      role: "branch-update",
+      target: { kind: "pull-request", number: 31 },
+      inputRevision: { head: headOid, base: baseOid },
+      branch: "agent/issue-31",
+      baseBranch: "origin/main",
+      worktreePath: "/worktrees/agent-issue-31",
+      agentName: "dl-u-31-deadbeef0000",
+      workspaceLabel: "branch update",
+      promptFile: path.join(runDir, "prompt.md"),
+      promiseFile: path.join(runDir, "promise.json"),
+      phase: "authority_released",
+      lastSuccessfulPhase: "github_claimed",
+      launchError: "workspace was still open",
+      requestEventId: "request-1",
+      authorityRelease: { reason: "never_launched", releasedAt: "2026-08-20T10:02:12Z" },
+    }));
+
+    try {
+      expect(branchUpdatePairWasAttempted(
+        { ...pr, comments: [{ body: renderBranchUpdateMarker(headOid, baseOid) }] },
+        { ...launchEnv, stateDir },
+        headOid,
+        baseOid,
+      )).toBe(false);
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
     }

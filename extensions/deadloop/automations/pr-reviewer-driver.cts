@@ -619,6 +619,38 @@ function applyBranchUpdateBlocked(
   return { comment, applied };
 }
 
+function branchUpdatePairWasAttempted(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  headOid: string,
+  baseOid: string,
+): boolean {
+  if (!branchUpdateAttemptExists(pr.comments || [], headOid, baseOid)) return false;
+  const runsRoot = path.join(env.stateDir, "runs");
+  let entries: string[];
+  try { entries = fs.readdirSync(runsRoot); } catch { return true; }
+  let matchingNeverLaunched = false;
+  for (const entry of entries) {
+    let record: JsonObject;
+    try { record = readAttemptRecord(path.join(runsRoot, entry)); } catch { continue; }
+    if (
+      record.project !== env.projectId ||
+      record.repository !== env.githubRepo ||
+      record.role !== "branch-update" ||
+      record.target?.kind !== "pull-request" ||
+      Number(record.target.number) !== Number(pr.number || 0) ||
+      String(record.inputRevision?.head || "") !== headOid ||
+      String(record.inputRevision?.base || "") !== baseOid
+    ) continue;
+    if (record.phase === "authority_released" && record.authorityRelease?.reason === "never_launched") {
+      matchingNeverLaunched = true;
+      continue;
+    }
+    return true;
+  }
+  return !matchingNeverLaunched;
+}
+
 function recoverableBlockedBranchUpdateHead(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -1527,7 +1559,7 @@ function driveSelectedTarget(
       });
     }
     const marker = renderBranchUpdateMarker(headOid, baseOid);
-    if (branchUpdateAttemptExists(plan.pr.comments || [], headOid, baseOid)) {
+    if (branchUpdatePairWasAttempted(plan.pr, env, headOid, baseOid)) {
       const transition = applyBranchUpdateBlocked(
         plan.pr, env, fixture, "this exact PR head/base head pair already used its one attempt",
         (_livePlan, live) => {
@@ -1725,6 +1757,7 @@ module.exports = {
   assertBranchUpdateRequestSelectable,
   assertTrustedReviewIdentity,
   recoverableBlockedBranchUpdateHead,
+  branchUpdatePairWasAttempted,
   branchUpdateLaunchPlan,
   consumeRequestEvent,
   envConfig,
