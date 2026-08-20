@@ -55,6 +55,7 @@ Pi 拡張 / パッケージの仕様に関わる変更では、Pi 本体のド�
 - `git reset --hard`、`git clean`、強制 push、branch の強制削除は、ユーザーの明示指示なしに実行しない。
 - 自動化プロンプトの安全制約を弱めない。特に作業エージェントに push / ラベル操作 / PR 作成 / Issue close を許す変更は、明示的な設計判断なしに行わない。
 - 自動マージに関わる変更は、dry-run、manual approval、失敗時の停止条件を確認する。
+- エージェントの push は次の範囲に限る。既存 PR のレビュー指摘対応と CI の修復は、そのまま push してよい。新しいブランチの作成、新しい PR の作成、`main` への push、PR のマージは、利用者に確認する。
 
 ## 検証
 
@@ -81,6 +82,7 @@ npm pack --dry-run
 - `README.md` はユーザー向け、`extensions/deadloop/README.md` は拡張の運用メモ、`docs/` は設計・実行基盤仕様に使う。
 - `README.md` の内容を変更した場合は、`README.ja.md` にも同じ変更が必要か確認する。
 - 新しい大きな方針を決めた場合は、README だけに埋めず、必要に応じて `docs/` に設計メモまたは ADR を追加する。
+- `CHANGELOG.md` は npm 公開を開始する時点で作る。それまでは Issue と PR を変更履歴として扱い、二重に記録しない。
 
 ## コミット前チェック
 
@@ -88,3 +90,4 @@ npm pack --dry-run
 - `extensions/deadloop/projects.json` や一時ファイルが staged されていないことを確認する。
 - README / docs / プロンプトの変更は、実装と矛盾していないか読み直す。
 - 自動化プロンプトを変えた場合は、GitHub に書き込む文面、ラベル遷移、停止条件を重点的に見直す。
+- コミットは `~/Work/agent-kit/scripts/committer "メッセージ" <パス> ...` をフルパスで呼ぶ。`git add -A` は使わず、常にステージするパスを明示する。
