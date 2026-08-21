@@ -97,7 +97,7 @@ describe("direct Node runtime parity", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it.each(["owner_absent", "never_launched", "superseded_by_request"] as const)("normalizes the %s release reason identically", (reason) => {
+  it.each(["owner_absent", "terminal_missing_report", "never_launched", "superseded_by_request"] as const)("normalizes the %s release reason identically", (reason) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-attempt-parity-"));
     try {
       const record = {

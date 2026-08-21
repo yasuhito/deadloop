@@ -34,7 +34,7 @@ import {
   runScheduledAutomation,
 } from "../../src/automation-runner";
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../src/agent-scratch-area.cjs");
-const { createAsyncHerdrRunner } = require("../../src/herdr-runner.cts");
+const { createAsyncHerdrRunner, createHerdrRunner } = require("../../src/herdr-runner.cts");
 const { observeAttemptLiveness } = require("../../src/attempt-runtime-observation.cts");
 const {
   agentOccupiesAttemptWorkspace,
@@ -42,6 +42,8 @@ const {
   workspaceProof,
 } = require("./automations/abandon-launch-failed-attempt.cts");
 const { readAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
+const { observeMonitorHandoffDisposition, terminalEvidenceArgs } = require("../../src/monitor-handoff-observation.cts");
+const { applyTerminalMonitorDisposition } = require("./automations/contain-terminal-monitor.cts");
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
 const {
   defaultIssueDecisionConfig,
@@ -1398,25 +1400,52 @@ function revalidatePendingIssueHandoff(handoff) {
   }
 }
 
-function monitorHandoffIsTerminal(handoff) {
-  if (!handoff.input || typeof handoff.input !== "object") return false;
+function monitorHandoffDisposition(handoff) {
+  if (!handoff.input || typeof handoff.input !== "object") {
+    return { action: "preserve", reason: "runtime_ambiguous" };
+  }
   const input = handoff.input;
   const attemptRecordFile = typeof input.attemptRecordFile === "string"
     ? input.attemptRecordFile
     : typeof input.promiseFile === "string"
       ? path.join(path.dirname(input.promiseFile), "attempt.json")
       : "";
-  if (!attemptRecordFile) return false;
+  if (!attemptRecordFile) return { action: "preserve", reason: "runtime_ambiguous" };
+  let record;
   try {
-    const record = readAttemptRecord(path.dirname(attemptRecordFile));
-    if (record.phase === "github_persisted" || releasesAttemptOwnership(record.phase)) return true;
-    if (handoff.kind !== "branch-update") return false;
-    const report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
-    validateCompletionReportBinding(record, report);
-    return report.status === "blocked";
+    record = readAttemptRecord(path.dirname(attemptRecordFile));
   } catch {
-    return false;
+    return { action: "preserve", reason: "runtime_ambiguous" };
   }
+  return observeMonitorHandoffDisposition(record, handoff.kind, {
+    runner: createHerdrRunner(),
+    readTerminalEvidence: (attempt) => {
+      const output = childProcess.spawnSync(
+        "herdr",
+        terminalEvidenceArgs(attempt),
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, killSignal: "SIGKILL" },
+      );
+      return output.status === 0 ? String(output.stdout || "") : "";
+    },
+  });
+}
+
+function applyMonitorHandoffDisposition(handoff, disposition, project) {
+  const enabled = findEnabledProject(loadEnablementState(), project);
+  if (!enabled?.automationLogin) throw new Error("terminal monitor transition requires the authorized Automation host login");
+  return applyTerminalMonitorDisposition({
+    handoff,
+    disposition,
+    project: {
+      id: project.id,
+      repoPath: project.repoPath,
+      githubRepo: project.githubRepo,
+      stateDir: STATE_DIR,
+      enabledAt: project.enabledAt,
+      automationLogin: enabled.automationLogin,
+      labels: projectLabels(project),
+    },
+  });
 }
 
 function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => true) {
@@ -1425,7 +1454,11 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
     enabledAt: () => project.enabledAt,
     isEnabled: () => isCurrentSchedulerRun() && isProjectEnabled(project),
     isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
-    monitorHandoffIsTerminal,
+    monitorHandoffDisposition,
+    applyMonitorHandoffDisposition: (handoff, disposition) => {
+      if (!isCurrentSchedulerRun()) return false;
+      return applyMonitorHandoffDisposition(handoff, disposition, project);
+    },
     notify: (message, level) => {
       if (!isCurrentSchedulerRun()) return;
       try {
@@ -1616,7 +1649,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
 }
 
 export {
-  monitorHandoffIsTerminal,
+  monitorHandoffDisposition,
   reconcilePersistedAttemptJournals,
   reconcilePrWorkAuthority,
   retainedAttemptClaimSnapshot,
