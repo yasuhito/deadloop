@@ -1400,6 +1400,24 @@ function revalidatePendingIssueHandoff(handoff) {
   }
 }
 
+function monitorRuntimeRunner() {
+  return createHerdrRunner({
+    runText: (command, args) => {
+      const result = childProcess.spawnSync(command, args, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+      });
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        throw new Error(String(result.stderr || result.stdout || `${command} failed`).trim());
+      }
+      return String(result.stdout || "");
+    },
+  });
+}
+
 function monitorHandoffDisposition(handoff) {
   if (!handoff.input || typeof handoff.input !== "object") {
     return { action: "preserve", reason: "runtime_ambiguous" };
@@ -1418,7 +1436,7 @@ function monitorHandoffDisposition(handoff) {
     return { action: "preserve", reason: "runtime_ambiguous" };
   }
   return observeMonitorHandoffDisposition(record, handoff.kind, {
-    runner: createHerdrRunner(),
+    runner: monitorRuntimeRunner(),
     readTerminalEvidence: (attempt) => {
       const output = childProcess.spawnSync(
         "herdr",
