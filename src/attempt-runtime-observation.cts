@@ -24,6 +24,15 @@ type AttemptLivenessObservation =
   | { kind: "owner_absent" }
   | { kind: "ambiguous" };
 
+type AttemptTurnObservation =
+  | { kind: "working"; agent: JsonObject }
+  | { kind: "terminal"; status: "idle" | "done" | "blocked"; agent: JsonObject }
+  | { kind: "owner_absent" }
+  | { kind: "ambiguous" };
+
+const WORKING_AGENT_STATUSES = new Set(["active", "busy", "running", "working"]);
+const TERMINAL_TURN_STATUSES = new Set(["idle", "done", "blocked"]);
+
 // Herdr answers two separate questions: whether the agent is listed at all, and if it is, whether it
 // is mid-turn. Only the first says anything about the attempt's life. `idle`, `done`, and `blocked`
 // all mean the agent is waiting for input — `herdr agent wait` treats those three as the states to
@@ -80,6 +89,22 @@ function livenessFromAgents(agents: JsonObject[], record: JsonObject): AttemptLi
   return { kind: "live" };
 }
 
+function observeAttemptTurn(runner: AttemptAgentRunner, record: JsonObject): AttemptTurnObservation {
+  const agents = runner.listAgents();
+  const related = relatedAgents(agents, record);
+  if (related.length === 0) return { kind: "owner_absent" };
+  const owned = related.filter((agent) => String(agent.name || "") === String(record.agentName || "")
+    && String(agent.paneId || "") === String(record.rootPaneId || "")
+    && canonicalPathContains(record.worktreePath, agent.cwd));
+  if (owned.length !== 1 || owned.length !== related.length) return { kind: "ambiguous" };
+  const status = String(owned[0].status || owned[0].agent_status || "").toLowerCase();
+  if (WORKING_AGENT_STATUSES.has(status)) return { kind: "working", agent: owned[0] };
+  if (TERMINAL_TURN_STATUSES.has(status)) {
+    return { kind: "terminal", status: status as "idle" | "done" | "blocked", agent: owned[0] };
+  }
+  return { kind: "ambiguous" };
+}
+
 /**
  * Whether the agent this journal names is still working, asked of the execution runtime and nothing
  * else. ADR 0020 leaves this the only authority on the question: the journal's phase, its claim
@@ -115,4 +140,4 @@ function observeAttemptRuntime(runner: AttemptRuntimeRunner, record: JsonObject,
   return liveness.kind === "live" ? { kind: "live_matching_owner" } : { kind: "owner_absent_owned" };
 }
 
-module.exports = { canonicalPath, canonicalPathContains, closeReceiptPath, observeAttemptLiveness, observeAttemptRuntime };
+module.exports = { canonicalPath, canonicalPathContains, closeReceiptPath, observeAttemptLiveness, observeAttemptRuntime, observeAttemptTurn };

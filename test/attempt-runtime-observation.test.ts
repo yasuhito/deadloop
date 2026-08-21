@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { observeAttemptLiveness, observeAttemptRuntime } = require("../src/attempt-runtime-observation.cts");
+const { observeAttemptLiveness, observeAttemptRuntime, observeAttemptTurn } = require("../src/attempt-runtime-observation.cts");
 
 const roots: string[] = [];
 
@@ -122,6 +122,30 @@ describe("attempt liveness observation", () => {
     expect(observeAttemptLiveness(renamed, attempt()).kind).toBe("ambiguous");
   });
 
+});
+
+describe("attempt turn observation", () => {
+  it("reports the attempt's working turn", () => {
+    const working = runner({ listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt", status: "working" }] });
+
+    expect(observeAttemptTurn(working, attempt())).toEqual({ kind: "working", agent: { name: "owner", paneId: "pane-1", cwd: "/wt", status: "working" } });
+  });
+
+  it.each(["idle", "done", "blocked"])("reports the attempt's %s turn terminal", (status) => {
+    const terminal = runner({ listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt", status }] });
+
+    expect(observeAttemptTurn(terminal, attempt())).toMatchObject({ kind: "terminal", status });
+  });
+
+  it("does not infer a turn from an unknown runtime status", () => {
+    const unknown = runner({ listAgents: () => [{ name: "owner", paneId: "pane-1", cwd: "/wt", status: "unknown" }] });
+
+    expect(observeAttemptTurn(unknown, attempt()).kind).toBe("ambiguous");
+  });
+
+  it("reports an absent owner separately from a terminal turn", () => {
+    expect(observeAttemptTurn(runner(), attempt()).kind).toBe("owner_absent");
+  });
 });
 
 describe("attempt runtime observation", () => {
