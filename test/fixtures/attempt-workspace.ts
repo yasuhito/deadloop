@@ -94,7 +94,6 @@ export function workerFixture() {
     role: "worker",
     repository: REPOSITORY,
     target: issueTarget,
-    issueClaimable: false,
     pullRequests: [
       {
         repository: REPOSITORY,

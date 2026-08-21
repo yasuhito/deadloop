@@ -43,18 +43,22 @@ pi install git:github.com/yasuhito/deadloop
    /deadloop-enable
    ```
 
-3. 実装を依頼する Issue に `agent:implement` を付けます。`ready-for-agent` は任意のトリアージ用ラベルであり、作業開始には不要です。
+3. 実装を依頼する場合は `agent:implement`、読み取り専用の調査を依頼する場合は `agent:explore` を Issue に付けます。`ready-for-agent` は任意のトリアージ情報です。両方の依頼がある場合は調査が優先され、結果が Issue に投稿されてから実装が始まります。
 
 これだけで利用を開始できます。有効化すると、deadloop は `npm run check` を実行し、不足している標準ラベルを作成して、自動マージを無効にした状態で動き始めます。リポジトリに `npm run check` スクリプトがない場合は、[詳細設定](#詳細設定)に従って `deadloop.json` に別の `checkCommand` を指定してください。
 
 ## ラベルでループを制御する
 
-Issue にラベルを付けると、ループが始まります。実装中とレビュー中の状態は deadloop が管理し、承認後は方針に従って PR を人間へ引き渡すか、自動でマージします。
+Issue にラベルを付けると、ループが始まります。調査、実装、レビューの状態は deadloop が管理し、承認後は方針に従って PR を人間へ引き渡すか、自動でマージします。
 
 ```mermaid
 flowchart TD
-    I["`**実装待ちの Issue**
-    agent:implement`"]
+    I["`**依頼待ちの Issue**
+    agent:explore または agent:implement`"]
+    E["`**読み取り専用の調査**
+    agent:in-progress`"]
+    X["`**調査完了**
+    agent への要求なし`"]
     W["`**実装中**
     agent:in-progress`"]
     R["`**PR のレビュー待ち**
@@ -69,9 +73,13 @@ flowchart TD
     B["`**対応が必要**
     agent:blocked`"]
 
-    I -->|deadloop が Issue を取得| W
+    I -->|調査要求を消費| E
+    E -->|実装要求が待機中| I
+    E -->|待機中の要求なし| X
+    E -. 問題発生 .-> B
+    I -->|実装要求を消費| W
     W -->|draft PR を作成| R
-    R -->|deadloop がレビューを取得| V
+    R -->|レビュー要求を消費| V
     V -->|修正を push| R
     V -->|マージ競合| U
     U -->|branch を更新| R
@@ -82,9 +90,9 @@ flowchart TD
     V -. 問題発生 .-> B
 ```
 
-1. **実装を依頼する** — `agent:implement` を付けると実装を依頼できます。`ready-for-agent` は任意のトリアージ情報です。deadloop が選択した要求世代を消費する前に `agent:implement` を外すと、依頼を取り消せます。
-2. **deadloop に任せる** — deadloop は試行を永続化し、選択した要求だけを消費してから `agent:in-progress` を付け、Worker を起動します。その後、`agent:review` を付けた draft PR を作成し、必要に応じてレビューと修正を繰り返します。PR の作業は要求ラベルだけが待ち行列になり、`agent:update-branch`、`agent:implement`、`agent:review` の順に一度に 1 件ずつ処理されます。
-3. **完了または対応する** — 承認された PR は、自動マージが無効なら ready へ変わり agent 系ワークフローラベルが外れます。有効ならマージされます。`ready-for-human` は Issue の分類用ラベルであり、PR には付きません。`agent:blocked` が付くとループは止まり、止まった PR には agent への要求が 1 つも残りません。Issue または PR のコメントに記載された原因を解消し、次に実行したい役割の要求ラベルを追加してください。`agent:blocked` はその試行が始まった時点で消えます。
+1. **作業を依頼する** — `agent:explore` は読み取り専用の調査を依頼し、`agent:implement` より優先されます。`agent:implement` は実装を依頼します。`ready-for-agent` は任意のトリアージ情報です。deadloop が選択した要求世代を消費する前に要求ラベルを外すと、依頼を取り消せます。
+2. **deadloop に任せる** — deadloop は試行を永続化し、選択した要求の消費と `agent:in-progress` の作成を 1 つの検証済み遷移として行ってから、調査担当または Worker を起動します。1 つの Issue で動く試行は 1 つだけで、同時なら調査が優先されます。調査と実装が同時に消費された場合、起動するのは調査だけで、`agent:implement` は戻されます。実装は調査結果が使えるようになった後の試行として待機し、その旨をコメントで説明します。人が何かする必要はありません。調査が成功すると、待機中の実装要求を消さずに結果を投稿します。実装では `agent:review` を付けた draft PR を作成し、必要に応じてレビューと修正を繰り返します。PR の作業は要求ラベルだけが待ち行列になり、`agent:update-branch`、`agent:implement`、`agent:review` の順に一度に 1 件ずつ処理されます。
+3. **完了または対応する** — 承認された PR は、自動マージが無効なら ready へ変わり agent 系ワークフローラベルが外れます。有効ならマージされます。`ready-for-human` は Issue の分類用ラベルであり、PR には付きません。`agent:blocked` が付くとループは止まります。調査が失敗した場合や安全を確認できない場合、停止より前の要求は消去され、停止後に追加された要求は復旧の入口として残ります。コメントに記載された原因を解消し、次に実行したい役割の要求ラベルを追加してください。`agent:blocked` はその試行が始まった時点で消えます。
 
 ## 運用コマンド
 

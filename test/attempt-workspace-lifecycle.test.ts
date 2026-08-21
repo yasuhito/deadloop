@@ -632,7 +632,7 @@ describe("attempt workspace reconciliation", () => {
       {
         record,
         report: observedV1({ ...fixture.report, attemptId: "changed-attempt" }),
-        github: { ...fixture.github, issueClaimable: true },
+        github: { ...fixture.github, pullRequests: [] },
         workspace: confirmed(ownedWorkspace),
         newerLiveOwner: confirmed(false),
       },

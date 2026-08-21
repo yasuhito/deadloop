@@ -43,18 +43,22 @@ You need an authenticated `gh` CLI and a running [Herdr](https://herdr.dev/) 0.8
    /deadloop-enable
    ```
 
-3. To request implementation, add `agent:implement` to the Issue. `ready-for-agent` remains an optional triage label and is not required to start work.
+3. Add `agent:implement` to request implementation, or `agent:explore` to request a read-only investigation. `ready-for-agent` remains optional triage metadata. When both requests are present, exploration runs first and its result is posted to the Issue before implementation starts.
 
 That is enough to start. During enablement, deadloop runs `npm run check`, creates any missing standard labels, and leaves automatic merge off. If the repository does not provide an `npm run check` script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
 
 ## Control the loop with labels
 
-You start the loop by labeling an Issue. deadloop owns the implementation and review transitions, then either hands the approved PR to a human or merges it according to policy.
+You start the loop by labeling an Issue. deadloop owns the exploration, implementation, and review transitions, then either hands the approved PR to a human or merges it according to policy.
 
 ```mermaid
 flowchart TD
     I["`**Issue queued**
-    agent:implement`"]
+    agent:explore or agent:implement`"]
+    E["`**Read-only exploration**
+    agent:in-progress`"]
+    X["`**Exploration complete**
+    no agent request`"]
     W["`**Implementation**
     agent:in-progress`"]
     R["`**PR review requested**
@@ -69,9 +73,13 @@ flowchart TD
     B["`**Needs attention**
     agent:blocked`"]
 
-    I -->|deadloop claims Issue| W
+    I -->|exploration request consumed| E
+    E -->|implementation request queued| I
+    E -->|no queued request| X
+    E -. problem .-> B
+    I -->|implementation request consumed| W
     W -->|draft PR created| R
-    R -->|deadloop claims review| V
+    R -->|review request consumed| V
     V -->|changes pushed| R
     V -->|merge conflict| U
     U -->|branch updated| R
@@ -82,9 +90,9 @@ flowchart TD
     V -. problem .-> B
 ```
 
-1. **Request implementation** — `agent:implement` requests implementation; `ready-for-agent` is optional triage metadata. Remove `agent:implement` before deadloop consumes the selected request generation to cancel it.
-2. **Let deadloop work** — deadloop durably records the attempt, consumes only the selected request, then adds `agent:in-progress` and starts the Worker. It creates a draft PR with `agent:review` and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
-3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help, and a stopped PR keeps no agent request; fix the cause reported in the Issue or PR comment, then add the request label for the role you want next. `agent:blocked` clears when that attempt starts.
+1. **Request work** — `agent:explore` requests a read-only investigation and takes priority over `agent:implement`; `agent:implement` requests implementation. `ready-for-agent` is optional triage metadata. Remove a request label before deadloop consumes its selected generation to cancel it.
+2. **Let deadloop work** — deadloop durably records the attempt, then consumes only the selected request and creates `agent:in-progress` as one proven transition before it starts the explorer or Worker. One Issue runs one attempt, and exploration wins: if exploration and implementation are consumed at the same moment, only exploration starts and `agent:implement` is put back, so implementation stays queued for the attempt after the exploration result is available; a comment explains it and nothing is needed from you. A successful exploration posts its result without erasing a queued implementation request. Implementation creates a draft PR with `agent:review` and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
+3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help. A failed or unsafe exploration clears requests that predate its block; a request added after the block remains the recovery interface. Fix the reported cause, then add the request label for the role you want next. `agent:blocked` clears when that attempt starts.
 
 ## Operator commands
 

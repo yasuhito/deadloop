@@ -61,7 +61,6 @@ type BoundGithubObservation = {
 export type WorkerGithubObservation = BoundGithubObservation & {
   kind: "confirmed";
   role: "worker";
-  issueClaimable: boolean;
   pullRequests: Array<
     BoundGithubObservation & {
       state: "open" | "closed" | "merged";
@@ -112,8 +111,6 @@ export type GithubCompletionObservation =
   | UncertainGithubObservation;
 
 export type CompletionDecisionContext = {
-  workerReadyLabel?: string;
-  workerImplementLabel?: string;
   workerReviewLabel?: string;
   reviewerExpectedLabels?: readonly string[];
   reviewerManagedLabels?: readonly string[];
@@ -242,7 +239,6 @@ export function workerCompletionPersisted(
     pullRequest.closesIssue === record.target.number &&
     pullRequest.labels.includes(reviewLabel) &&
     markerMatches(pullRequest.marker, record, "complete", outputRevision) &&
-    !github.issueClaimable &&
     !sameSha(outputRevision, record.inputRevision.head)
   );
 }

@@ -17,7 +17,6 @@ type IssueMonitorPromptInput = MonitorPromptBaseInput & {
   worktreePath: string;
   branch: string;
   checkCommand: string;
-  readyLabel: string;
   implementLabel?: string;
   reviewLabel: string;
   inProgressLabel: string;
@@ -119,12 +118,8 @@ function renderWorkspaceCompletion(input: MonitorPromptBaseInput, expectedLabels
   ].filter((label): label is string => Boolean(label));
   const managed = managedLabels.flatMap((label) => ["--managed-label", shellQuotePrompt(label)]).join(" ");
   const worker = input as Partial<IssueMonitorPromptInput>;
-  const workerLabels = worker.readyLabel && worker.implementLabel && worker.reviewLabel
-    ? [
-        "--worker-ready-label", shellQuotePrompt(worker.readyLabel),
-        "--worker-implement-label", shellQuotePrompt(worker.implementLabel),
-        "--worker-review-label", shellQuotePrompt(worker.reviewLabel),
-      ].join(" ")
+  const workerLabels = worker.reviewLabel
+    ? ["--worker-review-label", shellQuotePrompt(worker.reviewLabel)].join(" ")
     : "";
   const policy = "autoMerge" in input ? `--auto-merge ${input.autoMerge ? "true" : "false"}` : "";
   const extras = [workerLabels, policy, labels, managed].filter(Boolean).join(" ");
@@ -142,11 +137,11 @@ ${renderPromisePollingRules(input, "issue")}
 
 After a \`complete\` promise:
 - Inspect \`${input.worktreePath}\` and confirm only Issue #${input.issueNumber} changes are present.
-- Run the fixed required-verification contract through run-project-check.ts isolation before creating any PR, and persist its output-commit-bound record by running exactly \`${verify}\`. Agent-reported additional validations never replace this record. If it reports \`status=blocked\`, it has deterministically removed the in-progress claim, added the blocked label, and posted idempotent recovery guidance; stop without another comment or label mutation. A new attempt must adopt the restored policy.
+- Run the fixed required-verification contract through run-project-check.ts isolation before creating any PR, and persist its output-commit-bound record by running exactly \`${verify}\`. Agent-reported additional validations never replace this record. If it reports \`status=blocked\`, it has deterministically removed the in-progress state, added the blocked label, and posted idempotent recovery guidance; stop without another comment or label mutation. A new attempt must adopt the restored policy.
 - Only after that command reports \`status=passed\`, push only the Worker branch \`${input.branch}\` without force-push by running exactly \`${guardedPush}\`. The guarded push independently requires the same passed record and current policy.
 - Only after that push succeeds, create a reviewable PR whose body includes \`Closes #${input.issueNumber}\`, or recover that exact PR, and add \`${input.reviewLabel}\` by running exactly \`${createPr}\`. This dedicated command independently requires the verified output commit; do not run \`gh pr create\` or success label mutations directly.
 - Do not manually close the issue with GitHub commands, and do not merge the PR.
-- After the PR, closing reference, exact pushed head, labels, and Issue state are persisted, run \`${renderAttemptPersistence(input)}\` to bind that existing result. Only after it reports result_persisted, run the deterministic workspace completion command exactly once: \`${renderWorkspaceCompletion(input)}\`. A pending cleanup result must not replay the push, PR creation, comment, or labels.
+- After the PR, closing reference, exact pushed head, labels, and attempt marker are persisted, run \`${renderAttemptPersistence(input)}\` to bind that existing result. Only after it reports result_persisted, run the deterministic workspace completion command exactly once: \`${renderWorkspaceCompletion(input)}\`. A pending cleanup result must not replay the push, PR creation, comment, or labels.
 
 After a \`blocked\` promise:
 - Use the promise reason/summary to report the blocker.

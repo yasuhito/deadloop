@@ -23,7 +23,7 @@ function evaluateCompletionPersistence(input){
  let ok=false;
  if(r.role==="worker"){
   const p=github.pullRequests.filter(x=>bound(x,record)&&x.state==="open"&&x.headBranch===record.branch);
-  ok=typeof context.workerReviewLabel==="string"&&p.length===1&&sha(record.outputRevision,r.result.outputRevision)&&sha(p[0].headSha,r.result.outputRevision)&&p[0].baseBranch===record.baseBranch&&p[0].closesIssue===record.target.number&&p[0].labels.includes(context.workerReviewLabel)&&marker(p[0].marker,record,"complete",r.result.outputRevision)&&!github.issueClaimable&&!sha(r.result.outputRevision,record.inputRevision.head);
+  ok=typeof context.workerReviewLabel==="string"&&p.length===1&&sha(record.outputRevision,r.result.outputRevision)&&sha(p[0].headSha,r.result.outputRevision)&&p[0].baseBranch===record.baseBranch&&p[0].closesIssue===record.target.number&&p[0].labels.includes(context.workerReviewLabel)&&marker(p[0].marker,record,"complete",r.result.outputRevision)&&!sha(r.result.outputRevision,record.inputRevision.head);
  } else if(r.role==="reviewer"){
   const p=github.reviewPersistence;const expected=context["reviewerExpectedLabels"];const managed=new Set(context["reviewerManagedLabels"]||expected||[]);ok=sha(github.headSha,record.inputRevision.head)&&Array.isArray(expected)&&seteq(github.labels.filter(x=>managed.has(x)),expected)&&!(expected.length===0&&github.draft)&&!!p&&bound(p,record)&&sha(p.headSha,record.inputRevision.head)&&marker(p.marker,record,r.result.outcome)&& (reviewTransition!=="repair"||(p.boundedRepairAttemptMarked&&findings(p.findings,r.result.findings||[])));
  } else {
