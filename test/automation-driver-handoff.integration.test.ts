@@ -93,7 +93,6 @@ describe("real driver handoff across disable and re-enable", () => {
           return { action: "working", accounting: { activeMilliseconds: 0, observedAt: new Date(789).toISOString(), runtimeWasWorking: true } };
         },
         saveState: (next) => writeFileSync(statePath, JSON.stringify(next)),
-        sendUserMessage: (prompt) => sent.push(prompt),
       });
 
       expect(observation({

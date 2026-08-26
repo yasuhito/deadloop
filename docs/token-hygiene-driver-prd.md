@@ -27,7 +27,7 @@ Add a deterministic automation driver seam. A scheduled automation may run a dri
 
 - `skip`: no work is needed; do not send an LLM prompt.
 - `done`: deterministic work completed; report a concise summary only.
-- `needs_llm`: send a short, generated prompt with bounded evidence.
+- `monitor`: launch an agent and register model-free deterministic attempt monitoring.
 - `error`: record failure and surface a concise operator summary.
 
 This seam lets deadloop keep the extension scheduler small while pushing workflow-specific behavior into scripts with focused tests.

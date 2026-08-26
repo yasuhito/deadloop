@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { Given, Then, When } from "@cucumber/cucumber";
 
+import { deliverPendingDriverHandoff } from "../../src/automation-runner";
 import { fixtureStateDir } from "../support/fixture-state-dir";
 const { observeAttemptMonitoringDirective } = require("../../src/monitor-handoff-observation.cts");
 
@@ -23,6 +24,12 @@ type WorkerWorld = {
   coordinatorResult?: Record<string, unknown>;
   monitorAgents?: RunnerAgent[];
   monitorDirective?: Record<string, unknown> | null;
+};
+
+const MONITORED_ROLES = ["issue", "explorer", "reviewer", "branch-update", "repair"] as const;
+
+type MonitoredRolesWorld = {
+  roleEntries?: Record<string, Record<string, unknown>>;
 };
 
 function launchWorker(world: WorkerWorld): void {
@@ -210,4 +217,65 @@ Then("deadloop continues the attempt as working", function (this: WorkerWorld) {
 
 Then("deadloop records a missing report without sending any monitor prompt", function (this: WorkerWorld) {
   assert.equal(this.monitorDirective?.action, "missing_report");
+});
+
+Given("Deterministic monitoring registered for a Worker, explorer, reviewer, branch-update, and repair attempt", function (this: WorkerWorld & MonitoredRolesWorld) {
+  this.roleEntries = {};
+  for (const kind of MONITORED_ROLES) {
+    this.roleEntries[kind] = {
+      pendingDriverHandoff: {
+        action: "monitor",
+        monitorHandoff: { kind, input: { enabledAt: 1 } },
+        monitorAccounting: { activeMilliseconds: 0, observedAt: "1970-01-01T00:00:00.000Z", runtimeWasWorking: true },
+      },
+    };
+  }
+});
+
+When("deadloop monitors every role across repeated scheduler ticks", function (this: WorkerWorld & MonitoredRolesWorld) {
+  if (!this.roleEntries) throw new Error("monitored roles precondition is missing");
+  const tickMinute = 60_000;
+  let minute = 0;
+  for (let tick = 0; tick < 100; tick += 1) {
+    minute += tickMinute;
+    for (const kind of MONITORED_ROLES) {
+      const entry = this.roleEntries[kind];
+      deliverPendingDriverHandoff(entry, { automations: {} }, kind, {
+        enabledAt: () => 1,
+        isEnabled: () => true,
+        now: () => minute,
+        observeAttemptMonitoring: (_handoff, accounting) => ({
+          action: "working" as const,
+          accounting: {
+            activeMilliseconds: Number(accounting.activeMilliseconds) + tickMinute,
+            observedAt: new Date(minute).toISOString(),
+            runtimeWasWorking: true,
+          },
+        }),
+        saveState: () => undefined,
+      });
+    }
+  }
+});
+
+Then("deadloop queues no host-model prompt for any role", function (this: WorkerWorld & MonitoredRolesWorld) {
+  if (!this.roleEntries) throw new Error("monitored roles precondition is missing");
+  // Nothing in the delivery path can reach a host-model turn, so observability comes from the
+  // scheduler record itself: every tick stayed a deterministic working observation, no prompt
+  // was ever queued, and each attempt remains bound to its original monitor handoff.
+  const observations = MONITORED_ROLES.map((kind) => {
+    const entry = this.roleEntries![kind];
+    return {
+      kind,
+      lastResult: entry.lastResult,
+      queuedAt: entry.lastQueuedAt,
+      monitored: ((entry.pendingDriverHandoff as Record<string, any>)?.monitorHandoff?.kind) === kind,
+    };
+  });
+  assert.deepEqual(observations, MONITORED_ROLES.map((kind) => ({
+    kind,
+    lastResult: "driver_attempt_working",
+    queuedAt: undefined,
+    monitored: true,
+  })));
 });

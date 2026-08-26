@@ -14,12 +14,6 @@ Automation users expect deterministic results not to start unnecessary agents an
 * When deadloop runs the automation
 * Then deadloop does not send a prompt
 
-## Scenario: Send only the decision prompt when judgment is required
-
-* Given Automation requires judgment
-* When deadloop runs the automation
-* Then deadloop sends only the decision prompt
-
 ## Scenario: Do not send a prompt for an invalid automation response
 
 * Given Automation returns an invalid response

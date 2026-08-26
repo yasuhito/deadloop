@@ -41,10 +41,6 @@ Given("Automation reports that processing is complete", function (this: DriverWo
   configureAutomation(this, { code: 0, stdout: driverPayload("done"), stderr: "" });
 });
 
-Given("Automation requires judgment", function (this: DriverWorld) {
-  configureAutomation(this, { code: 0, stdout: driverPayload("needs_llm", { prompt: "decision prompt" }), stderr: "" });
-});
-
 Given("Automation returns an invalid response", function (this: DriverWorld) {
   configureAutomation(this, { code: 0, stdout: "not json", stderr: "" });
 });
@@ -86,10 +82,6 @@ When("deadloop runs the automation", async function (this: DriverWorld) {
 
 Then("deadloop does not send a prompt", function (this: DriverWorld) {
   assert.deepEqual(this.sent, []);
-});
-
-Then("deadloop sends only the decision prompt", function (this: DriverWorld) {
-  assert.deepEqual(this.sent, ["decision prompt"]);
 });
 
 Then("deadloop sends the normal prompt", function (this: DriverWorld) {

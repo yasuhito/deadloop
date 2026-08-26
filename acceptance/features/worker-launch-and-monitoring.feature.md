@@ -44,3 +44,9 @@ This avoids disrupting an active agent or an agent on another worktree and avoid
 * Given A monitored Issue Worker whose runtime ended terminally without writing a report
 * When the deterministic monitor evaluates the attempt
 * Then deadloop records a missing report without sending any monitor prompt
+
+## Scenario: Keep every launched role monitored without the Automation host model
+
+* Given Deterministic monitoring registered for a Worker, explorer, reviewer, branch-update, and repair attempt
+* When deadloop monitors every role across repeated scheduler ticks
+* Then deadloop queues no host-model prompt for any role

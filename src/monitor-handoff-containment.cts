@@ -17,8 +17,8 @@ type MonitorContainmentInput = {
 const RELEASED_PHASES = new Set(["github_persisted", "workspace_closed", "authority_released", "abandoned"]);
 function decideMonitorContainment(input: MonitorContainmentInput): MonitorHandoffDisposition {
   if (RELEASED_PHASES.has(String(input.record?.phase || ""))) return { action: "settled" };
-  if (input.report.kind === "valid") return { action: "continue_legacy_monitor" };
-  if (input.runtime.kind === "working") return { action: "continue_legacy_monitor" };
+  if (input.report.kind === "valid") return { action: "continue_monitoring" };
+  if (input.runtime.kind === "working") return { action: "continue_monitoring" };
   if (input.runtime.kind === "ambiguous" || input.runtime.kind === "unreachable") {
     return input.runtime.kind === "ambiguous"
       ? { action: "preserve", reason: "runtime_ambiguous" }

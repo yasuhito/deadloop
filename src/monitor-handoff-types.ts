@@ -20,7 +20,7 @@ export type AttemptMonitoringApplication = {
 };
 
 export type MonitorHandoffDisposition =
-  | { action: "continue_legacy_monitor" }
+  | { action: "continue_monitoring" }
   | { action: "settled" }
   | { action: "wait_for_model"; reason: "model_availability" }
   | { action: "stop"; reason: "missing_completion_report" | "invalid_completion_report" | "storage_exhaustion" | "active_work_timeout" }

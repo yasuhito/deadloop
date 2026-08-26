@@ -194,7 +194,6 @@ function driveMonitoringOnce(world: ReviewerFailureWorld): void {
     retryModelWait: () => false,
     now: () => NOW,
     saveState: () => undefined,
-    sendUserMessage: () => undefined,
   });
 }
 
