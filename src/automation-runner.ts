@@ -8,14 +8,8 @@ import type {
   ActiveWorkAccounting,
   AttemptMonitoringApplication,
   AttemptMonitoringDirective,
-  MonitorHandoffDisposition,
 } from "./monitor-handoff-types";
 const { passesIssueLabelGate } = require("./issue-eligibility.cjs");
-const { renderPendingMonitorHandoff } = require("./monitor-prompts.cts");
-
-export type { MonitorHandoffDisposition } from "./monitor-handoff-types";
-
-const MONITOR_HANDOFF_RETRY_MS = 60_000;
 
 export type AutomationExecResult = {
   code: number;
@@ -40,7 +34,6 @@ export type AutomationRunnerDeps = {
   enabledAt?: () => number;
   isEnabled?: () => boolean;
   isIdle?: () => boolean;
-  monitorHandoffDisposition?: (handoff: Record<string, unknown>) => MonitorHandoffDisposition;
   observeAttemptMonitoring?: (
     handoff: Record<string, unknown>,
     accounting: ActiveWorkAccounting,
@@ -51,10 +44,6 @@ export type AutomationRunnerDeps = {
     directive: Exclude<AttemptMonitoringDirective, { action: "working" | "ambiguity" | "settled" }>,
   ) => AttemptMonitoringApplication;
   retryModelWait?: (handoff: Record<string, unknown>) => boolean;
-  applyMonitorHandoffDisposition?: (
-    handoff: Record<string, unknown>,
-    disposition: Exclude<MonitorHandoffDisposition, { action: "continue_legacy_monitor" } | { action: "settled" }>,
-  ) => boolean;
   notify?: (message: string, level: "info" | "warning" | "error") => void;
   now: () => number;
   prepareExecutionSupply: () => AutomationExecutionSupply | Promise<AutomationExecutionSupply>;
@@ -222,8 +211,6 @@ export function deliverPendingDriverHandoff(
     | "isEnabled"
     | "notify"
     | "now"
-    | "monitorHandoffDisposition"
-    | "applyMonitorHandoffDisposition"
     | "observeAttemptMonitoring"
     | "applyAttemptMonitoring"
     | "retryModelWait"
@@ -257,7 +244,6 @@ export function deliverPendingDriverHandoff(
         generationsAreValid &&
         (!generationChanged ||
           (monitorHandoff.kind === "issue" && deps.revalidatePendingDriverHandoff?.(monitorHandoff) === true));
-      if (generationChanged) delete payload.monitorQueuedAt;
       if (!canRebind) {
         delete entry.pendingDriverHandoff;
         recordAutomationResult(entry, "driver_handoff_revalidation_required");
@@ -267,7 +253,7 @@ export function deliverPendingDriverHandoff(
         deps.notify?.(`deadloop discarded stale monitor handoff: ${automationName}`, "warning");
         return true;
       }
-      if (["reviewer", "branch-update", "issue", "explorer"].includes(String(monitorHandoff.kind || ""))) {
+      {
         const storedAccounting = payload.monitorAccounting;
         const accounting: ActiveWorkAccounting = storedAccounting && typeof storedAccounting === "object" && !Array.isArray(storedAccounting)
           ? storedAccounting as unknown as ActiveWorkAccounting
@@ -317,59 +303,6 @@ export function deliverPendingDriverHandoff(
         entry.updatedAt = deps.now();
         deps.saveState(state);
         return true;
-      }
-      const monitorQueuedAt = payload.monitorQueuedAt;
-      if (typeof monitorQueuedAt === "number" && Number.isFinite(monitorQueuedAt)) {
-        const disposition = deps.monitorHandoffDisposition?.(monitorHandoff) ?? { action: "continue_legacy_monitor" };
-        if (disposition.action === "settled") {
-          delete entry.pendingDriverHandoff;
-          recordAutomationResult(entry, "driver_monitor_settled");
-          entry.updatedAt = deps.now();
-          deps.saveState(state);
-          return true;
-        }
-        if (disposition.action === "preserve") {
-          recordAutomationResult(entry, "driver_monitor_observation_ambiguous");
-          entry.lastSummary = disposition.reason;
-          entry.updatedAt = deps.now();
-          deps.saveState(state);
-          return true;
-        }
-        if (disposition.action !== "continue_legacy_monitor") {
-          try {
-            if (payload.monitorContainmentApplied !== true) {
-              payload.monitorContainmentApplied =
-                deps.applyMonitorHandoffDisposition?.(monitorHandoff, disposition) === true;
-            }
-            const applied = payload.monitorContainmentApplied === true;
-            if (disposition.action === "stop" && applied) delete entry.pendingDriverHandoff;
-            recordAutomationResult(
-              entry,
-              disposition.action === "wait_for_model"
-                ? "driver_monitor_waiting_for_model"
-                : disposition.action === "stop"
-                  ? applied ? "driver_monitor_stopped" : "driver_monitor_stop_pending"
-                  : "driver_monitor_observation_ambiguous",
-            );
-            entry.lastSummary = disposition.reason;
-            entry.updatedAt = deps.now();
-            deps.saveState(state);
-          } catch (error) {
-            recordAutomationResult(entry, "driver_monitor_stop_pending");
-            entry.lastError = error instanceof Error ? error.message : String(error);
-            entry.updatedAt = deps.now();
-            deps.saveState(state);
-          }
-          return true;
-        }
-      }
-      prompt = renderPendingMonitorHandoff(monitorHandoff, currentEnabledAt);
-      if (
-        typeof monitorQueuedAt === "number" &&
-        Number.isFinite(monitorQueuedAt) &&
-        deps.now() - monitorQueuedAt < MONITOR_HANDOFF_RETRY_MS
-      ) {
-        return false;
       }
     } catch (error) {
       delete entry.pendingDriverHandoff;

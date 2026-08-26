@@ -19,7 +19,7 @@ type EnabledProjectValue = EnablementIdentityValue & {
   enabled: boolean;
 };
 
-type EnablementStateValue = { projects: EnabledProjectValue[]; lastWriterCodeIdentity?: string };
+type EnablementStateValue = { projects: EnabledProjectValue[]; lastWriterCodeIdentity: string };
 
 function validIdentity(value: unknown): value is EnablementIdentityValue {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -37,9 +37,7 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
   const state = value as { projects?: unknown; lastWriterCodeIdentity?: unknown };
   const candidates = state.projects;
   if (!Array.isArray(candidates)) return null;
-  if (state.lastWriterCodeIdentity !== undefined && (
-    typeof state.lastWriterCodeIdentity !== "string" || !/^[0-9a-f]{40}$/i.test(state.lastWriterCodeIdentity)
-  )) return null;
+  if (typeof state.lastWriterCodeIdentity !== "string" || !/^[0-9a-f]{40}$/i.test(state.lastWriterCodeIdentity)) return null;
   const normalized: EnabledProjectValue[] = [];
   const repoPaths = new Set<string>();
   const githubRepos = new Set<string>();
@@ -82,12 +80,9 @@ function normalizeEnablementStateValue(value: unknown): EnablementStateValue | n
       enabled: record.enabled,
     });
   }
-  const lastWriterCodeIdentity = typeof state.lastWriterCodeIdentity === "string"
-    ? state.lastWriterCodeIdentity.toLowerCase()
-    : undefined;
   return {
     projects: normalized,
-    ...(lastWriterCodeIdentity === undefined ? {} : { lastWriterCodeIdentity }),
+    lastWriterCodeIdentity: state.lastWriterCodeIdentity.toLowerCase(),
   };
 }
 

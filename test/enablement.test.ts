@@ -19,6 +19,7 @@ const safetyFields = {
   autoMergeAcknowledged: false,
   enabled: true,
 };
+const writerCodeIdentity = "a".repeat(40);
 
 describe("local enablement state", () => {
   it("starts disabled when no state file exists", () => {
@@ -114,34 +115,46 @@ describe("local enablement state", () => {
   });
 
   it("rejects invalid first-enable auto-merge gate metadata", () => {
-    expect(normalizeEnablementState({ projects: [{ ...project, enabledAt: 1, firstEnableAutoMerge: "true" }] })).toBeNull();
+    expect(normalizeEnablementState({ projects: [{ ...project, enabledAt: 1, firstEnableAutoMerge: "true" }], lastWriterCodeIdentity: writerCodeIdentity })).toBeNull();
+  });
+
+  it("requires the code identity of the Automation host that wrote the shared state", () => {
+    expect(normalizeEnablementState({ projects: [], lastWriterCodeIdentity: undefined })).toBeNull();
+  });
+
+  it("rejects a recorded writer identity that is not a full commit SHA", () => {
+    expect(normalizeEnablementState({ projects: [], lastWriterCodeIdentity: "not-a-commit" })).toBeNull();
+  });
+
+  it("keeps the recorded writer identity in the normalized shared state", () => {
+    expect(normalizeEnablementState({ projects: [], lastWriterCodeIdentity: writerCodeIdentity.toUpperCase() })).toEqual({ projects: [], lastWriterCodeIdentity: writerCodeIdentity });
   });
 
   it("rejects duplicate canonical checkout paths", () => {
     expect(normalizeEnablementState({ projects: [
       { ...project, ...safetyFields, enabledAt: 1 },
       { repoPath: "/repos/other/../demo", githubRepo: "owner/other", ...safetyFields, enabledAt: 2 },
-    ] })).toBeNull();
+    ], lastWriterCodeIdentity: writerCodeIdentity })).toBeNull();
   });
 
   it("rejects duplicate GitHub repositories", () => {
     expect(normalizeEnablementState({ projects: [
       { ...project, ...safetyFields, enabledAt: 1 },
       { repoPath: "/repos/other", githubRepo: "OWNER/DEMO", githubRepositoryId: "R_other", ...safetyFields, enabledAt: 2 },
-    ] })).toBeNull();
+    ], lastWriterCodeIdentity: writerCodeIdentity })).toBeNull();
   });
 
   it("rejects duplicate immutable GitHub repository IDs across renamed aliases", () => {
     expect(normalizeEnablementState({ projects: [
       { ...project, ...safetyFields, enabledAt: 1 },
       { repoPath: "/repos/renamed", githubRepo: "owner/renamed", ...safetyFields, enabledAt: 2 },
-    ] })).toBeNull();
+    ], lastWriterCodeIdentity: writerCodeIdentity })).toBeNull();
   });
 
   it("rejects duplicate exact identities", () => {
     expect(normalizeEnablementState({ projects: [
       { ...project, ...safetyFields, enabledAt: 1 },
       { ...project, ...safetyFields, enabledAt: 2 },
-    ] })).toBeNull();
+    ], lastWriterCodeIdentity: writerCodeIdentity })).toBeNull();
   });
 });

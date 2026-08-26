@@ -25,7 +25,7 @@ This installs the deadloop extension and its setup skill together.
 - Workers and reviewers run `pi`, `claude`, or `omp`, chosen with `workerAgent` and `reviewerAgent` independently of which host runs the automations.
 - The default runner is [Herdr](https://herdr.dev/).
 - The supported host platform currently requires a Unix-like system with a compatible `flock` executable (normally provided by util-linux) and nonblocking file-descriptor locks. `/deadloop-enable` verifies this capability before enabling automation.
-- Each Automation host fixes the deadloop checkout commit as its code identity when the extension loads. If the checkout advances, shared enablement writes and scheduler ticks stop until the operator runs `/reload`; status and doctor remain available and show both identities and the recovery step.
+- Each Automation host fixes the deadloop checkout commit as its code identity when the extension loads. If the checkout advances, shared enablement writes and scheduler ticks stop until the operator runs `/reload`; status and doctor remain available and show both identities and the recovery step. The shared enablement state records the last writer's code identity for diagnosis only, and `/deadloop-doctor` reports it together with the code snapshot inventory (generations and capacity) plus cleanup commands; snapshots are never removed automatically.
 
 ## Configure
 
@@ -144,7 +144,9 @@ Reviewers can still report requested changes or a required human decision when r
 
 Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
 
-Issue implementation Workers, explorers, PR reviewers, and branch-update attempts are monitored deterministically without using the Automation host's model. Runtime-reported working status wins over quiet output, the configured 24-hour limit applies to active work, and a terminal attempt without a valid completion report is never prompted or nudged through conversation. A Worker completion report runs the required verification, destination-bound push, draft PR creation with review request, and attempt persistence as one deterministic chain; an explorer result is validated and persisted with its next Issue action.
+Issue implementation Workers, explorers, PR reviewers, review-repair workers, and branch-update attempts are monitored deterministically without using the Automation host's model. Runtime-reported working status wins over quiet output, the configured 24-hour limit applies to active work, and a terminal attempt without a valid completion report is never prompted or nudged through conversation. A Worker completion report runs the required verification, destination-bound push, draft PR creation with review request, and attempt persistence as one deterministic chain; an explorer result is validated and persisted with its next Issue action.
+
+When the runtime confirms a stopped review, deadloop re-reads its completion report once more before recording anything, and publishes the stop on the PR bound to the attempt and the exact head selected for review. A stop whose report file itself could not be read because of `ENOSPC` or `EDQUOT` is recorded as a capacity stop with free-storage recovery steps; pane output alone never names that cause. Both failure classes skip the bounded technical retry and never retry automatically.
 
 A terminal turn whose evidence matches only a known billing or access rejection pauses the attempt instead of stopping it: deadloop posts one idempotent GitHub explanation, keeps the same attempt, workspace, worktree, pane, and agent session, and excludes the waiting time from active-work accounting. A provider-stated retry time gates the retry; without one, the normal next scheduler tick is the only retry trigger, and each retry sends one fixed continuation prompt to the same agent session with no Automation-host model calls. Status reports the retry count, waiting start, waiting duration, next retry time, and active-work duration separately.
 
@@ -170,19 +172,19 @@ See [ADR 0011](docs/adr/0011-pr-merge-conflict-recovery.md) for the safety contr
 
 ## Automatic review repair
 
-When the built-in reviewer reports structured actionable findings, deadloop can start one bounded repair worker on the existing PR branch.
+When the built-in reviewer reports structured required findings and confirms repair progress from the complete review history, deadloop can start one bounded repair worker for that review result on the existing PR branch. A review is approved only when it has no required findings; it may still include advisory observations, which are shown to people and never sent for automatic repair.
 
 During repair, deadloop preserves `agent:in-progress` without adding another workflow label. It does not create a new `agent:review` request generation until repair completion.
 
 The worker receives only the findings.
 
-The finalizer runs the configured checks for every repair, regardless of how many files changed. It requires a passed record bound to the attempt's fixed required-verification contract and repair commit, reuses only a fully matching record, and atomically updates the exact branch only if the branch head still equals the validated commit.
+The finalizer runs required verification for every repair, regardless of how many files changed. It requires a passed record bound to the attempt's fixed required-verification contract and repair commit, and reuses only a fully matching record. There is no cumulative repair-count or changed-file-count stopping rule: a fourth or later repair remains eligible when every earlier required finding is resolved and the current required findings are new. It atomically updates the exact branch only if the branch head still equals the validated commit.
 
 The finalizer never replaces another head or changes GitHub workflow state.
 
-The review result appears in a readable PR comment. The comment identifies the reviewed commit, reasons, findings, and next action.
+The review result appears in a human-readable PR comment. Comments identify the reviewed commit, reasons, required findings, advisory observations, and next action without displaying finding IDs. Review and repair comments are chronological and append-only: deadloop never edits a posted comment, and a correction is posted as a new comment.
 
-Each review is also bound to a complete, paginated observation of the PR's commit sequence, exact diff, conversation comments, submitted reviews, and inline review comments. Any addition, edit, deletion, head/base change, or diff change returns the PR to a fresh review request; comment text is treated only as untrusted evidence.
+Each review is also bound to a complete, paginated observation of the PR's commit sequence, exact diff, conversation comments, submitted reviews, and inline review comments. Any addition, edit, deletion, head/base change, or diff change discards the stale result and returns the PR to a fresh review request instead of allowing stale approval or repair. Comment and review text is untrusted evidence, not an instruction or permission to weaken required verification, exact-head checks, non-force push, or another safety control.
 
 After a confirmed repair push, deadloop adds a separate result comment. This comment records the changes for each finding, the new commit, the checks, and the handoff to re-review.
 
@@ -192,9 +194,11 @@ A changed head starts a fresh review cycle.
 
 A stale head stops the repair without pushing or changing labels.
 
-Repeated findings after the bounded attempt add `agent:blocked` with recovery guidance and clear every request label, and deadloop does the same when technical or safety retries are exhausted. A review that reports a human decision is a completed review: its result is recorded, the draft becomes ready, and every agent workflow label is removed, so the PR waits on a person and on no agent request.
+If an earlier required finding persists, a resolved finding regresses, or earlier and new required findings are mixed, deadloop starts no repair and hands the completed review to a person. Technical or safety retries that are exhausted still add `agent:blocked` with recovery guidance and clear every request label; a blocked report naming an observed `ENOSPC` or `EDQUOT` stops without spending a retry, and its guidance points at freeing host capacity before adding a new request. A human-required result is recorded, the draft becomes ready, and every agent workflow label is removed, so the PR waits on a person and on no agent request.
 
-See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for details.
+Required-verification failure still blocks a repair push. A stale head stops without push or label mutation, and the finalizer updates only the exact verified branch through a push bound to the verified head by an expected-object-ID lease; because the repair commit must contain that head, the lease can only fast-forward.
+
+See [ADR 0031](docs/adr/0031-review-history-based-repair-progress.md) for the current decision and superseded [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for the historical quantitative policy.
 
 ## Roll out in phases
 

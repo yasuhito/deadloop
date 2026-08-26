@@ -1,5 +1,6 @@
 const { compareGithubTimelineEvents } = require("./github-timeline-order.cts");
 const { redactLocalDetail } = require("./local-detail-redaction.cts");
+const { containsStorageExhaustion } = require("./storage-exhaustion.cjs");
 
 type JsonObject = Record<string, any>;
 
@@ -22,12 +23,14 @@ type ReconciliationInput = {
   completion?: CompletionObservation;
   /** Launch errors recorded by this PR's attempts that failed before starting any agent. */
   launchFailures?: string[];
+  /** ENOSPC/EDQUOT deadloop's own deterministic processing or a bound completion report observed. */
+  storageExhaustion?: boolean;
 };
 
 type ReconciliationDecision =
   | { action: "keep_active"; cleanup: "none" }
   | { action: "release_for_request"; reason: "request_superseded_absent_owner"; labels: string[]; cleanup: "close_owned_workspace" }
-  | { action: "block"; reason: "attempt_missing" | "attempt_ambiguous" | "runtime_unreachable" | "runtime_ambiguous" | "runtime_owner_absent" | "completion_handoff_refused" | "launch_unprepared"; labels: string[]; cleanup: "none" | "close_owned_workspace" | "preserve_workspace"; invalidatesRequests: boolean };
+  | { action: "block"; reason: "attempt_missing" | "attempt_ambiguous" | "runtime_unreachable" | "runtime_ambiguous" | "runtime_owner_absent" | "completion_handoff_refused" | "launch_unprepared" | "storage_exhaustion"; labels: string[]; cleanup: "none" | "close_owned_workspace" | "preserve_workspace"; invalidatesRequests: boolean };
 
 function labelNames(labels: Array<string | { name?: string }>): string[] {
   return labels.map((label) => typeof label === "string" ? label : String(label.name || "")).filter(Boolean);
@@ -67,7 +70,8 @@ function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDec
     : input.request.kind === "ambiguous" ? "attempt_ambiguous"
       : input.runtime.kind === "unreachable" ? "runtime_unreachable"
         : input.runtime.kind === "ambiguous" ? "runtime_ambiguous"
-          : input.completion?.kind === "handoff_refused" ? "completion_handoff_refused" : "runtime_owner_absent";
+          : input.completion?.kind === "handoff_refused" ? "completion_handoff_refused"
+            : input.storageExhaustion ? "storage_exhaustion" : "runtime_owner_absent";
   return { action: "block", reason, labels: blockLabels(input, preserveRequests), cleanup, invalidatesRequests: !preserveRequests };
 }
 
@@ -132,6 +136,10 @@ function recoveryMarker(number: number, head: string, reason: string, cutoffEven
 function launchFailureGuidance(failures: string[]): string {
   const shapes = [
     {
+      matches: (text: string) => containsStorageExhaustion(text),
+      action: "the host ran out of storage: free up capacity on the machine running deadloop, then add a new Agent request",
+    },
+    {
       matches: (text: string) => text.includes("does not resolve to the recorded canonical checkout") || text.includes("canonical checkout preparation"),
       action: "the canonical checkout is missing or diverged: recreate it by hand, or fix why it went away; the next request prepares it again once the cause is resolved",
     },
@@ -157,6 +165,7 @@ function recoveryComment(number: number, head: string, reason: string, cutoffEve
     runtime_ambiguous: "workspace ownership could not be proven",
     runtime_owner_absent: "the execution runtime no longer listed the recorded owner",
     completion_handoff_refused: "the completion report could not be handed over for this pull request state",
+    storage_exhaustion: "the host ran out of storage while the attempt was running (a write failed with ENOSPC or EDQUOT)",
   };
   let explanation = `${readable[reason] || reason}`;
   if (reason === "launch_unprepared") {
@@ -168,6 +177,12 @@ function recoveryComment(number: number, head: string, reason: string, cutoffEve
       + failures.map((failure) => `- ${failure}`).join("\n")
       + `\n\nAdding another Agent request now repeats the same failure.`
       + `\nOperator actions:\n${launchFailureGuidance(failures)}`;
+  }
+  if (reason === "storage_exhaustion") {
+    explanation = `${explanation}\n\nThe stopped attempt will not retry automatically and consumed no retry allowance.`
+      + `\nOperator actions:`
+      + `\n- free up storage on the machine running deadloop`
+      + `\n- add a new Agent request once storage is available`;
   }
   return `deadloop blocked this PR because ${explanation}. No old completion report may update the PR; inspect the retained attempt evidence, then add a new Agent request after resolving the blocker.\n\n${recoveryMarker(number, head, reason, cutoffEventId)}`;
 }

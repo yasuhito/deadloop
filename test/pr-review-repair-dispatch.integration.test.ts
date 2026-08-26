@@ -153,7 +153,7 @@ function enableProject(state: string, repoPath: string): void {
   spawnSync("git", ["-C", repoPath, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   spawnSync("git", ["-C", repoPath, "update-ref", "refs/remotes/origin/master", "HEAD"]);
   fs.mkdirSync(state, { recursive: true });
-  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ projects: [{
+  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
     repoPath, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch: "origin/master", automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
@@ -198,7 +198,7 @@ function runStaleWorktreeDispatch(
   spawnSync("git", ["-C", root, "add", "README.md", "deadloop.json"]);
   spawnSync("git", ["-C", root, "commit", "--quiet", "-m", "fixture"]);
   spawnSync("git", ["-C", root, "update-ref", "refs/remotes/origin/master", "HEAD"]);
-  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
+  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), 
     projects: [{
       repoPath: root, githubRepo: "yasuhito/deadloop", githubRepositoryId: "R_repo", baseBranch: "origin/master", automationLogin: "deadloop-bot", enabledAt: 1,
       firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
@@ -659,7 +659,7 @@ function runV1ChangesRequestedTwice(options: {
     }));
   }
   fs.writeFileSync(runtime, JSON.stringify({ workspace: "reviewer-workspace", agent: null, launches: 0 }));
-  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ projects: [{
+  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
     repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch: "origin/master", automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
@@ -1088,7 +1088,7 @@ describe("review repair dispatch integration", () => {
     const promise = path.join(runDir, "promise.json");
     fs.mkdirSync(bin);
     fs.mkdirSync(runDir, { recursive: true });
-    fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
+    fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), 
       projects: [{
         repoPath: root, githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot", enabledAt: 7,
         firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
@@ -1140,8 +1140,8 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
     expect(runDispatch(true, false).events).toEqual([]);
   });
 
-  it("requests LLM monitoring after launching a repair", () => {
-    expect(runDispatch(true).output.action).toBe("needs_llm");
+  it("registers model-free monitoring after launching a repair", () => {
+    expect(runDispatch(true).output.action).toBe("monitor");
   });
 
   it("identifies the bounded repair monitor action", () => {
@@ -1152,8 +1152,8 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
     expect(runDispatch(true).output.monitorHandoff.kind).toBe("repair");
   });
 
-  it("returns the dedicated repair monitor prompt", () => {
-    expect(runDispatch(true).output.prompt).toContain("review-repair worker");
+  it("returns no monitor prompt for the Automation host", () => {
+    expect(runDispatch(true).output.prompt).toBeUndefined();
   });
 
   it("returns an error after disable", () => {
@@ -1409,11 +1409,11 @@ else if (args[0] === "agent" && args[1] === "start") {
     expect({
       action: output.action,
       driverAction: output.driverAction,
-      monitored: output.prompt.includes("review-repair worker"),
+      monitored: Boolean(output.monitorHandoff),
       agentStarted: fs.existsSync(agentStarted),
       evidenceError: Boolean(output.launchEvidenceError),
     }).toEqual({
-      action: "needs_llm",
+      action: "monitor",
       driverAction: "review_repair_monitor_request",
       monitored: true,
       agentStarted: true,
@@ -1536,7 +1536,7 @@ else if (args[0] === "agent" && args[1] === "start") {
       recovered: output.launch.recovered,
       launchEvidenceRecorded: fs.existsSync(path.join(state, "review-repair-launches", `demo-pr-243-${attemptKey}.json`)),
     }).toEqual({
-      action: "needs_llm",
+      action: "monitor",
       driverAction: "review_repair_monitor_request",
       recovered: true,
       launchEvidenceRecorded: true,
@@ -1644,7 +1644,7 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
       promiseFile: output.monitorHandoff?.input?.promiseFile,
       launchAttempted: fs.existsSync(launchAttempted),
     }).toEqual({
-      action: "needs_llm",
+      action: "monitor",
       driverAction: "review_repair_monitor_recovered",
       promiseFile: path.join(repairRunDir, "promise.json"),
       launchAttempted: false,

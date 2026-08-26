@@ -22,7 +22,6 @@ const {
 } = require("./pr-review-comments.cts");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.cts");
-const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.cts");
 const { blockedPrLabelMove } = require("../../../src/pr-request-selection.cts");
 const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.cts");
 const { agentWorkflowLabels, humanHandoffLabelMove } = require("../../../src/human-handoff.cts");
@@ -94,6 +93,9 @@ function envConfig(args: JsonObject = {}) {
     updateBranchLabel: configValue(args, "updateBranchLabel", process.env.DEADLOOP_UPDATE_BRANCH_LABEL, "agent:update-branch"),
     inProgressLabel: configValue(args, "inProgressLabel", process.env.DEADLOOP_IN_PROGRESS_LABEL, "agent:in-progress"),
     humanLabel: configValue(args, "humanLabel", process.env.DEADLOOP_HUMAN_LABEL, "ready-for-human"),
+    // The repair attempt shares the launching reviewer automation's active-work budget (seconds);
+    // the shared deterministic monitor applies it to active work only.
+    reviewerMaxRuntimeSeconds: Number(process.env.DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS || 86400),
     // Every guarded write of this dispatch re-reads the bound reviewer attempt from here, so the
     // attempt's fixed required-verification contract can be re-authenticated against the current
     // trusted policy immediately before the write.
@@ -857,7 +859,23 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
     if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
-    const technicalDecision = decideTechnicalReviewFailure(pr.comments || [], expectedHead);
+    const technicalDecision = decideTechnicalReviewFailure(pr.comments || [], expectedHead, promise);
+    if (technicalDecision.action === "storage_exhaustion") {
+      const block = applyHumanBlock(
+        prNumber,
+        env,
+        pr,
+        "the host ran out of storage during the review; free up storage on the automation host, then add a new Agent request",
+        promise.summary,
+        "",
+        historyFile,
+      );
+      if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before storage-exhaustion stop");
+      return driverResult("done", `PR #${prNumber} review stopped because the host ran out of storage`, {
+        driverAction: "review_storage_exhaustion_blocked",
+        comment: block.comment,
+      });
+    }
     if (technicalDecision.action === "retry") {
       const staleComparison = withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub) => {
         guardedGithub.commentPr(
@@ -1174,11 +1192,11 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
         reviewLabel: env.reviewLabel, implementLabel: env.implementLabel, updateBranchLabel: env.updateBranchLabel,
         inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
         attemptKey: selection.key,
+        maxActiveMilliseconds: env.reviewerMaxRuntimeSeconds * 1000,
       };
-      return driverResult("needs_llm", `Recovered review-repair monitor for PR #${prNumber}`, {
+      return driverResult("monitor", `Recovered review-repair monitor for PR #${prNumber}`, {
         driverAction: "review_repair_monitor_recovered", selection,
         monitorHandoff: { kind: "repair", input: monitorInput },
-        prompt: renderRepairMonitorPrompt(monitorInput),
       });
     }
     const interruptionMarker = `<!-- deadloop:review-repair-dispatch-stop key=${selection.key} -->`;
@@ -1386,12 +1404,12 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
     reviewLabel: env.reviewLabel, implementLabel: env.implementLabel, updateBranchLabel: env.updateBranchLabel,
     inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
     attemptKey: selection.key,
+    maxActiveMilliseconds: env.reviewerMaxRuntimeSeconds * 1000,
   };
-  return driverResult("needs_llm", `Launched review-repair worker for PR #${prNumber}`, {
+  return driverResult("monitor", `Launched review-repair worker for PR #${prNumber}`, {
     driverAction: "review_repair_monitor_request", selection, labelsPreserved: [env.inProgressLabel], launch,
     ...(launchEvidenceError ? { launchEvidenceError } : {}),
     monitorHandoff: { kind: "repair", input: monitorInput },
-    prompt: renderRepairMonitorPrompt(monitorInput),
   });
 }
 function main(): void {

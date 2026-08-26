@@ -12,7 +12,7 @@ const project = normalizeProject({
 const shared = { project, repositoryEnablement: "enabled" as const, cwd: "/repo", warnings: [] };
 
 describe("deterministic attempt monitoring reports", () => {
-  it("describes deterministic reviewer and branch-update monitoring in status", () => {
+  it("describes deterministic reviewer, branch-update, and repair monitoring in status", () => {
     const report = formatStatusReport({
       ...shared,
       automations: [],
@@ -24,7 +24,7 @@ describe("deterministic attempt monitoring reports", () => {
     expect(report).toContain("attemptMonitoring: deterministic for all roles (no Automation-host model)");
   });
 
-  it("describes deterministic reviewer and branch-update monitoring in doctor", () => {
+  it("describes deterministic reviewer, branch-update, and repair monitoring in doctor", () => {
     const report = formatDoctorReport({ ...shared, findings: [] });
 
     expect(report).toContain("attemptMonitoring: deterministic for all roles (no Automation-host model)");

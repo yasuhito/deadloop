@@ -7,6 +7,7 @@ import path from "node:path";
 import { reconcileAndSelectDueAutomation } from "../../src/automation-scheduler";
 import { decideCodeIdentity, observeGitCodeIdentity, type CodeIdentityDecision } from "../../src/code-identity";
 import { ensureCodeSnapshot } from "../../src/code-snapshot";
+import { collectCodeSnapshotInventory } from "../../src/code-snapshot-inventory";
 import {
   DEFAULT_TIMEZONE,
   REPO_POLICY_FILE,
@@ -42,10 +43,8 @@ const {
   workspaceProof,
 } = require("./automations/abandon-launch-failed-attempt.cts");
 const { readAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
-const { observeMonitorHandoffDisposition, terminalEvidenceArgs } = require("../../src/monitor-handoff-observation.cts");
 const {
   applyDeterministicAttemptMonitoring,
-  monitorRuntimeRunner,
   observeDeterministicAttemptMonitoring,
   retryWaitingAgentSession,
 } = require("../../src/deterministic-attempt-monitor-runtime.cts");
@@ -433,14 +432,18 @@ function resolveEnableProject(cwd, identity) {
   return implicit.projects[0];
 }
 
-function loadEnablementState() {
+// A persisted state always names the code identity that last wrote it. Before the first write there is
+// no file, so the loader returns an empty placeholder whose writer identity is undefined.
+type LoadedEnablementState = ReturnType<typeof normalizeEnablementState> | { projects: []; lastWriterCodeIdentity: undefined };
+
+function loadEnablementState(): LoadedEnablementState {
   try {
     const text = fs.readFileSync(ENABLEMENT_PATH, "utf8");
     const state = normalizeEnablementState(JSON.parse(text));
     if (!state) throw new Error("schema is invalid");
     return state;
   } catch (error) {
-    if (error?.code === "ENOENT") return { projects: [] };
+    if (error?.code === "ENOENT") return { projects: [], lastWriterCodeIdentity: undefined };
     throw new Error(`enablement state is invalid at ${ENABLEMENT_PATH}: ${error?.message || error}. Inspect and move the file aside, then run /deadloop-enable again to recover.`);
   }
 }
@@ -784,9 +787,6 @@ async function collectLiveSnapshotData(
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
   const configuredProject = activeProject(cwd, projects);
-  const project = configuredProject
-    ? firstEnableAutoMergeGate(loadEnablementState(), configuredProject).project
-    : null;
   const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
   const repositoryEnablement = repositoryEnablementForRoot(repositoryRoot);
   const diagnosticWarnings = projectsResult.ok
@@ -794,8 +794,11 @@ async function collectLiveSnapshotData(
     : [projectsResult.reason, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])];
   const codeIdentity = options.codeIdentityDecision?.();
   const warnings = statusWarnings(diagnosticWarnings, codeIdentity);
+  // The recorded writer identity is diagnostic only: it never gates reads or writes (ADR 0016).
+  const enablementState = configuredProject ? loadEnablementState() : null;
+  const project = configuredProject ? firstEnableAutoMergeGate(enablementState, configuredProject).project : null;
   if (!project) {
-    return { cwd, projects, state, repositoryEnablement, warnings, codeIdentity, selectedProject: null };
+    return { cwd, projects, state, repositoryEnablement, warnings, codeIdentity, lastWriterCodeIdentity: enablementState?.lastWriterCodeIdentity ?? null, selectedProject: null };
   }
 
   const issueFields = includeIssueComments
@@ -915,6 +918,7 @@ async function collectLiveSnapshotData(
     repositoryEnablement,
     warnings,
     codeIdentity,
+    lastWriterCodeIdentity: enablementState?.lastWriterCodeIdentity ?? null,
     selectedProject: project,
   };
 }
@@ -1155,6 +1159,9 @@ async function buildLiveDoctorReport(pi, cwd, codeIdentityDecision?: () => CodeI
     ...data,
     retainedClaims: retained.claims,
     retainedClaimOwnershipAmbiguous: retained.ownershipAmbiguous,
+    codeSnapshots: collectCodeSnapshotInventory(STATE_DIR),
+    deployedCodeIdentity: data.codeIdentity?.deployedIdentity ?? null,
+    loadedCodeIdentity: data.codeIdentity?.loadedIdentity ?? null,
     ...(data.selectedProject?.repoPath && data.selectedProject.requiredVerification.status === "blocked"
       ? { verificationCandidates: discoverVerificationCandidates({ repositoryRoot: data.selectedProject.repoPath }) }
       : {}),
@@ -1410,36 +1417,6 @@ function revalidatePendingIssueHandoff(handoff) {
   }
 }
 
-function monitorHandoffDisposition(handoff) {
-  if (!handoff.input || typeof handoff.input !== "object") {
-    return { action: "preserve", reason: "runtime_ambiguous" };
-  }
-  const input = handoff.input;
-  const attemptRecordFile = typeof input.attemptRecordFile === "string"
-    ? input.attemptRecordFile
-    : typeof input.promiseFile === "string"
-      ? path.join(path.dirname(input.promiseFile), "attempt.json")
-      : "";
-  if (!attemptRecordFile) return { action: "preserve", reason: "runtime_ambiguous" };
-  let record;
-  try {
-    record = readAttemptRecord(path.dirname(attemptRecordFile));
-  } catch {
-    return { action: "preserve", reason: "runtime_ambiguous" };
-  }
-  return observeMonitorHandoffDisposition(record, handoff.kind, {
-    runner: monitorRuntimeRunner(),
-    readTerminalEvidence: (attempt) => {
-      const output = childProcess.spawnSync(
-        "herdr",
-        terminalEvidenceArgs(attempt),
-        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, killSignal: "SIGKILL" },
-      );
-      return output.status === 0 ? String(output.stdout || "") : "";
-    },
-  });
-}
-
 function applyMonitorHandoffDisposition(handoff, disposition, project) {
   const enabled = findEnabledProject(loadEnablementState(), project);
   if (!enabled?.automationLogin) throw new Error("terminal monitor transition requires the authorized Automation host login");
@@ -1464,7 +1441,6 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
     enabledAt: () => project.enabledAt,
     isEnabled: () => isCurrentSchedulerRun() && isProjectEnabled(project),
     isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
-    monitorHandoffDisposition,
     observeAttemptMonitoring: observeDeterministicAttemptMonitoring,
     applyAttemptMonitoring: (handoff, directive) => {
       if (!isCurrentSchedulerRun()) return { applied: false };
@@ -1473,10 +1449,6 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
         directive,
         (currentHandoff, disposition) => applyMonitorHandoffDisposition(currentHandoff, disposition, project),
       );
-    },
-    applyMonitorHandoffDisposition: (handoff, disposition) => {
-      if (!isCurrentSchedulerRun()) return false;
-      return applyMonitorHandoffDisposition(handoff, disposition, project);
     },
     retryModelWait: (handoff) => {
       if (!isCurrentSchedulerRun()) return false;
@@ -1733,7 +1705,6 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
 }
 
 export {
-  monitorHandoffDisposition,
   reconcilePersistedAttemptJournals,
   reconcilePrWorkAuthority,
   retainedAttemptClaimSnapshot,
