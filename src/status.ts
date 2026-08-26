@@ -4,6 +4,10 @@ import { hasUncommittedWork } from "./agent-scratch-area.cjs";
 import type { CodeIdentityDecision } from "./code-identity";
 import { automationStateKey, nextSlotAfter, type NormalizedProject, type AutomationStateEntry } from "./core";
 import { passesIssueLabelGate } from "./issue-eligibility.cjs";
+import type { AttemptUsageSummary } from "./model-usage-types";
+const { formatCurrentAttemptUsage } = require("./model-usage-report.cts") as {
+  formatCurrentAttemptUsage: (summaries: AttemptUsageSummary[]) => string[];
+};
 import { formatRequiredVerification } from "./required-verification";
 
 export type LabelLike = string | { name?: string | null };
@@ -48,6 +52,8 @@ export type StatusReportInput = {
   codeIdentity?: CodeIdentityDecision;
   selectedProject?: NormalizedProject | null;
   nowMs?: number;
+  /** Normalized usage summaries for attempts that still own a workspace (current-attempt view). */
+  attemptUsage?: AttemptUsageSummary[];
 };
 
 export type StatusLineItem = {
@@ -88,6 +94,7 @@ export type StatusSnapshot = {
   cwd: string;
   warnings: string[];
   codeIdentity?: CodeIdentityDecision;
+  attemptUsage: AttemptUsageSummary[];
   automations: AutomationStatus[];
   issues: {
     eligible: StatusLineItem[];
@@ -251,6 +258,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
       cwd: input.cwd,
       warnings: input.warnings || [],
       codeIdentity: input.codeIdentity,
+      attemptUsage: [],
       automations: [],
       issues: { eligible: [], inProgress: [], waitingForPerson: [] },
       prs: { reviewTarget: [], reviewing: [] },
@@ -325,6 +333,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
     cwd: input.cwd,
     warnings: input.warnings || [],
     codeIdentity: input.codeIdentity,
+    attemptUsage: (input.attemptUsage || []).filter((summary) => summary.active),
     automations,
     issues: {
       eligible: eligible.map(lineItem),
@@ -433,7 +442,10 @@ export function formatStatusReport(snapshot: StatusSnapshot): string {
     formatRequiredVerification(project.requiredVerification),
     `autoMerge: ${project.autoMerge ? "on" : "off"}`,
     `externalReview: ${project.externalReview.enabled ? "on" : "off"}`,
+    `roleModels: worker=${project.workerModel}; reviewer=${project.reviewerModel}`
+      + `; explorer=${project.explorerModel}; repair=${project.repairModel}; branchUpdate=${project.branchUpdateModel}`,
     "attemptMonitoring: deterministic for all roles (no Automation-host model)",
+    ...formatCurrentAttemptUsage(snapshot.attemptUsage),
     "",
     "Automations:",
   ];

@@ -5,6 +5,7 @@ const ATTEMPT_RECORD_FILE = "attempt.json";
 const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
 const SUCCESSFUL_PHASES = ["prepared", "github_claimed", "workspace_opened", "agent_started", "report_received", "github_persisted", "workspace_closed"];
 const ROLES = new Set(["worker", "explorer", "reviewer", "review-repair", "branch-update"]);
+const AGENT_KINDS = new Set(["pi", "claude", "omp"]);
 const NEXT = { prepared: "github_claimed", github_claimed: "workspace_opened", workspace_opened: "agent_started", agent_started: "report_received", report_received: "github_persisted", github_persisted: "workspace_closed" };
 
 function attemptRecordPath(runDir) { return path.join(runDir, ATTEMPT_RECORD_FILE); }
@@ -65,6 +66,7 @@ function parseAttemptRecord(value) {
   for (const field of ["attemptId", "launchUuid", "project", "repository", "branch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile"]) nonEmpty(value[field], field);
   for (const field of ["baseBranch", "workspaceId", "tabId", "rootPaneId"]) if (value[field] !== undefined) nonEmpty(value[field], field);
   if (value.outputRevision !== undefined) sha(value.outputRevision, "outputRevision");
+  if (value.agent !== undefined && !AGENT_KINDS.has(value.agent)) throw new Error("Invalid attempt record: agent is invalid");
   if (value.autoMergePolicy !== undefined && typeof value.autoMergePolicy !== "boolean") throw new Error("Invalid attempt record: autoMergePolicy must be boolean");
   if (value.reviewHistoryRequired !== undefined && typeof value.reviewHistoryRequired !== "boolean") throw new Error("Invalid attempt record: reviewHistoryRequired must be boolean");
   if (value.requestEventId !== undefined && (typeof value.requestEventId !== "string" || !value.requestEventId.trim())) throw new Error("Invalid attempt record: requestEventId must be a non-empty string");
@@ -83,6 +85,7 @@ function parseAttemptRecord(value) {
     ...(value.baseBranch === undefined ? {} : { baseBranch: nonEmpty(value.baseBranch, "baseBranch") }),
     worktreePath: nonEmpty(value.worktreePath, "worktreePath"),
     agentName: nonEmpty(value.agentName, "agentName"),
+    ...(value.agent === undefined ? {} : { agent: value.agent }),
     workspaceLabel: nonEmpty(value.workspaceLabel, "workspaceLabel"),
     promptFile: nonEmpty(value.promptFile, "promptFile"),
     promiseFile: nonEmpty(value.promiseFile, "promiseFile"),

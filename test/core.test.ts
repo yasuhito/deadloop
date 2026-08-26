@@ -69,6 +69,8 @@ describe("deterministic extension core", () => {
       id: "Example Project!",
       repoPath: "/repo",
       githubRepo: "owner/repo",
+      workerModel: "openai-codex/gpt-5.6-sol",
+      reviewerModel: "openai-codex/gpt-5.6-sol",
       labels: { ready: "agent-ready" },
       automations: [{ name: "issue coordinator", promptFile: "issue.md" }],
     });
@@ -103,9 +105,12 @@ describe("deterministic extension core", () => {
       workerLaunchPolicy:
         "Choose the Worker level from issue difficulty: low for simple docs, small test fixes, and local code changes; medium for ordinary implementation; high for cross-component work, design judgment, migrations, or difficult bugs. Add one line to the Worker prompt explaining the choice.",
       workerAgent: "pi",
-      workerModel: "",
+      workerModel: "openai-codex/gpt-5.6-sol",
+      explorerModel: "openai-codex/gpt-5.6-sol",
+      repairModel: "openai-codex/gpt-5.6-sol",
+      branchUpdateModel: "openai-codex/gpt-5.6-sol",
       reviewerAgent: "pi",
-      reviewerModel: "",
+      reviewerModel: "openai-codex/gpt-5.6-sol",
       automationLogins: [],
       labels: {
         ready: "agent-ready",
@@ -148,13 +153,13 @@ describe("deterministic extension core", () => {
   });
 
   it("uses standard automations when project configuration omits them", () => {
-    const project = normalizeProject({ id: "demo" });
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", id: "demo" });
 
     expect(project.automations.map((automation) => automation.id)).toEqual(["demo:issue-coordinator", "demo:pr-reviewer"]);
   });
 
   it("keeps explicit empty automations disabled", () => {
-    const project = normalizeProject({ id: "demo", automations: [] });
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", id: "demo", automations: [] });
 
     expect(project.automations).toEqual([]);
   });
@@ -220,7 +225,7 @@ describe("deterministic extension core", () => {
   });
 
   it("renders prompt templates from public template values", () => {
-    const project = normalizeProject({
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
       id: "demo",
       repoPath: "/repo",
       githubRepo: "owner/repo",
@@ -234,7 +239,7 @@ describe("deterministic extension core", () => {
   });
 
   it("builds automation script environment from the shared runtime values", () => {
-    const project = normalizeProject({
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
       id: "demo",
       repoPath: "/repo",
       githubRepo: "owner/repo",
@@ -254,7 +259,7 @@ describe("deterministic extension core", () => {
 
   it("passes the selected projects.json path to completion automations", () => {
     const project = projectsFromConfig(
-      { projects: [{ id: "demo", automations: [{}] }] },
+      { projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", automations: [{}] }] },
       undefined,
       { configPath: "/extension/projects.json" },
     )[0];
@@ -263,7 +268,7 @@ describe("deterministic extension core", () => {
   });
 
   it("does not expose the retired CI fallback auto-merge environment variable", () => {
-    const project = normalizeProject({ automations: [{}] });
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", automations: [{}] });
 
     expect(automationEnvironment(project, project.automations[0])).not.toHaveProperty(
       "DEADLOOP_CI_FALLBACK_ALLOW_AUTO_MERGE",
@@ -271,7 +276,7 @@ describe("deterministic extension core", () => {
   });
 
   it("builds worker instructions from custom instruction files", () => {
-    const project = normalizeProject({ workerInstructionFiles: ["docs/agents.md", "docs/testing.md"] });
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", workerInstructionFiles: ["docs/agents.md", "docs/testing.md"] });
 
     expect(project.workerInstructions).toBe(
       "Start by reading docs/agents.md, docs/testing.md, and docs relevant to the change. Follow repository-local instructions first.",
@@ -279,7 +284,7 @@ describe("deterministic extension core", () => {
   });
 
   it("keeps explicit worker instructions above instruction files", () => {
-    const project = normalizeProject({
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
       workerInstructions: "Follow these repository-specific instructions.",
       workerInstructionFiles: ["docs/agents.md"],
     });
@@ -288,39 +293,39 @@ describe("deterministic extension core", () => {
   });
 
   it("defaults the worker agent to pi", () => {
-    expect(normalizeProject({}).workerAgent).toBe("pi");
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",}).workerAgent).toBe("pi");
   });
 
   it("preserves the pi worker agent selection", () => {
-    expect(normalizeProject({ workerAgent: "pi" }).workerAgent).toBe("pi");
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", workerAgent: "pi" }).workerAgent).toBe("pi");
   });
 
   it("preserves the claude worker agent selection", () => {
-    expect(normalizeProject({ workerAgent: "claude" }).workerAgent).toBe("claude");
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", workerAgent: "claude" }).workerAgent).toBe("claude");
   });
 
   it("preserves the omp worker agent selection", () => {
-    expect(normalizeProject({ workerAgent: "omp" }).workerAgent).toBe("omp");
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", workerAgent: "omp" }).workerAgent).toBe("omp");
   });
 
   it("rejects invalid worker agent values", () => {
-    expect(() => normalizeProject({ workerAgent: "codex" })).toThrow(/invalid workerAgent/);
+    expect(() => normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", workerAgent: "codex" })).toThrow(/invalid workerAgent/);
   });
 
   it("defaults the reviewer agent to pi", () => {
-    expect(normalizeProject({}).reviewerAgent).toBe("pi");
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",}).reviewerAgent).toBe("pi");
   });
 
   it("preserves the claude reviewer agent selection", () => {
-    expect(normalizeProject({ reviewerAgent: "claude" }).reviewerAgent).toBe("claude");
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", reviewerAgent: "claude" }).reviewerAgent).toBe("claude");
   });
 
   it("preserves the omp reviewer agent selection", () => {
-    expect(normalizeProject({ reviewerAgent: "omp" }).reviewerAgent).toBe("omp");
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", reviewerAgent: "omp" }).reviewerAgent).toBe("omp");
   });
 
   it("rejects invalid reviewer agent values", () => {
-    expect(() => normalizeProject({ reviewerAgent: "codex" })).toThrow(/invalid reviewerAgent/);
+    expect(() => normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", reviewerAgent: "codex" })).toThrow(/invalid reviewerAgent/);
   });
 
   it("keeps the default worker launch policy independent of pi thinking flags", () => {
@@ -328,32 +333,32 @@ describe("deterministic extension core", () => {
   });
 
   it("preserves the operator-designated worker model verbatim", () => {
-    const project = normalizeProject({ workerModel: "anthropic/claude-opus-4-8" });
+    const project = normalizeProject({ reviewerModel: "review-model", workerModel: "anthropic/claude-opus-4-8" });
 
     expect(project.workerModel).toBe("anthropic/claude-opus-4-8");
   });
 
   it("preserves the operator-designated reviewer model verbatim", () => {
-    const project = normalizeProject({ reviewerModel: "openai-codex/gpt-5.2-codex" });
+    const project = normalizeProject({ workerModel: "anthropic/claude-opus-4-8", reviewerModel: "openai-codex/gpt-5.2-codex" });
 
     expect(project.reviewerModel).toBe("openai-codex/gpt-5.2-codex");
   });
 
   it("exposes worker and reviewer models to prompt templates", () => {
-    const project = normalizeProject({ workerModel: "anthropic/claude-opus-4-8", automations: [{}] });
+    const project = normalizeProject({ reviewerModel: "review-model", workerModel: "anthropic/claude-opus-4-8", automations: [{}] });
     const values = templateValues(project, project.automations[0], "/auto");
 
-    expect(renderTemplate("{{workerModel}}|{{reviewerModel}}", values)).toBe("anthropic/claude-opus-4-8|");
+    expect(renderTemplate("{{workerModel}}|{{reviewerModel}}", values)).toBe("anthropic/claude-opus-4-8|review-model");
   });
 
   it("exposes the worker agent to prompt templates", () => {
-    const project = normalizeProject({ workerAgent: "claude", automations: [{}] });
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", workerAgent: "claude", automations: [{}] });
 
     expect(renderTemplate("{{workerAgent}}", templateValues(project, project.automations[0], "/auto"))).toBe("claude");
   });
 
   it("exposes the reviewer agent to prompt templates", () => {
-    const project = normalizeProject({ reviewerAgent: "claude", automations: [{}] });
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", reviewerAgent: "claude", automations: [{}] });
 
     expect(renderTemplate("{{reviewerAgent}}", templateValues(project, project.automations[0], "/auto"))).toBe(
       "claude",
@@ -369,6 +374,8 @@ describe("deterministic extension core", () => {
         githubRepo: "owner/repo",
         baseBranch: "origin/release",
         checkCommand: "npm run verify",
+        workerModel: "test-model",
+        reviewerModel: "review-model",
         worktreeRoot: "/worktrees/configured",
         autoMerge: true,
         automations: [],
@@ -387,7 +394,7 @@ describe("deterministic extension core", () => {
   });
 
   it("blocks a directly normalized local command without base revision evidence", () => {
-    expect(normalizeProject({
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
       id: "demo",
       githubRepo: "owner/repo",
       checkCommand: "npm run local",
@@ -401,7 +408,7 @@ describe("deterministic extension core", () => {
   it("binds a local check command to the trusted base revision", () => {
     const revision = "a".repeat(40);
     const result = parseProjectsConfig(
-      JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo", checkCommand: "npm run local" }] }),
+      JSON.stringify({ projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", githubRepo: "owner/repo", checkCommand: "npm run local" }] }),
       undefined,
       {
         configPath: "/state/projects.json",
@@ -416,15 +423,15 @@ describe("deterministic extension core", () => {
   });
 
   it("defaults auto merge to disabled", () => {
-    expect(normalizeProject({}).autoMerge).toBe(false);
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",}).autoMerge).toBe(false);
   });
 
   it("preserves explicitly enabled auto merge", () => {
-    expect(normalizeProject({ autoMerge: true }).autoMerge).toBe(true);
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", autoMerge: true }).autoMerge).toBe(true);
   });
 
   it("defaults CI fallback to disabled billing-only mode", () => {
-    expect(normalizeProject({}).ciFallback).toEqual({
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",}).ciFallback).toEqual({
       enabled: false,
       mode: "billing-only",
       localCommands: "",
@@ -432,11 +439,11 @@ describe("deterministic extension core", () => {
   });
 
   it("defaults external review to disabled", () => {
-    expect(normalizeProject({}).externalReview).toEqual({ enabled: false, waitSeconds: 1800 });
+    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",}).externalReview).toEqual({ enabled: false, waitSeconds: 1800 });
   });
 
   it("normalizes CI fallback local commands for prompt templates", () => {
-    const project = normalizeProject({
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
       ciFallback: {
         enabled: true,
         localCommands: ["git diff --check", "npm test"],
@@ -453,26 +460,26 @@ describe("deterministic extension core", () => {
   });
 
   it("exposes auto merge state to prompt templates", () => {
-    const project = normalizeProject({ automations: [{}] });
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", automations: [{}] });
 
     expect(renderTemplate("{{autoMerge}}", templateValues(project, project.automations[0], "/auto"))).toBe("false");
   });
 
   it("exposes external review state to prompt templates", () => {
-    const project = normalizeProject({ externalReview: { enabled: true, waitSeconds: 60 }, automations: [{}] });
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", externalReview: { enabled: true, waitSeconds: 60 }, automations: [{}] });
 
     expect(renderTemplate("{{externalReviewEnabled}}|{{externalReviewWaitSeconds}}", templateValues(project, project.automations[0], "/auto"))).toBe("true|60");
   });
 
   it("preserves an automation driver file from project config", () => {
-    const project = normalizeProject({ automations: [{ driverFile: "issue-coordinator-driver.cts" }] });
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", automations: [{ driverFile: "issue-coordinator-driver.cts" }] });
 
     expect(project.automations[0].driverFile).toBe("issue-coordinator-driver.cts");
   });
 
   it("uses reloaded project settings during tick resolution", () => {
     const configTexts = ["old-model", "new-model"].map((workerModel) =>
-      JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", workerModel }] }),
+      JSON.stringify({ projects: [{ id: "demo", reviewerModel: "review-model", repoPath: "/repo", workerModel }] }),
     );
     const workerModels = configTexts.map((configText) => {
       const result = resolveProjectForTick({ cwd: "/repo", configText });
@@ -482,16 +489,16 @@ describe("deterministic extension core", () => {
     expect(workerModels).toEqual(["old-model", "new-model"]);
   });
 
-  it("keeps existing behavior when the trusted repo policy is absent", () => {
-    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+  it("reports a config error when no model is available from local config or repo policy", () => {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", reviewerModel: "review-model", repoPath: "/repo" }] }), "", {
       repoPolicyProvider: () => ({ status: "missing" }),
     });
 
-    expect(result.ok && result.projects[0].workerModel).toBe("");
+    expect(result.ok).toBe(false);
   });
 
   it("uses the trusted repo policy worker model when local config omits it", () => {
-    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", repoPath: "/repo" }] }), "", {
       repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ workerModel: "repo-model" }) }),
     });
 
@@ -499,7 +506,7 @@ describe("deterministic extension core", () => {
   });
 
   it("blocks a loaded shared verification command without base revision evidence", () => {
-    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", githubRepo: "owner/repo" }] }), "", {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", githubRepo: "owner/repo" }] }), "", {
       repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ checkCommand: "npm run shared" }) }),
     });
 
@@ -510,7 +517,7 @@ describe("deterministic extension core", () => {
   });
 
   it("allows trusted repo policy to provide worker instruction files", () => {
-    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", repoPath: "/repo" }] }), "", {
       repoPolicyProvider: () => ({
         status: "loaded",
         text: JSON.stringify({ workerInstructionFiles: ["docs/agents.md"] }),
@@ -524,7 +531,7 @@ describe("deterministic extension core", () => {
 
   it("keeps the local worker model above the trusted repo policy", () => {
     const result = parseProjectsConfig(
-      JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", workerModel: "local-model" }] }),
+      JSON.stringify({ projects: [{ id: "demo", reviewerModel: "review-model", repoPath: "/repo", workerModel: "local-model" }] }),
       "",
       {
         repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ workerModel: "repo-model" }) }),
@@ -543,7 +550,7 @@ describe("deterministic extension core", () => {
   });
 
   it("keeps trusted repo policy explicit empty automations disabled", () => {
-    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", repoPath: "/repo" }] }), "", {
       repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ automations: [] }) }),
     });
 
@@ -551,7 +558,7 @@ describe("deterministic extension core", () => {
   });
 
   it("allows trusted repo policy to provide locally omitted automations", () => {
-    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", repoPath: "/repo" }] }), "", {
       repoPolicyProvider: () => ({
         status: "loaded",
         text: JSON.stringify({ automations: [{ id: "demo:auto", promptFile: "issue-coordinator.prompt.md" }] }),
@@ -563,7 +570,7 @@ describe("deterministic extension core", () => {
 
   it("allows trusted repo policy to provide automation driver files", () => {
     const result = parseProjectsConfig(
-      JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", automations: [{ id: "demo:auto" }] }] }),
+      JSON.stringify({ projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", repoPath: "/repo", automations: [{ id: "demo:auto" }] }] }),
       "",
       {
         repoPolicyProvider: () => ({
@@ -577,7 +584,7 @@ describe("deterministic extension core", () => {
   });
 
   it("uses trusted repo policy external review settings", () => {
-    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", repoPath: "/repo" }] }), "", {
       repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ externalReview: { enabled: true } }) }),
     });
 
@@ -585,7 +592,7 @@ describe("deterministic extension core", () => {
   });
 
   it("rejects forbidden trusted repo policy keys", () => {
-    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo" }] }), "", {
+    const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", repoPath: "/repo" }] }), "", {
       repoPolicyProvider: () => ({ status: "loaded", text: JSON.stringify({ autoMerge: true }) }),
     });
 
@@ -596,7 +603,7 @@ describe("deterministic extension core", () => {
     let requested = "";
 
     parseProjectsConfig(
-      JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", baseBranch: "origin/master" }] }),
+      JSON.stringify({ projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", repoPath: "/repo", baseBranch: "origin/master" }] }),
       "",
       {
         repoPolicyProvider: (project) => {
@@ -620,7 +627,7 @@ describe("deterministic extension core", () => {
     expect(
       resolveProjectForTick({
         cwd: "/repo",
-        configText: JSON.stringify({ projects: [{ id: "new-demo", repoPath: "/repo" }] }),
+        configText: JSON.stringify({ projects: [{ id: "new-demo", repoPath: "/repo", workerModel: "m", reviewerModel: "r" }] }),
         lockedProjectId: "demo",
       }),
     ).toMatchObject({ ok: false, reason: "active project changed since scheduler lock was acquired" });

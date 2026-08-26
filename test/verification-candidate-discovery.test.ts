@@ -19,7 +19,7 @@ function repository(files: Record<string, string>): string {
 }
 
 function doctor(root: string): string {
-  const project = normalizeProject({ id: "demo", repoPath: root, githubRepo: "owner/repo" });
+  const project = normalizeProject({ id: "demo", repoPath: root, githubRepo: "owner/repo" , workerModel: "test-model", reviewerModel: "review-model" });
   return formatDoctorReport(buildDoctorSnapshot({
     cwd: root,
     projects: [project],

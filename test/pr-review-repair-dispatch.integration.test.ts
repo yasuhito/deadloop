@@ -318,6 +318,8 @@ else process.stdout.write(JSON.stringify({ok:true}));
         DEADLOOP_GITHUB_REPO: "yasuhito/deadloop",
         DEADLOOP_ENABLED_AT: "1",
         DEADLOOP_STATE_DIR: state,
+        DEADLOOP_WORKER_MODEL: "test-worker-model",
+        DEADLOOP_REPAIR_MODEL: "test-repair-model",
         TEST_EXPECTED_HEAD: expectedHead,
         TEST_CURRENT_HEAD: currentHead,
         TEST_DIRTY: String(Boolean(options.dirty)),
@@ -449,6 +451,8 @@ else if (args[0] === "agent" && args[1] === "start") {
         DEADLOOP_GITHUB_REPO: "owner/repo",
         DEADLOOP_ENABLED_AT: "1",
         DEADLOOP_STATE_DIR: state,
+        DEADLOOP_WORKER_MODEL: "test-worker-model",
+        DEADLOOP_REPAIR_MODEL: "test-repair-model",
         TEST_WORKTREE: worktree,
         TEST_AGENT_STATE: path.join(root, "agent-state.json"),
         EVENT_LOG: eventLog,
@@ -666,6 +670,7 @@ function runV1ChangesRequestedTwice(options: {
   }] }));
   fs.writeFileSync(path.join(state, "projects.json"), JSON.stringify({ projects: [{
     id: "demo", repoPath: repo, githubRepo: "owner/repo", baseBranch: "origin/master", labels,
+    workerModel: "test-worker-model", reviewerModel: "test-review-model",
   }] }));
   const findings = [{ title: "Lint contract", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }];
   fs.writeFileSync(promise, JSON.stringify({
@@ -733,6 +738,7 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: repo, DEADLOOP_WORKTREE_ROOT: worktreeRoot,
     DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
+    DEADLOOP_WORKER_MODEL: "test-worker-model", DEADLOOP_REPAIR_MODEL: "test-repair-model",
     DEADLOOP_BLOCKED_LABEL: labels.blocked, DEADLOOP_IMPLEMENT_LABEL: labels.implement,
     DEADLOOP_UPDATE_BRANCH_LABEL: labels.updateBranch,
     HEAD: head, COMMENTS: comments, GH_VIEW_COUNT: ghViewCount,
@@ -744,7 +750,7 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
         prNumber: 243, expectedHeadOid: head, branch: "agent/issue-243", promiseFile: promise,
         attemptRecordFile: attempt, projectId: "demo", repoPath: repo, worktreeRoot,
         githubRepo: "owner/repo", stateDir: state, enabledAt: 1, requestEventId: "22",
-        projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
+        projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "test-worker-model", repairModel: "test-repair-model", repairRemote: "origin",
         implementLabel: labels.implement, updateBranchLabel: labels.updateBranch, reviewLabel: labels.review,
         inProgressLabel: "agent:in-progress", blockedLabel: labels.blocked,
       }, { requestEventId: "22" })
@@ -912,7 +918,7 @@ describe("review repair dispatch integration", () => {
   it("persists a custom base branch in the review-repair worktree request", () => {
     const input = repairLaunchInput(
       "243", "agent/issue-243", "a".repeat(40), [], "attempt-key",
-      { projectId: "demo", baseBranch: "origin/develop", repoPath: "/repo", automationDir: "/automation", stateDir: "/state", worktreeRoot: "/worktrees", githubRepo: "owner/repo", workerAgent: "pi", workerModel: "", requiredVerification: {} },
+      { projectId: "demo", baseBranch: "origin/develop", repoPath: "/repo", automationDir: "/automation", stateDir: "/state", worktreeRoot: "/worktrees", githubRepo: "owner/repo", workerAgent: "pi", workerModel: "test-worker-model", repairModel: "test-repair-model", requiredVerification: {} },
       "launch-uuid",
     );
 
@@ -1122,7 +1128,7 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
       prNumber: 143, expectedHeadOid: "a".repeat(40), branch: "agent/issue-142", promiseFile: promise,
       attemptRecordFile: path.join(runDir, "attempt.json"), projectId: "demo", repoPath: root,
       worktreeRoot: path.join(root, "worktrees"), githubRepo: "owner/repo", stateDir: state, enabledAt: 7,
-      requestEventId: "22", projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "",
+      requestEventId: "22", projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "test-worker-model", repairModel: "test-repair-model",
       repairRemote: "origin", reviewLabel: "agent:review", implementLabel: "agent:implement",
       updateBranchLabel: "agent:update-branch", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
     }, { requestEventId: "22" });
@@ -1398,6 +1404,8 @@ else if (args[0] === "agent" && args[1] === "start") {
           PI_CODING_AGENT_DIR: path.dirname(state),
           DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
+          DEADLOOP_WORKER_MODEL: "test-worker-model",
+          DEADLOOP_REPAIR_MODEL: "test-repair-model",
           TEST_WORKTREE: worktree,
           AGENT_STARTED: agentStarted,
         },
@@ -1521,6 +1529,8 @@ else if (args[0] === "agent" && args[1] === "start") {
           PI_CODING_AGENT_DIR: path.dirname(state),
           DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
+          DEADLOOP_WORKER_MODEL: "test-worker-model",
+          DEADLOOP_REPAIR_MODEL: "test-repair-model",
           TEST_WORKTREE: worktree,
           AGENT_STARTED: agentStarted,
           TEST_STATE: state,
@@ -1630,6 +1640,8 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
           PI_CODING_AGENT_DIR: path.dirname(state),
           DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
+          DEADLOOP_WORKER_MODEL: "test-worker-model",
+          DEADLOOP_REPAIR_MODEL: "test-repair-model",
           TEST_WORKTREE: worktree,
           LAUNCH_ATTEMPTED: launchAttempted,
         },

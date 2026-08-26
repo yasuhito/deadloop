@@ -8,7 +8,7 @@ import { buildDoctorSnapshot, formatDoctorReport, type DoctorInput } from "../..
 type DoctorWorld = { input?: DoctorInput; report?: string };
 
 const nowMs = Date.parse("2026-07-05T00:00:00Z");
-const project = normalizeProject({
+const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
   id: "deadloop",
   repoPath: "/repo",
   githubRepo: "owner/repo",
@@ -59,7 +59,7 @@ Given("An Issue was stopped by unresolved required verification", function (this
 });
 
 Given("An Issue was stopped by required verification that is now resolved", function (this: DoctorWorld) {
-  const resolvedProject = normalizeProject({ ...project, checkCommand: "npm run check" }, {
+  const resolvedProject = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", ...project, checkCommand: "npm run check" }, {
     localPath: "/state/projects.json",
     repoPolicyPath: "deadloop.json",
     repoPolicyBaseBranch: "origin/main",
@@ -81,7 +81,7 @@ Given("A pull request was stopped by unresolved required verification", function
 });
 
 Given("A pull request was stopped by required verification that is now resolved", function (this: DoctorWorld) {
-  const resolvedProject = normalizeProject({ ...project, checkCommand: "npm run check" }, {
+  const resolvedProject = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", ...project, checkCommand: "npm run check" }, {
     localPath: "/state/projects.json",
     repoPolicyPath: "deadloop.json",
     repoPolicyBaseBranch: "origin/main",
@@ -165,15 +165,15 @@ Given("There is a recent normal automation attempt", function (this: DoctorWorld
 });
 
 Given("A Claude worktree is not trusted", function (this: DoctorWorld) {
-  setInput(this, { projects: [normalizeProject({ ...project, workerAgent: "claude" })], claudeConfig: { ok: true, projects: {} } });
+  setInput(this, { projects: [normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", ...project, workerAgent: "claude" })], claudeConfig: { ok: true, projects: {} } });
 });
 
 Given("A Claude worktree is trusted", function (this: DoctorWorld) {
-  setInput(this, { projects: [normalizeProject({ ...project, workerAgent: "claude" })], claudeConfig: { ok: true, projects: { "/repo": { hasTrustDialogAccepted: true } } } });
+  setInput(this, { projects: [normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", ...project, workerAgent: "claude" })], claudeConfig: { ok: true, projects: { "/repo": { hasTrustDialogAccepted: true } } } });
 });
 
 Given("A Claude review worktree is not trusted", function (this: DoctorWorld) {
-  setInput(this, { projects: [normalizeProject({ ...project, reviewerAgent: "claude" })], claudeConfig: { ok: true, projects: {} } });
+  setInput(this, { projects: [normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", ...project, reviewerAgent: "claude" })], claudeConfig: { ok: true, projects: {} } });
 });
 
 Given("A worktree uses only Pi", function (this: DoctorWorld) {
@@ -181,7 +181,7 @@ Given("A worktree uses only Pi", function (this: DoctorWorld) {
 });
 
 Given("Claude trust configuration cannot be read for a worktree", function (this: DoctorWorld) {
-  setInput(this, { projects: [normalizeProject({ ...project, workerAgent: "claude" })], claudeConfig: { ok: false } });
+  setInput(this, { projects: [normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", ...project, workerAgent: "claude" })], claudeConfig: { ok: false } });
 });
 
 Given("A pull request has `agent:in-progress` but no active review agent", function (this: DoctorWorld) {

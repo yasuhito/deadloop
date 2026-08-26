@@ -11,7 +11,7 @@ function inventory(generations: Array<{ codeIdentity: string; bytes: number }>):
 }
 
 function doctorFindings(codeSnapshots: CodeSnapshotInventory | null, extra: Record<string, unknown> = {}): DoctorFinding[] {
-  const project = normalizeProject({ id: "demo", repoPath: "/repos/demo", githubRepo: "owner/demo" });
+  const project = normalizeProject({ id: "demo", repoPath: "/repos/demo", githubRepo: "owner/demo" , workerModel: "test-model", reviewerModel: "review-model" });
   return buildDoctorSnapshot({
     cwd: "/repos/demo",
     projects: [project],
@@ -71,7 +71,7 @@ describe("doctor code snapshot inventory findings", () => {
 
 describe("doctor enablement writer reporting", () => {
   it("reports the code identity that last wrote the shared enablement state", () => {
-    const project = normalizeProject({ id: "demo", repoPath: "/repos/demo", githubRepo: "owner/demo" });
+    const project = normalizeProject({ id: "demo", repoPath: "/repos/demo", githubRepo: "owner/demo" , workerModel: "test-model", reviewerModel: "review-model" });
     const snapshot = buildDoctorSnapshot({
       cwd: "/repos/demo",
       projects: [project],

@@ -86,6 +86,7 @@ function envConfig(args: JsonObject = {}) {
     checkCommand: configValue(args, "checkCommand", process.env.DEADLOOP_CHECK_COMMAND, "git diff --check"),
     workerAgent: configValue(args, "workerAgent", process.env.DEADLOOP_WORKER_AGENT, "pi"),
     workerModel: configValue(args, "workerModel", process.env.DEADLOOP_WORKER_MODEL, ""),
+    repairModel: configValue(args, "repairModel", process.env.DEADLOOP_REPAIR_MODEL, ""),
     remote: configValue(args, "remote", process.env.DEADLOOP_REVIEW_REPAIR_REMOTE, "origin"),
     reviewLabel: configValue(args, "reviewLabel", process.env.DEADLOOP_REVIEW_LABEL, "agent:review"),
     blockedLabel: configValue(args, "blockedLabel", process.env.DEADLOOP_BLOCKED_LABEL, "agent:blocked"),
@@ -552,7 +553,7 @@ function repairLaunchInput(
     stateDir: env.stateDir,
     workspaceLabel: repairWorkspaceLabel(prNumber, key, env),
     agent: env.workerAgent,
-    model: env.workerModel,
+    model: env.repairModel,
     level: "medium",
     uuid,
     attemptId: key,
@@ -1192,6 +1193,7 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
         reviewLabel: env.reviewLabel, implementLabel: env.implementLabel, updateBranchLabel: env.updateBranchLabel,
         inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
         attemptKey: selection.key,
+        repairModel: env.repairModel,
         maxActiveMilliseconds: env.reviewerMaxRuntimeSeconds * 1000,
       };
       return driverResult("monitor", `Recovered review-repair monitor for PR #${prNumber}`, {
@@ -1404,6 +1406,7 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
     reviewLabel: env.reviewLabel, implementLabel: env.implementLabel, updateBranchLabel: env.updateBranchLabel,
     inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
     attemptKey: selection.key,
+    repairModel: env.repairModel,
     maxActiveMilliseconds: env.reviewerMaxRuntimeSeconds * 1000,
   };
   return driverResult("monitor", `Launched review-repair worker for PR #${prNumber}`, {

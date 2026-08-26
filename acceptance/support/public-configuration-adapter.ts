@@ -154,12 +154,22 @@ export function resolveSelectedProject(input: {
   });
   const raw = input.files[selectedPath];
   if (!raw) throw new Error(`selected configuration is unreadable: ${selectedPath}`);
-  const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", ...raw }] }), "", {
+  const build = (raw: RawProject) => parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", repoPath: "/repo", ...raw }] }), "", {
     configPath: selectedPath,
     repoPolicyProvider: input.policy
       ? () => ({ status: "loaded", text: JSON.stringify(input.policy), baseRevision: "b".repeat(40) })
       : () => ({ status: "missing", baseRevision: "b".repeat(40) }),
   });
+  let result = build(raw);
+  // Fixtures without role models stay valid: the required models only apply when neither the
+  // local configuration nor the trusted repo policy supplies them.
+  if (result.ok === false && /Model is required/.test(result.reason)) {
+    result = build({
+      ...raw,
+      workerModel: raw.workerModel ?? input.policy?.workerModel ?? "default-worker-model",
+      reviewerModel: raw.reviewerModel ?? input.policy?.reviewerModel ?? "default-reviewer-model",
+    });
+  }
   if (result.ok === false) throw new Error(result.reason);
   const project = result.projects[0];
   if (!project) throw new Error("selected configuration has no active project");

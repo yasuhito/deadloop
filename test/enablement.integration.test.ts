@@ -303,7 +303,8 @@ function writeConfig(root: string, repoPath: string, options: { autoMerge?: bool
       id: "demo",
       repoPath,
       githubRepo: options.githubRepo || "owner/demo",
-      automations: [],
+      workerModel: "test-model",
+      reviewerModel: "review-model",
       ...(options.enabled === undefined ? {} : { enabled: options.enabled }),
       ...(options.autoMerge === undefined ? {} : { autoMerge: options.autoMerge }),
       ...(options.worktreeRoot === undefined ? {} : { worktreeRoot: options.worktreeRoot }),
@@ -338,6 +339,7 @@ function reviewerFixtureRepository(): { root: string; repoPath: string } {
 // publish the blocker rather than continue to candidate selection.
 async function unreconciledAuthorityStatus(): Promise<string> {
   const { root, repoPath } = reviewerFixtureRepository();
+  writeConfig(root, repoPath);
   const statuses: string[] = [];
   const extension = await loadExtension(root, {
     authenticatedLogin: "Deadloop-Bot",
@@ -376,6 +378,7 @@ async function enablementProgressObservation(): Promise<{
   statuses: Array<{ key: string; value: string | undefined }>;
 }> {
   const { root, repoPath } = fixtureRepository();
+  writeConfig(root, repoPath);
   const extension = await loadExtension(root);
   const notifications: string[] = [];
   const statuses: Array<{ key: string; value: string | undefined }> = [];
@@ -679,6 +682,7 @@ describe("enablement command integration", () => {
 
   it("runs the OS lock capability preflight before GitHub enablement mutations", async () => {
     const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
     const events: string[] = [];
     const extension = await loadExtension(root, {
       schedulerLockCapabilityPreflight: () => { events.push("lock-preflight"); },
@@ -841,6 +845,7 @@ describe("enablement command integration", () => {
 
   it("persists the authenticated GitHub login as an authorized automation identity", async () => {
     const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
     const extension = await loadExtension(root, { authenticatedLogin: "Deadloop-Bot" });
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
@@ -966,6 +971,7 @@ describe("enablement command integration", () => {
 
   it("does not enable without an authenticated GitHub login", async () => {
     const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
     const extension = await loadExtension(root, { authenticatedLogin: "" });
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
@@ -975,6 +981,7 @@ describe("enablement command integration", () => {
 
   it("passes the default enablement identity to the reviewer driver environment", async () => {
     const { root, repoPath } = reviewerFixtureRepository();
+    writeConfig(root, repoPath);
     let reviewerCommand = "";
     const extension = await loadExtension(root, {
       authenticatedLogin: "Deadloop-Bot",
@@ -1204,6 +1211,7 @@ describe("enablement command integration", () => {
 
   it("uses npm run check when deadloop.json and projects.json provide no override", async () => {
     const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
     rmSync(path.join(repoPath, "deadloop.json"));
     writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({ scripts: { check: "true" } }));
     git(repoPath, ["add", "deadloop.json", "package.json"]);
@@ -1234,6 +1242,7 @@ describe("enablement command integration", () => {
 
   it("keeps an in-flight guarded operation authorized after repeated enable", async () => {
     const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
     const extension = await loadExtension(root);
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
     const stateDir = path.join(root, ".pi", "agent", "deadloop");
@@ -1267,6 +1276,7 @@ describe("enablement command integration", () => {
 
   it("disabling one repository does not revoke another repository's enablement", async () => {
     const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
     const otherRepoPath = path.join(root, "other-primary");
     mkdirSync(otherRepoPath);
     git(otherRepoPath, ["init", "--quiet"]);
@@ -1278,6 +1288,10 @@ describe("enablement command integration", () => {
     git(otherRepoPath, ["commit", "--quiet", "-m", "initial"]);
     git(otherRepoPath, ["remote", "add", "origin", "https://github.com/owner/demo.git"]);
     git(otherRepoPath, ["update-ref", "refs/remotes/origin/master", "master"]);
+    git(otherRepoPath, ["update-ref", "refs/remotes/origin/main", "master"]);
+    writeFileSync(path.join(root, ".pi", "agent", "deadloop", "projects.json"), JSON.stringify({
+      projects: [{ id: "other-demo", repoPath: otherRepoPath, githubRepo: "owner/demo", workerModel: "test-model", reviewerModel: "review-model", automations: [] }],
+    }));
     let releasePreflight!: () => void;
     let preflightStarted!: () => void;
     const started = new Promise<void>((resolve) => { preflightStarted = resolve; });
@@ -1691,6 +1705,7 @@ describe("enablement command integration", () => {
 
   it("discovers a user configuration created after enablement", async () => {
     const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
     const extension = await loadExtension(root);
     vi.useFakeTimers();
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
@@ -1918,6 +1933,7 @@ describe("enablement command integration", () => {
 
   it("enables a primary checkout with an external separate Git directory", async () => {
     const { root, repoPath } = fixtureRepository({ separateGitDir: true });
+    writeConfig(root, repoPath);
     const extension = await loadExtension(root);
 
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
@@ -1980,10 +1996,17 @@ describe("enablement command integration", () => {
 
   it("keeps one scheduler owner across old and new aliases of one GitHub repository", async () => {
     const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
     git(repoPath, ["remote", "set-url", "origin", "https://github.com/old/demo.git"]);
     const secondRepoPath = path.join(root, "second-primary");
     execFileSync("git", ["clone", "--quiet", path.join(root, "origin.git"), secondRepoPath]);
     git(secondRepoPath, ["remote", "set-url", "origin", "https://github.com/new/demo.git"]);
+    writeFileSync(path.join(root, ".pi", "agent", "deadloop", "projects.json"), JSON.stringify({
+      projects: [
+        { id: "demo", repoPath, githubRepo: "old/demo", baseBranch: "origin/master", workerModel: "test-model", reviewerModel: "review-model", automations: [] },
+        { id: "demo-alias", repoPath: secondRepoPath, githubRepo: "new/demo", baseBranch: "origin/master", workerModel: "test-model", reviewerModel: "review-model", automations: [] },
+      ],
+    }));
     const firstExtension = await loadExtension(root, {
       fetchRemote: "https://github.com/old/demo.git",
       pushRemote: "https://github.com/old/demo.git",

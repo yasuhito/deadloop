@@ -510,7 +510,7 @@ Then("deadloop preserves the agent's workspace and worktree", function (this: Wo
 Given("The automation host is connected to an unsupported Herdr", function (this: World) { this.mutationCount = 0; });
 
 When("deadloop starts an automation cycle", async function (this: World) {
-  const project = normalizeProject({ id: "demo", repoPath: "/repo", githubRepo: "owner/repo", automations: [{ id: "a", name: "a" }] });
+  const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", id: "demo", repoPath: "/repo", githubRepo: "owner/repo", automations: [{ id: "a", name: "a" }] });
   try {
     await runScheduledAutomation(project, project.automations[0], 1, { automations: {} }, {
       herdrPreflight: () => { throw new Error("Herdr is unsupported"); }, now: () => 1,
