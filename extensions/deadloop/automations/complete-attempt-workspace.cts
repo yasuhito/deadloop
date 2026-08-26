@@ -31,7 +31,27 @@ const {
 
 import type { AttemptRecord, CompletionReportV1 } from "../../../src/attempt-lifecycle";
 import type { GithubCompletionObservation } from "../../../src/attempt-workspace-lifecycle";
+import type { HumanHandoffLabels } from "../../../src/human-handoff-types";
 import type { JsonObject } from "../../../src/automation-driver-kit-types";
+
+/**
+ * The explicit human-handoff expectation, carried by the five --handoff-*-label flags. Present only
+ * when every flag is given; a partial set would describe a handoff nothing defines.
+ */
+function reviewerHumanHandoffExpectation(values: JsonObject): HumanHandoffLabels | undefined {
+  const labels = {
+    reviewLabel: String(values.handoffReviewLabel || ""),
+    implementLabel: String(values.handoffImplementLabel || ""),
+    updateBranchLabel: String(values.handoffUpdateBranchLabel || ""),
+    inProgressLabel: String(values.handoffInProgressLabel || ""),
+    blockedLabel: String(values.handoffBlockedLabel || ""),
+  };
+  if (Object.values(labels).every((label) => label !== "")) return labels;
+  if (Object.values(labels).some((label) => label !== "")) {
+    throw new Error("a human handoff expectation needs every --handoff-*-label flag together");
+  }
+  return undefined;
+}
 
 function parseArgs(argv: string[]): JsonObject {
   const values: JsonObject = { expectedLabel: [], managedLabel: [] };
@@ -321,6 +341,7 @@ function completeLocked(
       ]);
       completionStopConfirmed = isExactRequiredVerificationStop(issue, completionStop.resolution, completionStop.labels);
     }
+    const reviewerHumanHandoff = reviewerHumanHandoffExpectation(args);
     const decision = completionStop
       ? { action: completionStopConfirmed ? "close" as const : "retain" as const }
       : evaluateCompletionPersistence({
@@ -331,6 +352,7 @@ function completeLocked(
           workerReviewLabel: String(args.workerReviewLabel || ""),
           reviewerExpectedLabels: args.expectedLabel || [],
           reviewerManagedLabels: args.managedLabel?.length ? args.managedLabel : args.expectedLabel || [],
+          ...(reviewerHumanHandoff ? { reviewerHumanHandoff } : {}),
         },
       });
     if (decision.action !== "close") {

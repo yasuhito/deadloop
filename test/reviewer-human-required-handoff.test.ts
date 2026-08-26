@@ -71,4 +71,12 @@ describe("completed human_required review handoff", () => {
     const commands = await reconcileWithRecordedCommands();
     expect(commands.some((args) => String(args[0]).endsWith("complete-attempt-workspace.cts"))).toBe(true);
   });
+
+  it("expects the explicit human handoff when closing that reviewer workspace", async () => {
+    writeCompletedHumanRequiredReview();
+    const commands = await reconcileWithRecordedCommands();
+    const closure = commands.find((args) => String(args[0]).endsWith("complete-attempt-workspace.cts"));
+
+    expect(closure?.includes("--handoff-review-label")).toBe(true);
+  });
 });

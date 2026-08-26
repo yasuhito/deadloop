@@ -119,10 +119,21 @@ export function reviewerFixture(
     ? [{ title: "Bug", body: "Fix it", path: "src/a.ts", line: 1, severity: "major" as const }]
     : [];
   const repairs = decideReviewTransition({ outcome, priorRequiredFindings }).transition === "repair";
-  // A review that is not repairing hands the pull request to a person, which keeps no agent
-  // workflow label at all. The human handoff label belongs to Issues, never to a pull request.
+  // A review that is not repairing hands the pull request to a person. That expectation is explicit:
+  // the closure proof waits on the shared human-handoff state (ready, no agent workflow label left),
+  // not on an empty expected label set.
   const expectedLabels = repairs ? ["agent:review", "agent:in-progress"] : [];
-  const context = { reviewerExpectedLabels: expectedLabels } satisfies CompletionDecisionContext;
+  const context = (repairs
+    ? { reviewerExpectedLabels: expectedLabels }
+    : {
+        reviewerHumanHandoff: {
+          reviewLabel: "agent:review",
+          implementLabel: "agent:implement",
+          updateBranchLabel: "agent:update-branch",
+          inProgressLabel: "agent:in-progress",
+          blockedLabel: "agent:blocked",
+        },
+      }) satisfies CompletionDecisionContext;
   const github = {
     kind: "confirmed",
     role: "reviewer",

@@ -8,6 +8,8 @@ import {
 } from "./attempt-lifecycle";
 
 const { decideReviewTransition } = require("./reviewer-outcome-contract.cts");
+const { humanHandoffComplete } = require("./human-handoff.cts");
+import type { HumanHandoffLabels } from "./human-handoff-types";
 
 export type RetentionReason =
   | "active_attempt"
@@ -114,6 +116,10 @@ export type CompletionDecisionContext = {
   workerReviewLabel?: string;
   reviewerExpectedLabels?: readonly string[];
   reviewerManagedLabels?: readonly string[];
+  /** Present only when the reviewer role is expected to reach a human handoff, so the handoff state
+   * (ready, no agent workflow label left) is asserted explicitly instead of inferred from an empty
+   * expected label set. */
+  reviewerHumanHandoff?: HumanHandoffLabels;
 };
 
 export type CompletionPersistenceDecision = { action: "close" } | { action: "preserve"; reason: RetentionReason };
@@ -247,13 +253,7 @@ export function workerCompletionPersisted(
  * Pure reviewer rows.
  *
  * A human-required outcome is a completed review like any other: the review ran, its result is
- * recorded on the pull request, and what is left belongs to a person. It closes on the same proof
- * the other outcomes need, and the state that proof describes is its caller's expected label set —
- * for a human handoff, one that keeps no agent workflow label at all.
- *
- * A handoff has two halves, and the empty expected set names only one of them. A pull request left
- * as a draft is not handed over however few labels it carries, so an expected set that waits on no
- * agent request has to see the draft gone as well.
+ * recorded on the pull request, and what is left belongs to a person.
  */
 export function reviewerCompletionPersisted(
   record: AttemptRecord,
@@ -262,11 +262,34 @@ export function reviewerCompletionPersisted(
   expectedLabels: readonly string[],
   managedLabels: readonly string[] = expectedLabels,
 ): boolean {
+  if (!reviewerResultPersisted(record, report, github)) return false;
+  const managed = new Set(managedLabels);
+  return sameStringSet(github.labels.filter((label) => managed.has(label)), expectedLabels);
+}
+
+/**
+ * Pure reviewer row predicate for a completed human handoff. Both halves of the shared handoff
+ * definition are explicit here: the pull request must be ready and no agent workflow label may
+ * remain. A half-satisfied state (ready with labels left, label-free but still draft) keeps the
+ * workspace open instead of closing on it.
+ */
+export function humanHandoffCompletionPersisted(
+  record: AttemptRecord,
+  report: ReviewerReport,
+  github: ReviewerGithubObservation,
+  labels: HumanHandoffLabels,
+): boolean {
+  return reviewerResultPersisted(record, report, github)
+    && humanHandoffComplete({ isDraft: github.draft, labels: github.labels }, labels);
+}
+
+function reviewerResultPersisted(
+  record: AttemptRecord,
+  report: ReviewerReport,
+  github: ReviewerGithubObservation,
+): boolean {
   const transition = decideReviewTransition(report.result).transition;
   if (!boundToRecord(github, record) || !sameSha(github.headSha, record.inputRevision.head)) return false;
-  const managed = new Set(managedLabels);
-  if (!sameStringSet(github.labels.filter((label) => managed.has(label)), expectedLabels)) return false;
-  if (expectedLabels.length === 0 && github.draft) return false;
   const persistence = github.reviewPersistence;
   if (
     !persistence ||
@@ -348,6 +371,9 @@ function rolePredicate(
       && workerCompletionPersisted(record, report, github, context.workerReviewLabel);
   }
   if (report.role === "reviewer" && github.role === "reviewer") {
+    if (context.reviewerHumanHandoff !== undefined) {
+      return humanHandoffCompletionPersisted(record, report, github, context.reviewerHumanHandoff);
+    }
     return (
       context.reviewerExpectedLabels !== undefined &&
       reviewerCompletionPersisted(

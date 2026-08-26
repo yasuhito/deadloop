@@ -25,6 +25,7 @@ const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed 
 const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.cts");
 const { blockedPrLabelMove } = require("../../../src/pr-request-selection.cts");
 const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.cts");
+const { agentWorkflowLabels, humanHandoffLabelMove } = require("../../../src/human-handoff.cts");
 const {
   isPrRequiredVerificationStopComment,
   planPrRequiredVerificationStop,
@@ -326,20 +327,6 @@ function blockedClaimMove(env: ReturnType<typeof envConfig>) {
     env.inProgressLabel,
     env.blockedLabel,
   );
-}
-
-/**
- * Every agent workflow label, which a human handoff keeps none of.
- *
- * A blocked pull request is one deadloop could not finish safely, and a completed review that needs
- * a person is one deadloop finished. Neither keeps an agent request waiting; they differ in the
- * blocked label, which the block adds and the handoff removes.
- */
-function humanHandoffLabelMove(env: ReturnType<typeof envConfig>) {
-  return {
-    remove: [env.reviewLabel, env.implementLabel, env.updateBranchLabel, env.inProgressLabel, env.blockedLabel],
-    add: [],
-  };
 }
 
 function applyHumanBlock(
@@ -1046,7 +1033,7 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
         // nobody is waiting on.
         if (livePr.isDraft === true) guardedGithub.markPrReady(env.githubRepo, prNumber);
         const labels = labelNames(livePr.labels);
-        if (humanHandoffLabelMove(env).remove.some((label) => labels.includes(label))) {
+        if (agentWorkflowLabels(env).some((label) => labels.includes(label))) {
           guardedGithub.movePrLabels(env.githubRepo, prNumber, humanHandoffLabelMove(env));
         }
       });

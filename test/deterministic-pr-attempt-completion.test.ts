@@ -101,4 +101,30 @@ describe("deterministic PR attempt completion", () => {
 
     expect(result.nextHandoff?.monitorHandoff?.kind).toBe("repair");
   });
+
+  it("closes an approved non-autoMerge review through the explicit human handoff expectation", () => {
+    const state = fixture("reviewer", { outcome: "approved", reviewedHead: "a".repeat(40) });
+    const invocations: string[][] = [];
+
+    processInput(state.handoff, { run: (script: string, args: string[]) => {
+      invocations.push([script, ...args]);
+      return script === "pr-review-repair-dispatch.cts" ? { action: "done", driverAction: "review_approved" } : { driverAction: "workspace_closed" };
+    } });
+
+    const closure = invocations.find((invocation) => invocation[0] === "complete-attempt-workspace.cts");
+    expect(closure?.includes("--handoff-review-label")).toBe(true);
+  });
+
+  it("closes a handed-off human_required review through the explicit human handoff expectation", () => {
+    const state = fixture("reviewer", { outcome: "human_required", reviewedHead: "a".repeat(40) });
+    const invocations: string[][] = [];
+
+    processInput(state.handoff, { run: (script: string, args: string[]) => {
+      invocations.push([script, ...args]);
+      return script === "pr-review-repair-dispatch.cts" ? { action: "done", driverAction: "review_human_handoff" } : { driverAction: "workspace_closed" };
+    } });
+
+    const closure = invocations.find((invocation) => invocation[0] === "complete-attempt-workspace.cts");
+    expect(closure?.includes("--handoff-blocked-label")).toBe(true);
+  });
 });
