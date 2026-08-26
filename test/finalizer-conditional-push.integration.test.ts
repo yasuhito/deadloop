@@ -185,7 +185,7 @@ describe("finalizer exact-head pushes against real remotes", () => {
     mkdirSync(runDir, { recursive: true });
     git(repo, ["update-ref", "refs/remotes/origin/main", rootOid]);
     const baseBranch = "origin/main";
-    writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
+    writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
       repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch, enabledAt: 1,
       automationLogin: "deadloop-bot",
       firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,

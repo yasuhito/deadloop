@@ -96,7 +96,7 @@ function repairDispatch(testCase: string): Record<string, unknown> {
     }] }));
     fs.writeFileSync(
       path.join(state, "enabled-projects.json"),
-      JSON.stringify({ projects: [{
+      JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
         repoPath: root,
         githubRepo: "owner/repo",
         githubRepositoryId: "R_repo",

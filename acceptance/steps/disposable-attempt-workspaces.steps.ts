@@ -425,6 +425,7 @@ function launchBranchUpdateBoundary(workspaceId: string) {
   fs.writeFileSync(path.join(binDir, "gh"), "#!/bin/sh\nprintf '%s\\n' '{\"id\":\"R_fixture\"}'\n", "utf8");
   fs.chmodSync(path.join(binDir, "gh"), 0o755);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({
+    lastWriterCodeIdentity: "a".repeat(40),
     projects: [{
       repoPath, githubRepo: "owner/repo", githubRepositoryId: "R_fixture", automationLogin: "deadloop-bot", enabledAt, disableGeneration: 0,
       firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,

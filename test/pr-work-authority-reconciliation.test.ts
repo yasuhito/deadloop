@@ -126,6 +126,68 @@ describe("launch failures recorded by the pull request's own attempts", () => {
   });
 });
 
+describe("storage exhaustion stops observed by deadloop itself", () => {
+  const absentOwner = {
+    ...base,
+    runtime: { kind: "owner_absent_owned" },
+    pr: { ...base.pr, labels: ["agent:blocked"] },
+  };
+
+  it("names storage exhaustion instead of an unknown cause when ENOSPC was observed", () => {
+    expect(reconcilePrWorkAuthority({ ...absentOwner, storageExhaustion: true }).reason).toBe("storage_exhaustion");
+  });
+
+  it("keeps reporting a reportless termination as the generic owner-absent failure", () => {
+    expect(reconcilePrWorkAuthority(absentOwner).reason).toBe("runtime_owner_absent");
+  });
+
+  it("keeps a live attempt running even when storage exhaustion was observed earlier", () => {
+    expect(reconcilePrWorkAuthority({ ...base, storageExhaustion: true }).action).toBe("keep_active");
+  });
+
+  it("leaves no request behind for the loop to retry automatically", () => {
+    const decision = reconcilePrWorkAuthority({
+      ...absentOwner,
+      pr: { ...absentOwner.pr, labels: [...absentOwner.pr.labels, "agent:review"] },
+      storageExhaustion: true,
+    });
+    expect(decision.labels).toEqual(["agent:blocked"]);
+  });
+
+  it("tells the operator to free capacity before adding a new request", () => {
+    const body = recoveryComment(24, "a".repeat(40), "storage_exhaustion", "event-30");
+    expect(body).toContain("free up storage on the machine running deadloop");
+  });
+
+  it("names the recovery step of adding a new Agent request", () => {
+    const body = recoveryComment(24, "a".repeat(40), "storage_exhaustion", "event-30");
+    expect(body).toContain("add a new Agent request once storage is available");
+  });
+
+  it("posts exactly one idempotent comment when the stop blocks", async () => {
+    const comments: string[] = [];
+    const events = [{ id: "block-1", event: "labeled", created_at: "2026-07-20T10:02:00Z", label: { name: "agent:blocked" }, actor: { login: "deadloop-bot" } }];
+    const operations = (posted: string[]) => ({
+      automationLogin: "deadloop-bot",
+      listTimelineEvents: () => events,
+      listComments: () => posted.map((body) => ({ author: { login: "deadloop-bot" }, body })),
+      replaceLabels: () => {},
+      comment: (body: string) => { posted.push(body); },
+      closeOwnedWorkspace: () => true,
+    });
+    await applyPrWorkAuthorityReconciliation({ ...absentOwner, storageExhaustion: true }, operations(comments));
+    await applyPrWorkAuthorityReconciliation({ ...absentOwner, storageExhaustion: true }, operations(comments));
+    expect(comments).toHaveLength(1);
+  });
+
+  it("adds free-capacity guidance to launch failures that name ENOSPC", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "worktree create failed with EDQUOT: disk quota exceeded",
+    ]);
+    expect(body).toContain("the host ran out of storage");
+  });
+});
+
  describe("PR runtime reconciliation", () => {
   it("keeps an attempt active when the runtime reports it live", () => {
     expect(reconcilePrWorkAuthority(base).action).toBe("keep_active");

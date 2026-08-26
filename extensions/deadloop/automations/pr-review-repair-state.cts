@@ -1,4 +1,5 @@
 const { createHash } = require("node:crypto") as typeof import("node:crypto");
+const { reportNamesStorageExhaustion } = require("../../../src/storage-exhaustion.cjs");
 
 type JsonObject = Record<string, any>;
 
@@ -83,7 +84,12 @@ function selectRepairAttempt(comments: JsonObject[], headOid: string, findings: 
   return { action: "launch_repair", reason: "repair_progress_reported", key, reviewFingerprint };
 }
 
-function decideTechnicalReviewFailure(comments: JsonObject[], headOid: string): JsonObject {
+function decideTechnicalReviewFailure(comments: JsonObject[], headOid: string, report?: JsonObject): JsonObject {
+  // A blocked report naming an observed ENOSPC/EDQUOT names its cause. Retrying consumes the one
+  // technical allowance without addressing that cause, so the stop keeps it and skips the retry.
+  if (reportNamesStorageExhaustion(report)) {
+    return { action: "storage_exhaustion", reason: "observed_storage_exhaustion", failures: 0 };
+  }
   const failures = technicalFailureCount(comments, headOid);
   return failures < 1
     ? { action: "retry", reason: "first_technical_failure", failures }

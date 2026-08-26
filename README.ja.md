@@ -25,7 +25,7 @@ pi install git:github.com/yasuhito/deadloop
 - 作業担当とレビュー担当は `pi`、`claude`、`omp` から選べます。`workerAgent` と `reviewerAgent` で指定し、どのホストが自動処理を動かしているかとは独立です。
 - 既定の実行基盤は [Herdr](https://herdr.dev/) です。
 - 現在対応しているホスト環境は、互換性のある `flock` 実行ファイル（通常は util-linux が提供）と、非待機のファイル記述子ロックを利用できる Unix 系システムです。`/deadloop-enable` は自動処理を有効化する前に、この機能を検査します。
-- 各 Automation host は、拡張の読み込み時に deadloop checkout の commit をコード識別子として固定します。checkout が進んだ場合、共有 enablement 状態の書き込みと tick は operator が `/reload` を実行するまで停止します。status と doctor は引き続き利用でき、両方の識別子と復旧手順を表示します。
+- 各 Automation host は、拡張の読み込み時に deadloop checkout の commit をコード識別子として固定します。checkout が進んだ場合、共有 enablement 状態の書き込みと tick は operator が `/reload` を実行するまで停止します。status と doctor は引き続き利用でき、両方の識別子と復旧手順を表示します。共有 enablement 状態には診断専用として最後の書き込み元のコード識別子が記録され、`/deadloop-doctor` がそれに加えてコードスナップショットの在庫（世代数と容量）と掃除コマンドを報告します。スナップショットを自動で削除することはありません。
 
 ## 設定
 
@@ -192,7 +192,7 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 
 先頭コミットがすでに変わっていた場合は、push もラベル変更も行わずに停止します。
 
-上限付きの試行後も同じ指摘が残った場合は、復旧情報とともに `agent:blocked` を付け、要求ラベルを全て外します。技術上または安全上の再試行を使い切った場合も同様です。人間の判断が必要だと報告したレビューは完走したレビューとして扱い、結果を記録したうえで draft を ready へ変え、agent 系ワークフローラベルを全て外します。PR は人間を待つ状態になり、agent への要求は残りません。
+上限付きの試行後も同じ指摘が残った場合は、復旧情報とともに `agent:blocked` を付け、要求ラベルを全て外します。技術上または安全上の再試行を使い切った場合も同様です。書き込みが `ENOSPC` や `EDQUOT` で失敗したことを報告するレビューは再試行回数を使わずに停止し、ホストの空き容量を確かめてから新しい要求を追加するよう案内します。人間の判断が必要だと報告したレビューは完走したレビューとして扱い、結果を記録したうえで draft を ready へ変え、agent 系ワークフローラベルを全て外します。PR は人間を待つ状態になり、agent への要求は残りません。
 
 詳しくは [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) を参照してください。
 
