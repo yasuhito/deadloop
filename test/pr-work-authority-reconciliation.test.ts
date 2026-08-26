@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 const {
   applyPrWorkAuthorityReconciliation,
+  postBlockRequestIsEligible,
   reconcilePrWorkAuthority,
   recoveryComment,
 } = require("../src/pr-work-authority-reconciliation.cts");
@@ -72,6 +73,56 @@ describe("launch failures recorded by the pull request's own attempts", () => {
       },
     );
     expect(comments.some((body) => body.includes("does not resolve to the recorded canonical checkout"))).toBe(true);
+  });
+
+  // Launch errors quote runtime output, and that output embeds host command lines with absolute
+  // local paths. The published explanation keeps the reason but scrubs the locations.
+  it("keeps local paths out of the published failure explanation", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "Command failed: herdr worktree create --cwd /home/me/work/deadloop --path /home/me/work/deadloop/.worktrees/agent-issue-24 --json",
+    ]);
+    expect(body).not.toContain("/home/me");
+  });
+
+  it("names the omission instead of the local path", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "worktree create failed because /srv/deadloop/state/attempt.json is unusable",
+    ]);
+    expect(body).toContain("[internal path omitted]");
+  });
+
+  it("does not repeat the explanation when the same failure is reprocessed", async () => {
+    const comments: string[] = [];
+    const failure = "worktree agent/issue-42 does not resolve to the recorded canonical checkout";
+    const events = [{ id: "block-1", event: "labeled", created_at: "2026-07-20T10:02:00Z", label: { name: "agent:blocked" }, actor: { login: "deadloop-bot" } }];
+    await applyPrWorkAuthorityReconciliation(
+      { ...missingJournal, launchFailures: [failure] },
+      {
+        automationLogin: "deadloop-bot",
+        listTimelineEvents: () => events,
+        listComments: () => [{ author: { login: "deadloop-bot" }, body: recoveryComment(24, "a".repeat(40), "launch_unprepared", "block-1", [failure]) }],
+        replaceLabels: () => {},
+        comment: (body: string) => { comments.push(body); },
+      },
+    );
+    expect(comments).toHaveLength(0);
+  });
+
+  it("leaves no request behind for the loop to retry automatically", () => {
+    const decision = reconcilePrWorkAuthority({
+      ...missingJournal,
+      pr: { ...missingJournal.pr, labels: [...missingJournal.pr.labels, "agent:review"] },
+      launchFailures: ["worktree agent/issue-42 does not resolve to the recorded canonical checkout"],
+    });
+    expect(decision.labels).toEqual(["agent:blocked"]);
+  });
+
+  it("keeps a request added after the block queued for the next launch", () => {
+    const events = [
+      { id: "31", event: "labeled", created_at: "2026-07-20T10:02:00Z", label: { name: "agent:blocked" }, actor: { login: "deadloop-bot" } },
+      { id: "32", event: "labeled", created_at: "2026-07-20T10:05:00Z", label: { name: "agent:review" }, actor: { login: "yasuhito" } },
+    ];
+    expect(postBlockRequestIsEligible({ request: events[1], events, blockedLabel: "agent:blocked" })).toBe(true);
   });
 });
 

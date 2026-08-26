@@ -156,7 +156,7 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
   return { root, repo, stateDir, worktree, completedRun, mutations: path.join(root, "mutations.log") };
 }
 
-async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunchedSecondAttempt>, observe: { labels?: string[]; blockedEventAppearsLater?: boolean } = {}) {
+async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunchedSecondAttempt>, observe: { labels?: string[]; blockedEventAppearsLater?: boolean; flipHeadAfterReads?: number; operatorRequestAdded?: boolean } = {}, mutations: string[] = []) {
   const labels = [...(observe.labels || ["agent:blocked"])];
   const comments: Record<string, unknown>[] = [];
   const postedComments: string[] = [];
@@ -164,12 +164,16 @@ async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunche
     { id: "10", event: "labeled", created_at: "2026-08-01T09:00:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:review" } },
     { id: "20", event: "labeled", created_at: "2026-08-01T10:04:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:review" } },
   ];
+  if (observe.operatorRequestAdded) {
+    baseEvents.push({ id: "40", event: "labeled", created_at: "2026-08-01T10:08:00Z", actor: { login: "yasuhito" }, label: { name: "agent:review" } });
+  }
   // A block this host applies mid-reconciliation only shows up in the timeline after its own label
   // write lands, which is what lets applyPrWorkAuthorityReconciliation find its own cutoff event.
   const events = () => observe.blockedEventAppearsLater && labels.includes("agent:blocked")
     ? [...baseEvents, { id: "30", event: "labeled", created_at: "2026-08-01T10:06:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } }]
     : baseEvents;
   const pr = () => ({ number: 42, state: "OPEN", headRefOid: HEAD, labels: labels.map((name) => ({ name })) });
+  let prViewReads = 0;
   const commandRunner = {
     runText: (argv: string[]) => {
       if (argv[0] === "herdr") return "";
@@ -185,16 +189,24 @@ async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunche
       if (command === "herdr worktree list") return { result: { worktrees: [{ path: fixture.worktree }] } };
       if (command === "gh repo view") return { id: "repo-id", nameWithOwner: "owner/repo" };
       if (command === "gh pr list") return [pr()];
-      if (command === "gh pr view") return pr();
+      if (command === "gh pr view") {
+        // A push landing between reconciliation reads is what the recovery mutation guards refuse.
+        prViewReads += 1;
+        return observe.flipHeadAfterReads !== undefined && prViewReads > observe.flipHeadAfterReads
+          ? { ...pr(), headRefOid: "b".repeat(40) }
+          : pr();
+      }
       // Label writes and comment posts are observed so a test can prove what reached GitHub.
       if (argv[0] === "gh" && argv[1] === "api" && argv.includes("--method")) {
         const method = argv[Number(argv.indexOf("--method")) + 1];
         const endpointArg = String(argv.find((token) => typeof token === "string" && token.startsWith("repos/")));
         if (endpointArg.endsWith("/labels") && method === "PUT" && options.input) {
+          mutations.push(`PUT ${endpointArg}`);
           labels.splice(0, labels.length, ...JSON.parse(options.input).labels);
           return labels.map((name) => ({ name }));
         }
         if (endpointArg.endsWith("/comments") && method === "POST") {
+          mutations.push(`POST ${endpointArg}`);
           postedComments.push(String(argv.at(-1)).replace(/^body=/, ""));
           return { id: "comment-new" };
         }
@@ -213,6 +225,7 @@ async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunche
   return {
     result,
     postedComments,
+    mutations,
     unlaunched: JSON.parse(readFileSync(path.join(fixture.stateDir, "runs", "unlaunched", "attempt.json"), "utf8")),
   };
 }
@@ -293,5 +306,40 @@ describe("a second attempt that never opened a workspace", () => {
     const { postedComments } = await reconcileOnce(fixture, { labels: ["agent:in-progress"], blockedEventAppearsLater: true });
 
     expect(postedComments.join("\n")).toContain("2 Agent request(s) failed to launch");
+  });
+
+  // A push landing between reconciliation's read and its label write must not move labels onto the
+  // new head: the decision was made for a head that no longer exists.
+  it("changes no label when the pull-request head moved before the label write", async () => {
+    const fixture = pullRequestWithUnlaunchedSecondAttempt({ completed: false });
+    const mutations: string[] = [];
+    try {
+      await reconcileOnce(fixture, { labels: ["agent:in-progress"], blockedEventAppearsLater: true, flipHeadAfterReads: 0 }, mutations);
+    } catch {}
+
+    expect(mutations.some((entry) => entry.includes("/labels"))).toBe(false);
+  });
+
+  // The comment names a specific head through its recovery marker, so commenting after an unseen
+  // push would explain the wrong revision.
+  it("posts no comment when the pull-request head moved before the comment", async () => {
+    const fixture = pullRequestWithUnlaunchedSecondAttempt({ completed: false });
+    const mutations: string[] = [];
+    try {
+      await reconcileOnce(fixture, { labels: ["agent:in-progress"], blockedEventAppearsLater: true, flipHeadAfterReads: 1 }, mutations);
+    } catch {}
+
+    expect(mutations.some((entry) => entry.includes("/comments"))).toBe(false);
+  });
+
+  // A person restarts by adding a request label; reconciliation holds no journal for this pull
+  // request anymore, so the queued request must reach the reviewer launch untouched.
+  it("keeps a request added after the block queued for the reviewer launch", async () => {
+    const fixture = pullRequestWithUnlaunchedSecondAttempt({ completed: false });
+    await reconcileOnce(fixture, { labels: ["agent:in-progress"], blockedEventAppearsLater: true });
+    const secondMutations: string[] = [];
+    const second = await reconcileOnce(fixture, { labels: ["agent:blocked", "agent:review"], operatorRequestAdded: true }, secondMutations);
+
+    expect(second.mutations).toEqual([]);
   });
 });

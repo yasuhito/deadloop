@@ -1,4 +1,5 @@
 const { compareGithubTimelineEvents } = require("./github-timeline-order.cts");
+const { redactLocalDetail } = require("./local-detail-redaction.cts");
 
 type JsonObject = Record<string, any>;
 
@@ -159,9 +160,12 @@ function recoveryComment(number: number, head: string, reason: string, cutoffEve
   };
   let explanation = `${readable[reason] || reason}`;
   if (reason === "launch_unprepared") {
-    const failures = launchFailures || [];
-    explanation = `${failures.length} Agent request(s) failed to launch before any agent started:\n`
-      + [...new Set(failures)].map((failure) => `- ${failure}`).join("\n")
+    // The recorded errors quote runtime output that can carry absolute host paths, so the published
+    // bullets scrub those fragments first. The count still reflects every recorded request cycle.
+    const recorded = launchFailures || [];
+    const failures = [...new Set(recorded.map((failure) => redactLocalDetail(failure)))];
+    explanation = `${recorded.length} Agent request(s) failed to launch before any agent started:\n`
+      + failures.map((failure) => `- ${failure}`).join("\n")
       + `\n\nAdding another Agent request now repeats the same failure.`
       + `\nOperator actions:\n${launchFailureGuidance(failures)}`;
   }
