@@ -64,7 +64,7 @@ function workerFixture(): { record: AttemptRecord; report: any; github: any } {
     inputHead, outcome: "complete", outputRevision: outputHead,
   };
   const github = {
-    kind: "confirmed", role: "worker", repository: record.repository, target: record.target, issueClaimable: false,
+    kind: "confirmed", role: "worker", repository: record.repository, target: record.target,
     pullRequests: [{
       repository: record.repository, target: record.target, state: "open", headBranch: record.branch,
       headSha: outputHead, baseBranch: record.baseBranch, closesIssue: 12, labels: ["agent:review"], marker,

@@ -4,6 +4,8 @@ const path = require("node:path") as typeof import("node:path");
 const { readAttemptRecord } = require("./attempt-lifecycle-runtime.cjs");
 const { createHerdrRunner } = require("./herdr-runner.cts");
 const { observeAttemptMonitoringDirective, terminalEvidenceArgs } = require("./monitor-handoff-observation.cts");
+const { observeAttemptTurn } = require("./attempt-runtime-observation.cts");
+const { createModelSessionRetry } = require("./model-wait.cts");
 
 import type { ActiveWorkAccounting, AttemptMonitoringApplication, AttemptMonitoringDirective } from "./monitor-handoff-types";
 
@@ -61,6 +63,30 @@ function observeDeterministicAttemptMonitoring(
   );
 }
 
+/**
+ * Retries a model-availability wait through the attempt's own agent session, or reports that the
+ * session cannot be reused. It never opens a replacement workspace, worktree, pane, or agent.
+ */
+function retryWaitingAgentSession(handoff: JsonObject): boolean {
+  const record = attemptRecordForMonitorHandoff(handoff);
+  const runner = monitorRuntimeRunner();
+  const retry = createModelSessionRetry({
+    turnOf: (attempt) => observeAttemptTurn(runner, attempt) as any,
+    submitPrompt: (agentName, text) => {
+      const submitted = childProcess.spawnSync(
+        "herdr",
+        ["agent", "prompt", agentName, text],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, killSignal: "SIGKILL" },
+      );
+      if (submitted.error) throw submitted.error;
+      if (submitted.status !== 0) {
+        throw new Error(String(submitted.stderr || submitted.stdout || "herdr agent prompt failed").trim());
+      }
+    },
+  });
+  return retry(record);
+}
+
 function runDeterministicCompletion(handoff: JsonObject): AttemptMonitoringApplication {
   const script = path.join(String(handoff.input?.automationDir || ""), "complete-deterministic-pr-attempt.cts");
   const completed = childProcess.spawnSync("node", [script], {
@@ -104,5 +130,6 @@ module.exports = {
   attemptRecordForMonitorHandoff,
   monitorRuntimeRunner,
   observeDeterministicAttemptMonitoring,
+  retryWaitingAgentSession,
   runDeterministicCompletion,
 };

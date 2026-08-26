@@ -48,6 +48,7 @@ const {
   applyDeterministicAttemptMonitoring,
   monitorRuntimeRunner,
   observeDeterministicAttemptMonitoring,
+  retryWaitingAgentSession,
 } = require("../../src/deterministic-pr-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("./automations/contain-terminal-monitor.cts");
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
@@ -1034,10 +1035,17 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
       ));
       continue;
     }
+    const explorerCleanupPending = successfulExplorerCleanupPending(runDir, record);
     if (record.project !== project?.id || record.repository !== project?.githubRepo
-      || releasesAttemptOwnership(record.phase)) continue;
+      || releasesAttemptOwnership(record.phase) && !explorerCleanupPending) continue;
     let status: import("../../src/doctor").HerdrDoctorStatus = "missing_report";
     let detail = `attempt ${record.attemptId} (${record.role}) is retained at phase ${record.phase}`;
+    if (explorerCleanupPending) {
+      status = "cleanup_pending";
+      detail = `${detail}; successful exploration worktree cleanup is pending; outcome receipt: ${path.join(runDir, "exploration-outcome.json")}; cleanup receipt: ${path.join(runDir, "exploration-worktree-cleaned.json")}; local diagnostic: ${path.join(runDir, "exploration-diagnostic.json")}`;
+      findings.push(herdrDoctorFinding(status, detail));
+      continue;
+    }
     if (record.phase === "launch_failed") {
       status = "launch_failed";
       const guidance = launchFailedRecoveryGuidance(record, runDir, project, workspaces, agents, evidence);
@@ -1479,6 +1487,18 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
       if (!isCurrentSchedulerRun()) return false;
       return applyMonitorHandoffDisposition(handoff, disposition, project);
     },
+    retryModelWait: (handoff) => {
+      if (!isCurrentSchedulerRun()) return false;
+      try {
+        return withEnabledProjectLock(
+          { repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt },
+          (_enabled, recheck) => (recheck(), retryWaitingAgentSession(handoff)),
+        );
+      } catch (error) {
+        if (error instanceof Error && error.message === "deadloop is disabled for this repository") return false;
+        throw error;
+      }
+    },
     notify: (message, level) => {
       if (!isCurrentSchedulerRun()) return;
       try {
@@ -1580,6 +1600,31 @@ async function reconcilePrWorkAuthority(pi, project): Promise<{ reconciled: bool
   return { reconciled: true, reason: "" };
 }
 
+function successfulExplorerCleanupPending(runDir, record): boolean {
+  if (record.role !== "explorer" || record.phase !== "workspace_closed" || record.agentRequest?.role !== "explorer") return false;
+  try {
+    const receipt = JSON.parse(fs.readFileSync(path.join(runDir, "exploration-outcome.json"), "utf8"));
+    const outcomeIsBound = receipt.schemaVersion === 1
+      && receipt.attemptId === record.attemptId
+      && receipt.requestEventId === record.agentRequest.eventId
+      && receipt.outcome === "persisted";
+    if (!outcomeIsBound) return false;
+    try {
+      const cleanup = JSON.parse(fs.readFileSync(path.join(runDir, "exploration-worktree-cleaned.json"), "utf8"));
+      const cleanupIsBound = cleanup.schemaVersion === 1
+        && cleanup.attemptId === record.attemptId
+        && cleanup.requestEventId === record.agentRequest.eventId
+        && cleanup.branch === record.branch
+        && path.resolve(cleanup.worktreePath) === path.resolve(record.worktreePath);
+      return !cleanupIsBound;
+    } catch {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+}
+
 async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> {
   const runsDir = path.join(STATE_DIR, "runs");
   let runs: string[];
@@ -1599,8 +1644,9 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       }
       continue;
     }
+    const explorerCleanupPending = successfulExplorerCleanupPending(runDir, record);
     if (record.project !== project.id || record.repository !== project.githubRepo
-      || releasesAttemptOwnership(record.phase)) continue;
+      || releasesAttemptOwnership(record.phase) && !explorerCleanupPending) continue;
     const labels = projectLabels(project);
     if (record.phase === "prepared") {
       const claimResult = await execJson(pi, "node", [
@@ -1612,10 +1658,12 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         "--state-dir", STATE_DIR,
         "--enabled-at", String(project.enabledAt),
         "--ready-label", labels.ready,
+        "--explore-label", labels.explore,
         "--implement-label", labels.implement,
         "--in-progress-label", labels.inProgress,
         "--review-label", labels.review,
         "--update-branch-label", labels.updateBranch,
+        "--automation-logins", (project.automationLogins || []).join(","),
         "--blocked-label", labels.blocked,
       ], null);
       if (claimResult?.action === "error") debugLog("prepared attempt claim reconciliation blocked", claimResult.reason || claimResult.driverAction, claimResult.summary);
@@ -1628,12 +1676,14 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
     }
 
     let report;
-    if (record.phase !== "github_persisted") {
+    if (record.phase !== "github_persisted" && !explorerCleanupPending) {
       try {
         report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
         validateCompletionReportBinding(record, report);
       } catch { continue; }
-      if (report.status !== "complete") continue;
+      if (record.role === "explorer"
+        ? !["complete", "blocked"].includes(report.status)
+        : report.status !== "complete") continue;
     }
     const reviewerAutoMerge = record.autoMergePolicy ?? project.autoMerge;
     // A review that neither repairs nor merges hands its pull request to a person. That handoff is
@@ -1654,20 +1704,35 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       ...[labels.review, labels.inProgress, labels.blocked, labels.human]
         .flatMap((label) => ["--managed-label", label]),
     ];
-    const args = [
-      path.join(AUTOMATION_DIR, "complete-attempt-workspace.cts"),
-      "--attempt-record", attemptRecord,
-      "--project-id", project.id,
-      "--project-repo", project.repoPath,
-      "--github-repo", project.githubRepo,
-      "--state-dir", STATE_DIR,
-      "--enabled-at", String(project.enabledAt),
-      "--worker-ready-label", labels.ready,
-      "--worker-implement-label", labels.implement,
-      "--worker-review-label", labels.review,
-      "--auto-merge", reviewerAutoMerge ? "true" : "false",
-      ...proofLabels,
-    ];
+    const args = record.role === "explorer"
+      ? [
+          path.join(AUTOMATION_DIR, "complete-issue-exploration.cts"),
+          "--attempt-record", attemptRecord,
+          "--project-id", project.id,
+          "--project-repo", project.repoPath,
+          "--github-repo", project.githubRepo,
+          "--state-dir", STATE_DIR,
+          "--enabled-at", String(project.enabledAt),
+          "--explore-label", labels.explore,
+          "--implement-label", labels.implement,
+          "--in-progress-label", labels.inProgress,
+          "--automation-logins", (project.automationLogins || []).join(","),
+          "--blocked-label", labels.blocked,
+        ]
+      : [
+          path.join(AUTOMATION_DIR, "complete-attempt-workspace.cts"),
+          "--attempt-record", attemptRecord,
+          "--project-id", project.id,
+          "--project-repo", project.repoPath,
+          "--github-repo", project.githubRepo,
+          "--state-dir", STATE_DIR,
+          "--enabled-at", String(project.enabledAt),
+          "--worker-ready-label", labels.ready,
+          "--worker-implement-label", labels.implement,
+          "--worker-review-label", labels.review,
+          "--auto-merge", reviewerAutoMerge ? "true" : "false",
+          ...proofLabels,
+        ];
     const result = await execJson(pi, "node", args, null);
     // `driverResult` carries the failure text in `summary`, so logging only `reason` reduces every
     // exception to the word "exception" and leaves a per-tick retry with nothing to diagnose it by.
