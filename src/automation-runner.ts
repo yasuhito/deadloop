@@ -50,6 +50,7 @@ export type AutomationRunnerDeps = {
     handoff: Record<string, unknown>,
     directive: Exclude<AttemptMonitoringDirective, { action: "working" | "ambiguity" | "settled" }>,
   ) => AttemptMonitoringApplication;
+  retryModelWait?: (handoff: Record<string, unknown>) => boolean;
   applyMonitorHandoffDisposition?: (
     handoff: Record<string, unknown>,
     disposition: Exclude<MonitorHandoffDisposition, { action: "continue_legacy_monitor" } | { action: "settled" }>,
@@ -121,6 +122,96 @@ type DriverPayload = {
   [key: string]: unknown;
 };
 
+type ModelAvailabilityWait = { startedAt: string; nextRetryAt: string | null };
+type ModelAvailabilityPayload = DriverPayload & {
+  modelWait?: ModelAvailabilityWait;
+  modelRetryCount?: number;
+  modelNoticePosted?: boolean;
+};
+
+/**
+ * One tick against a retained attempt whose turn ended in a recognized billing/access rejection.
+ *
+ * The first transition posts the single idempotent GitHub explanation and records the wait.
+ * Provider-stated timing gates the retry; without it, the normal next scheduler tick is the only
+ * retry trigger. A disabled repository starts no retry mutation, and a session that cannot be
+ * reused stops the attempt through the ordinary deterministic path instead of opening replacement
+ * runtime resources. Waiting records no successor schedule itself, so a one-shot caller ends here.
+ */
+function handleModelAvailabilityWait(
+  entry: Record<string, unknown>,
+  payload: ModelAvailabilityPayload,
+  monitorHandoff: Record<string, unknown>,
+  directive: Extract<AttemptMonitoringDirective, { action: "missing_report" }>,
+  automationName: string,
+  state: AutomationState,
+  deps: Pick<
+    AutomationRunnerDeps,
+    "applyAttemptMonitoring" | "isEnabled" | "notify" | "now" | "retryModelWait" | "saveState"
+  >,
+): boolean {
+  const now = deps.now();
+  const wait = payload.modelWait;
+  if (!wait) {
+    const application = deps.applyAttemptMonitoring?.(monitorHandoff, directive) ?? { applied: false };
+    payload.modelWait = {
+      startedAt: new Date(now).toISOString(),
+      nextRetryAt: typeof directive.providerRetryAt === "string" ? directive.providerRetryAt : null,
+    };
+    payload.modelNoticePosted = application.applied === true;
+    recordAutomationResult(entry, application.applied ? "driver_monitor_waiting_for_model" : "driver_attempt_completion_pending");
+    entry.lastSummary = "waiting for model availability";
+    entry.updatedAt = now;
+    deps.saveState(state);
+    deps.notify?.(`deadloop waits for model availability: ${automationName}`, "warning");
+    return true;
+  }
+  const dueAt = wait.nextRetryAt === null ? null : Date.parse(wait.nextRetryAt);
+  const retryDue = dueAt !== null && Number.isFinite(dueAt) ? now >= dueAt : now > Date.parse(wait.startedAt);
+  if (!retryDue) {
+    if (payload.modelNoticePosted !== true) {
+      const application = deps.applyAttemptMonitoring?.(monitorHandoff, directive) ?? { applied: false };
+      payload.modelNoticePosted = application.applied === true;
+      if (application.applied) {
+        recordAutomationResult(entry, "driver_monitor_waiting_for_model");
+        entry.updatedAt = now;
+      }
+    }
+    deps.saveState(state);
+    return true;
+  }
+  if (deps.isEnabled && !deps.isEnabled()) {
+    recordAutomationResult(entry, "disabled_before_model_retry");
+    entry.updatedAt = now;
+    deps.saveState(state);
+    return true;
+  }
+  if (deps.retryModelWait?.(monitorHandoff) === true) {
+    payload.modelRetryCount = Number(payload.modelRetryCount || 0) + 1;
+    delete payload.modelWait;
+    delete payload.modelNoticePosted;
+    recordAutomationResult(entry, "driver_monitor_model_retry");
+    entry.lastSummary = "model availability retry sent";
+    entry.updatedAt = now;
+    deps.saveState(state);
+    return true;
+  }
+  const stopped = deps.applyAttemptMonitoring?.(
+    monitorHandoff,
+    { ...directive, providerRetryAt: undefined, reason: "terminal_without_report" },
+  ) ?? { applied: false };
+  if (stopped.nextHandoff) {
+    entry.pendingDriverHandoff = stopped.nextHandoff;
+  } else if (stopped.applied && !stopped.retain) {
+    delete entry.pendingDriverHandoff;
+  }
+  recordAutomationResult(entry, stopped.applied ? "driver_attempt_missing_report" : "driver_attempt_completion_pending");
+  entry.lastSummary = "agent session cannot be reused";
+  entry.updatedAt = now;
+  deps.saveState(state);
+  return true;
+}
+
 export function deliverPendingDriverHandoff(
   entry: Record<string, unknown>,
   state: AutomationState,
@@ -135,6 +226,7 @@ export function deliverPendingDriverHandoff(
     | "applyMonitorHandoffDisposition"
     | "observeAttemptMonitoring"
     | "applyAttemptMonitoring"
+    | "retryModelWait"
     | "revalidatePendingDriverHandoff"
     | "saveState"
     | "sendUserMessage"
@@ -198,6 +290,16 @@ export function deliverPendingDriverHandoff(
         } else if (directive.action === "ambiguity") {
           recordAutomationResult(entry, "driver_monitor_observation_ambiguous");
           entry.lastSummary = directive.reason;
+        } else if (directive.action === "missing_report" && directive.reason === "model_availability") {
+          return handleModelAvailabilityWait(
+            entry,
+            payload as ModelAvailabilityPayload,
+            monitorHandoff,
+            directive,
+            automationName,
+            state,
+            deps,
+          );
         } else {
           const application = deps.applyAttemptMonitoring?.(monitorHandoff, directive) ?? { applied: false };
           if (application.nextHandoff) {

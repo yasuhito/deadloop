@@ -53,6 +53,7 @@ function decisionForIssues(
   repo: string,
   env: IssueCoordinatorFlowEnv,
   deadline?: number,
+  timelineEvents?: (issue: JsonObject) => JsonObject[],
 ): JsonObject {
   const config = issueDecisionConfig(env);
   if (fixturePath) return fixtureDecision(fixturePath, config, repo || undefined);
@@ -61,6 +62,7 @@ function decisionForIssues(
     config,
     (issue: JsonObject) => issueBlockedByNumbers(repo, issueNumberForDecision(issue), deadline),
     (number: number) => liveDependencyState(repo, number, deadline),
+    timelineEvents,
     repo,
   );
 }

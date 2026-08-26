@@ -166,6 +166,145 @@ describe("attempt workspace doctor classifications", () => {
     resetRuns(); const runDir = path.join(stateDir, "runs", "one"); mkdirSync(runDir); writeFileSync(path.join(runDir, "attempt.json"), "malformed");
     expect(await reconcilePersistedAttemptJournals({}, { id: "demo", githubRepo: "octo/demo" })).toBe(false);
   });
+  it("routes retained explorer cleanup through deterministic Issue completion", async () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      role: "explorer",
+      phase: "github_persisted",
+      lastSuccessfulPhase: "github_persisted",
+      outputRevision: undefined,
+      requiredVerification: undefined,
+      agentRequest: { role: "explorer", label: "explore", eventId: "request-1" },
+    };
+    writeAttempt(record, undefined);
+    let commandArgs: string[] = [];
+    await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { commandArgs = args; return { code: 0, stdout: '{"action":"done"}' }; } }, {
+      id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
+      labels: { ready: "ready", explore: "explore", implement: "implement", inProgress: "progress", review: "review", blocked: "blocked", human: "human" },
+    });
+    expect(commandArgs[0]).toMatch(/complete-issue-exploration\.cts$/);
+  });
+
+  it("reports successful explorer worktree cleanup pending after workspace closure", () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      role: "explorer",
+      phase: "workspace_closed",
+      lastSuccessfulPhase: "workspace_closed",
+      outputRevision: undefined,
+      requiredVerification: undefined,
+      agentRequest: { role: "explorer", label: "explore", eventId: "request-1" },
+    };
+    const promiseFile = writeAttempt(record, undefined);
+    writeFileSync(path.join(path.dirname(promiseFile), "exploration-outcome.json"), JSON.stringify({
+      schemaVersion: 1,
+      attemptId: record.attemptId,
+      requestEventId: "request-1",
+      outcome: "persisted",
+    }));
+    expect(retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], [])[0]?.title)
+      .toContain("cleanup_pending");
+  });
+
+  it("retries successful explorer worktree cleanup after workspace closure", async () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      role: "explorer",
+      phase: "workspace_closed",
+      lastSuccessfulPhase: "workspace_closed",
+      outputRevision: undefined,
+      requiredVerification: undefined,
+      agentRequest: { role: "explorer", label: "explore", eventId: "request-1" },
+    };
+    const promiseFile = writeAttempt(record, undefined);
+    writeFileSync(path.join(path.dirname(promiseFile), "exploration-outcome.json"), JSON.stringify({
+      schemaVersion: 1,
+      attemptId: record.attemptId,
+      requestEventId: "request-1",
+      outcome: "persisted",
+    }));
+    let commandArgs: string[] = [];
+    await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { commandArgs = args; return { code: 0, stdout: '{"action":"done"}' }; } }, {
+      id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
+      labels: { ready: "ready", explore: "explore", implement: "implement", inProgress: "progress", review: "review", blocked: "blocked", human: "human" },
+    });
+    expect(commandArgs[0]).toMatch(/complete-issue-exploration\.cts$/);
+  });
+
+  it("stops routing explorer cleanup after a bound cleanup receipt is persisted", async () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      role: "explorer",
+      phase: "workspace_closed",
+      lastSuccessfulPhase: "workspace_closed",
+      outputRevision: undefined,
+      requiredVerification: undefined,
+      agentRequest: { role: "explorer", label: "explore", eventId: "request-1" },
+    };
+    const promiseFile = writeAttempt(record, undefined);
+    const runDir = path.dirname(promiseFile);
+    writeFileSync(path.join(runDir, "exploration-outcome.json"), JSON.stringify({
+      schemaVersion: 1,
+      attemptId: record.attemptId,
+      requestEventId: "request-1",
+      outcome: "persisted",
+    }));
+    let dispatches = 0;
+    const pi = { exec: async () => {
+      dispatches += 1;
+      writeFileSync(path.join(runDir, "exploration-worktree-cleaned.json"), JSON.stringify({
+        schemaVersion: 1,
+        attemptId: record.attemptId,
+        requestEventId: "request-1",
+        branch: record.branch,
+        worktreePath: record.worktreePath,
+      }));
+      return { code: 0, stdout: '{"action":"done"}' };
+    } };
+    const project = {
+      id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
+      labels: { ready: "ready", explore: "explore", implement: "implement", inProgress: "progress", review: "review", blocked: "blocked", human: "human" },
+    };
+    await reconcilePersistedAttemptJournals(pi, project);
+    await reconcilePersistedAttemptJournals(pi, project);
+    expect(dispatches).toBe(1);
+  });
+
+  it("routes a blocked explorer report through deterministic Issue completion", async () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      role: "explorer",
+      phase: "agent_started",
+      lastSuccessfulPhase: "agent_started",
+      outputRevision: undefined,
+      requiredVerification: undefined,
+      agentRequest: { role: "explorer", label: "explore", eventId: "request-1" },
+    };
+    const report = {
+      schemaVersion: 1,
+      role: "explorer",
+      status: "blocked",
+      attemptId: record.attemptId,
+      target: { ...record.target, repository: record.repository },
+      inputRevision: record.inputRevision,
+      summary: "blocked",
+      result: { reason: "blocked", explanation: "blocked", recovery: "retry" },
+      evidence: {},
+    };
+    writeAttempt(record, report);
+    let commandArgs: string[] = [];
+    await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { commandArgs = args; return { code: 0, stdout: '{"action":"done"}' }; } }, {
+      id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
+      labels: { ready: "ready", explore: "explore", implement: "implement", inProgress: "progress", review: "review", blocked: "blocked", human: "human" },
+    });
+    expect(commandArgs[0]).toMatch(/complete-issue-exploration\.cts$/);
+  });
+
   it("passes the complete configured managed reviewer label set separately during restart cleanup", async () => {
     const fixture = reviewerFixture("approved");
     writeAttempt({ ...fixture.record, autoMergePolicy: false, phase: "github_persisted", lastSuccessfulPhase: "github_persisted" }, undefined);
