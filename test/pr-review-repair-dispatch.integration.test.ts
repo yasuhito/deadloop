@@ -153,7 +153,7 @@ function enableProject(state: string, repoPath: string): void {
   spawnSync("git", ["-C", repoPath, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   spawnSync("git", ["-C", repoPath, "update-ref", "refs/remotes/origin/master", "HEAD"]);
   fs.mkdirSync(state, { recursive: true });
-  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ projects: [{
+  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
     repoPath, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch: "origin/master", automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
@@ -198,7 +198,7 @@ function runStaleWorktreeDispatch(
   spawnSync("git", ["-C", root, "add", "README.md", "deadloop.json"]);
   spawnSync("git", ["-C", root, "commit", "--quiet", "-m", "fixture"]);
   spawnSync("git", ["-C", root, "update-ref", "refs/remotes/origin/master", "HEAD"]);
-  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
+  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), 
     projects: [{
       repoPath: root, githubRepo: "yasuhito/deadloop", githubRepositoryId: "R_repo", baseBranch: "origin/master", automationLogin: "deadloop-bot", enabledAt: 1,
       firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
@@ -659,7 +659,7 @@ function runV1ChangesRequestedTwice(options: {
     }));
   }
   fs.writeFileSync(runtime, JSON.stringify({ workspace: "reviewer-workspace", agent: null, launches: 0 }));
-  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ projects: [{
+  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
     repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch: "origin/master", automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
@@ -1088,7 +1088,7 @@ describe("review repair dispatch integration", () => {
     const promise = path.join(runDir, "promise.json");
     fs.mkdirSync(bin);
     fs.mkdirSync(runDir, { recursive: true });
-    fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
+    fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), 
       projects: [{
         repoPath: root, githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot", enabledAt: 7,
         firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,

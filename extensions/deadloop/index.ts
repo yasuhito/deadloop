@@ -7,6 +7,7 @@ import path from "node:path";
 import { reconcileAndSelectDueAutomation } from "../../src/automation-scheduler";
 import { decideCodeIdentity, observeGitCodeIdentity, type CodeIdentityDecision } from "../../src/code-identity";
 import { ensureCodeSnapshot } from "../../src/code-snapshot";
+import { collectCodeSnapshotInventory } from "../../src/code-snapshot-inventory";
 import {
   DEFAULT_TIMEZONE,
   REPO_POLICY_FILE,
@@ -433,14 +434,18 @@ function resolveEnableProject(cwd, identity) {
   return implicit.projects[0];
 }
 
-function loadEnablementState() {
+// A persisted state always names the code identity that last wrote it. Before the first write there is
+// no file, so the loader returns an empty placeholder whose writer identity is undefined.
+type LoadedEnablementState = ReturnType<typeof normalizeEnablementState> | { projects: []; lastWriterCodeIdentity: undefined };
+
+function loadEnablementState(): LoadedEnablementState {
   try {
     const text = fs.readFileSync(ENABLEMENT_PATH, "utf8");
     const state = normalizeEnablementState(JSON.parse(text));
     if (!state) throw new Error("schema is invalid");
     return state;
   } catch (error) {
-    if (error?.code === "ENOENT") return { projects: [] };
+    if (error?.code === "ENOENT") return { projects: [], lastWriterCodeIdentity: undefined };
     throw new Error(`enablement state is invalid at ${ENABLEMENT_PATH}: ${error?.message || error}. Inspect and move the file aside, then run /deadloop-enable again to recover.`);
   }
 }
@@ -784,9 +789,6 @@ async function collectLiveSnapshotData(
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
   const configuredProject = activeProject(cwd, projects);
-  const project = configuredProject
-    ? firstEnableAutoMergeGate(loadEnablementState(), configuredProject).project
-    : null;
   const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
   const repositoryEnablement = repositoryEnablementForRoot(repositoryRoot);
   const diagnosticWarnings = projectsResult.ok
@@ -794,8 +796,11 @@ async function collectLiveSnapshotData(
     : [projectsResult.reason, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])];
   const codeIdentity = options.codeIdentityDecision?.();
   const warnings = statusWarnings(diagnosticWarnings, codeIdentity);
+  // The recorded writer identity is diagnostic only: it never gates reads or writes (ADR 0016).
+  const enablementState = configuredProject ? loadEnablementState() : null;
+  const project = configuredProject ? firstEnableAutoMergeGate(enablementState, configuredProject).project : null;
   if (!project) {
-    return { cwd, projects, state, repositoryEnablement, warnings, codeIdentity, selectedProject: null };
+    return { cwd, projects, state, repositoryEnablement, warnings, codeIdentity, lastWriterCodeIdentity: enablementState?.lastWriterCodeIdentity ?? null, selectedProject: null };
   }
 
   const issueFields = includeIssueComments
@@ -915,6 +920,7 @@ async function collectLiveSnapshotData(
     repositoryEnablement,
     warnings,
     codeIdentity,
+    lastWriterCodeIdentity: enablementState?.lastWriterCodeIdentity ?? null,
     selectedProject: project,
   };
 }
@@ -1155,6 +1161,9 @@ async function buildLiveDoctorReport(pi, cwd, codeIdentityDecision?: () => CodeI
     ...data,
     retainedClaims: retained.claims,
     retainedClaimOwnershipAmbiguous: retained.ownershipAmbiguous,
+    codeSnapshots: collectCodeSnapshotInventory(STATE_DIR),
+    deployedCodeIdentity: data.codeIdentity?.deployedIdentity ?? null,
+    loadedCodeIdentity: data.codeIdentity?.loadedIdentity ?? null,
     ...(data.selectedProject?.repoPath && data.selectedProject.requiredVerification.status === "blocked"
       ? { verificationCandidates: discoverVerificationCandidates({ repositoryRoot: data.selectedProject.repoPath }) }
       : {}),

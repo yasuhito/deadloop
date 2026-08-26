@@ -218,6 +218,85 @@ Then("deadloop opens the same worktree in a fresh workspace", function (this: Wo
   rmSync(this.root!, { recursive: true, force: true });
 });
 
+Given("A Worker's worktree remains after required verification formally stopped it", function (this: World) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cucumber-stopped-worker-"));
+  this.root = root;
+  const runDir = path.join(root, "runs", "old-launch");
+  createPreparedAttempt(runDir, {
+    attemptId: "old-attempt", launchUuid: "old-launch", project: "demo", repository: "owner/repo",
+    role: "worker", target: { kind: "issue", number: 12 }, inputRevision: { head: inputHead },
+    requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: inputHead },
+    branch: "agent/issue-12-retry", baseBranch: "origin/main", worktreePath: path.join(root, "agent-issue-12-retry"),
+    agentName: "dl-w-12-old000000000", workspaceLabel: "old worker", promptFile: path.join(runDir, "prompt.md"),
+    promiseFile: path.join(runDir, "promise.json"),
+  });
+  transitionPersistedAttempt(runDir, "github_claimed");
+  writeAttemptRecordAtomically(attemptRecordPath(runDir), {
+    ...readAttemptRecord(runDir), workspaceId: "workspace-old", tabId: "tab-old", rootPaneId: "pane-old",
+    phase: "workspace_opened", lastSuccessfulPhase: "workspace_opened",
+  });
+  transitionPersistedAttempt(runDir, "agent_started");
+  recordPersistedCompletionReport(runDir, {
+    schemaVersion: 1, attemptId: "old-attempt", target: { repository: "owner/repo", kind: "issue", number: 12 },
+    inputRevision: { head: inputHead }, status: "complete", summary: "Stopped before verification.",
+    role: "worker", result: { outputRevision: outputHead }, evidence: { validations: ["npm test passed"] },
+  });
+  transitionPersistedAttempt(runDir, "github_persisted");
+  transitionPersistedAttempt(runDir, "workspace_closed");
+  this.recoveredWorker = { worktreePath: path.join(root, "agent-issue-12-retry"), opened: 0 };
+});
+
+When("deadloop starts the Worker stopped by required verification", function (this: World) {
+  const root = this.root!;
+  const recovered = this.recoveredWorker!;
+  let launchedName = "";
+  let openedWorkspace = false;
+  const runner = {
+    createWorktree: () => { throw new Error("a reused checkout must not create a duplicate worktree"); },
+    openWorktree: () => {
+      recovered.opened += 1;
+      openedWorkspace = true;
+      return { workspaceId: "workspace-new", tabId: "tab-new", rootPaneId: "pane-new", worktreePath: recovered.worktreePath };
+    },
+    renameWorkspace: () => "", startAgent: () => "", closeWorkspace: () => "",
+    listWorkspaces: () => [],
+    listWorktrees: () => [{ branch: "agent/issue-12-retry", path: recovered.worktreePath }],
+    listAgents: () => launchedName && openedWorkspace
+      ? [{ name: launchedName, paneId: "pane-new", workspace_id: "workspace-new", cwd: recovered.worktreePath, status: "working" }]
+      : [],
+    removeWorktree: () => "",
+  };
+  const env = workerEnvironment({
+    DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo",
+    DEADLOOP_BASE_BRANCH: "origin/main", DEADLOOP_WORKTREE_ROOT: root, DEADLOOP_STATE_DIR: root,
+    DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: advancedBaseHead }),
+  });
+  this.result = launchIssueWorkerFlow({ number: 12, title: "renamed issue" }, env, {
+    mkdirSync: fs.mkdirSync,
+    alignCheckout: () => {},
+    runner,
+    runText: (args: string[]) => {
+      const nameIndex = args.indexOf("--name");
+      if (nameIndex >= 0) launchedName = args[nameIndex + 1];
+      if (args[0] === "git" && args.includes("status")) return "";
+      if (args[0] === "git" && args[2] === "/repo") return `${advancedBaseHead}\n`;
+      return args[0] === "git" ? `${outputHead}\n` : "started";
+    },
+    writeFileSync: fs.writeFileSync,
+  });
+  const newRun = fs.readdirSync(path.join(root, "runs")).find((entry) => entry !== "old-launch");
+  const attempt = readAttemptRecord(path.join(root, "runs", String(newRun)));
+  recovered.inputHead = attempt.inputRevision.head;
+  recovered.policyBaseHead = attempt.requiredVerification?.baseRevision;
+});
+
+Then("deadloop opens the preserved checkout at its recorded output revision", function (this: World) {
+  assert.deepEqual({ opened: this.recoveredWorker?.opened, workspaceId: this.result.workspaceId, worktreePath: this.result.worktreePath, inputHead: this.recoveredWorker?.inputHead, policyBaseHead: this.recoveredWorker?.policyBaseHead }, {
+    opened: 1, workspaceId: "workspace-new", worktreePath: this.recoveredWorker?.worktreePath, inputHead: outputHead, policyBaseHead: advancedBaseHead,
+  });
+  rmSync(this.root!, { recursive: true, force: true });
+});
+
 Then("The agent appears in exactly one workspace and one pane", function (this: World) {
   assert.deepEqual(this.layoutObservation, {
     workspaces: [{ workspace_id: this.result.workspaceId, tab_count: 1, pane_count: 1 }],
@@ -346,6 +425,7 @@ function launchBranchUpdateBoundary(workspaceId: string) {
   fs.writeFileSync(path.join(binDir, "gh"), "#!/bin/sh\nprintf '%s\\n' '{\"id\":\"R_fixture\"}'\n", "utf8");
   fs.chmodSync(path.join(binDir, "gh"), 0o755);
   fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({
+    lastWriterCodeIdentity: "a".repeat(40),
     projects: [{
       repoPath, githubRepo: "owner/repo", githubRepositoryId: "R_fixture", automationLogin: "deadloop-bot", enabledAt, disableGeneration: 0,
       firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,

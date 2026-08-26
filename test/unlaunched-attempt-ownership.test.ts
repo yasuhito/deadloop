@@ -95,7 +95,7 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
   writeFileSync(process.env.TEST_COMMENTS, JSON.stringify([[]]));
   writeFileSync(process.env.TEST_LABELS, JSON.stringify(options.blocked ? ["agent:blocked"] : ["agent:in-progress"]));
   writeFileSync(process.env.TEST_MUTATIONS, "");
-  writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
+  writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
     repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "repo-id", enabledAt: 1, baseBranch: "origin/master",
     automationLogin: "deadloop-bot", firstEnableAutoMerge: false, firstStartPending: false,
     lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true,
