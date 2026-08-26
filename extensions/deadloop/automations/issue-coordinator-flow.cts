@@ -55,7 +55,7 @@ function decisionForIssues(
   deadline?: number,
 ): JsonObject {
   const config = issueDecisionConfig(env);
-  if (fixturePath) return fixtureDecision(fixturePath, config);
+  if (fixturePath) return fixtureDecision(fixturePath, config, repo || undefined);
   return selectIssueForImplementation(
     issues,
     config,

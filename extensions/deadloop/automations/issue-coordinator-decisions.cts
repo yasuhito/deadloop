@@ -254,7 +254,7 @@ function parseRelationshipDependencyMap(data: IssueDecisionRecord): Map<number, 
   return parsed;
 }
 
-function fixtureDecision(file: string, config: IssueDecisionConfig): IssueDecisionRecord {
+function fixtureDecision(file: string, config: IssueDecisionConfig, repository?: string): IssueDecisionRecord {
   const data = JSON.parse(fs.readFileSync(file, "utf8"));
   const states = parseDependencyStateMap(data);
   const relationships = parseRelationshipDependencyMap(data);
@@ -263,6 +263,7 @@ function fixtureDecision(file: string, config: IssueDecisionConfig): IssueDecisi
     config,
     (issue) => relationships.get(issueNumberForDecision(issue)) || new Set(),
     (number) => states.get(number),
+    repository,
   );
 }
 
@@ -388,7 +389,7 @@ function main(argv: string[] = process.argv.slice(2)): number {
   const config = configFromIssueArgs(args);
   let decision: IssueDecisionRecord;
   if (args.fixture) {
-    decision = fixtureDecision(args.fixture, config);
+    decision = fixtureDecision(args.fixture, config, args.repo || undefined);
   } else {
     const repo = args.repo || process.env.DEADLOOP_GITHUB_REPO || "";
     if (!repo) throw new Error("--repo or DEADLOOP_GITHUB_REPO is required");

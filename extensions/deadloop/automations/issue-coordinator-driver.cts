@@ -123,12 +123,15 @@ function isUnknownDependency(dep: JsonObject): boolean {
   return String(dep?.state || "").toUpperCase() === "UNKNOWN";
 }
 
-function unresolvedDependencyEntryFingerprint(entry: JsonObject): string {
-  const references = (entry.dependencies || [])
+function unresolvedReferences(entry: JsonObject): string[] {
+  return (entry.dependencies || [])
     .filter((dep: JsonObject) => isUnknownDependency(dep))
     .map((dep: JsonObject) => `#${dep.number}`)
     .sort();
-  return createHash("sha256").update(references.join(",")).digest("hex");
+}
+
+function unresolvedDependencyEntryFingerprint(entry: JsonObject): string {
+  return createHash("sha256").update(unresolvedReferences(entry).join(",")).digest("hex");
 }
 
 function unresolvedDependencyCommentPresent(issue: JsonObject, fingerprint: string): boolean {
@@ -137,11 +140,7 @@ function unresolvedDependencyCommentPresent(issue: JsonObject, fingerprint: stri
 }
 
 function renderUnresolvedDependencyComment(repository: string, entry: JsonObject, fingerprint: string): string {
-  const references = (entry.dependencies || [])
-    .filter((dep: JsonObject) => isUnknownDependency(dep))
-    .map((dep: JsonObject) => `#${dep.number}`)
-    .sort()
-    .join(", ");
+  const references = unresolvedReferences(entry).join(", ");
   return [
     "deadloop did not select this issue because some dependency references could not be resolved.",
     "",
@@ -156,6 +155,7 @@ function renderUnresolvedDependencyComment(repository: string, entry: JsonObject
 
 // Reports issues that lost selection because of unresolvable dependency references. The comment is
 // fingerprinted so an unchanged reference set is reported once, not once per coordinator tick.
+// Returns a summary of what was reported, or "" when nothing was unresolvable.
 function reportUnresolvedDependencySkips(
   issues: JsonObject[],
   decision: JsonObject,
@@ -164,16 +164,10 @@ function reportUnresolvedDependencySkips(
 ): string {
   const affected = (decision.skipped || []).filter((entry: JsonObject) => entry.reason === "open_dependency"
     && (entry.dependencies || []).some((dep: JsonObject) => isUnknownDependency(dep)));
-  if (!affected.length) return "No target issue";
   const parts: string[] = [];
   for (const entry of affected) {
     const number = Number(entry.number);
-    const references = (entry.dependencies || [])
-      .filter((dep: JsonObject) => isUnknownDependency(dep))
-      .map((dep: JsonObject) => `#${dep.number}`)
-      .sort()
-      .join(", ");
-    parts.push(`#${number} skipped for unresolvable dependency references (${references})`);
+    parts.push(`#${number} skipped for unresolvable dependency references (${unresolvedReferences(entry).join(", ")})`);
     const issue = issues.find((candidate) => Number(candidate.number) === number);
     if (!issue || fixture) continue;
     withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
@@ -183,7 +177,7 @@ function reportUnresolvedDependencySkips(
       github.commentIssue(env.githubRepo, number, renderUnresolvedDependencyComment(env.githubRepo, entry, fingerprint));
     });
   }
-  return `No target issue; ${parts.join("; ")}`;
+  return parts.join("; ");
 }
 
 function applyIssueTransition(
@@ -922,7 +916,7 @@ function drive(fixturePath: string | undefined): DriverResult {
   const issuePlan = planIssueCoordinatorAction(issues, decision);
   if (issuePlan.kind === "skip_no_candidate") {
     const summary = reportUnresolvedDependencySkips(issues, decision, env, fixture);
-    return driverResult("skip", summary, { driverAction: "no_candidate", decision });
+    return driverResult("skip", summary || "No target issue", { driverAction: "no_candidate", decision });
   }
 
   const issue = issuePlan.issue;
