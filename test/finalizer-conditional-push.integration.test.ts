@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const { finalizeReviewRepair } = require("../extensions/deadloop/automations/pr-review-repair-finalize.cts");
 const { createPreparedAttempt } = require("../src/attempt-lifecycle-runtime.cjs");
-const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
+const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-launch.cts");
 const { finalizeBranchUpdate } = require("../extensions/deadloop/automations/pr-branch-update-finalize.cts");
 const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 

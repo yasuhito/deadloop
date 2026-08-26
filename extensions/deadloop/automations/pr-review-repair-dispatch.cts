@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Turn a completed reviewer promise into an approved handoff, bounded retry,
-// human block, or one dedicated repair launch for the exact PR head/result.
+// human block, or one agent:implement repair request (ADR 0032). This
+// dispatcher never launches the repair worker; the PR driver does.
 
 const fs = require("node:fs") as typeof import("node:fs");
 const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
-const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { validatePromise } = require("./extract-worker-promise.cts");
 const {
   decideTechnicalReviewFailure,
@@ -13,15 +13,12 @@ const {
   reviewOutcomeFingerprint,
   selectRepairAttempt,
 } = require("./pr-review-repair-state.cts");
-const {
-  publicText,
+const { publicText,
   renderApprovedReviewComment,
   renderChangesRequestedComment,
   renderHumanRequiredComment,
   reviewCommentExists,
 } = require("./pr-review-comments.cts");
-const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
-const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.cts");
 const { blockedPrLabelMove } = require("../../../src/pr-request-selection.cts");
 const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.cts");
 const { agentWorkflowLabels, humanHandoffLabelMove } = require("../../../src/human-handoff.cts");
@@ -32,12 +29,11 @@ const {
 } = require("../../../src/issue-required-verification-stop.cts");
 const {
   createCommandRunner,
-  createHerdrRunnerFromCommandRunner,
   driverResult,
   shellQuote,
 } = require("../../../src/automation-driver-kit.cts");
 const { createGithubOperations } = require("../../../src/github-operations.cts");
-const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
@@ -56,7 +52,6 @@ const {
 } = require("../../../src/pr-review-history.cts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
-import type { RunnerAdapter } from "../../../src/runner";
 
 const commandRunner = createCommandRunner();
 
@@ -66,13 +61,10 @@ function configValue(args: JsonObject, name: string, environmentValue: string | 
 }
 
 function envConfig(args: JsonObject = {}) {
-  const automationDir = __dirname;
   return {
     projectId: configValue(args, "projectId", process.env.DEADLOOP_PROJECT_ID, "project"),
     repoPath: configValue(args, "repoPath", process.env.DEADLOOP_REPO_PATH, "."),
-    worktreeRoot: configValue(args, "worktreeRoot", process.env.DEADLOOP_WORKTREE_ROOT, path.join(os.homedir(), ".herdr", "worktrees", configValue(args, "projectId", process.env.DEADLOOP_PROJECT_ID, "project"))),
     githubRepo: configValue(args, "githubRepo", process.env.DEADLOOP_GITHUB_REPO, ""),
-    baseBranch: configValue(args, "baseBranch", process.env.DEADLOOP_BASE_BRANCH, "origin/main"),
     requiredVerification: args.requiredVerification
       ? typeof args.requiredVerification === "string" ? JSON.parse(args.requiredVerification) : args.requiredVerification
       : process.env.DEADLOOP_REQUIRED_VERIFICATION ? JSON.parse(process.env.DEADLOOP_REQUIRED_VERIFICATION) : undefined,
@@ -83,26 +75,16 @@ function envConfig(args: JsonObject = {}) {
       process.env.DEADLOOP_STATE_DIR,
       path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "deadloop"),
     ),
-    checkCommand: configValue(args, "checkCommand", process.env.DEADLOOP_CHECK_COMMAND, "git diff --check"),
-    workerAgent: configValue(args, "workerAgent", process.env.DEADLOOP_WORKER_AGENT, "pi"),
-    workerModel: configValue(args, "workerModel", process.env.DEADLOOP_WORKER_MODEL, ""),
-    repairModel: configValue(args, "repairModel", process.env.DEADLOOP_REPAIR_MODEL, ""),
-    remote: configValue(args, "remote", process.env.DEADLOOP_REVIEW_REPAIR_REMOTE, "origin"),
     reviewLabel: configValue(args, "reviewLabel", process.env.DEADLOOP_REVIEW_LABEL, "agent:review"),
     blockedLabel: configValue(args, "blockedLabel", process.env.DEADLOOP_BLOCKED_LABEL, "agent:blocked"),
     implementLabel: configValue(args, "implementLabel", process.env.DEADLOOP_IMPLEMENT_LABEL, "agent:implement"),
     updateBranchLabel: configValue(args, "updateBranchLabel", process.env.DEADLOOP_UPDATE_BRANCH_LABEL, "agent:update-branch"),
     inProgressLabel: configValue(args, "inProgressLabel", process.env.DEADLOOP_IN_PROGRESS_LABEL, "agent:in-progress"),
     humanLabel: configValue(args, "humanLabel", process.env.DEADLOOP_HUMAN_LABEL, "ready-for-human"),
-    // The repair attempt shares the launching reviewer automation's active-work budget (seconds);
-    // the shared deterministic monitor applies it to active work only.
-    reviewerMaxRuntimeSeconds: Number(process.env.DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS || 86400),
     // Every guarded write of this dispatch re-reads the bound reviewer attempt from here, so the
     // attempt's fixed required-verification contract can be re-authenticated against the current
     // trusted policy immediately before the write.
     attemptRecordFile: configValue(args, "attemptRecord", undefined, ""),
-    requestEventId: "",
-    automationDir,
   };
 }
 
@@ -146,38 +128,6 @@ function readLivePr(repo: string, prNumber: string, runner = commandRunner): Jso
     ...pr,
     comments: pages.flat().map((comment) => ({ ...comment, author: comment.author || comment.user })),
   };
-}
-
-type RepairWorktreeInspection =
-  | { kind: "absent" }
-  | { kind: "ambiguous" }
-  | { kind: "present"; head: string; clean: boolean };
-
-function branchWorktrees(repoPath: string, branch: string): string[] {
-  const output = commandRunner.runText(["git", "-C", repoPath, "worktree", "list", "--porcelain", "-z"]);
-  const expectedBranch = `refs/heads/${branch}`;
-  const matches: string[] = [];
-  for (const block of output.split("\0\0")) {
-    const fields = block.split("\0");
-    const worktreeField = fields.find((field) => field.startsWith("worktree "));
-    const branchField = fields.find((field) => field.startsWith("branch "));
-    if (worktreeField && branchField?.slice("branch ".length) === expectedBranch) {
-      matches.push(worktreeField.slice("worktree ".length));
-    }
-  }
-  return matches;
-}
-
-function inspectRepairWorktree(repoPath: string, branch: string): RepairWorktreeInspection {
-  const worktrees = branchWorktrees(repoPath, branch);
-  if (worktrees.length === 0) return { kind: "absent" };
-  if (worktrees.length !== 1) return { kind: "ambiguous" };
-  const worktreePath = worktrees[0];
-  const head = commandRunner.runText(["git", "-C", worktreePath, "rev-parse", "HEAD"]).trim().toLowerCase();
-  const clean = !hasUncommittedWork(
-    commandRunner.runText(["git", "-C", worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]),
-  );
-  return { kind: "present", head, clean };
 }
 
 function recoveryComment(prNumber: string, env: ReturnType<typeof envConfig>, reason: string, summary: string, marker = ""): string {
@@ -362,285 +312,6 @@ function createdCommentIdentity(output: string, author: string, body: string): {
   return { id, author, body };
 }
 
-function repairWorkerPrompt(
-  prNumber: string,
-  branch: string,
-  expectedHead: string,
-  findings: JsonObject[],
-  attemptKey: string,
-  promiseFile: string,
-  worktreePath: string,
-  env: ReturnType<typeof envConfig>,
-): string {
-  const finalizer = [
-    "node",
-    shellQuote(path.join(env.automationDir, "pr-review-repair-finalize.cts")),
-    "--repo",
-    shellQuote(worktreePath),
-    "--project-id",
-    shellQuote(env.projectId),
-    "--attempt-record",
-    shellQuote(path.join(path.dirname(promiseFile), "attempt.json")),
-    "--project-repo",
-    shellQuote(env.repoPath),
-    "--github-repo",
-    shellQuote(env.githubRepo),
-    "--pr",
-    prNumber,
-    "--branch",
-    shellQuote(branch),
-    "--expected-head",
-    shellQuote(expectedHead),
-    "--remote",
-    shellQuote(env.remote),
-    "--automation-dir",
-    shellQuote(env.automationDir),
-    "--state-dir",
-    shellQuote(env.stateDir),
-    "--enabled-at",
-    String(env.enabledAt),
-    "--check-command",
-    shellQuote(env.checkCommand),
-    "--result-file",
-    shellQuote(path.join(path.dirname(promiseFile), "finalizer-result.json")),
-    "--in-progress-label",
-    shellQuote(env.inProgressLabel),
-    "--blocked-label",
-    shellQuote(env.blockedLabel),
-  ].join(" ");
-  return `Repair only the actionable review findings below on existing PR #${prNumber}.
-
-Exact target:
-- GitHub repo: ${env.githubRepo}
-- Existing PR branch (the only branch you may push): ${branch}
-- Expected PR head: ${expectedHead}
-- Worktree: ${worktreePath}
-
-Required findings contract:
-\`\`\`json
-${JSON.stringify(findings, null, 2)}
-\`\`\`
-
-Safety contract:
-- Change only what is needed to resolve every listed finding. Do not add features, reinterpret the issue, or widen scope.
-- Run focused tests while editing, then commit the repair normally. Never amend, rebase, reset published history, or force-push.
-- Do not run git push directly. After committing, run exactly this finalizer; it runs configured checks, immediately re-checks the PR head, and performs the only permitted push to the exact branch, leased to that exact head:
-  ${finalizer}
-- Never edit labels or PR metadata, create a PR, merge, close an issue, delete a branch, or invoke another agent.
-- If the finalizer returns stale_head, stop without pushing or changing GitHub state.
-
-Promise report:
-- Always write one V1 JSON object to ${promiseFile}. Its immutable identity is ${JSON.stringify({ schemaVersion: 1, attemptId: attemptKey, role: "review-repair", target: { repository: env.githubRepo, kind: "pull-request", number: Number(prNumber) }, inputRevision: { head: expectedHead } })}.
-- After action=pushed, read the finalizer result file beside the promise and write a summary plus status="complete", result={outcome:"repair_pushed",outputRevision:"<finalizer headOid>",repairs:[{title:"exact finding title",summary:"specific change",paths:["changed/repo/path"]}]}, and evidence={finalizer:<entire receipt>,validations:<receipt checks>}. Include exactly one repair entry for every finding and only files actually changed for that finding.
-- After action=stale_head, read the finalizer result file and write a summary plus status="complete", result={outcome:"stale_head",outputRevision:"<finalizer currentRemoteHeadOid>"}, and evidence={finalizer:<entire receipt>}. The outputRevision is required and must be the current remote head recorded by the finalizer.
-- On technical, validation, invariant, or push failure, write a summary plus status="blocked", result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
-- This attempt key is ${attemptKey}; do not place it or any local path in public text.
-- Do not claim success unless the finalizer returned pushed or stale_head.`;
-}
-
-function repairWorkspaceLabel(prNumber: string, key: string, env: ReturnType<typeof envConfig>): string {
-  return `${env.projectId}-pr-${prNumber}-review-repair-${key}`;
-}
-
-function launchEvidenceFile(prNumber: string, key: string, env: ReturnType<typeof envConfig>): string {
-  return path.join(env.stateDir, "review-repair-launches", `${env.projectId}-pr-${prNumber}-${key}.json`);
-}
-
-type RepairLaunchMetadata = { repairName: string; promiseFile: string; launchUuid?: string; phase?: string };
-
-function findRunMetadata(expectedHead: string, key: string, env: ReturnType<typeof envConfig>): RepairLaunchMetadata | null {
-  const runsDir = path.join(env.stateDir, "runs");
-  let entries: string[];
-  try { entries = fs.readdirSync(runsDir); } catch { return null; }
-  const matches: RepairLaunchMetadata[] = [];
-  for (const entry of entries) {
-    const runDir = path.join(runsDir, entry);
-    try {
-      const contract = JSON.parse(fs.readFileSync(path.join(runDir, "review-contract.json"), "utf8"));
-      const attempt = JSON.parse(fs.readFileSync(path.join(runDir, "attempt.json"), "utf8"));
-      if (contract?.attemptKey === key && (!expectedHead || String(contract?.expectedHead || "").toLowerCase() === expectedHead.toLowerCase())) {
-        matches.push({
-          repairName: String(attempt.agentName || ""),
-          promiseFile: path.join(runDir, "promise.json"),
-          launchUuid: String(attempt.launchUuid || ""),
-          phase: String(attempt.phase || ""),
-        });
-      }
-    } catch {}
-  }
-  if (matches.length > 1) throw new Error("repair launch recovery found ambiguous run metadata");
-  return matches[0] || null;
-}
-
-function readLaunchEvidence(
-  prNumber: string,
-  branch: string,
-  expectedHead: string,
-  key: string,
-  env: ReturnType<typeof envConfig>,
-): RepairLaunchMetadata | null {
-  try {
-    const evidence = JSON.parse(fs.readFileSync(launchEvidenceFile(prNumber, key, env), "utf8"));
-    if (
-      evidence?.key !== key
-      || evidence?.githubRepo !== env.githubRepo
-      || evidence?.branch !== branch
-      || String(evidence?.expectedHead || "").toLowerCase() !== expectedHead.toLowerCase()
-    ) return null;
-    const fallback = findRunMetadata(expectedHead, key, env);
-    const promiseFile = String(evidence?.promiseFile || fallback?.promiseFile || "");
-    const repairName = String(evidence?.repairName || fallback?.repairName || "");
-    return promiseFile && repairName ? { repairName, promiseFile } : null;
-  } catch {
-    return null;
-  }
-}
-
-function recoverLaunchFromHerdr(
-  _prNumber: string,
-  branch: string,
-  key: string,
-  env: ReturnType<typeof envConfig>,
-): boolean {
-  const metadata = findRunMetadata("", key, env);
-  if (!metadata?.repairName) return false;
-  const runner = createHerdrRunnerFromCommandRunner(commandRunner);
-  const worktrees = runner.listWorktrees(env.repoPath).filter((worktree) => String(worktree.branch || "") === branch);
-  const agents = runner.listAgents().filter((agent) => agent.name === metadata.repairName);
-  if (!agents.length) return false;
-  if (agents.length !== 1 || worktrees.length !== 1) {
-    throw new Error(`repair launch recovery found ${agents.length} named agent(s) and ${worktrees.length} branch worktree(s)`);
-  }
-
-  const worktreePath = String(worktrees[0].path || worktrees[0].worktreePath || "");
-  const agentPath = String(agents[0].cwd || "");
-  if (!worktreePath || !agentPath || path.resolve(worktreePath) !== path.resolve(agentPath)) {
-    throw new Error("repair launch recovery found a named agent outside the selected branch worktree");
-  }
-  return true;
-}
-
-function recordLaunchEvidence(
-  prNumber: string,
-  branch: string,
-  expectedHead: string,
-  key: string,
-  launch: RepairLaunchMetadata,
-  env: ReturnType<typeof envConfig>,
-): void {
-  const file = launchEvidenceFile(prNumber, key, env);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify({ key, githubRepo: env.githubRepo, branch, expectedHead, ...launch })}\n`, {
-    encoding: "utf8", mode: 0o600,
-  });
-  fs.renameSync(temporary, file);
-}
-
-function repairLaunchInput(
-  prNumber: string,
-  branch: string,
-  expectedHead: string,
-  findings: JsonObject[],
-  key: string,
-  env: ReturnType<typeof envConfig>,
-  uuid: string,
-) {
-  return {
-    worktree: { mode: "open" as const, branch, baseBranch: env.baseBranch, remote: env.remote },
-    repoPath: env.repoPath,
-    automationDir: env.automationDir,
-    stateDir: env.stateDir,
-    workspaceLabel: repairWorkspaceLabel(prNumber, key, env),
-    agent: env.workerAgent,
-    model: env.repairModel,
-    level: "medium",
-    uuid,
-    attemptId: key,
-    promptFilePrefix: "review-repair-prompt",
-    project: env.projectId,
-    repository: env.githubRepo,
-    role: "review-repair" as const,
-    target: { kind: "pull-request" as const, number: Number(prNumber) },
-    inputRevision: { head: expectedHead },
-    requiredVerification: env.requiredVerification,
-    requestEventId: env.requestEventId || undefined,
-    intendedWorktreePath: path.join(env.worktreeRoot, branch.replace(/\//g, "-")),
-    renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string }) =>
-      repairWorkerPrompt(prNumber, branch, expectedHead, findings, key, promiseFile, worktreePath, env),
-  };
-}
-
-function writeRepairContract(
-  runDir: string,
-  expectedHead: string,
-  findings: JsonObject[],
-  key: string,
-): void {
-  fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(
-    path.join(runDir, "review-contract.json"),
-    `${JSON.stringify({ attemptKey: key, expectedHead, findingTitles: findings.map((finding) => String(finding.title)) })}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
-}
-
-type RepairLaunchOperations = {
-  mkdirSync: (dir: string, options: { recursive: true; mode?: number }) => void;
-  runner?: RunnerAdapter;
-  runText: (args: string[]) => string;
-  writeFileSync: (file: string, text: string, encoding: "utf8") => void;
-};
-
-function recordRepairLaunchGithubClaim(
-  prNumber: string,
-  branch: string,
-  expectedHead: string,
-  findings: JsonObject[],
-  key: string,
-  env: ReturnType<typeof envConfig>,
-  uuid: string,
-) {
-  return recordAgentLaunchGithubClaimed(repairLaunchInput(prNumber, branch, expectedHead, findings, key, env, uuid));
-}
-
-function launchRepair(
-  prNumber: string,
-  branch: string,
-  expectedHead: string,
-  findings: JsonObject[],
-  key: string,
-  env: ReturnType<typeof envConfig>,
-  beforeAgentStart?: () => void,
-  uuid: string = randomUUID(),
-  prepareOnly = false,
-  operations?: RepairLaunchOperations,
-): JsonObject {
-  const selectedOperations = operations || {
-    mkdirSync: fs.mkdirSync,
-    runner: createHerdrRunnerFromCommandRunner(commandRunner),
-    runText: commandRunner.runText,
-    writeFileSync: fs.writeFileSync,
-  };
-  selectedOperations.runText(["git", "check-ref-format", "--branch", branch]);
-  const runDir = path.join(env.stateDir, "runs", uuid);
-  writeRepairContract(runDir, expectedHead, findings, key);
-  const input = repairLaunchInput(prNumber, branch, expectedHead, findings, key, env, uuid);
-  const repairName = input.workspaceLabel;
-  const promiseFile = path.join(runDir, "promise.json");
-  try {
-    const ops = { ...selectedOperations, beforeAgentStart };
-    const prepared = prepareAgentLaunchFlow(input, ops);
-    if (prepareOnly) return { repairName: prepared.agentName, promiseFile: prepared.promiseFile };
-    const launch = launchAgentFlow(input, ops);
-    return { ...launch, repairName: launch.agentName };
-  } catch (error) {
-    throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
-      launch: { repairName, promiseFile },
-    });
-  }
-}
-
 function persistAuthorizedApproval<T extends unknown[]>(
   withMutation: (callback: (...args: T) => void) => void,
   authorize: () => void,
@@ -806,7 +477,6 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
     branch: args.branch,
     requestEventId: args.requestEventId,
   });
-  env.requestEventId = String(attemptRecord.requestEventId || "");
   const persistenceMarker = rawReport?.schemaVersion === 1
     ? renderAttemptPersistenceMarker(attemptRecord, rawReport, {
         findings: rawReport.role === "reviewer" ? rawReport.result?.findings || [] : [],
@@ -817,7 +487,8 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
   const expectedHead = String(args.expectedHead).toLowerCase();
   const branch = String(args.branch);
   const pr = readLivePr(env.githubRepo, prNumber);
-  requireManagedPr(pr, env);
+  // No early claim check here: every mutation below is guarded, and a replayed
+  // dispatch legitimately observes the request already queued without in-progress.
   const historyFile = hasAttemptRecord
     ? path.join(path.dirname(String(args.attemptRecord)), "pr-review-history.json")
     : "";
@@ -1070,31 +741,14 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
     });
   }
 
-  const worktree = inspectRepairWorktree(env.repoPath, branch);
   const refreshedPr = readLivePr(env.githubRepo, prNumber);
   if (String(refreshedPr.state || "").toUpperCase() !== "OPEN" || Boolean(refreshedPr.isCrossRepository) || String(refreshedPr.headRefName || "") !== branch) {
-    const block = applyHumanBlock(prNumber, env, refreshedPr, "the selected PR stopped being a safe same-repository branch target before repair dispatch", promise.summary, "", historyFile);
-    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before repair dispatch block");
+    const block = applyHumanBlock(prNumber, env, refreshedPr, "the selected PR stopped being a safe same-repository branch target before repair request", promise.summary, "", historyFile);
+    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before repair request");
     return driverResult("done", `PR #${prNumber} requires human intervention`, { driverAction: "review_human_blocked", comment: block.comment });
   }
-  const refreshedHead = String(refreshedPr.headRefOid || "").toLowerCase();
-  if (refreshedHead !== expectedHead) {
-    return driverResult("done", `PR #${prNumber} head changed before repair dispatch; left GitHub state untouched`, { driverAction: "review_stale_head" });
-  }
-  if (worktree.kind === "ambiguous") {
-    const block = applyHumanBlock(prNumber, env, refreshedPr, "more than one worktree claims the repair branch", "Worktree ownership must be made unambiguous before another repair starts.", "", historyFile);
-    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before ambiguous-worktree block");
-    return driverResult("done", `PR #${prNumber} repair worktree ownership is ambiguous; marked blocked`, { driverAction: "review_repair_ambiguous_worktree", comment: block.comment });
-  }
-  if (worktree.kind === "present" && !worktree.clean) {
-    const block = applyHumanBlock(prNumber, env, refreshedPr, "the existing repair worktree is dirty", "The existing repair worktree must be inspected before another repair starts.", "", historyFile);
-    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before dirty-worktree block");
-    return driverResult("done", `PR #${prNumber} repair worktree is dirty; marked blocked`, { driverAction: "review_repair_dirty_worktree", comment: block.comment });
-  }
-  if (worktree.kind === "present" && worktree.head !== expectedHead) {
-    const block = applyHumanBlock(prNumber, env, refreshedPr, "the clean repair worktree and current PR head do not match", "The existing worktree must be reconciled without rewriting history before another repair starts.", "", historyFile);
-    if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before repair-worktree mismatch block");
-    return driverResult("done", `PR #${prNumber} repair worktree does not match its current head; marked blocked`, { driverAction: "review_repair_worktree_mismatch", comment: block.comment });
+  if (String(refreshedPr.headRefOid || "").toLowerCase() !== expectedHead) {
+    return driverResult("done", `PR #${prNumber} head changed before repair request; left GitHub state untouched`, { driverAction: "review_stale_head" });
   }
 
   if (historyFile && fs.existsSync(historyFile)) {
@@ -1110,113 +764,17 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
   if (!automationLogin) throw new Error("authenticated GitHub identity is unavailable");
   const selection = selectRepairAttempt(refreshedPr.comments || [], expectedHead, findings, automationLogin);
   if (selection.action === "already_attempted") {
-    let recoveredLaunch = readLaunchEvidence(prNumber, branch, expectedHead, selection.key, env);
-    const retained = findRunMetadata(expectedHead, selection.key, env);
-    if (!recoveredLaunch && retained?.launchUuid && ["prepared", "github_claimed"].includes(String(retained.phase || ""))) {
-      const resumeUuid = retained.launchUuid;
-      let resumed: JsonObject;
-      let recoveryStaleComparison: JsonObject | undefined;
-      try {
-        resumed = withEnabledDriverLaunch(
-          env,
-          (recheck: () => void) => recheck(),
-          (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck, resumeUuid),
-          {
-            prepareAttempt: () => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, undefined, resumeUuid, true),
-            recordGithubMutation: () => recordRepairLaunchGithubClaim(
-              prNumber, branch, expectedHead, findings, selection.key, env, resumeUuid,
-            ),
-            revalidate: (enabled: { automationLogin?: string; githubRepositoryId?: string }) => {
-              const livePr = readLivePr(env.githubRepo, prNumber);
-              assertSameLaunchTarget(refreshedPr, livePr, "pr");
-              requireManagedPr(livePr, env);
-              revalidateManagedPr(prNumber, env, enabled, expectedHead);
-              const recoveryHistoryFile = fs.existsSync(acceptedHistoryFile)
-                ? acceptedHistoryFile
-                : fs.existsSync(historyFile) ? historyFile : "";
-              if (recoveryHistoryFile) {
-                const recoveryHistory = readPrHistoryObservation(recoveryHistoryFile);
-                const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
-                const comparison = comparePrHistoryObservations(recoveryHistory, currentHistory);
-                if (comparison.kind !== "unchanged") {
-                  recoveryStaleComparison = comparison;
-                  throw new StaleLaunchError(`PR #${prNumber} review history changed before repair recovery`);
-                }
-              }
-              const labels = labelNames(livePr.labels);
-              const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
-              if (!labels.includes(env.inProgressLabel) || labels.includes(env.blockedLabel)
-                || liveSelection.action !== "already_attempted" || liveSelection.key !== selection.key) {
-                throw new StaleLaunchError(`PR #${prNumber} interrupted repair is no longer resumable`);
-              }
-              assertAttemptContractCurrent(env, enabled);
-            },
-          },
-        );
-      } catch (error) {
-        if (isStaleLaunchError(error) && error instanceof Error && error.message.includes("review history")) {
-          const recoveryHistoryFile = fs.existsSync(acceptedHistoryFile)
-            ? acceptedHistoryFile
-            : fs.existsSync(historyFile) ? historyFile : "";
-          const freshness = recoveryStaleComparison
-            ? releaseObservedStaleReviewHistory(prNumber, env, recoveryStaleComparison, expectedHead)
-            : releaseStaleReviewHistory(prNumber, env, recoveryHistoryFile, expectedHead);
-          return driverResult("done", `PR #${prNumber} review history changed before repair recovery; released the active claim`, {
-            driverAction: "review_stale_history", historyComparison: freshness.comparison,
-          });
-        }
-        throw error;
-      }
-      recoveredLaunch = { repairName: resumed.agentName, promiseFile: resumed.promiseFile, launchUuid: resumeUuid, phase: "agent_started" };
-      recordLaunchEvidence(prNumber, branch, expectedHead, selection.key, recoveredLaunch, env);
-    }
-    let workerConfirmed = Boolean(recoveredLaunch);
-    if (!workerConfirmed) {
-      workerConfirmed = recoverLaunchFromHerdr(prNumber, branch, selection.key, env);
-      if (workerConfirmed) recoveredLaunch = findRunMetadata(expectedHead, selection.key, env);
-    }
-    if (workerConfirmed && recoveredLaunch) {
-      const staleComparison = withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub, livePr) => {
-        if (!reviewCommentExists(livePr.comments || [], expectedHead, selection.reviewFingerprint, outcome)) {
-          guardedGithub.commentPr(
-            env.githubRepo,
-            prNumber,
-            renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint, repairAlreadyStarted: true }),
-          );
-        }
-      }, fs.existsSync(acceptedHistoryFile) ? acceptedHistoryFile : historyFile);
-      if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before repair recovery persistence");
-      const monitorInput = {
-        prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
-        promiseFile: recoveredLaunch.promiseFile, attemptRecordFile: path.join(path.dirname(recoveredLaunch.promiseFile), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
-        repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
-        reviewLabel: env.reviewLabel, implementLabel: env.implementLabel, updateBranchLabel: env.updateBranchLabel,
-        inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
-        attemptKey: selection.key,
-        repairModel: env.repairModel,
-        maxActiveMilliseconds: env.reviewerMaxRuntimeSeconds * 1000,
-      };
-      return driverResult("monitor", `Recovered review-repair monitor for PR #${prNumber}`, {
-        driverAction: "review_repair_monitor_recovered", selection,
-        monitorHandoff: { kind: "repair", input: monitorInput },
+    // The one repair for this exact review result was already requested. Complete whatever part of
+    // the claim-to-request transition landed before an interruption, and start nothing new.
+    const ensured = queueRepairRequest(prNumber, env, expectedHead);
+    if (!ensured.applied) {
+      return driverResult("skip", `PR #${prNumber} no longer holds the active review claim; left workflow state untouched`, {
+        driverAction: "review_repair_already_requested_stale",
       });
     }
-    const interruptionMarker = `<!-- deadloop:review-repair-dispatch-stop key=${selection.key} -->`;
-    const alreadyRecovered = (refreshedPr.comments || []).some((comment: JsonObject) => String(comment?.body || "").includes(interruptionMarker));
-    let comment = "Interrupted repair dispatch recovery already exists.";
-    if (!alreadyRecovered) {
-      const block = applyHumanBlock(prNumber, env, refreshedPr, "the repair attempt was recorded but no confirmed worker launch exists", promise.summary, interruptionMarker, historyFile);
-      if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before interrupted-dispatch block");
-      comment = block.comment;
-    } else {
-      const labels = labelNames(refreshedPr.labels);
-      const move = blockedClaimMove(env);
-      if (move.remove.some((label) => labels.includes(label)) || !move.add.every((label) => labels.includes(label))) {
-        const staleComparison = withRevalidatedPrMutation(prNumber, env, refreshedPr, (guardedGithub) => guardedGithub.movePrLabels(env.githubRepo, prNumber, move), historyFile);
-        if (staleComparison) return staleHistoryResult(prNumber, staleComparison, "before interrupted-dispatch block");
-      }
-    }
-    return driverResult("done", `PR #${prNumber} repair dispatch was interrupted; marked blocked`, { driverAction: "review_repair_dispatch_interrupted", selection, comment });
+    return driverResult("done", `PR #${prNumber} already requested its one automatic review repair`, {
+      driverAction: "review_repair_already_requested", selection,
+    });
   }
   if (hasAttemptRecord) {
     let persistedBody = "";
@@ -1263,7 +821,7 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
       writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
     }
     const closed = commandRunner.runJson([
-      "node", path.join(env.automationDir, "complete-attempt-workspace.cts"),
+      "node", path.join(__dirname, "complete-attempt-workspace.cts"),
       "--attempt-record", String(args.attemptRecord),
       "--project-id", env.projectId,
       "--project-repo", env.repoPath,
@@ -1277,144 +835,48 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
       "--managed-label", env.implementLabel,
       "--managed-label", env.updateBranchLabel,
     ]);
-    if (closed?.driverAction !== "workspace_closed") throw new Error("reviewer workspace was not closed before repair launch");
+    if (closed?.driverAction !== "workspace_closed") throw new Error("reviewer workspace was not closed before repair request");
   }
 
-  if (historyRequired && !fs.existsSync(acceptedHistoryFile)) {
-    return driverResult("error", `PR #${prNumber} accepted history observation is missing before repair launch`, {
-      driverAction: "incomplete_review_history",
-      reason: "missing_accepted_history_observation",
+  const requested = queueRepairRequest(prNumber, env, expectedHead);
+  if (!requested.applied) {
+    return driverResult("skip", `PR #${prNumber} no longer holds the active review claim; left workflow state untouched`, {
+      driverAction: "review_repair_request_stale",
     });
   }
-
-  const repairLaunchUuid = randomUUID();
-  const preparedRepair = launchRepair(
-    prNumber, branch, expectedHead, findings, selection.key, env, undefined, repairLaunchUuid, true,
-  );
-
-  let launch: JsonObject;
-  let launchStaleComparison: JsonObject | undefined;
-  try {
-    launch = withEnabledDriverLaunch(
-      env,
-      (recheck: () => void, enabled: { automationLogin?: string }) => {
-        if (hasAttemptRecord) {
-          recheck();
-          return;
-        }
-        requireManagedPr(refreshedPr, env);
-        revalidateManagedPr(prNumber, env, enabled, expectedHead);
-        const guardedGithub = createGithubOperations(commandRunner, () => { recheck(); revalidateManagedPr(prNumber, env, enabled, expectedHead); });
-        guardedGithub.commentPr(env.githubRepo, prNumber, renderChangesRequestedComment({ ...commentInput, reviewFingerprint: selection.reviewFingerprint }));
-      },
-      (recheck: () => void) => launchRepair(prNumber, branch, expectedHead, findings, selection.key, env, recheck, repairLaunchUuid),
-      {
-        prepareAttempt: () => launchRepair(
-          prNumber, branch, expectedHead, findings, selection.key, env, undefined, repairLaunchUuid, true,
-        ),
-        recordGithubMutation: () => recordRepairLaunchGithubClaim(
-          prNumber, branch, expectedHead, findings, selection.key, env, repairLaunchUuid,
-        ),
-        revalidate: (enabled: { automationLogin?: string; githubRepositoryId?: string }) => {
-          const livePr = readLivePr(env.githubRepo, prNumber);
-          assertSameLaunchTarget(refreshedPr, livePr, "pr");
-          requireManagedPr(livePr, env);
-          revalidateManagedPr(prNumber, env, enabled, expectedHead);
-          if (historyRequired && !fs.existsSync(acceptedHistoryFile)) {
-            throw new Error(`PR #${prNumber} accepted history observation is missing before repair launch`);
-          }
-          if (acceptedHistoryFile && fs.existsSync(acceptedHistoryFile)) {
-            const acceptedHistory = readPrHistoryObservation(acceptedHistoryFile);
-            const currentHistory = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);
-            const comparison = comparePrHistoryObservations(acceptedHistory, currentHistory);
-            if (comparison.kind !== "unchanged") {
-              launchStaleComparison = comparison;
-              throw new StaleLaunchError(`PR #${prNumber} review history changed before repair launch`);
-            }
-          }
-          const labels = labelNames(livePr.labels);
-          if (!labels.includes(env.inProgressLabel) || labels.includes(env.blockedLabel)) {
-            throw new StaleLaunchError(`PR #${prNumber} is no longer eligible for repair`);
-          }
-          const liveSelection = selectRepairAttempt(livePr.comments || [], expectedHead, findings, automationLogin);
-          const markerOwnedByPreparedRepair = liveSelection.action === "already_attempted"
-            && liveSelection.key === selection.key
-            && preparedRepair.promiseFile === path.join(env.stateDir, "runs", repairLaunchUuid, "promise.json")
-            && (() => {
-              const preparedRecord = readAttemptRecord(path.join(env.stateDir, "runs", repairLaunchUuid));
-              return preparedRecord.launchUuid === repairLaunchUuid
-                && preparedRecord.attemptId === selection.key
-                && ["prepared", "github_claimed"].includes(preparedRecord.phase);
-            })();
-          if ((liveSelection.action !== "launch_repair" || liveSelection.key !== selection.key) && !markerOwnedByPreparedRepair) {
-            throw new StaleLaunchError(`PR #${prNumber} repair attempt state changed before launch`);
-          }
-          // Local and last, so the launch cannot start on a contract the policy no longer matches.
-          assertAttemptContractCurrent(env, enabled);
-        },
-      },
-    );
-  } catch (error) {
-    if (isStaleLaunchError(error)) {
-      if (error instanceof Error && error.message.includes("review history") && acceptedHistoryFile) {
-        const freshness = launchStaleComparison
-          ? releaseObservedStaleReviewHistory(prNumber, env, launchStaleComparison, expectedHead)
-          : releaseStaleReviewHistory(prNumber, env, acceptedHistoryFile, expectedHead);
-        return driverResult("done", `PR #${prNumber} review history changed before repair launch; released the active claim`, {
-          driverAction: "review_stale_history", historyComparison: freshness.comparison,
-        });
-      }
-      return driverResult("done", `PR #${prNumber} changed before repair launch; left workflow state untouched`, { driverAction: "review_repair_launch_stale" });
-    }
-    if (error instanceof Error && error.message.includes("deadloop is disabled")) throw error;
-    const failedLaunch = (error as Error & { launch?: JsonObject }).launch;
-    let recovered = false;
-    if (failedLaunch) {
-      try { recovered = recoverLaunchFromHerdr(prNumber, branch, selection.key, env); } catch { recovered = false; }
-    }
-    if (recovered && failedLaunch?.promiseFile) {
-      launch = { ...failedLaunch, recovered: true };
-    } else {
-      const latestPr = readLivePr(env.githubRepo, prNumber);
-      const block = applyHumanBlock(
-        prNumber,
-        env,
-        latestPr,
-        `the bounded repair launch failed after its attempt marker was recorded: ${error instanceof Error ? error.message : String(error)}`,
-        promise.summary,
-        `<!-- deadloop:review-repair-dispatch-stop key=${selection.key} -->`,
-        fs.existsSync(acceptedHistoryFile) ? acceptedHistoryFile : historyFile,
-      );
-      if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before launch-failure block");
-      return driverResult("done", `PR #${prNumber} repair launch failed; marked blocked`, { driverAction: "review_repair_launch_failed", comment: block.comment });
-    }
-  }
-
-  let launchEvidenceError = "";
-  try {
-    recordLaunchEvidence(prNumber, branch, expectedHead, selection.key, {
-      repairName: String(launch.repairName),
-      promiseFile: String(launch.promiseFile),
-    }, env);
-  } catch (error) {
-    launchEvidenceError = error instanceof Error ? error.message : String(error);
-  }
-  const monitorInput = {
-    prNumber: Number(prNumber), expectedHeadOid: expectedHead, branch, automationDir: env.automationDir,
-    promiseFile: launch.promiseFile, attemptRecordFile: launch.attemptRecordFile || path.join(path.dirname(String(launch.promiseFile)), "attempt.json"), actorName: "review-repair worker", projectId: env.projectId,
-    repoPath: env.repoPath, githubRepo: env.githubRepo, stateDir: env.stateDir, enabledAt: env.enabledAt,
-    reviewLabel: env.reviewLabel, implementLabel: env.implementLabel, updateBranchLabel: env.updateBranchLabel,
-    inProgressLabel: env.inProgressLabel, blockedLabel: env.blockedLabel,
-    attemptKey: selection.key,
-    repairModel: env.repairModel,
-    maxActiveMilliseconds: env.reviewerMaxRuntimeSeconds * 1000,
-  };
-  return driverResult("monitor", `Launched review-repair worker for PR #${prNumber}`, {
-    driverAction: "review_repair_monitor_request", selection, labelsPreserved: [env.inProgressLabel], launch,
-    ...(launchEvidenceError ? { launchEvidenceError } : {}),
-    monitorHandoff: { kind: "repair", input: monitorInput },
+  return driverResult("done", `PR #${prNumber} review result queued an agent:implement repair request`, {
+    driverAction: "review_repair_requested", selection,
   });
 }
+
+/**
+ * Replace the active review claim with an agent:implement repair request (ADR 0032).
+ *
+ * The request label goes on first: a crash window that leaves both labels visible still selects
+ * for repair, while removing the claim first could leave a pull request carrying nothing at all.
+ * Idempotent, so an interrupted dispatch completes the transition it started.
+ */
+function queueRepairRequest(prNumber: string, env: ReturnType<typeof envConfig>, expectedHead: string): { applied: boolean } {
+  let applied = false;
+  withEnabledDriverLock(env, (enabled: { automationLogin?: string; githubRepositoryId?: string; githubRepo?: string }, recheck: () => void) => {
+    const livePr = readLivePr(env.githubRepo, prNumber);
+    if (String(livePr.state || "").toUpperCase() !== "OPEN"
+      || String(livePr.headRefOid || "").toLowerCase() !== expectedHead.toLowerCase()) {
+      throw new StaleLaunchError(`PR #${prNumber} changed before its repair request`);
+    }
+    const labels = new Set(labelNames(livePr.labels));
+    if (!labels.has(env.inProgressLabel) || labels.has(env.blockedLabel)) return;
+    revalidateManagedPr(prNumber, env, enabled, expectedHead);
+    const guardedGithub = createGithubOperations(commandRunner, () => { recheck(); revalidateManagedPr(prNumber, env, enabled, expectedHead); });
+    if (!labels.has(env.implementLabel)) {
+      guardedGithub.addPrLabel(env.githubRepo, prNumber, env.implementLabel);
+    }
+    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel], add: [] });
+    applied = true;
+  });
+  return { applied };
+}
+
 function main(): void {
   try {
     process.stdout.write(`${JSON.stringify(dispatch(parseArgs(process.argv.slice(2))))}\n`);
@@ -1432,12 +894,9 @@ module.exports = {
   blockedClaimMove,
   dispatch,
   envConfig,
-  launchRepair,
   parseArgs,
   persistAuthorizedApproval,
+  queueRepairRequest,
   readLivePr,
-  recordRepairLaunchGithubClaim,
-  repairLaunchInput,
-  repairWorkerPrompt,
   requireManagedPr,
 };

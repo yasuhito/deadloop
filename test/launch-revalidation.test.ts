@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 const issueDriver = readFileSync("extensions/deadloop/automations/issue-coordinator-driver.cts", "utf8");
 const reviewerDriver = readFileSync("extensions/deadloop/automations/pr-reviewer-driver.cts", "utf8");
-const repairDriver = readFileSync("extensions/deadloop/automations/pr-review-repair-dispatch.cts", "utf8");
 
 function namedFunction(source: string, name: string): string {
   const start = source.indexOf(`function ${name}(`);
@@ -38,7 +37,8 @@ describe("guarded launch revalidation wiring", () => {
     );
   });
 
-  it("revalidates the exact review-repair attempt inside the repair launch guard", () => {
-    expect(repairDriver).toMatch(/withEnabledDriverLaunch[\s\S]*revalidate:[\s\S]*selectRepairAttempt/);
+  it("revalidates the exact persisted contract inside the repair launch guard", () => {
+    const launchPrRepair = namedFunction(reviewerDriver, "launchPrRepair");
+    expect(launchPrRepair).toMatch(/launchWithAdapters[\s\S]*persistedRepairContract/);
   });
 });

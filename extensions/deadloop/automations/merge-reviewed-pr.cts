@@ -2,12 +2,16 @@
 // Merge one reviewed PR only if GitHub still reports the reviewed head commit.
 // The mutation is serialized with /deadloop-disable through the enablement lock.
 
-const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
 const { validatePromise } = require("./extract-worker-promise.cts");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const {
+  classifyCheckObservations,
+  decideCiFallbackMergeGate,
+} = require("../../../src/ci-review-policy.cts");
 const { reauthorizeReviewWrite } = require("../../../src/worker-required-verification-runtime.cjs");
 const {
   comparePrHistoryObservations,
@@ -28,6 +32,7 @@ type MergeArgs = {
   inProgressLabel: string;
   blockedLabel: string;
   historyObservation: string;
+  ciFallbackRecord?: string;
 };
 type EnabledProject = {
   repoPath: string;
@@ -145,31 +150,78 @@ function assertReviewApproved(args: MergeArgs, ops: MergeOps): void {
   }
 }
 
-const SUCCESSFUL_CHECK_RESULTS = new Set(["SUCCESS", "SUCCESSFUL", "NEUTRAL", "SKIPPED"]);
-const PENDING_CHECK_STATES = new Set(["QUEUED", "IN_PROGRESS", "PENDING", "EXPECTED", "WAITING", "REQUESTED"]);
+/** The exact prospective tree a fresh CI fallback record must prove. */
+function observeProspectiveTree(ops: MergeOps, args: MergeArgs, baseOid: string): string | undefined {
+  const result = ops.run([
+    "git", "-C", args.projectRepo, "merge-tree", "--write-tree", "--name-only", "-z", baseOid, args.expectedHead,
+  ], MAX_GUARDED_OPERATION_MS);
+  if (result.status !== 0) return undefined;
+  return String(result.stdout || "").split("\0").filter(Boolean)[0] || undefined;
+}
 
-function assertChecksPassed(value: unknown): void {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error("CI checks are missing; automatic merge stopped");
+function observeBaseRevision(ops: MergeOps, args: MergeArgs): string {
+  const result = ops.run(["git", "-C", args.projectRepo, "rev-parse", "--verify", "origin/main^{commit}"], MAX_GUARDED_OPERATION_MS);
+  if (result.status !== 0) throw new Error("configured base revision is unavailable; automatic merge stopped");
+  return result.stdout.trim();
+}
+
+/**
+ * GitHub checks are one health signal, never the sole authority (ADR 0030). Absent checks are
+ * non-failure; pending waits; unknown stops; a terminal failure merges only on fresh CI-equivalent
+ * verification of the exact prospective merge tree, recorded as CI fallback and never as CI success.
+ * Returns the truthful basis on which the merge may proceed.
+ */
+function assertMergeHealthEvidence(args: MergeArgs, pr: MergeTargetPr, ops: MergeOps): "ci_success" | "no_checks" | "ci_fallback" {
+  const classification = classifyCheckObservations(pr.statusCheckRollup);
+  if (classification === "absent") return "no_checks";
+  if (classification === "all_success") return "ci_success";
+  if (classification === "pending") throw new Error("CI checks have not completed; automatic merge stopped");
+  if (classification === "unknown") throw new Error("CI check state is unknown; automatic merge stopped");
+  // Terminal failure: only a fresh, bound CI fallback record authorizes this merge.
+  if (!args.ciFallbackRecord) {
+    throw new Error("CI checks failed; automatic merge requires fresh CI-equivalent verification of the prospective merge tree");
   }
-  for (const check of value) {
-    if (!check || typeof check !== "object" || Array.isArray(check)) {
-      throw new Error("CI check state is unknown; automatic merge stopped");
-    }
-    const record = check as { status?: unknown; state?: unknown; conclusion?: unknown };
-    const status = String(record.status || "").toUpperCase();
-    const state = String(record.state || "").toUpperCase();
-    const conclusion = String(record.conclusion || "").toUpperCase();
-    if (PENDING_CHECK_STATES.has(status) || PENDING_CHECK_STATES.has(state)) {
-      throw new Error("CI checks have not completed; automatic merge stopped");
-    }
-    if (!status && !state && !conclusion) {
-      throw new Error("CI check state is unknown; automatic merge stopped");
-    }
-    if (!SUCCESSFUL_CHECK_RESULTS.has(conclusion) && !SUCCESSFUL_CHECK_RESULTS.has(state)) {
-      throw new Error("CI checks did not pass; automatic merge stopped");
-    }
+  const baseOid = observeBaseRevision(ops, args);
+  const treeOid = observeProspectiveTree(ops, args, baseOid);
+  if (!treeOid) throw new Error("the prospective merge tree could not be integrated cleanly; automatic merge stopped");
+  let record: unknown;
+  try { record = JSON.parse(fs.readFileSync(args.ciFallbackRecord, "utf8")); }
+  catch { throw new Error("persisted CI fallback record is unreadable; automatic merge stopped"); }
+  const bound = decideCiFallbackMergeGate({
+    checks: pr.statusCheckRollup,
+    repository: args.githubRepo,
+    prNumber: Number(args.pr),
+    headOid: args.expectedHead,
+    baseOid,
+    treeOid,
+    contract: contractOf(record),
+    policyBaseRevision: String((record as Record<string, unknown>)?.policyBaseRevision || ""),
+    fallbackRecord: record as Record<string, unknown>,
+  });
+  if (bound.action === "proceed" && bound.basis === "ci_fallback") return "ci_fallback";
+  if (bound.action === "stop" && bound.reason === "ci_fallback_stale") {
+    throw new Error("persisted CI fallback evidence no longer matches this head, base, tree, command, or policy; automatic merge stopped");
   }
+  throw new Error("CI checks failed without valid CI fallback evidence; automatic merge stopped");
+}
+
+function contractOf(record: unknown): { command: string; derivation: string; policySource: { kind: string; location: string } } {
+  const source = (record as Record<string, any>)?.policySource || {};
+  return {
+    command: String((record as Record<string, any>)?.command || ""),
+    derivation: String((record as Record<string, any>)?.derivation || ""),
+    policySource: { kind: String(source.kind || ""), location: String(source.location || "") },
+  };
+}
+
+/** Truthful audit note: fallback success authorizes the merge, but it is never CI success. */
+function recordFallbackAuthorization(args: MergeArgs, ops: MergeOps): void {
+  const result = ops.run([
+    "gh", "pr", "comment", args.pr, "-R", args.githubRepo,
+    "--body",
+    `Automatic merge authorized by CI-equivalent verification (CI fallback): the repository's complete verification command passed on the prospective merge tree of head \`${args.expectedHead}\`. This is recorded as CI fallback success, not as CI success.`,
+  ], MAX_GUARDED_OPERATION_MS);
+  if (result.status !== 0) throw new Error((result.stderr || result.stdout || "CI fallback authorization could not be recorded").trim());
 }
 
 function assertReviewHistoryFresh(args: MergeArgs, ops: MergeOps): void {
@@ -249,13 +301,13 @@ function markReadyForMerge(args: MergeArgs, ops: MergeOps): void {
   if (ready.status !== 0) throw new Error((ready.stderr || ready.stdout || "approved PR could not be marked ready").trim());
 }
 
-function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
+function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): "ci_success" | "no_checks" | "ci_fallback" {
   const pr = readMergeTargetPr(args, ops);
   assertMergeTargetUnchanged(pr, args);
   if (pr.isDraft !== false) throw new Error("PR is draft or its draft state is unknown; automatic merge stopped");
   if (pr.mergeable !== "MERGEABLE") throw new Error("PR mergeability is not confirmed; automatic merge stopped");
   if (pr.mergeStateStatus !== "CLEAN") throw new Error("PR merge state is not clean; automatic merge stopped");
-  assertChecksPassed(pr.statusCheckRollup);
+  return assertMergeHealthEvidence(args, pr, ops);
 }
 
 function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): number {
@@ -311,6 +363,10 @@ function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): 
     // stale authorization.
     assertReviewHistoryFresh(args, ops);
     assertVerification(args, enabled);
+    const healthBasis = assertCurrentPrEligible(args, ops);
+    revalidateMergeTarget();
+    // Fallback evidence is reported separately from CI success, so audit trails stay truthful.
+    if (healthBasis === "ci_fallback") recordFallbackAuthorization(args, ops);
     const result = ops.run([
       "gh", "pr", "merge", args.pr, "-R", args.githubRepo,
       "--squash", "--delete-branch", "--match-head-commit", args.expectedHead,
@@ -345,6 +401,7 @@ function parseArgs(argv: string[]): MergeArgs {
     inProgressLabel: values.inProgressLabel,
     blockedLabel: values.blockedLabel,
     historyObservation: values.historyObservation,
+    ...(values.ciFallbackRecord ? { ciFallbackRecord: values.ciFallbackRecord } : {}),
   };
 }
 

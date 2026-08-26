@@ -8,6 +8,7 @@ import { parseHerdrVersions } from "../src/herdr-version";
 const { runHerdrPreflight } = require("../src/herdr-preflight.cjs");
 
 const extensionSource = readFileSync("extensions/deadloop/index.ts", "utf8");
+const schedulerTickSource = readFileSync("src/scheduler-tick.ts", "utf8");
 const completionSource = readFileSync("extensions/deadloop/automations/complete-attempt-workspace.cts", "utf8");
 
 function functionSource(source: string, name: string): string {
@@ -46,8 +47,8 @@ describe("Herdr 0.8.0 activation", () => {
   });
 
   it("runs restart reconciliation before pending handoff and candidate selection", () => {
-    const tick = functionSource(extensionSource, "tick");
-    expect(tick.indexOf("reconcilePersistedAttemptJournals") < tick.indexOf("deliverPendingDriverHandoff")).toBe(true);
+    const tick = functionSource(schedulerTickSource, "executeSchedulerTick");
+    expect(tick.indexOf("reconcileRetainedAttempts") < tick.indexOf("deliverPendingDriverHandoff")).toBe(true);
   });
 
   it("holds the enablement guard around workspace closure", () => {

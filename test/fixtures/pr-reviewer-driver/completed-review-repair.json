@@ -1,0 +1,54 @@
+{
+  "automationLogin": "deadloop-bot",
+  "githubRepositoryId": "R_repo",
+  "prs": [
+    {
+      "number": 31,
+      "title": "Repairable PR",
+      "url": "https://github.com/owner/repo/pull/31",
+      "updatedAt": "2026-07-08T00:00:00Z",
+      "headRefName": "agent/issue-31",
+      "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+      "isCrossRepository": false,
+      "isDraft": false,
+      "labels": [
+        {
+          "name": "agent:implement"
+        }
+      ],
+      "statusCheckRollup": [],
+      "comments": [
+        {
+          "author": {
+            "login": "deadloop-bot"
+          },
+          "body": "## Review result: changes required\n\n- Reviewed commit: `cccccccccccccccccccccccccccccccccccccccc`\n- Conclusion: The changes below must be addressed before this PR can proceed.\n\n## Required findings\n\n### Lint contract \u2014 major\n- File: `src/a.ts`\n- Reason: Format src/a.ts\n\n## Next step\nExactly one automatic repair for this review result will now start and will change only the findings listed above. The updated head will be reviewed again after a successful push.\n\n<!-- deadloop:review-result head=cccccccccccccccccccccccccccccccccccccccc review=1b1f22e2ee22c1857d30 outcome=changes_requested -->\n<!-- deadloop:review-repair-attempt key=84d890fe6868225c052c head=cccccccccccccccccccccccccccccccccccccccc review=1b1f22e2ee22c1857d30 data=eyJmaW5kaW5ncyI6IFt7InRpdGxlIjogIkxpbnQgY29udHJhY3QiLCAiYm9keSI6ICJGb3JtYXQgc3JjL2EudHMiLCAicGF0aCI6ICJzcmMvYS50cyIsICJzZXZlcml0eSI6ICJtYWpvciJ9XX0 -->"
+        },
+        {
+          "author": {
+            "login": "deadloop-bot"
+          },
+          "body": "<!-- deadloop:review-repair-result key=84d890fe6868225c052c head=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee -->"
+        }
+      ],
+      "reviewRequests": [],
+      "mergeable": "MERGEABLE",
+      "mergeStateStatus": "CLEAN",
+      "timelineEvents": [
+        {
+          "id": "implement-20",
+          "event": "labeled",
+          "created_at": "2026-07-07T23:59:00Z",
+          "label": {
+            "name": "agent:implement"
+          }
+        }
+      ]
+    }
+  ],
+  "agents": {
+    "result": {
+      "agents": []
+    }
+  }
+}

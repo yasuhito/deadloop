@@ -1,8 +1,13 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const { mergeReviewedPr } = require("../extensions/deadloop/automations/merge-reviewed-pr.cts");
 
 const expectedHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const trustedBase = "cccccccccccccccccccccccccccccccccccccccc";
+const mergeTreeOid = "dddddddddddddddddddddddddddddddddddddddd";
 const eligiblePr = {
   state: "OPEN",
   isDraft: false,
@@ -17,6 +22,31 @@ const approvedReview = {
   promise: { status: "complete", outcome: "approved", reviewedHead: expectedHead, reason: "", summary: "approved", findings: [] },
 };
 
+let fallbackRecordSandbox: string | undefined;
+
+function writeFallbackRecordFile(overrides: Record<string, unknown>): string {
+  fallbackRecordSandbox ||= mkdtempSync(path.join(os.tmpdir(), "deadloop-merge-fallback-"));
+  const file = path.join(fallbackRecordSandbox, `record-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(file, JSON.stringify({
+    version: 1,
+    role: "merge_candidate",
+    repository: "owner/repo",
+    prNumber: 24,
+    headOid: expectedHead,
+    baseOid: trustedBase,
+    treeOid: mergeTreeOid,
+    command: "npm ci && npm run check",
+    derivation: "npm_convention",
+    policySource: { kind: "npm_convention", location: "package-lock.json+package.json#scripts.check" },
+    policyBaseRevision: trustedBase,
+    outcome: "passed",
+    exitCode: 0,
+    logPath: path.join(fallbackRecordSandbox, "verification.log"),
+    ...overrides,
+  }), "utf8");
+  return file;
+}
+
 function runMerge(options: {
   mergeStatus?: number;
   autoMergeEnabled?: boolean | boolean[];
@@ -27,6 +57,7 @@ function runMerge(options: {
   verificationChangesAfterPrRead?: boolean;
   onMerge?: () => void;
   repository?: { id: string; nameWithOwner: string };
+  ciFallbackRecord?: string;
   finalRace?: "head" | "repository" | "policy" | "history";
   onHistoryCheck?: (count: number) => void;
 } = {}) {
@@ -53,6 +84,7 @@ function runMerge(options: {
       expectedHead,
       reviewPromise: "/state/reviewer-promise.json",
       historyObservation: "/state/runs/reviewer/pr-review-history-accepted.json",
+      ...(options.ciFallbackRecord ? { ciFallbackRecord: options.ciFallbackRecord } : {}),
       inProgressLabel: "agent:in-progress",
       blockedLabel: "agent:blocked",
     },
@@ -117,6 +149,10 @@ function runMerge(options: {
         if (args[1] === "pr" && args[2] === "ready") {
           markedReady = true;
           return { status: 0, stdout: "", stderr: "" };
+        }
+        if (args[0] === "git") {
+          if (args.includes("rev-parse")) return { status: 0, stdout: `${trustedBase}\n`, stderr: "" };
+          if (args.includes("merge-tree")) return { status: 0, stdout: `${mergeTreeOid}\u0000`, stderr: "" };
         }
         if (args[2] === "view") {
           prReads += 1;
@@ -264,16 +300,37 @@ describe("reviewed PR merge", () => {
     expect(() => runMerge({ pr: { ...eligiblePr, mergeStateStatus: "BLOCKED" } })).toThrow("merge state");
   });
 
-  it("fails closed when no CI checks are reported", () => {
-    expect(() => runMerge({ pr: { ...eligiblePr, statusCheckRollup: [] } })).toThrow("CI checks are missing");
+  it("treats missing CI checks as non-failure and merges", () => {
+    expect(() => runMerge({ pr: { ...eligiblePr, statusCheckRollup: [] } })).not.toThrow();
   });
 
   it("fails closed while CI is pending", () => {
     expect(() => runMerge({ pr: { ...eligiblePr, statusCheckRollup: [{ status: "IN_PROGRESS", conclusion: "" }] } })).toThrow("CI checks have not completed");
   });
 
-  it("fails closed when CI fails", () => {
-    expect(() => runMerge({ pr: { ...eligiblePr, statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE" }] } })).toThrow("CI checks did not pass");
+  it("fails closed when CI fails without fresh CI fallback evidence", () => {
+    expect(() => runMerge({ pr: { ...eligiblePr, statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE" }] } }))
+      .toThrow("requires fresh CI-equivalent verification");
+  });
+
+  it("merges on fresh CI fallback evidence bound to the exact prospective tree", () => {
+    const recordFile = writeFallbackRecordFile({});
+    const result = runMerge({
+      pr: { ...eligiblePr, statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE" }] },
+      ciFallbackRecord: recordFile,
+    });
+    const mergeIndex = result.commands.findIndex((command) => command[1] === "pr" && command[2] === "merge");
+    expect(mergeIndex).toBeGreaterThan(-1);
+
+    expect(result.commands.slice(0, mergeIndex).some((command) => command[1] === "pr" && command[2] === "comment")).toBe(true);
+  });
+
+  it("fails closed when CI fallback evidence is bound to a different tree", () => {
+    const recordFile = writeFallbackRecordFile({ treeOid: "e".repeat(40) });
+    expect(() => runMerge({
+      pr: { ...eligiblePr, statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE" }] },
+      ciFallbackRecord: recordFile,
+    })).toThrow("no longer matches this head, base, tree, command, or policy");
   });
 
   it("fails closed when a CI result is ambiguous", () => {

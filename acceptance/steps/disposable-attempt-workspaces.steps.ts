@@ -22,7 +22,9 @@ import { normalizeProject } from "../../src/core";
 
 const { envConfig: workerEnvironment, launchIssueWorkerFlow } = require("../../extensions/deadloop/automations/issue-coordinator-driver.cts");
 const { envConfig: reviewerEnvironment, launchBranchUpdate, launchRequestBoundPrReviewerFlow } = require("../../extensions/deadloop/automations/pr-reviewer-driver.cts");
-const { envConfig: repairEnvironment, launchRepair, recordRepairLaunchGithubClaim } = require("../../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
+const { launchRepair, repairLaunchInput } = require("../../extensions/deadloop/automations/pr-review-repair-launch.cts");
+const { recordAgentLaunchGithubClaimed } = require("../../src/agent-launch-flow.cts");
+const { envConfig: dispatchEnvironment } = require("../../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
 const { selectCleanupPlan } = require("../../extensions/deadloop/automations/cleanup-completed-worker-worktrees.cts");
 
 const inputHead = "a".repeat(40);
@@ -393,17 +395,27 @@ function roleLaunchOps(root: string, workspaceId: string, onOpenWorktree?: () =>
 
 function launchRepairBoundary(workspaceId: string) {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cucumber-review-repair-"));
-  const env = repairEnvironment({
-    projectId: "demo", repoPath: "/repo", githubRepo: "owner/repo", worktreeRoot: root, stateDir: root,
+  const env = {
+    ...dispatchEnvironment({ projectId: "demo", repoPath: "/repo", githubRepo: "owner/repo", stateDir: root }),
+    worktreeRoot: root,
+    baseBranch: "origin/main",
+    remote: "origin",
+    checkCommand: "npm test",
+    workerAgent: "pi",
+    workerModel: "",
+    enabledAt: 1,
     requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "a".repeat(40) },
-  });
+  };
   const branch = "agent/issue-12";
   const findings = [{ title: "Bounded defect", body: "Repair the selected defect", path: "src/a.ts", severity: "major" }];
   const key = "1234567890abcdef1234";
   const uuid = "cucumber-review-repair";
   const operations = roleLaunchOps(root, workspaceId);
   launchRepair("12", branch, inputHead, findings, key, env, undefined, uuid, true, operations);
-  recordRepairLaunchGithubClaim("12", branch, inputHead, findings, key, env, uuid);
+  // Between preparation and launch the driver records its GitHub claim; the boundary replays the
+  // same transition through the shared launch seam so the phases match production exactly.
+  const claimInput = repairLaunchInput("12", branch, inputHead, findings, key, env, uuid);
+  recordAgentLaunchGithubClaimed(claimInput);
   const launched = launchRepair("12", branch, inputHead, findings, key, env, undefined, uuid, false, operations);
   rmSync(root, { recursive: true, force: true });
   return launched;

@@ -12,6 +12,7 @@ const {
   repairResultCommentExists,
 } = require("../extensions/deadloop/automations/pr-review-comments.cts");
 const { sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.cts");
+const { encodeMarkerPayload } = require("../extensions/deadloop/automations/pr-review-repair-state.cts");
 
 function fixture(name: string) {
   return JSON.parse(fs.readFileSync(path.join("test/fixtures/pr-review-comments", name), "utf8"));
@@ -44,7 +45,7 @@ describe("PR review public comments", () => {
 Exactly one automatic repair for this review result will now start and will change only the findings listed above. The updated head will be reviewed again after a successful push.
 
 <!-- deadloop:review-result head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=1234567890abcdef1234 outcome=changes_requested -->
-<!-- deadloop:review-repair-attempt key=90e33b980e83cbff65a4 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=1234567890abcdef1234 -->`);
+<!-- deadloop:review-repair-attempt key=90e33b980e83cbff65a4 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa review=1234567890abcdef1234 data=${encodeMarkerPayload({ findings: fixture("changes-requested.json").findings })} -->`);
   });
 
   it("explains that one repair starts for the exact review result", () => {

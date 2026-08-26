@@ -10,6 +10,10 @@ const { formatCurrentAttemptUsage } = require("./model-usage-report.cts") as {
 };
 import { formatRequiredVerification } from "./required-verification";
 
+const { evaluateProjectBaseBlocking } = require("./ci-base-blocking.cts") as {
+  evaluateProjectBaseBlocking: (input: { stateDir: string; projectId: string; repoPath: string; baseBranch?: string }) => { active: boolean; reason?: string; record?: Record<string, unknown> };
+};
+
 export type LabelLike = string | { name?: string | null };
 
 export type GithubItem = {
@@ -42,6 +46,7 @@ export type StatusReportInput = {
   projects: NormalizedProject[];
   repositoryEnablement?: RepositoryEnablement;
   state?: PiLooperState;
+  statePath?: string;
   issues?: GithubItem[];
   openPrs?: GithubItem[];
   closedPrs?: GithubItem[];
@@ -95,6 +100,7 @@ export type StatusSnapshot = {
   warnings: string[];
   codeIdentity?: CodeIdentityDecision;
   attemptUsage: AttemptUsageSummary[];
+  baseVerificationBlocked?: { reason?: string; failedAt?: string };
   automations: AutomationStatus[];
   issues: {
     eligible: StatusLineItem[];
@@ -267,6 +273,21 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
   }
 
   const state = input.state || { automations: {} };
+  let baseVerificationBlocked: StatusSnapshot["baseVerificationBlocked"];
+  if (project.repoPath && input.statePath) {
+    try {
+      const blocking = evaluateProjectBaseBlocking({
+        stateDir: path.dirname(input.statePath),
+        projectId: project.id,
+        repoPath: project.repoPath,
+        baseBranch: project.baseBranch,
+      });
+      if (blocking.active) {
+        const record = (blocking.record || {}) as Record<string, unknown>;
+        baseVerificationBlocked = { reason: blocking.reason, failedAt: record.failedAt ? String(record.failedAt) : undefined };
+      }
+    } catch {}
+  }
   const automations = project.automations.map((automation) => {
     const entry = state.automations?.[automationStateKey(project, automation)] || {};
     const handoff = entry.pendingDriverHandoff;
@@ -334,6 +355,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
     warnings: input.warnings || [],
     codeIdentity: input.codeIdentity,
     attemptUsage: (input.attemptUsage || []).filter((summary) => summary.active),
+    ...(baseVerificationBlocked ? { baseVerificationBlocked } : {}),
     automations,
     issues: {
       eligible: eligible.map(lineItem),
@@ -440,6 +462,9 @@ export function formatStatusReport(snapshot: StatusSnapshot): string {
     ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     `config: ${formatConfigSource(project)}`,
     formatRequiredVerification(project.requiredVerification),
+    ...(snapshot.baseVerificationBlocked
+      ? [`baseVerificationBlocked: ${snapshot.baseVerificationBlocked.reason || "base_verification_failed"} since ${snapshot.baseVerificationBlocked.failedAt || "unknown"}; no agent launch consumes an Agent request until base or contract changes`]
+      : []),
     `autoMerge: ${project.autoMerge ? "on" : "off"}`,
     `externalReview: ${project.externalReview.enabled ? "on" : "off"}`,
     `roleModels: worker=${project.workerModel}; reviewer=${project.reviewerModel}`

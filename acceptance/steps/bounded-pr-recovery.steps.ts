@@ -38,12 +38,6 @@ function loggedAgentStartCount(result: Record<string, unknown> | undefined): num
   return String(result?.herdrLog || "").split("\n").filter((line) => line.startsWith("agent start ")).length;
 }
 
-function loggedRepairAgentStartCount(result: Record<string, unknown> | undefined): number {
-  return String(result?.herdrLog || "").split("\n").filter((line) =>
-    /^agent start dl-x-31-[0-9a-f]{12} /.test(line),
-  ).length;
-}
-
 function observedLabels(result: Record<string, unknown> | undefined): string[] {
   return adapterEffects(result)?.labels?.["31"] ?? result?.observedLabels ?? [];
 }
@@ -203,6 +197,14 @@ else if (args[0] === "pr" && args[1] === "view") process.stdout.write(JSON.strin
   comments: JSON.parse(fs.readFileSync(process.env.TEST_COMMENTS_FILE, "utf8"))
 }));
 else if (args[0] === "repo" && args[1] === "view") process.stdout.write(JSON.stringify({id: "R_repo", nameWithOwner: "owner/repo"}));
+else if (args[0] === "api" && ["POST"].includes(mutationMethod) && /labels$/.test(args[3] || "")) {
+  const labels = JSON.parse(fs.readFileSync(process.env.TEST_LABELS_FILE, "utf8"));
+  const bodyField = args.find(arg => arg === "-");
+  const body = bodyField !== undefined ? JSON.parse(fs.readFileSync(0, "utf8")) : { labels: [] };
+  fs.writeFileSync(process.env.TEST_LABELS_FILE, JSON.stringify([...new Set([...labels, ...body.labels])]));
+  fs.appendFileSync(process.env.TEST_GITHUB_LOG, args.join(" ") + "\\n");
+  process.stdout.write(JSON.stringify(labels));
+}
 else {
   if (args[0] === "pr" && args[1] === "edit") {
     const labels = new Set(JSON.parse(fs.readFileSync(process.env.TEST_LABELS_FILE, "utf8")));
@@ -724,11 +726,21 @@ Then("The selection reason after conflict recovery is repair re-review", functio
 
 Then("deadloop preserves the review state", function (this: RecoveryWorld) {
   const labels = adapterEffects(this.result)?.labels?.["31"] ?? this.result?.observedLabels;
-  assert.deepEqual(labels, this.case === "conflict" ? ["agent:review", "agent:in-progress"] : ["agent:in-progress"]);
+  // The conflict case holds its review claim; the repair-dispatch case releases the claim into
+  // the queued agent:implement request (ADR 0032).
+  const expected = this.case === "conflict"
+    ? ["agent:review", "agent:in-progress"]
+    : ["agent:implement"];
+  assert.deepEqual(labels, expected);
 });
 
-Then("deadloop starts a dedicated repair attempt", function (this: RecoveryWorld) {
-  assert.equal(loggedRepairAgentStartCount(this.result), 1);
+Then("deadloop queues an agent:implement repair request without starting an agent", function (this: RecoveryWorld) {
+  assert.deepEqual({
+    action: this.result?.driverAction,
+    starts: loggedAgentStartCount(this.result),
+    requested: observedLabels(this.result).includes("agent:implement"),
+    claimReleased: !observedLabels(this.result).includes("agent:in-progress"),
+  }, { action: "review_repair_requested", starts: 0, requested: true, claimReleased: true });
 });
 
 Then("deadloop does not start another dedicated repair attempt", function (this: RecoveryWorld) {

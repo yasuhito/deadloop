@@ -128,11 +128,11 @@ A deadloop user can observe which configuration source was selected, how an agen
 * When deadloop status is requested
 * Then Status shows automatic merge as disabled
 
-## Scenario: Disallow CI fallback verification when configuration is omitted
+## Scenario: Expose the shared-policy CI-equivalent command to automations
 
-* Given Local configuration is empty
-* When CI fallback permission is determined from public configuration
-* Then Public configuration does not allow CI fallback verification
+* Given Shared policy declares ciEquivalentCommand `make ci` and local configuration is empty
+* When Automation launch commands are prepared from public configuration
+* Then Automations receive `make ci` as the CI-equivalent command
 
 ## Scenario: Show external review as disabled when configuration is omitted
 

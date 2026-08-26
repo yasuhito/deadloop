@@ -91,11 +91,6 @@ describe("deterministic extension core", () => {
         sources: [{ kind: "default", location: "deadloop", command: "npm run check" }],
       },
       autoMerge: false,
-      ciFallback: {
-        enabled: false,
-        mode: "billing-only",
-        localCommands: "",
-      },
       externalReview: {
         enabled: false,
         waitSeconds: 1800,
@@ -430,33 +425,26 @@ describe("deterministic extension core", () => {
     expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", autoMerge: true }).autoMerge).toBe(true);
   });
 
-  it("defaults CI fallback to disabled billing-only mode", () => {
-    expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",}).ciFallback).toEqual({
-      enabled: false,
-      mode: "billing-only",
-      localCommands: "",
-    });
+  it("rejects removed legacy CI fallback settings", () => {
+    expect(() => projectsFromConfig({ projects: [{ ciFallback: { enabled: true } }] })).toThrow(/legacy CI fallback/);
   });
 
   it("defaults external review to disabled", () => {
     expect(normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",}).externalReview).toEqual({ enabled: false, waitSeconds: 1800 });
   });
 
-  it("normalizes CI fallback local commands for prompt templates", () => {
-    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
-      ciFallback: {
-        enabled: true,
-        localCommands: ["git diff --check", "npm test"],
-      },
-      automations: [{}],
-    });
+  it("carries the shared-policy CI-equivalent command into automation environment", () => {
+    const project = normalizeProject({ automations: [{}] }, {
+      repoPolicyPath: "deadloop.json",
+      repoPolicyBaseBranch: "origin/main",
+      repoPolicyStatus: "loaded",
+      repoPolicyAppliedKeys: ["ciEquivalentCommand"],
+      repoPolicyBaseRevision: "base",
+    } as never);
 
-    expect(
-      renderTemplate(
-        "{{ciFallbackEnabled}}|{{ciFallbackLocalCommands}}",
-        templateValues(project, project.automations[0], "/auto"),
-      ),
-    ).toBe("true|git diff --check\nnpm test");
+    expect(project.ciEquivalentCommand).toBeUndefined();
+    const configured = normalizeProject({ ciEquivalentCommand: "make ci", automations: [{}] });
+    expect(automationEnvironment(configured, configured.automations[0]).DEADLOOP_CI_EQUIVALENT_COMMAND).toBe("make ci");
   });
 
   it("exposes auto merge state to prompt templates", () => {
