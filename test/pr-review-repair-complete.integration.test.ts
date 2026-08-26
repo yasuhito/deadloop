@@ -72,7 +72,7 @@ function runCompletion(options: {
   const enabledProjectsFile = path.join(stateDir, "enabled-projects.json");
   const projectsFile = path.join(stateDir, "projects.json");
   fs.writeFileSync(authLoginFile, `${options.authenticatedLogin || "deadloop-bot"}\n`);
-  fs.writeFileSync(enabledProjectsFile, JSON.stringify({ projects: [{
+  fs.writeFileSync(enabledProjectsFile, JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
     repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch, automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: options.enabled ?? true,
@@ -247,7 +247,7 @@ async function runConcurrentSuccessRetries(): Promise<number> {
   spawnSync("git", ["-C", projectRepo, "update-ref", `refs/remotes/${baseBranch}`, "HEAD"]);
   const baseRevision = spawnSync("git", ["-C", projectRepo, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
   spawnSync("git", ["-C", projectRepo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
-  fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
+  fs.writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
     repoPath: projectRepo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch, automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,

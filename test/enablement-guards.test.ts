@@ -55,7 +55,7 @@ function writeState(project: ReturnType<typeof fixture>, record: Record<string, 
   const safetyFields = withSafetyFields
     ? { githubRepositoryId: "R_repo", automationLogin: "deadloop-bot", firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false, autoMergeAcknowledged: false, enabled: true }
     : {};
-  writeFileSync(path.join(project.stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{ repoPath: project.repoPath, githubRepo: project.githubRepo, ...safetyFields, ...record }] }));
+  writeFileSync(path.join(project.stateDir, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{ repoPath: project.repoPath, githubRepo: project.githubRepo, ...safetyFields, ...record }] }));
 }
 
 function writeGuardedPrAttempt(project: ReturnType<typeof fixture>, head = "a".repeat(40)): string {

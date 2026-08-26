@@ -19,7 +19,7 @@ function runRace(kind: "issue" | "pr") {
   mkdirSync(bin);
   spawnSync("git", ["-C", repo, "init", "--quiet"]);
   spawnSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
-  writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ projects: [{
+  writeFileSync(path.join(stateDir, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
     repoPath: repo,
     githubRepo: "owner/repo",
     githubRepositoryId: "R_repo",

@@ -90,6 +90,7 @@ Given("A blocked pull request has a completed Reviewer and its head changed afte
     id: "demo", repoPath: root, githubRepo: "owner/repo", baseBranch: "origin/main",
   }] }));
   fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
+    lastWriterCodeIdentity: "a".repeat(40),
     projects: [{
       repoPath: root,
       githubRepo: "owner/repo",
