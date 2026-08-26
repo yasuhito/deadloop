@@ -21,7 +21,7 @@ describe("package manifest files", () => {
 
   it("defines a local lint command", () => {
     expect(packageJson.scripts.lint).toBe(
-      "biome check package.json biome.json cucumber.cjs deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src acceptance/**/*.ts extensions/deadloop/index.ts extensions/deadloop/automations/*.ts test/*.ts --files-ignore-unknown=true",
+      "biome check package.json biome.json cucumber.cjs deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src acceptance/**/*.ts extensions/deadloop/index.ts extensions/deadloop/automations/*.ts extensions/deadloop/automations/*.cts test/*.ts --files-ignore-unknown=true",
     );
   });
 
@@ -71,7 +71,19 @@ describe("package manifest files", () => {
     expect(packageJson.files).toContain("extensions/deadloop/projects.example.json");
   });
 
+  it("includes the CommonJS automation modules", () => {
+    expect(packageJson.files).toContain("extensions/deadloop/automations/*.cts");
+  });
+
   it("does not include package-local project config", () => {
     expect(packageJson.files).not.toContain("extensions/deadloop/projects.json");
+  });
+});
+
+describe("project host settings", () => {
+  it("loads deadloop when omp starts from this checkout", () => {
+    const settings = JSON.parse(readFileSync(".omp/settings.json", "utf8")) as { extensions?: string[] };
+
+    expect(settings.extensions).toEqual(["extensions/deadloop/index.ts"]);
   });
 });

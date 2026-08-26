@@ -301,6 +301,10 @@ describe("deterministic extension core", () => {
     expect(normalizeProject({ workerAgent: "claude" }).workerAgent).toBe("claude");
   });
 
+  it("preserves the omp worker agent selection", () => {
+    expect(normalizeProject({ workerAgent: "omp" }).workerAgent).toBe("omp");
+  });
+
   it("rejects invalid worker agent values", () => {
     expect(() => normalizeProject({ workerAgent: "codex" })).toThrow(/invalid workerAgent/);
   });
@@ -311,6 +315,10 @@ describe("deterministic extension core", () => {
 
   it("preserves the claude reviewer agent selection", () => {
     expect(normalizeProject({ reviewerAgent: "claude" }).reviewerAgent).toBe("claude");
+  });
+
+  it("preserves the omp reviewer agent selection", () => {
+    expect(normalizeProject({ reviewerAgent: "omp" }).reviewerAgent).toBe("omp");
   });
 
   it("rejects invalid reviewer agent values", () => {
@@ -459,9 +467,9 @@ describe("deterministic extension core", () => {
   });
 
   it("preserves an automation driver file from project config", () => {
-    const project = normalizeProject({ automations: [{ driverFile: "issue-coordinator-driver.ts" }] });
+    const project = normalizeProject({ automations: [{ driverFile: "issue-coordinator-driver.cts" }] });
 
-    expect(project.automations[0].driverFile).toBe("issue-coordinator-driver.ts");
+    expect(project.automations[0].driverFile).toBe("issue-coordinator-driver.cts");
   });
 
   it("uses reloaded project settings during tick resolution", () => {
@@ -562,12 +570,12 @@ describe("deterministic extension core", () => {
       {
         repoPolicyProvider: () => ({
           status: "loaded",
-          text: JSON.stringify({ automations: [{ id: "demo:auto", driverFile: "issue-coordinator-driver.ts" }] }),
+          text: JSON.stringify({ automations: [{ id: "demo:auto", driverFile: "issue-coordinator-driver.cts" }] }),
         }),
       },
     );
 
-    expect(result.ok && result.projects[0].automations[0].driverFile).toBe("issue-coordinator-driver.ts");
+    expect(result.ok && result.projects[0].automations[0].driverFile).toBe("issue-coordinator-driver.cts");
   });
 
   it("uses trusted repo policy external review settings", () => {

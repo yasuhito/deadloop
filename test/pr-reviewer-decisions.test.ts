@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { defaultDecisionConfig, selectPrRequestTarget } = require("../extensions/deadloop/automations/pr-reviewer-decisions.ts");
+const { defaultDecisionConfig, selectPrRequestTarget } = require("../extensions/deadloop/automations/pr-reviewer-decisions.cts");
 
 type AnyRecord = Record<string, any>;
 

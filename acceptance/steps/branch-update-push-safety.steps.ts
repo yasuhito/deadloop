@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { After, Given, Then, When } from "@cucumber/cucumber";
 
-const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
+const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.cts");
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const candidate = "cccccccccccccccccccccccccccccccccccccccc";
@@ -25,14 +25,16 @@ type SafetyWorld = {
   trustRoot?: string;
 };
 
-function finalize(world: SafetyWorld): void {
+async function finalize(world: SafetyWorld): Promise<void> {
   const commands: string[][] = [];
   world.commands = commands;
-  world.finalizeResult = finalizeBranchUpdate(
+  world.finalizeResult = await finalizeBranchUpdate(
     {
       repo: "/worktree",
+      projectId: "demo",
       projectRepo: "/project",
       githubRepo: "owner/repo",
+      attemptRecord: "/state/runs/attempt/attempt.json",
       pr: "31",
       branch,
       expectedHead: head,
@@ -44,6 +46,7 @@ function finalize(world: SafetyWorld): void {
       checkCommand: "npm test",
     },
     {
+      ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, run: (args: string[]) => unknown) => run(["node", "/automation/run-project-check.ts"]),
       assertEnabled: () => ({ githubRepo: "owner/repo", githubRepositoryId: "R_repo" }),
       run: (args: string[]) => {
         commands.push(args);
@@ -146,28 +149,28 @@ Given("The pull request head was verified before the update", function (this: Sa
   this.crossRepository = false;
 });
 
-When("The pull request head changes after the project check", function (this: SafetyWorld) {
+When("The pull request head changes after the project check", async function (this: SafetyWorld) {
   this.changeHeadAfterChecks = true;
-  finalize(this);
+  await finalize(this);
 });
 
 Given("The pull request comes from another repository", function (this: SafetyWorld) {
   this.crossRepository = true;
 });
 
-When("Tracked changes appear in the worktree after the project check", function (this: SafetyWorld) {
+When("Tracked changes appear in the worktree after the project check", async function (this: SafetyWorld) {
   this.trackedChangesAfterChecks = true;
   try {
-    finalize(this);
+    await finalize(this);
   } catch (error) {
     if (error instanceof Error && error.message.includes("worktree is dirty")) return;
     throw error;
   }
 });
 
-When("deadloop attempts to complete the branch update", function (this: SafetyWorld) {
+When("deadloop attempts to complete the branch update", async function (this: SafetyWorld) {
   try {
-    finalize(this);
+    await finalize(this);
   } catch (error) {
     if (this.trackedChangesAfterChecks && error instanceof Error && error.message.includes("worktree is dirty")) return;
     throw error;
@@ -206,7 +209,7 @@ When("deadloop attempts to start a Claude work agent", function (this: SafetyWor
   spawnSync(
     "node",
     [
-      "extensions/deadloop/automations/launch-agent.ts",
+      "extensions/deadloop/automations/launch-agent.cts",
       "--agent",
       "claude",
       "--name",
@@ -238,8 +241,8 @@ Then("Only the selected branch is pushed", function (this: SafetyWorld) {
   assert.deepEqual(pushTargets(this), [[pushUrl, `${candidate}:refs/heads/${branch}`]]);
 });
 
-Then("The branch is pushed without force", function (this: SafetyWorld) {
-  assert.deepEqual(successfulPushForceOptions(this), [[]]);
+Then("The branch is pushed under a lease on the verified head and no other force variant", function (this: SafetyWorld) {
+  assert.deepEqual(successfulPushForceOptions(this), [[`--force-with-lease=refs/heads/${branch}:${head}`]]);
 });
 
 After(function (this: SafetyWorld) {

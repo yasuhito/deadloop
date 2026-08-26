@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { After, Given, Then, When } from "@cucumber/cucumber";
 
-const { runProjectCheck } = require("../../src/project-check.ts");
+const { runProjectCheck } = require("../../src/project-check.cts");
 
 type ProjectCheckResult = { code: number };
 type SafetyWorld = {

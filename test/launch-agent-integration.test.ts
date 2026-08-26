@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const launcher = path.join(process.cwd(), "extensions/deadloop/automations/launch-agent.ts");
+const launcher = path.join(process.cwd(), "extensions/deadloop/automations/launch-agent.cts");
 
 let sandbox: string;
 let binDir: string;
@@ -88,6 +88,19 @@ describe("launch-agent integration", () => {
     expect(recorded).toEqual([
       "agent", "start", "demo-worker", "--kind", "pi", "--pane", "p1",
       "--", "--name", "demo-worker", "--thinking", "medium", "--approve", `@${promptFile}`,
+    ]);
+  });
+
+  it("passes the omp launch argv to herdr with its own kind", () => {
+    fs.writeFileSync(promptFile, "prompt body");
+    const { recorded } = run([
+      "--agent", "omp", "--name", "demo-worker", "--cwd", worktree, "--level", "medium",
+      "--prompt-file", promptFile, "--pane", "p1",
+    ]);
+
+    expect(recorded).toEqual([
+      "agent", "start", "demo-worker", "--kind", "omp", "--pane", "p1",
+      "--", "--thinking", "medium", "--auto-approve", `@${promptFile}`,
     ]);
   });
 

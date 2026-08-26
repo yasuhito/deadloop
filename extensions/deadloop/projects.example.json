@@ -24,7 +24,7 @@
           "schedule": "*/10 * * * *",
           "promptFile": "issue-coordinator.prompt.md",
           "precheckFile": "issue-coordinator.precheck.sh",
-          "driverFile": "issue-coordinator-driver.ts",
+          "driverFile": "issue-coordinator-driver.cts",
           "precheckTimeoutSeconds": 60
         },
         {
@@ -33,7 +33,7 @@
           "schedule": "*/10 * * * *",
           "promptFile": "pr-reviewer.prompt.md",
           "precheckFile": "pr-reviewer.precheck.sh",
-          "driverFile": "pr-reviewer-driver.ts",
+          "driverFile": "pr-reviewer-driver.cts",
           "precheckTimeoutSeconds": 60
         }
       ]

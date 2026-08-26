@@ -10,8 +10,8 @@ const {
   renderRepairSuccessComment,
   reviewCommentExists,
   repairResultCommentExists,
-} = require("../extensions/deadloop/automations/pr-review-comments.ts");
-const { sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
+} = require("../extensions/deadloop/automations/pr-review-comments.cts");
+const { sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.cts");
 
 function fixture(name: string) {
   return JSON.parse(fs.readFileSync(path.join("test/fixtures/pr-review-comments", name), "utf8"));
@@ -67,6 +67,15 @@ Exactly one automatic repair for this review result will now start and will chan
         reviewFingerprint: "1".repeat(20),
       }),
     ).toContain("The reviewed head is approved. The configured handoff or merge safety checks can continue.");
+  });
+
+  it("labels agent validations as additional non-authoritative evidence", () => {
+    expect(renderApprovedReviewComment({
+      headOid: "a".repeat(40),
+      summary: "No actionable defects were found.",
+      reviewFingerprint: "1".repeat(20),
+      additionalValidations: ["npm run extra passed"],
+    })).toContain("informational and do not replace deadloop's required verification record");
   });
 
   it("renders advisory observations on an approved result", () => {

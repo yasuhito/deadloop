@@ -10,7 +10,7 @@ import {
   validateCompletionReportV1,
 } from "../src/attempt-lifecycle";
 
-const { validatePromise } = require("../extensions/deadloop/automations/extract-worker-promise.ts");
+const { validatePromise } = require("../extensions/deadloop/automations/extract-worker-promise.cts");
 
 const head = "a".repeat(40);
 const base = "b".repeat(40);

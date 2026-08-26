@@ -11,7 +11,7 @@
     "test": "npm run test:unit && npm run test:acceptance",
     "check:acceptance-rules": "tsx src/check-acceptance-rules.ts",
     "check": "npm run check:acceptance-rules && npm test && npm run lint && npm run typecheck && bash -n extensions/deadloop/automations/*.sh && npm pack --dry-run",
-    "lint": "biome check package.json biome.json cucumber.cjs deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src acceptance/**/*.ts extensions/deadloop/index.ts extensions/deadloop/automations/*.ts test/*.ts --files-ignore-unknown=true",
+    "lint": "biome check package.json biome.json cucumber.cjs deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src acceptance/**/*.ts extensions/deadloop/index.ts extensions/deadloop/automations/*.ts extensions/deadloop/automations/*.cts test/*.ts --files-ignore-unknown=true",
     "typecheck": "tsc --noEmit"
   },
   "files": [
@@ -30,8 +30,10 @@
     "extensions/deadloop/automations/*.md",
     "extensions/deadloop/automations/*.sh",
     "extensions/deadloop/automations/*.ts",
+    "extensions/deadloop/automations/*.cts",
     "skills/**/*.md",
     "src/**/*.ts",
+    "src/**/*.cts",
     "src/**/*.cjs"
   ],
   "pi": {

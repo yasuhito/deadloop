@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 // @ts-expect-error Node loads this CommonJS-style TypeScript module with built-in type stripping.
-const { normalizeEnablementStateValue } = require("./enablement-state.ts");
+const { normalizeEnablementStateValue } = require("./enablement-state.cts");
 const { acquireLockSync, releaseOwned } = require("./enablement-lock.cjs");
 const { currentDisableGeneration } = require("./disable-generation.cjs");
 
@@ -92,14 +92,26 @@ function withEnabledProjectLock(project, operation, options = {}) {
   const lockPath = path.join(project.stateDir, "enabled-projects.json.lock");
   fs.mkdirSync(project.stateDir, { recursive: true });
   const lock = acquireLockSync(lockPath, { ...options, busyMessage: "enablement state is busy; operation stopped" });
+  let outcome;
   try {
     const enabled = assertEnabled(project);
     const recheck = () => assertLocallyEnabled(project);
     options.afterAuthorization?.();
-    return operation(enabled, recheck);
-  } finally {
+    outcome = operation(enabled, recheck);
+  } catch (error) {
     releaseOwned(lockPath, lock.token);
+    throw error;
   }
+  // An asynchronous operation is still running when it returns its promise, so the guarded window
+  // ends when that promise settles, never when the call stack unwinds.
+  if (typeof outcome?.then !== "function") {
+    releaseOwned(lockPath, lock.token);
+    return outcome;
+  }
+  return outcome.then(
+    (value) => { releaseOwned(lockPath, lock.token); return value; },
+    (error) => { releaseOwned(lockPath, lock.token); throw error; },
+  );
 }
 
 module.exports = {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { consumeIssueRequest } = require("../src/issue-request-transition.ts");
+const { consumeIssueRequest } = require("../src/issue-request-transition.cts");
 
 type Event = {
   id: string;

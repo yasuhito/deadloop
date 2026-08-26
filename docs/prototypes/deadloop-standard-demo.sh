@@ -98,7 +98,7 @@ replay() {
   heading '1 / 4 — Queue one small Issue'
   printf 'Issue '; safe_summary "$queued"
   printf '\nlabels: %s\n' "$(label_names "$queued")"
-  printf '\nTwo explicit labels make the Issue eligible. Automatic merge is off.\n'
+  printf '\nThe agent:implement label makes the Issue eligible. Automatic merge is off.\n'
   sleep 15
 
   heading '2 / 4 — deadloop owns the guarded run'

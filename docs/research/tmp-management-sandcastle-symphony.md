@@ -83,7 +83,7 @@ Deadloop already has stronger *ownership correctness* than either reference in s
 - It explicitly separates “Git worktree is durable branch state” from “Herdr attempt workspace is disposable runtime state,” and writes an atomic launch-unique attempt journal before external mutation. [`docs/herdr-runner.md:19-39`](../herdr-runner.md#L19-L39).
 - It uses a repository-ID-scoped OS `flock`, launch-unique agent names, exact checkout/workspace ownership checks, and suppresses another attempt when retained state is ambiguous. [`extensions/deadloop/README.md`, State](../../extensions/deadloop/README.md#L23-L35); [`docs/herdr-runner.md:60-82`](../herdr-runner.md#L60-L82).
 - Successful attempts close the Herdr workspace only after GitHub-side evidence is proven, while linked worktrees remain until a separate merged/closed-PR safety gate. This intentionally differs from Sandcastle's usual clean-worktree deletion and is closer to Symphony's durable per-issue workspace, but with stronger journal binding. [`docs/herdr-runner.md:47-82`](../herdr-runner.md#L47-L82).
-- The adapter calls Herdr/Git with inherited environment; it does not pass an explicit `env`, set `TMPDIR`, or check capacity. [`src/herdr-runner.ts:194-196`](../../src/herdr-runner.ts#L194-L196), [`src/herdr-runner.ts:222-257`](../../src/herdr-runner.ts#L222-L257).
+- The adapter calls Herdr/Git with inherited environment; it does not pass an explicit `env`, set `TMPDIR`, or check capacity. [`src/herdr-runner.cts:194-196`](../../src/herdr-runner.cts#L194-L196), [`src/herdr-runner.cts:222-257`](../../src/herdr-runner.cts#L222-L257).
 
 The gap exposed by the observed incident is therefore *resource containment and capacity*, not primarily state identity. A user-scoped `/tmp` tmpfs quota can return `ENOSPC` even when system-wide disk appears free; every same-user Pi/Herdr/agent process inherits the same pressure domain. Closing a terminal or deleting a worktree on another filesystem does not guarantee relief if agent scratch files, sockets, downloads, compiler intermediates, or Herdr runtime artifacts remain in `/tmp`. Because deadloop and Workers run as the same OS user and Herdr is not a filesystem sandbox, the host must deliberately route and account for temporary storage.
 
@@ -125,7 +125,7 @@ The gap exposed by the observed incident is therefore *resource containment and 
 ## Review findings
 
 1. **critical — Symphony `elixir/lib/symphony_elixir/config/schema.ex:72-84`**: the default workspace root is the system temp directory, directly reproducing the risk class when `/tmp` is quota-limited.
-2. **critical — deadloop `src/herdr-runner.ts:194-196, 222-257`**: child commands inherit ambient temp settings and there is no free-space/inode admission gate or ENOSPC classification.
+2. **critical — deadloop `src/herdr-runner.cts:194-196, 222-257`**: child commands inherit ambient temp settings and there is no free-space/inode admission gate or ENOSPC classification.
 3. **high — both upstream systems**: no storage budget or pressure-triggered GC exists; lifecycle cleanup cannot prevent quota exhaustion from live or retained runs.
 4. **high — Sandcastle `src/WorktreeManager.ts:291-366` at `e99f832f`**: named-branch worktree reuse has no source-enforced exclusion despite ADR 0007; concurrent same-branch writers can share a directory.
 5. **medium — Symphony `orchestrator.ex` startup cleanup**: only known terminal tracker issues are reclaimed; unknown/nonterminal stale directories are not collected, and cleanup is skipped when tracker fetch fails.
@@ -147,7 +147,7 @@ The gap exposed by the observed incident is therefore *resource containment and 
 - [`orchestrator.ex` at `58cf97d`](https://github.com/openai/symphony/blob/58cf97da06d556c019ccea20c67f4f77da124bf3/elixir/lib/symphony_elixir/orchestrator.ex) — retries, terminal cleanup, startup recovery, concurrency.
 - [`config/schema.ex` at `58cf97d`](https://github.com/openai/symphony/blob/58cf97da06d556c019ccea20c67f4f77da124bf3/elixir/lib/symphony_elixir/config/schema.ex) — `/tmp` default, concurrency defaults, and Codex temp access policy.
 - [`SPEC.md` at `58cf97d`](https://github.com/openai/symphony/blob/58cf97da06d556c019ccea20c67f4f77da124bf3/SPEC.md) — first-party normative lifecycle/recovery contract.
-- deadloop [`docs/herdr-runner.md`](../herdr-runner.md), [`extensions/deadloop/README.md`](../../extensions/deadloop/README.md), and [`src/herdr-runner.ts`](../../src/herdr-runner.ts) — local architecture and actual adapter behavior.
+- deadloop [`docs/herdr-runner.md`](../herdr-runner.md), [`extensions/deadloop/README.md`](../../extensions/deadloop/README.md), and [`src/herdr-runner.cts`](../../src/herdr-runner.cts) — local architecture and actual adapter behavior.
 
 ### Dropped
 

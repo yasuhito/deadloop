@@ -20,10 +20,10 @@ import { evaluateCompletionPersistence, orchestrateFreshAttemptWorkspace, reconc
 import { runScheduledAutomation } from "../../src/automation-runner";
 import { normalizeProject } from "../../src/core";
 
-const { envConfig: workerEnvironment, launchIssueWorkerFlow } = require("../../extensions/deadloop/automations/issue-coordinator-driver.ts");
-const { envConfig: reviewerEnvironment, launchBranchUpdate, launchRequestBoundPrReviewerFlow } = require("../../extensions/deadloop/automations/pr-reviewer-driver.ts");
-const { envConfig: repairEnvironment, launchRepair, recordRepairLaunchGithubClaim } = require("../../extensions/deadloop/automations/pr-review-repair-dispatch.ts");
-const { selectCleanupPlan } = require("../../extensions/deadloop/automations/cleanup-completed-worker-worktrees.ts");
+const { envConfig: workerEnvironment, launchIssueWorkerFlow } = require("../../extensions/deadloop/automations/issue-coordinator-driver.cts");
+const { envConfig: reviewerEnvironment, launchBranchUpdate, launchRequestBoundPrReviewerFlow } = require("../../extensions/deadloop/automations/pr-reviewer-driver.cts");
+const { envConfig: repairEnvironment, launchRepair, recordRepairLaunchGithubClaim } = require("../../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
+const { selectCleanupPlan } = require("../../extensions/deadloop/automations/cleanup-completed-worker-worktrees.cts");
 
 const inputHead = "a".repeat(40);
 const outputHead = "b".repeat(40);
@@ -316,6 +316,7 @@ function launchRepairBoundary(workspaceId: string) {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-cucumber-review-repair-"));
   const env = repairEnvironment({
     projectId: "demo", repoPath: "/repo", githubRepo: "owner/repo", worktreeRoot: root, stateDir: root,
+    requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "a".repeat(40) },
   });
   const branch = "agent/issue-12";
   const findings = [{ title: "Bounded defect", body: "Repair the selected defect", path: "src/a.ts", severity: "major" }];
@@ -360,6 +361,7 @@ function launchBranchUpdateBoundary(workspaceId: string) {
     const env = reviewerEnvironment({
       DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: repoPath, DEADLOOP_GITHUB_REPO: "owner/repo",
       DEADLOOP_WORKTREE_ROOT: worktreeRoot, DEADLOOP_STATE_DIR: stateDir, DEADLOOP_ENABLED_AT: String(enabledAt),
+      DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: "a".repeat(40) }),
       DEADLOOP_GITHUB_REPOSITORY_ID: "R_fixture", DEADLOOP_AUTOMATION_LOGIN: "deadloop-bot",
       DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
     });

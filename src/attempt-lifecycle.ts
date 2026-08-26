@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { RequiredVerificationContract } from "./required-verification";
-import type { PriorRequiredFindingDisposition } from "./reviewer-outcome-contract";
+import type { PriorRequiredFindingDisposition } from "./reviewer-outcome-contract-types";
 
-const { isPriorRequiredFindingDisposition } = require("./reviewer-outcome-contract.ts");
+const { isPriorRequiredFindingDisposition } = require("./reviewer-outcome-contract.cts");
 
 export const ATTEMPT_RECORD_FILE = "attempt.json";
 const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
@@ -140,8 +140,11 @@ export type AttemptAbandonment = {
   abandonedAt: string;
 };
 
+// A completed attempt never reaches `authority_released`: it transitions through `report_received`
+// and `github_persisted` to `workspace_closed`, which releases ownership on its own. These reasons
+// therefore name the ways an attempt can end without completing.
 export type AttemptAuthorityRelease = {
-  reason: "github_authority_lost" | "never_launched";
+  reason: "owner_absent" | "terminal_missing_report" | "never_launched" | "superseded_by_request";
   releasedAt: string;
   cutoffEventId?: string;
 };
@@ -305,11 +308,12 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
       fail("authority_released requires authorityRelease evidence");
     }
     const evidence = record.authorityRelease as Record<string, unknown>;
-    if (evidence.reason !== "github_authority_lost" && evidence.reason !== "never_launched") fail("authorityRelease.reason is invalid");
+    const reasons: AttemptAuthorityRelease["reason"][] = ["owner_absent", "terminal_missing_report", "never_launched", "superseded_by_request"];
+    if (!reasons.includes(evidence.reason as AttemptAuthorityRelease["reason"])) fail("authorityRelease.reason is invalid");
     const releasedAt = nonEmptyString(evidence.releasedAt, "authorityRelease.releasedAt");
     if (!Number.isFinite(Date.parse(releasedAt))) fail("authorityRelease.releasedAt must be an ISO timestamp");
     const cutoffEventId = evidence.cutoffEventId === undefined ? undefined : nonEmptyString(evidence.cutoffEventId, "authorityRelease.cutoffEventId");
-    authorityRelease = { reason: evidence.reason, releasedAt, ...(cutoffEventId ? { cutoffEventId } : {}) };
+    authorityRelease = { reason: evidence.reason as AttemptAuthorityRelease["reason"], releasedAt, ...(cutoffEventId ? { cutoffEventId } : {}) };
   } else if (record.authorityRelease !== undefined) fail("authorityRelease evidence requires authority_released phase");
 
   return {
@@ -516,7 +520,7 @@ export function releasePersistedAttemptAuthority(
   runDir: string,
   releasedAt: string,
   cutoffEventId?: string,
-  reason: AttemptAuthorityRelease["reason"] = "github_authority_lost",
+  reason: AttemptAuthorityRelease["reason"] = "owner_absent",
 ): AttemptRecord {
   const current = readAttemptRecord(runDir);
   if (current.phase === "authority_released") return current;

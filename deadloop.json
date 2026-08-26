@@ -1,3 +1,5 @@
 {
-  "checkCommand": "npm run check"
+  "checkCommand": "npm run check",
+  "workerModel": "openai-codex/gpt-5.6-sol",
+  "reviewerModel": "openai-codex/gpt-5.6-sol"
 }
