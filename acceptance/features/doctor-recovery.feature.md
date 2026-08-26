@@ -26,6 +26,18 @@ Operators can check blocked work simply by viewing `/deadloop-doctor`, clean up 
 * When The operator runs doctor
 * Then doctor shows its target-specific requeue command
 
+## Scenario: Hide required-verification PR requeue while configuration remains blocked
+
+* Given A pull request was stopped by unresolved required verification
+* When The operator runs doctor
+* Then doctor does not show its PR requeue command
+
+## Scenario: Show required-verification PR requeue after configuration resolves
+
+* Given A pull request was stopped by required verification that is now resolved
+* When The operator runs doctor
+* Then doctor shows its PR-specific requeue command
+
 ## Scenario: Show the command to check the worktree of a stale in-progress Issue.
 
 * Given A worktree exists for an Issue with `agent:in-progress` whose updates stopped more than 24 hours ago

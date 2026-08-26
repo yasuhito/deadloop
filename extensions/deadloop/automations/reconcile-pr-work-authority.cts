@@ -322,6 +322,15 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       } catch {}
     }
     const malformed = attempts.malformed.filter((attempt) => Number(attempt.target?.number) === number);
+    // Every recorded reason this PR's launches failed before starting an agent: the attempts still
+    // waiting to be released this cycle, and the ones earlier cycles already released. This is what
+    // lets a stop name the real failure instead of a missing journal.
+    const launchFailures = [
+      ...claimed.filter(releasableUnlaunchedAttempt),
+      ...attempts.released.filter((attempt) => attempt.target?.kind === "pull-request"
+        && Number(attempt.target?.number) === number
+        && attempt.authorityRelease?.reason === "never_launched"),
+    ].map((attempt) => String(attempt.launchError || "")).filter(Boolean);
     const events = github.listPrTimelineEvents(args.githubRepo, number);
     let request: { kind: string };
     let runtime: { kind: string };
@@ -365,7 +374,8 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       }
     }
 
-    const input = { pr: { ...pr, labels: labels(pr) }, request, runtime, requestLabels, inProgressLabel, blockedLabel, completion };
+    const input = { pr: { ...pr, labels: labels(pr) }, request, runtime, requestLabels, inProgressLabel, blockedLabel, completion,
+      ...(launchFailures.length ? { launchFailures } : {}) };
     let blockStarted: { reason: string; timelineEventIds: string[] } | undefined;
     try {
       const receipt = JSON.parse(fs.readFileSync(recoveryFile, "utf8"));
