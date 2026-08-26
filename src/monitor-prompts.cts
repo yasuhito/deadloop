@@ -11,6 +11,12 @@ type MonitorPromptBaseInput = {
   enabledAt?: number;
 };
 
+
+type ExplorerMonitorPromptInput = MonitorPromptBaseInput & {
+  issueNumber: number;
+  /** Deterministic completion command the monitor must run after a terminal promise. */
+  completionCommand?: string;
+};
 type IssueMonitorPromptInput = MonitorPromptBaseInput & {
   issueNumber: number;
   issueTitle?: string;
@@ -177,6 +183,21 @@ Terminal handling:
 Prohibited in every path: force-push, any monitor-side push, label changes on success/stale, PR creation, PR merge, issue close, branch deletion, or retrying this exact head/base pair.
 
 Report only the terminal action and evidence.`;
+
+}
+function renderExplorerMonitorPrompt(input: ExplorerMonitorPromptInput): string {
+  const lines = [
+    `A read-only explorer is running for Issue #${input.issueNumber}.`,
+    `Monitor only the promise file at ${input.promiseFile}. Do not launch another agent.`,
+    "Do not mutate the repository or GitHub. The deterministic completion path will validate and persist the result.",
+  ];
+  if (input.completionCommand) {
+    lines.push(
+      `After a complete or blocked promise, run exactly: \`${input.completionCommand}\`.`,
+      "If completion reports cleanup pending, do not replay the result comment or label mutation; retry the same command.",
+    );
+  }
+  return lines.join("\n");
 }
 
 function renderReviewerDispatcherCommand(input: ReviewerMonitorPromptInput): string {
@@ -282,6 +303,7 @@ Report only the terminal action and evidence.`;
 
 type PendingMonitorHandoff =
   | { kind: "issue"; input: IssueMonitorPromptInput }
+  | { kind: "explorer"; input: ExplorerMonitorPromptInput }
   | { kind: "reviewer"; input: ReviewerMonitorPromptInput }
   | { kind: "branch-update"; input: BranchUpdateMonitorPromptInput }
   | { kind: "repair"; input: RepairMonitorPromptInput };
@@ -290,6 +312,9 @@ function renderPendingMonitorHandoff(handoff: PendingMonitorHandoff, enabledAt?:
   if (!handoff.input || typeof handoff.input !== "object") throw new Error("unsupported pending monitor handoff");
   if (handoff.kind === "issue") {
     return renderIssueMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
+  }
+  if (handoff.kind === "explorer") {
+    return renderExplorerMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
   }
   if (handoff.kind === "reviewer") {
     return renderReviewerMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
@@ -305,6 +330,7 @@ function renderPendingMonitorHandoff(handoff: PendingMonitorHandoff, enabledAt?:
 
 module.exports = {
   renderBranchUpdateMonitorPrompt,
+  renderExplorerMonitorPrompt,
   renderIssueMonitorPrompt,
   renderPendingMonitorHandoff,
   renderPromisePollingRules,

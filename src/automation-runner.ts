@@ -4,8 +4,11 @@ import {
   type NormalizedAutomation,
   type NormalizedProject,
 } from "./core";
+import type { MonitorHandoffDisposition } from "./monitor-handoff-types";
 const { passesIssueLabelGate } = require("./issue-eligibility.cjs");
 const { renderPendingMonitorHandoff } = require("./monitor-prompts.cts");
+
+export type { MonitorHandoffDisposition } from "./monitor-handoff-types";
 
 const MONITOR_HANDOFF_RETRY_MS = 60_000;
 
@@ -32,7 +35,11 @@ export type AutomationRunnerDeps = {
   enabledAt?: () => number;
   isEnabled?: () => boolean;
   isIdle?: () => boolean;
-  monitorHandoffIsTerminal?: (handoff: Record<string, unknown>) => boolean;
+  monitorHandoffDisposition?: (handoff: Record<string, unknown>) => MonitorHandoffDisposition;
+  applyMonitorHandoffDisposition?: (
+    handoff: Record<string, unknown>,
+    disposition: Exclude<MonitorHandoffDisposition, { action: "continue_legacy_monitor" } | { action: "settled" }>,
+  ) => boolean;
   notify?: (message: string, level: "info" | "warning" | "error") => void;
   now: () => number;
   prepareExecutionSupply: () => AutomationExecutionSupply | Promise<AutomationExecutionSupply>;
@@ -110,7 +117,8 @@ export function deliverPendingDriverHandoff(
     | "isEnabled"
     | "notify"
     | "now"
-    | "monitorHandoffIsTerminal"
+    | "monitorHandoffDisposition"
+    | "applyMonitorHandoffDisposition"
     | "revalidatePendingDriverHandoff"
     | "saveState"
     | "sendUserMessage"
@@ -151,15 +159,52 @@ export function deliverPendingDriverHandoff(
         deps.notify?.(`deadloop discarded stale monitor handoff: ${automationName}`, "warning");
         return true;
       }
-      prompt = renderPendingMonitorHandoff(monitorHandoff, currentEnabledAt);
-      if (deps.monitorHandoffIsTerminal?.(monitorHandoff)) {
-        delete entry.pendingDriverHandoff;
-        recordAutomationResult(entry, "driver_monitor_settled");
-        entry.updatedAt = deps.now();
-        deps.saveState(state);
-        return true;
-      }
       const monitorQueuedAt = payload.monitorQueuedAt;
+      if (typeof monitorQueuedAt === "number" && Number.isFinite(monitorQueuedAt)) {
+        const disposition = deps.monitorHandoffDisposition?.(monitorHandoff) ?? { action: "continue_legacy_monitor" };
+        if (disposition.action === "settled") {
+          delete entry.pendingDriverHandoff;
+          recordAutomationResult(entry, "driver_monitor_settled");
+          entry.updatedAt = deps.now();
+          deps.saveState(state);
+          return true;
+        }
+        if (disposition.action === "preserve") {
+          recordAutomationResult(entry, "driver_monitor_observation_ambiguous");
+          entry.lastSummary = disposition.reason;
+          entry.updatedAt = deps.now();
+          deps.saveState(state);
+          return true;
+        }
+        if (disposition.action !== "continue_legacy_monitor") {
+          try {
+            if (payload.monitorContainmentApplied !== true) {
+              payload.monitorContainmentApplied =
+                deps.applyMonitorHandoffDisposition?.(monitorHandoff, disposition) === true;
+            }
+            const applied = payload.monitorContainmentApplied === true;
+            if (disposition.action === "stop" && applied) delete entry.pendingDriverHandoff;
+            recordAutomationResult(
+              entry,
+              disposition.action === "wait_for_model"
+                ? "driver_monitor_waiting_for_model"
+                : disposition.action === "stop"
+                  ? applied ? "driver_monitor_stopped" : "driver_monitor_stop_pending"
+                  : "driver_monitor_observation_ambiguous",
+            );
+            entry.lastSummary = disposition.reason;
+            entry.updatedAt = deps.now();
+            deps.saveState(state);
+          } catch (error) {
+            recordAutomationResult(entry, "driver_monitor_stop_pending");
+            entry.lastError = error instanceof Error ? error.message : String(error);
+            entry.updatedAt = deps.now();
+            deps.saveState(state);
+          }
+          return true;
+        }
+      }
+      prompt = renderPendingMonitorHandoff(monitorHandoff, currentEnabledAt);
       if (
         typeof monitorQueuedAt === "number" &&
         Number.isFinite(monitorQueuedAt) &&

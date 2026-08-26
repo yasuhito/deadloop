@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 const {
+  branchUpdatePrObservation,
   assertBranchUpdateAttemptBinding,
   assertBranchUpdateCompletionObservation,
   assertBranchUpdateRepositoryIdentity,
@@ -36,6 +37,14 @@ function idempotentObservation(overrides: Record<string, unknown> = {}) {
     mode: "already-applied",
   };
 }
+
+describe("branch update PR observation", () => {
+  it("reads label names from the PR label collection", () => {
+    expect(branchUpdatePrObservation({
+      labels: [{ name: "agent:in-progress" }],
+    }).labels).toEqual(["agent:in-progress"]);
+  });
+});
 
 describe("branch update completion arguments", () => {
   it("does not require a review claim", () => {

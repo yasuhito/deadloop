@@ -107,6 +107,10 @@ type PrObservation = {
   labels: string[];
 };
 
+function branchUpdatePrObservation(pr: JsonObject): PrObservation {
+  return { pr, labels: labelNames(pr.labels) };
+}
+
 function waitForPushedHeadVisibility(input: {
   observe: () => PrObservation;
   pause: () => void;
@@ -164,7 +168,7 @@ function completion(args: JsonObject): DriverResult {
     const observation = createGithubOperations(runner);
     const observe = (): PrObservation => {
       const current = observation.getPr(String(args.githubRepo), String(args.pr));
-      return { pr: current, labels: labelNames(current) };
+      return branchUpdatePrObservation(current);
     };
     const observePushedHead = (): PrObservation => waitForPushedHeadVisibility({
       observe,
@@ -233,6 +237,7 @@ function main(): void {
 if (require.main === module) main();
 
 module.exports = {
+  branchUpdatePrObservation,
   assertBranchUpdateAttemptBinding,
   assertBranchUpdateCompletionObservation,
   assertBranchUpdateRepositoryIdentity,

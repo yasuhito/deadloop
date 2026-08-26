@@ -17,7 +17,7 @@ const {
 } = require("../../../src/issue-required-verification-stop.cts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.cts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.cts");
-const { renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.cts");
+const { renderExplorerMonitorPrompt, renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.cts");
 const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
@@ -1017,7 +1017,9 @@ function driveSelectedIssue(
       }
       throw error;
     }
-    const completion = [
+    // The completion command travels inside the structured monitor input so handoff
+    // redelivery re-renders it instead of dropping the deterministic completion step.
+    const completionCommand = [
       "node", shellQuote(path.join(env.automationDir, "complete-issue-exploration.cts")),
       "--attempt-record", shellQuote(launch.attemptRecordFile),
       "--project-id", shellQuote(env.projectId),
@@ -1030,17 +1032,25 @@ function driveSelectedIssue(
       "--in-progress-label", shellQuote(env.inProgressLabel),
       "--blocked-label", shellQuote(env.blockedLabel),
     ].join(" ");
-    const prompt = [
-      `A read-only explorer is running for Issue #${issue.number}.`,
-      `Monitor only the promise file at ${launch.promiseFile}. Do not launch another agent.`,
-      "Do not mutate the repository or GitHub. The deterministic completion path will validate and persist the result.",
-      `After a complete or blocked promise, run exactly: \`${completion}\`.`,
-      "If completion reports cleanup pending, do not replay the result comment or label mutation; retry the same command.",
-    ].join("\n");
+    const monitorInput = {
+      issueNumber: Number(issue.number || 0),
+      automationDir: env.automationDir,
+      promiseFile: String(launch.promiseFile || ""),
+      attemptRecordFile: String(launch.attemptRecordFile || ""),
+      actorName: "explorer",
+      projectId: env.projectId,
+      repoPath: env.repoPath,
+      githubRepo: env.githubRepo,
+      stateDir: env.stateDir,
+      enabledAt: env.enabledAt,
+      completionCommand,
+    };
+    const prompt = renderExplorerMonitorPrompt(monitorInput);
     return driverResult("needs_llm", `Launched read-only explorer for Issue #${issue.number}`, {
       driverAction: "explorer_monitor_request",
       issueNumber: issue.number,
       launch,
+      monitorHandoff: { kind: "explorer", input: monitorInput },
       prompt,
     });
   }
