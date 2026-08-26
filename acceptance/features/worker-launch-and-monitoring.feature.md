@@ -1,6 +1,6 @@
-# Feature: Start a work agent once and monitor it to completion
+# Feature: Start a work agent once and monitor it deterministically to completion
 
-Start each Issue's work agent exactly once in a dedicated worktree and monitor it safely until its promise file is complete.
+Start each Issue's work agent exactly once in a dedicated worktree and monitor it with the shared deterministic attempt monitor until its completion report settles.
 This avoids disrupting an active agent or an agent on another worktree and avoids terminating active work prematurely.
 
 ## Scenario: Create a dedicated worktree from the base branch for a prepared Issue
@@ -15,50 +15,32 @@ This avoids disrupting an active agent or an agent on another worktree and avoid
 * When deadloop starts the Issue's agent
 * Then deadloop starts exactly one new agent
 
-## Scenario: Hand the started agent off to promise-file monitoring
+## Scenario: Hand the started Worker off to deterministic attempt monitoring
 
 * Given An Issue ready for work has been selected
 * When deadloop starts work on the selected Issue
-* Then The Issue enters promise-file monitoring
+* Then The driver registers model-free deterministic monitoring for the Issue
 
-## Scenario: Continue monitoring an agent with recent activity after a report request
+## Scenario: Keep the started Worker's monitoring off the Automation host model
 
-* Given The agent has recent activity after being asked for a promise file
-* When deadloop evaluates the agent's monitoring state
-* Then deadloop continues monitoring the agent
+* Given An Issue ready for work has been selected
+* When deadloop starts work on the selected Issue
+* Then deadloop queues no host-model prompt for the Issue
 
-## Scenario: Continue monitoring during the grace period after requesting a promise file
+## Scenario: Bind the monitored attempt to the consumed request generation
 
-* Given The promise-file request is still within its grace period
-* When deadloop evaluates the agent's monitoring state
-* Then deadloop continues monitoring the agent
+* Given An Issue ready for work has been selected
+* When deadloop starts work on the selected Issue
+* Then The monitor handoff carries the consumed request generation
 
-## Scenario: Request a promise file before terminating an agent that has finished activity
+## Scenario: Keep a working runtime active on quiet output through the shared directive interface
 
-* Given An agent has finished activity without writing a promise file
-* When deadloop evaluates the agent's monitoring state
-* Then deadloop asks the agent to write the promise file
+* Given A monitored Issue Worker whose runtime reports working status past its last observation
+* When the deterministic monitor evaluates the attempt
+* Then deadloop continues the attempt as working
 
-## Scenario: Permit termination only after confirming inactivity and expiry of the grace period
+## Scenario: Stop an idle runtime that ended without a completion report instead of nudging it
 
-* Given Agent inactivity and expiry of the post-request grace period are confirmed
-* When deadloop evaluates the agent's monitoring state
-* Then deadloop permits the agent pane to close
-
-## Scenario: Collect missing observations before deciding to terminate
-
-* Given The post-request grace period expired without an observation of the agent pane
-* When deadloop evaluates the agent's monitoring state
-* Then deadloop collects the missing observation before termination
-
-## Scenario Outline: End monitoring when the promise file is complete regardless of agent state
-
-* Given The <status> agent has finished writing the promise file
-* When deadloop evaluates the agent's monitoring state
-* Then deadloop ends monitoring according to the promise file
-
-### Examples:
-
-  | status |
-  | working |
-  | done |
+* Given A monitored Issue Worker whose runtime ended terminally without writing a report
+* When the deterministic monitor evaluates the attempt
+* Then deadloop records a missing report without sending any monitor prompt

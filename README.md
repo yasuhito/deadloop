@@ -152,7 +152,7 @@ Reviewers can still report requested changes or a required human decision when r
 
 Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
 
-Reviewer, branch-update, and review-repair attempts are monitored deterministically without using the Automation host's model. Runtime-reported working status wins over quiet output, the configured 24-hour limit applies to active work, and a terminal attempt without a valid completion report is never prompted or nudged through conversation.
+Issue implementation Workers, explorers, PR reviewers, review-repair workers, and branch-update attempts are monitored deterministically without using the Automation host's model. Runtime-reported working status wins over quiet output, the configured 24-hour limit applies to active work, and a terminal attempt without a valid completion report is never prompted or nudged through conversation. A Worker completion report runs the required verification, destination-bound push, draft PR creation with review request, and attempt persistence as one deterministic chain; an explorer result is validated and persisted with its next Issue action.
 
 When the runtime confirms a stopped review, deadloop re-reads its completion report once more before recording anything, and publishes the stop on the PR bound to the attempt and the exact head selected for review. A stop whose report file itself could not be read because of `ENOSPC` or `EDQUOT` is recorded as a capacity stop with free-storage recovery steps; pane output alone never names that cause. Both failure classes skip the bounded technical retry and never retry automatically.
 

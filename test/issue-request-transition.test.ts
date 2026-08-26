@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 const {
   consumeIssueRequest,
   issueRecoveryBlockCanBeCleared,
-  persistFailedExploration,
+  persistIssueAttemptStop,
   persistSuccessfulExploration,
 } = require("../src/issue-request-transition.cts");
 
@@ -412,11 +412,12 @@ function failedExplorationScenario(options: {
       explanation: "The explorer could not prove a safe result.",
       recovery: "Correct the cause, then add the exploration request again.",
     },
+    stopNoun: "exploration",
     persistGithub: () => { persisted = true; },
   };
   let outcome;
-  try { outcome = persistFailedExploration(input); } catch (error) { outcome = { kind: "interrupted", error }; }
-  if (options.retry) outcome = persistFailedExploration(input);
+  try { outcome = persistIssueAttemptStop(input); } catch (error) { outcome = { kind: "interrupted", error }; }
+  if (options.retry) outcome = persistIssueAttemptStop(input);
   return { comments, events: state.events, labels: [...state.labels], outcome, persisted };
 }
 

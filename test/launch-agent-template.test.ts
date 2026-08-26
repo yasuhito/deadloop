@@ -25,9 +25,6 @@ function issueCoordinatorWorkerResult(): Record<string, any> {
   return JSON.parse(result.stdout);
 }
 
-function issueCoordinatorWorkerPrompt(): string {
-  return issueCoordinatorWorkerResult().prompt;
-}
 
 // A raw agent-launch branch is a `herdr agent start ... -- <agent binary>` command that names the
 // agent binary directly, which the launcher replaced. The alternation is derived from the profile
@@ -67,7 +64,9 @@ describe("agent launch template", () => {
   });
 
   it("keeps no raw agent-start launch branch in the issue coordinator", () => {
-    expect(issueCoordinatorWorkerPrompt()).not.toMatch(rawLaunchBranch);
+    const result = issueCoordinatorWorkerResult();
+
+    expect(JSON.stringify(result.monitorHandoff)).not.toMatch(rawLaunchBranch);
   });
 
   it("keeps no raw agent-start launch branch in the pr reviewer", () => {

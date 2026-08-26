@@ -841,6 +841,9 @@ export function automationEnvironment(
     DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS: automation.driverFile === "pr-reviewer-driver.cts"
       ? envText(values.automationMaxRuntimeSeconds)
       : undefined,
+    DEADLOOP_COORDINATOR_MAX_RUNTIME_SECONDS: automation.driverFile === "issue-coordinator-driver.cts"
+      ? envText(values.automationMaxRuntimeSeconds)
+      : undefined,
     DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: envText(project.automationLogins.join(",")),
     DEADLOOP_AUTO_MERGE: envText(values.autoMerge),
     DEADLOOP_CI_FALLBACK_ENABLED: envText(values.ciFallbackEnabled),
