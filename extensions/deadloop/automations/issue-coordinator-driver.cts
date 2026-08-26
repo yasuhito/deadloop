@@ -35,7 +35,7 @@ const {
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.cts");
-const { readAttemptRecord, releasePersistedAttemptAuthority } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { attemptRecordPath, readAttemptRecord, releasesAttemptOwnership, releasePersistedAttemptAuthority } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertCurrentWorkerContract, requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
@@ -384,64 +384,110 @@ function shouldSimulateLaunch(fixture: JsonObject | null): boolean {
   return Boolean(fixture);
 }
 
-type AbandonedWorkerCheckout = {
+/** A preserved checkout of a formally stopped Worker attempt that released its ownership. */
+type StoppedWorkerCheckout = {
   branch: string;
   worktreePath: string;
-  inputHead: string;
-  abandonedAt: string;
+  preservedHead: string;
+  stoppedAt: string;
   workspaceId: string;
   agentName: string;
 };
 
-function abandonedWorkerCheckout(issueNumber: number, env: ReturnType<typeof envConfig>): AbandonedWorkerCheckout | null {
+/** A journal can only vouch for a checkout it provably held: it must name the workspace evidence. */
+function holdsStoppedAttemptWorkspace(record: Record<string, any>): boolean {
+  return Boolean(record.workspaceId && record.tabId && record.rootPaneId);
+}
+
+/** Revisions this journal proves the checkout may sit at: its input, plus its recorded output. */
+function provableCheckoutHeads(record: Record<string, any>): string[] {
+  return [record.inputRevision.head, ...(record.outputRevision ? [record.outputRevision] : [])];
+}
+
+/** When this attempt stopped; only orders equivalent vouchers, never decides safety. */
+function stoppedAttemptTimestamp(record: Record<string, any>, runDir: string): string {
+  if (record.abandonment) return record.abandonment.abandonedAt;
+  if (record.authorityRelease) return record.authorityRelease.releasedAt;
+  // The workspace_closed transition was the journal's last write.
+  try { return fs.statSync(attemptRecordPath(runDir)).mtime.toISOString(); }
+  catch { return new Date(0).toISOString(); }
+}
+
+function stoppedWorkerCheckout(
+  issueNumber: number,
+  env: ReturnType<typeof envConfig>,
+  ops: { runText: (args: string[]) => string },
+): StoppedWorkerCheckout | null {
   const runsRoot = path.join(env.stateDir, "runs");
   let entries: string[];
   try { entries = fs.readdirSync(runsRoot); } catch { return null; }
-  const candidates: AbandonedWorkerCheckout[] = [];
+  const candidates: Array<{ checkout: StoppedWorkerCheckout; heads: string[] }> = [];
   for (const entry of entries) {
     const runDir = path.join(runsRoot, entry);
     if (!fs.existsSync(path.join(runDir, "attempt.json"))) continue;
     const record = readAttemptRecord(runDir);
     if (record.project !== env.projectId || record.repository !== env.githubRepo || record.role !== "worker"
-      || record.target?.kind !== "issue" || record.target.number !== issueNumber || record.phase !== "abandoned") continue;
+      || record.target?.kind !== "issue" || record.target.number !== issueNumber
+      || !releasesAttemptOwnership(record.phase) || !holdsStoppedAttemptWorkspace(record)) continue;
     candidates.push({
-      branch: record.branch,
-      worktreePath: record.worktreePath,
-      inputHead: record.inputRevision.head,
-      abandonedAt: record.abandonment.abandonedAt,
-      workspaceId: record.workspaceId,
-      agentName: record.agentName,
+      heads: provableCheckoutHeads(record),
+      checkout: {
+        branch: record.branch,
+        worktreePath: record.worktreePath,
+        preservedHead: record.inputRevision.head,
+        stoppedAt: stoppedAttemptTimestamp(record, runDir),
+        workspaceId: record.workspaceId,
+        agentName: record.agentName,
+      },
     });
   }
   if (!candidates.length) return null;
+  // One Issue may hold one preserved checkout: journals naming different branches or paths leave
+  // the resume target ambiguous, so they fail closed instead of silently picking one.
   const identities = new Set(candidates.map((candidate) =>
-    `${candidate.branch}\0${path.resolve(candidate.worktreePath)}\0${candidate.inputHead.toLowerCase()}`));
-  if (identities.size !== 1) throw new Error(`Issue #${issueNumber} has conflicting abandoned Worker checkouts`);
-  return candidates.sort((left, right) => Date.parse(right.abandonedAt) - Date.parse(left.abandonedAt))[0];
+    `${candidate.checkout.branch}\0${path.resolve(candidate.checkout.worktreePath)}`));
+  if (identities.size !== 1) throw new Error(`Issue #${issueNumber} has conflicting stopped Worker checkouts`);
+  const checkout = candidates[0].checkout;
+  let head: string;
+  try {
+    head = ops.runText(["git", "-C", checkout.worktreePath, "rev-parse", "--verify", "HEAD^{commit}"]).trim();
+  } catch (error) {
+    throw new Error(`Issue #${issueNumber} Worker checkout ${checkout.branch} at ${checkout.worktreePath}`
+      + ` is gone while a stopped attempt still preserves it as evidence; restore it or remove the stale branch by hand`,
+      { cause: error });
+  }
+  const vouchers = candidates.filter((candidate) =>
+    candidate.heads.some((revision) => revision.toLowerCase() === head.toLowerCase()));
+  if (!vouchers.length) {
+    throw new Error(`Issue #${issueNumber} Worker checkout ${checkout.branch} is at ${head.slice(0, 12)},`
+      + ` which no stopped attempt journal records; align it by hand instead of moving it silently`);
+  }
+  const chosen = vouchers.sort((left, right) => Date.parse(right.checkout.stoppedAt) - Date.parse(left.checkout.stoppedAt))[0].checkout;
+  return { ...chosen, preservedHead: head };
 }
 
 function assertRecoverableWorkerCheckout(
-  checkout: AbandonedWorkerCheckout,
+  checkout: StoppedWorkerCheckout,
   env: ReturnType<typeof envConfig>,
   ops: { runner: ReturnType<typeof herdrRunner>; runText: (args: string[]) => string },
 ): void {
   const expectedPath = path.resolve(checkout.worktreePath);
   const matches = ops.runner.listWorktrees(env.repoPath).filter((worktree: JsonObject) =>
     worktree.branch === checkout.branch && typeof worktree.path === "string" && path.resolve(worktree.path) === expectedPath);
-  if (matches.length !== 1 || matches[0].workspaceId) throw new Error("abandoned Worker checkout is not one closed linked worktree");
+  if (matches.length !== 1 || matches[0].workspaceId) throw new Error("stopped Worker checkout is not one closed linked worktree");
   if (ops.runner.listWorkspaces().some((workspace: JsonObject) => workspace.worktreePath
-    && path.resolve(workspace.worktreePath) === expectedPath)) throw new Error("abandoned Worker checkout still has an open workspace");
+    && path.resolve(workspace.worktreePath) === expectedPath)) throw new Error("stopped Worker checkout still has an open workspace");
   if (ops.runner.listAgents().some((agent: JsonObject) => {
     const cwd = typeof agent.cwd === "string" ? path.resolve(agent.cwd) : "";
     const relative = cwd ? path.relative(expectedPath, cwd) : "";
     const cwdInside = Boolean(cwd) && (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)));
     return cwdInside || agent.name === checkout.agentName
       || agent.workspaceId === checkout.workspaceId || agent.workspace_id === checkout.workspaceId;
-  })) throw new Error("abandoned Worker checkout is still occupied by an agent");
+  })) throw new Error("stopped Worker checkout is still occupied by an agent");
   const head = ops.runText(["git", "-C", checkout.worktreePath, "rev-parse", "--verify", "HEAD^{commit}"]).trim();
-  if (head.toLowerCase() !== checkout.inputHead.toLowerCase()) throw new Error("abandoned Worker checkout HEAD changed");
+  if (head.toLowerCase() !== checkout.preservedHead.toLowerCase()) throw new Error("stopped Worker checkout HEAD changed");
   if (hasUncommittedWork(ops.runText(["git", "-C", checkout.worktreePath, ...UNCOMMITTED_WORK_STATUS_ARGS]))) {
-    throw new Error("abandoned Worker checkout contains changes");
+    throw new Error("stopped Worker checkout contains changes");
   }
 }
 
@@ -478,7 +524,7 @@ function issueWorkerLaunchPlan(
   env: ReturnType<typeof envConfig>,
   uuid: string,
   baseHead: string,
-  recovery: AbandonedWorkerCheckout | null = null,
+  recovery: StoppedWorkerCheckout | null = null,
   verificationBaseHead: string = baseHead,
   agentRequest?: { role: "worker"; label: string; eventId: string },
 ) {
@@ -562,9 +608,9 @@ function launchIssueWorkerFlow(
   env: ReturnType<typeof envConfig>,
   ops: { runText: (args: string[]) => string; [key: string]: any },
 ): JsonObject {
-  const recovery = abandonedWorkerCheckout(Number(issue.number || 0), env);
+  const recovery = stoppedWorkerCheckout(Number(issue.number || 0), env, ops);
   const currentBaseHead = ops.runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
-  const baseHead = recovery?.inputHead || currentBaseHead;
+  const baseHead = recovery?.preservedHead || currentBaseHead;
   const plan = issueWorkerLaunchPlan(issue, env, randomUUID(), baseHead, recovery, currentBaseHead);
   if (recovery) assertRecoverableWorkerCheckout(recovery, env, ops as { runner: ReturnType<typeof herdrRunner>; runText: (args: string[]) => string });
   prepareAgentLaunchFlow(plan.input, ops);
@@ -576,11 +622,11 @@ function launchIssueWorkerFlow(
 function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
   const number = Number(issue.number || 0);
   const uuid = shouldSimulateLaunch(fixture) ? `fixture-worker-${slugForBranch(env.projectId)}-${number}` : randomUUID();
-  const recovery = shouldSimulateLaunch(fixture) ? null : abandonedWorkerCheckout(number, env);
+  const recovery = shouldSimulateLaunch(fixture) ? null : stoppedWorkerCheckout(number, env, { runText });
   const currentBaseHead = shouldSimulateLaunch(fixture)
     ? "f".repeat(40)
     : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
-  const baseHead = recovery?.inputHead || currentBaseHead;
+  const baseHead = recovery?.preservedHead || currentBaseHead;
   const requestEvents = fixture
     ? (issue.timelineEvents || [{ id: "1", event: "labeled", created_at: "2026-08-16T00:00:00Z", actor: { login: "fixture-user" }, label: { name: env.implementLabel } }])
     : githubOperations().listIssueTimelineEvents(env.githubRepo, number);
@@ -1217,6 +1263,7 @@ module.exports = {
   envConfig,
   issueWorkerLaunchPlan,
   launchIssueWorkerFlow,
+  stoppedWorkerCheckout,
   renderUnresolvedDependencyComment,
   unresolvedDependencyCommentPresent,
   unresolvedDependencyEntryFingerprint,
