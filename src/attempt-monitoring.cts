@@ -1,4 +1,4 @@
-const { isModelAvailabilityRejection } = require("./model-availability.cts");
+const { isModelAvailabilityRejection, parseProviderRetryAt } = require("./model-availability.cts");
 
 type JsonObject = Record<string, any>;
 
@@ -32,7 +32,7 @@ type AttemptMonitoringDirective =
   | { action: "settled"; accounting: ActiveWorkAccounting }
   | { action: "working"; accounting: ActiveWorkAccounting }
   | { action: "completion"; accounting: ActiveWorkAccounting; report: JsonObject }
-  | { action: "missing_report"; accounting: ActiveWorkAccounting; reason: "terminal_without_report" | "invalid_completion_report" | "model_availability" }
+  | { action: "missing_report"; accounting: ActiveWorkAccounting; reason: "terminal_without_report" | "invalid_completion_report" | "model_availability"; providerRetryAt?: string | null }
   | { action: "timeout"; accounting: ActiveWorkAccounting; reason: "active_work_limit" }
   | { action: "ambiguity"; accounting: ActiveWorkAccounting; reason: "runtime_ambiguous" | "runtime_unreachable" };
 
@@ -77,7 +77,12 @@ function decideAttemptMonitoring(input: AttemptMonitoringInput): AttemptMonitori
     return { action: "missing_report", accounting, reason: "invalid_completion_report" };
   }
   if (input.runtime.kind === "terminal" && isModelAvailabilityRejection(input.runtime.terminalEvidence)) {
-    return { action: "missing_report", accounting, reason: "model_availability" };
+    return {
+      action: "missing_report",
+      accounting,
+      reason: "model_availability",
+      providerRetryAt: parseProviderRetryAt(input.runtime.terminalEvidence, Date.parse(input.now)),
+    };
   }
   return { action: "missing_report", accounting, reason: "terminal_without_report" };
 }

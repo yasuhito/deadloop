@@ -47,6 +47,7 @@ const {
   applyDeterministicAttemptMonitoring,
   monitorRuntimeRunner,
   observeDeterministicAttemptMonitoring,
+  retryWaitingAgentSession,
 } = require("../../src/deterministic-pr-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("./automations/contain-terminal-monitor.cts");
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
@@ -1476,6 +1477,18 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
     applyMonitorHandoffDisposition: (handoff, disposition) => {
       if (!isCurrentSchedulerRun()) return false;
       return applyMonitorHandoffDisposition(handoff, disposition, project);
+    },
+    retryModelWait: (handoff) => {
+      if (!isCurrentSchedulerRun()) return false;
+      try {
+        return withEnabledProjectLock(
+          { repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt },
+          (_enabled, recheck) => (recheck(), retryWaitingAgentSession(handoff)),
+        );
+      } catch (error) {
+        if (error instanceof Error && error.message === "deadloop is disabled for this repository") return false;
+        throw error;
+      }
     },
     notify: (message, level) => {
       if (!isCurrentSchedulerRun()) return;
