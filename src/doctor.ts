@@ -3,7 +3,8 @@ import path from "node:path";
 import { hasUncommittedWork } from "./agent-scratch-area.cjs";
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
-const { isRequiredVerificationStopComment } = require("./issue-required-verification-stop.cts") as {
+const { isPrRequiredVerificationStopComment, isRequiredVerificationStopComment } = require("./issue-required-verification-stop.cts") as {
+  isPrRequiredVerificationStopComment(body: unknown): boolean;
   isRequiredVerificationStopComment(body: unknown): boolean;
 };
 import {
@@ -89,6 +90,7 @@ export type DoctorInput = {
 
 export type DoctorFindingType =
   | "blocked_issue"
+  | "blocked_pull_request"
   | "stale_in_progress"
   | "orphan_worktree"
   | "queue_jam"
@@ -268,6 +270,29 @@ function buildBlockedIssueFindings(project: NormalizedProject, issues: DoctorGit
         commands: canRequeueRequiredVerification
           ? [`gh issue edit ${issue.number ?? "<number>"} --remove-label ${shellArg(project.labels.blocked)} --add-label ${shellArg(project.labels.implement)}`]
           : [],
+      };
+    });
+}
+
+function buildBlockedPrFindings(project: NormalizedProject, openPrs: DoctorGithubItem[]): DoctorFinding[] {
+  const repo = project.githubRepo || "<repo>";
+  return openPrs
+    .filter((pr) => labelsOf(pr).has(project.labels.blocked))
+    .filter((pr) => (pr.comments || []).some((comment) => isPrRequiredVerificationStopComment(comment.body)))
+    .map((pr) => {
+      const number = pr.number ?? "<number>";
+      const commands = project.requiredVerification.status === "resolved"
+        ? [
+            `gh pr edit ${number} -R ${shellArg(repo)} --remove-label ${shellArg(project.labels.blocked)} --remove-label ${shellArg(project.labels.review)}`
+              + ` && gh pr edit ${number} -R ${shellArg(repo)} --add-label ${shellArg(project.labels.review)}`,
+          ]
+        : [];
+      return {
+        id: `blocked-pr-${pr.number ?? "unknown"}`,
+        type: "blocked_pull_request" as const,
+        title: `blocked pull request: ${issueRef(pr)}`,
+        summary: blockedCommentSummary(pr),
+        commands,
       };
     });
 }
@@ -633,6 +658,7 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
     verificationCandidates: input.verificationCandidates,
     findings: [
       ...buildBlockedIssueFindings(project, issues),
+      ...buildBlockedPrFindings(project, openPrs),
       ...buildStaleInProgressFindings(project, issues, worktrees, nowMs),
       ...buildOrphanWorktreeFindings(project, issues, openPrs, worktrees, gitStatuses),
       ...buildQueueJamFindings(project, issues),
