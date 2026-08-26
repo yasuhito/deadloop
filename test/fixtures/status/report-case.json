@@ -21,7 +21,9 @@
           "name": "deadloop PR reviewer",
           "schedule": "*/10 * * * *"
         }
-      ]
+      ],
+      "workerModel": "openai-codex/gpt-5.6-sol",
+      "reviewerModel": "openai-codex/gpt-5.6-sol"
     }
   ],
   "state": {
@@ -37,14 +39,22 @@
     {
       "number": 13,
       "title": "Add deadloop status report",
-      "labels": [{ "name": "agent:in-progress" }]
+      "labels": [
+        {
+          "name": "agent:in-progress"
+        }
+      ]
     }
   ],
   "openPrs": [
     {
       "number": 21,
       "title": "Add status report",
-      "labels": [{ "name": "agent:review" }]
+      "labels": [
+        {
+          "name": "agent:review"
+        }
+      ]
     }
   ],
   "closedPrs": [
@@ -54,7 +64,11 @@
       "mergedAt": "2026-07-04T00:00:00Z",
       "headRefName": "agent/issue-12-old",
       "headRefOid": "abc123",
-      "labels": [{ "name": "agent:review" }]
+      "labels": [
+        {
+          "name": "agent:review"
+        }
+      ]
     }
   ],
   "worktrees": [

@@ -116,6 +116,9 @@ export type RawProject = {
   workerLaunchPolicy?: string;
   workerAgent?: string;
   workerModel?: string;
+  explorerModel?: string;
+  repairModel?: string;
+  branchUpdateModel?: string;
   reviewerAgent?: string;
   reviewerModel?: string;
   automationLogins?: string[];
@@ -159,6 +162,9 @@ export type NormalizedProject = {
   workerLaunchPolicy: string;
   workerAgent: WorkerAgent;
   workerModel: string;
+  explorerModel: string;
+  repairModel: string;
+  branchUpdateModel: string;
   reviewerAgent: ReviewerAgent;
   reviewerModel: string;
   automationLogins: string[];
@@ -291,6 +297,9 @@ function hasOwn(object: object, key: string): boolean {
 const REPO_POLICY_PROJECT_KEYS = new Set([
   "workerAgent",
   "workerModel",
+  "explorerModel",
+  "repairModel",
+  "branchUpdateModel",
   "reviewerAgent",
   "reviewerModel",
   "checkCommand",
@@ -457,6 +466,9 @@ function mergeRepoPolicy(local: RawProject, policy: RawProject): { project: RawP
   const appliedKeys = mergeIfLocalMissing(merged, local as Record<string, unknown>, policy as Record<string, unknown>, [
     "workerAgent",
     "workerModel",
+    "explorerModel",
+    "repairModel",
+    "branchUpdateModel",
     "reviewerAgent",
     "reviewerModel",
     "checkCommand",
@@ -576,6 +588,38 @@ function normalizeAgentKind(value: unknown, field: string): AgentKind {
   throw new Error(`invalid ${field}: ${String(value)} (expected ${expected})`);
 }
 
+export type RoleModels = {
+  workerModel: string;
+  explorerModel: string;
+  repairModel: string;
+  branchUpdateModel: string;
+  reviewerModel: string;
+};
+
+/**
+ * Resolves the per-role models from operator configuration (ADR: role model selection).
+ *
+ * The worker and reviewer models are required: deadloop never silently falls back to an
+ * agent CLI default. Explorer, repair, and branch-update inherit the worker model when
+ * omitted, so a concise configuration still launches every role explicitly.
+ */
+export function resolveRoleModels(raw: Pick<RawProject,
+  "workerModel" | "explorerModel" | "repairModel" | "branchUpdateModel" | "reviewerModel"
+>): RoleModels {
+  const readModel = (value: unknown) => String(value ?? "").trim();
+  const workerModel = readModel(raw.workerModel);
+  if (!workerModel) throw new Error("workerModel is required: configure it so no launch falls back to the agent CLI default");
+  const reviewerModel = readModel(raw.reviewerModel);
+  if (!reviewerModel) throw new Error("reviewerModel is required: configure it so no review launch falls back to the agent CLI default");
+  return {
+    workerModel,
+    reviewerModel,
+    explorerModel: readModel(raw.explorerModel) || workerModel,
+    repairModel: readModel(raw.repairModel) || workerModel,
+    branchUpdateModel: readModel(raw.branchUpdateModel) || workerModel,
+  };
+}
+
 export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSource): NormalizedProject {
   const id = sanitizeId(raw.id || raw.githubRepo || raw.repoPath);
   const source = configSource || defaultConfigSource(raw);
@@ -603,9 +647,8 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
     workerInstructions: normalizeWorkerInstructions(raw),
     workerLaunchPolicy: raw.workerLaunchPolicy || DEFAULT_WORKER_LAUNCH_POLICY,
     workerAgent: normalizeAgentKind(raw.workerAgent, "workerAgent"),
-    workerModel: raw.workerModel || "",
     reviewerAgent: normalizeAgentKind(raw.reviewerAgent, "reviewerAgent"),
-    reviewerModel: raw.reviewerModel || "",
+    ...resolveRoleModels(raw),
     automationLogins: normalizeAutomationLogins(raw.automationLogins),
     labels: normalizeLabels(raw.labels || {}),
     automations: [],
@@ -761,9 +804,12 @@ function automationRuntimeValues(
     workerInstructions: project.workerInstructions || "",
     workerLaunchPolicy: project.workerLaunchPolicy || "",
     workerAgent: project.workerAgent,
-    workerModel: project.workerModel || "",
+    workerModel: project.workerModel,
+    explorerModel: project.explorerModel,
+    repairModel: project.repairModel,
+    branchUpdateModel: project.branchUpdateModel,
     reviewerAgent: project.reviewerAgent,
-    reviewerModel: project.reviewerModel || "",
+    reviewerModel: project.reviewerModel,
     readyLabel: project.labels.ready,
     exploreLabel: project.labels.explore,
     implementLabel: project.labels.implement,
@@ -817,6 +863,9 @@ export function automationEnvironment(
     DEADLOOP_REQUIRED_VERIFICATION_RESOLUTION: JSON.stringify(project.requiredVerification),
     DEADLOOP_WORKER_AGENT: envText(values.workerAgent),
     DEADLOOP_WORKER_MODEL: envText(values.workerModel),
+    DEADLOOP_EXPLORER_MODEL: envText(values.explorerModel),
+    DEADLOOP_REPAIR_MODEL: envText(values.repairModel),
+    DEADLOOP_BRANCH_UPDATE_MODEL: envText(values.branchUpdateModel),
     DEADLOOP_WORKER_INSTRUCTIONS: envText(values.workerInstructions),
     DEADLOOP_WORKER_LAUNCH_POLICY: envText(values.workerLaunchPolicy),
     DEADLOOP_REVIEWER_AGENT: envText(values.reviewerAgent),

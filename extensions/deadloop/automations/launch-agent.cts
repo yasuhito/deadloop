@@ -13,8 +13,8 @@
 //
 // Usage:
 //   node launch-agent.cts --agent <pi|claude|omp> --name <name> --cwd <path>
-//     --pane <rootPaneId> --level <low|medium|high> --prompt-file <path>
-//     [--model <model>] [--uuid <uuid>] [--repo-path <path>]
+//     --pane <rootPaneId> --level <low|medium|high> --model <model> --prompt-file <path>
+//     [--uuid <uuid>] [--repo-path <path>]
 
 const fs = require("node:fs") as typeof import("node:fs");
 const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
@@ -86,6 +86,9 @@ function main(
   if (!promptFile) fail({ error: "missing_prompt_file" });
   const rootPaneId = args.pane || "";
   if (!rootPaneId) fail({ error: "missing_root_pane" });
+  // The role's resolved model is required: an empty model would silently fall back to the
+  // agent CLI default, which is exactly what deadloop never does.
+  if (!String(args.model || "").trim()) fail({ error: "missing_model", resolution: "configure workerModel and reviewerModel for this project" });
 
   let promptText: string;
   try {

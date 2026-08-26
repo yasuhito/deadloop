@@ -27,6 +27,13 @@ import { herdrVersionDiagnosticData, parseHerdrVersions } from "../../src/herdr-
 import { herdrServerIsUnreachableWithSupportedClient, runHerdrPreflight } from "../../src/herdr-preflight";
 import { discoverVerificationCandidates } from "../../src/required-verification";
 import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } from "../../src/status";
+const { formatAttemptUsageDetail, formatUsageWindowReport } = require("../../src/model-usage-report.cts") as {
+  formatAttemptUsageDetail: (stateDir: string, attemptId: string) => string;
+  formatUsageWindowReport: (stateDir: string, nowMs: number) => string;
+};
+const { summarizeAttemptUsage } = require("../../src/model-usage-report.cts") as {
+  summarizeAttemptUsage: (stateDir: string) => import("../../src/model-usage-types").AttemptUsageSummary[];
+};
 import { readClaudeConfig } from "../../src/agent-trust.cjs";
 import { isPendingIssueHandoffEligible } from "../../src/automation-runner";
 import {
@@ -924,7 +931,7 @@ async function collectLiveSnapshotData(
 
 async function buildLiveStatusReport(pi, cwd, codeIdentityDecision?: () => CodeIdentityDecision) {
   const data = await collectLiveSnapshotData(pi, cwd, { includeClosedPrs: true, codeIdentityDecision });
-  return formatStatusReport(buildStatusSnapshot(data));
+  return formatStatusReport(buildStatusSnapshot({ ...data, attemptUsage: summarizeAttemptUsage(STATE_DIR) }));
 }
 
 function labelNames(item) {
@@ -1814,6 +1821,21 @@ export default function (pi) {
     "deadloop-doctor",
     (reportPi, cwd) => buildLiveDoctorReport(reportPi, cwd, currentCodeIdentityDecision),
   );
+  pi.registerCommand("deadloop-usage", {
+    description: "Show normalized model usage: the last 7 days by role and model, or one attempt with --attempt <id>",
+    handler: async (args, ctx) => {
+      const attemptId = String(args || "").trim();
+      let report: string;
+      try {
+        if (!attemptId) report = formatUsageWindowReport(STATE_DIR, Date.now());
+        else if (/\s/.test(attemptId)) throw new Error("usage: /deadloop-usage [attempt-id]");
+        else report = formatAttemptUsageDetail(STATE_DIR, attemptId);
+      } catch (error) {
+        report = `usage report unavailable: ${error instanceof Error ? error.message : String(error)}`;
+      }
+      displayCommandResult(pi, ctx, "deadloop-usage", report);
+    },
+  });
   pi.registerCommand("deadloop-abandon-attempt", {
     description: "Safely abandon one proven launch-failed attempt and requeue its unchanged Issue or PR",
     handler: async (args, ctx) => {

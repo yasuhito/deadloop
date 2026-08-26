@@ -69,6 +69,38 @@ function fixture(withMarker: boolean) {
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("selected attempt workspace completion", () => {
+  it("collects normalized model usage before closing the workspace", () => {
+    const data = fixture(true);
+    const worktreePath = JSON.parse(readFileSync(data.args.attemptRecord, "utf8")).worktreePath;
+    // This journal predates agent-kind recording; give it one so usage can be attributed.
+    const current = JSON.parse(readFileSync(data.args.attemptRecord, "utf8"));
+    writeFileSync(data.args.attemptRecord, `${JSON.stringify({ ...current, agent: "pi" })}\n`, "utf8");
+    // A temporary artifact under the attempt checkout: a pi session recorded in the worktree.
+    const sessionsRoot = path.join(path.dirname(data.args.stateDir), "pi-sessions");
+    const slugDir = path.join(sessionsRoot, worktreePath.replaceAll("/", "-"));
+    mkdirSync(slugDir, { recursive: true });
+    const artifact = path.join(slugDir, "session.jsonl");
+    writeFileSync(artifact, `${JSON.stringify({ type: "session", version: 3, id: "usage-session", timestamp: "2026-01-01T00:00:00.000Z", cwd: worktreePath })}\n`
+      + `${JSON.stringify({ type: "message", id: "resp-1", timestamp: "2026-01-01T00:00:10.000Z", message: { role: "assistant", provider: "openai-codex", model: "gpt-5.6-sol", usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, reasoning: 0, totalTokens: 12, cost: { total: 0.001 } }, stopReason: "stop", timestamp: "2026-01-01T00:00:10.000Z" } })}\n`, "utf8");
+    const previousSessionsRoot = process.env.DEADLOOP_PI_SESSIONS_ROOT;
+    process.env.DEADLOOP_PI_SESSIONS_ROOT = sessionsRoot;
+    // The cleanup boundary destroys temporary artifacts; collection must already have happened.
+    const originalRunText = data.runner.runText.bind(data.runner);
+    data.runner.runText = (args: string[]) => {
+      if (args[0] === "herdr" && args[1] === "workspace" && args[2] === "close") rmSync(sessionsRoot, { recursive: true, force: true });
+      return originalRunText(args);
+    };
+
+    try {
+      const result = completeLocked(data.args, data.runner, () => undefined);
+      const ledger = path.join(data.runDir, "model-usage.jsonl");
+      expect(result.driverAction === "workspace_closed" && readFileSync(ledger, "utf8").includes("\"recordId\":\"usage-session:resp-1\"")).toBe(true);
+    } finally {
+      if (previousSessionsRoot === undefined) delete process.env.DEADLOOP_PI_SESSIONS_ROOT;
+      else process.env.DEADLOOP_PI_SESSIONS_ROOT = previousSessionsRoot;
+    }
+  });
+
   it("retains a strongly reported Worker when the persisted attempt marker is absent", () => {
     const data = fixture(false);
     const result = completeLocked(data.args, data.runner, () => undefined);

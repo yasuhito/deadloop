@@ -22,6 +22,8 @@ describe("prompt template integrity", () => {
       id: "template-integrity",
       repoPath: "/repo",
       githubRepo: "owner/repo",
+      workerModel: "test-model",
+      reviewerModel: "review-model",
       automations: promptFiles.map((promptFile) => ({
         id: `template-integrity:${promptFile}`,
         name: promptFile,

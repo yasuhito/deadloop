@@ -31,7 +31,9 @@
           "driverFile": "pr-reviewer-driver.cts",
           "precheckTimeoutSeconds": 60
         }
-      ]
+      ],
+      "workerModel": "openai-codex/gpt-5.6-sol",
+      "reviewerModel": "openai-codex/gpt-5.6-sol"
     }
   ]
 }

@@ -286,6 +286,8 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
           DEADLOOP_GITHUB_REPO: "owner/repo",
           DEADLOOP_ENABLED_AT: "1",
           DEADLOOP_STATE_DIR: state,
+          DEADLOOP_WORKER_MODEL: "test-worker-model",
+          DEADLOOP_REPAIR_MODEL: "test-repair-model",
           DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head }),
           TEST_COMMENTS_FILE: commentsFile,
           TEST_GITHUB_LOG: githubLog,

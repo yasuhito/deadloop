@@ -96,7 +96,7 @@ async function exerciseDriver(
     sendUserMessageIfEnabled?: (prompt: string) => boolean;
   } = {},
 ) {
-  const project = normalizeProject({
+  const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
     id: "demo",
     automations: [
       { id: "demo:auto", name: "auto", precheckFile: "precheck.sh", promptFile: "full.md", driverFile: "driver.py" },
@@ -554,7 +554,7 @@ describe("deterministic automation driver runner", () => {
   });
 
   it("does not dispatch a prompt when disable wins the enqueue lock", async () => {
-    const project = normalizeProject({
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
       id: "demo",
       automations: [{ id: "demo:auto", name: "auto", precheckFile: "precheck.sh", promptFile: "full.md" }],
     });
@@ -578,7 +578,7 @@ describe("deterministic automation driver runner", () => {
   });
 
   it("does not start precheck when execution supply cannot be fixed", async () => {
-    const project = normalizeProject({
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
       id: "demo",
       automations: [{ id: "demo:auto", name: "auto", precheckFile: "precheck.sh", promptFile: "full.md" }],
     });
@@ -604,7 +604,7 @@ describe("deterministic automation driver runner", () => {
   });
 
   it("does not dispatch a prompt after enablement is removed during precheck", async () => {
-    const project = normalizeProject({
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
       id: "demo",
       automations: [{ id: "demo:auto", name: "auto", precheckFile: "precheck.sh", promptFile: "full.md" }],
     });

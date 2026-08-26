@@ -7,6 +7,8 @@ import { buildStatusSnapshot, formatStatusReport } from "../src/status";
 const project = normalizeProject({
   id: "demo",
   githubRepo: "octo/demo",
+  workerModel: "test-model",
+  reviewerModel: "review-model",
   automations: [{ id: "demo:reviewer", name: "PR reviewer", precheckFile: "precheck.sh", promptFile: "prompt.md", driverFile: "driver.cts" }],
 });
 const shared = { project, repositoryEnablement: "enabled" as const, cwd: "/repo", warnings: [] };
@@ -15,6 +17,7 @@ describe("deterministic attempt monitoring reports", () => {
   it("describes deterministic reviewer, branch-update, and repair monitoring in status", () => {
     const report = formatStatusReport({
       ...shared,
+      attemptUsage: [],
       automations: [],
       issues: { eligible: [], inProgress: [], waitingForPerson: [] },
       prs: { reviewTarget: [], reviewing: [] },
@@ -63,6 +66,7 @@ describe("deterministic attempt monitoring reports", () => {
   it("renders retry count, waiting start, duration, next retry, and active-work duration in status", () => {
     const report = formatStatusReport({
       ...shared,
+      attemptUsage: [],
       automations: [{
         id: "demo:reviewer",
         name: "PR reviewer",

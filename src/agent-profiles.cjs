@@ -20,7 +20,7 @@
  * @property {string} command                                  Launched CLI binary.
  * @property {{ flag: string, source: "name" | "uuid" }} [identity]  Session identity flag and where its value comes from; omitted for a CLI that has none.
  * @property {string} levelFlag                                Launch-policy level flag name (level tokens map through unchanged).
- * @property {string} modelFlag                                Operator model flag name (omitted when the model is empty).
+ * @property {string} modelFlag                                Operator model flag name; always emitted because the resolved role model is required.
  * @property {string[]} permissionArgs                         Extra permission flags, in order.
  * @property {PromptMode} prompt                               How the prompt reaches the CLI: `@file` reference or file contents as a positional arg.
  * @property {string[]} preconditions                          Preconditions the launcher fail-fast checks before starting.
@@ -78,7 +78,7 @@ function isAgentKind(value) {
  * @property {AgentKind} agent
  * @property {string} [name]            Herdr agent name, used as the pi session identity; unused by a CLI with no identity flag.
  * @property {string} level              Launch-policy level token (low / medium / high).
- * @property {string} [model]            Operator model; the model flag is omitted when this is empty.
+ * @property {string} model             Resolved operator model for this launch's role; required and never empty.
  * @property {string} [uuid]             Session uuid, used as the claude session identity.
  * @property {string} promptFile         Prompt file path, referenced as `@<promptFile>` for file-ref agents.
  * @property {string} promptText         Prompt file contents, passed as a positional arg for file-contents agents.
@@ -102,8 +102,11 @@ function buildNativeArgv(ctx) {
     }
     nativeArgv.push(identity.flag, identityValue);
   }
+  if (!ctx.model || !String(ctx.model).trim()) {
+    throw new Error(`agent ${ctx.agent} requires a non-empty resolved model`);
+  }
   nativeArgv.push(profile.levelFlag, ctx.level);
-  if (ctx.model) nativeArgv.push(profile.modelFlag, ctx.model);
+  nativeArgv.push(profile.modelFlag, ctx.model);
   nativeArgv.push(...profile.permissionArgs);
   nativeArgv.push(profile.prompt === "file-contents" ? ctx.promptText : `@${ctx.promptFile}`);
   return nativeArgv;

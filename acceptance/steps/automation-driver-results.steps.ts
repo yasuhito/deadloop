@@ -13,7 +13,7 @@ type DriverWorld = {
 };
 
 function configureAutomation(world: DriverWorld, driverResult: DriverWorld["driverResult"], hasDriver = true): void {
-  world.project = normalizeProject({
+  world.project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
     id: "acceptance",
     automations: [
       {

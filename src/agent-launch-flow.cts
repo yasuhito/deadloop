@@ -103,6 +103,7 @@ function preparedRecordInput(input: AgentLaunchFlowInput, prepared: PreparedLaun
     ...(input.worktree.baseBranch === undefined ? {} : { baseBranch: input.worktree.baseBranch }),
     worktreePath: input.intendedWorktreePath,
     agentName: prepared.agentName,
+    agent: input.agent as PreparedAttemptInput["agent"],
     workspaceLabel: input.workspaceLabel,
     promptFile: prepared.promptFile,
     promiseFile: prepared.promiseFile,

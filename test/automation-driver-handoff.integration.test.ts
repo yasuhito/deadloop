@@ -22,7 +22,7 @@ describe("real driver handoff across disable and re-enable", () => {
   ])("%s", async (_name, observation, expected) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-driver-handoff-"));
     const statePath = path.join(root, "state.json");
-    const project = normalizeProject({
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
       id: "demo",
       repoPath: "/repo path",
       githubRepo: "owner/repo",

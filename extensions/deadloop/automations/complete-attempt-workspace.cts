@@ -15,6 +15,7 @@ const { validatePromise } = require("./extract-worker-promise.cts");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { parseAttemptPersistenceMarkers } = require("../../../src/attempt-persistence-marker.cjs");
+const { collectAttemptModelUsage } = require("../../../src/model-usage-collector.cts");
 const { evaluateCompletionPersistence } = require("../../../src/attempt-workspace-predicates.cjs");
 const { isExactRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.cts");
 const {
@@ -209,6 +210,14 @@ type CompletionStopExpectation = {
   labels: { ready: string; implement: string; inProgress: string; blocked: string };
 };
 
+function collectUsageBeforeClosure(runDir: string): void {
+  // Observational telemetry: the collector records its own failures and this call never
+  // blocks the closure that follows. Collection happens here — after the turn ended and the
+  // GitHub evidence is durable, but before the workspace closes and temporary worktree
+  // artifacts (and their sessions) disappear.
+  try { collectAttemptModelUsage({ runDir }); } catch {}
+}
+
 function completeLocked(
   args: JsonObject,
   commandRunner: ReturnType<typeof createCommandRunner>,
@@ -373,6 +382,7 @@ function completeLocked(
   // Never close first: immediately before any close, re-prove the configured checkout, common Git
   // directory, and canonical linked worktree observation.
   assertWorktreeBelongsToProject(commandRunner, record, args);
+  collectUsageBeforeClosure(runDir);
   if (workspaceMatches.length === 1 && record.workspaceId) {
     recheck();
     const closed = safeRunnerCall(() => runner.closeWorkspace(record.workspaceId as string));

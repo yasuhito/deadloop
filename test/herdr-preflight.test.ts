@@ -61,7 +61,7 @@ describe("Herdr 0.8.0 activation", () => {
 
   it("rejects a tick before precheck, candidate driver, state mutation, or prompt delivery", async () => {
     const calls: string[] = [];
-    const project = normalizeProject({ id: "demo", repoPath: "/repo", githubRepo: "owner/repo", automations: [{ id: "a", name: "a" }] });
+    const project = normalizeProject({ id: "demo", repoPath: "/repo", githubRepo: "owner/repo", workerModel: "test-model", reviewerModel: "review-model", automations: [{ id: "a", name: "a" }] });
     try {
       await runScheduledAutomation(project, project.automations[0], 1, { automations: {} }, {
         herdrPreflight: () => { calls.push("preflight"); throw new Error("unsupported"); },

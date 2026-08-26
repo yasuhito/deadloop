@@ -21,6 +21,7 @@ describe("agent launch profiles", () => {
         agent: "pi",
         name: "demo-issue-1-worker",
         level: "medium",
+        model: "openai-codex/gpt-5.6-sol",
         promptFile: "/wt/.deadloop/prompt.md",
         promptText: "unused",
       }),
@@ -30,6 +31,8 @@ describe("agent launch profiles", () => {
       "demo-issue-1-worker",
       "--thinking",
       "medium",
+      "--model",
+      "openai-codex/gpt-5.6-sol",
       "--approve",
       "@/wt/.deadloop/prompt.md",
     ]);
@@ -37,7 +40,7 @@ describe("agent launch profiles", () => {
 
   it("approves project trust for unattended pi agents", () => {
     expect(
-      buildAgentArgv({ agent: "pi", name: "w", level: "low", promptFile: "/p", promptText: "" }),
+      buildAgentArgv({ agent: "pi", name: "w", level: "low", model: "m", promptFile: "/p", promptText: "" }),
     ).toContain("--approve");
   });
 
@@ -47,6 +50,7 @@ describe("agent launch profiles", () => {
         agent: "claude",
         name: "demo-issue-1-worker",
         level: "high",
+        model: "anthropic/claude-opus-4-8",
         uuid: "11111111-1111-1111-1111-111111111111",
         promptFile: "/wt/.deadloop/prompt.md",
         promptText: "実装してください",
@@ -57,16 +61,18 @@ describe("agent launch profiles", () => {
       "11111111-1111-1111-1111-111111111111",
       "--effort",
       "high",
+      "--model",
+      "anthropic/claude-opus-4-8",
       "--permission-mode",
       "bypassPermissions",
       "実装してください",
     ]);
   });
 
-  it("omits the model flag when the model is empty", () => {
-    expect(
+  it("throws when the resolved model is empty instead of falling back to the CLI default", () => {
+    expect(() =>
       buildAgentArgv({ agent: "pi", name: "w", level: "low", model: "", promptFile: "/p", promptText: "" }),
-    ).not.toContain("--model");
+    ).toThrow(/non-empty resolved model/);
   });
 
   it("includes the pi model flag when a model is set", () => {
@@ -83,20 +89,20 @@ describe("agent launch profiles", () => {
   });
 
   it("maps the pi level onto the --thinking flag", () => {
-    expect(buildAgentArgv({ agent: "pi", name: "w", level: "low", promptFile: "/p", promptText: "" })).toContain(
+    expect(buildAgentArgv({ agent: "pi", name: "w", level: "low", model: "m", promptFile: "/p", promptText: "" })).toContain(
       "--thinking",
     );
   });
 
   it("maps the claude level onto the --effort flag", () => {
     expect(
-      buildAgentArgv({ agent: "claude", name: "w", level: "low", uuid: "u", promptFile: "/p", promptText: "x" }),
+      buildAgentArgv({ agent: "claude", name: "w", level: "low", model: "m", uuid: "u", promptFile: "/p", promptText: "x" }),
     ).toContain("--effort");
   });
 
   it("threads the uuid into the claude session id", () => {
     expect(
-      buildAgentArgv({ agent: "claude", name: "w", level: "low", uuid: "abc-uuid", promptFile: "/p", promptText: "x" }),
+      buildAgentArgv({ agent: "claude", name: "w", level: "low", model: "m", uuid: "abc-uuid", promptFile: "/p", promptText: "x" }),
     ).toContain("abc-uuid");
   });
 
@@ -106,19 +112,14 @@ describe("agent launch profiles", () => {
         agent: "omp",
         name: "demo-issue-1-worker",
         level: "medium",
+        model: "opus",
         promptFile: "/wt/.deadloop/prompt.md",
         promptText: "unused",
       }),
-    ).toEqual(["omp", "--thinking", "medium", "--auto-approve", "@/wt/.deadloop/prompt.md"]);
+    ).toEqual(["omp", "--thinking", "medium", "--model", "opus", "--auto-approve", "@/wt/.deadloop/prompt.md"]);
   });
 
   it("builds the omp argv even when no session name is supplied", () => {
-    expect(
-      buildAgentArgv({ agent: "omp", level: "low", promptFile: "/p", promptText: "" }),
-    ).toEqual(["omp", "--thinking", "low", "--auto-approve", "@/p"]);
-  });
-
-  it("includes the omp model flag when a model is set", () => {
     expect(
       buildAgentArgv({ agent: "omp", level: "low", model: "opus", promptFile: "/p", promptText: "" }),
     ).toEqual(["omp", "--thinking", "low", "--model", "opus", "--auto-approve", "@/p"]);
@@ -131,6 +132,7 @@ describe("agent launch profiles", () => {
         agent: "codex",
         name: "w",
         level: "low",
+        model: "m",
         promptFile: "/p",
         promptText: "",
       }),
@@ -139,7 +141,7 @@ describe("agent launch profiles", () => {
 
   it("throws when the claude session uuid is missing", () => {
     expect(() =>
-      buildAgentArgv({ agent: "claude", name: "w", level: "low", promptFile: "/p", promptText: "x" }),
+      buildAgentArgv({ agent: "claude", name: "w", level: "low", model: "m", promptFile: "/p", promptText: "x" }),
     ).toThrow(/uuid/);
   });
 });

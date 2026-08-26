@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { RequiredVerificationContract } from "./required-verification";
 import type { PriorRequiredFindingDisposition } from "./reviewer-outcome-contract-types";
+import type { AgentKind } from "./agent-profiles.cjs";
 
 const { isPriorRequiredFindingDisposition } = require("./reviewer-outcome-contract.cts");
 
@@ -160,6 +161,8 @@ export type AttemptRecord = AttemptIdentity & {
   baseBranch?: string;
   worktreePath: string;
   agentName: string;
+  /** The launched agent CLI kind; recorded for model-usage attribution. */
+  agent?: AgentKind;
   workspaceLabel: string;
   promptFile: string;
   promiseFile: string;
@@ -184,6 +187,7 @@ export type PreparedAttemptInput = AttemptIdentity & {
   baseBranch?: string;
   worktreePath: string;
   agentName: string;
+  agent?: AgentKind;
   workspaceLabel: string;
   promptFile: string;
   promiseFile: string;

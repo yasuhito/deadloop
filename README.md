@@ -109,6 +109,7 @@ Run these commands from the Pi session in the target repository:
 | `/deadloop-run-once` | Run exactly one normal scheduler tick while scheduling stays disabled; no later tick is scheduled. |
 | `/deadloop-status` | Show whether deadloop is enabled and summarize its current state. |
 | `/deadloop-doctor` | Diagnose configuration and retained attempts without changing them. |
+| `/deadloop-usage [attempt-id]` | Show normalized model usage for the last 7 days by role and model; with an attempt id, show its response-level detail. |
 | `/deadloop-abandon-attempt <attempt-id>` | Safely abandon a retained attempt only when doctor presents this command. |
 
 ## Advanced configuration
@@ -140,6 +141,25 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 ```
 
 `projects.json` contains local paths and rollout choices. Do not commit it. Prefer the repository-owned `deadloop.json` for shared, reviewable policy.
+
+### Role models
+
+Each role launches with an explicit model, so no launch ever falls back to the agent CLI default:
+
+- `workerModel` and `reviewerModel` are required in `projects.json`. deadloop refuses to enable or launch without them.
+- `explorerModel`, `repairModel`, and `branchUpdateModel` are optional; each inherits `workerModel` when omitted.
+- The repository-owned `deadloop.json` may supply any of these values for shared policy; local settings win.
+
+Every launch records which model it started, and status shows the resolved per-role models.
+
+### Model usage records
+
+deadloop normalizes every traceable model response — the parent agent, sub-agents, and advisors — into one record with attempt identity, role, provider, model, input/cache-read/cache-write/output/reasoning/total tokens, duration, stop reason, error presence, timestamp, and an estimated cost. Records are collected after the turn ends and before workspace closure, deduplicated by stable session/response identity, and stored in deadloop's state directory for the same retention period as attempt evidence. Prompt and response bodies are never copied.
+
+- Missing measurements appear as `unknown`, never as zero; usage that cannot be proven to belong to an attempt is counted as `unattributed`.
+- Collection is observational: a telemetry failure is recorded but never undoes a completion, push, handoff, or merge.
+- There is no token ceiling; measurements exist so operators can tune model policy after real operation. The estimated cost is deadloop's estimate from session metadata, not a provider invoice.
+- Status shows current-attempt usage totals; `/deadloop-usage` reports the last 7 days by role and provider/model, or one attempt in detail.
 
 If an implementation Issue reaches a required-verification block, deadloop preserves unrelated triage labels, removes the implementation request or in-progress state, and adds `agent:blocked` with reason-specific recovery guidance. It suppresses duplicate guidance for the same recovery, does not resume merely because configuration changes, and shows that Issue's requeue command in `/deadloop-doctor` only after required verification resolves.
 
