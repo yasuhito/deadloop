@@ -132,6 +132,14 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 レビューが必須検証で停止した場合、修正が必要な指摘は記録しますが、修復担当は起動せず、指摘のない結果を承認として記録しません。`agent:review` を残し、`agent:in-progress` を外して `agent:blocked` を付けます。`ready-for-human` は付けません。同じ復旧内容の停止コメントは重複させず、設定変更だけでは再投入しません。必須検証が解決した後に限り、`/deadloop-doctor` が PR 固有の再投入コマンドを表示します。
 
+## ワークフロー状態は GitHub 上だけにあります
+
+Issue / PR の状態、head、ラベル、コメント、checks が唯一のワークフロー状態です。要求ラベル（`agent:explore`、`agent:implement`、`agent:review`、`agent:update-branch`）は一回限りのイベントです。ラベルを付けた一つひとつのイベントがその役割の試行を一度だけ依頼し、deadloop は作業開始前にそのラベルだけを外して消費します。再試行や追加の依頼は、同じ要求ラベルをもう一度付けることだけで表せます。`agent:in-progress` は消費されて動いている仕事、`agent:blocked` は停止を示し、停止した対象が停止より前の要求を持つことはありません。
+
+1 つのリポジトリを同時に駆動するのはリポジトリ ID 単位のロックで守られた 1 ホストだけですが、複数のマシンや identity が 1 つのリポジトリを担当できます。誰が仕事を所有しているかは公開タイムラインから同じように導かれるため、どのホストも同じ結論に達します。試行が時間切れになった場合、ホストが落ちた場合、安全を証明できない場合は、対象は人間が読める理由とともに `agent:blocked` へ移ります。人が新しい要求ラベルを追加するまで、自動では何も再開しません。`/deadloop-doctor` はローカル向けの手順ではなく、そのコマンドを表示します。
+
+このモデルは Matt Pocock の Sandcastle dogfood workflow を基調とします（調査記録は [docs/research/matt-pocock-sandcastle-github-state-model.md](docs/research/matt-pocock-sandcastle-github-state-model.md)）。ただし deadloop は安全のための違いを意図的に保ちます。検証済み head に厳密に束縛した非 force push、push・引き渡し・マージ前の必須検証、毎 tick の古い状態との照合、複数ホスト間での claim 導出です。判断の詳細は [ADR 0032](docs/adr/0032-github-is-the-workflow-state-source-of-truth.md) を参照してください。
+
 ## 安全装置
 
 `autoMerge` は、レビュー済みの PR を deadloop が自動的にマージするかを制御します。
@@ -150,9 +158,7 @@ PR レビュー、ブランチ更新、レビュー修復の試行監視には�
 
 ## マージ競合の自動修復
 
-ブランチの自動更新は、現在利用できません。deadloop はマージ競合を検出しますが、`agent:update-branch` ラベルによる依頼を作業エージェントへ接続する #241 が完了するまでは、ブランチを更新しません。先頭コミットの厳密一致、必須検証、通常 merge の安全契約は引き続き必要で、finalizer の push は検証済み head を期待 object ID とする lease で束縛したままにします。
-
-以下は、今後この処理を接続するときの安全契約であり、現在実行できる動作の説明ではありません。
+deadloop はレビュー中にマージ競合を検出すると、ローカル状態から復旧せず `agent:update-branch` 要求へ置き換えます。後の周期でその要求を消費し、branch 更新作業エージェントを起動します。push された head によって要求が不要になった場合は、説明コメントとともに要求を消費し、通常のレビューへ戻します。
 
 作業エージェントは、選択された基準コミットを既存の PR ブランチへマージします。rebase は行いません。
 
