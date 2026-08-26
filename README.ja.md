@@ -25,6 +25,7 @@ pi install git:github.com/yasuhito/deadloop
 - 作業担当とレビュー担当は `pi`、`claude`、`omp` から選べます。`workerAgent` と `reviewerAgent` で指定し、どのホストが自動処理を動かしているかとは独立です。
 - 既定の実行基盤は [Herdr](https://herdr.dev/) です。
 - 現在対応しているホスト環境は、互換性のある `flock` 実行ファイル（通常は util-linux が提供）と、非待機のファイル記述子ロックを利用できる Unix 系システムです。`/deadloop-enable` は自動処理を有効化する前に、この機能を検査します。
+- 各 Automation host は、拡張の読み込み時に deadloop checkout の commit をコード識別子として固定します。checkout が進んだ場合、共有 enablement 状態の書き込みと tick は operator が `/reload` を実行するまで停止します。status と doctor は引き続き利用でき、両方の識別子と復旧手順を表示します。
 
 ## 設定
 
