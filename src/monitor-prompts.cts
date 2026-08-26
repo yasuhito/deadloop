@@ -11,7 +11,6 @@ type MonitorPromptBaseInput = {
   enabledAt?: number;
 };
 
-
 type ExplorerMonitorPromptInput = MonitorPromptBaseInput & {
   issueNumber: number;
   /** Deterministic completion command the monitor must run after a terminal promise. */
@@ -65,18 +64,6 @@ type ReviewerMonitorPromptInput = MonitorPromptBaseInput & {
   blockedLabel: string;
 };
 
-type RepairMonitorPromptInput = MonitorPromptBaseInput & {
-  prNumber: number;
-  expectedHeadOid: string;
-  branch: string;
-  attemptKey?: string;
-  reviewLabel: string;
-  implementLabel: string;
-  updateBranchLabel: string;
-  inProgressLabel: string;
-  blockedLabel: string;
-};
-
 function shellQuotePrompt(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
   return `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -87,7 +74,7 @@ function renderPromisePollingRules(
   targetKind: "issue" | "pull-request",
   mutationAuthority = true,
 ): string {
-  const prInput = input as Partial<ReviewerMonitorPromptInput & RepairMonitorPromptInput & BranchUpdateMonitorPromptInput>;
+  const prInput = input as Partial<ReviewerMonitorPromptInput & BranchUpdateMonitorPromptInput>;
   const attempt = targetKind === "pull-request"
     ? ` --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --in-progress-label ${shellQuotePrompt(prInput.inProgressLabel || "agent:in-progress")} --blocked-label ${shellQuotePrompt(prInput.blockedLabel || "agent:blocked")}`
     : "";
@@ -171,32 +158,9 @@ function renderExplorerMonitorPrompt(input: ExplorerMonitorPromptInput): string 
   return lines.join("\n");
 }
 
-function renderRepairMonitorPrompt(input: RepairMonitorPromptInput): string {
-  return `Deterministic dispatcher launched one review-repair worker for PR #${input.prNumber}. Monitor only this attempt; never launch another agent or widen the findings contract.
-
-Attempt binding:
-- Existing PR branch: ${input.branch}
-- Expected PR head: ${input.expectedHeadOid}
-- Keep ${input.inProgressLabel} as the active managed state while repair is running.
-
-${renderPromisePollingRules(input, "pull-request")}
-
-Terminal handling:
-- As soon as validation returns complete or blocked, run this deterministic completion handler exactly once and follow its result:
-  \`node ${shellQuotePrompt(`${input.automationDir}/pr-review-repair-complete.cts`)} --promise ${shellQuotePrompt(input.promiseFile)} --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --result ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/finalizer-result.json`)} --contract ${shellQuotePrompt(`${input.promiseFile.replace(/\/[^/]+$/, "")}/review-contract.json`)} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --pr ${input.prNumber} --branch ${shellQuotePrompt(input.branch)} --expected-head ${shellQuotePrompt(input.expectedHeadOid)} --attempt-key ${shellQuotePrompt(input.attemptKey || "<attemptKey>")} --review-label ${shellQuotePrompt(input.reviewLabel)} --implement-label ${shellQuotePrompt(input.implementLabel)} --update-branch-label ${shellQuotePrompt(input.updateBranchLabel)} --in-progress-label ${shellQuotePrompt(input.inProgressLabel || "agent:in-progress")} --blocked-label ${shellQuotePrompt(input.blockedLabel)}\`
-- The handler posts a success comment only when the structured promise, finalizer receipt, and live new head agree. It posts idempotent recovery guidance for blocked or inconclusive completion and posts nothing for stale_head.
-- After a repair_pushed or stale_head result is confirmed by the handler, run \`${renderWorkspaceCompletion(input)}\`. Never close a blocked or inconclusive repair workspace.
-- Do not independently render comments, infer changes from git diffs or logs, or change labels.
-
-Prohibited in every path: force-push, monitor-side push, label changes outside the completion handler, PR creation, merge, issue close, branch deletion, or a second attempt for this exact review result.
-
-Report only the terminal action and evidence.`;
-}
-
 type PendingMonitorHandoff =
   | { kind: "issue"; input: IssueMonitorPromptInput }
-  | { kind: "explorer"; input: ExplorerMonitorPromptInput }
-  | { kind: "repair"; input: RepairMonitorPromptInput };
+  | { kind: "explorer"; input: ExplorerMonitorPromptInput };
 
 function renderPendingMonitorHandoff(handoff: PendingMonitorHandoff, enabledAt?: number): string {
   if (!handoff.input || typeof handoff.input !== "object") throw new Error("unsupported pending monitor handoff");
@@ -206,9 +170,6 @@ function renderPendingMonitorHandoff(handoff: PendingMonitorHandoff, enabledAt?:
   if (handoff.kind === "explorer") {
     return renderExplorerMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
   }
-  if (handoff.kind === "repair") {
-    return renderRepairMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
-  }
   throw new Error("unsupported pending monitor handoff");
 }
 
@@ -217,5 +178,4 @@ module.exports = {
   renderIssueMonitorPrompt,
   renderPendingMonitorHandoff,
   renderPromisePollingRules,
-  renderRepairMonitorPrompt,
 };
