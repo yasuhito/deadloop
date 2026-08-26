@@ -249,14 +249,18 @@ Then("The stopped attempt releases its ownership as a terminal missing-report fa
 
 Then("The capacity stop names the observed storage exhaustion with recovery steps and no local paths on the repair PR", function (this: RepairFailureWorld) {
   const body = String(this.comments?.[0]?.body || "");
-  assert.equal(body.includes("ENOSPC or EDQUOT") && body.includes("free up storage on the machine running deadloop"), true);
-  assert.equal(body.includes(this.worktreePath!) || body.includes(this.promiseFile!), false);
+  assert.equal(
+    body.includes("ENOSPC or EDQUOT")
+      && body.includes("free up storage on the machine running deadloop")
+      && !body.includes(this.worktreePath!)
+      && !body.includes(this.promiseFile!),
+    true,
+  );
 });
 
 Then("The published stop stays a generic technical failure for the repair", function (this: RepairFailureWorld) {
   const body = String(this.comments?.[0]?.body || "");
-  assert.equal(body.includes("without a valid completion report"), true);
-  assert.equal(body.includes("free up storage"), false);
+  assert.equal(body.includes("without a valid completion report") && !body.includes("free up storage"), true);
 });
 
 Given("A blocked repair runtime failure that gained a new agent:implement request after the block", function (this: RepairFailureWorld) {

@@ -228,9 +228,7 @@ Then("The merge proceeds on CI fallback evidence", function (this: CiFallbackWor
 });
 
 Then("The basis is CI fallback rather than CI success", function (this: CiFallbackWorld) {
-  const basis = String((this.gateDecision as AnyRecord).basis);
-  assert.equal(basis, "ci_fallback");
-  assert.notEqual(basis, "ci_success");
+  assert.deepEqual((this.gateDecision as AnyRecord).basis, "ci_fallback");
 });
 
 Then("deadloop stops because the persisted fallback evidence is stale", function (this: CiFallbackWorld) {
@@ -242,8 +240,12 @@ Then("deadloop stops with a CI-fallback-failed stop instead of re-running verifi
 });
 
 Then("The contract command is `make ci` derived from explicit repo policy", function (this: CiFallbackWorld) {
-  assert.deepEqual((this.resolution as AnyRecord).command, "make ci");
-  assert.equal((this.resolution as AnyRecord).derivation, "explicit_repo_policy");
+  assert.deepEqual((this.resolution as AnyRecord), {
+    status: "resolved",
+    command: "make ci",
+    derivation: "explicit_repo_policy",
+    policySource: { kind: "repo_policy", location: "deadloop.json#ciEquivalentCommand" },
+  });
 });
 
 Then("The contract command is `npm ci && npm run check`", function (this: CiFallbackWorld) {
