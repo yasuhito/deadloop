@@ -60,6 +60,7 @@ const {
 } = require("./automations/issue-coordinator-decisions.cts");
 const { loadAutomationState, saveAutomationState } = require("../../src/automation-state.cjs");
 const { acquireLock, releaseOwned } = require("../../src/enablement-lock.cjs");
+const { clearEnablementStorageExhaustion, enablementStorageExhaustionPath, formatEnablementFailureMessage, readEnablementStorageExhaustion } = require("../../src/enablement-storage-diagnosis.cjs");
 const {
   DISABLE_LOCK_ATTEMPTS,
   DISABLE_LOCK_DELAY_MS,
@@ -1138,6 +1139,8 @@ async function buildLiveDoctorReport(pi, cwd, codeIdentityDecision?: () => CodeI
     codeSnapshots: collectCodeSnapshotInventory(STATE_DIR),
     deployedCodeIdentity: data.codeIdentity?.deployedIdentity ?? null,
     loadedCodeIdentity: data.codeIdentity?.loadedIdentity ?? null,
+    enablementStorageExhaustion: readEnablementStorageExhaustion(STATE_DIR),
+    enablementStorageExhaustionPath: enablementStorageExhaustionPath(STATE_DIR),
     ...(data.selectedProject?.repoPath && data.selectedProject.requiredVerification.status === "blocked"
       ? { verificationCandidates: discoverVerificationCandidates({ repositoryRoot: data.selectedProject.repoPath }) }
       : {}),
@@ -2258,6 +2261,7 @@ export default function (pi) {
         }
         const owner = ownsLock ? "this session" : `another session (pid ${readLock(projectLockPath(project))?.pid || "unknown"})`;
         const message = `deadloop enabled for ${identity.githubRepo}; scheduler owner: ${owner}. autoMerge is ${project.autoMerge ? "on (existing local setting preserved)" : "off"}. Enablement did not run repository tests; required verification still gates produced revisions.`;
+        try { clearEnablementStorageExhaustion(STATE_DIR); } catch {}
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
       } catch (error) {
@@ -2265,7 +2269,9 @@ export default function (pi) {
           await rollbackFailedEnablementAttempt(identity, previousEnabledAt, primaryRepoPath, enableAttemptToken, assertCodeIdentityCurrent, loadedCodeIdentityForWrite());
         }
         if (primaryRepoPath) finishEnableAttempt(primaryRepoPath, enableAttemptToken);
-        const message = `deadloop was not enabled: ${error?.message || error}`;
+        // A storage-exhaustion stop is a purely local enablement failure: it records no execution
+        // permission and touches no GitHub state, so the result names the stop and keeps evidence.
+        const message = formatEnablementFailureMessage(error, { stateDir: STATE_DIR, repoPath: primaryRepoPath, githubRepo: identity?.githubRepo });
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
       } finally {

@@ -48,6 +48,8 @@ You need an authenticated `gh` CLI and a running [Herdr](https://herdr.dev/) 0.8
 
 That is enough to start. Enablement is a fast control-plane check: it resolves the required-verification contract but does not run repository tests, and it creates any missing standard labels with automatic merge off. Repository tests still run as required verification before deadloop pushes, hands off, or merges a produced revision. The default verification command is `npm run check`; if the repository does not provide that script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
 
+If a deterministic enablement operation itself fails because local storage ran out (`ENOSPC` or `EDQUOT`), the command reports that capacity stop and keeps a small local evidence file; `/deadloop-doctor` shows it until the next successful enablement. The stop records no execution permission and touches no GitHub issue, pull request, or agent workflow label — fix storage, then run `/deadloop-enable` again.
+
 ## Control the loop with labels
 
 You start the loop by labeling an Issue. deadloop owns the exploration, implementation, and review transitions, then either hands the approved PR to a human or merges it according to policy.

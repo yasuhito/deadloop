@@ -20,6 +20,12 @@ function isStorageExhaustionError(error) {
       || containsStorageExhaustion(error.message));
 }
 
+/** The observed ENOSPC/EDQUOT code of a host error object, or null when only surrounding text names it. */
+function observedStorageExhaustionCode(error) {
+  const code = String(error?.code || "").toUpperCase();
+  return STORAGE_EXHAUSTION_CODES.has(code) ? code : null;
+}
+
 /** Whether a completion report's own result fields name an observed ENOSPC/EDQUOT failure. */
 function reportNamesStorageExhaustion(report) {
   const fields = [
@@ -33,4 +39,4 @@ function reportNamesStorageExhaustion(report) {
   return fields.some((text) => typeof text === "string" && containsStorageExhaustion(text));
 }
 
-module.exports = { containsStorageExhaustion, isStorageExhaustionError, reportNamesStorageExhaustion };
+module.exports = { containsStorageExhaustion, isStorageExhaustionError, observedStorageExhaustionCode, reportNamesStorageExhaustion };
