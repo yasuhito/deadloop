@@ -32,11 +32,6 @@ describe("uncommitted work judgments in shipped code", () => {
     const source = `const UNCOMMITTED_WORK_STATUS_ARGS = ["status", "--porcelain", "--untracked-files=all"];`;
     expect(checkUncommittedWorkJudgments(sources(source, "src/agent-scratch-area.cjs"))).toEqual([]);
   });
-
-  it("accepts the pristine proof that counts ignored files too", () => {
-    const source = `const status = git(worktree, ["status", "--porcelain", "--untracked-files=all", "--ignored"]);`;
-    expect(checkUncommittedWorkJudgments(sources(source, "src/enablement-verification.ts"))).toEqual([]);
-  });
 });
 
 describe("uncommitted work judgments in agent prompts", () => {

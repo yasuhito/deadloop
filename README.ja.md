@@ -46,7 +46,7 @@ pi install git:github.com/yasuhito/deadloop
 
 3. 実装を依頼する場合は `agent:implement`、読み取り専用の調査を依頼する場合は `agent:explore` を Issue に付けます。`ready-for-agent` は任意のトリアージ情報です。両方の依頼がある場合は調査が優先され、結果が Issue に投稿されてから実装が始まります。
 
-これだけで利用を開始できます。有効化すると、deadloop は `npm run check` を実行し、不足している標準ラベルを作成して、自動マージを無効にした状態で動き始めます。リポジトリに `npm run check` スクリプトがない場合は、[詳細設定](#詳細設定)に従って `deadloop.json` に別の `checkCommand` を指定してください。
+これだけで利用を開始できます。有効化は高速な事前確認だけを行い、リポジトリのテストは実行しません。不足している標準ラベルを作成し、自動マージを無効にした状態で動き始めます。テストは必須検証として、作業結果のpush・引き継ぎ・マージの前に実行されます。既定の検証コマンドは `npm run check` です。リポジトリにこのスクリプトがない場合は、[詳細設定](#詳細設定)に従って `deadloop.json` に別の `checkCommand` を指定してください。
 
 ## ラベルでループを制御する
 
@@ -102,7 +102,7 @@ flowchart TD
 
 | コマンド | 用途 |
 | --- | --- |
-| `/deadloop-enable` | リポジトリを検証し、deadloop が新しい作業を開始できるようにします。 |
+| `/deadloop-enable` | 高速な事前確認を行い、deadloop が新しい作業を開始できるようにします。 |
 | `/deadloop-disable` | 新しい作業の開始を止めます。実行中の試行は完了することがあります。 |
 | `/deadloop-status` | deadloop が有効かどうかと、現在の状態の概要を表示します。 |
 | `/deadloop-doctor` | 設定や保持された試行を変更せずに診断します。 |
