@@ -61,10 +61,13 @@ A Worker or reviewer attempt stores its resolved required-verification contract 
 ```text
 /deadloop-enable
 /deadloop-disable
+/deadloop-run-once
 /deadloop-status
 /deadloop-doctor
 /deadloop-abandon-attempt <attempt-id>
 ```
+
+`/deadloop-run-once` runs exactly one normal scheduler tick while persisted enablement is off. It takes the same repository-ID-scoped nonblocking lock as the continuous scheduler, issues a scoped execution authorization in `~/.pi/agent/deadloop/one-shot-execution.json` (never persisted enablement), invokes the shared tick interface with the same policy and side effects, and removes the authorization when the tick finishes. No successor timer is registered and the repository stays disabled. The report distinguishes no-op ticks from reconciled, launched, waiting (model availability, no scheduled retry), and failed ticks.
 
 ## Deterministic drivers
 

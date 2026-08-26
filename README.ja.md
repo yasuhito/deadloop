@@ -104,6 +104,7 @@ flowchart TD
 | --- | --- |
 | `/deadloop-enable` | 高速な事前確認を行い、deadloop が新しい作業を開始できるようにします。 |
 | `/deadloop-disable` | 新しい作業の開始を止めます。実行中の試行は完了することがあります。 |
+| `/deadloop-run-once` | 自動実行が無効な状態で、通常の scheduler tick を正確に一度だけ実行します。後続の tick は予約しません。 |
 | `/deadloop-status` | deadloop が有効かどうかと、現在の状態の概要を表示します。 |
 | `/deadloop-doctor` | 設定や保持された試行を変更せずに診断します。 |
 | `/deadloop-abandon-attempt <attempt-id>` | doctor に表示された場合だけ、保持された試行を安全に放棄します。 |
