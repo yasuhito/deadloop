@@ -182,7 +182,7 @@ A changed head starts a fresh review cycle.
 
 A stale head stops the repair without pushing or changing labels.
 
-Repeated findings after the bounded attempt add `agent:blocked` with recovery guidance and clear every request label, and deadloop does the same when technical or safety retries are exhausted. A review that reports a human decision is a completed review: its result is recorded, the draft becomes ready, and every agent workflow label is removed, so the PR waits on a person and on no agent request.
+Repeated findings after the bounded attempt add `agent:blocked` with recovery guidance and clear every request label, and deadloop does the same when technical or safety retries are exhausted. A blocked report naming an observed `ENOSPC` or `EDQUOT` stops without spending a retry, and its guidance points at freeing host capacity before adding a new request. A review that reports a human decision is a completed review: its result is recorded, the draft becomes ready, and every agent workflow label is removed, so the PR waits on a person and on no agent request.
 
 See [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for details.
 

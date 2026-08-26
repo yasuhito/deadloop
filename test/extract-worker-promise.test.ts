@@ -5,6 +5,8 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
+const { promiseReadErrorLabel } = require("../extensions/deadloop/automations/extract-worker-promise.cts");
+
 const helperPath = "extensions/deadloop/automations/extract-worker-promise.cts";
 
 function runPromise(filePath: string, style: "separate" | "equals" = "separate") {
@@ -347,5 +349,15 @@ describe("extract worker promise helper", () => {
     withTempFile('{"reason":"","summary":"実装した。検証した。残作業なし。"}', (filePath) => {
       expect(runHelper(filePath)).toEqual({ code: 1, status: "invalid" });
     });
+  });
+
+  it("keeps an ENOSPC read failure distinct from read_error", () => {
+    const label = promiseReadErrorLabel(Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" }));
+    expect(label.startsWith("storage_exhaustion:")).toBe(true);
+  });
+
+  it("labels every other read failure as a generic read error", () => {
+    const label = promiseReadErrorLabel(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+    expect(label.startsWith("read_error:")).toBe(true);
   });
 });
