@@ -434,7 +434,7 @@ describe("deterministic extension core", () => {
   });
 
   it("carries the shared-policy CI-equivalent command into automation environment", () => {
-    const project = normalizeProject({ automations: [{}] }, {
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", automations: [{}] }, {
       repoPolicyPath: "deadloop.json",
       repoPolicyBaseBranch: "origin/main",
       repoPolicyStatus: "loaded",
@@ -443,7 +443,7 @@ describe("deterministic extension core", () => {
     } as never);
 
     expect(project.ciEquivalentCommand).toBeUndefined();
-    const configured = normalizeProject({ ciEquivalentCommand: "make ci", automations: [{}] });
+    const configured = normalizeProject({ ciEquivalentCommand: "make ci", workerModel: "test-model", reviewerModel: "review-model", automations: [{}] });
     expect(automationEnvironment(configured, configured.automations[0]).DEADLOOP_CI_EQUIVALENT_COMMAND).toBe("make ci");
   });
 

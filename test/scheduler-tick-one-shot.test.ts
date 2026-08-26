@@ -32,6 +32,8 @@ const ENABLED_AT = 777;
 function dueProject(): NormalizedProject {
   return normalizeProject({
     id: "demo",
+    workerModel: "test-model",
+    reviewerModel: "test-review-model",
     automations: [{
       id: "demo:ticker",
       name: "demo ticker",

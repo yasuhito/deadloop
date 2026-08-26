@@ -6,7 +6,7 @@ import { buildDoctorSnapshot, formatDoctorReport } from "../src/doctor";
 import { normalizeProject } from "../src/core";
 
 function snapshotWithEvidence(evidence: unknown) {
-  const project = normalizeProject({ id: "demo", repoPath: "/repos/demo", githubRepo: "owner/demo" });
+  const project = normalizeProject({ id: "demo", repoPath: "/repos/demo", githubRepo: "owner/demo", workerModel: "test-model", reviewerModel: "test-review-model" });
   return buildDoctorSnapshot({
     cwd: "/repos/demo",
     projects: [project],
