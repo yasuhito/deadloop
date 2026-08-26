@@ -19,6 +19,7 @@ type GithubIssue = {
 };
 
 type StopLabels = { implement: string; inProgress: string; blocked: string };
+type PrStopLabels = StopLabels & { review: string; updateBranch: string; human?: string };
 
 type StopPlan = {
   removeLabels: string[];
@@ -56,8 +57,16 @@ function requiredVerificationStopMarker(issueNumber: number, diagnosis: IssueReq
   return `<!-- deadloop:required-verification-blocked:v1 target=issue-${issueNumber} fingerprint=${requiredVerificationStopFingerprint(diagnosis)} -->`;
 }
 
+function prRequiredVerificationStopMarker(prNumber: number, diagnosis: IssueRequiredVerificationStopDiagnosis): string {
+  return `<!-- deadloop:required-verification-blocked:v1 target=pr-${prNumber} fingerprint=${requiredVerificationStopFingerprint(diagnosis)} -->`;
+}
+
 function isRequiredVerificationStopComment(body: unknown): boolean {
-  return /<!-- deadloop:required-verification-blocked:v1 target=issue-\d+ fingerprint=[0-9a-f]{64} -->/.test(String(body || ""));
+  return /<!-- deadloop:required-verification-blocked:v1 target=(?:issue|pr)-\d+ fingerprint=[0-9a-f]{64} -->/.test(String(body || ""));
+}
+
+function isPrRequiredVerificationStopComment(body: unknown): boolean {
+  return /<!-- deadloop:required-verification-blocked:v1 target=pr-\d+ fingerprint=[0-9a-f]{64} -->/.test(String(body || ""));
 }
 
 function hasRequiredVerificationStopMarker(issue: GithubIssue, diagnosis: IssueRequiredVerificationStopDiagnosis): boolean {
@@ -132,6 +141,26 @@ function renderComment(
   ].join("\n");
 }
 
+function requiredVerificationStopDiagnosis(attempt: Record<string, any>, error: unknown): IssueRequiredVerificationStopDiagnosis {
+  const contract = attempt.requiredVerification || {};
+  const inspectedSources = error instanceof Error
+    ? (error as Error & { requiredVerificationSources?: IssueRequiredVerificationStopDiagnosis["sources"] }).requiredVerificationSources
+    : undefined;
+  const fixedSources = [
+    ...(contract.source ? [{ ...contract.source, command: String(contract.command || "") }] : []),
+    ...(contract.override?.source ? [{ ...contract.override.source, command: String(contract.override.command || "") }] : []),
+  ];
+  return {
+    status: "blocked",
+    reason: "stale_policy",
+    repository: String(attempt.repository || ""),
+    baseRevision: String(contract.baseRevision || attempt.inputRevision?.head || "unknown"),
+    sources: inspectedSources || fixedSources,
+    sourceScope: inspectedSources ? "current" : "fixed",
+    detail: error instanceof Error ? error.message : String(error),
+  };
+}
+
 function planIssueRequiredVerificationStop(input: {
   issue: GithubIssue;
   resolution: IssueRequiredVerificationStopDiagnosis;
@@ -151,12 +180,58 @@ function planIssueRequiredVerificationStop(input: {
   };
 }
 
+function renderPrComment(prNumber: number, diagnosis: IssueRequiredVerificationStopDiagnosis): string {
+  return [
+    prRequiredVerificationStopMarker(prNumber, diagnosis),
+    "## Required verification blocked",
+    "",
+    `reason: ${diagnosis.reason}`,
+    `trusted base revision: ${diagnosis.baseRevision || "unknown"}`,
+    ...(diagnosis.detail ? [`detail: ${diagnosis.detail}`] : []),
+    "",
+    diagnosis.sourceScope === "current" ? "Inspected sources:" : "Confirmed fixed-contract sources:",
+    ...renderSources(diagnosis),
+    "",
+    "Operations not performed:",
+    "- No automatic repair, approval, human handoff, or merge transition was performed.",
+    "",
+    "Recovery:",
+    `1. ${recoveryText(diagnosis)}`,
+    "2. Run `/deadloop-doctor` and use the PR-specific requeue command only after required verification resolves.",
+  ].join("\n");
+}
+
+function planPrRequiredVerificationStop(input: {
+  pr: GithubIssue;
+  resolution: IssueRequiredVerificationStopDiagnosis;
+  labels: PrStopLabels;
+}): StopPlan {
+  const number = Number(input.pr.number || 0);
+  if (!Number.isInteger(number) || number <= 0) throw new Error("required-verification stop requires a pull request number");
+  const names = labelNames(input.pr);
+  const marker = prRequiredVerificationStopMarker(number, input.resolution);
+  const duplicate = (input.pr.comments || []).some((comment) => String(comment.body || "").includes(marker));
+  const removeLabels = [input.labels.implement, input.labels.updateBranch, input.labels.inProgress, input.labels.human]
+    .filter((label): label is string => Boolean(label) && names.has(String(label)));
+  const addLabels = [input.labels.review, input.labels.blocked].filter((label) => !names.has(label));
+  return {
+    removeLabels,
+    addLabels,
+    ...(duplicate ? {} : { comment: renderPrComment(number, input.resolution) }),
+    fingerprint: requiredVerificationStopFingerprint(input.resolution),
+  };
+}
+
 module.exports = {
   applyIssueRequiredVerificationStop,
   hasRequiredVerificationStopMarker,
   isExactRequiredVerificationStop,
+  isPrRequiredVerificationStopComment,
   isRequiredVerificationStopComment,
   planIssueRequiredVerificationStop,
+  planPrRequiredVerificationStop,
+  prRequiredVerificationStopMarker,
+  requiredVerificationStopDiagnosis,
   requiredVerificationStopFingerprint,
   requiredVerificationStopMarker,
 };
