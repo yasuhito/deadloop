@@ -17,7 +17,6 @@ const {
 } = require("../../../src/issue-required-verification-stop.cts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.cts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.cts");
-const { renderExplorerMonitorPrompt, renderIssueMonitorPrompt } = require("../../../src/monitor-prompts.cts");
 const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
@@ -42,9 +41,6 @@ import type { DriverResult, JsonObject } from "../../../src/automation-driver-ki
 
 const SCRIPT_DIR = __dirname;
 const CLEANUP_SCRIPT = path.join(SCRIPT_DIR, "cleanup-completed-worker-worktrees.cts");
-function shellQuote(value: unknown): string {
-  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
-}
 const commandRunner = createCommandRunner();
 const { runText, runJson } = commandRunner;
 
@@ -767,7 +763,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
       },
     },
   );
-  return { workerName, branch, ...launch };
+  return { workerName, branch, agentRequest, ...launch };
 }
 
 function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): JsonObject {
@@ -979,6 +975,9 @@ function envConfig(source: NodeJS.ProcessEnv = process.env) {
     wontfixLabel: source.DEADLOOP_WONTFIX_LABEL || "wontfix",
     authorizedAutomationLogins: String(source.DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS || "")
       .split(",").map((value) => value.trim().toLowerCase()).filter(Boolean),
+    coordinatorMaxRuntimeSeconds: Number(source.DEADLOOP_COORDINATOR_MAX_RUNTIME_SECONDS) > 0
+      ? Number(source.DEADLOOP_COORDINATOR_MAX_RUNTIME_SECONDS)
+      : 86_400,
     needsTriageLabel: source.DEADLOOP_NEEDS_TRIAGE_LABEL || "needs-triage",
   };
 }
@@ -1130,21 +1129,6 @@ function driveSelectedIssue(
       }
       throw error;
     }
-    // The completion command travels inside the structured monitor input so handoff
-    // redelivery re-renders it instead of dropping the deterministic completion step.
-    const completionCommand = [
-      "node", shellQuote(path.join(env.automationDir, "complete-issue-exploration.cts")),
-      "--attempt-record", shellQuote(launch.attemptRecordFile),
-      "--project-id", shellQuote(env.projectId),
-      "--project-repo", shellQuote(env.repoPath),
-      "--github-repo", shellQuote(env.githubRepo),
-      "--state-dir", shellQuote(env.stateDir),
-      "--enabled-at", shellQuote(env.enabledAt),
-      "--explore-label", shellQuote(env.exploreLabel),
-      "--implement-label", shellQuote(env.implementLabel),
-      "--in-progress-label", shellQuote(env.inProgressLabel),
-      "--blocked-label", shellQuote(env.blockedLabel),
-    ].join(" ");
     const monitorInput = {
       issueNumber: Number(issue.number || 0),
       automationDir: env.automationDir,
@@ -1156,15 +1140,18 @@ function driveSelectedIssue(
       githubRepo: env.githubRepo,
       stateDir: env.stateDir,
       enabledAt: env.enabledAt,
-      completionCommand,
+      exploreLabel: env.exploreLabel,
+      implementLabel: env.implementLabel,
+      inProgressLabel: env.inProgressLabel,
+      blockedLabel: env.blockedLabel,
+      requestEventId: String(launch.agentRequest?.eventId || ""),
+      maxActiveMilliseconds: env.coordinatorMaxRuntimeSeconds * 1000,
     };
-    const prompt = renderExplorerMonitorPrompt(monitorInput);
-    return driverResult("needs_llm", `Launched read-only explorer for Issue #${issue.number}`, {
+    return driverResult("monitor", `Launched read-only explorer for Issue #${issue.number}`, {
       driverAction: "explorer_monitor_request",
       issueNumber: issue.number,
       launch,
       monitorHandoff: { kind: "explorer", input: monitorInput },
-      prompt,
     });
   }
 
@@ -1225,6 +1212,8 @@ function driveSelectedIssue(
       cwd: String(launch.worktreePath || ""),
       command: env.checkCommand,
     }),
+    readyLabel: env.readyLabel,
+    exploreLabel: env.exploreLabel,
     implementLabel: env.implementLabel,
     reviewLabel: env.reviewLabel,
     inProgressLabel: env.inProgressLabel,
@@ -1232,13 +1221,14 @@ function driveSelectedIssue(
     humanLabel: env.humanLabel,
     needsInfoLabel: env.needsInfoLabel,
     wontfixLabel: env.wontfixLabel,
+    requestEventId: String(launch.agentRequest?.eventId || ""),
+    maxActiveMilliseconds: env.coordinatorMaxRuntimeSeconds * 1000,
   };
-  return driverResult("needs_llm", `Launched Worker for Issue #${issue.number}`, {
+  return driverResult("monitor", `Launched Worker for Issue #${issue.number}`, {
     driverAction: "worker_monitor_request",
     issueNumber: issue.number,
     launch,
     monitorHandoff: { kind: "issue", input: monitorInput },
-    prompt: renderIssueMonitorPrompt(monitorInput),
   });
 }
 

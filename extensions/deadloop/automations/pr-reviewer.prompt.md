@@ -23,11 +23,11 @@ Handle the JSON action exactly:
 - `done`: a deterministic Agent-request transition is already complete; report only `summary`.
 - `error`: report `summary` and `driverAction`; do not improvise recovery.
 - `monitor`: the scheduler handles reviewer and branch-update monitoring deterministically. Do not send this prompt to a model.
-- `needs_llm`: treat the returned `prompt` as the whole task. This remains only for roles not yet migrated.
+- no other action exists: monitoring never runs through a prompt.
 
 ## Bounded path
 
-When `action=needs_llm`, stay inside the driver-selected path.
+Stay inside the driver-selected path.
 
 - Do not choose another PR.
 - Do not run destructive git commands in the main workspace `{{repoPath}}`.

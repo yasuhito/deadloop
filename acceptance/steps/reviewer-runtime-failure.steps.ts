@@ -8,7 +8,7 @@ import { Given, Then, When } from "@cucumber/cucumber";
 import { deliverPendingDriverHandoff } from "../../src/automation-runner";
 import { runPrReviewerDriverFixture } from "../support/pr-reviewer-driver";
 
-const { applyDeterministicAttemptMonitoring } = require("../../src/deterministic-pr-monitor-runtime.cts");
+const { applyDeterministicAttemptMonitoring } = require("../../src/deterministic-attempt-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("../../extensions/deadloop/automations/contain-terminal-monitor.cts");
 const { readAttemptRecord } = require("../../src/attempt-lifecycle-runtime.cjs");
 const { observeAttemptMonitoringDirective } = require("../../src/monitor-handoff-observation.cts");
@@ -194,7 +194,6 @@ function driveMonitoringOnce(world: ReviewerFailureWorld): void {
     retryModelWait: () => false,
     now: () => NOW,
     saveState: () => undefined,
-    sendUserMessage: () => undefined,
   });
 }
 

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const { reportObservation } = require("../src/monitor-handoff-observation.cts");
 const { decideAttemptMonitoring } = require("../src/attempt-monitoring.cts");
 const { decideMonitorContainment } = require("../src/monitor-handoff-containment.cts");
-const { applyDeterministicAttemptMonitoring } = require("../src/deterministic-pr-monitor-runtime.cts");
+const { applyDeterministicAttemptMonitoring } = require("../src/deterministic-attempt-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("../extensions/deadloop/automations/contain-terminal-monitor.cts");
 
 const HEAD = "a".repeat(40);
@@ -62,7 +62,7 @@ describe("the reviewer stop classification for a storage-broken report", () => {
     })).toMatchObject({ action: "missing_report", reason: "storage_exhaustion" });
   });
 
-  it("stops with the same reason on the legacy containment path", () => {
+  it("stops with the same reason on the containment observation path", () => {
     expect(decideMonitorContainment({
       record: { phase: "agent_started" },
       report: { kind: "invalid", cause: "storage_exhaustion" },

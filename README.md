@@ -132,6 +132,14 @@ If an implementation Issue reaches a required-verification block, deadloop prese
 
 A review stopped by required verification records actionable findings without launching repair, never records a finding-free result as approved, keeps `agent:review`, removes `agent:in-progress`, and adds `agent:blocked` without adding `ready-for-human`. The same recovery fingerprint suppresses duplicate stop comments. Configuration changes alone do not requeue the PR; after required verification resolves, `/deadloop-doctor` shows the PR-specific command that creates a new review request event.
 
+## Workflow state lives on GitHub
+
+The Issue / PR state, head revision, labels, comments, and checks are the only workflow state. Request labels (`agent:explore`, `agent:implement`, `agent:review`, `agent:update-branch`) are one-shot events: each labeled event asks for one attempt of that role, deadloop consumes it by removing exactly that label before starting work, and adding the same label again is the only way to retry or queue more work. `agent:in-progress` marks consumed work in motion, `agent:blocked` marks a stop, and neither is combined with a waiting request left behind by the stop.
+
+One host serves a repository at a time through a repository-ID-scoped file lock; several machines or identities may share one repository because ownership is derived from the same public timeline, so every host reaches the same conclusion about which attempt owns the work. If an attempt times out, its host dies, or reconciliation cannot prove safety, the target lands on `agent:blocked` with a readable reason — nothing restarts on its own until someone adds a fresh request label. `/deadloop-doctor` prints that exact command instead of local recovery steps.
+
+This model follows Matt Pocock's Sandcastle dogfood workflows (research notes in [docs/research/matt-pocock-sandcastle-github-state-model.md](docs/research/matt-pocock-sandcastle-github-state-model.md)). Deadloop keeps its own safety differences on purpose: non-force pushes bound to the exact verified head, required verification before push, handoff, or merge, per-tick stale reconciliation, and distributed claims across hosts. See [ADR 0032](docs/adr/0032-github-is-the-workflow-state-source-of-truth.md) for the decision.
+
 ## Safety controls
 
 `autoMerge` controls whether deadloop merges reviewed PRs automatically.
@@ -144,7 +152,9 @@ Reviewers can still report requested changes or a required human decision when r
 
 Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
 
-Reviewer, branch-update, and review-repair attempts are monitored deterministically without using the Automation host's model. Runtime-reported working status wins over quiet output, the configured 24-hour limit applies to active work, and a terminal attempt without a valid completion report is never prompted or nudged through conversation.
+Issue implementation Workers, explorers, PR reviewers, review-repair workers, and branch-update attempts are monitored deterministically without using the Automation host's model. Runtime-reported working status wins over quiet output, the configured 24-hour limit applies to active work, and a terminal attempt without a valid completion report is never prompted or nudged through conversation. A Worker completion report runs the required verification, destination-bound push, draft PR creation with review request, and attempt persistence as one deterministic chain; an explorer result is validated and persisted with its next Issue action.
+
+A Worker whose monitoring was lost after it filed a completion report is not stranded either: once no pending handoff remains and the runtime stops reporting active work, reconciliation collects the bound report through the same deterministic chain — push and draft PR included when the local branch survives. If the report no longer proves its binding to the attempt's target revision, the Issue gets one reasoned `agent:blocked` stop with manual recovery steps instead of a dangling claim; the retained branch and journal are left as evidence.
 
 When the runtime confirms a stopped review, deadloop re-reads its completion report once more before recording anything, and publishes the stop on the PR bound to the attempt and the exact head selected for review. A stop whose report file itself could not be read because of `ENOSPC` or `EDQUOT` is recorded as a capacity stop with free-storage recovery steps; pane output alone never names that cause. Both failure classes skip the bounded technical retry and never retry automatically.
 
@@ -152,9 +162,7 @@ A terminal turn whose evidence matches only a known billing or access rejection 
 
 ## Merge-conflict recovery
 
-Automatic branch updates are currently unavailable. deadloop detects merge conflicts but does not update the branch until #241 connects the `agent:update-branch` request to its worker. The existing exact-head, required-verification, and normal-merge safety contracts remain required, and the finalizer push stays bound to the verified head by an expected-object-ID lease.
-
-The behavior below describes the safety contract for that future connection, not behavior that can currently run.
+deadloop detects merge conflicts during review and turns them into `agent:update-branch` requests instead of recovering from local state. A later cycle consumes that request and launches a branch-update worker; when the pushed head makes the request obsolete, it is consumed with an explanation and the PR returns to normal review.
 
 The worker merges the selected base commit into the existing PR branch. It never rebases.
 

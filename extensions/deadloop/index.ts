@@ -43,13 +43,11 @@ const {
   workspaceProof,
 } = require("./automations/abandon-launch-failed-attempt.cts");
 const { readAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
-const { observeMonitorHandoffDisposition, terminalEvidenceArgs } = require("../../src/monitor-handoff-observation.cts");
 const {
   applyDeterministicAttemptMonitoring,
-  monitorRuntimeRunner,
   observeDeterministicAttemptMonitoring,
   retryWaitingAgentSession,
-} = require("../../src/deterministic-pr-monitor-runtime.cts");
+} = require("../../src/deterministic-attempt-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("./automations/contain-terminal-monitor.cts");
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
 const {
@@ -1086,7 +1084,13 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
         else status = "active";
       }
     }
-    findings.push(herdrDoctorFinding(status, detail));
+    // A stranded Worker completion report is collectable, so doctor names the deterministic path
+    // instead of leaving the persistence_unconfirmed state looking like a permanent manual task.
+    const collectionHint = status === "persistence_unconfirmed"
+      && record.phase === "report_received" && record.role === "worker"
+      ? "; once no pending handoff remains and the runtime stops reporting active work, journal reconciliation persists this bound report deterministically"
+      : "";
+    findings.push(herdrDoctorFinding(status, `${detail}${collectionHint}`));
   }
   return findings;
 }
@@ -1386,36 +1390,6 @@ function revalidatePendingIssueHandoff(handoff) {
   }
 }
 
-function monitorHandoffDisposition(handoff) {
-  if (!handoff.input || typeof handoff.input !== "object") {
-    return { action: "preserve", reason: "runtime_ambiguous" };
-  }
-  const input = handoff.input;
-  const attemptRecordFile = typeof input.attemptRecordFile === "string"
-    ? input.attemptRecordFile
-    : typeof input.promiseFile === "string"
-      ? path.join(path.dirname(input.promiseFile), "attempt.json")
-      : "";
-  if (!attemptRecordFile) return { action: "preserve", reason: "runtime_ambiguous" };
-  let record;
-  try {
-    record = readAttemptRecord(path.dirname(attemptRecordFile));
-  } catch {
-    return { action: "preserve", reason: "runtime_ambiguous" };
-  }
-  return observeMonitorHandoffDisposition(record, handoff.kind, {
-    runner: monitorRuntimeRunner(),
-    readTerminalEvidence: (attempt) => {
-      const output = childProcess.spawnSync(
-        "herdr",
-        terminalEvidenceArgs(attempt),
-        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, killSignal: "SIGKILL" },
-      );
-      return output.status === 0 ? String(output.stdout || "") : "";
-    },
-  });
-}
-
 function applyMonitorHandoffDisposition(handoff, disposition, project) {
   const enabled = findEnabledProject(loadEnablementState(), project);
   if (!enabled?.automationLogin) throw new Error("terminal monitor transition requires the authorized Automation host login");
@@ -1440,7 +1414,6 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
     enabledAt: () => project.enabledAt,
     isEnabled: () => isCurrentSchedulerRun() && isProjectEnabled(project),
     isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
-    monitorHandoffDisposition,
     observeAttemptMonitoring: observeDeterministicAttemptMonitoring,
     applyAttemptMonitoring: (handoff, directive) => {
       if (!isCurrentSchedulerRun()) return { applied: false };
@@ -1449,10 +1422,6 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
         directive,
         (currentHandoff, disposition) => applyMonitorHandoffDisposition(currentHandoff, disposition, project),
       );
-    },
-    applyMonitorHandoffDisposition: (handoff, disposition) => {
-      if (!isCurrentSchedulerRun()) return false;
-      return applyMonitorHandoffDisposition(handoff, disposition, project);
     },
     retryModelWait: (handoff) => {
       if (!isCurrentSchedulerRun()) return false;
@@ -1592,11 +1561,26 @@ function successfulExplorerCleanupPending(runDir, record): boolean {
   }
 }
 
+/** Attempt journals a live pendingDriverHandoff still monitors; the shared deterministic monitor
+ * owns their collection, so journal reconciliation must not race it. */
+function monitoredAttemptRecordFiles(state) {
+  const files = new Set();
+  for (const entry of Object.values(state?.automations || {})) {
+    const handoff = entry && typeof entry === "object" ? (entry as Record<string, unknown>).pendingDriverHandoff : undefined;
+    const monitorHandoff = handoff && typeof handoff === "object" ? (handoff as Record<string, unknown>).monitorHandoff : undefined;
+    const input = monitorHandoff && typeof monitorHandoff === "object" ? (monitorHandoff as Record<string, unknown>).input : undefined;
+    const file = input && typeof input === "object" ? (input as Record<string, unknown>).attemptRecordFile : undefined;
+    if (typeof file === "string" && file) files.add(path.resolve(file));
+  }
+  return files;
+}
+
 async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> {
   const runsDir = path.join(STATE_DIR, "runs");
   let runs: string[];
   let safeToSchedule = true;
   try { runs = fs.readdirSync(runsDir); } catch { return true; }
+  const monitoredRecords = monitoredAttemptRecordFiles(loadState());
   for (const run of runs) {
     const runDir = path.join(runsDir, run);
     const attemptRecord = path.join(runDir, "attempt.json");
@@ -1636,6 +1620,33 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       if (claimResult?.action === "error") debugLog("prepared attempt claim reconciliation blocked", claimResult.reason || claimResult.driverAction, claimResult.summary);
       try { record = readAttemptRecord(runDir); }
       catch { safeToSchedule = false; continue; }
+    }
+    // A Worker stranded at report_received after monitoring loss has no pendingDriverHandoff left to
+    // drive it. The same deterministic attemptMonitoring vocabulary status and doctor publish decides
+    // here too: persist the bound completion report through the guarded chain once the execution
+    // runtime stops reporting active work, or stop with reason and recovery steps when proof fails.
+    if (record.phase === "report_received" && record.role === "worker" && record.target.kind === "issue"
+      && !monitoredRecords.has(path.resolve(attemptRecord))) {
+      const recovered = await execJson(pi, "node", [
+        path.join(AUTOMATION_DIR, "reconcile-report-received-attempt.cts"),
+        "--attempt-record", attemptRecord,
+        "--project-id", project.id,
+        "--project-repo", project.repoPath,
+        "--github-repo", project.githubRepo,
+        "--state-dir", STATE_DIR,
+        "--enabled-at", String(project.enabledAt),
+        "--ready-label", labels.ready,
+        "--explore-label", labels.explore,
+        "--implement-label", labels.implement,
+        "--review-label", labels.review,
+        "--in-progress-label", labels.inProgress,
+        "--automation-logins", (project.automationLogins || []).join(","),
+        "--blocked-label", labels.blocked,
+      ], null, { timeout: 15 * 60_000 });
+      if (recovered?.action === "error") debugLog("report_received attempt recovery failed", recovered.summary);
+      try { record = readAttemptRecord(runDir); }
+      catch { safeToSchedule = false; continue; }
+      if (releasesAttemptOwnership(record.phase)) continue;
     }
     if (!record.workspaceId) {
       if (record.phase === "prepared" || record.phase === "github_claimed") safeToSchedule = false;
@@ -1709,7 +1720,6 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
 }
 
 export {
-  monitorHandoffDisposition,
   reconcilePersistedAttemptJournals,
   reconcilePrWorkAuthority,
   retainedAttemptClaimSnapshot,

@@ -7,11 +7,11 @@ const missingReport = { kind: "missing" };
 
 describe("retained monitor containment", () => {
   it("keeps the legacy monitor path for a working agent", () => {
-    expect(decideMonitorContainment({ record: activeRecord, report: missingReport, runtime: { kind: "working" } })).toEqual({ action: "continue_legacy_monitor" });
+    expect(decideMonitorContainment({ record: activeRecord, report: missingReport, runtime: { kind: "working" } })).toEqual({ action: "continue_monitoring" });
   });
 
   it("processes a completion report before runtime terminal state", () => {
-    expect(decideMonitorContainment({ record: activeRecord, report: { kind: "valid" }, runtime: { kind: "terminal", status: "done" } })).toEqual({ action: "continue_legacy_monitor" });
+    expect(decideMonitorContainment({ record: activeRecord, report: { kind: "valid" }, runtime: { kind: "terminal", status: "done" } })).toEqual({ action: "continue_monitoring" });
   });
 
   it("waits after a recognized terminal model availability rejection", () => {

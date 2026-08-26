@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { deliverPendingDriverHandoff } from "../src/automation-runner";
-const { applyDeterministicAttemptMonitoring } = require("../src/deterministic-pr-monitor-runtime.cts");
+const { applyDeterministicAttemptMonitoring } = require("../src/deterministic-attempt-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("../extensions/deadloop/automations/contain-terminal-monitor.cts");
 const { readAttemptRecord } = require("../src/attempt-lifecycle-runtime.cjs");
 const { observeAttemptMonitoringDirective } = require("../src/monitor-handoff-observation.cts");
@@ -116,7 +116,7 @@ function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-requ
         inProgressLabel: "agent:in-progress",
         blockedLabel: "agent:blocked",
       }
-    : { attemptRecordFile, issueNumber: 42, issueTitle: "Issue title", issueBody: "Issue body" };
+    : { attemptRecordFile, enabledAt: 1, issueNumber: 42, issueTitle: "Issue title", issueBody: "Issue body" };
   const input = {
     handoff: { kind: pullRequest ? "reviewer" : "issue", input: handoffInput },
     disposition: { action: "stop", reason: "missing_completion_report" },
@@ -267,6 +267,47 @@ describe("terminal monitor transition", () => {
     }
 
     expect({ comments: state.comments.length, monitorTurns }).toEqual({ comments: 1, monitorTurns: [] });
+  });
+
+  it("keeps the shared issue Worker sequence free of Automation-host model turns across hundreds of ticks", () => {
+    const state = fixture("terminal failure", "issue");
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "monitor",
+        monitorHandoff: { kind: "issue", input: state.input.handoff.input },
+        monitorAccounting: { activeMilliseconds: 0, observedAt: new Date(0).toISOString(), runtimeWasWorking: true },
+      },
+    };
+    const automationState = { automations: { coordinator: entry } };
+    const hostModelTurns: string[] = [];
+    let now = 0;
+    const dependencies = {
+      enabledAt: () => 1,
+      isEnabled: () => true,
+      observeAttemptMonitoring: (_handoff: Record<string, unknown>, accounting: any, observedAt: number) => {
+        const record = readAttemptRecord(path.dirname(state.attemptRecordFile));
+        return observeAttemptMonitoringDirective(record, accounting, observedAt, 86_400_000, {
+          runner: state.runner,
+          readTerminalEvidence: () => "terminal failure",
+        });
+      },
+      applyAttemptMonitoring: (handoff: Record<string, unknown>) => ({
+        applied: applyTerminalMonitorDisposition(
+          { handoff, disposition: { action: "stop", reason: "missing_completion_report" }, project: state.input.project },
+          state.dependencies,
+        ),
+      }),
+      now: () => now,
+      saveState: () => undefined,
+      sendUserMessage: (prompt: string) => hostModelTurns.push(prompt),
+    };
+
+    for (let tick = 0; tick < 500; tick += 1) {
+      now = tick * 60_000;
+      deliverPendingDriverHandoff(entry, automationState, "issue coordinator", dependencies);
+    }
+
+    expect({ comments: state.comments.length, hostModelTurns }).toEqual({ comments: 1, hostModelTurns: [] });
   });
 
   it("posts one model-availability explanation across waiting and retries on the deterministic reviewer path", () => {

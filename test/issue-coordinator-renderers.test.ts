@@ -129,7 +129,7 @@ describe("issue coordinator renderers", () => {
     );
   });
 
-  it("keeps the prompt-based coordinator pointed at the deterministic renderers", () => {
-    expect(issueCoordinatorPrompt).toContain("src/issue-coordinator-renderers.cts");
+  it("keeps the driver-first coordinator pointed at the deterministic renderers", () => {
+    expect(issueCoordinatorPrompt).toContain("issue-coordinator-driver.cts");
   });
 });

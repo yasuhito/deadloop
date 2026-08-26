@@ -17,7 +17,7 @@ const {
   assertWorktreeBelongsToProject,
   canonicalAttemptLocation,
 } = require("../../../src/attempt-project-confinement.cjs");
-const { persistFailedExploration, persistSuccessfulExploration } = require("../../../src/issue-request-transition.cts");
+const { persistIssueAttemptStop, persistSuccessfulExploration } = require("../../../src/issue-request-transition.cts");
 const { validatePromise } = require("./extract-worker-promise.cts");
 const { completeLocked } = require("./complete-attempt-workspace.cts");
 
@@ -276,11 +276,12 @@ function completeExplorationLocked(args: JsonObject, command: ReturnType<typeof 
       persistGithub: () => { record = transitionPersistedAttempt(runDir, "github_persisted"); },
     };
     if (failure) {
-      persistFailedExploration({
+      persistIssueAttemptStop({
         ...common,
         requestLabels: [String(args.exploreLabel), String(args.implementLabel)],
         blockedLabel: String(args.blockedLabel),
         failure,
+        stopNoun: "exploration",
       });
     } else {
       persistSuccessfulExploration({ ...common, resultBody: renderExplorationResult(report) });

@@ -232,7 +232,13 @@ exit 2
   });
 
   it("hands successful exploration to the deterministic completion path", () => {
-    expect(runDriverFixture("driver-explore.json").prompt).toContain("complete-issue-exploration.cts");
+    const result = runDriverFixture("driver-explore.json");
+
+    expect({ action: result.action, kind: result.monitorHandoff.kind, maxActiveMilliseconds: result.monitorHandoff.input.maxActiveMilliseconds }).toEqual({
+      action: "monitor",
+      kind: "explorer",
+      maxActiveMilliseconds: 86_400_000,
+    });
   });
 
   it("launches a recovery request ordered after an Issue block", () => {
@@ -387,12 +393,14 @@ exit 2
     expect(runDriverFixture("driver-ready-worker.json").monitorHandoff.input.issueBody).toContain("Build a focused feature.");
   });
 
-  it("does not ask the LLM to run launch-agent", () => {
-    expect(runDriverFixture("driver-ready-worker.json").prompt).not.toContain("launch-agent.cts");
-  });
+  it("registers model-free monitoring without a monitor prompt", () => {
+    const result = runDriverFixture("driver-ready-worker.json");
 
-  it("keeps promise files as the worker completion authority", () => {
-    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain("only completion authority");
+    expect({ action: result.action, prompt: result.prompt, maxActiveMilliseconds: result.monitorHandoff.input.maxActiveMilliseconds }).toEqual({
+      action: "monitor",
+      prompt: undefined,
+      maxActiveMilliseconds: 86_400_000,
+    });
   });
 
   it("reports the deterministic worker promise path outside the worktree", () => {
@@ -403,12 +411,22 @@ exit 2
     ).toBe(path.join(stateDir, "runs/fixture-worker-demo-12/promise.json"));
   });
 
-  it("isolates runtime artifacts during monitor validation", () => {
-    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain("run-project-check.ts");
+  it("binds completion to the verified worktree and branch", () => {
+    const input = runDriverFixture("driver-ready-worker.json").monitorHandoff.input;
+
+    expect({ worktreePath: typeof input.worktreePath, branch: String(input.branch).startsWith("agent/issue-12-") }).toEqual({
+      worktreePath: "string",
+      branch: true,
+    });
   });
 
-  it("preserves the validation gate before PR creation", () => {
-    expect(runDriverFixture("driver-ready-worker.json").prompt).toContain("before creating any PR");
+  it("binds the completion chain to the configured review label", () => {
+    const input = runDriverFixture("driver-ready-worker.json").monitorHandoff.input;
+
+    expect({ reviewLabel: input.reviewLabel, requestEventId: typeof input.requestEventId }).toEqual({
+      reviewLabel: "agent:review",
+      requestEventId: "string",
+    });
   });
 
   it("receives worker agent settings from the shared automation environment", () => {

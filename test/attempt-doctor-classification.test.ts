@@ -8,7 +8,7 @@ const { createHerdrRunner } = require("../src/herdr-runner.cts");
 
 const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-doctor-attempt-"));
 const stateDir = path.join(root, "deadloop");
-let monitorHandoffDisposition: (handoff: Record<string, unknown>) => { action: string };
+let observeMonitorHandoffDisposition: (record: unknown, kind: unknown, deps: unknown) => { action: string };
 let retainedAttemptDoctorFindings: (...args: any[]) => any[];
 let retainedAttemptClaimSnapshot: (...args: any[]) => { claims: unknown[]; ownershipAmbiguous: boolean };
 let reconcilePersistedAttemptJournals: (...args: any[]) => Promise<boolean>;
@@ -17,7 +17,8 @@ beforeAll(async () => {
   vi.stubEnv("PI_CODING_AGENT_DIR", root);
   vi.resetModules();
   // @ts-expect-error Vitest transforms this runtime extension import.
-  ({ monitorHandoffDisposition, retainedAttemptDoctorFindings, retainedAttemptClaimSnapshot, reconcilePersistedAttemptJournals } = await import("../extensions/deadloop/index"));
+  ({ retainedAttemptDoctorFindings, retainedAttemptClaimSnapshot, reconcilePersistedAttemptJournals } = await import("../extensions/deadloop/index"));
+  ({ observeMonitorHandoffDisposition } = require("../src/monitor-handoff-observation.cts"));
 });
 afterAll(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 
@@ -68,9 +69,10 @@ describe("attempt workspace doctor classifications", () => {
       },
     );
 
-    expect(monitorHandoffDisposition({
-      kind: "branch-update",
-      input: { promiseFile },
+    const record = JSON.parse(readFileSync(path.join(path.dirname(promiseFile), "attempt.json"), "utf8"));
+    expect(observeMonitorHandoffDisposition(record, "branch-update", {
+      runner: { listAgents: () => [], listWorkspaces: () => [], listWorktrees: () => [] },
+      readTerminalEvidence: () => "",
     }).action).toBe("settled");
   });
   it("proves doctor ownership from a normalized 0.8.0 nested WorkspaceInfo worktree", () => {

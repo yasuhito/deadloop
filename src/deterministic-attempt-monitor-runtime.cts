@@ -88,7 +88,10 @@ function retryWaitingAgentSession(handoff: JsonObject): boolean {
 }
 
 function runDeterministicCompletion(handoff: JsonObject): AttemptMonitoringApplication {
-  const script = path.join(String(handoff.input?.automationDir || ""), "complete-deterministic-pr-attempt.cts");
+  const completionScript = ["issue", "explorer"].includes(String(handoff.kind))
+    ? "complete-deterministic-issue-attempt.cts"
+    : "complete-deterministic-pr-attempt.cts";
+  const script = path.join(String(handoff.input?.automationDir || ""), completionScript);
   const completed = childProcess.spawnSync("node", [script], {
     input: JSON.stringify(handoff),
     encoding: "utf8",
@@ -98,7 +101,7 @@ function runDeterministicCompletion(handoff: JsonObject): AttemptMonitoringAppli
   });
   if (completed.error) throw completed.error;
   if (completed.status !== 0) {
-    throw new Error(String(completed.stderr || completed.stdout || "deterministic PR completion failed").trim());
+    throw new Error(String(completed.stderr || completed.stdout || `deterministic ${String(handoff.kind || "attempt")} completion failed`).trim());
   }
   return JSON.parse(String(completed.stdout || "{}"));
 }

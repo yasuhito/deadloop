@@ -78,7 +78,7 @@ The GitHub issues created from this PRD are intentionally not labeled `agent:imp
 
 ## Delivered
 
-Every acceptance criterion above is met, and the host contract was verified beyond the module format: `pi.exec`, `pi.sendUserMessage`, `ctx.isIdle`, `ctx.hasPendingMessages`, and `ctx.ui.setStatus` all work under omp, and an injected prompt starts a turn there, so a `needs_llm` driver result reaches the model rather than stalling with ticks still recorded. `extensions/deadloop/README.md` describes how to re-verify that contract after a host upgrade.
+Every acceptance criterion above is met, and the host contract was verified beyond the module format: `pi.exec`, `pi.sendUserMessage`, `ctx.isIdle`, `ctx.hasPendingMessages`, and `ctx.ui.setStatus` all work under omp, and an injected prompt starts a turn there, so each automation's own front-end prompt reaches the model rather than stalling with ticks still recorded. `extensions/deadloop/README.md` describes how to re-verify that contract after a host upgrade.
 
 Two follow-ups left this PRD's scope deliberately:
 
