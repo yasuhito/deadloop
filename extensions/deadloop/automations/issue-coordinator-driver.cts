@@ -35,6 +35,7 @@ const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.cts");
 const { attemptRecordPath, readAttemptRecord, releasesAttemptOwnership, releasePersistedAttemptAuthority } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { evaluateProjectBaseBlocking } = require("../../../src/ci-base-blocking.cts");
 const { assertCurrentWorkerContract, requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
@@ -989,6 +990,18 @@ function drive(fixturePath: string | undefined): DriverResult {
   const fixture = loadFixture(fixturePath);
   const env = envConfig(fixturePath ? { ...process.env, DEADLOOP_FIXTURE_MODE: "1" } : process.env);
   if (!env.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
+
+  // A failed trusted-base/contract pair suppresses every launch while it stands; waiting Agent
+  // requests stay unconsumed so the loop resumes the moment base or contract changes.
+  if (!fixture && env.repoPath) {
+    const baseBlocking = evaluateProjectBaseBlocking({ stateDir: env.stateDir, projectId: env.projectId, repoPath: env.repoPath, baseBranch: env.baseBranch });
+    if (baseBlocking.active) {
+      return driverResult("skip", `Base verification blocked: ${baseBlocking.reason}; no Agent request was consumed`, {
+        driverAction: "base_verification_blocked",
+        reason: baseBlocking.reason,
+      });
+    }
+  }
 
   const cleanup = cleanupPlan(fixture);
   const candidates = cleanup.candidates || [];

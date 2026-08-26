@@ -11,7 +11,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(role: "reviewer" | "branch-update", reportResult: Record<string, unknown>) {
+function fixture(role: "reviewer" | "branch-update", reportResult: Record<string, unknown>, options: { autoMerge?: boolean } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-deterministic-pr-completion-"));
   roots.push(root);
   const promiseFile = path.join(root, "promise.json");
@@ -45,7 +45,7 @@ function fixture(role: "reviewer" | "branch-update", reportResult: Record<string
       githubRepo: "octo/demo", stateDir: "/state", enabledAt: 1, prNumber: 24, expectedHeadOid: head,
       branch: "feature", worktreeRoot: "/worktrees", worktreePath: "/worktree", projectCheckCommand: "npm test",
       reviewLabel: "agent:review", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch",
-      inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", autoMerge: false,
+      inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked", autoMerge: options.autoMerge === true,
     } },
   };
 }
@@ -151,6 +151,66 @@ describe("deterministic PR attempt completion", () => {
     const result = processInput(state.handoff, { run: () => ({
       action: "monitor", driverAction: "review_repair_monitor_request", monitorHandoff: { kind: "repair", input: {} },
     }) });
+
+    expect(result.nextHandoff?.monitorHandoff?.kind).toBe("repair");
+  });
+
+  it("gates an approved autoMerge review through the CI fallback gate before merging", () => {
+    const state = fixture("reviewer", { outcome: "approved", reviewedHead: "a".repeat(40) }, { autoMerge: true });
+    const scripts: string[] = [];
+
+    const result = processInput(state.handoff, { run: (script: string) => {
+      scripts.push(script);
+      if (script === "ci-fallback-gate.cts") return { action: "proceed_merge", basis: "no_checks" };
+      if (script === "pr-review-repair-dispatch.cts") return { action: "done", driverAction: "review_approved" };
+      if (script === "merge-reviewed-pr.cts") return {};
+      return { driverAction: "workspace_closed" };
+    } });
+
+    expect(scripts.indexOf("ci-fallback-gate.cts")).toBeGreaterThan(-1);
+    expect(result.applied).toBe(true);
+  });
+
+  it("passes the fallback record to the merge only when the gate authorizes on CI fallback", () => {
+    const state = fixture("reviewer", { outcome: "approved", reviewedHead: "a".repeat(40) }, { autoMerge: true });
+    const invocations: string[][] = [];
+
+    processInput(state.handoff, { run: (script: string, args: string[]) => {
+      invocations.push([script, ...args]);
+      if (script === "ci-fallback-gate.cts") return { action: "proceed_merge", basis: "ci_fallback", recordPath: "/state/ci-fallback/demo/pr-24.json" };
+      if (script === "pr-review-repair-dispatch.cts") return { action: "done", driverAction: "review_approved" };
+      return { driverAction: "workspace_closed" };
+    } });
+
+    const merge = invocations.find((invocation) => invocation[0] === "merge-reviewed-pr.cts");
+    expect(merge?.includes("--ci-fallback-record")).toBe(true);
+  });
+
+  it("keeps the workspace when pending checks make the gate wait instead of merging", () => {
+    const state = fixture("reviewer", { outcome: "approved", reviewedHead: "a".repeat(40) }, { autoMerge: true });
+    const scripts: string[] = [];
+
+    const result = processInput(state.handoff, { run: (script: string) => {
+      scripts.push(script);
+      if (script === "pr-review-repair-dispatch.cts") return { action: "done", driverAction: "review_approved" };
+      if (script === "ci-fallback-gate.cts") return { action: "wait", reason: "checks_pending" };
+      return { driverAction: "workspace_closed" };
+    } });
+
+    expect(result.applied).toBe(false);
+    expect(scripts).not.toContain("merge-reviewed-pr.cts");
+  });
+
+  it("hands a CI fallback repair monitor handoff to the deterministic chain like any repair", () => {
+    const state = fixture("reviewer", { outcome: "approved", reviewedHead: "a".repeat(40) }, { autoMerge: true });
+
+    const result = processInput(state.handoff, { run: (script: string) => {
+      if (script === "pr-review-repair-dispatch.cts") return { action: "done", driverAction: "review_approved" };
+      if (script === "ci-fallback-gate.cts") {
+        return { action: "monitor", driverAction: "ci_fallback_repair_monitor_request", monitorHandoff: { kind: "repair", input: {} } };
+      }
+      throw new Error(`unexpected script ${script}`);
+    } });
 
     expect(result.nextHandoff?.monitorHandoff?.kind).toBe("repair");
   });

@@ -77,6 +77,22 @@ function dispatcherArgs(input: JsonObject, record: JsonObject): string[] {
   ];
 }
 
+function ciFallbackGateArgs(input: JsonObject): string[] {
+  return [
+    ...flag("attempt-record", input.attemptRecordFile),
+    ...flag("pr", input.prNumber), ...flag("expected-head", input.expectedHeadOid),
+    ...flag("branch", input.branch), ...flag("github-repo", input.githubRepo),
+    ...flag("repo-path", input.repoPath),
+    ...flag("project-id", input.projectId), ...flag("state-dir", input.stateDir), ...flag("enabled-at", input.enabledAt),
+    ...flag("required-verification", input.requiredVerification ? JSON.stringify(input.requiredVerification) : undefined),
+    ...flag("worker-agent", input.workerAgent || "pi"),
+    ...flag("worker-model", input.workerModel), ...flag("remote", input.repairRemote || "origin"),
+    ...flag("review-label", input.reviewLabel), ...flag("blocked-label", input.blockedLabel),
+    ...flag("implement-label", input.implementLabel), ...flag("update-branch-label", input.updateBranchLabel),
+    ...flag("in-progress-label", input.inProgressLabel),
+  ];
+}
+
 function processBranchUpdate(input: JsonObject, report: JsonObject, ops: CompletionOps): JsonObject {
   if (report.status === "blocked") return { applied: true, result: "branch_update_blocked_retained" };
   if (report.result?.outcome === "stale_head") {
@@ -140,26 +156,41 @@ function processReviewer(input: JsonObject, record: JsonObject, report: JsonObje
   }
   if (dispatched.driverAction === "review_approved") {
     const acceptedHistory = path.join(path.dirname(input.promiseFile), "pr-review-history-accepted.json");
-    const policyResult = input.autoMerge
-      ? ops.run("merge-reviewed-pr.cts", [
-          ...flag("attempt-record", input.attemptRecordFile), ...flag("project-repo", input.repoPath),
-          ...flag("github-repo", input.githubRepo), ...flag("state-dir", input.stateDir), ...flag("enabled-at", input.enabledAt),
-          ...flag("pr", input.prNumber), ...flag("expected-head", input.expectedHeadOid), ...flag("review-promise", input.promiseFile),
-          ...flag("history-observation", acceptedHistory), ...flag("in-progress-label", input.inProgressLabel), ...flag("blocked-label", input.blockedLabel),
-        ])
-      : ops.run("handoff-reviewed-pr.cts", [
-          ...flag("project-repo", input.repoPath), ...flag("github-repo", input.githubRepo),
-          ...flag("state-dir", input.stateDir), ...flag("enabled-at", input.enabledAt), ...flag("pr", input.prNumber),
-          ...flag("expected-head", input.expectedHeadOid), ...flag("review-promise", input.promiseFile),
-          ...flag("history-observation", acceptedHistory), ...flag("review-label", input.reviewLabel),
-          ...flag("implement-label", input.implementLabel), ...flag("update-branch-label", input.updateBranchLabel),
-          ...flag("in-progress-label", input.inProgressLabel), ...flag("blocked-label", input.blockedLabel),
-        ]);
+    let policyResult: JsonObject;
+    let closedWorkspaceForMerge = false;
+    if (input.autoMerge) {
+      // GitHub checks are one health signal: a failed terminal check set may be replaced by fresh
+      // CI-equivalent verification of the exact prospective merge tree (ADR 0030).
+      const gate = ops.run("ci-fallback-gate.cts", ciFallbackGateArgs(input));
+      if (gate.action === "monitor" && gate.monitorHandoff?.kind === "repair") {
+        return { applied: true, nextHandoff: gate, result: gate.driverAction };
+      }
+      if (gate.action !== "proceed_merge") {
+        return { applied: false, result: String(gate.reason || "ci_fallback_gate_stopped"), gate };
+      }
+      policyResult = ops.run("merge-reviewed-pr.cts", [
+        ...flag("attempt-record", input.attemptRecordFile), ...flag("project-repo", input.repoPath),
+        ...flag("github-repo", input.githubRepo), ...flag("state-dir", input.stateDir), ...flag("enabled-at", input.enabledAt),
+        ...flag("pr", input.prNumber), ...flag("expected-head", input.expectedHeadOid), ...flag("review-promise", input.promiseFile),
+        ...flag("history-observation", acceptedHistory), ...flag("in-progress-label", input.inProgressLabel), ...flag("blocked-label", input.blockedLabel),
+        ...flag("ci-fallback-record", gate.basis === "ci_fallback" ? gate.recordPath : undefined),
+      ]);
+      closedWorkspaceForMerge = true;
+    } else {
+      policyResult = ops.run("handoff-reviewed-pr.cts", [
+        ...flag("project-repo", input.repoPath), ...flag("github-repo", input.githubRepo),
+        ...flag("state-dir", input.stateDir), ...flag("enabled-at", input.enabledAt), ...flag("pr", input.prNumber),
+        ...flag("expected-head", input.expectedHeadOid), ...flag("review-promise", input.promiseFile),
+        ...flag("history-observation", acceptedHistory), ...flag("review-label", input.reviewLabel),
+        ...flag("implement-label", input.implementLabel), ...flag("update-branch-label", input.updateBranchLabel),
+        ...flag("in-progress-label", input.inProgressLabel), ...flag("blocked-label", input.blockedLabel),
+      ]);
+    }
     if (policyResult.action === "error") return { applied: false, result: policyResult };
-    const closed = input.autoMerge
+    const closed = closedWorkspaceForMerge
       ? completeWorkspace(input, ops, [input.inProgressLabel])
       : completeHumanHandoffWorkspace(input, ops);
-    return { applied: closed.driverAction === "workspace_closed", result: policyResult.driverAction };
+    return { applied: closed.driverAction === "workspace_closed", result: policyResult.driverAction || policyResult.action };
   }
   if (dispatched.driverAction === "review_human_handoff") {
     const closed = completeHumanHandoffWorkspace(input, ops);

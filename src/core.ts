@@ -91,18 +91,6 @@ export type NormalizedAutomation = {
 export type WorkerAgent = AgentKind;
 export type ReviewerAgent = AgentKind;
 
-export type RawCiFallbackConfig = {
-  enabled?: boolean;
-  mode?: string;
-  localCommands?: string | string[];
-};
-
-export type NormalizedCiFallbackConfig = {
-  enabled: boolean;
-  mode: string;
-  localCommands: string;
-};
-
 export type RawExternalReviewConfig = {
   enabled?: boolean;
   waitSeconds?: number;
@@ -120,8 +108,8 @@ export type RawProject = {
   baseBranch?: string;
   worktreeRoot?: string;
   checkCommand?: string;
+  ciEquivalentCommand?: string;
   autoMerge?: boolean;
-  ciFallback?: RawCiFallbackConfig;
   externalReview?: RawExternalReviewConfig;
   workerInstructions?: string;
   workerInstructionFiles?: string[];
@@ -164,8 +152,8 @@ export type NormalizedProject = {
   worktreeRoot: string;
   checkCommand: string;
   requiredVerification: RequiredVerificationResolution;
+  ciEquivalentCommand?: string;
   autoMerge: boolean;
-  ciFallback: NormalizedCiFallbackConfig;
   externalReview: NormalizedExternalReviewConfig;
   workerInstructions: string;
   workerLaunchPolicy: string;
@@ -310,6 +298,7 @@ const REPO_POLICY_PROJECT_KEYS = new Set([
   "workerInstructionFiles",
   "workerLaunchPolicy",
   "externalReview",
+  "ciEquivalentCommand",
   "labels",
   "automations",
 ]);
@@ -342,10 +331,22 @@ function validateStringArray(value: unknown, context: string): asserts value is 
   }
 }
 
+function validateLocalProject(raw: unknown): void {
+  // ADR 0030 removed every legacy CI fallback setting without compatibility handling.
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && Object.prototype.hasOwnProperty.call(raw, "ciFallback")) {
+    throw new Error("projects.json contains removed legacy CI fallback settings (ciFallback); delete them — CI fallback verification now resolves its contract from trusted-base deadloop.json");
+  }
+}
+
 function validateRepoPolicy(policy: unknown): RawProject {
   validateObject(policy, REPO_POLICY_FILE);
   for (const key of Object.keys(policy)) {
     if (!REPO_POLICY_PROJECT_KEYS.has(key)) throw new Error(`repo policy key is not allowed: ${key}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(policy, "ciEquivalentCommand")) {
+    const command = (policy as { ciEquivalentCommand?: unknown }).ciEquivalentCommand;
+    if (typeof command !== "string") throw new Error("repo policy ciEquivalentCommand must be a string");
+    if (!command.trim()) throw new Error("repo policy ciEquivalentCommand must not be empty; an explicit empty CI-equivalent command is a configuration error");
   }
   const workerInstructionFiles = (policy as { workerInstructionFiles?: unknown }).workerInstructionFiles;
   if (workerInstructionFiles !== undefined) {
@@ -409,7 +410,6 @@ function mergeIfLocalMissing<T extends Record<string, unknown>>(
   }
   return applied;
 }
-
 function mergeLabels(local?: LabelConfig, policy?: LabelConfig): { labels?: LabelConfig; appliedKeys: string[] } {
   if (!local && !policy) return { appliedKeys: [] };
   const merged = { ...(policy || {}), ...(local || {}) };
@@ -464,6 +464,7 @@ function mergeRepoPolicy(local: RawProject, policy: RawProject): { project: RawP
     "workerInstructionFiles",
     "workerLaunchPolicy",
     "externalReview",
+    "ciEquivalentCommand",
   ]);
   const labels = mergeLabels(local.labels, policy.labels);
   if (labels.labels) merged.labels = labels.labels;
@@ -511,23 +512,6 @@ function applyRepoPolicy(
   source.repoPolicyAppliedKeys = merged.appliedKeys;
   return { raw: merged.project, source };
 }
-function normalizeLocalCommands(value: string | string[] | undefined): string {
-  if (Array.isArray(value))
-    return value
-      .map((command) => String(command).trim())
-      .filter(Boolean)
-      .join("\n");
-  return String(value || "").trim();
-}
-
-function normalizeCiFallback(value: RawCiFallbackConfig | undefined): NormalizedCiFallbackConfig {
-  return {
-    enabled: value?.enabled === true,
-    mode: value?.mode || "billing-only",
-    localCommands: normalizeLocalCommands(value?.localCommands),
-  };
-}
-
 function normalizeExternalReview(value: RawExternalReviewConfig | undefined): NormalizedExternalReviewConfig {
   const waitSeconds = Number(value?.waitSeconds ?? 1800);
   return {
@@ -613,8 +597,8 @@ export function normalizeProject(raw: RawProject, configSource?: ProjectConfigSo
         ? [{ kind: "repo_policy", location: source.repoPolicyPath, command: source.repoPolicyCheckCommand }]
         : [],
     }),
+    ...(raw.ciEquivalentCommand !== undefined ? { ciEquivalentCommand: String(raw.ciEquivalentCommand) } : {}),
     autoMerge: raw.autoMerge === true,
-    ciFallback: normalizeCiFallback(raw.ciFallback),
     externalReview: normalizeExternalReview(raw.externalReview),
     workerInstructions: normalizeWorkerInstructions(raw),
     workerLaunchPolicy: raw.workerLaunchPolicy || DEFAULT_WORKER_LAUNCH_POLICY,
@@ -642,6 +626,7 @@ export function projectsFromConfig(
     config && typeof config === "object" && Array.isArray((config as { projects?: unknown }).projects)
       ? (config as { projects: RawProject[] }).projects
       : [];
+  for (const raw of projects) validateLocalProject(raw);
   return projects
     .filter((raw) => {
       if (!onlyIds.length) return true;
@@ -770,9 +755,7 @@ function automationRuntimeValues(
     worktreeRoot: project.worktreeRoot || "",
     checkCommand: project.checkCommand || DEFAULT_CHECK_COMMAND,
     autoMerge: project.autoMerge,
-    ciFallbackEnabled: project.ciFallback.enabled,
-    ciFallbackMode: project.ciFallback.mode,
-    ciFallbackLocalCommands: project.ciFallback.localCommands,
+    ciEquivalentCommand: project.ciEquivalentCommand || "",
     externalReviewEnabled: project.externalReview.enabled,
     externalReviewWaitSeconds: project.externalReview.waitSeconds,
     workerInstructions: project.workerInstructions || "",
@@ -846,9 +829,7 @@ export function automationEnvironment(
       : undefined,
     DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: envText(project.automationLogins.join(",")),
     DEADLOOP_AUTO_MERGE: envText(values.autoMerge),
-    DEADLOOP_CI_FALLBACK_ENABLED: envText(values.ciFallbackEnabled),
-    DEADLOOP_CI_FALLBACK_MODE: envText(values.ciFallbackMode),
-    DEADLOOP_CI_FALLBACK_LOCAL_COMMANDS: envText(values.ciFallbackLocalCommands),
+    DEADLOOP_CI_EQUIVALENT_COMMAND: envText(values.ciEquivalentCommand) || undefined,
     DEADLOOP_EXTERNAL_REVIEW_ENABLED: envText(values.externalReviewEnabled),
     DEADLOOP_EXTERNAL_REVIEW_WAIT_SECONDS: envText(values.externalReviewWaitSeconds),
     DEADLOOP_READY_LABEL: envText(values.readyLabel),

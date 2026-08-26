@@ -13,16 +13,6 @@ import type { RunnerAdapter } from "../../src/runner";
 import { buildDoctorSnapshot, formatDoctorReport } from "../../src/doctor";
 import { buildStatusSnapshot, formatStatusReport } from "../../src/status";
 
-const { decideCiFallback } = require("../../extensions/deadloop/automations/ci-fallback-decision.cts") as {
-  decideCiFallback: (
-    data: unknown,
-    jobsData: unknown,
-    logText: string,
-    enabled: boolean,
-    mode: string,
-    maxImmediateSeconds: number,
-  ) => Record<string, unknown>;
-};
 const { main: launchAgent } = require("../../extensions/deadloop/automations/launch-agent.cts") as {
   main: (argv: string[], options: Record<string, unknown>) => string;
 };
@@ -182,17 +172,8 @@ export function observeReviewerLaunch(project: NormalizedProject): string[] {
   return observeAgentLaunch(project, "reviewer");
 }
 
-export function observeCiFallbackDecision(project: NormalizedProject): Record<string, unknown> {
+export function observeCiEquivalentContractEnvironment(project: NormalizedProject): string | undefined {
   const automation = selectedAutomation(project, "pr-reviewer-driver.cts");
   const environment = automationEnvironment(project, automation);
-  const fixture = path.join(process.cwd(), "test/fixtures/ci-fallback/qorraq-all-jobs-immediate-failure.json");
-  const input = JSON.parse(fs.readFileSync(fixture, "utf8")) as unknown;
-  return decideCiFallback(
-    input,
-    null,
-    "",
-    environment.DEADLOOP_CI_FALLBACK_ENABLED === "1",
-    environment.DEADLOOP_CI_FALLBACK_MODE ?? "",
-    5,
-  );
+  return environment.DEADLOOP_CI_EQUIVALENT_COMMAND;
 }

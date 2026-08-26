@@ -118,6 +118,16 @@ The default verification command is `npm run check`. To use another command, com
 }
 ```
 
+The same `deadloop.json` may also declare one complete CI-equivalent verification command that deadloop runs against the prospective merge tree when GitHub checks fail (see [Safety controls](#safety-controls)):
+
+```json
+{
+  "ciEquivalentCommand": "your full CI-equivalent command"
+}
+```
+
+Without it, a trusted-base `package-lock.json` plus a `package.json` `scripts.check` entry establishes the convention `npm ci && npm run check`; otherwise CI fallback verification stays unavailable.
+
 The default setup does not require a local configuration file. Create one only when you need overrides such as `autoMerge`, a custom `worktreeRoot`, or additional trusted automation hosts:
 
 ```bash
@@ -147,6 +157,8 @@ This model follows Matt Pocock's Sandcastle dogfood workflows (research notes in
 With `false`, deadloop creates and reviews each PR, then hands the merge to a human.
 
 With `true`, deadloop squash-merges PRs that pass its safety checks and deletes their head branches.
+
+GitHub checks are one health signal, never the sole authority. Missing checks are not failures, pending checks are waited on, and unknown check states stop the merge. After every check finishes with at least one failure, automatic merge continues only if the repository's complete CI-equivalent verification command passes on the exact prospective merge tree of the current head and base. That result is recorded as CI fallback success — never as CI success — bound to the head, base, resulting tree, resolved command, and trusted-base policy revision; any of these changing invalidates it. A failed fallback first diagnoses the fixed trusted base with the same command: a failing base blocks all agent launches without consuming Agent requests until the base or contract changes, while a healthy base allows exactly one repair through the existing review-repair path per episode; a second fallback failure stops for a human. deadloop only performs normal GitHub merges and never uses admin or ruleset bypass; branch protection remains authoritative.
 
 Reviewers can still report requested changes or a required human decision when required verification is missing or failing. Approval, successful human handoff, and merge consideration require a host-recorded successful required-verification result for the current PR head; agent-reported validations remain additional evidence only.
 

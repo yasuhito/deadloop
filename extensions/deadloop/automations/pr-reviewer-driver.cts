@@ -38,6 +38,7 @@ const {
   observePrHistory,
   writePrHistoryObservation,
 } = require("../../../src/pr-review-history.cts");
+const { evaluateProjectBaseBlocking } = require("../../../src/ci-base-blocking.cts");
 
 import type { AttemptAgentRunner } from "../../../src/attempt-runtime-observation-types";
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
@@ -1409,6 +1410,19 @@ function drive(fixturePath: string | undefined): DriverResult {
   const fixture = loadFixture(fixturePath);
   const configuredEnv = envConfig();
   if (!configuredEnv.githubRepo && !fixture) return driverResult("error", "DEADLOOP_GITHUB_REPO is required", { driverAction: "configuration_error" });
+
+  // A failed trusted-base/contract pair suppresses every launch while it stands; waiting Agent
+  // requests stay unconsumed so the loop resumes the moment base or contract changes.
+  if (!fixture && configuredEnv.repoPath) {
+    const baseBlocking = evaluateProjectBaseBlocking({ stateDir: configuredEnv.stateDir, projectId: configuredEnv.projectId, repoPath: configuredEnv.repoPath, baseBranch: configuredEnv.baseBranch });
+    if (baseBlocking.active) {
+      return driverResult("skip", `Base verification blocked: ${baseBlocking.reason}; no Agent request was consumed`, {
+        driverAction: "base_verification_blocked",
+        reason: baseBlocking.reason,
+      });
+    }
+  }
+
   const observedPrs = fixture ? fixture.prs || [] : livePrs(configuredEnv.githubRepo);
   const automationLogin = fixture
     ? String(fixture.automationLogin || "deadloop-bot")

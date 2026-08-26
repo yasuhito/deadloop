@@ -105,6 +105,7 @@ export type DoctorFindingType =
   | "coordinator_stalled"
   | "workspace_trust"
   | "retained_attempt_workspace"
+  | "base_verification_blocked"
   | "herdr_unsupported"
   | "code_snapshot_inventory";
 
@@ -688,6 +689,38 @@ function buildWorkspaceTrustFindings(
   ];
 }
 
+const { evaluateProjectBaseBlocking } = require("./ci-base-blocking.cts") as {
+  evaluateProjectBaseBlocking: (input: { stateDir: string; projectId: string; repoPath: string; baseBranch?: string }) => { active: boolean; reason?: string; record?: Record<string, unknown> };
+};
+
+/** The failed trusted-base/contract pair that currently suppresses every launch, if one stands. */
+function activeBaseVerificationBlocking(project: NormalizedProject, stateDir: string): DoctorFinding[] {
+  if (!project.repoPath) return [];
+  try {
+    const blocking = evaluateProjectBaseBlocking({
+      stateDir,
+      projectId: project.id,
+      repoPath: project.repoPath,
+      baseBranch: project.baseBranch,
+    });
+    if (!blocking.active) return [];
+    const record = (blocking.record || {}) as Record<string, unknown>;
+    return [{
+      id: "base-verification-blocked",
+      type: "base_verification_blocked" as const,
+      title: `base verification blocked: ${String(record.baseRevision || "unknown base")}`,
+      summary: [
+        `Reason: ${blocking.reason}.`,
+        `Failed command: ${String(record.command || "unknown")} on base ${String(record.baseRevision || "unknown")} (failed at ${String(record.failedAt || "unknown time")}).`,
+        "No agent launches and no Agent request is consumed while this base/contract pair stands; the block clears automatically when the base or the CI-equivalent contract changes.",
+      ].join(" "),
+      commands: [],
+    }];
+  } catch {
+    return [];
+  }
+}
+
 export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   const project = input.selectedProject === undefined
     ? resolveActiveProject(input.cwd, input.projects)
@@ -725,6 +758,7 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
       ...buildUnrequestedPullRequestFindings(project, issues, openPrs),
       ...buildAutomationFindings(project, state, automationDir, statePath, nowMs),
       ...buildWorkspaceTrustFindings(project, input.claudeConfig),
+      ...activeBaseVerificationBlocking(project, path.dirname(statePath)),
       ...buildCodeSnapshotInventoryFindings(input),
     ],
     lastWriterCodeIdentity: input.lastWriterCodeIdentity ?? null,
