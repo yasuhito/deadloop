@@ -74,6 +74,28 @@ Given("An Issue was stopped by required verification that is now resolved", func
   });
 });
 
+const prRequiredVerificationStopComment = "<!-- deadloop:required-verification-blocked:v1 target=pr-9 fingerprint=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->";
+
+Given("A pull request was stopped by unresolved required verification", function (this: DoctorWorld) {
+  setInput(this, { openPrs: [{ number: 9, labels: ["agent:review", "agent:blocked"], comments: [{ body: prRequiredVerificationStopComment }] }] });
+});
+
+Given("A pull request was stopped by required verification that is now resolved", function (this: DoctorWorld) {
+  const resolvedProject = normalizeProject({ ...project, checkCommand: "npm run check" }, {
+    localPath: "/state/projects.json",
+    repoPolicyPath: "deadloop.json",
+    repoPolicyBaseBranch: "origin/main",
+    repoPolicyStatus: "loaded",
+    repoPolicyAppliedKeys: ["checkCommand"],
+    repoPolicyBaseRevision: "a".repeat(40),
+    repoPolicyCheckCommand: "npm run check",
+  });
+  setInput(this, {
+    projects: [resolvedProject],
+    openPrs: [{ number: 9, labels: ["agent:review", "agent:blocked"], comments: [{ body: prRequiredVerificationStopComment }] }],
+  });
+});
+
 Given("A worktree exists for an Issue with `agent:in-progress` whose updates stopped more than 24 hours ago", function (this: DoctorWorld) {
   setInput(this, {
     issues: [{ number: 2, labels: ["agent:in-progress"], updatedAt: "2026-07-03T23:59:59Z" }],
@@ -258,6 +280,14 @@ Then("doctor does not show its requeue command", function (this: DoctorWorld) {
 
 Then("doctor shows its target-specific requeue command", function (this: DoctorWorld) {
   assert.match(this.report || "", /gh issue edit 8 --remove-label agent:blocked --add-label agent:implement/);
+});
+
+Then("doctor does not show its PR requeue command", function (this: DoctorWorld) {
+  assert.doesNotMatch(this.report || "", /gh pr edit 9 .*--add-label agent:review/);
+});
+
+Then("doctor shows its PR-specific requeue command", function (this: DoctorWorld) {
+  assert.match(this.report || "", /gh pr edit 9 -R owner\/repo --remove-label agent:blocked --remove-label agent:review && gh pr edit 9 -R owner\/repo --add-label agent:review/);
 });
 
 Then("doctor shows a command to inspect changes in the stale worktree", function (this: DoctorWorld) {
