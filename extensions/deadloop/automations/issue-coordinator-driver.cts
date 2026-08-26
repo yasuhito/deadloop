@@ -5,7 +5,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
-const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
+const { createHash, randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { decisionForIssues, planIssueCoordinatorAction } = require("./issue-coordinator-flow.cts");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
@@ -114,6 +114,76 @@ function gateMissingContractComment(issue: JsonObject): string {
     "",
     `Update the issue body, then add \`agent:implement\` again. Target: #${issue.number}`,
   ].join("\n");
+}
+
+// A dependency number whose live lookup returns no state is either a number that does not exist in
+// this repository or a failed lookup. Unlike a plainly open dependency, it never resolves on its own,
+// so deadloop reports the exact references on the issue once per reference set.
+function isUnknownDependency(dep: JsonObject): boolean {
+  return String(dep?.state || "").toUpperCase() === "UNKNOWN";
+}
+
+function unresolvedDependencyEntryFingerprint(entry: JsonObject): string {
+  const references = (entry.dependencies || [])
+    .filter((dep: JsonObject) => isUnknownDependency(dep))
+    .map((dep: JsonObject) => `#${dep.number}`)
+    .sort();
+  return createHash("sha256").update(references.join(",")).digest("hex");
+}
+
+function unresolvedDependencyCommentPresent(issue: JsonObject, fingerprint: string): boolean {
+  const marker = new RegExp(`<!-- deadloop:unresolved-dependency:v1 fingerprint=${fingerprint} -->`);
+  return (issue.comments || []).some((comment: JsonObject) => marker.test(String(comment?.body || "")));
+}
+
+function renderUnresolvedDependencyComment(repository: string, entry: JsonObject, fingerprint: string): string {
+  const references = (entry.dependencies || [])
+    .filter((dep: JsonObject) => isUnknownDependency(dep))
+    .map((dep: JsonObject) => `#${dep.number}`)
+    .sort()
+    .join(", ");
+  return [
+    "deadloop did not select this issue because some dependency references could not be resolved.",
+    "",
+    `Unresolved references in ${repository}: ${references}`,
+    "- The referenced number has no Issue in this repository, or the lookup failed.",
+    "",
+    "References that point at another repository are ignored; deadloop works per repository. Resolve or remove these references to make this issue selectable again.",
+    "",
+    `<!-- deadloop:unresolved-dependency:v1 fingerprint=${fingerprint} -->`,
+  ].join("\n");
+}
+
+// Reports issues that lost selection because of unresolvable dependency references. The comment is
+// fingerprinted so an unchanged reference set is reported once, not once per coordinator tick.
+function reportUnresolvedDependencySkips(
+  issues: JsonObject[],
+  decision: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+): string {
+  const affected = (decision.skipped || []).filter((entry: JsonObject) => entry.reason === "open_dependency"
+    && (entry.dependencies || []).some((dep: JsonObject) => isUnknownDependency(dep)));
+  if (!affected.length) return "No target issue";
+  const parts: string[] = [];
+  for (const entry of affected) {
+    const number = Number(entry.number);
+    const references = (entry.dependencies || [])
+      .filter((dep: JsonObject) => isUnknownDependency(dep))
+      .map((dep: JsonObject) => `#${dep.number}`)
+      .sort()
+      .join(", ");
+    parts.push(`#${number} skipped for unresolvable dependency references (${references})`);
+    const issue = issues.find((candidate) => Number(candidate.number) === number);
+    if (!issue || fixture) continue;
+    withEnabledDriverLock(env, (_enabled: unknown, recheck: () => void) => {
+      const github = githubOperations(recheck);
+      const fingerprint = unresolvedDependencyEntryFingerprint(entry);
+      if (unresolvedDependencyCommentPresent(issue, fingerprint)) return;
+      github.commentIssue(env.githubRepo, number, renderUnresolvedDependencyComment(env.githubRepo, entry, fingerprint));
+    });
+  }
+  return `No target issue; ${parts.join("; ")}`;
 }
 
 function applyIssueTransition(
@@ -850,7 +920,10 @@ function drive(fixturePath: string | undefined): DriverResult {
   }
   const decision = decisionForIssues(fixturePath, issues, env.githubRepo, env);
   const issuePlan = planIssueCoordinatorAction(issues, decision);
-  if (issuePlan.kind === "skip_no_candidate") return driverResult("skip", "No target issue", { driverAction: "no_candidate", decision });
+  if (issuePlan.kind === "skip_no_candidate") {
+    const summary = reportUnresolvedDependencySkips(issues, decision, env, fixture);
+    return driverResult("skip", summary, { driverAction: "no_candidate", decision });
+  }
 
   const issue = issuePlan.issue;
   // Locking a target needs the repository it belongs to. The identity is immutable and rendered
@@ -1060,4 +1133,4 @@ function main(): void {
 
 if (require.main === module) main();
 
-module.exports = { assertPreparedWorkerContractCurrent, assertRecoverableWorkerCheckout, assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow };
+module.exports = { assertPreparedWorkerContractCurrent, assertRecoverableWorkerCheckout, assertWorkerLaunchBaseCurrent, envConfig, issueWorkerLaunchPlan, launchIssueWorkerFlow, renderUnresolvedDependencyComment, unresolvedDependencyCommentPresent, unresolvedDependencyEntryFingerprint };

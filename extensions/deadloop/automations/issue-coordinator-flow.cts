@@ -61,6 +61,7 @@ function decisionForIssues(
     config,
     (issue: JsonObject) => issueBlockedByNumbers(repo, issueNumberForDecision(issue), deadline),
     (number: number) => liveDependencyState(repo, number, deadline),
+    repo,
   );
 }
 

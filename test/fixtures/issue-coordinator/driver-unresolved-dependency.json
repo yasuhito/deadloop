@@ -1,0 +1,13 @@
+{
+  "cleanup": { "candidates": [] },
+  "issues": [
+    {
+      "number": 208,
+      "title": "Blocked by an unresolvable reference",
+      "body": "## Agent Brief\nBuild after dependency.\n\n## Blocked by\n- Depends on #999\n- [other repo](https://github.com/qorraq/qorraq-prototype/issues/348)\n\n## Acceptance criteria\n- It works.",
+      "labels": [{ "name": "agent:implement" }]
+    }
+  ],
+  "dependencyStates": {},
+  "relationshipDependencies": {}
+}

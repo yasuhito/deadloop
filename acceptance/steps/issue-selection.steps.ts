@@ -115,6 +115,14 @@ Given("An eligible Issue has a completed dependency in its body", function (this
   this.fixtureName = "selection-closed-body-dependency.json";
 });
 
+Given("An eligible Issue depends on an Issue in another repository", function (this: IssueSelectionWorld) {
+  this.fixtureName = "selection-cross-repository-dependency.json";
+});
+
+Given("An eligible Issue depends on an Issue number that does not exist", function (this: IssueSelectionWorld) {
+  this.fixtureName = "selection-missing-dependency-issue.json";
+});
+
 Given("An Issue with all required public labels has an unfinished dependency on GitHub", function (this: IssueSelectionWorld) {
   this.fixtureName = "selection-open-relationship-dependency.json";
 });
@@ -154,5 +162,9 @@ Then("The Issue with an unfinished dependency is not selected for work", functio
 });
 
 Then("The Issue with an unfinished GitHub dependency is not selected for work", function (this: IssueSelectionWorld) {
+  assert.equal(this.decision?.selected, false);
+});
+
+Then("The Issue with an unresolvable dependency reference is not selected for work", function (this: IssueSelectionWorld) {
   assert.equal(this.decision?.selected, false);
 });

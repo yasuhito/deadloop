@@ -29,10 +29,18 @@ const DEFAULT_HUMAN_LABEL = "ready-for-human";
 const DEFAULT_NEEDS_INFO_LABEL = "needs-info";
 const DEFAULT_WONTFIX_LABEL = "wontfix";
 
+type DependencyRef = { repository: string | null; number: number };
+
 const INLINE_DEPENDENCY_RE = /(?:Depends on|Blocked by|依存:|ブロック:)\s*#(\d+)/gi;
 const DEPENDENCY_SECTION_RE = /^##\s*(?:Blocked by|Depends on|依存|ブロック)\b[\s\S]*?(?=^##|(?![\s\S]))/gim;
 const NONE_LINE_RE = /^\s*none\s*(?:-|$)/im;
 const ISSUE_REFERENCE_RE = /#(\d+)/g;
+// A dependency section can reference Issues by bare number, by `owner/repo#123`, or by a GitHub
+// Issue/pull request URL (bare or wrapped in a markdown link). Qualified references belong to their
+// own repository's number space and must not be read as target-repository numbers.
+const MARKDOWN_ISSUE_LINK_RE = /\[[^\]]*\]\(\s*(https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pulls)\/(\d+))[^)]*\)/gi;
+const GITHUB_ISSUE_URL_RE = /https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pulls)\/(\d+)/gi;
+const QUALIFIED_NUMBER_RE = /\b([\w.-]+\/[\w.-]+)#(\d+)\b/g;
 const DEPENDENCY_QUERY_TIMEOUT_MS = 5_000;
 
 class IssueDecisionDeadlineError extends Error {}
@@ -103,16 +111,54 @@ function numbersFromMatches(regex: RegExp, text: string): number[] {
   return values;
 }
 
-function bodyDependencyNumbers(body: string | undefined | null): Set<number> {
+function normalizeRepository(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function refsFromSectionText(section: string): DependencyRef[] {
+  const refs: DependencyRef[] = [];
+  const rest = section
+    .replace(MARKDOWN_ISSUE_LINK_RE, (_match, _url, owner, name, number) => {
+      refs.push({ repository: `${owner}/${name}`, number: Number(number) });
+      return " ";
+    })
+    .replace(GITHUB_ISSUE_URL_RE, (_match, owner, name, number) => {
+      refs.push({ repository: `${owner}/${name}`, number: Number(number) });
+      return " ";
+    })
+    .replace(QUALIFIED_NUMBER_RE, (_match, repository, number) => {
+      refs.push({ repository, number: Number(number) });
+      return " ";
+    });
+  for (const number of numbersFromMatches(ISSUE_REFERENCE_RE, rest)) refs.push({ repository: null, number });
+  return refs;
+}
+
+function bodyDependencyRefs(body: string | undefined | null): DependencyRef[] {
   const text = body || "";
-  const dependencies = new Set(numbersFromMatches(INLINE_DEPENDENCY_RE, text));
+  const refs = new Map<string, DependencyRef>();
+  const add = (ref: DependencyRef) => {
+    const key = `${ref.repository ? normalizeRepository(ref.repository) : ""}#${ref.number}`;
+    if (!refs.has(key)) refs.set(key, ref);
+  };
+  for (const number of numbersFromMatches(INLINE_DEPENDENCY_RE, text)) add({ repository: null, number });
   DEPENDENCY_SECTION_RE.lastIndex = 0;
   for (let match = DEPENDENCY_SECTION_RE.exec(text); match; match = DEPENDENCY_SECTION_RE.exec(text)) {
     const section = match[0];
     if (NONE_LINE_RE.test(section)) continue;
-    for (const number of numbersFromMatches(ISSUE_REFERENCE_RE, section)) dependencies.add(number);
+    for (const ref of refsFromSectionText(section)) add(ref);
   }
-  return dependencies;
+  return [...refs.values()];
+}
+
+// A bare number resolves inside the target repository. A URL or `owner/repo#123` naming the target
+// repository also resolves locally; any other qualified reference names another repository and is not
+// a dependency of this repository's loop.
+function resolveDependencyRef(ref: DependencyRef, targetRepository?: string): { local: boolean; key: string } {
+  if (!ref.repository) return { local: true, key: `#${ref.number}` };
+  const normalized = normalizeRepository(ref.repository);
+  if (targetRepository && normalized === normalizeRepository(targetRepository)) return { local: true, key: `#${ref.number}` };
+  return { local: false, key: `${normalized}#${ref.number}` };
 }
 
 function skipIssueForDecision(reason: string, issue: IssueDecisionRecord): IssueDecisionRecord {
@@ -138,6 +184,7 @@ function selectIssueForImplementation(
   config: IssueDecisionConfig,
   relationshipDependencies: (issue: IssueDecisionRecord) => Set<number>,
   dependencyState: (number: number) => string | null | undefined,
+  repository?: string,
 ): IssueDecisionRecord {
   const skipLabels = [config.inProgressLabel, config.blockedLabel, config.needsInfoLabel, config.humanLabel, config.wontfixLabel];
   const skipped: IssueDecisionRecord[] = [];
@@ -159,11 +206,20 @@ function selectIssueForImplementation(
 
     const dependencies = new Set<number>();
     if (request.role === "worker") {
-      for (const number of bodyDependencyNumbers(issue.body || "")) dependencies.add(number);
+      const externalDependencies = new Set<string>();
+      for (const ref of bodyDependencyRefs(issue.body || "")) {
+        const resolved = resolveDependencyRef(ref, repository);
+        if (resolved.local) dependencies.add(Number(resolved.key.slice(1)));
+        else externalDependencies.add(resolved.key);
+      }
       for (const number of relationshipDependencies(issue)) dependencies.add(number);
       const { closed, openDependencies } = dependencyStatesClosed(dependencies, dependencyState);
       if (!closed) {
-        skipped.push({ ...skipIssueForDecision("open_dependency", issue), dependencies: openDependencies });
+        skipped.push({
+          ...skipIssueForDecision("open_dependency", issue),
+          dependencies: openDependencies,
+          ...(externalDependencies.size ? { externalDependencies: [...externalDependencies].sort() } : {}),
+        });
         continue;
       }
     }
@@ -362,7 +418,10 @@ if (require.main === module) {
 }
 
 module.exports = {
-  bodyDependencyNumbers,
+  bodyDependencyRefs,
+  dependencyStatesClosed,
+  normalizeRepository,
+  resolveDependencyRef,
   defaultIssueDecisionConfig,
   fixtureDecision,
   DEPENDENCY_QUERY_TIMEOUT_MS,
