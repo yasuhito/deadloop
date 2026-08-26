@@ -18,6 +18,7 @@ const {
   observePrHistory,
   readPrHistoryObservation,
 } = require("../../../src/pr-review-history.cts");
+const { humanHandoffComplete, humanHandoffLabelMove } = require("../../../src/human-handoff.cts");
 
 import type { JsonObject } from "../../../src/automation-driver-kit-types";
 
@@ -119,9 +120,6 @@ function compareAcceptedHistory(args: HandoffArgs, ops: HandoffOps, expected: Js
   return comparePrHistoryObservations(expected, currentHistory(args, ops)).kind === "unchanged";
 }
 
-function agentWorkflowLabels(args: HandoffArgs): string[] {
-  return [args.reviewLabel, args.implementLabel, args.updateBranchLabel, args.inProgressLabel, args.blockedLabel];
-}
 
 type CurrentPr = JsonObject & { labels: Set<string> };
 
@@ -148,10 +146,12 @@ function assertEligiblePr(args: HandoffArgs, ops: HandoffOps): CurrentPr {
   return pr;
 }
 
+// The postcondition is the one shared human-handoff definition: ready, and no agent workflow label
+// left. An unknown draft state counts as still draft, so only an observed ready PR passes.
 function assertHandoffApplied(args: HandoffArgs, ops: HandoffOps): void {
   const pr = readCurrentPr(args, ops);
-  if (pr.state !== "OPEN" || pr.isDraft !== false || pr.headRefOid !== args.expectedHead
-    || agentWorkflowLabels(args).some((label) => pr.labels.has(label))) {
+  if (pr.state !== "OPEN" || pr.headRefOid !== args.expectedHead
+    || !humanHandoffComplete({ isDraft: pr.isDraft as boolean, labels: [...pr.labels] }, args)) {
     throw new Error("ready handoff postcondition changed");
   }
 }
@@ -204,7 +204,7 @@ function handoffReviewedPr(args: HandoffArgs, ops: HandoffOps = { run: defaultRu
     }
     const result = ops.run([
       "gh", "pr", "edit", args.pr, "-R", args.githubRepo,
-      ...agentWorkflowLabels(args).flatMap((label) => ["--remove-label", label]),
+      ...humanHandoffLabelMove(args).remove.flatMap((label) => ["--remove-label", label]),
     ], MAX_GUARDED_OPERATION_MS);
     if (result.status !== 0) throw new Error(commandError(result, "reviewed PR ready handoff failed"));
     try {

@@ -28,6 +28,20 @@ function managedLabels(input: JsonObject): string[] {
     .filter(Boolean).flatMap((label) => flag("managed-label", label));
 }
 
+/**
+ * The explicit human-handoff expectation for a completed review: closure must prove the shared
+ * handoff state instead of inferring it from an empty expected label set.
+ */
+function handoffExpectationLabels(input: JsonObject): string[] {
+  return [
+    ...flag("handoff-review-label", input.reviewLabel),
+    ...flag("handoff-implement-label", input.implementLabel),
+    ...flag("handoff-update-branch-label", input.updateBranchLabel),
+    ...flag("handoff-in-progress-label", input.inProgressLabel),
+    ...flag("handoff-blocked-label", input.blockedLabel),
+  ];
+}
+
 function completeWorkspace(input: JsonObject, ops: CompletionOps, expectedLabels: string[] = []): JsonObject {
   return ops.run("complete-attempt-workspace.cts", [
     ...common(input),
@@ -35,6 +49,10 @@ function completeWorkspace(input: JsonObject, ops: CompletionOps, expectedLabels
     ...managedLabels(input),
     ...("autoMerge" in input ? flag("auto-merge", String(Boolean(input.autoMerge))) : []),
   ]);
+}
+
+function completeHumanHandoffWorkspace(input: JsonObject, ops: CompletionOps): JsonObject {
+  return ops.run("complete-attempt-workspace.cts", [...common(input), ...handoffExpectationLabels(input)]);
 }
 
 function persistAttempt(input: JsonObject, ops: CompletionOps): JsonObject {
@@ -114,11 +132,13 @@ function processReviewer(input: JsonObject, record: JsonObject, report: JsonObje
           ...flag("in-progress-label", input.inProgressLabel), ...flag("blocked-label", input.blockedLabel),
         ]);
     if (policyResult.action === "error") return { applied: false, result: policyResult };
-    const closed = completeWorkspace(input, ops, input.autoMerge ? [input.inProgressLabel] : []);
+    const closed = input.autoMerge
+      ? completeWorkspace(input, ops, [input.inProgressLabel])
+      : completeHumanHandoffWorkspace(input, ops);
     return { applied: closed.driverAction === "workspace_closed", result: policyResult.driverAction };
   }
   if (dispatched.driverAction === "review_human_handoff") {
-    const closed = completeWorkspace(input, ops);
+    const closed = completeHumanHandoffWorkspace(input, ops);
     return { applied: closed.driverAction === "workspace_closed", result: dispatched.driverAction };
   }
   if (["review_stale_history", "review_technical_retry"].includes(String(dispatched.driverAction))) {
@@ -160,4 +180,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { completeWorkspace, dispatcherArgs, processBranchUpdate, processInput, processReviewer };
+module.exports = { completeWorkspace, completeHumanHandoffWorkspace, dispatcherArgs, processBranchUpdate, processInput, processReviewer };

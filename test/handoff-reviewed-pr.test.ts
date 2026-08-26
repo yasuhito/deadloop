@@ -131,5 +131,15 @@ describe("reviewed PR ready handoff", () => {
       .toThrow("ready handoff stopped and review state restored");
   });
 
+  it("restores the review state when a label survives the handoff mutation", () => {
+    expect(() => runHandoff([acceptedHistory, acceptedHistory, acceptedHistory], {
+      prViews: [
+        livePr,
+        livePr,
+        { ...livePr, isDraft: false, labels: [{ name: "agent:in-progress" }] },
+      ],
+    })).toThrow("ready handoff stopped and review state restored");
+  });
+
 
 });
