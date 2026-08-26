@@ -80,13 +80,17 @@ function processBranchUpdate(input: JsonObject, report: JsonObject, ops: Complet
 }
 
 function processReviewer(input: JsonObject, record: JsonObject, report: JsonObject, ops: CompletionOps): JsonObject {
-  if (report.status === "blocked") return { applied: true, result: "reviewer_blocked_retained" };
-  if (report.result?.outcome === "approved") {
-    const verification = ops.run("run-worker-required-verification.cts", [
-      ...common(input), ...flag("worktree", input.worktreePath),
-      ...flag("quarantine-root", path.join(input.stateDir, "check-quarantine")), ...flag("role", "reviewer"),
-    ]);
-    if (verification.status !== "passed") return { applied: true, result: verification };
+  if (report.status === "complete" && report.result?.outcome === "approved") {
+    try {
+      ops.run("run-worker-required-verification.cts", [
+        ...common(input), ...flag("worktree", input.worktreePath),
+        ...flag("quarantine-root", path.join(input.stateDir, "check-quarantine")), ...flag("role", "reviewer"),
+      ]);
+    } catch {
+      // The verification command persists its failed evidence before exiting. The dispatcher below
+      // turns that evidence into the existing idempotent approval stop instead of rerunning the
+      // expensive check on every scheduler tick.
+    }
   }
   const dispatched = ops.run("pr-review-repair-dispatch.cts", dispatcherArgs(input, record));
   if (dispatched.action === "needs_llm" && dispatched.monitorHandoff?.kind === "repair") {
@@ -116,6 +120,17 @@ function processReviewer(input: JsonObject, record: JsonObject, report: JsonObje
   if (dispatched.driverAction === "review_human_handoff") {
     const closed = completeWorkspace(input, ops);
     return { applied: closed.driverAction === "workspace_closed", result: dispatched.driverAction };
+  }
+  if (["review_stale_history", "review_technical_retry"].includes(String(dispatched.driverAction))) {
+    const closed = completeWorkspace(input, ops, [input.reviewLabel]);
+    return { applied: closed.driverAction === "workspace_closed", result: dispatched.driverAction };
+  }
+  if (dispatched.driverAction === "review_stale_head") {
+    const closed = completeWorkspace(input, ops);
+    return { applied: closed.driverAction === "workspace_closed", result: dispatched.driverAction };
+  }
+  if (dispatched.driverAction === "review_policy_changed") {
+    return { applied: false, result: dispatched.driverAction };
   }
   return { applied: true, result: dispatched.driverAction || "review_completion_retained" };
 }

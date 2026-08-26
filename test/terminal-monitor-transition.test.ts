@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { deliverPendingDriverHandoff } from "../src/automation-runner";
 const { applyTerminalMonitorDisposition } = require("../extensions/deadloop/automations/contain-terminal-monitor.cts");
 const { readAttemptRecord } = require("../src/attempt-lifecycle-runtime.cjs");
+const { observeAttemptMonitoringDirective } = require("../src/monitor-handoff-observation.cts");
 
 const roots: string[] = [];
 afterEach(() => {
@@ -241,11 +242,13 @@ describe("terminal monitor transition", () => {
     const dependencies = {
       enabledAt: () => 1,
       isEnabled: () => true,
-      observeAttemptMonitoring: (_handoff: Record<string, unknown>, accounting: any) => ({
-        action: "missing_report" as const,
-        accounting,
-        reason: "terminal_without_report" as const,
-      }),
+      observeAttemptMonitoring: (_handoff: Record<string, unknown>, accounting: any, observedAt: number) => {
+        const record = readAttemptRecord(path.dirname(state.attemptRecordFile));
+        return observeAttemptMonitoringDirective(record, accounting, observedAt, 86_400_000, {
+          runner: state.runner,
+          readTerminalEvidence: () => "terminal failure",
+        });
+      },
       applyAttemptMonitoring: (handoff: Record<string, unknown>) => ({
         applied: applyTerminalMonitorDisposition(
           { handoff, disposition: { action: "stop", reason: "missing_completion_report" }, project: state.input.project },

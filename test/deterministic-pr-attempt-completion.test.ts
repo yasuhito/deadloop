@@ -65,6 +65,33 @@ describe("deterministic PR attempt completion", () => {
     expect(scripts).toEqual(["pr-branch-update-complete.cts", "persist-attempt-result.cts", "complete-attempt-workspace.cts"]);
   });
 
+  it("dispatches a failed reviewer verification to the existing approval stop", () => {
+    const state = fixture("reviewer", { outcome: "approved", reviewedHead: "a".repeat(40) });
+    const scripts: string[] = [];
+
+    processInput(state.handoff, { run: (script: string) => {
+      scripts.push(script);
+      if (script === "run-worker-required-verification.cts") throw new Error("required verification failed");
+      return { action: "done", driverAction: "review_verification_blocked" };
+    } });
+
+    expect(scripts).toEqual(["run-worker-required-verification.cts", "pr-review-repair-dispatch.cts"]);
+  });
+
+  it("closes a stale-history reviewer after requesting a fresh review", () => {
+    const state = fixture("reviewer", { outcome: "human_required", reviewedHead: "a".repeat(40) });
+    const scripts: string[] = [];
+
+    processInput(state.handoff, { run: (script: string) => {
+      scripts.push(script);
+      return script === "pr-review-repair-dispatch.cts"
+        ? { action: "done", driverAction: "review_stale_history" }
+        : { driverAction: "workspace_closed" };
+    } });
+
+    expect(scripts).toEqual(["pr-review-repair-dispatch.cts", "complete-attempt-workspace.cts"]);
+  });
+
   it("routes actionable reviewer findings into deterministic repair dispatch", () => {
     const state = fixture("reviewer", { outcome: "changes_requested", reviewedHead: "a".repeat(40), findings: [{ title: "bug", body: "fix it", severity: "major" }] });
 

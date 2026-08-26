@@ -277,6 +277,38 @@ describe("deterministic automation driver runner", () => {
     expect({ observed, sent }).toEqual({ observed: 1, sent: [] });
   });
 
+  it("persists paused active-work accounting across deterministic monitor ticks", () => {
+    const payload: Record<string, any> = {
+      action: "monitor",
+      monitorHandoff: { kind: "reviewer", input: { enabledAt: 1 } },
+      monitorAccounting: { activeMilliseconds: 0, observedAt: "1970-01-01T00:00:00.000Z", runtimeWasWorking: true },
+    };
+    const entry: Record<string, unknown> = { pendingDriverHandoff: payload };
+    const state = { automations: { auto: entry } };
+    let now = 60_000;
+    let observedAccounting: Record<string, unknown> = {};
+
+    const deps = {
+      enabledAt: () => 1,
+      isEnabled: () => true,
+      now: () => now,
+      observeAttemptMonitoring: (_handoff: Record<string, unknown>, accounting: any) => {
+        observedAccounting = accounting;
+        return now === 60_000
+          ? { action: "missing_report" as const, accounting: { activeMilliseconds: 60_000, observedAt: "1970-01-01T00:01:00.000Z", runtimeWasWorking: false }, reason: "model_availability" as const }
+          : { action: "working" as const, accounting: { activeMilliseconds: accounting.activeMilliseconds, observedAt: "1970-01-01T00:02:00.000Z", runtimeWasWorking: true } };
+      },
+      applyAttemptMonitoring: () => ({ applied: true, retain: true }),
+      saveState: () => undefined,
+      sendUserMessage: () => undefined,
+    };
+    deliverPendingDriverHandoff(entry, state, "auto", deps);
+    now = 120_000;
+    deliverPendingDriverHandoff(entry, state, "auto", deps);
+
+    expect(observedAccounting).toMatchObject({ activeMilliseconds: 60_000, runtimeWasWorking: false });
+  });
+
   it("retains a queued monitor handoff until the attempt settles", () => {
     const fixture = monitorDeliveryFixture();
 

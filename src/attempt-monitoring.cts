@@ -1,3 +1,5 @@
+const { isModelAvailabilityRejection } = require("./model-availability.cts");
+
 type JsonObject = Record<string, any>;
 
 type ActiveWorkAccounting = {
@@ -35,18 +37,6 @@ type AttemptMonitoringDirective =
   | { action: "ambiguity"; accounting: ActiveWorkAccounting; reason: "runtime_ambiguous" | "runtime_unreachable" };
 
 const RELEASED_PHASES = new Set(["github_persisted", "workspace_closed", "authority_released", "abandoned"]);
-const MODEL_AVAILABILITY_REJECTIONS = [
-  /credit balance is too low/i,
-  /(?:usage|spending) limit (?:has been )?(?:reached|exceeded)/i,
-  /(?:quota|rate limit) (?:has been )?exceeded/i,
-  /(?:do not|don't) have access to (?:this |the )?model/i,
-];
-
-function isModelAvailabilityRejection(value: unknown): boolean {
-  return typeof value === "string" && Boolean(value.trim())
-    && MODEL_AVAILABILITY_REJECTIONS.some((pattern) => pattern.test(value));
-}
-
 function accountActiveWork(
   accounting: ActiveWorkAccounting,
   now: string,
@@ -68,6 +58,9 @@ function decideAttemptMonitoring(input: AttemptMonitoringInput): AttemptMonitori
   const runtimeWorking = input.runtime.kind === "working";
   const accounting = accountActiveWork(input.accounting, input.now, runtimeWorking);
   if (RELEASED_PHASES.has(String(input.attempt?.phase || ""))) return { action: "settled", accounting };
+  // The bound report is completion authority. An agent writes it immediately before ending its turn,
+  // so runtime observation may still lag as `working`; waiting for a second status would strand the
+  // report in that race. Runtime working outranks output silence and errors, never a valid report.
   if (input.report.kind === "valid") return { action: "completion", accounting, report: input.report.value };
   if (runtimeWorking && accounting.activeMilliseconds >= input.maxActiveMilliseconds) {
     return { action: "timeout", accounting, reason: "active_work_limit" };
@@ -89,4 +82,4 @@ function decideAttemptMonitoring(input: AttemptMonitoringInput): AttemptMonitori
   return { action: "missing_report", accounting, reason: "terminal_without_report" };
 }
 
-module.exports = { accountActiveWork, decideAttemptMonitoring, isModelAvailabilityRejection };
+module.exports = { accountActiveWork, decideAttemptMonitoring };

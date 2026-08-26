@@ -34,7 +34,7 @@ import {
   runScheduledAutomation,
 } from "../../src/automation-runner";
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../src/agent-scratch-area.cjs");
-const { createAsyncHerdrRunner, createHerdrRunner } = require("../../src/herdr-runner.cts");
+const { createAsyncHerdrRunner } = require("../../src/herdr-runner.cts");
 const { observeAttemptLiveness } = require("../../src/attempt-runtime-observation.cts");
 const {
   agentOccupiesAttemptWorkspace,
@@ -42,7 +42,12 @@ const {
   workspaceProof,
 } = require("./automations/abandon-launch-failed-attempt.cts");
 const { readAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
-const { observeAttemptMonitoringDirective, observeMonitorHandoffDisposition, terminalEvidenceArgs } = require("../../src/monitor-handoff-observation.cts");
+const { observeMonitorHandoffDisposition, terminalEvidenceArgs } = require("../../src/monitor-handoff-observation.cts");
+const {
+  applyDeterministicAttemptMonitoring,
+  monitorRuntimeRunner,
+  observeDeterministicAttemptMonitoring,
+} = require("../../src/deterministic-pr-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("./automations/contain-terminal-monitor.cts");
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
 const {
@@ -1400,24 +1405,6 @@ function revalidatePendingIssueHandoff(handoff) {
   }
 }
 
-function monitorRuntimeRunner() {
-  return createHerdrRunner({
-    runText: (command, args) => {
-      const result = childProcess.spawnSync(command, args, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 10_000,
-        killSignal: "SIGKILL",
-      });
-      if (result.error) throw result.error;
-      if (result.status !== 0) {
-        throw new Error(String(result.stderr || result.stdout || `${command} failed`).trim());
-      }
-      return String(result.stdout || "");
-    },
-  });
-}
-
 function monitorHandoffDisposition(handoff) {
   if (!handoff.input || typeof handoff.input !== "object") {
     return { action: "preserve", reason: "runtime_ambiguous" };
@@ -1448,65 +1435,6 @@ function monitorHandoffDisposition(handoff) {
   });
 }
 
-function attemptRecordForMonitorHandoff(handoff) {
-  const input = handoff?.input;
-  if (!input || typeof input !== "object") throw new Error("attempt monitor handoff has no input");
-  const recordFile = typeof input.attemptRecordFile === "string"
-    ? input.attemptRecordFile
-    : typeof input.promiseFile === "string" ? path.join(path.dirname(input.promiseFile), "attempt.json") : "";
-  if (!recordFile) throw new Error("attempt monitor handoff has no attempt record");
-  return readAttemptRecord(path.dirname(recordFile));
-}
-
-function observeDeterministicAttemptMonitoring(handoff, accounting, now) {
-  const input = handoff.input || {};
-  const record = attemptRecordForMonitorHandoff(handoff);
-  return observeAttemptMonitoringDirective(
-    record,
-    accounting,
-    now,
-    Number(input.maxActiveMilliseconds || 86_400_000),
-    {
-      runner: monitorRuntimeRunner(),
-      readTerminalEvidence: (attempt) => {
-        const output = childProcess.spawnSync(
-          "herdr",
-          terminalEvidenceArgs(attempt),
-          { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, killSignal: "SIGKILL" },
-        );
-        return output.status === 0 ? String(output.stdout || "") : "";
-      },
-    },
-  );
-}
-
-function applyDeterministicAttemptMonitoring(handoff, directive, project) {
-  if (directive.action === "completion") {
-    const script = path.join(String(handoff.input?.automationDir || ""), "complete-deterministic-pr-attempt.cts");
-    const completed = childProcess.spawnSync("node", [script], {
-      input: JSON.stringify(handoff), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
-      timeout: 15 * 60_000, killSignal: "SIGKILL",
-    });
-    if (completed.error) throw completed.error;
-    if (completed.status !== 0) throw new Error(String(completed.stderr || completed.stdout || "deterministic PR completion failed").trim());
-    return JSON.parse(String(completed.stdout || "{}"));
-  }
-  const disposition = directive.action === "missing_report"
-    ? directive.reason === "model_availability"
-      ? { action: "wait_for_model", reason: "model_availability" }
-      : { action: "stop", reason: directive.reason === "invalid_completion_report" ? "invalid_completion_report" : "missing_completion_report" }
-    : {
-        action: "stop",
-        reason: "active_work_timeout",
-        accounting: directive.accounting,
-        maxActiveMilliseconds: Number(handoff.input?.maxActiveMilliseconds || 86_400_000),
-      };
-  return {
-    applied: applyMonitorHandoffDisposition(handoff, disposition, project),
-    retain: disposition.action === "wait_for_model",
-  };
-}
-
 function applyMonitorHandoffDisposition(handoff, disposition, project) {
   const enabled = findEnabledProject(loadEnablementState(), project);
   if (!enabled?.automationLogin) throw new Error("terminal monitor transition requires the authorized Automation host login");
@@ -1535,7 +1463,11 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
     observeAttemptMonitoring: observeDeterministicAttemptMonitoring,
     applyAttemptMonitoring: (handoff, directive) => {
       if (!isCurrentSchedulerRun()) return { applied: false };
-      return applyDeterministicAttemptMonitoring(handoff, directive, project);
+      return applyDeterministicAttemptMonitoring(
+        handoff,
+        directive,
+        (currentHandoff, disposition) => applyMonitorHandoffDisposition(currentHandoff, disposition, project),
+      );
     },
     applyMonitorHandoffDisposition: (handoff, disposition) => {
       if (!isCurrentSchedulerRun()) return false;
