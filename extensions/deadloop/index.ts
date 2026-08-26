@@ -48,7 +48,7 @@ const {
   monitorRuntimeRunner,
   observeDeterministicAttemptMonitoring,
   retryWaitingAgentSession,
-} = require("../../src/deterministic-pr-monitor-runtime.cts");
+} = require("../../src/deterministic-attempt-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("./automations/contain-terminal-monitor.cts");
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
 const {

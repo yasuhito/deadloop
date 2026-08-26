@@ -51,6 +51,8 @@ type PersistFailedExplorationInput = Omit<PersistSuccessfulExplorationInput, "re
   requestLabels: string[];
   blockedLabel: string;
   failure: { reason: string; explanation: string; recovery: string };
+  /** The role's plain name in the stop comment, e.g. "exploration" or "implementation". */
+  stopNoun: string;
 };
 
 function eventId(event: JsonObject | null | undefined): string {
@@ -382,14 +384,14 @@ function ownedActiveState(
 
 function failedExplorationBody(input: PersistFailedExplorationInput): string {
   return [
-    `<!-- deadloop:issue-exploration-stop:v1 attempt=${input.attemptId} request=${input.requestEventId} reason=${input.failure.reason} -->`,
-    "## deadloop exploration stopped",
+    `<!-- deadloop:issue-attempt-stop:v1 role=${input.stopNoun} attempt=${input.attemptId} request=${input.requestEventId} reason=${input.failure.reason} -->`,
+    `## deadloop ${input.stopNoun} stopped`,
     "",
     input.failure.explanation.trim(),
     "",
     input.failure.recovery.trim(),
     "",
-    `To request a new exploration attempt, add \`${input.requestLabel}\` again.`,
+    `To request a new ${input.stopNoun} attempt, add \`${input.requestLabel}\` again.`,
   ].join("\n");
 }
 
@@ -434,13 +436,13 @@ function activeLabelEventAfter(events: JsonObject[], label: string, cutoff: Json
 }
 
 /**
- * Persist one terminal exploration stop while preserving recovery requests ordered after its block.
+ * Persist one terminal Issue attempt stop while preserving recovery requests ordered after its block.
  */
-function persistFailedExploration(input: PersistFailedExplorationInput): { kind: "blocked"; requestEventId: string } {
+function persistIssueAttemptStop(input: PersistFailedExplorationInput): { kind: "blocked"; requestEventId: string } {
   if (!input.automationLogin.trim()) throw new Error("authorized Automation host login is required");
   let observation = observeExplorationCompletion(input);
   let activeState = ownedActiveState(observation, input);
-  if (!activeState) throw new Error("exploration active state is not owned by this attempt");
+  if (!activeState) throw new Error("issue attempt active state is not owned by this attempt");
 
   // The stop must be live before anything else is cleared, and it is recreated when it was removed
   // after this attempt already wrote it: a retry has to restore the visible terminal state instead of
@@ -448,14 +450,14 @@ function persistFailedExploration(input: PersistFailedExplorationInput): { kind:
   let block = liveTerminalBlockEvent(observation, activeState, input);
   if (!block) {
     if (!activeState.active && !recordedTerminalBlockEvent(observation, activeState, input)) {
-      throw new Error("exploration block is missing after active state removal");
+      throw new Error("issue attempt block is missing after active state removal");
     }
     input.github.addIssueLabel(input.repository, input.issueNumber, input.blockedLabel);
     observation = observeExplorationCompletion(input);
     activeState = ownedActiveState(observation, input);
-    if (!activeState) throw new Error("exploration active state changed while blocking");
+    if (!activeState) throw new Error("issue attempt active state changed while blocking");
     block = liveTerminalBlockEvent(observation, activeState, input);
-    if (!block) throw new Error("exploration terminal block could not be proven");
+    if (!block) throw new Error("issue attempt terminal block could not be proven");
   }
 
   const body = failedExplorationBody(input);
@@ -464,7 +466,7 @@ function persistFailedExploration(input: PersistFailedExplorationInput): { kind:
     observation = observeExplorationCompletion(input);
     activeState = ownedActiveState(observation, input);
     if (!activeState || !trustedExactComment(observation.comments, input.automationLogin, body)) {
-      throw new Error("exploration stop explanation could not be proven");
+      throw new Error("issue attempt stop explanation could not be proven");
     }
   }
 
@@ -482,7 +484,7 @@ function persistFailedExploration(input: PersistFailedExplorationInput): { kind:
       input.github.addIssueLabel(input.repository, input.issueNumber, requestLabel);
       observation = observeExplorationCompletion(input);
       activeState = ownedActiveState(observation, input);
-      if (!activeState) throw new Error("exploration active state changed while restoring a recovery request");
+      if (!activeState) throw new Error("issue attempt active state changed while restoring a recovery request");
       latest = labelEvent(observation.events, requestLabel);
     }
     if (!latest || compareIssueTimelineEvents(latest, block) > 0
@@ -490,11 +492,11 @@ function persistFailedExploration(input: PersistFailedExplorationInput): { kind:
       || !observation.labels.has(requestLabel)) continue;
     const deletion = input.github.deleteIssueLabel(input.repository, input.issueNumber, requestLabel);
     if (deletion.status !== 200 && deletion.status !== 404) {
-      throw new Error("pre-block exploration request removal could not be proven");
+      throw new Error("pre-block issue request removal could not be proven");
     }
     observation = observeExplorationCompletion(input);
     activeState = ownedActiveState(observation, input);
-    if (!activeState) throw new Error("exploration active state changed while clearing requests");
+    if (!activeState) throw new Error("issue attempt active state changed while clearing requests");
     const postBlockRequest = [...observation.events]
       .filter((event) => compareIssueTimelineEvents(event, block) > 0
         && String(event.event || "").toLowerCase() === "labeled"
@@ -507,7 +509,7 @@ function persistFailedExploration(input: PersistFailedExplorationInput): { kind:
       input.github.addIssueLabel(input.repository, input.issueNumber, requestLabel);
       observation = observeExplorationCompletion(input);
       activeState = ownedActiveState(observation, input);
-      if (!activeState) throw new Error("exploration active state changed while restoring a recovery request");
+      if (!activeState) throw new Error("issue attempt active state changed while restoring a recovery request");
     }
   }
 
@@ -525,7 +527,7 @@ function persistFailedExploration(input: PersistFailedExplorationInput): { kind:
   if (!activeState || activeState.active || !activeState.removed
     || !observation.labels.has(input.blockedLabel) || !requestsAreTerminal
     || !trustedExactComment(observation.comments, input.automationLogin, body)) {
-    throw new Error("exploration terminal GitHub persistence could not be proven");
+    throw new Error("issue attempt terminal GitHub persistence could not be proven");
   }
   input.persistGithub();
   return { kind: "blocked", requestEventId: input.requestEventId };
@@ -542,7 +544,7 @@ function persistSuccessfulExploration(input: PersistSuccessfulExplorationInput):
   if (!input.automationLogin.trim()) throw new Error("authorized Automation host login is required");
   let observation = observeExplorationCompletion(input);
   let activeState = ownedActiveState(observation, input);
-  if (!activeState) throw new Error("exploration active state is not owned by this attempt");
+  if (!activeState) throw new Error("issue attempt active state is not owned by this attempt");
 
   if (!trustedExplorationResultComment(observation.comments, input)) {
     if (!activeState.active) throw new Error("exploration result comment is missing after active state removal");
@@ -866,7 +868,7 @@ module.exports = {
   issueLabelIsActive,
   issueRecoveryBlockCanBeCleared,
   issueRecoveryRequestIsEligible,
-  persistFailedExploration,
+  persistIssueAttemptStop,
   persistSuccessfulExploration,
   trustedExplorationResultComment,
 };

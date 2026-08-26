@@ -21,13 +21,13 @@ describe("deterministic attempt monitoring reports", () => {
       herdr: { workerWorktrees: [], cleanupCandidates: [], staleLeftovers: [] },
     });
 
-    expect(report).toContain("attemptMonitoring: deterministic for reviewer and branch-update (no Automation-host model)");
+    expect(report).toContain("attemptMonitoring: deterministic for all roles (no Automation-host model)");
   });
 
   it("describes deterministic reviewer and branch-update monitoring in doctor", () => {
     const report = formatDoctorReport({ ...shared, findings: [] });
 
-    expect(report).toContain("attemptMonitoring: deterministic for reviewer and branch-update (no Automation-host model)");
+    expect(report).toContain("attemptMonitoring: deterministic for all roles (no Automation-host model)");
   });
 
   it("extracts active-work duration and model wait observables from the automation state", () => {

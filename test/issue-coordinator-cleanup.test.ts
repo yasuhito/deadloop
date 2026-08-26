@@ -272,12 +272,16 @@ describe("issue coordinator cleanup", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.rootPaneId).toBe("fixture-pane-worker");
   });
 
-  it("keeps worker launch out of the monitoring prompt", () => {
-    expect(runDriverFixture("driver-ready-worker.json").prompt).not.toContain("launch-agent.cts");
+  it("registers model-free monitoring instead of a monitoring prompt", () => {
+    const result = runDriverFixture("driver-ready-worker.json");
+
+    expect({ action: result.action, prompt: result.prompt }).toEqual({ action: "monitor", prompt: undefined });
   });
 
-  it("does not document workspace split startup for workers", () => {
-    expect(runDriverFixture("driver-ready-worker.json").prompt).not.toMatch(/herdr agent start[^`\n]*--workspace <workspaceId>/);
+  it("binds monitoring to the structured attempt journal", () => {
+    const input = runDriverFixture("driver-ready-worker.json").monitorHandoff.input;
+
+    expect(String(input.attemptRecordFile)).toMatch(/attempt\.json$/);
   });
 
   it("documents direct root-pane startup for review workers", () => {

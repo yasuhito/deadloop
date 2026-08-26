@@ -267,7 +267,7 @@ export function deliverPendingDriverHandoff(
         deps.notify?.(`deadloop discarded stale monitor handoff: ${automationName}`, "warning");
         return true;
       }
-      if (["reviewer", "branch-update"].includes(String(monitorHandoff.kind || ""))) {
+      if (["reviewer", "branch-update", "issue", "explorer"].includes(String(monitorHandoff.kind || ""))) {
         const storedAccounting = payload.monitorAccounting;
         const accounting: ActiveWorkAccounting = storedAccounting && typeof storedAccounting === "object" && !Array.isArray(storedAccounting)
           ? storedAccounting as unknown as ActiveWorkAccounting
@@ -306,6 +306,10 @@ export function deliverPendingDriverHandoff(
             entry.pendingDriverHandoff = application.nextHandoff;
           } else if (application.applied && !application.retain) {
             delete entry.pendingDriverHandoff;
+          }
+          // A retained completion carries its own visible failure, e.g. the verification log path.
+          if (!application.applied && typeof application.error === "string" && application.error.trim()) {
+            entry.lastError = application.error;
           }
           recordAutomationResult(entry, application.applied ? `driver_attempt_${directive.action}` : "driver_attempt_completion_pending");
           entry.lastSummary = "reason" in directive ? directive.reason : `deterministic ${directive.action}`;

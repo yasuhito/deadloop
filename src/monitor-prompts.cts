@@ -12,26 +12,6 @@ type MonitorPromptBaseInput = {
 };
 
 
-type ExplorerMonitorPromptInput = MonitorPromptBaseInput & {
-  issueNumber: number;
-  /** Deterministic completion command the monitor must run after a terminal promise. */
-  completionCommand?: string;
-};
-type IssueMonitorPromptInput = MonitorPromptBaseInput & {
-  issueNumber: number;
-  issueTitle?: string;
-  worktreePath: string;
-  branch: string;
-  checkCommand: string;
-  implementLabel?: string;
-  reviewLabel: string;
-  inProgressLabel: string;
-  blockedLabel: string;
-  humanLabel?: string;
-  needsInfoLabel?: string;
-  wontfixLabel?: string;
-};
-
 type BranchUpdateMonitorPromptInput = MonitorPromptBaseInput & {
   prNumber: number;
   expectedHeadOid: string;
@@ -109,12 +89,6 @@ Enablement guard:
 ${mutationRules}`;
 }
 
-function renderAttemptPersistence(input: MonitorPromptBaseInput): string {
-  const reviewLabel = (input as Partial<IssueMonitorPromptInput & BranchUpdateMonitorPromptInput>).reviewLabel;
-  if (!reviewLabel) throw new Error("attempt persistence rendering requires the configured review label");
-  return `node ${shellQuotePrompt(`${input.automationDir}/persist-attempt-result.cts`)} --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --review-label ${shellQuotePrompt(reviewLabel)}`;
-}
-
 function renderWorkspaceCompletion(input: MonitorPromptBaseInput, expectedLabels: string[] = []): string {
   const labels = expectedLabels.flatMap((label) => ["--expected-label", shellQuotePrompt(label)]).join(" ");
   const reviewer = input as Partial<ReviewerMonitorPromptInput>;
@@ -123,52 +97,13 @@ function renderWorkspaceCompletion(input: MonitorPromptBaseInput, expectedLabels
     reviewer.inProgressLabel, reviewer.blockedLabel,
   ].filter((label): label is string => Boolean(label));
   const managed = managedLabels.flatMap((label) => ["--managed-label", shellQuotePrompt(label)]).join(" ");
-  const worker = input as Partial<IssueMonitorPromptInput>;
-  const workerLabels = worker.reviewLabel
-    ? ["--worker-review-label", shellQuotePrompt(worker.reviewLabel)].join(" ")
+  const workerLabels = "reviewLabel" in input && input.reviewLabel
+    ? ["--worker-review-label", shellQuotePrompt(String(input.reviewLabel))].join(" ")
     : "";
+
   const policy = "autoMerge" in input ? `--auto-merge ${input.autoMerge ? "true" : "false"}` : "";
   const extras = [workerLabels, policy, labels, managed].filter(Boolean).join(" ");
   return `node ${shellQuotePrompt(`${input.automationDir}/complete-attempt-workspace.cts`)} --attempt-record ${shellQuotePrompt(input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))}${extras ? ` ${extras}` : ""}`;
-}
-
-function renderIssueMonitorPrompt(input: IssueMonitorPromptInput): string {
-  const attemptRecord = input.attemptRecordFile || `${input.promiseFile.replace(/\/[^/]+$/, "")}/attempt.json`;
-  const verify = `node ${shellQuotePrompt(`${input.automationDir}/run-worker-required-verification.cts`)} --attempt-record ${shellQuotePrompt(attemptRecord)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --worktree ${shellQuotePrompt(input.worktreePath)} --quarantine-root ${shellQuotePrompt(`${input.stateDir || "<stateDir>"}/check-quarantine`)}`;
-  const guardedPush = `node ${shellQuotePrompt(`${input.automationDir}/guarded-push.cts`)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --worktree ${shellQuotePrompt(input.worktreePath)} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --remote origin --branch ${shellQuotePrompt(input.branch)} --attempt-record ${shellQuotePrompt(attemptRecord)}`;
-  const createPr = `node ${shellQuotePrompt(`${input.automationDir}/guarded-worker-pr.cts`)} --attempt-record ${shellQuotePrompt(attemptRecord)} --project-id ${shellQuotePrompt(input.projectId || "<projectId>")} --project-repo ${shellQuotePrompt(input.repoPath || "<projectRepo>")} --github-repo ${shellQuotePrompt(input.githubRepo || "<githubRepo>")} --state-dir ${shellQuotePrompt(input.stateDir || "<stateDir>")} --enabled-at ${shellQuotePrompt(String(input.enabledAt ?? "<enabledAt>"))} --title ${shellQuotePrompt(input.issueTitle || `Issue #${input.issueNumber}`)} --review-label ${shellQuotePrompt(input.reviewLabel)}`;
-  return `Deterministic driver launched Worker for Issue #${input.issueNumber}. Do not launch another agent and do not reselect another issue.
-
-${renderPromisePollingRules(input, "issue")}
-
-After a \`complete\` promise:
-- Inspect \`${input.worktreePath}\` and confirm only Issue #${input.issueNumber} changes are present.
-- Run the fixed required-verification contract through run-project-check.ts isolation before creating any PR, and persist its output-commit-bound record by running exactly \`${verify}\`. Agent-reported additional validations never replace this record. If it reports \`status=blocked\`, it has deterministically removed the in-progress state, added the blocked label, and posted idempotent recovery guidance; stop without another comment or label mutation. A new attempt must adopt the restored policy.
-- Only after that command reports \`status=passed\`, push only the Worker branch \`${input.branch}\` without force-push by running exactly \`${guardedPush}\`. The guarded push independently requires the same passed record and current policy.
-- Only after that push succeeds, create a reviewable PR whose body includes \`Closes #${input.issueNumber}\`, or recover that exact PR, and add \`${input.reviewLabel}\` by running exactly \`${createPr}\`. This dedicated command independently requires the verified output commit; do not run \`gh pr create\` or success label mutations directly.
-- Do not manually close the issue with GitHub commands, and do not merge the PR.
-- After the PR, closing reference, exact pushed head, labels, and attempt marker are persisted, run \`${renderAttemptPersistence(input)}\` to bind that existing result. Only after it reports result_persisted, run the deterministic workspace completion command exactly once: \`${renderWorkspaceCompletion(input)}\`. A pending cleanup result must not replay the push, PR creation, comment, or labels.
-
-After a \`blocked\` promise:
-- Use the promise reason/summary to report the blocker.
-- Move the issue from \`${input.inProgressLabel}\` to \`${input.blockedLabel}\` only when the blocker is actionable.
-
-Report only the resulting action and evidence.`;
-}
-
-function renderExplorerMonitorPrompt(input: ExplorerMonitorPromptInput): string {
-  const lines = [
-    `A read-only explorer is running for Issue #${input.issueNumber}.`,
-    `Monitor only the promise file at ${input.promiseFile}. Do not launch another agent.`,
-    "Do not mutate the repository or GitHub. The deterministic completion path will validate and persist the result.",
-  ];
-  if (input.completionCommand) {
-    lines.push(
-      `After a complete or blocked promise, run exactly: \`${input.completionCommand}\`.`,
-      "If completion reports cleanup pending, do not replay the result comment or label mutation; retry the same command.",
-    );
-  }
-  return lines.join("\n");
 }
 
 function renderRepairMonitorPrompt(input: RepairMonitorPromptInput): string {
@@ -193,19 +128,10 @@ Prohibited in every path: force-push, monitor-side push, label changes outside t
 Report only the terminal action and evidence.`;
 }
 
-type PendingMonitorHandoff =
-  | { kind: "issue"; input: IssueMonitorPromptInput }
-  | { kind: "explorer"; input: ExplorerMonitorPromptInput }
-  | { kind: "repair"; input: RepairMonitorPromptInput };
+type PendingMonitorHandoff = { kind: "repair"; input: RepairMonitorPromptInput };
 
 function renderPendingMonitorHandoff(handoff: PendingMonitorHandoff, enabledAt?: number): string {
   if (!handoff.input || typeof handoff.input !== "object") throw new Error("unsupported pending monitor handoff");
-  if (handoff.kind === "issue") {
-    return renderIssueMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
-  }
-  if (handoff.kind === "explorer") {
-    return renderExplorerMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
-  }
   if (handoff.kind === "repair") {
     return renderRepairMonitorPrompt({ ...handoff.input, enabledAt: enabledAt ?? handoff.input.enabledAt });
   }
@@ -213,8 +139,6 @@ function renderPendingMonitorHandoff(handoff: PendingMonitorHandoff, enabledAt?:
 }
 
 module.exports = {
-  renderExplorerMonitorPrompt,
-  renderIssueMonitorPrompt,
   renderPendingMonitorHandoff,
   renderPromisePollingRules,
   renderRepairMonitorPrompt,

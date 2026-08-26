@@ -351,7 +351,7 @@ describe("deterministic automation driver runner", () => {
     expect(fixture.entry.pendingDriverHandoff).toBeUndefined();
   });
 
-  it.each(["issue", "explorer", "reviewer", "branch-update", "repair"])("never redelivers a terminal %s handoff without a report", (kind) => {
+  it.each(["reviewer", "branch-update", "repair"])("never redelivers a terminal %s handoff without a report", (kind) => {
     const fixture = monitorDeliveryFixture(kind);
     deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
     fixture.setDisposition({ action: "stop", reason: "missing_completion_report" });
@@ -361,7 +361,31 @@ describe("deterministic automation driver runner", () => {
       deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
     }
 
-    expect(fixture.sent).toHaveLength(["reviewer", "branch-update"].includes(kind) ? 0 : 1);
+    expect(fixture.sent).toHaveLength(kind === "repair" ? 1 : 0);
+  });
+
+  it.each(["issue", "explorer"])("never redelivers a terminal %s handoff through the shared directive interface", (kind) => {
+    const fixture = monitorDeliveryFixture(kind);
+    const deps = {
+      ...fixture.deps,
+      observeAttemptMonitoring: () => ({
+        action: "missing_report" as const,
+        accounting: { activeMilliseconds: 0, observedAt: new Date(0).toISOString(), runtimeWasWorking: false },
+        reason: "terminal_without_report" as const,
+      }),
+      applyAttemptMonitoring: (_handoff: Record<string, unknown>, directive: Record<string, unknown>) => {
+        fixture.applied.push(String(directive.reason));
+        return { applied: true };
+      },
+    };
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", deps);
+
+    expect({ sent: fixture.sent, lastResult: fixture.entry.lastResult }).toEqual({
+      sent: [],
+      lastResult: "driver_attempt_missing_report",
+    });
+    expect(fixture.applied).toEqual(["terminal_without_report"]);
+    expect(fixture.entry.pendingDriverHandoff).toBeUndefined();
   });
 
   it("applies a terminal stop once", () => {
@@ -536,7 +560,7 @@ describe("deterministic automation driver runner", () => {
     expect(entry.lastResult).toBe("driver_handoff_revalidation_required");
   });
 
-  it("rebinds a pre-disable issue handoff after deterministic eligibility revalidation", () => {
+  it("continues deterministic monitoring for a revalidated pre-disable issue handoff without a host-model prompt", () => {
     const entry: Record<string, unknown> = {
       pendingDriverHandoff: {
         action: "needs_llm",
@@ -546,17 +570,30 @@ describe("deterministic automation driver runner", () => {
     };
     const state = { automations: { auto: entry } };
     const sent: string[] = [];
+    const observed: string[] = [];
 
     deliverPendingDriverHandoff(entry, state, "auto", {
       enabledAt: () => 2,
       isEnabled: () => true,
       now: () => 456,
       revalidatePendingDriverHandoff: () => true,
+      observeAttemptMonitoring: () => {
+        observed.push("observe");
+        return {
+          action: "working" as const,
+          accounting: { activeMilliseconds: 0, observedAt: new Date(456).toISOString(), runtimeWasWorking: true },
+        };
+      },
       saveState: () => undefined,
       sendUserMessage: (prompt) => sent.push(prompt),
     });
 
-    expect(sent[0]).toContain("--enabled-at 2");
+    expect({ sent, observed, lastResult: entry.lastResult, pending: entry.pendingDriverHandoff !== undefined }).toEqual({
+      sent: [],
+      observed: ["observe"],
+      lastResult: "driver_attempt_working",
+      pending: true,
+    });
   });
 
   it("does not dispatch a driver prompt when disable wins the enqueue lock", async () => {

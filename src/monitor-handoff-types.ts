@@ -16,6 +16,7 @@ export type AttemptMonitoringApplication = {
   applied: boolean;
   retain?: boolean;
   nextHandoff?: Record<string, unknown>;
+  error?: unknown;
 };
 
 export type MonitorHandoffDisposition =

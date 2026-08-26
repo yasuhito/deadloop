@@ -16,9 +16,9 @@ function foundFile(requested: string | undefined): AutomationFileResolution {
 describe("real driver handoff across disable and re-enable", () => {
   it.each([
     ["does not deliver the handoff while disabled", (result: { sentWhileDisabled: string[] }) => result.sentWhileDisabled, []],
-    ["binds the monitor to the re-enabled generation", (result: { queuedCurrentGeneration: boolean }) => result.queuedCurrentGeneration, true],
-    ["reports that the monitor was queued", (result: { lastResult: unknown }) => result.lastResult, "driver_needs_llm_queued"],
-    ["retains the queued monitor for recovery", (result: { pending?: { monitorHandoff?: { kind?: unknown } } }) => result.pending?.monitorHandoff?.kind, "issue"],
+    ["keeps deterministic monitoring off the host model across generations", (result: { hostModelTurns: string[] }) => result.hostModelTurns, []],
+    ["reports deterministic attempt monitoring as its latest result", (result: { lastResult: unknown }) => result.lastResult, "driver_attempt_working"],
+    ["retains the monitored issue attempt across the disabled window", (result: { pending?: { monitorHandoff?: { kind?: unknown } } }) => result.pending?.monitorHandoff?.kind, "issue"],
   ])("%s", async (_name, observation, expected) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-driver-handoff-"));
     const statePath = path.join(root, "state.json");
@@ -45,6 +45,7 @@ describe("real driver handoff across disable and re-enable", () => {
         prepareExecutionSupply: () => ({ codeIdentity: "a".repeat(40), lockHash: "b".repeat(64), packageRoot: "/snapshot", automationDir: "/snapshot/automations", dependencyRoot: "/dependencies" }),
         readPrompt: () => "unused",
         resolveAutomationFileInDir: (_kind, _automation, requested) => foundFile(requested),
+        observeAttemptMonitoring: () => ({ action: "working", accounting: { activeMilliseconds: 0, observedAt: new Date(456).toISOString(), runtimeWasWorking: true } }),
         runDriver: async () => {
           const result = spawnSync(
             "node",
@@ -76,7 +77,7 @@ describe("real driver handoff across disable and re-enable", () => {
 
       const reloaded = JSON.parse(readFileSync(statePath, "utf8")) as AutomationState;
       const entry = reloaded.automations["demo:demo:issue-coordinator"];
-      const handoff = entry.pendingDriverHandoff as { monitorHandoff: { input: { promiseFile: string } } };
+      const handoff = entry.pendingDriverHandoff as { monitorHandoff: { input: { promiseFile: string; enabledAt?: number } } };
       mkdirSync(path.dirname(handoff.monitorHandoff.input.promiseFile), { recursive: true });
       writeFileSync(handoff.monitorHandoff.input.promiseFile, JSON.stringify({ status: "complete", reason: "implemented" }));
       const sentWhileDisabled = [...sent];
@@ -86,13 +87,18 @@ describe("real driver handoff across disable and re-enable", () => {
         isEnabled: () => enabled,
         now: () => 789,
         revalidatePendingDriverHandoff: () => true,
+        observeAttemptMonitoring: (_monitorHandoff: Record<string, any>) => {
+          // The re-enabled generation is what monitoring binds to from here on.
+          handoff.monitorHandoff.input.enabledAt = 2;
+          return { action: "working", accounting: { activeMilliseconds: 0, observedAt: new Date(789).toISOString(), runtimeWasWorking: true } };
+        },
         saveState: (next) => writeFileSync(statePath, JSON.stringify(next)),
         sendUserMessage: (prompt) => sent.push(prompt),
       });
 
       expect(observation({
         sentWhileDisabled,
-        queuedCurrentGeneration: sent.length === 1 && sent[0].includes("--enabled-at 2"),
+        hostModelTurns: sent,
         lastResult: entry.lastResult,
         pending: entry.pendingDriverHandoff,
       })).toEqual(expected);
