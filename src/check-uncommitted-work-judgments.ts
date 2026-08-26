@@ -17,7 +17,6 @@ export type SourceFile = { path: string; source: string };
 // recorded decision, not an exemption for convenience.
 const ALLOWED_STATUS_INVOCATIONS = new Map([
   ["src/agent-scratch-area.cjs", "defines the shared argument list"],
-  ["src/enablement-verification.ts", "proves a throwaway worktree is pristine, which counts ignored files too"],
 ]);
 
 // A git status invocation names the subcommand and at least one of its output

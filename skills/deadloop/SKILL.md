@@ -48,7 +48,7 @@ pi install /absolute/path/to/deadloop
    /deadloop-enable
    ```
 
-   Enablement verifies GitHub write access and creates any missing standard labels. It starts with `autoMerge: false`.
+   Enablement runs fast prerequisite checks only: it verifies GitHub write access and creates any missing standard labels without running repository tests. It starts with `autoMerge: false`.
 
 3. Optionally copy `projects.example.json` to `~/.pi/agent/deadloop/projects.json` only when the user needs overrides such as a custom worktree root. Manual label creation is also optional.
 

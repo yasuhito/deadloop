@@ -46,7 +46,7 @@ You need an authenticated `gh` CLI and a running [Herdr](https://herdr.dev/) 0.8
 
 3. Add `agent:implement` to request implementation, or `agent:explore` to request a read-only investigation. `ready-for-agent` remains optional triage metadata. When both requests are present, exploration runs first and its result is posted to the Issue before implementation starts.
 
-That is enough to start. During enablement, deadloop runs `npm run check`, creates any missing standard labels, and leaves automatic merge off. If the repository does not provide an `npm run check` script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
+That is enough to start. Enablement is a fast control-plane check: it resolves the required-verification contract but does not run repository tests, and it creates any missing standard labels with automatic merge off. Repository tests still run as required verification before deadloop pushes, hands off, or merges a produced revision. The default verification command is `npm run check`; if the repository does not provide that script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
 
 ## Control the loop with labels
 
@@ -102,7 +102,7 @@ Run these commands from the Pi session in the target repository:
 
 | Command | Purpose |
 | --- | --- |
-| `/deadloop-enable` | Verify the repository and enable new deadloop work. |
+| `/deadloop-enable` | Run fast prerequisite checks and enable new deadloop work. |
 | `/deadloop-disable` | Stop new work from starting; running attempts may finish. |
 | `/deadloop-status` | Show whether deadloop is enabled and summarize its current state. |
 | `/deadloop-doctor` | Diagnose configuration and retained attempts without changing them. |
