@@ -12,7 +12,7 @@ const project = normalizeProject({
 const shared = { project, repositoryEnablement: "enabled" as const, cwd: "/repo", warnings: [] };
 
 describe("deterministic attempt monitoring reports", () => {
-  it("describes deterministic reviewer and branch-update monitoring in status", () => {
+  it("describes deterministic reviewer, branch-update, and repair monitoring in status", () => {
     const report = formatStatusReport({
       ...shared,
       automations: [],
@@ -21,13 +21,13 @@ describe("deterministic attempt monitoring reports", () => {
       herdr: { workerWorktrees: [], cleanupCandidates: [], staleLeftovers: [] },
     });
 
-    expect(report).toContain("attemptMonitoring: deterministic for reviewer and branch-update (no Automation-host model)");
+    expect(report).toContain("attemptMonitoring: deterministic for reviewer, branch-update, and repair (no Automation-host model)");
   });
 
-  it("describes deterministic reviewer and branch-update monitoring in doctor", () => {
+  it("describes deterministic reviewer, branch-update, and repair monitoring in doctor", () => {
     const report = formatDoctorReport({ ...shared, findings: [] });
 
-    expect(report).toContain("attemptMonitoring: deterministic for reviewer and branch-update (no Automation-host model)");
+    expect(report).toContain("attemptMonitoring: deterministic for reviewer, branch-update, and repair (no Automation-host model)");
   });
 
   it("extracts active-work duration and model wait observables from the automation state", () => {

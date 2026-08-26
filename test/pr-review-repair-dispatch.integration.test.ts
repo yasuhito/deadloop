@@ -1140,8 +1140,8 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
     expect(runDispatch(true, false).events).toEqual([]);
   });
 
-  it("requests LLM monitoring after launching a repair", () => {
-    expect(runDispatch(true).output.action).toBe("needs_llm");
+  it("registers model-free monitoring after launching a repair", () => {
+    expect(runDispatch(true).output.action).toBe("monitor");
   });
 
   it("identifies the bounded repair monitor action", () => {
@@ -1152,8 +1152,8 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
     expect(runDispatch(true).output.monitorHandoff.kind).toBe("repair");
   });
 
-  it("returns the dedicated repair monitor prompt", () => {
-    expect(runDispatch(true).output.prompt).toContain("review-repair worker");
+  it("returns no monitor prompt for the Automation host", () => {
+    expect(runDispatch(true).output.prompt).toBeUndefined();
   });
 
   it("returns an error after disable", () => {
@@ -1409,11 +1409,11 @@ else if (args[0] === "agent" && args[1] === "start") {
     expect({
       action: output.action,
       driverAction: output.driverAction,
-      monitored: output.prompt.includes("review-repair worker"),
+      monitored: Boolean(output.monitorHandoff),
       agentStarted: fs.existsSync(agentStarted),
       evidenceError: Boolean(output.launchEvidenceError),
     }).toEqual({
-      action: "needs_llm",
+      action: "monitor",
       driverAction: "review_repair_monitor_request",
       monitored: true,
       agentStarted: true,
@@ -1536,7 +1536,7 @@ else if (args[0] === "agent" && args[1] === "start") {
       recovered: output.launch.recovered,
       launchEvidenceRecorded: fs.existsSync(path.join(state, "review-repair-launches", `demo-pr-243-${attemptKey}.json`)),
     }).toEqual({
-      action: "needs_llm",
+      action: "monitor",
       driverAction: "review_repair_monitor_request",
       recovered: true,
       launchEvidenceRecorded: true,
@@ -1644,7 +1644,7 @@ else if (args[0] === "agent" && args[1] === "start") fs.writeFileSync(process.en
       promiseFile: output.monitorHandoff?.input?.promiseFile,
       launchAttempted: fs.existsSync(launchAttempted),
     }).toEqual({
-      action: "needs_llm",
+      action: "monitor",
       driverAction: "review_repair_monitor_recovered",
       promiseFile: path.join(repairRunDir, "promise.json"),
       launchAttempted: false,

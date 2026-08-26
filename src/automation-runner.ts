@@ -267,7 +267,7 @@ export function deliverPendingDriverHandoff(
         deps.notify?.(`deadloop discarded stale monitor handoff: ${automationName}`, "warning");
         return true;
       }
-      if (["reviewer", "branch-update"].includes(String(monitorHandoff.kind || ""))) {
+      if (["reviewer", "branch-update", "repair"].includes(String(monitorHandoff.kind || ""))) {
         const storedAccounting = payload.monitorAccounting;
         const accounting: ActiveWorkAccounting = storedAccounting && typeof storedAccounting === "object" && !Array.isArray(storedAccounting)
           ? storedAccounting as unknown as ActiveWorkAccounting
