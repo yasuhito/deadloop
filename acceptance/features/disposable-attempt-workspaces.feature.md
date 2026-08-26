@@ -14,6 +14,12 @@ Safely hand a worktree to the next attempt without leaving the completed agent's
 * When deadloop starts the requeued Worker
 * Then deadloop opens the same worktree in a fresh workspace
 
+## Scenario: Reopen a required-verification-stopped Worker's preserved checkout for a new attempt
+
+* Given A Worker's worktree remains after required verification formally stopped it
+* When deadloop starts the Worker stopped by required verification
+* Then deadloop opens the preserved checkout at its recorded output revision
+
 ## Scenario: Close only the workspace of the agent that handed off the PR
 
 * Given The agent's PR and completion report agree

@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,6 +8,17 @@ import { afterEach, describe, expect, it } from "vitest";
 const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.cts";
 const { acquireLockSync, releaseOwned } = require("../src/enablement-lock.cjs");
 const { renderUnresolvedDependencyComment, unresolvedDependencyCommentPresent, unresolvedDependencyEntryFingerprint } = require("../extensions/deadloop/automations/issue-coordinator-driver.cts");
+import {
+  abandonPersistedAttempt,
+  attemptRecordPath,
+  createPreparedAttempt,
+  readAttemptRecord,
+  recordPersistedCompletionReport,
+  transitionPersistedAttempt,
+  writeAttemptRecordAtomically,
+  type PreparedAttemptInput,
+} from "../src/attempt-lifecycle";
+import type { JsonObject } from "../src/automation-driver-kit-types";
 
 // The dispatch lock writes under the state directory, so a fixture run needs one of its own rather
 // than the operator's live deadloop state.
@@ -417,22 +428,22 @@ describe("reusing an abandoned Worker checkout", () => {
   const checkout = {
     branch: "agent/issue-1-task",
     worktreePath: "/worktrees/agent-issue-1-task",
-    inputHead: "a".repeat(40),
-    abandonedAt: "2026-08-14T00:00:00.000Z",
+    preservedHead: "a".repeat(40),
+    stoppedAt: "2026-08-14T00:00:00.000Z",
     workspaceId: "workspace-1",
     agentName: "demo-issue-1-worker",
   };
 
   /** Every other proof passes, so the status line is the only thing under test. */
-  function assertWith(status: string) {
+  function assertWith(status: string, worktrees = [{ branch: checkout.branch, path: checkout.worktreePath, workspaceId: "" }]) {
     const { assertRecoverableWorkerCheckout } = require("../extensions/deadloop/automations/issue-coordinator-driver.cts");
     return () => assertRecoverableWorkerCheckout(checkout, { repoPath: "/repo" }, {
       runner: {
-        listWorktrees: () => [{ branch: checkout.branch, path: checkout.worktreePath, workspaceId: "" }],
+        listWorktrees: () => worktrees,
         listWorkspaces: () => [],
         listAgents: () => [],
       },
-      runText: (args: string[]) => (args.includes("rev-parse") ? checkout.inputHead : status),
+      runText: (args: string[]) => (args.includes("rev-parse") ? checkout.preservedHead : status),
     });
   }
 
@@ -446,5 +457,196 @@ describe("reusing an abandoned Worker checkout", () => {
 
   it("refuses a checkout holding somebody else's untracked file", () => {
     expect(assertWith("?? luac.out\n")).toThrow("contains changes");
+  });
+
+  it("refuses a checkout whose linked worktree shows two runner records", () => {
+    const duplicate = [
+      { branch: checkout.branch, path: checkout.worktreePath, workspaceId: "" },
+      { branch: checkout.branch, path: checkout.worktreePath, workspaceId: "" },
+    ];
+    expect(assertWith("", duplicate)).toThrow("not one closed linked worktree");
+  });
+});
+
+describe("reusing a formally stopped Worker checkout", () => {
+  const baseHead = "a".repeat(40);
+  const outputHead = "b".repeat(40);
+  const advancedBaseHead = "c".repeat(40);
+  const driver = require("../extensions/deadloop/automations/issue-coordinator-driver.cts");
+
+  type StoppedFixture = { root: string; runDir: string; worktreePath: string; branch: string };
+
+  /** Persist one valid workspace_closed Worker journal whose evidence matches this scenario. */
+  function persistStoppedJournal(root: string, variant: { runName?: string; branch?: string } = {}): StoppedFixture {
+    const runName = variant.runName ?? "stopped-1";
+    const branch = variant.branch ?? "agent/issue-12-stop";
+    const runDir = path.join(root, "runs", runName);
+    const source: PreparedAttemptInput = {
+      attemptId: `${runName}-attempt`, launchUuid: `${runName}-launch`, project: "demo", repository: "owner/repo",
+      role: "worker", target: { kind: "issue", number: 12 }, inputRevision: { head: baseHead },
+      requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: baseHead },
+      branch, baseBranch: "origin/main", worktreePath: path.join(root, branch.replace(/\//g, "-")),
+      agentName: `dl-w-12-${runName}000000`, workspaceLabel: "old worker",
+      promptFile: path.join(runDir, "worker-prompt.md"), promiseFile: path.join(runDir, "promise.json"),
+    };
+    createPreparedAttempt(runDir, source);
+    transitionPersistedAttempt(runDir, "github_claimed");
+    writeAttemptRecordAtomically(attemptRecordPath(runDir), {
+      ...readAttemptRecord(runDir), workspaceId: "workspace-old", tabId: "tab-old", rootPaneId: "pane-old",
+      phase: "workspace_opened", lastSuccessfulPhase: "workspace_opened",
+    });
+    transitionPersistedAttempt(runDir, "agent_started");
+    recordPersistedCompletionReport(runDir, {
+      schemaVersion: 1, attemptId: source.attemptId, target: { repository: source.repository, kind: "issue", number: 12 },
+      inputRevision: source.inputRevision, status: "complete", summary: "Stopped before verification.",
+      role: "worker", result: { outputRevision: outputHead }, evidence: { validations: ["npm test passed"] },
+    });
+    transitionPersistedAttempt(runDir, "github_persisted");
+    transitionPersistedAttempt(runDir, "workspace_closed");
+    return { root, runDir, worktreePath: source.worktreePath, branch };
+  }
+
+  /** Persist one valid abandoned launch-failure journal on the same deterministic checkout. */
+  function persistAbandonedJournal(root: string): StoppedFixture {
+    const runDir = path.join(root, "runs", "abandoned-1");
+    const source: PreparedAttemptInput = {
+      attemptId: "abandoned-attempt", launchUuid: "abandoned-launch-1", project: "demo", repository: "owner/repo",
+      role: "worker", target: { kind: "issue", number: 12 }, inputRevision: { head: baseHead },
+      requiredVerification: { repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: baseHead },
+      branch: "agent/issue-12-stop", baseBranch: "origin/main", worktreePath: path.join(root, "agent-issue-12-stop"),
+      agentName: "dl-w-12-abandoned0000", workspaceLabel: "old worker",
+      promptFile: path.join(runDir, "worker-prompt.md"), promiseFile: path.join(runDir, "promise.json"),
+    };
+    createPreparedAttempt(runDir, source);
+    transitionPersistedAttempt(runDir, "github_claimed");
+    writeAttemptRecordAtomically(attemptRecordPath(runDir), {
+      ...readAttemptRecord(runDir), workspaceId: "workspace-old", tabId: "tab-old", rootPaneId: "pane-old",
+      phase: "workspace_opened", lastSuccessfulPhase: "workspace_opened",
+    });
+    transitionPersistedAttempt(runDir, "launch_failed", "agent did not start");
+    abandonPersistedAttempt(runDir, "2026-08-14T00:00:00.000Z");
+    return { root, runDir, worktreePath: source.worktreePath, branch: source.branch };
+  }
+
+  function searchEnv(root: string) {
+    return driver.envConfig({ DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_STATE_DIR: root });
+  }
+
+  function searchWith(root: string, observedHead: () => string) {
+    return driver.stoppedWorkerCheckout(12, searchEnv(root), {
+      runText: (args: string[]) => (args.includes("rev-parse") ? observedHead() : ""),
+    });
+  }
+
+  it("finds a preserved checkout at the recorded output revision of a formally stopped attempt", () => {
+    const fixture = persistStoppedJournal(fixtureStateDir());
+    expect(searchWith(fixture.root, () => outputHead)?.preservedHead).toBe(outputHead);
+  });
+
+  it("still finds an abandoned launch-failure checkout at its input revision", () => {
+    const fixture = persistAbandonedJournal(fixtureStateDir());
+    expect(searchWith(fixture.root, () => baseHead)?.preservedHead).toBe(baseHead);
+  });
+
+  it("fails closed when the preserved checkout sits at no recorded revision", () => {
+    const fixture = persistStoppedJournal(fixtureStateDir());
+    expect(() => searchWith(fixture.root, () => "d".repeat(40))).toThrow("no stopped attempt journal records");
+  });
+
+  it("fails closed when the preserved checkout is gone while its journal still holds evidence", () => {
+    const fixture = persistStoppedJournal(fixtureStateDir());
+    expect(() => driver.stoppedWorkerCheckout(12, searchEnv(fixture.root), {
+      runText: (args: string[]) => { if (args.includes("rev-parse")) throw new Error(`fatal: not a git repository: ${args[2]}`); return ""; },
+    })).toThrow("restore it or remove the stale branch by hand");
+  });
+
+  it("fails closed when stopped journals disagree on the preserved checkout identity", () => {
+    const root = fixtureStateDir();
+    persistStoppedJournal(root);
+    persistStoppedJournal(root, { runName: "stopped-2", branch: "agent/issue-12-renamed" });
+    expect(() => searchWith(root, () => outputHead)).toThrow("conflicting stopped Worker checkouts");
+  });
+
+  it("fails closed when the preserved checkout holds unsaved work", () => {
+    const fixture = persistStoppedJournal(fixtureStateDir());
+    const checkout = searchWith(fixture.root, () => outputHead)!;
+    expect(() => driver.assertRecoverableWorkerCheckout(checkout, searchEnv(fixture.root), {
+      runner: {
+        listWorktrees: () => [{ branch: checkout.branch, path: checkout.worktreePath, workspaceId: "" }],
+        listWorkspaces: () => [],
+        listAgents: () => [],
+      },
+      runText: (args: string[]) => (args.includes("rev-parse") ? outputHead : " M src/a.ts\n"),
+    })).toThrow("contains changes");
+  });
+
+  /** Reuse the preserved checkout through the production flow with every runtime call faked. */
+  function reuseStoppedCheckout(): { fixture: StoppedFixture; result: JsonObject; opened: number } {
+    const root = fixtureStateDir();
+    const fixture = persistStoppedJournal(root);
+    let launchedName = "";
+    const observation = { opened: 0 };
+    const env = driver.envConfig({
+      DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo",
+      DEADLOOP_BASE_BRANCH: "origin/main", DEADLOOP_WORKTREE_ROOT: root, DEADLOOP_STATE_DIR: root,
+      DEADLOOP_REQUIRED_VERIFICATION: JSON.stringify({ repository: "owner/repo", command: "npm test", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: advancedBaseHead }),
+    });
+    const runner = {
+      createWorktree: () => { throw new Error("reused Worker must not create a duplicate worktree"); },
+      openWorktree: () => {
+        observation.opened += 1;
+        return { workspaceId: "workspace-new", tabId: "tab-new", rootPaneId: "pane-new", worktreePath: fixture.worktreePath };
+      },
+      renameWorkspace: () => "", startAgent: () => "", closeWorkspace: () => "", removeWorktree: () => "",
+      listWorkspaces: () => [],
+      listWorktrees: () => [{ branch: fixture.branch, path: fixture.worktreePath, workspaceId: "" }],
+      listAgents: () => (launchedName ? [{ name: launchedName, paneId: "pane-new", cwd: fixture.worktreePath, status: "working" }] : []),
+    };
+    const result = driver.launchIssueWorkerFlow({ number: 12, title: "renamed issue" }, env, {
+      mkdirSync,
+      alignCheckout: () => {},
+      runner,
+      runText: (args: string[]) => {
+        const nameIndex = args.indexOf("--name");
+        if (nameIndex >= 0) { launchedName = args[nameIndex + 1]; return "started"; }
+        if (args[0] === "git" && args.includes("status")) return "";
+        if (args[0] === "git" && args[2] === "/repo") return `${advancedBaseHead}\n`;
+        return args[0] === "git" ? `${outputHead}\n` : "started";
+      },
+      writeFileSync,
+    });
+    return { fixture, result, opened: observation.opened };
+  }
+
+  it("opens the preserved checkout at its recorded output revision for the new attempt", () => {
+    const { fixture, result, opened } = reuseStoppedCheckout();
+    const newRunName = readdirSync(path.join(fixture.root, "runs")).find((entry) => entry !== "stopped-1") as string;
+    const attempt = readAttemptRecord(path.join(fixture.root, "runs", newRunName));
+    expect({
+      opened,
+      workspaceId: result.workspaceId,
+      worktreePath: result.worktreePath,
+      resumedHead: attempt.inputRevision.head,
+      policyBaseHead: attempt.requiredVerification?.baseRevision,
+      branch: result.branch,
+    }).toEqual({
+      opened: 1,
+      workspaceId: "workspace-new",
+      worktreePath: fixture.worktreePath,
+      resumedHead: outputHead,
+      policyBaseHead: advancedBaseHead,
+      branch: "agent/issue-12-stop",
+    });
+  });
+
+  it("leaves the previous stopped attempt's journal and recorded evidence untouched", () => {
+    const { fixture, result } = reuseStoppedCheckout();
+    const prior = readAttemptRecord(fixture.runDir);
+    expect({ phase: prior.phase, outputRevision: prior.outputRevision, worktreePath: prior.worktreePath, launchResultWorkspaceId: result.workspaceId }).toEqual({
+      phase: "workspace_closed",
+      outputRevision: outputHead,
+      worktreePath: fixture.worktreePath,
+      launchResultWorkspaceId: "workspace-new",
+    });
   });
 });
