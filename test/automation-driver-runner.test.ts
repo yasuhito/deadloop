@@ -6,6 +6,7 @@ import {
   type MonitorHandoffDisposition,
   runScheduledAutomation,
 } from "../src/automation-runner";
+import type { AttemptMonitoringDirective } from "../src/monitor-handoff-types";
 import { normalizeProject, type AutomationFileResolution } from "../src/core";
 
 function foundFile(requested: string | undefined): AutomationFileResolution {
@@ -642,5 +643,225 @@ describe("deterministic automation driver runner", () => {
     });
 
     expect(sent).toEqual([]);
+  });
+});
+
+describe("model availability waiting in deterministic attempt monitoring", () => {
+  const accounting = { activeMilliseconds: 60_000, observedAt: "1970-01-01T00:01:00.000Z", runtimeWasWorking: false };
+
+  function modelWaitFixture() {
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "monitor",
+        monitorHandoff: { kind: "reviewer", input: { enabledAt: 1 } },
+        monitorAccounting: accounting,
+      },
+    };
+    const state = { automations: { auto: entry } };
+    const sent: string[] = [];
+    const applied: Array<Record<string, any>> = [];
+    const retries: Array<Record<string, unknown>> = [];
+    let enabled = true;
+    let reusable = true;
+    let directive: AttemptMonitoringDirective | undefined;
+    let application: Record<string, any> | ((_handoff: Record<string, unknown>, observed: Record<string, any>) => Record<string, unknown>) = { applied: true, retain: true };
+    let now = Date.parse("2026-08-21T00:00:00.000Z");
+    const deps = {
+      enabledAt: () => 1,
+      isEnabled: () => enabled,
+      notify: () => undefined,
+      now: () => now,
+      observeAttemptMonitoring: () => directive ?? null,
+      applyAttemptMonitoring: (handoff: Record<string, unknown>, observed: Record<string, any>) => {
+        applied.push(observed);
+        return typeof application === "function" ? application(handoff, observed) : application;
+      },
+      retryModelWait: (handoff: Record<string, unknown>) => {
+        retries.push(handoff);
+        return reusable;
+      },
+      saveState: () => undefined,
+      sendUserMessage: (prompt: string) => sent.push(prompt),
+    };
+    const tick = () => deliverPendingDriverHandoff(entry, state, "auto", deps);
+    return {
+      applied, deps, entry, retries, sent, tick,
+      payload: () => entry.pendingDriverHandoff as Record<string, any>,
+      setApplication: (value: typeof application) => { application = value; },
+      setDirective: (value: AttemptMonitoringDirective) => { directive = value; },
+      setEnabled: (value: boolean) => { enabled = value; },
+      setNow: (value: number) => { now = value; },
+      setReusable: (value: boolean) => { reusable = value; },
+    };
+  }
+
+  function rejectionDirective(providerRetryAt: string | null, activeMilliseconds = 60_000): AttemptMonitoringDirective {
+    return {
+      action: "missing_report" as const,
+      accounting: { ...accounting, activeMilliseconds },
+      reason: "model_availability" as const,
+      providerRetryAt,
+    };
+  }
+
+  it("records a waiting_for_model wait on the first terminal known billing rejection", () => {
+    const fixture = modelWaitFixture();
+    fixture.setDirective(rejectionDirective(null));
+
+    fixture.tick();
+
+    expect({
+      result: fixture.entry.lastResult,
+      summary: fixture.entry.lastSummary,
+      wait: fixture.payload().modelWait,
+      retained: fixture.entry.pendingDriverHandoff !== undefined,
+    }).toEqual({
+      result: "driver_monitor_waiting_for_model",
+      summary: "waiting for model availability",
+      wait: { startedAt: "2026-08-21T00:00:00.000Z", nextRetryAt: null },
+      retained: true,
+    });
+  });
+
+  it("posts the model availability explanation once while waiting holds", () => {
+    const fixture = modelWaitFixture();
+    fixture.setDirective(rejectionDirective("2026-08-21T01:00:00.000Z"));
+
+    fixture.setNow(Date.parse("2026-08-21T00:00:00.000Z"));
+    fixture.tick();
+    fixture.setNow(Date.parse("2026-08-21T00:10:00.000Z"));
+    fixture.tick();
+    fixture.setNow(Date.parse("2026-08-21T00:20:00.000Z"));
+    fixture.tick();
+
+    expect(fixture.applied).toHaveLength(1);
+  });
+
+  it("honors provider retry timing before firing the retry mutation", () => {
+    const fixture = modelWaitFixture();
+    fixture.setDirective(rejectionDirective("2026-08-21T01:00:00.000Z"));
+
+    fixture.tick();
+    fixture.setNow(Date.parse("2026-08-21T00:59:59.999Z"));
+    fixture.tick();
+    const beforeDue = fixture.retries.length;
+    fixture.setNow(Date.parse("2026-08-21T01:00:00.000Z"));
+    fixture.setDirective({ action: "working", accounting: { ...accounting, runtimeWasWorking: true } });
+    fixture.setDirective(rejectionDirective("2026-08-21T01:00:00.000Z"));
+    fixture.tick();
+
+    expect({ beforeDue, afterDue: fixture.retries.length }).toEqual({ beforeDue: 0, afterDue: 1 });
+  });
+
+  it("uses the normal next scheduler tick as the only retry trigger without provider timing", () => {
+    const fixture = modelWaitFixture();
+    fixture.setDirective(rejectionDirective(null));
+
+    fixture.tick();
+    const atEnter = fixture.retries.length;
+    fixture.setNow(Date.parse("2026-08-21T00:10:00.000Z"));
+    fixture.tick();
+
+    expect({ atEnter, atNextTick: fixture.retries.length }).toEqual({ atEnter: 0, atNextTick: 1 });
+  });
+
+  it("stops through the ordinary deterministic path when the same session cannot be reused", () => {
+    const fixture = modelWaitFixture();
+    fixture.setDirective(rejectionDirective(null));
+    fixture.setReusable(false);
+    fixture.setApplication((_handoff, observed) => {
+      if (observed.reason === "terminal_without_report") return { applied: true, retain: false };
+      return { applied: true, retain: true };
+    });
+
+    fixture.tick();
+    fixture.setNow(Date.parse("2026-08-21T00:10:00.000Z"));
+    fixture.tick();
+
+    expect({
+      stopReasons: fixture.applied.map((observed) => observed.reason),
+      pendingCleared: fixture.entry.pendingDriverHandoff === undefined,
+    }).toEqual({ stopReasons: ["model_availability", "terminal_without_report"], pendingCleared: true });
+  });
+
+  it("starts no retry mutation when the repository is disabled", () => {
+    const fixture = modelWaitFixture();
+    fixture.setDirective(rejectionDirective(null));
+
+    fixture.tick();
+    fixture.setEnabled(false);
+    fixture.setNow(Date.parse("2026-08-21T00:10:00.000Z"));
+    fixture.tick();
+
+    expect({
+      retries: fixture.retries.length,
+      result: fixture.entry.lastResult,
+      retained: fixture.entry.pendingDriverHandoff !== undefined,
+    }).toEqual({ retries: 0, result: "disabled_before_model_retry", retained: true });
+  });
+
+  it("records waiting but schedules no successor for a one-shot caller", () => {
+    const fixture = modelWaitFixture();
+    fixture.setDirective(rejectionDirective(null));
+
+    fixture.tick();
+
+    expect({ sent: fixture.sent, retriesAtSameTick: fixture.retries.length }).toEqual({
+      sent: [],
+      retriesAtSameTick: 0,
+    });
+  });
+
+  it("keeps waiting and retrying free of Automation-host model calls", () => {
+    const fixture = modelWaitFixture();
+    fixture.setDirective(rejectionDirective(null));
+
+    for (let index = 0; index < 100; index += 1) {
+      fixture.setNow(Date.parse("2026-08-21T00:00:00.000Z") + index * 60_000);
+      fixture.tick();
+    }
+
+    expect(fixture.sent).toEqual([]);
+  });
+
+  it("routes reviewer completion to the ordinary path after model access recovers", () => {
+    const fixture = modelWaitFixture();
+    fixture.setDirective(rejectionDirective(null));
+
+    fixture.tick();
+    fixture.setNow(Date.parse("2026-08-21T00:10:00.000Z"));
+    fixture.tick();
+    fixture.setDirective({ action: "working", accounting: { ...accounting, runtimeWasWorking: true } });
+    fixture.setNow(Date.parse("2026-08-21T00:20:00.000Z"));
+    fixture.tick();
+    const completionApplied = fixture.applied.length;
+    fixture.setDirective({
+      action: "completion",
+      accounting: { ...accounting, runtimeWasWorking: true },
+      report: { status: "complete" },
+    });
+    fixture.setApplication(() => ({ applied: true }));
+    fixture.setNow(Date.parse("2026-08-21T00:30:00.000Z"));
+    fixture.tick();
+
+    expect({
+      completionReached: fixture.applied.slice(completionApplied).map((observed) => observed.action),
+      retries: fixture.retries.length,
+    }).toEqual({ completionReached: ["completion"], retries: 1 });
+  });
+
+  it("counts retries across repeated model-wait episodes", () => {
+    const fixture = modelWaitFixture();
+    fixture.setDirective(rejectionDirective(null));
+
+    fixture.tick();
+    fixture.setNow(Date.parse("2026-08-21T00:10:00.000Z"));
+    fixture.tick();
+    fixture.setNow(Date.parse("2026-08-21T00:20:00.000Z"));
+    fixture.tick();
+    fixture.setNow(Date.parse("2026-08-21T00:30:00.000Z"));
+    fixture.tick();
+
+    expect(fixture.payload().modelRetryCount).toBe(2);
   });
 });

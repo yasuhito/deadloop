@@ -53,6 +53,13 @@ export type StatusLineItem = {
   title?: string;
 };
 
+export type ModelAvailabilityWaitStatus = {
+  startedAt: string;
+  durationMilliseconds: number;
+  nextRetryAt: string | null;
+  retryCount: number;
+};
+
 export type AutomationStatus = {
   id: string;
   name: string;
@@ -61,6 +68,8 @@ export type AutomationStatus = {
   lastSummary?: string;
   lastScheduledAt?: number;
   nextScheduledAt: number | null;
+  activeWorkMilliseconds?: number;
+  modelWait?: ModelAvailabilityWaitStatus;
 };
 
 export type CleanupCandidate = {
@@ -210,6 +219,22 @@ function selectStaleLeftovers(worktrees: HerdrWorktree[], cleanupCandidates: Cle
   return worktrees.filter((worktree) => worktree.path && cleanupPaths.has(worktree.path));
 }
 
+function modelAvailabilityWaitStatus(entry: Record<string, unknown>, nowMs: number): ModelAvailabilityWaitStatus | undefined {
+  const handoff = entry.pendingDriverHandoff;
+  if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) return undefined;
+  const payload = handoff as Record<string, unknown>;
+  const wait = payload.modelWait as Record<string, unknown> | undefined;
+  if (!wait || typeof wait !== "object") return undefined;
+  const startedAt = typeof wait.startedAt === "string" ? wait.startedAt : "";
+  const startedMs = Date.parse(startedAt);
+  return {
+    startedAt,
+    durationMilliseconds: Number.isFinite(startedMs) ? Math.max(0, nowMs - startedMs) : 0,
+    nextRetryAt: typeof wait.nextRetryAt === "string" ? wait.nextRetryAt : null,
+    retryCount: Number(payload.modelRetryCount || 0),
+  };
+}
+
 export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
   const project = input.selectedProject === undefined
     ? resolveActiveProject(input.cwd, input.projects)
@@ -232,6 +257,12 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
   const state = input.state || { automations: {} };
   const automations = project.automations.map((automation) => {
     const entry = state.automations?.[automationStateKey(project, automation)] || {};
+    const handoff = entry.pendingDriverHandoff;
+    const payload = handoff && typeof handoff === "object" && !Array.isArray(handoff)
+      ? handoff as Record<string, unknown>
+      : undefined;
+    const accounting = payload?.monitorAccounting as { activeMilliseconds?: unknown } | undefined;
+    const activeMilliseconds = Number(accounting?.activeMilliseconds);
     return {
       id: automation.id,
       name: automation.name,
@@ -240,6 +271,8 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
       lastSummary: String(entry.lastSummary || "").trim() || undefined,
       lastScheduledAt: Number.isFinite(entry.lastScheduledAt) ? Number(entry.lastScheduledAt) : undefined,
       nextScheduledAt: nextSlotAfter(entry, automation, nowMs),
+      activeWorkMilliseconds: accounting && Number.isFinite(activeMilliseconds) ? activeMilliseconds : undefined,
+      modelWait: modelAvailabilityWaitStatus(entry, nowMs),
     };
   });
 
@@ -349,6 +382,17 @@ function formatAutomationSummary(summary: string | undefined): string {
   return summary ? `; summary=${summary}` : "";
 }
 
+function formatModelWait(wait: ModelAvailabilityWaitStatus | undefined): string {
+  if (!wait) return "";
+  const next = wait.nextRetryAt ? formatTimestamp(Date.parse(wait.nextRetryAt)) : "next scheduler tick";
+  return `; waiting-for-model since=${wait.startedAt || "unknown"} (${wait.durationMilliseconds}ms)`
+    + `; retries=${wait.retryCount}; next-retry=${next}`;
+}
+
+function formatActiveWork(activeWorkMilliseconds: number | undefined): string {
+  return activeWorkMilliseconds === undefined ? "" : `; active-work=${activeWorkMilliseconds}ms`;
+}
+
 export function formatStatusReport(snapshot: StatusSnapshot): string {
   if (!snapshot.project) {
     const lines = snapshot.repositoryEnablement === "disabled"
@@ -382,7 +426,9 @@ export function formatStatusReport(snapshot: StatusSnapshot): string {
     for (const automation of snapshot.automations) {
       const summary = formatAutomationSummary(automation.lastSummary);
       lines.push(
-        `- ${automation.name}: ${automation.schedule}; last=${automation.lastResult}${summary}; next=${formatTimestamp(automation.nextScheduledAt)}`,
+        `- ${automation.name}: ${automation.schedule}; last=${automation.lastResult}${summary}`
+        + `${formatActiveWork(automation.activeWorkMilliseconds)}${formatModelWait(automation.modelWait)}`
+        + `; next=${formatTimestamp(automation.nextScheduledAt)}`,
       );
     }
   }
