@@ -10,7 +10,6 @@ const { planPrRequestAction } = require("./pr-reviewer-flow.cts");
 const { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.cts");
 const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.cts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.cts");
-const { renderBranchUpdateMonitorPrompt, renderReviewerMonitorPrompt } = require("../../../src/monitor-prompts.cts");
 const { renderProjectCheckCommand } = require("../../../src/project-check.cts");
 const { decideBranchUpdateLive } = require("./pr-branch-update-decision.cts");
 const { branchUpdateAttemptExists, branchUpdateRetryKey, renderBranchUpdateMarker } = require("./pr-branch-update-state.cts");
@@ -1598,8 +1597,9 @@ function driveSelectedTarget(
         updateBranchLabel: env.updateBranchLabel,
         inProgressLabel: env.inProgressLabel,
         blockedLabel: env.blockedLabel,
+        maxActiveMilliseconds: env.reviewerMaxRuntimeSeconds * 1000,
       };
-      return driverResult("needs_llm", `Launched branch-update worker for PR #${plan.decision.number}`, {
+      return driverResult("monitor", `Launched branch-update worker for PR #${plan.decision.number}`, {
         driverAction: "branch_update_monitor_request",
         prNumber: plan.decision.number,
         branchUpdate: updateDecision,
@@ -1607,7 +1607,6 @@ function driveSelectedTarget(
         labelsPreserved: [env.inProgressLabel],
         launch,
         monitorHandoff: { kind: "branch-update", input: monitorInput },
-        prompt: renderBranchUpdateMonitorPrompt(monitorInput),
         ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
       });
     } catch (error) {
@@ -1711,6 +1710,7 @@ function reviewOnlyDrive(
       command: env.checkCommand,
     }),
     projectCheckCommand: env.checkCommand,
+    requiredVerification: env.requiredVerification,
     workerAgent: env.branchUpdateAgent,
     workerModel: env.branchUpdateModel,
     repairRemote: env.reviewRepairRemote,
@@ -1720,15 +1720,15 @@ function reviewOnlyDrive(
     reviewLabel: env.reviewLabel,
     inProgressLabel: env.inProgressLabel,
     blockedLabel: env.blockedLabel,
+    maxActiveMilliseconds: env.reviewerMaxRuntimeSeconds * 1000,
   };
-  return driverResult("needs_llm", `Launched reviewer agent for PR #${decision.number}`, {
+  return driverResult("monitor", `Launched reviewer agent for PR #${decision.number}`, {
     driverAction: "reviewer_monitor_request",
     prNumber: decision.number,
     decision,
     gate,
     launch,
     monitorHandoff: { kind: "reviewer", input: monitorInput },
-    prompt: renderReviewerMonitorPrompt(monitorInput),
     ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
   });
 }

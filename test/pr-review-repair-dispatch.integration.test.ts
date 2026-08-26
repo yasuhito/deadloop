@@ -13,7 +13,7 @@ process.env.DEADLOOP_REQUIRED_VERIFICATION = JSON.stringify({
   baseRevision: "a".repeat(40),
 });
 
-const { renderReviewerMonitorPrompt } = require("../src/monitor-prompts.cts");
+const { dispatcherArgs } = require("../extensions/deadloop/automations/complete-deterministic-pr-attempt.cts");
 const { assertReviewerDispatchAttemptBinding, blockedClaimMove, repairLaunchInput, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
 const {
   persistHostVerificationEvidence,
@@ -739,26 +739,19 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     INJECT_LIMIT_RACE: options.injectCumulativeLimitRace ? "1" : "0",
     INJECT_BLOCKING_HISTORY_RACE: options.injectBlockingHistoryRace ? "1" : "0", RUNTIME: runtime, WORKTREE: worktree,
     POLICY_RACE_AFTER_VIEWS: String(options.policyRaceAfterViews ?? -1), POLICY_FILE: path.join(state, "projects.json") };
-  const dispatcherCommand = options.renderedCommand
-    ? (() => {
-        const prompt = renderReviewerMonitorPrompt({
-          prNumber: 243, expectedHeadOid: head, branch: "agent/issue-243",
-          automationDir: path.resolve("extensions/deadloop/automations"), promiseFile: promise,
-          attemptRecordFile: attempt, actorName: "reviewer", projectId: "demo", repoPath: repo,
-          worktreeRoot, githubRepo: "owner/repo", stateDir: state, enabledAt: 1,
-          requestEventId: "22",
-          projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
-          checkCommand: "npm test", implementLabel: labels.implement, updateBranchLabel: labels.updateBranch,
-          reviewLabel: labels.review, blockedLabel: labels.blocked,
-        });
-        const command = prompt.match(/run the deterministic dispatcher[^`]*:\n  `([^`]+)`/)?.[1];
-        if (!command) throw new Error("rendered dispatcher command was not found");
-        return command;
-      })()
-    : "";
+  const deterministicDispatcherArgs = options.renderedCommand
+    ? dispatcherArgs({
+        prNumber: 243, expectedHeadOid: head, branch: "agent/issue-243", promiseFile: promise,
+        attemptRecordFile: attempt, projectId: "demo", repoPath: repo, worktreeRoot,
+        githubRepo: "owner/repo", stateDir: state, enabledAt: 1, requestEventId: "22",
+        projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
+        implementLabel: labels.implement, updateBranchLabel: labels.updateBranch, reviewLabel: labels.review,
+        inProgressLabel: "agent:in-progress", blockedLabel: labels.blocked,
+      }, { requestEventId: "22" })
+    : [];
   const outputs = Array.from({ length: options.attempts ?? 2 }, () => {
     const result = options.renderedCommand
-      ? spawnSync("bash", ["-lc", dispatcherCommand], { cwd: process.cwd(), encoding: "utf8", env })
+      ? spawnSync("node", ["extensions/deadloop/automations/pr-review-repair-dispatch.cts", ...deterministicDispatcherArgs], { cwd: process.cwd(), encoding: "utf8", env })
       : spawnSync("node", argv, { cwd: process.cwd(), encoding: "utf8", env });
     if (result.status !== 0) throw new Error(result.stderr || result.stdout);
     return JSON.parse(result.stdout);
@@ -777,13 +770,13 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     repairWorktreePath: String(repairAttempt?.worktreePath || ""),
     labelsPreserved: outputs[0]?.labelsPreserved || [],
     dispatcherArgsForwarded: !options.renderedCommand || [
-      `--worktree-root '${worktreeRoot}'`,
-      `--review-label ${labels.review}`,
-      `--in-progress-label agent:in-progress`,
-      `--blocked-label ${labels.blocked}`,
-      `--implement-label ${labels.implement}`,
-      `--update-branch-label ${labels.updateBranch}`,
-    ].every((argument) => dispatcherCommand.includes(argument)),
+      "--worktree-root", worktreeRoot,
+      "--review-label", labels.review,
+      "--in-progress-label", "agent:in-progress",
+      "--blocked-label", labels.blocked,
+      "--implement-label", labels.implement,
+      "--update-branch-label", labels.updateBranch,
+    ].every((argument) => deterministicDispatcherArgs.includes(argument)),
   };
 }
 
@@ -1084,7 +1077,7 @@ describe("review repair dispatch integration", () => {
     expect(await runConcurrentApprovedRetries()).toBe(1);
   });
 
-  it("executes the exact rendered monitor dispatcher command in a clean environment", () => {
+  it("executes the deterministic attempt handler's dispatcher arguments in a clean environment", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-rendered-dispatch-"));
     tempDirs.push(root);
     const bin = path.join(root, "bin");
@@ -1124,19 +1117,16 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
   ? {id:"R_repo",nameWithOwner:"owner/repo"}
   : {number:143,state:"OPEN",headRefName:"agent/issue-142",headRefOid:"${"a".repeat(40)}",isCrossRepository:false,labels:[{name:"agent:in-progress"}],comments:[]}));
 `);
-    const prompt = renderReviewerMonitorPrompt({
-      prNumber: 143, expectedHeadOid: "a".repeat(40), branch: "agent/issue-142",
-      automationDir: path.resolve("extensions/deadloop/automations"), promiseFile: promise, actorName: "reviewer",
-      projectId: "demo", repoPath: root, worktreeRoot: path.join(root, "worktrees"), githubRepo: "owner/repo", stateDir: state, enabledAt: 7,
-      projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "", repairRemote: "origin",
-      checkCommand: "npm test", humanLabel: "ready-for-human", reviewLabel: "agent:review",
-      blockedLabel: "agent:blocked",
-      requestEventId: "22",
-    });
-    const command = prompt.match(/run the deterministic dispatcher[^`]*:\n  `([^`]+)`/)?.[1];
-    if (!command) throw new Error("rendered dispatcher command was not found");
+    const args = dispatcherArgs({
+      prNumber: 143, expectedHeadOid: "a".repeat(40), branch: "agent/issue-142", promiseFile: promise,
+      attemptRecordFile: path.join(runDir, "attempt.json"), projectId: "demo", repoPath: root,
+      worktreeRoot: path.join(root, "worktrees"), githubRepo: "owner/repo", stateDir: state, enabledAt: 7,
+      requestEventId: "22", projectCheckCommand: "npm test", workerAgent: "pi", workerModel: "",
+      repairRemote: "origin", reviewLabel: "agent:review", implementLabel: "agent:implement",
+      updateBranchLabel: "agent:update-branch", inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    }, { requestEventId: "22" });
 
-    const result = spawnSync("bash", ["-lc", command], {
+    const result = spawnSync("node", ["extensions/deadloop/automations/pr-review-repair-dispatch.cts", ...args], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: { PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.dirname(state), DEADLOOP_REQUIRED_VERIFICATION: process.env.DEADLOOP_REQUIRED_VERIFICATION },

@@ -673,6 +673,7 @@ export function formatDoctorReport(snapshot: DoctorSnapshot): string {
     ...snapshot.warnings.map((warning) => `warning: ${warning}`),
     `config: ${formatConfigSource(snapshot.project)}`,
     formatRequiredVerification(snapshot.project.requiredVerification),
+    "attemptMonitoring: deterministic for reviewer and branch-update (no Automation-host model)",
     ...(snapshot.verificationCandidates ? formatVerificationCandidates(snapshot.verificationCandidates) : []),
     "",
   ];

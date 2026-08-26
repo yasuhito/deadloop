@@ -26,6 +26,14 @@ describe("retained monitor containment", () => {
     expect(decideMonitorContainment({ record: activeRecord, report: missingReport, runtime: { kind: "owner_absent" } })).toEqual({ action: "stop", reason: "missing_completion_report" });
   });
 
+  it("does not infer model availability from an intermediate session error", () => {
+    expect(decideMonitorContainment({
+      record: activeRecord,
+      report: missingReport,
+      runtime: { kind: "terminal", status: "done", terminalEvidence: "credit balance is too low\nwork recovered\nfinished without report" },
+    })).toEqual({ action: "stop", reason: "missing_completion_report" });
+  });
+
   it("does not infer model availability from generic terminal text", () => {
     expect(decideMonitorContainment({ record: activeRecord, report: missingReport, runtime: { kind: "terminal", status: "done", terminalEvidence: "The implementation discusses a model unavailable state." } })).toEqual({ action: "stop", reason: "missing_completion_report" });
   });

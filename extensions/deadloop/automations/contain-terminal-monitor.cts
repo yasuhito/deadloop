@@ -9,7 +9,7 @@ const {
   releasePersistedAttemptAuthority,
   releasesAttemptOwnership,
 } = require("../../../src/attempt-lifecycle-runtime.cjs");
-const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.cts");
+const { closeReceiptPath, observeAttemptRuntime, observeAttemptTurn } = require("../../../src/attempt-runtime-observation.cts");
 const { observeMonitorHandoffDisposition, terminalEvidenceArgs } = require("../../../src/monitor-handoff-observation.cts");
 
 import type { MonitorHandoffDisposition } from "../../../src/monitor-handoff-types";
@@ -90,7 +90,21 @@ function commentBody(record: JsonObject, disposition: JsonObject): string {
   if (disposition.action === "wait_for_model") {
     return `deadloop paused this attempt because the agent's terminal result reported a recognized model billing or access rejection. The same attempt, workspace, worktree, and agent session remain retained; no monitor prompt will be sent while access is unavailable.\n\n<!-- deadloop:model-availability-wait attempt=${record.attemptId} -->`;
   }
+  if (disposition.reason === "active_work_timeout") {
+    return `deadloop stopped this attempt because its active work reached the configured runtime limit. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n\n<!-- deadloop:attempt-timeout attempt=${record.attemptId} -->`;
+  }
   return `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n\n<!-- deadloop:terminal-monitor-stop attempt=${record.attemptId} reason=${disposition.reason} -->`;
+}
+
+function dispositionStillApplies(commandRunner: JsonObject, runner: JsonObject, record: JsonObject, disposition: JsonObject): boolean {
+  if (disposition.action === "stop" && disposition.reason === "active_work_timeout") {
+    const active = Number(disposition.accounting?.activeMilliseconds || 0);
+    const maximum = Number(disposition.maxActiveMilliseconds || 0);
+    return maximum > 0 && active >= maximum && observeAttemptTurn(runner, record).kind === "working";
+  }
+  const observed = currentDisposition(commandRunner, runner, record);
+  return observed.action === disposition.action
+    && (!("reason" in disposition) || "reason" in observed && observed.reason === disposition.reason);
 }
 
 function authorizedCommentExists(github: JsonObject, input: ContainmentInput, record: JsonObject, body: string): boolean {
@@ -160,10 +174,9 @@ function applyTerminalMonitorDisposition(
       throw new Error("terminal monitor attempt identity changed");
     }
     if (releasesAttemptOwnership(record.phase)) return true;
-    const observed = currentDisposition(commandRunner, runner, record);
-    if (observed.action !== input.disposition.action) return false;
+    if (!dispositionStillApplies(commandRunner, runner, record, input.disposition)) return false;
+    const observed = input.disposition;
     if (observed.action !== "wait_for_model" && observed.action !== "stop") return false;
-    if (!("reason" in input.disposition) || observed.reason !== input.disposition.reason) return false;
     let target = exactTarget(github, input, record);
     const body = commentBody(record, observed);
 
@@ -172,8 +185,7 @@ function applyTerminalMonitorDisposition(
         recheck();
         record = readBoundAttempt(recordFile);
         target = exactTarget(github, input, record);
-        const live = currentDisposition(commandRunner, runner, record);
-        if (live.action !== observed.action || live.reason !== observed.reason) return false;
+        if (!dispositionStillApplies(commandRunner, runner, record, observed)) return false;
         if (!labels(target).includes(input.project.labels.inProgress)) return false;
         if (record.target.kind === "issue") github.commentIssue(input.project.githubRepo, record.target.number, body);
         else github.commentPr(input.project.githubRepo, record.target.number, body);
@@ -195,16 +207,14 @@ function applyTerminalMonitorDisposition(
       recheck();
       record = readBoundAttempt(recordFile);
       target = exactTarget(github, input, record);
-      const live = currentDisposition(commandRunner, runner, record);
-      if (live.action !== observed.action || live.reason !== observed.reason) return false;
+      if (!dispositionStillApplies(commandRunner, runner, record, observed)) return false;
       replaceStoppedLabels(commandRunner, input, record, target);
     }
     if (!authorizedCommentExists(github, input, record, body)) {
       recheck();
       record = readBoundAttempt(recordFile);
       exactTarget(github, input, record);
-      const live = currentDisposition(commandRunner, runner, record);
-      if (live.action !== observed.action || live.reason !== observed.reason) return false;
+      if (!dispositionStillApplies(commandRunner, runner, record, observed)) return false;
       if (record.target.kind === "issue") github.commentIssue(input.project.githubRepo, record.target.number, body);
       else github.commentPr(input.project.githubRepo, record.target.number, body);
     }
@@ -212,14 +222,19 @@ function applyTerminalMonitorDisposition(
 
     const runtime = observeAttemptRuntime(runner, record, input.project.repoPath);
     if (runtime.kind === "live_matching_owner") {
-      if (currentDisposition(commandRunner, runner, record).action !== "stop") return false;
+      if (!dispositionStillApplies(commandRunner, runner, record, observed)) return false;
       writeCloseReceipt(record);
       runner.closeWorkspace(record.workspaceId);
       if (observeAttemptRuntime(runner, record, input.project.repoPath).kind !== "owner_absent_owned") return false;
     } else if (runtime.kind !== "owner_absent_owned") {
       return false;
     }
-    releasePersistedAttemptAuthority(record.runDir, new Date().toISOString(), undefined, "terminal_missing_report");
+    releasePersistedAttemptAuthority(
+      record.runDir,
+      new Date().toISOString(),
+      undefined,
+      observed.reason === "active_work_timeout" ? "runtime_timeout" : "terminal_missing_report",
+    );
     return true;
   });
 }

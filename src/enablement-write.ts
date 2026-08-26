@@ -15,6 +15,7 @@ function previousAutomationLogin(value: unknown, project: EnabledProject): strin
 
 export function preserveEnablementAutomationLogins(previous: unknown, next: EnablementState): EnablementState {
   return {
+    ...next,
     projects: next.projects.map((project) => {
       if (project.automationLogin) return project;
       const automationLogin = previousAutomationLogin(previous, project);
