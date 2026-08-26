@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 const {
   assertBranchUpdateRequestConsumed,
   assertBranchUpdateRequestSelectable,
-} = require("../extensions/deadloop/automations/pr-reviewer-driver.ts");
-const { renderBranchUpdateMarker } = require("../extensions/deadloop/automations/pr-branch-update-state.ts");
+} = require("../extensions/deadloop/automations/pr-reviewer-driver.cts");
+const { renderBranchUpdateMarker } = require("../extensions/deadloop/automations/pr-branch-update-state.cts");
 
 const head = "a".repeat(40);
 const base = "b".repeat(40);

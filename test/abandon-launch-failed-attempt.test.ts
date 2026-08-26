@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createPreparedAttempt, transitionPersistedAttempt } from "../src/attempt-lifecycle";
 
-const { abandonLocked } = require("../extensions/deadloop/automations/abandon-launch-failed-attempt.ts");
+const { abandonLocked } = require("../extensions/deadloop/automations/abandon-launch-failed-attempt.cts");
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));

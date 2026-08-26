@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const { AGENT_SCRATCH_AREAS } = require("../src/agent-scratch-area.cjs");
-const { runProjectCheck } = require("../src/project-check.ts");
+const { runProjectCheck } = require("../src/project-check.cts");
 
 const sandboxes: string[] = [];
 

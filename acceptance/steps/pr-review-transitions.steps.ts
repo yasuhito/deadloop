@@ -4,7 +4,7 @@ import path from "node:path";
 import { Given, Then, When } from "@cucumber/cucumber";
 import { type PrReviewerDriverResult, runPrReviewerDriverFixture } from "../support/pr-reviewer-driver";
 
-const { mergeReviewedPr } = require("../../extensions/deadloop/automations/merge-reviewed-pr.ts");
+const { mergeReviewedPr } = require("../../extensions/deadloop/automations/merge-reviewed-pr.cts");
 
 const currentHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const previousHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -114,6 +114,7 @@ When("deadloop completes approval processing for the current pull request", func
             findings: [],
           },
         }),
+        assertReviewVerification: () => {},
         run: (args: string[]) => {
           commands.push(args);
           if (args[0] === "gh" && args[1] === "pr" && args[2] === "view") {

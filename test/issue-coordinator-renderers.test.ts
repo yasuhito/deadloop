@@ -6,7 +6,7 @@ const {
   renderIssueBlockedComment,
   renderIssuePlanningComment,
   renderIssueWorkerPrompt,
-} = require("../src/issue-coordinator-renderers.ts");
+} = require("../src/issue-coordinator-renderers.cts");
 
 const blockedInput = {
   issueNumber: 72,
@@ -130,6 +130,6 @@ describe("issue coordinator renderers", () => {
   });
 
   it("keeps the prompt-based coordinator pointed at the deterministic renderers", () => {
-    expect(issueCoordinatorPrompt).toContain("src/issue-coordinator-renderers.ts");
+    expect(issueCoordinatorPrompt).toContain("src/issue-coordinator-renderers.cts");
   });
 });

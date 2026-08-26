@@ -18,7 +18,7 @@ type IssueSelectionWorld = {
   precheckStatus?: number | null;
 };
 
-const decisionScript = "extensions/deadloop/automations/issue-coordinator-decisions.ts";
+const decisionScript = "extensions/deadloop/automations/issue-coordinator-decisions.cts";
 
 function selectIssue(fixtureName: string): IssueSelectionDecision {
   const result = spawnSync(

@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const issueDriver = readFileSync("extensions/deadloop/automations/issue-coordinator-driver.ts", "utf8");
-const reviewerDriver = readFileSync("extensions/deadloop/automations/pr-reviewer-driver.ts", "utf8");
-const repairDriver = readFileSync("extensions/deadloop/automations/pr-review-repair-dispatch.ts", "utf8");
+const issueDriver = readFileSync("extensions/deadloop/automations/issue-coordinator-driver.cts", "utf8");
+const reviewerDriver = readFileSync("extensions/deadloop/automations/pr-reviewer-driver.cts", "utf8");
+const repairDriver = readFileSync("extensions/deadloop/automations/pr-review-repair-dispatch.cts", "utf8");
 const extension = readFileSync("extensions/deadloop/index.ts", "utf8");
 
 function namedFunction(source: string, name: string): string {
@@ -27,7 +27,7 @@ describe("Herdr 0.8.0 activation boundary", () => {
 
 
   it("selects launchRepair for the review-repair role", () => {
-    expect(namedFunction(repairDriver, "dispatch")).toContain("launchRepair(");
+    expect(namedFunction(repairDriver, "dispatchReviewResult")).toContain("launchRepair(");
   });
 
   it("keeps the startup preflight selected", () => {

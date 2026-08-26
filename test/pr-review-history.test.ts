@@ -5,7 +5,7 @@ const {
   advancePrHistoryAfterDeterministicComment,
   comparePrHistoryObservations,
   observePrHistory,
-} = require("../src/pr-review-history.ts");
+} = require("../src/pr-review-history.cts");
 
 function apiPages(items: unknown[]) {
   return [items];

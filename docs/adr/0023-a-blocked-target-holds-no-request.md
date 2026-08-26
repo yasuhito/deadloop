@@ -37,7 +37,7 @@ Reconciliation no longer removes `agent:blocked`. A release ends the in-progress
 
 Restarting is adding a request label. Guidance said "remove `agent:blocked`", which under this decision does nothing — a blocked pull request has no request to resume — and made the same operation mean both "restart this" and "stop managing this". It now says to add the request label for the role, which is what the reconciler's recovery comment already said.
 
-Paths that only stop, without deciding a label set — the `gh pr edit --add-label` calls in `guarded-operation.ts`, `merge-reviewed-pr.ts`, and the `addBlocked` callbacks — keep writing the one label. They run where continuing is already unsafe, and reading, diffing, and replacing labels there would add failures to the moment that must not fail. A request can only sit beside those blocks if a person added it mid-attempt, which is exactly what the ordering rule refuses.
+Paths that only stop, without deciding a label set — the `gh pr edit --add-label` calls in `guarded-operation.cts`, `merge-reviewed-pr.cts`, and the `addBlocked` callbacks — keep writing the one label. They run where continuing is already unsafe, and reading, diffing, and replacing labels there would add failures to the moment that must not fail. A request can only sit beside those blocks if a person added it mid-attempt, which is exactly what the ordering rule refuses.
 
 ## Consequences
 
@@ -47,6 +47,6 @@ Restarting costs one label instead of one label, and no longer depends on doing 
 
 A pull request waiting to restart carries `agent:review` and `agent:blocked` together for one tick, until the attempt claims it. That pair now reads as "asked for, not started yet", and nothing else writes it.
 
-`pr-review-repair-complete.ts` needs the implement and update-branch label names it never received, and validates all three against the saved claim's managed set, because clearing a label the claim does not name would reach outside the contract the attempt was launched under.
+`pr-review-repair-complete.cts` needs the implement and update-branch label names it never received, and validates all three against the saved claim's managed set, because clearing a label the claim does not name would reach outside the contract the attempt was launched under.
 
 The Issue side keeps its own restart ritual: `agent:blocked` must be removed by hand, because Issue selection skips a blocked Issue outright and an Issue attempt does not replace every managed label when it starts. The label shape is already the same on both sides; only the restart differs, and closing that gap is separate work.

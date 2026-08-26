@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.ts";
+const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.cts";
 const { acquireLockSync, releaseOwned } = require("../src/enablement-lock.cjs");
 
 // The dispatch lock writes under the state directory, so a fixture run needs one of its own rather
@@ -293,7 +293,7 @@ exit 2
   });
 
   it("does not ask the LLM to run launch-agent", () => {
-    expect(runDriverFixture("driver-ready-worker.json").prompt).not.toContain("launch-agent.ts");
+    expect(runDriverFixture("driver-ready-worker.json").prompt).not.toContain("launch-agent.cts");
   });
 
   it("keeps promise files as the worker completion authority", () => {
@@ -341,7 +341,7 @@ describe("reusing an abandoned Worker checkout", () => {
 
   /** Every other proof passes, so the status line is the only thing under test. */
   function assertWith(status: string) {
-    const { assertRecoverableWorkerCheckout } = require("../extensions/deadloop/automations/issue-coordinator-driver.ts");
+    const { assertRecoverableWorkerCheckout } = require("../extensions/deadloop/automations/issue-coordinator-driver.cts");
     return () => assertRecoverableWorkerCheckout(checkout, { repoPath: "/repo" }, {
       runner: {
         listWorktrees: () => [{ branch: checkout.branch, path: checkout.worktreePath, workspaceId: "" }],

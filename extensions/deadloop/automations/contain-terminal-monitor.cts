@@ -1,0 +1,227 @@
+const fs = require("node:fs") as typeof import("node:fs");
+const path = require("node:path") as typeof import("node:path");
+
+const { createCommandRunner, createHerdrRunnerFromCommandRunner } = require("../../../src/automation-driver-kit.cts");
+const { createGithubOperations } = require("../../../src/github-operations.cts");
+const { withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const {
+  readAttemptRecord,
+  releasePersistedAttemptAuthority,
+  releasesAttemptOwnership,
+} = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.cts");
+const { observeMonitorHandoffDisposition, terminalEvidenceArgs } = require("../../../src/monitor-handoff-observation.cts");
+
+import type { MonitorHandoffDisposition } from "../../../src/monitor-handoff-types";
+
+type JsonObject = Record<string, any>;
+
+type ContainmentInput = {
+  handoff: JsonObject;
+  disposition: MonitorHandoffDisposition;
+  project: {
+    id: string;
+    repoPath: string;
+    githubRepo: string;
+    stateDir: string;
+    enabledAt: number;
+    automationLogin: string;
+    labels: {
+      explore: string;
+      implement: string;
+      review: string;
+      updateBranch: string;
+      inProgress: string;
+      blocked: string;
+    };
+  };
+};
+
+function attemptRecordFile(handoff: JsonObject): string {
+  const input = handoff.input;
+  if (!input || typeof input !== "object") return "";
+  if (typeof input.attemptRecordFile === "string") return input.attemptRecordFile;
+  return typeof input.promiseFile === "string" ? path.join(path.dirname(input.promiseFile), "attempt.json") : "";
+}
+
+function readBoundAttempt(recordFile: string): JsonObject {
+  const runDir = path.dirname(recordFile);
+  return { ...readAttemptRecord(runDir), runDir };
+}
+
+
+function readTerminalEvidence(commandRunner: JsonObject, record: JsonObject): string {
+  return commandRunner.runText(["herdr", ...terminalEvidenceArgs(record)], { check: false });
+}
+
+function currentDisposition(commandRunner: JsonObject, runner: JsonObject, record: JsonObject, handoffKind?: unknown): MonitorHandoffDisposition {
+  return observeMonitorHandoffDisposition(record, handoffKind, {
+    runner,
+    readTerminalEvidence: (attempt: JsonObject) => readTerminalEvidence(commandRunner, attempt),
+  });
+}
+
+function labels(value: JsonObject): string[] {
+  return (Array.isArray(value.labels) ? value.labels : [])
+    .map((label: unknown) => typeof label === "string" ? label : String((label as JsonObject)?.name || ""))
+    .filter(Boolean);
+}
+
+function exactTarget(github: JsonObject, input: ContainmentInput, record: JsonObject): JsonObject {
+  const number = Number(record.target.number);
+  const target = record.target.kind === "issue"
+    ? github.getIssue(input.project.githubRepo, number)
+    : github.getPr(input.project.githubRepo, number);
+  if (target.state !== "OPEN" || Number(target.number) !== number) throw new Error("terminal monitor target changed");
+  if (record.target.kind === "pull-request"
+    && String(target.headRefOid || "").toLowerCase() !== String(record.inputRevision.head || "").toLowerCase()) {
+    throw new Error("terminal monitor pull request head changed");
+  }
+  const handoffInput = input.handoff.input || {};
+  if (record.target.kind === "issue" && (
+    Number(handoffInput.issueNumber) !== number
+    || typeof handoffInput.issueTitle === "string" && target.title !== handoffInput.issueTitle
+    || typeof handoffInput.issueBody === "string" && target.body !== handoffInput.issueBody
+  )) throw new Error("terminal monitor Issue identity changed");
+  return target;
+}
+
+function commentBody(record: JsonObject, disposition: JsonObject): string {
+  if (disposition.action === "wait_for_model") {
+    return `deadloop paused this attempt because the agent's terminal result reported a recognized model billing or access rejection. The same attempt, workspace, worktree, and agent session remain retained; no monitor prompt will be sent while access is unavailable.\n\n<!-- deadloop:model-availability-wait attempt=${record.attemptId} -->`;
+  }
+  return `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n\n<!-- deadloop:terminal-monitor-stop attempt=${record.attemptId} reason=${disposition.reason} -->`;
+}
+
+function authorizedCommentExists(github: JsonObject, input: ContainmentInput, record: JsonObject, body: string): boolean {
+  const comments = record.target.kind === "issue"
+    ? github.listIssueComments(input.project.githubRepo, record.target.number)
+    : github.listPrComments(input.project.githubRepo, record.target.number);
+  return comments.some((comment: JsonObject) =>
+    String(comment.user?.login || comment.author?.login || "").toLowerCase() === input.project.automationLogin.toLowerCase()
+    && comment.body === body
+    && (!comment.created_at || !comment.updated_at || comment.created_at === comment.updated_at));
+}
+
+function writeCloseReceipt(record: JsonObject): void {
+  const destination = closeReceiptPath(record);
+  const temporary = `${destination}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify({
+    schemaVersion: 1,
+    attemptId: record.attemptId,
+    workspaceId: record.workspaceId,
+    worktreePath: record.worktreePath,
+    startedAt: new Date().toISOString(),
+  })}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporary, destination);
+}
+
+function replaceStoppedLabels(commandRunner: JsonObject, input: ContainmentInput, record: JsonObject, target: JsonObject): void {
+  const managed = new Set([
+    input.project.labels.explore,
+    input.project.labels.implement,
+    input.project.labels.review,
+    input.project.labels.updateBranch,
+    input.project.labels.inProgress,
+    input.project.labels.blocked,
+  ]);
+  const next = labels(target).filter((label) => !managed.has(label));
+  next.push(input.project.labels.blocked);
+  commandRunner.runJson([
+    "gh", "api", "--method", "PUT",
+    `repos/${input.project.githubRepo}/issues/${record.target.number}/labels`,
+    "--input", "-",
+  ], { input: JSON.stringify({ labels: next }) });
+}
+
+function applyTerminalMonitorDisposition(
+  input: ContainmentInput,
+  dependencies: {
+    commandRunner?: JsonObject;
+    runner?: JsonObject;
+    github?: JsonObject;
+    withEnabledProjectLock?: typeof withEnabledProjectLock;
+  } = {},
+): boolean {
+  const recordFile = attemptRecordFile(input.handoff);
+  if (!recordFile) throw new Error("terminal monitor handoff has no attempt record");
+  const commandRunner = dependencies.commandRunner || createCommandRunner();
+  const runner = dependencies.runner || createHerdrRunnerFromCommandRunner(commandRunner);
+  const github = dependencies.github || createGithubOperations(commandRunner);
+  const withProjectLock = dependencies.withEnabledProjectLock || withEnabledProjectLock;
+  return withProjectLock({
+    repoPath: input.project.repoPath,
+    githubRepo: input.project.githubRepo,
+    stateDir: input.project.stateDir,
+    enabledAt: input.project.enabledAt,
+  }, (_enabled: JsonObject, recheck: () => void) => {
+    let record = readBoundAttempt(recordFile);
+    if (record.project !== input.project.id || record.repository !== input.project.githubRepo) {
+      throw new Error("terminal monitor attempt identity changed");
+    }
+    if (releasesAttemptOwnership(record.phase)) return true;
+    const observed = currentDisposition(commandRunner, runner, record);
+    if (observed.action !== input.disposition.action) return false;
+    if (observed.action !== "wait_for_model" && observed.action !== "stop") return false;
+    if (!("reason" in input.disposition) || observed.reason !== input.disposition.reason) return false;
+    let target = exactTarget(github, input, record);
+    const body = commentBody(record, observed);
+
+    if (observed.action === "wait_for_model") {
+      if (!authorizedCommentExists(github, input, record, body)) {
+        recheck();
+        record = readBoundAttempt(recordFile);
+        target = exactTarget(github, input, record);
+        const live = currentDisposition(commandRunner, runner, record);
+        if (live.action !== observed.action || live.reason !== observed.reason) return false;
+        if (!labels(target).includes(input.project.labels.inProgress)) return false;
+        if (record.target.kind === "issue") github.commentIssue(input.project.githubRepo, record.target.number, body);
+        else github.commentPr(input.project.githubRepo, record.target.number, body);
+      }
+      return authorizedCommentExists(github, input, record, body);
+    }
+
+    const currentLabels = labels(target);
+    const stopped = currentLabels.includes(input.project.labels.blocked)
+      && !currentLabels.some((label) => [
+        input.project.labels.explore,
+        input.project.labels.implement,
+        input.project.labels.review,
+        input.project.labels.updateBranch,
+        input.project.labels.inProgress,
+      ].includes(label));
+    if (!stopped) {
+      if (!currentLabels.includes(input.project.labels.inProgress)) return false;
+      recheck();
+      record = readBoundAttempt(recordFile);
+      target = exactTarget(github, input, record);
+      const live = currentDisposition(commandRunner, runner, record);
+      if (live.action !== observed.action || live.reason !== observed.reason) return false;
+      replaceStoppedLabels(commandRunner, input, record, target);
+    }
+    if (!authorizedCommentExists(github, input, record, body)) {
+      recheck();
+      record = readBoundAttempt(recordFile);
+      exactTarget(github, input, record);
+      const live = currentDisposition(commandRunner, runner, record);
+      if (live.action !== observed.action || live.reason !== observed.reason) return false;
+      if (record.target.kind === "issue") github.commentIssue(input.project.githubRepo, record.target.number, body);
+      else github.commentPr(input.project.githubRepo, record.target.number, body);
+    }
+    if (!authorizedCommentExists(github, input, record, body)) return false;
+
+    const runtime = observeAttemptRuntime(runner, record, input.project.repoPath);
+    if (runtime.kind === "live_matching_owner") {
+      if (currentDisposition(commandRunner, runner, record).action !== "stop") return false;
+      writeCloseReceipt(record);
+      runner.closeWorkspace(record.workspaceId);
+      if (observeAttemptRuntime(runner, record, input.project.repoPath).kind !== "owner_absent_owned") return false;
+    } else if (runtime.kind !== "owner_absent_owned") {
+      return false;
+    }
+    releasePersistedAttemptAuthority(record.runDir, new Date().toISOString(), undefined, "terminal_missing_report");
+    return true;
+  });
+}
+
+module.exports = { applyTerminalMonitorDisposition, attemptRecordFile, commentBody, currentDisposition };

@@ -94,7 +94,7 @@
       "calls": [
         "createWorktree",
         "createTab",
-        "node /automation/launch-agent.ts --agent pi --name dl-worker --cwd /wt --repo-path /repo --level medium --model  --uuid U-baseline --prompt-file /state/deadloop/runs/U-baseline/worker-prompt.md --tab tab-1"
+        "node /automation/launch-agent.cts --agent pi --name dl-worker --cwd /wt --repo-path /repo --level medium --model  --uuid U-baseline --prompt-file /state/deadloop/runs/U-baseline/worker-prompt.md --tab tab-1"
       ],
       "writes": {
         "/state/deadloop/runs/U-baseline/worker-prompt.md": "promise: /state/deadloop/runs/U-baseline/promise.json"
@@ -112,7 +112,7 @@
       "calls": [
         "openWorktree",
         "createTab",
-        "node /automation/launch-agent.ts --agent pi --name dl-reviewer --cwd /wt --repo-path /repo --level medium --model  --uuid U-baseline --prompt-file /state/deadloop/runs/U-baseline/reviewer-prompt.md --tab tab-1"
+        "node /automation/launch-agent.cts --agent pi --name dl-reviewer --cwd /wt --repo-path /repo --level medium --model  --uuid U-baseline --prompt-file /state/deadloop/runs/U-baseline/reviewer-prompt.md --tab tab-1"
       ],
       "writes": {
         "/state/deadloop/runs/U-baseline/reviewer-prompt.md": "promise: /state/deadloop/runs/U-baseline/promise.json"
@@ -135,13 +135,13 @@
           "id": "example-project:issue-coordinator",
           "promptFile": "issue-coordinator.prompt.md",
           "precheckFile": "issue-coordinator.precheck.sh",
-          "driverFile": "issue-coordinator-driver.ts"
+          "driverFile": "issue-coordinator-driver.cts"
         },
         {
           "id": "example-project:pr-reviewer",
           "promptFile": "pr-reviewer.prompt.md",
           "precheckFile": "pr-reviewer.precheck.sh",
-          "driverFile": "pr-reviewer-driver.ts"
+          "driverFile": "pr-reviewer-driver.cts"
         }
       ]
     }

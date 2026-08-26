@@ -1,10 +1,17 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-function exampleAutomationFiles(index: number) {
+type ExampleAutomation = { promptFile: string; precheckFile: string; driverFile: string };
+
+function exampleAutomations(): ExampleAutomation[] {
   const config = JSON.parse(readFileSync("extensions/deadloop/projects.example.json", "utf8"));
-  const automation = config.projects[0].automations[index] as { promptFile: string; precheckFile: string };
+  return config.projects[0].automations as ExampleAutomation[];
+}
+
+function exampleAutomationFiles(index: number) {
+  const automation = exampleAutomations()[index];
   return { promptFile: automation.promptFile, precheckFile: automation.precheckFile };
 }
 
@@ -21,5 +28,12 @@ describe("automation short names", () => {
       promptFile: "pr-reviewer.prompt.md",
       precheckFile: "pr-reviewer.precheck.sh",
     });
+  });
+
+  it("resolves every example automation file to a shipped automation file", () => {
+    const missing = exampleAutomations()
+      .flatMap((automation) => [automation.promptFile, automation.precheckFile, automation.driverFile])
+      .filter((file) => !existsSync(join("extensions/deadloop/automations", file)));
+    expect(missing).toEqual([]);
   });
 });

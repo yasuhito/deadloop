@@ -97,4 +97,4 @@ GitHub とローカル状態を跨ぐ完全な exactly-once は保証しない�
 
 最初の抽出対象は汎用 `RunnerAdapter` の拡張ではなく、現行 driver から `coordinateIssue` と `reviewPullRequest` を分離することである。次に監視を `advanceImplementation` と `advanceReview` へ移し、Pi + Herdr の launcher を組み立てる。その後、Codex または Claude の二つ目の `AgentProgram` で seam を検証する。
 
-`src/herdr-runner.ts` の Herdr 応答正規化と、現行の純粋な Issue / PR 選定ロジックは再利用できる。一方、同期・非同期の二重 runner interface、暗黙の Herdr 生成、launcher subprocess の二重境界、標準経路での monitor prompt 依存は段階的に解消する。
+`src/herdr-runner.cts` の Herdr 応答正規化と、現行の純粋な Issue / PR 選定ロジックは再利用できる。一方、同期・非同期の二重 runner interface、暗黙の Herdr 生成、launcher subprocess の二重境界、標準経路での monitor prompt 依存は段階的に解消する。

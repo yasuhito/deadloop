@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrAwaitingReview, ensureWorkerPr } = require("../extensions/deadloop/automations/guarded-worker-pr.ts");
+const { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrAwaitingReview, ensureWorkerPr } = require("../extensions/deadloop/automations/guarded-worker-pr.cts");
 
 describe("guarded Worker PR binding", () => {
   it("rejects another GitHub repository before PR creation", () => {

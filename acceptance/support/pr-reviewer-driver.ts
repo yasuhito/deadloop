@@ -20,7 +20,7 @@ export function runPrReviewerDriverFixture(
   fixturePath: string,
   extraEnv: Record<string, string> = {},
 ): PrReviewerDriverResult {
-  const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.ts", "--fixture", fixturePath], {
+  const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.cts", "--fixture", fixturePath], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {

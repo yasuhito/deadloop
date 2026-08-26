@@ -571,14 +571,14 @@ function defaultAutomationsForProject(project: Pick<NormalizedProject, "id">): R
       name: `${project.id} issue coordinator`,
       promptFile: "issue-coordinator.prompt.md",
       precheckFile: "issue-coordinator.precheck.sh",
-      driverFile: "issue-coordinator-driver.ts",
+      driverFile: "issue-coordinator-driver.cts",
     },
     {
       id: `${project.id}:pr-reviewer`,
       name: `${project.id} PR reviewer`,
       promptFile: "pr-reviewer.prompt.md",
       precheckFile: "pr-reviewer.precheck.sh",
-      driverFile: "pr-reviewer-driver.ts",
+      driverFile: "pr-reviewer-driver.cts",
     },
   ];
 }
@@ -838,7 +838,7 @@ export function automationEnvironment(
     DEADLOOP_WORKER_LAUNCH_POLICY: envText(values.workerLaunchPolicy),
     DEADLOOP_REVIEWER_AGENT: envText(values.reviewerAgent),
     DEADLOOP_REVIEWER_MODEL: envText(values.reviewerModel),
-    DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS: automation.driverFile === "pr-reviewer-driver.ts"
+    DEADLOOP_REVIEWER_MAX_RUNTIME_SECONDS: automation.driverFile === "pr-reviewer-driver.cts"
       ? envText(values.automationMaxRuntimeSeconds)
       : undefined,
     DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: envText(project.automationLogins.join(",")),

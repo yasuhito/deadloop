@@ -494,9 +494,29 @@ describe("attempt lifecycle contract", () => {
     expect(JSON.parse(readFileSync(attemptRecordPath(path.dirname(record.promptFile)), "utf8"))).toEqual(record);
   });
 
-  it("releases local ownership after GitHub authority is lost", () => {
+  it("releases local ownership when the owner is absent", () => {
     const record = preparedAttempt();
 
     expect(releasePersistedAttemptAuthority(path.dirname(record.promptFile), "2026-08-01T10:00:00Z", "cutoff-1").phase).toBe("authority_released");
+  });
+
+  it("records why an absent owner released its authority", () => {
+    const record = preparedAttempt();
+
+    expect(releasePersistedAttemptAuthority(path.dirname(record.promptFile), "2026-08-01T10:00:00Z").authorityRelease?.reason).toBe("owner_absent");
+  });
+
+  it("records why a superseded attempt released its authority", () => {
+    const record = preparedAttempt();
+    const released = releasePersistedAttemptAuthority(path.dirname(record.promptFile), "2026-08-01T10:00:00Z", undefined, "superseded_by_request");
+
+    expect(released.authorityRelease?.reason).toBe("superseded_by_request");
+  });
+
+  it("refuses a release reason the contract does not define", () => {
+    const record = preparedAttempt();
+
+    expect(() => releasePersistedAttemptAuthority(path.dirname(record.promptFile), "2026-08-01T10:00:00Z", undefined, "github_authority_lost" as never))
+      .toThrow(/authorityRelease.reason is invalid/);
   });
 });

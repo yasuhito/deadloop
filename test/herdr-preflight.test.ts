@@ -8,7 +8,7 @@ import { parseHerdrVersions } from "../src/herdr-version";
 const { runHerdrPreflight } = require("../src/herdr-preflight.cjs");
 
 const extensionSource = readFileSync("extensions/deadloop/index.ts", "utf8");
-const completionSource = readFileSync("extensions/deadloop/automations/complete-attempt-workspace.ts", "utf8");
+const completionSource = readFileSync("extensions/deadloop/automations/complete-attempt-workspace.cts", "utf8");
 
 function functionSource(source: string, name: string): string {
   const start = source.indexOf(`function ${name}(`);

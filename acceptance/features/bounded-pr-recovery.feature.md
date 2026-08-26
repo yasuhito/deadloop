@@ -80,11 +80,11 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop processes the review result
 * Then deadloop leaves no waiting request on the pull request
 
-## Scenario: Escalate the new head for human handling when the same findings remain after repair
+## Scenario: Hand the new head to a person when the same findings remain after repair
 
 * Given The same review findings remain on the new head after repair
 * When deadloop processes the review result
-* Then deadloop escalates the pull request for human handling
+* Then deadloop leaves no agent workflow label on the pull request
 
 ## Scenario: Leave recovery guidance when the same findings remain after repair
 
@@ -134,11 +134,11 @@ Handle review findings and conflicts safely without repeating the same change or
 * When The pull request head changes immediately before push
 * Then deadloop does not push to the branch
 
-## Scenario: Push a repair non-forcibly to only the verified existing branch
+## Scenario: Push a repair to only the verified existing branch under a verified-head lease
 
 * Given The pull request head selected for repair has been verified
 * When deadloop completes the repair
-* Then deadloop pushes non-forcibly to the verified branch
+* Then deadloop pushes to the verified branch under a lease on the verified head
 
 ## Scenario: Run repair checks before the final pull request head check
 
@@ -152,11 +152,11 @@ Handle review findings and conflicts safely without repeating the same change or
 * When deadloop completes conflict recovery
 * Then deadloop does not push to the conflict-recovery branch
 
-## Scenario: Push conflict recovery non-forcibly to only the verified existing branch
+## Scenario: Push conflict recovery to only the verified existing branch under a verified-head lease
 
 * Given The pull request head selected for conflict recovery has been verified
 * When deadloop completes conflict recovery
-* Then deadloop pushes non-forcibly to the conflict-recovery branch
+* Then deadloop pushes to the conflict-recovery branch under a lease on the verified head
 
 ## Scenario: Run conflict-recovery checks before the final pull request head check
 

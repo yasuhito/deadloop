@@ -30,7 +30,7 @@ function mutationRanAfterDisable(monitor: string, useFabricatedState = false): b
   const result = spawnSync(
     "node",
     [
-      "extensions/deadloop/automations/guarded-operation.ts",
+      "extensions/deadloop/automations/guarded-operation.cts",
       "--project-repo", repoPath,
       "--github-repo", "owner/repo",
       "--state-dir", suppliedStateDir,

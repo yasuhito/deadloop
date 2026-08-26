@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { readAttemptRecord, type AttemptRecord, type CompletionReportV1 } from "../src/attempt-lifecycle";
 import {
+  assertReviewApprovalAuthorized,
   assertWorkerCompletionAuthorized,
   type RequiredVerificationRecord,
 } from "../src/worker-required-verification";
@@ -95,6 +96,45 @@ const verification: RequiredVerificationRecord = {
   durationMs: 10,
   logPath: "/state/check.log",
 };
+
+describe("Reviewer required-verification approval gate", () => {
+  const reviewerAttempt = {
+    ...attempt,
+    role: "reviewer" as const,
+    target: { kind: "pull-request" as const, number: 12 },
+    branch: "agent/issue-12-task",
+  };
+  const reviewerReport = {
+    ...report,
+    role: "reviewer" as const,
+    target: { repository: attempt.repository, kind: "pull-request" as const, number: 12 },
+    result: { outcome: "approved" as const, reviewedHead: inputHead, findings: [] },
+    evidence: { reviewed: ["diff"], validations: ["npm run extra passed"] },
+  };
+  const reviewVerification = { ...verification, binding: { ...verification.binding, targetCommit: inputHead } };
+
+  it("rejects approval without a required-verification record", () => {
+    expect(() => assertReviewApprovalAuthorized(reviewerAttempt, reviewerReport as CompletionReportV1, undefined, contract)).toThrow("record is missing");
+  });
+
+  it("rejects approval with a failed required-verification record", () => {
+    expect(() => assertReviewApprovalAuthorized(reviewerAttempt, reviewerReport as CompletionReportV1, { ...reviewVerification, outcome: "failed", exitCode: 1 }, contract)).toThrow("did not pass");
+  });
+
+  it("rejects approval backed by a passed record for an old head", () => {
+    expect(() => assertReviewApprovalAuthorized(reviewerAttempt, reviewerReport as CompletionReportV1, { ...reviewVerification, binding: { ...reviewVerification.binding, targetCommit: outputHead } }, contract)).toThrow("current target commit");
+  });
+
+  it("accepts approval backed by an authenticated passed record for the current head", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-review-verification-"));
+    try {
+      const fixedAttempt = { ...reviewerAttempt, promiseFile: path.join(root, "state", "runs", "review", "promise.json") };
+      const recordFile = path.join(path.dirname(fixedAttempt.promiseFile), "required-verification.json");
+      const authenticated = runtime.persistHostVerificationEvidence(recordFile, reviewVerification);
+      expect(assertReviewApprovalAuthorized(fixedAttempt, reviewerReport as CompletionReportV1, authenticated, contract).reviewedHead).toBe(inputHead);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
 
 describe("Worker required-verification completion gate", () => {
   it("rejects an exact synthesized record without host execution", () => {

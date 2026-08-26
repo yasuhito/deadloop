@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { pushedHeadTransition } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
+const { pushedHeadTransition } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.cts");
 
 const originalHead = "a".repeat(40);
 const pushedHead = "b".repeat(40);

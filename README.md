@@ -21,6 +21,8 @@ This installs the deadloop extension and its setup skill together.
 ## Current status
 
 - v0 is a Pi package / extension.
+- The automation host can be either Pi or [omp](https://github.com/oh-my-pi/pi-coding-agent) (Oh My Pi); the package loads and drives automations under both with no host-specific setting. One host serves a repository at a time: the scheduler lock is scoped to the GitHub repository ID, so a second host of either kind leaves the first one driving.
+- Workers and reviewers run `pi`, `claude`, or `omp`, chosen with `workerAgent` and `reviewerAgent` independently of which host runs the automations.
 - The default runner is [Herdr](https://herdr.dev/).
 - The supported host platform currently requires a Unix-like system with a compatible `flock` executable (normally provided by util-linux) and nonblocking file-descriptor locks. `/deadloop-enable` verifies this capability before enabling automation.
 - Each Automation host fixes the deadloop checkout commit as its code identity when the extension loads. If the checkout advances, shared enablement writes and scheduler ticks stop until the operator runs `/reload`; status and doctor remain available and show both identities and the recovery step.
@@ -127,17 +129,19 @@ With `false`, deadloop creates and reviews each PR, then hands the merge to a hu
 
 With `true`, deadloop squash-merges PRs that pass its safety checks and deletes their head branches.
 
+Reviewers can still report requested changes or a required human decision when required verification is missing or failing. Approval, successful human handoff, and merge consideration require a host-recorded successful required-verification result for the current PR head; agent-reported validations remain additional evidence only.
+
 Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
 
 ## Merge-conflict recovery
 
-Automatic branch updates are currently unavailable. deadloop detects merge conflicts but does not update the branch until #241 connects the `agent:update-branch` request to its worker. The existing non-force, exact-head, required-verification, and normal-merge safety contracts remain required.
+Automatic branch updates are currently unavailable. deadloop detects merge conflicts but does not update the branch until #241 connects the `agent:update-branch` request to its worker. The existing exact-head, required-verification, and normal-merge safety contracts remain required, and the finalizer push stays bound to the verified head by an expected-object-ID lease.
 
 The behavior below describes the safety contract for that future connection, not behavior that can currently run.
 
 The worker merges the selected base commit into the existing PR branch. It never rebases.
 
-The worker runs the configured checks. It atomically updates the branch only if the PR head still equals the validated commit, then returns the PR to normal review.
+The worker must produce a passed record bound to its fixed required-verification contract and output commit. It atomically updates the branch only if the PR head still equals the validated commit, then returns the PR to normal review.
 
 Review labels remain in place during the update. No extra label is required.
 
@@ -157,7 +161,7 @@ During repair, deadloop preserves `agent:in-progress` without adding another wor
 
 The worker receives only the findings.
 
-The finalizer runs the configured checks for every repair, regardless of how many files changed. It atomically updates the exact branch only if the branch head still equals the validated commit.
+The finalizer runs the configured checks for every repair, regardless of how many files changed. It requires a passed record bound to the attempt's fixed required-verification contract and repair commit, reuses only a fully matching record, and atomically updates the exact branch only if the branch head still equals the validated commit.
 
 The finalizer never replaces another head or changes GitHub workflow state.
 

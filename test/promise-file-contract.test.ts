@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-const { renderIssueWorkerPrompt } = require("../src/issue-coordinator-renderers.ts");
+const { renderIssueWorkerPrompt } = require("../src/issue-coordinator-renderers.cts");
 
 function issueWorkerPrompt(): string {
   return renderIssueWorkerPrompt({

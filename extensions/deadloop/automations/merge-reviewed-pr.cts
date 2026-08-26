@@ -1,0 +1,361 @@
+#!/usr/bin/env node
+// Merge one reviewed PR only if GitHub still reports the reviewed head commit.
+// The mutation is serialized with /deadloop-disable through the enablement lock.
+
+const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const fs = require("node:fs") as typeof import("node:fs");
+const path = require("node:path") as typeof import("node:path");
+const { MAX_GUARDED_OPERATION_MS, withEnabledProjectLock } = require("../../../src/enabled-operation.cjs");
+const { validatePromise } = require("./extract-worker-promise.cts");
+const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { reauthorizeReviewWrite } = require("../../../src/worker-required-verification-runtime.cjs");
+const {
+  comparePrHistoryObservations,
+  observePrHistory,
+  readPrHistoryObservation,
+} = require("../../../src/pr-review-history.cts");
+const { canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
+
+type MergeArgs = {
+  attemptRecord: string;
+  projectRepo: string;
+  githubRepo: string;
+  stateDir: string;
+  enabledAt: number;
+  pr: string;
+  expectedHead: string;
+  reviewPromise: string;
+  inProgressLabel: string;
+  blockedLabel: string;
+  historyObservation: string;
+};
+type EnabledProject = {
+  repoPath: string;
+  baseBranch?: string;
+  githubRepositoryId: string;
+  githubRepo: string;
+  automationLogin?: string;
+  firstEnableAutoMerge: boolean;
+  firstStartPending: boolean;
+  autoMergeAcknowledged: boolean;
+};
+type CommandResult = { status: number; stdout: string; stderr: string };
+type PromiseValidation = { status?: unknown; promise?: Record<string, unknown> };
+type MergeOps = {
+  run(args: string[], timeoutMs?: number): CommandResult;
+  loadAttemptRecord?: (args: MergeArgs) => Record<string, any>;
+  isAutoMergeEnabled?: (args: MergeArgs) => boolean;
+  validateReviewPromise?: (file: string) => PromiseValidation;
+  assertReviewVerification?: (args: MergeArgs, enabled: EnabledProject) => void;
+  assertReviewHistoryFresh?: (args: MergeArgs) => void;
+  withLock?: (project: { repoPath: string; githubRepo: string; stateDir: string; enabledAt: number }, operation: (enabled: EnabledProject, recheck: () => void) => number) => number;
+};
+
+function defaultRun(args: string[], timeoutMs?: number): CommandResult {
+  const result = spawnSync(args[0], args.slice(1), {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    ...(timeoutMs === undefined ? {} : { timeout: timeoutMs, killSignal: "SIGKILL" }),
+  });
+  return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
+}
+
+function currentAutoMergeEnabled(args: MergeArgs): boolean {
+  const configPath = process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json");
+  let text: string;
+  try {
+    text = fs.readFileSync(configPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw new Error(`projects.json read error: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let config: unknown;
+  try {
+    config = JSON.parse(text || "{}");
+  } catch (error) {
+    throw new Error(`projects.json parse error: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("projects.json must contain an object; automatic merge stopped");
+  }
+  const configuredProjects = (config as { projects?: unknown }).projects;
+  if (configuredProjects !== undefined && !Array.isArray(configuredProjects)) {
+    throw new Error("projects.json projects must be an array; automatic merge stopped");
+  }
+  const rawProjects: unknown[] = Array.isArray(configuredProjects) ? configuredProjects : [];
+  const selectedIds = new Set(String(process.env.DEADLOOP_PROJECTS || "").split(",").map((value) => value.trim()).filter(Boolean));
+  const matches = rawProjects.filter((candidate: unknown) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error("projects.json contains an invalid project; automatic merge stopped");
+    }
+    const project = candidate as { id?: unknown; repoPath?: unknown; githubRepo?: unknown };
+    const projectId = String(project.id || project.githubRepo || project.repoPath || "project")
+      .toLowerCase()
+      .replace(/[^a-z0-9_.-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "project";
+    if (selectedIds.size > 0 && !selectedIds.has(projectId)) return false;
+    return typeof project.repoPath === "string"
+      && path.resolve(project.repoPath) === path.resolve(args.projectRepo)
+      && project.githubRepo === args.githubRepo;
+  }) as Array<{ autoMerge?: unknown }>;
+  if (matches.length > 1) throw new Error("current project configuration is ambiguous; automatic merge stopped");
+  if (matches.length !== 1) return false;
+  if (matches[0].autoMerge !== undefined && typeof matches[0].autoMerge !== "boolean") {
+    throw new Error("current autoMerge setting is invalid; automatic merge stopped");
+  }
+  return matches[0].autoMerge === true;
+}
+
+function assertMergeAuthorized(enabled: EnabledProject): void {
+  if (enabled.firstStartPending) throw new Error("first safe start is still pending; automatic merge stopped");
+  if (enabled.firstEnableAutoMerge && !enabled.autoMergeAcknowledged) {
+    throw new Error("autoMerge has not been acknowledged after enablement; automatic merge stopped");
+  }
+}
+
+function assertRequiredVerificationApproved(args: MergeArgs, enabled: EnabledProject): void {
+  const attemptRecordFile = path.join(path.dirname(args.reviewPromise), "attempt.json");
+  const attempt = readAttemptRecord(path.dirname(attemptRecordFile));
+  const report = JSON.parse(fs.readFileSync(args.reviewPromise, "utf8"));
+  reauthorizeReviewWrite(attempt, {
+    projectRepo: args.projectRepo,
+    localConfigPath: process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json"),
+    repositoryId: enabled.githubRepositoryId,
+    report,
+    attemptRecordFile,
+  });
+  if (report.result.reviewedHead !== args.expectedHead) throw new Error("required verification reviewed head changed; automatic merge stopped");
+}
+
+function assertReviewApproved(args: MergeArgs, ops: MergeOps): void {
+  const validation = ops.validateReviewPromise
+    ? ops.validateReviewPromise(args.reviewPromise)
+    : validatePromise(args.reviewPromise);
+  if (validation.status !== "complete" || !validation.promise) {
+    throw new Error("validated reviewer approval is missing; automatic merge stopped");
+  }
+  if (validation.promise.status !== "complete" || validation.promise.outcome !== "approved") {
+    throw new Error("review result is not approved; automatic merge stopped");
+  }
+  if (validation.promise.reviewedHead !== args.expectedHead) {
+    throw new Error("reviewed head does not match the guarded merge head; automatic merge stopped");
+  }
+  if (!Array.isArray(validation.promise.findings) || validation.promise.findings.length !== 0) {
+    throw new Error("approved review findings are missing or non-empty; automatic merge stopped");
+  }
+}
+
+const SUCCESSFUL_CHECK_RESULTS = new Set(["SUCCESS", "SUCCESSFUL", "NEUTRAL", "SKIPPED"]);
+const PENDING_CHECK_STATES = new Set(["QUEUED", "IN_PROGRESS", "PENDING", "EXPECTED", "WAITING", "REQUESTED"]);
+
+function assertChecksPassed(value: unknown): void {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("CI checks are missing; automatic merge stopped");
+  }
+  for (const check of value) {
+    if (!check || typeof check !== "object" || Array.isArray(check)) {
+      throw new Error("CI check state is unknown; automatic merge stopped");
+    }
+    const record = check as { status?: unknown; state?: unknown; conclusion?: unknown };
+    const status = String(record.status || "").toUpperCase();
+    const state = String(record.state || "").toUpperCase();
+    const conclusion = String(record.conclusion || "").toUpperCase();
+    if (PENDING_CHECK_STATES.has(status) || PENDING_CHECK_STATES.has(state)) {
+      throw new Error("CI checks have not completed; automatic merge stopped");
+    }
+    if (!status && !state && !conclusion) {
+      throw new Error("CI check state is unknown; automatic merge stopped");
+    }
+    if (!SUCCESSFUL_CHECK_RESULTS.has(conclusion) && !SUCCESSFUL_CHECK_RESULTS.has(state)) {
+      throw new Error("CI checks did not pass; automatic merge stopped");
+    }
+  }
+}
+
+function assertReviewHistoryFresh(args: MergeArgs, ops: MergeOps): void {
+  if (ops.assertReviewHistoryFresh) {
+    ops.assertReviewHistoryFresh(args);
+    return;
+  }
+  if (!args.historyObservation) throw new Error("accepted PR history observation is missing; automatic merge stopped");
+  const runner = {
+    runText(command: string[]): string {
+      const result = ops.run(command, MAX_GUARDED_OPERATION_MS);
+      if (result.status !== 0) throw new Error((result.stderr || result.stdout || "PR history could not be observed").trim());
+      return result.stdout;
+    },
+    runJson(command: string[]): unknown {
+      return JSON.parse(this.runText(command));
+    },
+  };
+  const expected = readPrHistoryObservation(args.historyObservation);
+  const actual = observePrHistory(args.githubRepo, Number(args.pr), runner);
+  if (comparePrHistoryObservations(expected, actual).kind !== "unchanged") {
+    throw new Error("PR review history changed; automatic merge stopped");
+  }
+}
+
+type MergeTargetPr = {
+  state?: unknown;
+  isDraft?: unknown;
+  headRefOid?: unknown;
+  mergeable?: unknown;
+  mergeStateStatus?: unknown;
+  statusCheckRollup?: unknown;
+  labels?: unknown;
+};
+
+function readMergeTargetPr(args: MergeArgs, ops: MergeOps): MergeTargetPr {
+  const result = ops.run([
+    "gh", "pr", "view", args.pr, "-R", args.githubRepo,
+    "--json", "state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,labels",
+  ], MAX_GUARDED_OPERATION_MS);
+  if (result.status !== 0) throw new Error((result.stderr || result.stdout || "PR state could not be revalidated").trim());
+  try {
+    return JSON.parse(result.stdout || "{}");
+  } catch {
+    throw new Error("PR state response was invalid; automatic merge stopped");
+  }
+}
+
+/** The identity and ownership a merge target must keep, whether or not it is still a draft. */
+function assertMergeTargetUnchanged(pr: MergeTargetPr, args: MergeArgs): void {
+  const labels = new Set(
+    Array.isArray(pr.labels)
+      ? pr.labels.map((label: unknown) => label && typeof label === "object" ? (label as { name?: unknown }).name : undefined)
+        .filter((name): name is string => typeof name === "string")
+      : [],
+  );
+  if (pr.state !== "OPEN") throw new Error("PR is no longer open; automatic merge stopped");
+  if (pr.headRefOid !== args.expectedHead) throw new Error("PR head changed; automatic merge stopped");
+  if (!labels.has(args.inProgressLabel)) {
+    throw new Error("required in-progress label is no longer present; automatic merge stopped");
+  }
+  if (labels.has(args.blockedLabel)) throw new Error("PR is blocked; automatic merge stopped");
+}
+
+/**
+ * A Worker PR is a draft until a review approves it, and GitHub both refuses to merge a draft and
+ * reports its merge state as DRAFT, so no merge gate can be evaluated before this step. The
+ * approved head therefore becomes ready inside the same guarded run that merges it, while the
+ * in-progress label stays in place: readiness is a step of the merge, not a handoff.
+ */
+function markReadyForMerge(args: MergeArgs, ops: MergeOps): void {
+  const pr = readMergeTargetPr(args, ops);
+  assertMergeTargetUnchanged(pr, args);
+  if (pr.isDraft === false) return;
+  if (pr.isDraft !== true) throw new Error("PR draft state is unknown; automatic merge stopped");
+  const ready = ops.run(["gh", "pr", "ready", args.pr, "-R", args.githubRepo], MAX_GUARDED_OPERATION_MS);
+  if (ready.status !== 0) throw new Error((ready.stderr || ready.stdout || "approved PR could not be marked ready").trim());
+}
+
+function assertCurrentPrEligible(args: MergeArgs, ops: MergeOps): void {
+  const pr = readMergeTargetPr(args, ops);
+  assertMergeTargetUnchanged(pr, args);
+  if (pr.isDraft !== false) throw new Error("PR is draft or its draft state is unknown; automatic merge stopped");
+  if (pr.mergeable !== "MERGEABLE") throw new Error("PR mergeability is not confirmed; automatic merge stopped");
+  if (pr.mergeStateStatus !== "CLEAN") throw new Error("PR merge state is not clean; automatic merge stopped");
+  assertChecksPassed(pr.statusCheckRollup);
+}
+
+function mergeReviewedPr(args: MergeArgs, ops: MergeOps = { run: defaultRun }): number {
+  const record = ops.loadAttemptRecord
+    ? ops.loadAttemptRecord(args)
+    : readAttemptRecord(canonicalAttemptLocation({ stateDir: args.stateDir, attemptRecord: args.attemptRecord }).runDir);
+  if (record.role !== "reviewer" || record.repository !== args.githubRepo
+    || record.target?.kind !== "pull-request" || Number(record.target?.number) !== Number(args.pr)
+    || String(record.inputRevision?.head || "").toLowerCase() !== args.expectedHead.toLowerCase()) {
+    throw new Error("reviewer attempt record does not match the automatic merge target");
+  }
+  const project = { repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt };
+  const operation = (enabled: EnabledProject & { automationLogin?: string }, recheck: () => void = () => {}) => {
+    const autoMergeEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
+    if (!autoMergeEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
+    assertMergeAuthorized(enabled);
+    assertReviewApproved(args, ops);
+    const assertVerification = ops.assertReviewVerification || assertRequiredVerificationApproved;
+    assertVerification(args, enabled);
+    assertReviewHistoryFresh(args, ops);
+    assertMergeTargetUnchanged(readMergeTargetPr(args, ops), args);
+    const revalidateMergeTarget = () => {
+      const automationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
+      const authenticatedResult = ops.run(["gh", "api", "user", "--jq", ".login"], MAX_GUARDED_OPERATION_MS);
+      if (authenticatedResult.status !== 0 || !automationLogin
+        || String(authenticatedResult.stdout || "").trim().toLowerCase() !== automationLogin) {
+        throw new Error("current authenticated GitHub identity does not match enablement authority; automatic merge stopped");
+      }
+      recheck();
+      const repositoryResult = ops.run(["gh", "repo", "view", args.githubRepo, "--json", "id,nameWithOwner"], MAX_GUARDED_OPERATION_MS);
+      let repository: Record<string, unknown> = {};
+      try { repository = JSON.parse(repositoryResult.stdout || "{}"); } catch {}
+      if (repositoryResult.status !== 0 || enabled.githubRepo !== args.githubRepo
+        || String(repository.id || "") !== enabled.githubRepositoryId
+        || String(repository.nameWithOwner || "") !== enabled.githubRepo) {
+        throw new Error("enabled repository identity changed; automatic merge stopped");
+      }
+      assertMergeTargetUnchanged(readMergeTargetPr(args, ops), args);
+    };
+    revalidateMergeTarget();
+    // GitHub reports a draft pull request as mergeStateStatus DRAFT, so the merge gate can only be
+    // evaluated once the approved head is ready. Readiness therefore precedes every gate below.
+    markReadyForMerge(args, ops);
+    assertCurrentPrEligible(args, ops);
+    revalidateMergeTarget();
+    const autoMergeStillEnabled = ops.isAutoMergeEnabled ? ops.isAutoMergeEnabled(args) : currentAutoMergeEnabled(args);
+    if (!autoMergeStillEnabled) throw new Error("autoMerge is not currently enabled; automatic merge stopped");
+    assertCurrentPrEligible(args, ops);
+    revalidateMergeTarget();
+    // Nothing external is observed between here and the merge: the accepted review history is the
+    // last GitHub read and the fixed contract, current policy and current-head success record are
+    // re-authenticated last, so a policy or history change during the reads above cannot merge on
+    // stale authorization.
+    assertReviewHistoryFresh(args, ops);
+    assertVerification(args, enabled);
+    const result = ops.run([
+      "gh", "pr", "merge", args.pr, "-R", args.githubRepo,
+      "--squash", "--delete-branch", "--match-head-commit", args.expectedHead,
+    ], MAX_GUARDED_OPERATION_MS);
+    if (result.status !== 0) throw new Error((result.stderr || result.stdout || "guarded PR merge failed").trim());
+    return 0;
+  };
+  return ops.withLock ? ops.withLock(project, operation) : withEnabledProjectLock(project, operation);
+}
+
+function parseArgs(argv: string[]): MergeArgs {
+  const values: Record<string, string> = {};
+  for (let index = 0; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!flag?.startsWith("--") || value === undefined) throw new Error("expected flag/value pairs");
+    values[flag.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase())] = value;
+  }
+  const enabledAt = Number(values.enabledAt);
+  if (!values.attemptRecord || !values.projectRepo || !values.githubRepo || !values.stateDir || !values.pr || !values.expectedHead || !values.reviewPromise || !values.historyObservation || !values.inProgressLabel || !values.blockedLabel || !Number.isFinite(enabledAt)) {
+    throw new Error("--attempt-record, --project-repo, --github-repo, --state-dir, --enabled-at, --pr, --expected-head, --review-promise, --history-observation, --in-progress-label, --blocked-label are required");
+  }
+  return {
+    attemptRecord: values.attemptRecord,
+    projectRepo: values.projectRepo,
+    githubRepo: values.githubRepo,
+    stateDir: values.stateDir,
+    enabledAt,
+    pr: values.pr,
+    expectedHead: values.expectedHead,
+    reviewPromise: values.reviewPromise,
+    inProgressLabel: values.inProgressLabel,
+    blockedLabel: values.blockedLabel,
+    historyObservation: values.historyObservation,
+  };
+}
+
+function main(): void {
+  try {
+    process.exitCode = mergeReviewedPr(parseArgs(process.argv.slice(2)));
+  } catch (error) {
+    console.error(`merge-reviewed-pr.cts: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 2;
+  }
+}
+
+if (require.main === module) main();
+module.exports = { currentAutoMergeEnabled, mergeReviewedPr, parseArgs };

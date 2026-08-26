@@ -3,6 +3,7 @@ import path from "node:path";
 import { hasUncommittedWork } from "./agent-scratch-area.cjs";
 import type { CodeIdentityDecision } from "./code-identity";
 import { automationStateKey, nextSlotAfter, type NormalizedProject, type AutomationStateEntry } from "./core";
+import { passesIssueLabelGate } from "./issue-eligibility.cjs";
 import { formatRequiredVerification } from "./required-verification";
 
 export type LabelLike = string | { name?: string | null };
@@ -82,7 +83,7 @@ export type StatusSnapshot = {
   issues: {
     eligible: StatusLineItem[];
     inProgress: StatusLineItem[];
-    blockedOrNeedsInfo: StatusLineItem[];
+    waitingForPerson: StatusLineItem[];
   };
   prs: {
     reviewTarget: StatusLineItem[];
@@ -226,7 +227,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
       warnings: input.warnings || [],
       codeIdentity: input.codeIdentity,
       automations: [],
-      issues: { eligible: [], inProgress: [], blockedOrNeedsInfo: [] },
+      issues: { eligible: [], inProgress: [], waitingForPerson: [] },
       prs: { reviewTarget: [], reviewing: [] },
       herdr: { workerWorktrees: [], cleanupCandidates: [], staleLeftovers: [] },
     };
@@ -247,21 +248,29 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
   });
 
   const issues = input.issues || [];
-  const eligible = issues.filter((issue) => {
-    const labels = labelsOf(issue);
-    return (
-      labels.has(project.labels.ready) &&
-      labels.has(project.labels.implement) &&
-      !labels.has(project.labels.inProgress) &&
-      !labels.has(project.labels.blocked) &&
-      !labels.has(project.labels.needsInfo) &&
-      !labels.has(project.labels.wontfix)
-    );
-  });
+  // The implementation request is the `agent:implement` label and the same five labels stop it, so this
+  // reuses the gate the launcher itself applies (issue-coordinator-decisions.cts) rather than restating
+  // it: two hand-written copies are what let `ready-for-agent` become a phantom requirement here. The
+  // gate's other conditions are not reproduced — it serves `agent:explore` requests first and skips an
+  // Issue whose dependencies are still open, neither of which status fetches.
+  const eligible = issues.filter((issue) =>
+    passesIssueLabelGate(issue, {
+      required: [project.labels.implement],
+      blocked: [
+        project.labels.inProgress,
+        project.labels.blocked,
+        project.labels.needsInfo,
+        project.labels.human,
+        project.labels.wontfix,
+      ],
+    }),
+  );
   const inProgress = issues.filter((issue) => labelsOf(issue).has(project.labels.inProgress));
-  const blockedOrNeedsInfo = issues.filter((issue) => {
+  // `ready-for-human` joins this line because it is the third way an Issue waits on a person; without it
+  // an Issue handed back to a human would be excluded from eligible and named nowhere in the report.
+  const waitingForPerson = issues.filter((issue) => {
     const labels = labelsOf(issue);
-    return labels.has(project.labels.blocked) || labels.has(project.labels.needsInfo);
+    return labels.has(project.labels.blocked) || labels.has(project.labels.needsInfo) || labels.has(project.labels.human);
   });
 
   const openPrs = input.openPrs || [];
@@ -287,7 +296,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
     issues: {
       eligible: eligible.map(lineItem),
       inProgress: inProgress.map(lineItem),
-      blockedOrNeedsInfo: blockedOrNeedsInfo.map(lineItem),
+      waitingForPerson: waitingForPerson.map(lineItem),
     },
     prs: {
       reviewTarget: reviewTarget.map(lineItem),
@@ -400,7 +409,7 @@ export function formatStatusReport(snapshot: StatusSnapshot): string {
     "Issues:",
     `- eligible: ${formatItems(snapshot.issues.eligible)}`,
     `- in-progress: ${formatItems(snapshot.issues.inProgress)}`,
-    `- blocked/needs-info: ${formatItems(snapshot.issues.blockedOrNeedsInfo)}`,
+    `- waiting for a person: ${formatItems(snapshot.issues.waitingForPerson)}`,
     "",
     "PRs:",
     `- review target: ${formatItems(snapshot.prs.reviewTarget)}`,

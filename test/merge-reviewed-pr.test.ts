@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { mergeReviewedPr } = require("../extensions/deadloop/automations/merge-reviewed-pr.ts");
+const { mergeReviewedPr } = require("../extensions/deadloop/automations/merge-reviewed-pr.cts");
 
 const expectedHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const eligiblePr = {
@@ -23,8 +23,11 @@ function runMerge(options: {
   enabled?: { githubRepositoryId: string; githubRepo: string; firstEnableAutoMerge: boolean; firstStartPending: boolean; autoMergeAcknowledged: boolean };
   pr?: Record<string, unknown>;
   review?: typeof approvedReview;
+  verificationError?: string;
+  verificationChangesAfterPrRead?: boolean;
+  onMerge?: () => void;
   repository?: { id: string; nameWithOwner: string };
-  finalRace?: "head" | "repository";
+  finalRace?: "head" | "repository" | "policy" | "history";
   onHistoryCheck?: (count: number) => void;
 } = {}) {
   const commands: string[][] = [];
@@ -32,6 +35,7 @@ function runMerge(options: {
   let configObservedInsideLock = false;
   let mutationObservedInsideLock = false;
   let autoMergeChecks = 0;
+  let verificationChecks = 0;
   let historyChecks = 0;
   let prReads = 0;
   let repositoryReads = 0;
@@ -85,7 +89,22 @@ function runMerge(options: {
           : configured;
       },
       validateReviewPromise: () => options.review || approvedReview,
-      assertReviewHistoryFresh: () => options.onHistoryCheck?.(++historyChecks),
+      assertReviewVerification: () => {
+        verificationChecks += 1;
+        if (options.verificationError) throw new Error(options.verificationError);
+        if (options.verificationChangesAfterPrRead && prReads > 0 && verificationChecks > 1) {
+          throw new Error("required verification policy changed");
+        }
+        if (options.finalRace === "policy" && repositoryReads >= 3) {
+          throw new Error("required verification blocked: stale_policy; current policy differs from the fixed attempt contract");
+        }
+      },
+      assertReviewHistoryFresh: () => {
+        if (options.finalRace === "history" && repositoryReads >= 3) {
+          throw new Error("PR review history changed; automatic merge stopped");
+        }
+        options.onHistoryCheck?.(++historyChecks);
+      },
       run: (args: string[]) => {
         commands.push(args);
         if (args[1] === "repo" && args[2] === "view") {
@@ -109,6 +128,7 @@ function runMerge(options: {
           return { status: 0, stdout: JSON.stringify(finalPr), stderr: "" };
         }
         if (args[1] === "api" && args[2] === "user") return { status: 0, stdout: "deadloop-bot\n", stderr: "" };
+        options.onMerge?.();
         mutationObservedInsideLock = lockHeld;
         const status = options.mergeStatus ?? 0;
         return { status, stdout: "", stderr: status ? "head commit changed" : "" };
@@ -148,6 +168,36 @@ describe("reviewed PR merge", () => {
     expect(() => runMerge({ autoMergeEnabled: false })).toThrow("autoMerge is not currently enabled");
   });
 
+  it("does not merge when required-verification policy changes during the final PR read", () => {
+    let merges = 0;
+    try {
+      runMerge({ verificationChangesAfterPrRead: true, onMerge: () => { merges += 1; } });
+    } catch {
+      // The changed policy must stop the guarded merge.
+    }
+    expect(merges).toBe(0);
+  });
+
+  it("does not merge when the trusted policy changes during the final revalidation", () => {
+    let merges = 0;
+    try {
+      runMerge({ finalRace: "policy", onMerge: () => { merges += 1; } });
+    } catch {
+      // The changed policy must stop the guarded merge.
+    }
+    expect(merges).toBe(0);
+  });
+
+  it("does not merge when the accepted review history changes during the final revalidation", () => {
+    let merges = 0;
+    try {
+      runMerge({ finalRace: "history", onMerge: () => { merges += 1; } });
+    } catch {
+      // The changed history must stop the guarded merge.
+    }
+    expect(merges).toBe(0);
+  });
+
   it("rejects auto-merge during the first safe start", () => {
     expect(() => runMerge({ enabled: { githubRepositoryId: "R_repo", githubRepo: "owner/repo", firstEnableAutoMerge: true, firstStartPending: true, autoMergeAcknowledged: false } })).toThrow("first safe start");
   });
@@ -162,6 +212,10 @@ describe("reviewed PR merge", () => {
 
   it("fails closed without a validated reviewer approval", () => {
     expect(() => runMerge({ review: { status: "none" } as typeof approvedReview })).toThrow("reviewer approval");
+  });
+
+  it("fails closed when current-head required verification is missing", () => {
+    expect(() => runMerge({ verificationError: "required verification passed record is missing" })).toThrow("record is missing");
   });
 
   it("fails closed when reviewer approval targets another head", () => {

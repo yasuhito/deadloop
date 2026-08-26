@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   deliverPendingDriverHandoff,
   isPendingIssueHandoffEligible,
+  type MonitorHandoffDisposition,
   runScheduledAutomation,
 } from "../src/automation-runner";
 import { normalizeProject, type AutomationFileResolution } from "../src/core";
@@ -14,6 +15,69 @@ function foundFile(requested: string | undefined): AutomationFileResolution {
 
 function executionSupply() {
   return { codeIdentity: "a".repeat(40), lockHash: "b".repeat(64), packageRoot: "/snapshot", automationDir: "/snapshot/automations", dependencyRoot: "/dependencies" };
+}
+
+function branchUpdateMonitorHandoff() {
+  return {
+    kind: "branch-update",
+    input: {
+      automationDir: "/automation",
+      promiseFile: "/runs/one/promise.json",
+      attemptRecordFile: "/runs/one/attempt.json",
+      actorName: "branch-update worker",
+      projectId: "demo",
+      repoPath: "/repo",
+      githubRepo: "owner/repo",
+      stateDir: "/state",
+      enabledAt: 1,
+      prNumber: 12,
+      expectedHeadOid: "a".repeat(40),
+      expectedBaseOid: "b".repeat(40),
+      branch: "feature",
+      reviewLabel: "agent:review",
+      implementLabel: "agent:implement",
+      updateBranchLabel: "agent:update-branch",
+      inProgressLabel: "agent:in-progress",
+      blockedLabel: "agent:blocked",
+    },
+  };
+}
+
+function monitorDeliveryFixture(kind = "branch-update") {
+  const handoff = branchUpdateMonitorHandoff();
+  handoff.kind = kind;
+  const entry: Record<string, unknown> = {
+    pendingDriverHandoff: {
+      action: "needs_llm",
+      monitorHandoff: handoff,
+      prompt: "monitor prompt",
+    },
+  };
+  const state = { automations: { auto: entry } };
+  const sent: string[] = [];
+  const applied: string[] = [];
+  let now = 0;
+  let disposition: MonitorHandoffDisposition = { action: "continue_legacy_monitor" };
+  return {
+    entry,
+    state,
+    sent,
+    applied,
+    deps: {
+      enabledAt: () => 1,
+      isEnabled: () => true,
+      monitorHandoffDisposition: () => disposition,
+      applyMonitorHandoffDisposition: (_handoff: Record<string, unknown>, decision: Record<string, unknown>) => {
+        applied.push(String(decision.action));
+        return true;
+      },
+      now: () => now,
+      saveState: () => undefined,
+      sendUserMessage: (prompt: string) => sent.push(prompt),
+    },
+    setNow: (value: number) => { now = value; },
+    setDisposition: (value: MonitorHandoffDisposition) => { disposition = value; },
+  };
 }
 
 async function exerciseDriver(
@@ -183,6 +247,107 @@ describe("deterministic automation driver runner", () => {
     });
 
     expect({ sent, pending: entry.pendingDriverHandoff }).toEqual({ sent: ["driver prompt"], pending: undefined });
+  });
+
+  it("retains a queued monitor handoff until the attempt settles", () => {
+    const fixture = monitorDeliveryFixture();
+
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+
+    expect(fixture.entry.pendingDriverHandoff).toMatchObject({
+      monitorHandoff: { kind: "branch-update" },
+    });
+  });
+
+  it("redelivers a retained monitor handoff after the retry interval", () => {
+    const fixture = monitorDeliveryFixture();
+
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    fixture.setNow(60_000);
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+
+    expect(fixture.sent).toHaveLength(2);
+  });
+
+  it("does not redeliver a retained monitor handoff before the retry interval", () => {
+    const fixture = monitorDeliveryFixture();
+
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    fixture.setNow(59_999);
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+
+    expect(fixture.sent).toHaveLength(1);
+  });
+
+  it("clears a retained monitor handoff after the attempt settles", () => {
+    const fixture = monitorDeliveryFixture();
+
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    fixture.setDisposition({ action: "settled" });
+    fixture.setNow(60_000);
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+
+    expect(fixture.entry.pendingDriverHandoff).toBeUndefined();
+  });
+
+  it.each(["issue", "explorer", "reviewer", "branch-update", "repair"])("never redelivers a terminal %s handoff without a report", (kind) => {
+    const fixture = monitorDeliveryFixture(kind);
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    fixture.setDisposition({ action: "stop", reason: "missing_completion_report" });
+
+    for (let tick = 1; tick <= 500; tick += 1) {
+      fixture.setNow(tick * 60_000);
+      deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    }
+
+    expect(fixture.sent).toHaveLength(1);
+  });
+
+  it("applies a terminal stop once", () => {
+    const fixture = monitorDeliveryFixture();
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    fixture.setDisposition({ action: "stop", reason: "missing_completion_report" });
+
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+
+    expect(fixture.applied).toEqual(["stop"]);
+  });
+
+  it("preserves ambiguous runtime evidence without applying a stop", () => {
+    const fixture = monitorDeliveryFixture();
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    fixture.setDisposition({ action: "preserve", reason: "runtime_ambiguous" });
+
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+
+    expect({ applied: fixture.applied, pending: fixture.entry.pendingDriverHandoff !== undefined }).toEqual({
+      applied: [],
+      pending: true,
+    });
+  });
+
+  it("retains one handoff while waiting for model availability", () => {
+    const fixture = monitorDeliveryFixture();
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    fixture.setDisposition({ action: "wait_for_model", reason: "model_availability" });
+
+    for (let tick = 1; tick <= 500; tick += 1) {
+      fixture.setNow(tick * 60_000);
+      deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    }
+
+    expect(fixture.entry.pendingDriverHandoff).toBeDefined();
+  });
+  it("posts the model availability transition once", () => {
+    const fixture = monitorDeliveryFixture();
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    fixture.setDisposition({ action: "wait_for_model", reason: "model_availability" });
+
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+    deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
+
+    expect(fixture.applied).toEqual(["wait_for_model"]);
   });
 
   it.each(["reviewer", "branch-update", "repair"])("discards a pre-disable %s monitor handoff for deterministic re-evaluation", (kind) => {

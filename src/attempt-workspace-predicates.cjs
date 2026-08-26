@@ -3,7 +3,7 @@ function target(a,b){return a?.kind===b?.kind&&a?.number===b?.number;}
 function bound(o,r){return o.repository===r.repository&&target(o.target,r.target);}
 function seteq(a,b){return a.length===b.length&&[...a].sort().every((v,i)=>v===[...b].sort()[i]);}
 function findings(a,b){return a.length===b.length&&a.every((v,i)=>JSON.stringify(v)===JSON.stringify(b[i]));}
-/** Mirrors decideReviewTransition in ./reviewer-outcome-contract.ts. */
+/** Mirrors decideReviewTransition in ./reviewer-outcome-contract.cts. */
 const REPAIR_PROGRESS=new Set(["none","all_resolved"]);
 function transition(res){return res.outcome==="approved"?"approve":res.outcome==="changes_requested"&&REPAIR_PROGRESS.has(res.priorRequiredFindings)?"repair":"human_required";}
 function marker(m,r,out,output){return !!m&&m.attemptId===r.attemptId&&m.role===r.role&&m.repository===r.repository&&target(m.target,r.target)&&sha(m.inputHead,r.inputRevision.head)&&String(m.inputBase||"").toLowerCase()===String(r.inputRevision.base||"").toLowerCase()&&m.outcome===out&&(output===undefined?m.outputRevision===undefined:sha(m.outputRevision,output));}
