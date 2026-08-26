@@ -5,9 +5,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { deliverPendingDriverHandoff } from "../src/automation-runner";
-import type { MonitorHandoffDisposition } from "../src/monitor-handoff-types";
-const { applyTerminalMonitorDisposition, currentDisposition } = require("../extensions/deadloop/automations/contain-terminal-monitor.cts");
+const { applyTerminalMonitorDisposition } = require("../extensions/deadloop/automations/contain-terminal-monitor.cts");
 const { readAttemptRecord } = require("../src/attempt-lifecycle-runtime.cjs");
+const { observeAttemptMonitoringDirective } = require("../src/monitor-handoff-observation.cts");
 
 const roots: string[] = [];
 afterEach(() => {
@@ -61,8 +61,9 @@ function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-requ
   };
   const comments: Record<string, unknown>[] = [];
   let open = true;
+  let agentStatus = "done";
   const runner = {
-    listAgents: () => open ? [{ name: "owner", paneId: "pane-1", cwd: worktreePath, status: "done" }] : [],
+    listAgents: () => open ? [{ name: "owner", paneId: "pane-1", cwd: worktreePath, status: agentStatus }] : [],
     listWorkspaces: () => open ? [{ workspaceId: "workspace-1", worktreePath, tabCount: 1, paneCount: 1 }] : [],
     listWorktrees: () => [{ path: worktreePath }],
     closeWorkspace: () => { open = false; },
@@ -141,7 +142,7 @@ function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-requ
     github,
     withEnabledProjectLock: (_project: unknown, operation: (enabled: unknown, recheck: () => void) => boolean) => operation({}, () => undefined),
   };
-  return { attemptRecordFile, comments, dependencies, input, runner, target };
+  return { attemptRecordFile, comments, dependencies, input, runner, setAgentStatus: (status: string) => { agentStatus = status; }, target };
 }
 
 describe("terminal monitor transition", () => {
@@ -178,6 +179,21 @@ describe("terminal monitor transition", () => {
     });
   });
 
+  it("stops working PR activity at the configured active-work limit", () => {
+    const state = fixture("", "pull-request");
+    state.setAgentStatus("working");
+    state.input.disposition = {
+      action: "stop",
+      reason: "active_work_timeout",
+      accounting: { activeMilliseconds: 86_400_000 },
+      maxActiveMilliseconds: 86_400_000,
+    } as any;
+
+    applyTerminalMonitorDisposition(state.input, state.dependencies);
+
+    expect(readAttemptRecord(path.dirname(state.attemptRecordFile)).authorityRelease.reason).toBe("runtime_timeout");
+  });
+
   it("releases an attempt after interruption immediately following workspace close", () => {
     const state = fixture();
     const closeWorkspace = state.runner.closeWorkspace;
@@ -211,7 +227,7 @@ describe("terminal monitor transition", () => {
     expect(state.comments).toHaveLength(1);
   });
 
-  it("keeps the overnight PR #331 sequence to one monitor turn and one comment across hundreds of ticks", () => {
+  it("keeps the overnight PR #331 sequence free of Automation-host model turns across hundreds of ticks", () => {
     const state = fixture("terminal failure", "pull-request");
     const entry: Record<string, unknown> = {
       pendingDriverHandoff: {
@@ -226,18 +242,19 @@ describe("terminal monitor transition", () => {
     const dependencies = {
       enabledAt: () => 1,
       isEnabled: () => true,
-      monitorHandoffDisposition: () => {
-        const record = {
-          ...readAttemptRecord(path.dirname(state.attemptRecordFile)),
-          runDir: path.dirname(state.attemptRecordFile),
-        };
-        return currentDisposition(state.dependencies.commandRunner, state.runner, record);
+      observeAttemptMonitoring: (_handoff: Record<string, unknown>, accounting: any, observedAt: number) => {
+        const record = readAttemptRecord(path.dirname(state.attemptRecordFile));
+        return observeAttemptMonitoringDirective(record, accounting, observedAt, 86_400_000, {
+          runner: state.runner,
+          readTerminalEvidence: () => "terminal failure",
+        });
       },
-      applyMonitorHandoffDisposition: (handoff: Record<string, unknown>, disposition: MonitorHandoffDisposition) =>
-        applyTerminalMonitorDisposition(
-          { handoff, disposition, project: state.input.project },
+      applyAttemptMonitoring: (handoff: Record<string, unknown>) => ({
+        applied: applyTerminalMonitorDisposition(
+          { handoff, disposition: { action: "stop", reason: "missing_completion_report" }, project: state.input.project },
           state.dependencies,
         ),
+      }),
       now: () => now,
       saveState: () => undefined,
       sendUserMessage: (prompt: string) => monitorTurns.push(prompt),
@@ -248,9 +265,6 @@ describe("terminal monitor transition", () => {
       deliverPendingDriverHandoff(entry, automationState, "PR reviewer", dependencies);
     }
 
-    expect({ comments: state.comments.length, monitorTurns: monitorTurns.length }).toEqual({
-      comments: 1,
-      monitorTurns: 1,
-    });
+    expect({ comments: state.comments.length, monitorTurns }).toEqual({ comments: 1, monitorTurns: [] });
   });
 });

@@ -29,7 +29,7 @@ const {
   isPrRequiredVerificationStopComment,
   planPrRequiredVerificationStop,
   requiredVerificationStopDiagnosis,
-} = require("../../../src/issue-required-verification-stop.ts");
+} = require("../../../src/issue-required-verification-stop.cts");
 const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
@@ -74,7 +74,8 @@ function envConfig(args: JsonObject = {}) {
     githubRepo: configValue(args, "githubRepo", process.env.DEADLOOP_GITHUB_REPO, ""),
     baseBranch: configValue(args, "baseBranch", process.env.DEADLOOP_BASE_BRANCH, "origin/main"),
     requiredVerification: args.requiredVerification
-      || (process.env.DEADLOOP_REQUIRED_VERIFICATION ? JSON.parse(process.env.DEADLOOP_REQUIRED_VERIFICATION) : undefined),
+      ? typeof args.requiredVerification === "string" ? JSON.parse(args.requiredVerification) : args.requiredVerification
+      : process.env.DEADLOOP_REQUIRED_VERIFICATION ? JSON.parse(process.env.DEADLOOP_REQUIRED_VERIFICATION) : undefined,
     enabledAt: Number(configValue(args, "enabledAt", process.env.DEADLOOP_ENABLED_AT, "")),
     stateDir: configValue(
       args,

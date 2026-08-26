@@ -3,9 +3,10 @@ const fs = require("node:fs") as typeof import("node:fs");
 const { validateCompletionReportBinding } = require("./attempt-lifecycle-runtime.cjs");
 const { observeAttemptTurn } = require("./attempt-runtime-observation.cts");
 const { decideMonitorContainment } = require("./monitor-handoff-containment.cts");
+const { decideAttemptMonitoring } = require("./attempt-monitoring.cts");
 
 import type { AttemptAgentRunner } from "./attempt-runtime-observation-types";
-import type { MonitorHandoffDisposition } from "./monitor-handoff-types";
+import type { ActiveWorkAccounting, AttemptMonitoringDirective, MonitorHandoffDisposition } from "./monitor-handoff-types";
 
 type JsonObject = Record<string, any>;
 
@@ -33,6 +34,37 @@ function reportObservation(record: JsonObject): { kind: "missing" | "valid" | "i
   }
 }
 
+function runtimeObservation(
+  record: JsonObject,
+  dependencies: MonitorObservationDependencies,
+): JsonObject {
+  try {
+    const runtime = observeAttemptTurn(dependencies.runner, record);
+    return runtime.kind === "terminal"
+      ? { ...runtime, terminalEvidence: dependencies.readTerminalEvidence(record) }
+      : runtime;
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+function observeAttemptMonitoringDirective(
+  record: JsonObject,
+  accounting: ActiveWorkAccounting,
+  now: number,
+  maxActiveMilliseconds: number,
+  dependencies: MonitorObservationDependencies,
+): AttemptMonitoringDirective {
+  return decideAttemptMonitoring({
+    attempt: record,
+    report: reportObservation(record),
+    runtime: runtimeObservation(record, dependencies),
+    accounting,
+    maxActiveMilliseconds,
+    now: new Date(now).toISOString(),
+  });
+}
+
 function observeMonitorHandoffDisposition(
   record: JsonObject,
   handoffKind: unknown,
@@ -42,16 +74,7 @@ function observeMonitorHandoffDisposition(
   if (handoffKind === "branch-update" && report.kind === "valid" && report.value?.status === "blocked") {
     return { action: "settled" };
   }
-  let runtime;
-  try {
-    runtime = observeAttemptTurn(dependencies.runner, record);
-    if (runtime.kind === "terminal") {
-      runtime = { ...runtime, terminalEvidence: dependencies.readTerminalEvidence(record) };
-    }
-  } catch {
-    runtime = { kind: "unreachable" };
-  }
-  return decideMonitorContainment({ record, report, runtime });
+  return decideMonitorContainment({ record, report, runtime: runtimeObservation(record, dependencies) });
 }
 
-module.exports = { observeMonitorHandoffDisposition, reportObservation, terminalEvidenceArgs };
+module.exports = { observeAttemptMonitoringDirective, observeMonitorHandoffDisposition, reportObservation, runtimeObservation, terminalEvidenceArgs };
