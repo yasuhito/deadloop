@@ -10,7 +10,7 @@ type ActiveWorkAccounting = {
 
 type CompletionReportObservation =
   | { kind: "missing" }
-  | { kind: "invalid" }
+  | { kind: "invalid"; cause?: "storage_exhaustion" }
   | { kind: "valid"; value: JsonObject };
 
 type ExecutionRuntimeObservation =
@@ -32,7 +32,7 @@ type AttemptMonitoringDirective =
   | { action: "settled"; accounting: ActiveWorkAccounting }
   | { action: "working"; accounting: ActiveWorkAccounting }
   | { action: "completion"; accounting: ActiveWorkAccounting; report: JsonObject }
-  | { action: "missing_report"; accounting: ActiveWorkAccounting; reason: "terminal_without_report" | "invalid_completion_report" | "model_availability"; providerRetryAt?: string | null }
+  | { action: "missing_report"; accounting: ActiveWorkAccounting; reason: "terminal_without_report" | "invalid_completion_report" | "storage_exhaustion" | "model_availability"; providerRetryAt?: string | null }
   | { action: "timeout"; accounting: ActiveWorkAccounting; reason: "active_work_limit" }
   | { action: "ambiguity"; accounting: ActiveWorkAccounting; reason: "runtime_ambiguous" | "runtime_unreachable" };
 
@@ -74,7 +74,11 @@ function decideAttemptMonitoring(input: AttemptMonitoringInput): AttemptMonitori
     };
   }
   if (input.report.kind === "invalid") {
-    return { action: "missing_report", accounting, reason: "invalid_completion_report" };
+    return {
+      action: "missing_report",
+      accounting,
+      reason: input.report.cause === "storage_exhaustion" ? "storage_exhaustion" : "invalid_completion_report",
+    };
   }
   if (input.runtime.kind === "terminal" && isModelAvailabilityRejection(input.runtime.terminalEvidence)) {
     return {

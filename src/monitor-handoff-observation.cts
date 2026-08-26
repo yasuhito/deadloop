@@ -4,6 +4,7 @@ const { validateCompletionReportBinding } = require("./attempt-lifecycle-runtime
 const { observeAttemptTurn } = require("./attempt-runtime-observation.cts");
 const { decideMonitorContainment } = require("./monitor-handoff-containment.cts");
 const { decideAttemptMonitoring } = require("./attempt-monitoring.cts");
+const { isStorageExhaustionError } = require("./storage-exhaustion.cjs");
 
 import type { AttemptAgentRunner } from "./attempt-runtime-observation-types";
 import type { ActiveWorkAccounting, AttemptMonitoringDirective, MonitorHandoffDisposition } from "./monitor-handoff-types";
@@ -22,15 +23,16 @@ function terminalEvidenceArgs(record: JsonObject): string[] {
   ];
 }
 
-function reportObservation(record: JsonObject): { kind: "missing" | "valid" | "invalid"; value?: JsonObject } {
+/** The report file itself is evidence; only its own read failure can name a formal cause. */
+function reportObservation(record: JsonObject): { kind: "missing" | "valid" | "invalid"; value?: JsonObject; cause?: "storage_exhaustion" } {
   try {
     const value = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
     validateCompletionReportBinding(record, value);
     return { kind: "valid", value };
   } catch (error) {
-    return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
-      ? { kind: "missing" }
-      : { kind: "invalid" };
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return { kind: "missing" };
+    if (isStorageExhaustionError(error)) return { kind: "invalid", cause: "storage_exhaustion" };
+    return { kind: "invalid" };
   }
 }
 
