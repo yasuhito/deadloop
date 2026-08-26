@@ -104,6 +104,7 @@ Run these commands from the Pi session in the target repository:
 | --- | --- |
 | `/deadloop-enable` | Run fast prerequisite checks and enable new deadloop work. |
 | `/deadloop-disable` | Stop new work from starting; running attempts may finish. |
+| `/deadloop-run-once` | Run exactly one normal scheduler tick while scheduling stays disabled; no later tick is scheduled. |
 | `/deadloop-status` | Show whether deadloop is enabled and summarize its current state. |
 | `/deadloop-doctor` | Diagnose configuration and retained attempts without changing them. |
 | `/deadloop-abandon-attempt <attempt-id>` | Safely abandon a retained attempt only when doctor presents this command. |

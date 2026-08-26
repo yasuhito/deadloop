@@ -318,7 +318,7 @@ export function deliverPendingDriverHandoff(
   }
 }
 
-function isAutomationFailureResult(result: string): boolean {
+export function isAutomationFailureResult(result: string): boolean {
   return (
     result === "precheck_error" ||
     result === "send_error" ||

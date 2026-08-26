@@ -4,7 +4,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { reconcileAndSelectDueAutomation } from "../../src/automation-scheduler";
 import { decideCodeIdentity, observeGitCodeIdentity, type CodeIdentityDecision } from "../../src/code-identity";
 import { ensureCodeSnapshot } from "../../src/code-snapshot";
 import { collectCodeSnapshotInventory } from "../../src/code-snapshot-inventory";
@@ -29,11 +28,14 @@ import { herdrServerIsUnreachableWithSupportedClient, runHerdrPreflight } from "
 import { discoverVerificationCandidates } from "../../src/required-verification";
 import { buildStatusSnapshot, formatStatusReport, type RepositoryEnablement } from "../../src/status";
 import { readClaudeConfig } from "../../src/agent-trust.cjs";
+import { isPendingIssueHandoffEligible } from "../../src/automation-runner";
 import {
-  deliverPendingDriverHandoff,
-  isPendingIssueHandoffEligible,
-  runScheduledAutomation,
-} from "../../src/automation-runner";
+  executeSchedulerTick,
+  formatOneShotTickReport,
+  planOneShotTick,
+  type SchedulerTickOutcome,
+} from "../../src/scheduler-tick";
+const { clearOneShotExecution, issueOneShotExecution, readValidOneShotExecution } = require("../../src/one-shot-execution.cjs");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../src/agent-scratch-area.cjs");
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.cts");
 const { observeAttemptLiveness } = require("../../src/attempt-runtime-observation.cts");
@@ -1384,8 +1386,15 @@ function revalidatePendingIssueHandoff(handoff) {
   }
 }
 
+// A one-shot tick has no persisted enabled record; while its scoped execution authorization is
+// valid it supplies the same Automation host identity for terminal transitions.
+function automationHostIdentity(project): { automationLogin?: string } | null {
+  return findEnabledProject(loadEnablementState(), project)
+    ?? readValidOneShotExecution({ stateDir: STATE_DIR, repoPath: project.repoPath, githubRepo: project.githubRepo });
+}
+
 function applyMonitorHandoffDisposition(handoff, disposition, project) {
-  const enabled = findEnabledProject(loadEnablementState(), project);
+  const enabled = automationHostIdentity(project);
   if (!enabled?.automationLogin) throw new Error("terminal monitor transition requires the authorized Automation host login");
   return applyTerminalMonitorDisposition({
     handoff,
@@ -1477,10 +1486,6 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
   };
 }
 
-async function runAutomation(pi, ctx, project, automation, dueSlot, state, deps = automationRunnerDeps(pi, ctx, project)) {
-  await runScheduledAutomation(project, automation, dueSlot, state, deps);
-}
-
 function registerReportCommand(pi, name, description, customType, buildReport) {
   pi.registerCommand(name, {
     description,
@@ -1506,7 +1511,7 @@ async function reconcilePrWorkAuthority(pi, project): Promise<{ reconciled: bool
     return await pi.testing.reconcilePrWorkAuthority(project);
   }
   const labels = projectLabels(project);
-  const enabled = findEnabledProject(loadEnablementState(), project);
+  const enabled = automationHostIdentity(project);
   if (!enabled?.automationLogin) return { reconciled: false, reason: "the enabled record names no Automation host login" };
   const result = await execJson(pi, "node", [
     path.join(AUTOMATION_DIR, "reconcile-pr-work-authority.cts"),
@@ -1800,6 +1805,80 @@ export default function (pi) {
     },
   });
 
+  pi.registerCommand("deadloop-run-once", {
+    description: "Run exactly one normal scheduler tick while continuous scheduling stays disabled",
+    handler: async (_args, ctx) => {
+      const report = (content: string) => displayCommandResult(pi, ctx, "deadloop-run-once", content);
+      let execution = null;
+      let lock = null;
+      try {
+        assertCodeIdentityCurrent();
+        if (process.env.DEADLOOP === "off" || process.env.DEADLOOP_AUTOMATIONS === "off") {
+          throw new Error("one-shot ticks are suppressed by the DEADLOOP environment overrides");
+        }
+        preflight();
+        (pi.testing?.schedulerLockCapabilityPreflight || preflightSchedulerLockCapability)();
+        const projectsResult = loadProjectsResult(ctx.cwd, { includeDisabled: true });
+        if (!projectsResult.ok) throw new Error(projectsResult.reason);
+        const project = activeProject(ctx.cwd, projectsResult.projects);
+        if (!project) throw new Error("no deadloop project configuration matches the current repository checkout");
+
+        // Two scheduling authorities must never coexist: persisted enablement must be off, and the
+        // same repository-ID-scoped nonblocking lock the continuous scheduler uses must be free.
+        lock = acquireSchedulerLock(project);
+        const plan = planOneShotTick({
+          persistedEnabledProject: findEnabledProject(loadEnablementState(), project),
+          lockAcquisition: lock,
+        });
+        if (plan.ok === false) throw new Error(plan.reason);
+
+        // The scoped execution authorization names the Automation host identity for this one call.
+        // It never sets persistent enablement and is removed again when the command finishes.
+        const automationLogin = (await commandExec(pi, "gh", ["api", "user", "--jq", ".login"])).stdout.trim().toLowerCase();
+        if (!automationLogin) throw new Error("authenticated GitHub login is required for a one-shot tick");
+        const repoView = JSON.parse((await commandExec(pi, "gh", ["repo", "view", project.githubRepo, "--json", "id,nameWithOwner"])).stdout || "{}");
+        if (repoView.nameWithOwner !== project.githubRepo || !repoView.id) throw new Error("GitHub repository identity could not be resolved for the one-shot tick");
+        const enabledAt = Date.now();
+        execution = issueOneShotExecution({
+          stateDir: STATE_DIR,
+          repoPath: project.repoPath,
+          githubRepo: project.githubRepo,
+          githubRepositoryId: String(repoView.id),
+          automationLogin,
+          enabledAt,
+        });
+        const oneShotGuard = () => Boolean(
+          execution
+          && readValidOneShotExecution({ stateDir: STATE_DIR, repoPath: project.repoPath, githubRepo: project.githubRepo, enabledAt }),
+        );
+        const oneShotProject = { ...project, enabledAt };
+
+        setLooperStatus(ctx, `${EXTENSION_NAME}: running one scheduler tick`);
+        const outcome: SchedulerTickOutcome = await executeSchedulerTick(oneShotProject, {
+          guard: oneShotGuard,
+          codeIdentityAllowsTick: () => codeIdentityAllowsAutomation(ctx),
+          reconcileWorkAuthority: async () => unreconciledAuthorityStatus(await reconcilePrWorkAuthority(pi, oneShotProject)),
+          reconcileRetainedAttempts: () => reconcilePersistedAttemptJournals(pi, oneShotProject),
+          loadState,
+          updateStatus: (state) => updateStatus(ctx, oneShotProject, state),
+          now: () => Date.now(),
+          buildRunnerDeps: () => ({
+            ...automationRunnerDeps(pi, ctx, oneShotProject, oneShotGuard),
+            // Mutation gates follow the scoped authority instead of persisted enablement.
+            isEnabled: oneShotGuard,
+          }),
+        });
+        report(formatOneShotTickReport(outcome));
+      } catch (error) {
+        report(`one-shot tick failed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        clearOneShotExecution(STATE_DIR);
+        if (lock?.acquired && lock.lockPath && lock.token) releaseSchedulerLock(lock.lockPath, lock.token);
+        try { setLooperStatus(ctx, undefined); } catch {}
+      }
+    },
+  });
+
   let timer = null;
   let running = false;
   let startupTick = null;
@@ -1863,48 +1942,26 @@ export default function (pi) {
 
     running = true;
     let completedSafely = false;
+    const guard = () => active === schedulerRun && ownsLock && !stopRequested;
     try {
-      // GitHub work authority is reconciled before local cleanup, pending handoffs, or candidate selection.
-      const authorityStatus = unreconciledAuthorityStatus(await reconcilePrWorkAuthority(pi, project));
-      if (authorityStatus) {
-        setLooperStatus(ctx, `skipped: ${authorityStatus}`);
-        completedSafely = true;
-        return;
-      }
-      // Restart reconciliation is idempotent and runs before pending handoffs or candidate selection.
-      const safeToSchedule = await reconcilePersistedAttemptJournals(pi, project);
-      await pi.testing?.afterTickReconciliation?.();
-      if (!codeIdentityAllowsAutomation(ctx)) return;
-      if (!safeToSchedule) {
-        setLooperStatus(ctx, "skipped: a prepared GitHub claim requires operator reconciliation");
-        completedSafely = true;
-        return;
-      }
-      const state = loadState();
-      updateStatus(ctx, project, state);
-
-      const deps = automationRunnerDeps(pi, ctx, project, () => active === schedulerRun && ownsLock && !stopRequested);
-      for (const automation of project.automations) {
-        const entry = state.automations[automationStateKey(project, automation)] || {};
-        state.automations[automationStateKey(project, automation)] = entry;
-        if (!codeIdentityAllowsAutomation(ctx)) return;
-        if (deliverPendingDriverHandoff(entry, state, automation.name, deps)) {
-          if (active === schedulerRun && ownsLock && !stopRequested) deps.saveState(state);
-          completedSafely = true;
-          return;
-        }
-      }
-
-      if (!codeIdentityAllowsAutomation(ctx)) return;
-      const selected = reconcileAndSelectDueAutomation(project, state.automations, Date.now());
-      if (selected) {
-        if (!codeIdentityAllowsAutomation(ctx)) return;
-        await runAutomation(pi, ctx, project, selected.automation, selected.dueSlot, state, deps);
-        if (active === schedulerRun && ownsLock && !stopRequested) updateStatus(ctx, project, state);
-      }
-
-      if (active === schedulerRun && ownsLock && !stopRequested) deps.saveState(state);
-      completedSafely = true;
+      // GitHub work authority is reconciled before local cleanup, pending handoffs, or candidate selection;
+      // restart reconciliation is idempotent and runs before pending handoffs or candidate selection.
+      const outcome = await executeSchedulerTick(project, {
+        guard,
+        codeIdentityAllowsTick: () => codeIdentityAllowsAutomation(ctx),
+        reconcileWorkAuthority: async () => {
+          const authorityStatus = unreconciledAuthorityStatus(await reconcilePrWorkAuthority(pi, project));
+          if (authorityStatus) setLooperStatus(ctx, `skipped: ${authorityStatus}`);
+          return authorityStatus;
+        },
+        reconcileRetainedAttempts: () => reconcilePersistedAttemptJournals(pi, project),
+        afterReconciliation: () => pi.testing?.afterTickReconciliation?.(),
+        loadState,
+        updateStatus: (state) => updateStatus(ctx, project, state),
+        now: () => Date.now(),
+        buildRunnerDeps: () => automationRunnerDeps(pi, ctx, project, guard),
+      });
+      completedSafely = outcome.status !== "stopped";
     } finally {
       try {
         if (completedSafely) await completeFirstSchedulerStart(project, assertCodeIdentityCurrent, loadedCodeIdentityForWrite());
