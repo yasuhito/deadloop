@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { hasUncommittedWork } from "./agent-scratch-area.cjs";
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
+import type { CodeSnapshotInventory } from "./code-snapshot-inventory";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
 const { isPrRequiredVerificationStopComment, isRequiredVerificationStopComment } = require("./issue-required-verification-stop.cts") as {
   isPrRequiredVerificationStopComment(body: unknown): boolean;
@@ -86,6 +87,10 @@ export type DoctorInput = {
   retainedClaims?: Array<{ kind: "issue" | "pull-request"; number: number }>;
   retainedClaimOwnershipAmbiguous?: boolean;
   verificationCandidates?: VerificationCandidateDiscovery;
+  lastWriterCodeIdentity?: string | null;
+  codeSnapshots?: CodeSnapshotInventory | null;
+  deployedCodeIdentity?: string | null;
+  loadedCodeIdentity?: string | null;
 };
 
 export type DoctorFindingType =
@@ -100,7 +105,8 @@ export type DoctorFindingType =
   | "coordinator_stalled"
   | "workspace_trust"
   | "retained_attempt_workspace"
-  | "herdr_unsupported";
+  | "herdr_unsupported"
+  | "code_snapshot_inventory";
 
 export type DoctorFinding = {
   id: string;
@@ -151,6 +157,7 @@ export type DoctorSnapshot = {
   warnings: string[];
   findings: DoctorFinding[];
   verificationCandidates?: VerificationCandidateDiscovery;
+  lastWriterCodeIdentity?: string | null;
 };
 
 function isPathInside(child: string, parent: string): boolean {
@@ -592,6 +599,57 @@ function buildAutomationFindings(
   return findings;
 }
 
+// ADR 0017 keeps old generations until a person removes them: proving that no session still uses one
+// would require watching every attempt across every session deadloop is loaded into, and guessing wrong
+// deletes code out from under a running attempt. Doctor therefore reports only the traces shared state
+// left behind and never asserts which code another session loaded or is running.
+const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/i;
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = -1;
+  do {
+    value /= 1024;
+    unitIndex += 1;
+  } while (value >= 1024 && unitIndex < units.length - 1);
+  return `${Math.round(value * 10) / 10} ${units[unitIndex]}`;
+}
+
+function buildCodeSnapshotInventoryFindings(input: DoctorInput): DoctorFinding[] {
+  const inventory = input.codeSnapshots;
+  if (!inventory || !inventory.generations.length) return [];
+
+  const writerIdentity = input.lastWriterCodeIdentity && FULL_COMMIT_SHA.test(input.lastWriterCodeIdentity)
+    ? input.lastWriterCodeIdentity.toLowerCase()
+    : null;
+  const referenced = new Set(
+    [input.deployedCodeIdentity, input.loadedCodeIdentity, writerIdentity]
+      .filter((value): value is string => !!value && FULL_COMMIT_SHA.test(value)),
+  );
+  const totalBytes = inventory.generations.reduce((sum, generation) => sum + generation.bytes, 0);
+  const cleanupCandidates = inventory.generations.filter((generation) => !referenced.has(generation.codeIdentity));
+
+  return [{
+    id: "code-snapshot-inventory",
+    type: "code_snapshot_inventory",
+    title: `code snapshot inventory: ${inventory.generations.length} generation(s), ${formatBytes(totalBytes)}`,
+    summary: [
+      `${inventory.generations.length} generation(s), ${formatBytes(totalBytes)} at ${inventory.root}.`,
+      ...(writerIdentity ? [`The shared enablement state was last written by code identity ${writerIdentity}.`] : []),
+      "Which code each session loaded cannot be known from this session, so any generation may still be running elsewhere.",
+      cleanupCandidates.length
+        ? "The listed removal commands name generations that no trace this session can see refers to; a person verifies each one before removing it."
+        : "Every generation is named by a trace this session can see, so nothing is suggested for removal.",
+    ].join(" "),
+    commands: [
+      `du -sh ${shellArg(inventory.root)}/*`,
+      ...cleanupCandidates.map((generation) => `rm -rf ${shellArg(path.join(inventory.root, generation.codeIdentity))}`),
+    ],
+  }];
+}
+
 function buildWorkspaceTrustFindings(
   project: NormalizedProject,
   claudeConfig: ClaudeConfigResult | undefined,
@@ -667,7 +725,9 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
       ...buildUnrequestedPullRequestFindings(project, issues, openPrs),
       ...buildAutomationFindings(project, state, automationDir, statePath, nowMs),
       ...buildWorkspaceTrustFindings(project, input.claudeConfig),
+      ...buildCodeSnapshotInventoryFindings(input),
     ],
+    lastWriterCodeIdentity: input.lastWriterCodeIdentity ?? null,
   };
 }
 
@@ -700,6 +760,7 @@ export function formatDoctorReport(snapshot: DoctorSnapshot): string {
     `config: ${formatConfigSource(snapshot.project)}`,
     formatRequiredVerification(snapshot.project.requiredVerification),
     "attemptMonitoring: deterministic for reviewer and branch-update (no Automation-host model)",
+    ...(snapshot.lastWriterCodeIdentity ? [`last enablement write by code identity: ${snapshot.lastWriterCodeIdentity}`] : []),
     ...(snapshot.verificationCandidates ? formatVerificationCandidates(snapshot.verificationCandidates) : []),
     "",
   ];
