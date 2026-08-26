@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 const { decideRepairPushGuard, parseArgs: parseFinalizerArgs } = require("../extensions/deadloop/automations/pr-review-repair-finalize.cts");
@@ -105,5 +109,107 @@ describe("automatic review repair", () => {
     const second = { title: "Missing guard", body: "Reject stale input", path: "src/b.ts", line: 8, severity: "blocker" };
 
     expect(repairContract([...findings, second]).map((finding: Record<string, unknown>) => finding.title)).toEqual(["Lint contract failure", "Missing guard"]);
+  });
+});
+
+describe("recovery of a stopped repair contract", () => {
+  const { writeFileSync } = require("node:fs");
+  const { recoverStoppedRepairContract } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
+  const { repairAttemptKey } = require("../extensions/deadloop/automations/pr-review-repair-state.cts");
+
+  function retainedStoppedRepair(root: string, overrides: { titles?: string[]; promptFindings?: unknown[] } = {}): string {
+    const key = repairAttemptKey(head, reviewResultFingerprint(findings));
+    const runDir = path.join(root, "runs", "run-1");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, "review-contract.json"), JSON.stringify({
+      attemptKey: key,
+      expectedHead: head,
+      findingTitles: overrides.titles || findings.map((finding) => finding.title),
+    }));
+    const promptFile = path.join(runDir, "repair-prompt.md");
+    writeFileSync(promptFile, repairWorkerPrompt("243", "agent/issue-243", head, overrides.promptFindings || findings, key,
+      path.join(runDir, "promise.json"), "/worktree", {
+        projectId: "demo",
+        repoPath: "/repo",
+        githubRepo: "owner/repo",
+        stateDir: root,
+        checkCommand: "npm test",
+        workerAgent: "pi",
+        workerModel: "",
+        remote: "origin",
+        reviewLabel: "agent:review",
+        blockedLabel: "agent:blocked",
+        inProgressLabel: "agent:in-progress",
+        automationDir: "/automation",
+        enabledAt: 1,
+      }));
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify({
+      attemptId: key,
+      launchUuid: "launch-1",
+      project: "demo",
+      repository: "owner/repo",
+      role: "review-repair",
+      target: { kind: "pull-request", number: 243 },
+      inputRevision: { head },
+      branch: "agent/issue-243",
+      worktreePath: path.join(root, "worktrees", "agent-issue-243"),
+      agentName: "demo-pr-243-review-repair",
+      workspaceLabel: "demo-pr-243-review-repair",
+      promptFile,
+      promiseFile: path.join(runDir, "promise.json"),
+      phase: "authority_released",
+      lastSuccessfulPhase: "agent_started",
+      authorityRelease: { reason: "terminal_missing_report", releasedAt: "2026-07-04T00:00:00Z" },
+    }));
+    return key;
+  }
+
+  function stoppedRepairComments(_key: string) {
+    return [{ author: { login: automationLogin }, body: `## Review result\n${renderRepairMarker(head, reviewResultFingerprint(findings))}` }];
+  }
+
+  it("recovers the exact stopped contract from its marker, retained journal, and prompt", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deadloop-repair-recovery-"));
+    try {
+      const key = retainedStoppedRepair(root);
+      expect(recoverStoppedRepairContract({
+        stateDir: root, prNumber: 243, expectedHead: head, comments: stoppedRepairComments(key), automationLogin,
+      })).toMatchObject({ key, expectedHead: head });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns nothing when the pull request carries no unresolved repair marker for the head", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deadloop-repair-recovery-"));
+    try {
+      expect(recoverStoppedRepairContract({ stateDir: root, prNumber: 243, expectedHead: head, comments: [], automationLogin })).toBe(null);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses recovered findings whose titles diverge from the retained contract", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deadloop-repair-recovery-"));
+    try {
+      const key = retainedStoppedRepair(root, { titles: ["A different finding"] });
+      expect(() => recoverStoppedRepairContract({
+        stateDir: root, prNumber: 243, expectedHead: head, comments: stoppedRepairComments(key), automationLogin,
+      })).toThrow(/titles do not match/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses recovered findings that do not reproduce the recorded attempt key", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deadloop-repair-recovery-"));
+    try {
+      const key = retainedStoppedRepair(root, { promptFindings: [{ ...findings[0], body: "Tampered evidence" }] });
+      expect(() => recoverStoppedRepairContract({
+        stateDir: root, prNumber: 243, expectedHead: head, comments: stoppedRepairComments(key), automationLogin,
+      })).toThrow(/do not reproduce/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

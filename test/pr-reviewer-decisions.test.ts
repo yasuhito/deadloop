@@ -71,18 +71,16 @@ describe("pull request request-target selection", () => {
     expect(selectPrRequestTarget([conflicted], config).selected).toBe(true);
   });
 
-  it("does not let a pull request whose next request has no launcher hide the next candidate", () => {
-    expect(selectPrRequestTarget([pr(7, ["agent:implement"]), pr(9, ["agent:review"])], config).number).toBe(9);
+  it("serves a repair request as the review-repair role", () => {
+    expect(selectPrRequestTarget([pr(7, ["agent:implement"])], config).role).toBe("review-repair");
   });
 
-  it("reports why a request with no launcher was skipped", () => {
-    expect(selectPrRequestTarget([pr(7, ["agent:implement"])], config).skipped).toEqual([
-      { number: 7, reason: "unserved_request" },
-    ]);
-  });
-
-  it("does not fall back to the review request behind a request with no launcher", () => {
-    expect(selectPrRequestTarget([pr(7, ["agent:implement", "agent:review"])], config).selected).toBe(false);
+  it("does not fall back to the review request behind a repair request that cannot be served", () => {
+    const decision = selectPrRequestTarget(
+      [pr(7, ["agent:implement", "agent:review"])],
+      defaultDecisionConfig({ projectId: "demo", automationLogin: "deadloop-bot", servedRoles: ["branch-update", "reviewer"] }),
+    );
+    expect(decision.selected).toBe(false);
   });
 
   it("does not select a review request while checks are still running", () => {

@@ -10,7 +10,10 @@ const { validatePromise } = require("./extract-worker-promise.cts");
 const {
   decideTechnicalReviewFailure,
   renderTechnicalFailureMarker,
+  repairAttemptKey,
+  repairAttempts,
   reviewOutcomeFingerprint,
+  reviewResultFingerprint,
   selectRepairAttempt,
 } = require("./pr-review-repair-state.cts");
 const {
@@ -39,7 +42,7 @@ const {
 const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
-const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { readAttemptRecord, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError, labelNames } = require("../../../src/launch-revalidation.cts");
 const {
@@ -517,6 +520,95 @@ function recoverLaunchFromHerdr(
     throw new Error("repair launch recovery found a named agent outside the selected branch worktree");
   }
   return true;
+}
+
+/** The run directory whose retained contract binds one repair key to one expected head. */
+function retainedRepairContractDir(key: string, expectedHead: string, stateDir: string): string | null {
+  const runsDir = path.join(stateDir, "runs");
+  let entries: string[] = [];
+  try { entries = fs.readdirSync(runsDir); } catch { return null; }
+  const matches: Array<{ runDir: string; released: boolean; modified: number }> = [];
+  for (const entry of entries) {
+    const runDir = path.join(runsDir, entry);
+    try {
+      const contract = JSON.parse(fs.readFileSync(path.join(runDir, "review-contract.json"), "utf8"));
+      if (contract?.attemptKey !== key) continue;
+      if (String(contract?.expectedHead || "").toLowerCase() !== expectedHead.toLowerCase()) continue;
+      matches.push({
+        runDir,
+        released: releasesAttemptOwnership(readAttemptRecord(runDir).phase),
+        modified: fs.statSync(path.join(runDir, "attempt.json")).mtimeMs,
+      });
+    } catch {}
+  }
+  // Prefer a live claim, then the newest journal, so a relaunched attempt deterministically wins
+  // over its released predecessor when both retain the same contract.
+  matches.sort((left, right) => Number(left.released) - Number(right.released) || right.modified - left.modified);
+  return matches[0]?.runDir || null;
+}
+
+/** Reads back the full findings JSON the retained repair prompt embedded as the worker's contract. */
+function findingsFromRepairPrompt(promptFile: string): JsonObject[] {
+  const text = fs.readFileSync(promptFile, "utf8");
+  const label = text.indexOf("Required findings contract:");
+  if (label < 0) throw new Error("retained repair prompt does not name a findings contract");
+  const open = text.indexOf("```json", label);
+  const close = open < 0 ? -1 : text.indexOf("```", open + 7);
+  if (close < 0) throw new Error("retained repair prompt has no findings contract block");
+  const parsed = JSON.parse(text.slice(open + 7, close));
+  if (!Array.isArray(parsed)) throw new Error("retained repair findings contract is not a list");
+  return parsed as JsonObject[];
+}
+
+const REPAIR_RESULT_KEY_RE = /<!--\s*deadloop:review-repair-result\s+key=([0-9a-f]+)\s+head=[0-9a-f]+\s*-->/gi;
+
+/**
+ * Recovers the exact findings contract one stopped repair attempt was bound to, so a new Agent
+ * request can relaunch that contract instead of inventing a new one. The proof chain is entirely
+ * deadloop's own records: the authorized repair-attempt marker fixes the key and head on GitHub,
+ * the retained review contract names the finding titles and expected head, and the retained prompt
+ * embeds the full findings JSON whose fingerprint recomputes that same key.
+ *
+ * Returns null when GitHub exposes nothing actionable for this head — no changes-requested repair
+ * marker, several unresolved ones, or only repairs that already posted their result. Anything
+ * ambiguous or tampered throws instead of launching on a guess.
+ */
+function recoverStoppedRepairContract(input: {
+  stateDir: string;
+  prNumber: string | number;
+  expectedHead: string;
+  comments: JsonObject[];
+  automationLogin: string;
+}): JsonObject | null {
+  const head = String(input.expectedHead || "").toLowerCase();
+  const attempted = repairAttempts(input.comments, input.automationLogin).filter((attempt) => attempt.headOid === head);
+  if (!attempted.length) return null;
+  const completedKeys = new Set<string>();
+  for (const comment of input.comments || []) {
+    if (String(comment?.author?.login || "").toLowerCase() !== String(input.automationLogin).toLowerCase()) continue;
+    REPAIR_RESULT_KEY_RE.lastIndex = 0;
+    for (let match = REPAIR_RESULT_KEY_RE.exec(String(comment?.body || "")); match; match = REPAIR_RESULT_KEY_RE.exec(String(comment?.body || ""))) {
+      completedKeys.add(match[1].toLowerCase());
+    }
+  }
+  const candidates = ([...new Set(attempted.map((attempt) => String(attempt.key || "")))] as string[]).filter((key) => !completedKeys.has(key));
+  if (candidates.length !== 1) return null;
+  const key: string = candidates[0];
+  const runDir = retainedRepairContractDir(key, head, String(input.stateDir || ""));
+  if (!runDir) {
+    throw new Error(`PR #${input.prNumber} repair recovery found no retained contract for the recorded repair attempt`);
+  }
+  const record = readAttemptRecord(runDir);
+  const contract = JSON.parse(fs.readFileSync(path.join(runDir, "review-contract.json"), "utf8"));
+  const findings = findingsFromRepairPrompt(String(record.promptFile || ""));
+  const titles = findings.map((finding) => String(finding?.title || ""));
+  if (JSON.stringify(titles) !== JSON.stringify((contract.findingTitles || []).map((title: unknown) => String(title)))) {
+    throw new Error("retained repair contract titles do not match the recovered findings");
+  }
+  if (repairAttemptKey(head, reviewResultFingerprint(findings)) !== key) {
+    throw new Error("recovered repair findings do not reproduce the recorded repair attempt key");
+  }
+  return { key, expectedHead: head, findings, attemptId: String(record.attemptId || key), runDir };
 }
 
 function recordLaunchEvidence(
@@ -1429,11 +1521,13 @@ module.exports = {
   blockedClaimMove,
   dispatch,
   envConfig,
+  findingsFromRepairPrompt,
   launchRepair,
   parseArgs,
   persistAuthorizedApproval,
   readLivePr,
   recordRepairLaunchGithubClaim,
+  recoverStoppedRepairContract,
   repairLaunchInput,
   repairWorkerPrompt,
   requireManagedPr,

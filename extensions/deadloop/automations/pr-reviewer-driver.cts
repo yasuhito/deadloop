@@ -7,6 +7,11 @@ const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
 const { planPrRequestAction } = require("./pr-reviewer-flow.cts");
+const {
+  envConfig: repairDispatchEnvConfig,
+  recoverStoppedRepairContract,
+  repairLaunchInput,
+} = require("./pr-review-repair-dispatch.cts");
 const { blockedPrLabelMove, latestPrRequestEvent, orderedPrRequestLabels, prRequestLabelForRole } = require("../../../src/pr-request-selection.cts");
 const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.cts");
 const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../../src/agent-launch-flow.cts");
@@ -265,7 +270,7 @@ type DriverLaunchInput = {
   promptFilePrefix: string;
   project: string;
   repository: string;
-  role: "reviewer" | "branch-update";
+  role: "reviewer" | "branch-update" | "review-repair";
   target: { kind: "pull-request"; number: number };
   inputRevision: { head: string; base?: string };
   preservedCheckoutHead?: string;
@@ -1468,6 +1473,8 @@ function driveSelectedTarget(
   fixture: JsonObject | null,
 ): DriverResult {
 
+  if (plan.kind === "repair_request_required") return launchRepairRequestTarget(plan, env, fixture);
+
   if (plan.kind === "review_required" && isConflictingPr(plan.pr)) {
     const transition = consumeRequest(
       plan.pr, env, fixture, "reviewer",
@@ -1731,6 +1738,152 @@ function reviewOnlyDrive(
     monitorHandoff: { kind: "reviewer", input: monitorInput },
     ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
   });
+}
+
+function revalidateConsumedRepairLaunch(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  number: number,
+  requestEventId: string,
+): void {
+  const github = githubOperations();
+  const live = github.getPr(env.githubRepo, number);
+  assertSamePrRevision(pr, live);
+  const managedLabels = managedWorkflowLabels(env).filter((label) => new Set(labelNames(live)).has(label));
+  if (managedLabels.length !== 1 || managedLabels[0] !== env.inProgressLabel) {
+    throw new StaleLaunchError(`PR #${number} no longer has the exact consumed repair state`);
+  }
+  const latest = latestPrRequestEvent(github.listPrTimelineEvents(env.githubRepo, number), env.implementLabel);
+  if (String(latest?.id || latest?.node_id || "") !== requestEventId) {
+    throw new StaleLaunchError(`PR #${number} implement request changed before repair launch`);
+  }
+}
+
+/**
+ * Serves an `agent:implement` Agent request by relaunching the one stopped repair contract the
+ * pull request still owes. Everything binding is re-proven before the request moves: the authorized
+ * marker names the key and head on GitHub, the retained journal proves what the old attempt was,
+ * and the recovered findings reproduce that exact key. Any gap fails the launch closed before the
+ * request label is consumed, so a request nobody can act on stays queued and visible.
+ */
+function launchRepairRequestTarget(
+  plan: Extract<ReturnType<typeof planPrRequestAction>, { kind: "repair_request_required" }>,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+): DriverResult {
+  const pr = plan.pr;
+  const number = Number(pr.number || 0);
+  const branch = String(pr.headRefName || "");
+  const expectedHead = String(pr.headRefOid || "").toLowerCase();
+  try {
+    const github = driverGithubOperations(fixture);
+    const comments = github.listPrComments(env.githubRepo, number);
+    const automationLogin = fixture
+      ? String(fixture.automationLogin || "deadloop-bot")
+      : env.automationLogin || commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim();
+    const recovered = recoverStoppedRepairContract({
+      stateDir: env.stateDir, prNumber: number, expectedHead, comments: comments as JsonObject[], automationLogin,
+    });
+    if (!recovered) {
+      return driverResult("skip", `PR #${number} carries ${env.implementLabel} but publishes no resolvable stopped repair`, {
+        driverAction: "repair_request_unresolvable",
+        prNumber: number,
+      });
+    }
+    const repairEnv = repairDispatchEnvConfig();
+    const uuid = fixture ? "fixture-repair-uuid" : randomUUID();
+    const input = repairLaunchInput(String(number), branch, expectedHead, recovered.findings as JsonObject[], recovered.key, repairEnv, uuid);
+    let requestEventId = "";
+    let enabledAutomationLogin = "";
+    const revalidate = (enabled?: { automationLogin?: string }) => {
+      if (fixture) {
+        if (requestEventId) return;
+        const observed = observeRequestConsumption(
+          fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations>,
+          pr, env, orderedPrRequestLabels(prRequestLabels(env)), () => env.automationLogin,
+        );
+        requestEventId = String(observed.requestEventIds.get(env.implementLabel) || "");
+        if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.implementLabel} request event`);
+        input.requestEventId = requestEventId;
+        return;
+      }
+      enabledAutomationLogin = String(enabled?.automationLogin || enabledAutomationLogin).trim().toLowerCase();
+      assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
+      if (requestEventId) {
+        try {
+          revalidateConsumedRepairLaunch(pr, env, number, requestEventId);
+        } catch (error) {
+          if (error instanceof Error) (error as Error & { claimed?: boolean }).claimed = true;
+          throw error;
+        }
+        return;
+      }
+      const livePlan = planPrRequestAction(liveExposedPrs(env), liveAgents(), env);
+      if (livePlan.kind !== "repair_request_required" || Number(livePlan.pr.number) !== number) {
+        throw new StaleLaunchError(`PR #${number} is no longer eligible for repair launch`);
+      }
+      const events = githubOperations().listPrTimelineEvents(env.githubRepo, number);
+      const latest = latestPrRequestEvent(events, env.implementLabel);
+      requestEventId = String(latest?.id || latest?.node_id || "");
+      if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.implementLabel} request event`);
+      input.requestEventId = requestEventId;
+    };
+    const launch = launchWithAdapters(
+      env,
+      fixture,
+      input,
+      (githubOps) => {
+        consumeRequestEvent(
+          githubOps,
+          pr,
+          env,
+          "review-repair",
+          fixture ? () => env.automationLogin : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
+          requestEventId ? { [env.implementLabel]: requestEventId } : {},
+        );
+      },
+      revalidate,
+    );
+    const monitorInput = {
+      prNumber: number,
+      expectedHeadOid: expectedHead,
+      branch,
+      automationDir: repairEnv.automationDir,
+      promiseFile: String(launch.promiseFile || ""),
+      attemptRecordFile: String(launch.attemptRecordFile || path.join(path.dirname(String(launch.promiseFile || "")), "attempt.json")),
+      actorName: "review-repair worker",
+      projectId: env.projectId,
+      repoPath: env.repoPath,
+      worktreeRoot: env.worktreeRoot,
+      worktreePath: String(launch.worktreePath || ""),
+      githubRepo: env.githubRepo,
+      stateDir: env.stateDir,
+      enabledAt: env.enabledAt,
+      reviewLabel: env.reviewLabel,
+      implementLabel: env.implementLabel,
+      updateBranchLabel: env.updateBranchLabel,
+      inProgressLabel: env.inProgressLabel,
+      blockedLabel: env.blockedLabel,
+      attemptKey: recovered.key,
+      maxActiveMilliseconds: env.reviewerMaxRuntimeSeconds * 1000,
+    };
+    return driverResult("monitor", `Relaunched the stopped review repair for PR #${number}`, {
+      driverAction: "repair_request_monitor_request",
+      prNumber: number,
+      selection: { number, role: "review-repair", requestLabel: env.implementLabel },
+      launch,
+      monitorHandoff: { kind: "repair", input: monitorInput },
+      ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
+    });
+  } catch (error) {
+    if (isStaleLaunchError(error)) {
+      return driverResult("skip", `PR #${number} changed before its stopped repair relaunch`, {
+        driverAction: "repair_request_stale",
+        prNumber: number,
+      });
+    }
+    throw error;
+  }
 }
 
 function main(): void {
