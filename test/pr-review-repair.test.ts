@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 const { decideRepairPushGuard, parseArgs: parseFinalizerArgs } = require("../extensions/deadloop/automations/pr-review-repair-finalize.cts");
 const { recoveryComment, sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.cts");
-const { repairWorkerPrompt, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
+const { repairWorkerPrompt } = require("../extensions/deadloop/automations/pr-review-repair-launch.cts");
+const { requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
 const { decideTechnicalReviewFailure, renderRepairMarker, repairAttempts, reviewResultFingerprint, selectRepairAttempt } = require("../extensions/deadloop/automations/pr-review-repair-state.cts");
 
 const head = "a".repeat(40);
@@ -21,16 +22,18 @@ function repairContract(requiredFindings: Array<Record<string, unknown>>) {
     projectId: "demo",
     repoPath: "/repo",
     githubRepo: "owner/repo",
-    stateDir: "/state",
+    baseBranch: "origin/main",
+    remote: "origin",
     checkCommand: "npm test",
     workerAgent: "pi",
     workerModel: "",
-    remote: "origin",
+    enabledAt: 1,
+    worktreeRoot: "/worktrees",
+    stateDir: "/state",
+    automationDir: "/automation",
     reviewLabel: "agent:review",
     blockedLabel: "agent:blocked",
     inProgressLabel: "agent:in-progress",
-    automationDir: "/automation",
-    enabledAt: 1,
   });
   return JSON.parse(rendered.match(/Required findings contract:\n```json\n([\s\S]*?)\n```/)?.[1] || "[]");
 }
