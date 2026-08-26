@@ -40,7 +40,7 @@ args=(
   --update-branch-label "${update_branch_label}"
   --in-progress-label "${in_progress_label}"
   --blocked-label "${blocked_label}"
-  # This gate reads labels only; see defersBlockedRecovery in pr-reviewer-decisions.ts.
+  # This gate reads labels only; see defersBlockedRecovery in pr-reviewer-decisions.cts.
   --defers-blocked-recovery 1
   --auto-merge "${auto_merge}"
   --external-review-enabled "${external_review_enabled}"
@@ -51,4 +51,4 @@ if [ -n "${DEADLOOP_NOW:-}" ]; then
   args+=(--now "${DEADLOOP_NOW}")
 fi
 
-node "${automation_dir}/pr-reviewer-decisions.ts" "${args[@]}" >/dev/null
+node "${automation_dir}/pr-reviewer-decisions.cts" "${args[@]}" >/dev/null

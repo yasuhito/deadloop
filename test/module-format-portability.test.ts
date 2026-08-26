@@ -1,0 +1,62 @@
+import fs from "node:fs";
+import path from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+// 行頭 `export` が一つでもあると Bun ベースのローダーはそのファイルを ESM と判定し、
+// CJS の `module` が存在しない状態で評価する。よって `module.exports` へ代入する行に届いた瞬間
+// `ReferenceError: module is not defined` で拡張全体のロードが失敗する。両者は同居できない。
+
+const scannedRoots = ["src", "extensions/deadloop"];
+
+function typescriptFiles(relativeRoot: string): string[] {
+  return fs.readdirSync(path.join(process.cwd(), relativeRoot), { withFileTypes: true }).flatMap((entry) => {
+    const relativePath = path.join(relativeRoot, entry.name);
+    if (entry.isDirectory()) return entry.name === "node_modules" ? [] : typescriptFiles(relativePath);
+    const typescriptModule = entry.name.endsWith(".ts") || entry.name.endsWith(".cts");
+    return entry.isFile() && typescriptModule ? [relativePath] : [];
+  });
+}
+
+describe("module format portability", () => {
+  it("keeps every module.exports file free of top-level exports", () => {
+    const hybridModules = scannedRoots
+      .flatMap(typescriptFiles)
+      .filter((relativePath) => {
+        const lines = fs.readFileSync(path.join(process.cwd(), relativePath), "utf8").split("\n");
+        return lines.some((line) => line.startsWith("module.exports"))
+          && lines.some((line) => line.startsWith("export "));
+      })
+      .sort();
+
+    expect(hybridModules).toEqual([]);
+  });
+});
+
+// The omp extension loader classifies only `.cjs`, `.cts`, and `type: commonjs` `.js`/`.jsx` as
+// CommonJS, so any CommonJS export form left in a `.ts` file is evaluated as ESM, where neither
+// `module` nor `exports` is defined: the assignment throws `ReferenceError` and the extension fails
+// to load. Declaring the format by extension is the only host-neutral fix.
+const commonJsExportAssignment = /^\s*(?:module\.exports\b|exports(?:\.[A-Za-z_$]|\[)|Object\.assign\(\s*(?:module\.)?exports\b)/;
+
+function commonJsPlainTypescriptFiles(relativeRoot: string): string[] {
+  return typescriptFiles(relativeRoot)
+    .filter((relativePath) => !relativePath.endsWith(".cts"))
+    .filter((relativePath) => {
+      const lines = fs.readFileSync(path.join(process.cwd(), relativePath), "utf8").split("\n");
+      return lines.some((line) => commonJsExportAssignment.test(line));
+    })
+    .sort();
+}
+
+describe("src CommonJS module extensions", () => {
+  it("keeps every src module.exports file in a .cts file", () => {
+    expect(commonJsPlainTypescriptFiles("src")).toEqual([]);
+  });
+});
+
+describe("extension CommonJS module extensions", () => {
+  it("keeps every extension module.exports file in a .cts file", () => {
+    expect(commonJsPlainTypescriptFiles("extensions/deadloop")).toEqual([]);
+  });
+});

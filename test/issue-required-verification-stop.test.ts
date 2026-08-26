@@ -4,7 +4,7 @@ const {
   applyIssueRequiredVerificationStop,
   planIssueRequiredVerificationStop,
   requiredVerificationStopMarker,
-} = require("../src/issue-required-verification-stop.ts");
+} = require("../src/issue-required-verification-stop.cts");
 
 const labels = { implement: "agent:implement", inProgress: "agent:in-progress", blocked: "agent:blocked" };
 const resolution = {

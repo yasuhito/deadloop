@@ -4,7 +4,7 @@ const {
   planPrRequiredVerificationStop,
   prRequiredVerificationStopMarker,
   requiredVerificationStopDiagnosis,
-} = require("../src/issue-required-verification-stop.ts");
+} = require("../src/issue-required-verification-stop.cts");
 
 const labels = {
   review: "agent:review",

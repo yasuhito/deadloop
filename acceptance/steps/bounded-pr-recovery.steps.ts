@@ -8,9 +8,9 @@ import { Given, Then, When } from "@cucumber/cucumber";
 
 import { fixtureStateDir } from "../support/fixture-state-dir";
 
-const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
-const { renderRepairMarker, renderTechnicalFailureMarker, reviewResultFingerprint } = require("../../extensions/deadloop/automations/pr-review-repair-state.ts");
-const { finalizeReviewRepair } = require("../../extensions/deadloop/automations/pr-review-repair-finalize.ts");
+const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.cts");
+const { renderRepairMarker, renderTechnicalFailureMarker, reviewResultFingerprint } = require("../../extensions/deadloop/automations/pr-review-repair-state.cts");
+const { finalizeReviewRepair } = require("../../extensions/deadloop/automations/pr-review-repair-finalize.cts");
 const { writeWorkerContractSnapshot } = require("../../src/worker-required-verification-runtime.cjs");
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -50,7 +50,7 @@ function reviewerDriver(fixture: string): Record<string, unknown> {
   const fixturePath = path.isAbsolute(fixture) ? fixture : path.join("test/fixtures/pr-reviewer-driver", fixture);
   const result = spawnSync(
     "node",
-    ["extensions/deadloop/automations/pr-reviewer-driver.ts", "--fixture", fixturePath],
+    ["extensions/deadloop/automations/pr-reviewer-driver.cts", "--fixture", fixturePath],
     {
       cwd: process.cwd(),
       encoding: "utf8",
@@ -218,7 +218,7 @@ else if (args[0] === "agent" && args[1] === "start") { fs.writeFileSync(process.
     );
     const result = spawnSync(
       "node",
-      ["extensions/deadloop/automations/pr-review-repair-dispatch.ts", "--promise", promise, "--attempt-record", attemptRecord, "--request-event-id", "22", "--pr", "31", "--expected-head", currentHead, "--branch", branch],
+      ["extensions/deadloop/automations/pr-review-repair-dispatch.cts", "--promise", promise, "--attempt-record", attemptRecord, "--request-event-id", "22", "--pr", "31", "--expected-head", currentHead, "--branch", branch],
       {
         cwd: process.cwd(),
         encoding: "utf8",

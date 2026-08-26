@@ -10,8 +10,8 @@ import { fixtureStateDir } from "../support/fixture-state-dir";
 
 import type { RunnerAdapter, RunnerAgent } from "../../src/runner";
 
-const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../src/agent-launch-flow.ts");
-const { decideWorkerWatch } = require("../../extensions/deadloop/automations/worker-watch-decision.ts");
+const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed } = require("../../src/agent-launch-flow.cts");
+const { decideWorkerWatch } = require("../../extensions/deadloop/automations/worker-watch-decision.cts");
 
 const workerName = "demo-issue-12-worker";
 const workerPath = "/worktrees/demo/agent-issue-12-task";
@@ -135,7 +135,7 @@ Given("An Issue ready for work has been selected", function (this: WorkerWorld) 
 When("deadloop starts work on the selected Issue", function (this: WorkerWorld) {
   const result = spawnSync(
     "node",
-    ["extensions/deadloop/automations/issue-coordinator-driver.ts", "--fixture", "test/fixtures/issue-coordinator/driver-ready-worker.json"],
+    ["extensions/deadloop/automations/issue-coordinator-driver.cts", "--fixture", "test/fixtures/issue-coordinator/driver-ready-worker.json"],
     {
       cwd: process.cwd(),
       encoding: "utf8",

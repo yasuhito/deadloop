@@ -46,27 +46,27 @@ const attemptArgs = [
 
 describe("direct mutation and launch entrypoint compatibility gates", () => {
   it("rejects issue coordination before Issue selection or mutation", () => {
-    expect(reject("extensions/deadloop/automations/issue-coordinator-driver.ts")).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
+    expect(reject("extensions/deadloop/automations/issue-coordinator-driver.cts")).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
   });
   it("rejects PR review before PR selection or mutation", () => {
-    expect(reject("extensions/deadloop/automations/pr-reviewer-driver.ts")).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
+    expect(reject("extensions/deadloop/automations/pr-reviewer-driver.cts")).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
   });
   it("rejects review-repair dispatch before GitHub reads or worker launch", () => {
-    expect(reject("extensions/deadloop/automations/pr-review-repair-dispatch.ts", repairArgs)).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
+    expect(reject("extensions/deadloop/automations/pr-review-repair-dispatch.cts", repairArgs)).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
   });
   it("rejects review-repair completion before GitHub reads or comments", () => {
-    expect(reject("extensions/deadloop/automations/pr-review-repair-complete.ts", completionArgs)).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
+    expect(reject("extensions/deadloop/automations/pr-review-repair-complete.cts", completionArgs)).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
   });
   it("rejects the native launch entrypoint before reading launch inputs or starting an agent", () => {
-    expect(reject("extensions/deadloop/automations/launch-agent.ts")).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
+    expect(reject("extensions/deadloop/automations/launch-agent.cts")).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
   });
   it("rejects attempt result persistence before GitHub reads or comments", () => {
-    expect(reject("extensions/deadloop/automations/persist-attempt-result.ts", attemptArgs)).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
+    expect(reject("extensions/deadloop/automations/persist-attempt-result.cts", attemptArgs)).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
   });
   it("rejects attempt workspace completion before GitHub reads or workspace closure", () => {
-    expect(reject("extensions/deadloop/automations/complete-attempt-workspace.ts", attemptArgs)).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
+    expect(reject("extensions/deadloop/automations/complete-attempt-workspace.cts", attemptArgs)).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
   });
   it("rejects direct cleanup apply before GitHub reads or destructive worktree removal", () => {
-    expect(reject("extensions/deadloop/automations/cleanup-completed-worker-worktrees.ts", ["--apply", "--json"])).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
+    expect(reject("extensions/deadloop/automations/cleanup-completed-worker-worktrees.cts", ["--apply", "--json"])).toEqual({ rejected: true, githubCalled: false, agentStarted: false });
   });
 });

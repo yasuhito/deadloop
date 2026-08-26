@@ -20,12 +20,12 @@ ADR 0024 counted the gates that read `git status` **in code**. Two more copies o
 
 | location | wording |
 |---|---|
-| `pr-review-repair-dispatch.ts:434` | `First require a clean worktree and HEAD exactly equal to <head>.` |
-| `pr-reviewer-driver.ts:458` | `First require a clean worktree and require HEAD to equal the expected PR head.` |
+| `pr-review-repair-dispatch.cts:434` | `First require a clean worktree and HEAD exactly equal to <head>.` |
+| `pr-reviewer-driver.cts:458` | `First require a clean worktree and require HEAD to equal the expected PR head.` |
 
 An agent reading either line runs its own `git status` and cannot know the scratch-area list, so it reaches the answer ADR 0024 exists to prevent.
 
-Three more copies survived because ADR 0024 excluded them by decision: `pr-review-repair-finalize.ts:119`, `pr-review-repair-finalize.ts:131`, and `pr-branch-update-finalize.ts:111`, on the grounds that a finalize gate asks whether deadloop itself left something behind before a push. That ground does not hold. The finalizer's `--repo` is the worktree the worker runs in — the launcher opens the PR branch worktree, and dispatch refuses to proceed unless the named agent's working directory resolves to that same path. The scratch area is present there by construction, so removing the prompt lines alone would have moved the same stop one step later, into `repair worktree is dirty before checks`.
+Three more copies survived because ADR 0024 excluded them by decision: `pr-review-repair-finalize.cts:119`, `pr-review-repair-finalize.cts:131`, and `pr-branch-update-finalize.cts:111`, on the grounds that a finalize gate asks whether deadloop itself left something behind before a push. That ground does not hold. The finalizer's `--repo` is the worktree the worker runs in — the launcher opens the PR branch worktree, and dispatch refuses to proceed unless the named agent's working directory resolves to that same path. The scratch area is present there by construction, so removing the prompt lines alone would have moved the same stop one step later, into `repair worktree is dirty before checks`.
 
 ADR 0024 drew its line by the *question* a gate asks: gates asking about somebody else's unsaved work applied the rule, gates asking about deadloop's own leftovers did not. That line produced two classification errors in one day, because an agent scratch area is neither. It is the launched CLI's bookkeeping, so both questions have the same answer, and a distinction that does not change the answer only creates room to classify wrongly.
 

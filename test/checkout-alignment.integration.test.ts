@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { alignOpenedCheckout } = require("../src/checkout-alignment.ts");
+const { alignOpenedCheckout } = require("../src/checkout-alignment.cts");
 
 const branch = "agent/issue-203-task";
 const ref = `refs/heads/${branch}`;
@@ -87,6 +87,22 @@ describe("opened checkout alignment", () => {
     commit(checkout, "local only");
 
     expect(() => align(checkout, expectedHead)).toThrow("cannot fast-forward");
+  });
+
+  it("keeps an explicitly preserved clean descendant checkout", () => {
+    const { checkout, expectedHead } = fixture();
+    align(checkout, expectedHead);
+    const preservedHead = commit(checkout, "reviewed recovery");
+
+    alignOpenedCheckout({
+      worktreePath: checkout,
+      expectedHead,
+      preservedHead,
+      remote: "origin",
+      branch,
+    });
+
+    expect(git(checkout, ["rev-parse", "HEAD"])).toBe(preservedHead);
   });
 
   it("refuses a checkout with uncommitted work", () => {

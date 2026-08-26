@@ -71,4 +71,9 @@ describe("uncommitted work judgments in this repository", () => {
   it("leaves no judgment outside the shared implementation", () => {
     expect(checkUncommittedWorkJudgments(loadUncommittedWorkJudgmentSources())).toEqual([]);
   });
+
+  it("scans the CommonJS automation drivers that implement the gate", () => {
+    expect(loadUncommittedWorkJudgmentSources().map((source) => source.path))
+      .toContain("extensions/deadloop/automations/pr-review-comments.cts");
+  });
 });

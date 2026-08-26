@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { createCommandRunner, driverResult, oneLine, parseBool, parseFixtureArg, shellQuote } = require("../src/automation-driver-kit.ts");
+const { createCommandRunner, driverResult, oneLine, parseBool, parseFixtureArg, shellQuote } = require("../src/automation-driver-kit.cts");
 
 describe("automation driver kit", () => {
   it("builds driver result payloads", () => {

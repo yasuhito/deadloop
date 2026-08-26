@@ -2,7 +2,7 @@
 // Run a project validation command while keeping deadloop's generated evidence
 // out of recursive formatters. CommonJS-shaped so Node can execute this file.
 
-const { projectCheckMain } = require("../../../src/project-check.ts") as { projectCheckMain: () => Promise<void> };
+const { projectCheckMain } = require("../../../src/project-check.cts") as { projectCheckMain: () => Promise<void> };
 
 if (require.main === module) {
   projectCheckMain().catch((error: unknown) => {

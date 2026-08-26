@@ -202,10 +202,10 @@ Given("A pull request has `agent:in-progress` and ownership of its retained atte
   });
 });
 
-Given("A pull request has `agent:in-progress` and an active review agent", function (this: DoctorWorld) {
+Given("A pull request has `agent:in-progress` and its review agent awaits input", function (this: DoctorWorld) {
   setInput(this, {
     openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:in-progress"] }],
-    agents: [{ name: "deadloop-pr-10-reviewer", agent_status: "working" }],
+    agents: [{ name: "deadloop-pr-10-reviewer", agent_status: "idle" }],
   });
 });
 
@@ -213,6 +213,43 @@ Given("An Issue with `agent:in-progress` has a worktree but no active Worker", f
   setInput(this, {
     issues: [{ number: 11, labels: ["agent:in-progress"] }],
     worktrees: [{ branch: "agent/issue-11-demo", path: "/wt/agent-issue-11-demo", open_workspace_id: "ws-11" }],
+  });
+});
+
+Given("An Issue with `agent:in-progress` has an open pull request for its branch", function (this: DoctorWorld) {
+  setInput(this, {
+    issues: [{ number: 14, labels: ["agent:in-progress"] }],
+    openPrs: [{ number: 24, headRefName: "agent/issue-14-demo", labels: ["agent:review"] }],
+  });
+});
+
+Given("An Issue with `agent:in-progress` has an open pull request that holds no Agent request", function (this: DoctorWorld) {
+  setInput(this, {
+    issues: [{ number: 15, labels: ["agent:in-progress"] }],
+    openPrs: [{ number: 25, headRefName: "agent/issue-15-demo", labels: [], isDraft: true }],
+  });
+});
+
+Given("An Issue with `agent:in-progress` has a pull request that an agent already claimed", function (this: DoctorWorld) {
+  setInput(this, {
+    issues: [{ number: 16, labels: ["agent:in-progress"] }],
+    openPrs: [{ number: 26, headRefName: "agent/issue-16-demo", labels: ["agent:in-progress"], isDraft: true }],
+    agents: [{ name: "deadloop-pr-26-reviewer", agent_status: "working" }],
+  });
+});
+
+Given("An Issue with `agent:in-progress` has a pull request that was handed to a person", function (this: DoctorWorld) {
+  setInput(this, {
+    issues: [{ number: 17, labels: ["agent:in-progress"] }],
+    openPrs: [{ number: 27, headRefName: "agent/issue-17-demo", labels: [], isDraft: false }],
+  });
+});
+
+Given("An Issue with `agent:in-progress` has only a person's pull request naming it", function (this: DoctorWorld) {
+  setInput(this, {
+    issues: [{ number: 11, labels: ["agent:in-progress"] }],
+    worktrees: [{ branch: "agent/issue-11-demo", path: "/wt/agent-issue-11-demo", open_workspace_id: "ws-11" }],
+    openPrs: [{ number: 28, headRefName: "fix-issue-11-typo", labels: [], isDraft: false }],
   });
 });
 
@@ -265,12 +302,20 @@ Then("doctor shows no findings", function (this: DoctorWorld) {
   assert.match(this.report || "", /Findings: none/);
 });
 
-Then("doctor shows a command to clean up the worktree", function (this: DoctorWorld) {
-  assert.match(this.report || "", /herdr worktree remove --workspace ws-3/);
+Then("doctor shows no command that re-queues the Issue", function (this: DoctorWorld) {
+  assert.doesNotMatch(this.report || "", /gh issue edit 14 .*--add-label agent:implement/);
 });
 
-Then("doctor shows a command to enqueue the Issue", function (this: DoctorWorld) {
-  assert.match(this.report || "", /gh issue edit 6 --add-label agent:implement/);
+Then("doctor shows the pull request that holds no Agent request", function (this: DoctorWorld) {
+  assert.match(this.report || "", /pull request holds no Agent request: #25/);
+});
+
+Then("doctor shows no command that requests review", function (this: DoctorWorld) {
+  assert.doesNotMatch(this.report || "", /gh pr edit \d+ --add-label agent:review/);
+});
+
+Then("doctor shows a command to clean up the worktree", function (this: DoctorWorld) {
+  assert.match(this.report || "", /herdr worktree remove --workspace ws-3/);
 });
 
 Then("doctor shows a command to inspect the Issue", function (this: DoctorWorld) {

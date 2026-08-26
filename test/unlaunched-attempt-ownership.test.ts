@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { reconcile } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.ts");
+const { reconcile } = require("../extensions/deadloop/automations/reconcile-pr-work-authority.cts");
 const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 
 const HEAD = "a".repeat(40);

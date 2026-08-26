@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { After, Given, Then, When } from "@cucumber/cucumber";
 
-const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.ts");
+const { finalizeBranchUpdate } = require("../../extensions/deadloop/automations/pr-branch-update-finalize.cts");
 const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const candidate = "cccccccccccccccccccccccccccccccccccccccc";
@@ -209,7 +209,7 @@ When("deadloop attempts to start a Claude work agent", function (this: SafetyWor
   spawnSync(
     "node",
     [
-      "extensions/deadloop/automations/launch-agent.ts",
+      "extensions/deadloop/automations/launch-agent.cts",
       "--agent",
       "claude",
       "--name",

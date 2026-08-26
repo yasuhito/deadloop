@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 // @ts-expect-error Node loads this CommonJS-style TypeScript module with built-in type stripping.
-const { normalizeEnablementStateValue } = require("./enablement-state.ts");
+const { normalizeEnablementStateValue } = require("./enablement-state.cts");
 const { acquireLockSync, releaseOwned } = require("./enablement-lock.cjs");
 const { currentDisableGeneration } = require("./disable-generation.cjs");
 

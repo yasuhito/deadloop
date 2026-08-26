@@ -11,7 +11,7 @@ const {
   workerRequiredVerificationPath,
   writeWorkerContractSnapshot,
 } = require("../src/worker-required-verification-runtime.cjs");
-const { assertRepairCompletionRepositoryIdentity } = require("../extensions/deadloop/automations/pr-review-repair-complete.ts");
+const { assertRepairCompletionRepositoryIdentity } = require("../extensions/deadloop/automations/pr-review-repair-complete.cts");
 const roots: string[] = [];
 const oldHead = "a".repeat(40);
 const newHead = "b".repeat(40);
@@ -148,8 +148,8 @@ else if (args[0] === "pr" && args[1] === "comment") {
     fs.writeFileSync(process.env.ENABLED_PROJECTS_FILE, JSON.stringify(data));
   } else if (process.env.RACE_AFTER_COMMENT) {
     const data = JSON.parse(fs.readFileSync(process.env.PROJECTS_FILE, "utf8"));
-    if (process.env.RACE_AFTER_COMMENT === "runtime") data.projects[0].automations = [{id:"demo:pr-reviewer",driverFile:"pr-reviewer-driver.ts",maxRuntimeSeconds:80000,shutdownGraceSeconds:300}];
-    if (process.env.RACE_AFTER_COMMENT === "grace") data.projects[0].automations = [{id:"demo:pr-reviewer",driverFile:"pr-reviewer-driver.ts",maxRuntimeSeconds:86400,shutdownGraceSeconds:100}];
+    if (process.env.RACE_AFTER_COMMENT === "runtime") data.projects[0].automations = [{id:"demo:pr-reviewer",driverFile:"pr-reviewer-driver.cts",maxRuntimeSeconds:80000,shutdownGraceSeconds:300}];
+    if (process.env.RACE_AFTER_COMMENT === "grace") data.projects[0].automations = [{id:"demo:pr-reviewer",driverFile:"pr-reviewer-driver.cts",maxRuntimeSeconds:86400,shutdownGraceSeconds:100}];
     if (process.env.RACE_AFTER_COMMENT === "managed label") data.projects[0].labels = {review:"custom:review"};
     if (process.env.RACE_AFTER_COMMENT === "authorized identity") data.projects[0].automationLogins = ["other-bot"];
     fs.writeFileSync(process.env.PROJECTS_FILE, JSON.stringify(data));
@@ -162,7 +162,7 @@ else if (args[0] === "pr" && args[1] === "edit") fs.appendFileSync(process.env.A
   const result = spawnSync(
     "node",
     [
-      "extensions/deadloop/automations/pr-review-repair-complete.ts",
+      "extensions/deadloop/automations/pr-review-repair-complete.cts",
       "--promise",
       promiseFile,
       "--attempt-record",
@@ -299,7 +299,7 @@ else if (args[0] === "pr" && args[1] === "comment") {
 `);
   fs.chmodSync(gh, 0o755);
   const args = [
-    "extensions/deadloop/automations/pr-review-repair-complete.ts",
+    "extensions/deadloop/automations/pr-review-repair-complete.cts",
     "--promise", promiseFile, "--attempt-record", attemptFile, "--project-id", "demo",
     "--result", resultFile, "--contract", contractFile, "--project-repo", projectRepo, "--github-repo", "owner/repo", "--state-dir", stateDir,
     "--enabled-at", "1", "--pr", "24", "--branch", "agent/issue-24", "--expected-head", oldHead,

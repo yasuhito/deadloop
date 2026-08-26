@@ -2,8 +2,8 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-const { DEPENDENCY_QUERY_TIMEOUT_MS, defaultIssueDecisionConfig, remainingIssueDecisionTimeout, selectIssueForImplementation } = require("../extensions/deadloop/automations/issue-coordinator-decisions.ts");
-const decisionScript = "extensions/deadloop/automations/issue-coordinator-decisions.ts";
+const { DEPENDENCY_QUERY_TIMEOUT_MS, defaultIssueDecisionConfig, remainingIssueDecisionTimeout, selectIssueForImplementation } = require("../extensions/deadloop/automations/issue-coordinator-decisions.cts");
+const decisionScript = "extensions/deadloop/automations/issue-coordinator-decisions.cts";
 
 function runDecision(args: string[]) {
   return spawnSync("node", [decisionScript, ...args], { cwd: process.cwd(), encoding: "utf8" });

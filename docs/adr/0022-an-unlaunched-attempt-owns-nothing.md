@@ -6,7 +6,7 @@ Accepted, interim. Amends [ADR 0019](0019-work-authority-release-for-a-new-agent
 
 ## Context
 
-ADR 0020 decided that deadloop stops deriving work authority: the concept and the reconciliation that produced it are removed, replaced by compare-and-swap at the mutation, a local dispatch lock, runtime-only liveness, and GitHub as the request queue. That removal is not finished — the dispatch lock landed, and the claim layer's removal is still open work — so `reconcile-pr-work-authority.ts` still decides which attempt owns a pull request on every tick, and its defects still stop live pull requests.
+ADR 0020 decided that deadloop stops deriving work authority: the concept and the reconciliation that produced it are removed, replaced by compare-and-swap at the mutation, a local dispatch lock, runtime-only liveness, and GitHub as the request queue. That removal is not finished — the dispatch lock landed, and the claim layer's removal is still open work — so `reconcile-pr-work-authority.cts` still decides which attempt owns a pull request on every tick, and its defects still stop live pull requests.
 
 One such defect has no escape. An attempt claims its target on GitHub before it launches. Between those two points it holds a claim and no workspace. A launch that fails there leaves a journal at `launch_failed` whose `lastSuccessfulPhase` never passed `github_claimed` and whose workspace, tab, and pane are all absent.
 

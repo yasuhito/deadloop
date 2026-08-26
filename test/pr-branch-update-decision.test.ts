@@ -5,9 +5,9 @@ import os from "node:os";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { decideBranchUpdateLive } = require("../extensions/deadloop/automations/pr-branch-update-decision.ts");
+const { decideBranchUpdateLive } = require("../extensions/deadloop/automations/pr-branch-update-decision.cts");
 
-const decisionScript = "extensions/deadloop/automations/pr-branch-update-decision.ts";
+const decisionScript = "extensions/deadloop/automations/pr-branch-update-decision.cts";
 
 function runDecisionFixture(fixtureName: string) {
   const result = spawnSync(

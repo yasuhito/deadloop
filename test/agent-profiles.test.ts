@@ -4,7 +4,7 @@ import { AGENT_KINDS, buildAgentArgv, isAgentKind } from "../src/agent-profiles.
 
 describe("agent launch profiles", () => {
   it("derives the supported agent kinds from the profile table", () => {
-    expect(AGENT_KINDS).toEqual(["pi", "claude"]);
+    expect(AGENT_KINDS).toEqual(["pi", "claude", "omp"]);
   });
 
   it("recognizes a profiled agent kind", () => {
@@ -98,6 +98,30 @@ describe("agent launch profiles", () => {
     expect(
       buildAgentArgv({ agent: "claude", name: "w", level: "low", uuid: "abc-uuid", promptFile: "/p", promptText: "x" }),
     ).toContain("abc-uuid");
+  });
+
+  it("builds the omp argv without a session identity flag", () => {
+    expect(
+      buildAgentArgv({
+        agent: "omp",
+        name: "demo-issue-1-worker",
+        level: "medium",
+        promptFile: "/wt/.deadloop/prompt.md",
+        promptText: "unused",
+      }),
+    ).toEqual(["omp", "--thinking", "medium", "--auto-approve", "@/wt/.deadloop/prompt.md"]);
+  });
+
+  it("builds the omp argv even when no session name is supplied", () => {
+    expect(
+      buildAgentArgv({ agent: "omp", level: "low", promptFile: "/p", promptText: "" }),
+    ).toEqual(["omp", "--thinking", "low", "--auto-approve", "@/p"]);
+  });
+
+  it("includes the omp model flag when a model is set", () => {
+    expect(
+      buildAgentArgv({ agent: "omp", level: "low", model: "opus", promptFile: "/p", promptText: "" }),
+    ).toEqual(["omp", "--thinking", "low", "--model", "opus", "--auto-approve", "@/p"]);
   });
 
   it("throws when the agent kind is unknown", () => {
