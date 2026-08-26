@@ -166,6 +166,7 @@ async function loadExtension(
     beforeDisableLock?: () => Promise<void>;
     afterEnablementSaved?: () => Promise<void>;
     afterEnablementSchedulerStart?: () => Promise<void>;
+    afterTickReconciliation?: () => Promise<void>;
     beforeEnablementWorktreeCreate?: (journalPath: string) => Promise<void>;
     beforeEnablementProjectCheck?: (worktreePath: string) => Promise<void>;
     runAutomationScript?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
@@ -173,6 +174,7 @@ async function loadExtension(
     // null keeps the hook off the testing object so the host runs its own reconciliation.
     reconcilePrWorkAuthority?: (() => Promise<{ reconciled: boolean; reason: string }>) | null;
     schedulerLockCapabilityPreflight?: () => void;
+    observeDeployedCodeIdentity?: () => string;
     recoveryFixture?: {
       issues: unknown[];
       worktrees: unknown[];
@@ -277,6 +279,7 @@ async function loadExtension(
       beforeDisableLock: options.beforeDisableLock,
       afterEnablementSaved: options.afterEnablementSaved,
       afterEnablementSchedulerStart: options.afterEnablementSchedulerStart,
+      afterTickReconciliation: options.afterTickReconciliation,
       beforeEnablementWorktreeCreate: options.beforeEnablementWorktreeCreate,
       beforeEnablementProjectCheck: options.beforeEnablementProjectCheck,
       herdrPreflight: options.herdrPreflight || (() => undefined),
@@ -284,6 +287,7 @@ async function loadExtension(
         ? {}
         : { reconcilePrWorkAuthority: options.reconcilePrWorkAuthority || (async () => ({ reconciled: true, reason: "" })) }),
       schedulerLockCapabilityPreflight: options.schedulerLockCapabilityPreflight,
+      observeDeployedCodeIdentity: options.observeDeployedCodeIdentity || (() => "a".repeat(40)),
     },
   });
   retainedExtensionShutdowns.push(async () => {
@@ -2504,6 +2508,69 @@ describe("enablement command integration", () => {
       locks: 1,
       message: expect.stringContaining(`repository is already served by Automation host pid ${process.pid}`),
     });
+  });
+
+  it("records the writing Automation host code identity in shared enablement state", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root, { observeDeployedCodeIdentity: () => "a".repeat(40) });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    expect(state.lastWriterCodeIdentity).toBe("a".repeat(40));
+  });
+
+  it("stops enablement before GitHub side effects when the deployed code identity changed", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    let observations = 0;
+    const extension = await loadExtension(root, {
+      observeDeployedCodeIdentity: () => ++observations === 1 ? "a".repeat(40) : "b".repeat(40),
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.ghCommands).toEqual([]);
+  });
+
+  it("stops a tick before selecting an automation when the deployed code identity changed", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.projects[0].automations = [{ name: "identity guarded", schedule: "*/1 * * * *", precheckFile: "issue-coordinator.precheck.sh", promptFile: "issue-coordinator.md" }];
+    writeFileSync(configPath, JSON.stringify(config));
+    let deployed = "a".repeat(40);
+    let automationRuns = 0;
+    const extension = await loadExtension(root, {
+      observeDeployedCodeIdentity: () => deployed,
+      afterTickReconciliation: async () => { deployed = "b".repeat(40); },
+      runAutomationScript: async () => { automationRuns += 1; return { code: 0, stdout: "", stderr: "" }; },
+    });
+    vi.useFakeTimers();
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(automationRuns).toBe(0);
+  });
+
+  it("does not change a running attempt record when code identity stops the tick", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    let deployed = "a".repeat(40);
+    const extension = await loadExtension(root, { observeDeployedCodeIdentity: () => deployed });
+    vi.useFakeTimers();
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    const attemptPath = path.join(root, ".pi", "agent", "deadloop", "runs", "active", "attempt.json");
+    mkdirSync(path.dirname(attemptPath), { recursive: true });
+    writeFileSync(attemptPath, "running attempt\n");
+    deployed = "b".repeat(40);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(readFileSync(attemptPath, "utf8")).toBe("running attempt\n");
   });
 
   it("fails fast when another Automation host owns the repository lock", async () => {

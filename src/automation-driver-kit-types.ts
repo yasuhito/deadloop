@@ -3,7 +3,7 @@
 export type JsonObject = Record<string, any>;
 
 export type DriverResult = {
-  action: "skip" | "done" | "needs_llm" | "error";
+  action: "skip" | "done" | "monitor" | "needs_llm" | "error";
   summary: string;
   [key: string]: any;
 };
