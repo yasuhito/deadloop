@@ -365,12 +365,18 @@ describe("attempt completion persistence decisions", () => {
 
   it("retains a human-required reviewer result whose pull request still carries an agent request", () => {
     const fixture = reviewerFixture("human_required");
-    const github = { ...fixture.github, labels: ["agent:review"] };
+    const github = { ...fixture.github, labels: ["agent:in-progress"] };
 
-    expect(decide(fixture.record, fixture.report, github, {
-      reviewerExpectedLabels: [],
-      reviewerManagedLabels: ["agent:review", "agent:in-progress", "agent:blocked"],
-    })).toEqual({ action: "preserve", reason: "github_persistence_not_confirmed" });
+    expect(decide(fixture.record, fixture.report, github, fixture.context))
+      .toEqual({ action: "preserve", reason: "github_persistence_not_confirmed" });
+  });
+
+  it("retains a human handoff whose pull request is ready but still carries an agent workflow label", () => {
+    const fixture = reviewerFixture("approved");
+    const github = { ...fixture.github, labels: ["agent:blocked"] };
+
+    expect(decide(fixture.record, fixture.report, github, fixture.context))
+      .toEqual({ action: "preserve", reason: "github_persistence_not_confirmed" });
   });
 
   it("preserves changes requested that reports no repair progress", () => {

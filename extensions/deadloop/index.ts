@@ -1627,14 +1627,24 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       if (report.status !== "complete") continue;
     }
     const reviewerAutoMerge = record.autoMergePolicy ?? project.autoMerge;
-    // A review that neither repairs nor merges hands its pull request to a person, and that state
-    // carries no agent workflow label. The human handoff label classifies Issues, so expecting it
-    // on a pull request would describe a state nothing ever writes.
-    const expectedLabels = report?.role === "reviewer"
-      ? decideReviewTransition(report.result || {}).transition === "repair" || reviewerAutoMerge
-        ? [labels.review, labels.inProgress]
-        : []
-      : [];
+    // A review that neither repairs nor merges hands its pull request to a person. That handoff is
+    // expected explicitly, through the shared human-handoff definition, instead of as an empty
+    // label set: the closure proof must see the pull request ready and no agent workflow label left.
+    const expectedLabels = report?.role === "reviewer" ? [labels.review, labels.inProgress] : [];
+    const reviewerHandoff = report?.role === "reviewer"
+      && decideReviewTransition(report.result || {}).transition !== "repair" && !reviewerAutoMerge;
+    const handoffLabels = [
+      "--handoff-review-label", labels.review,
+      "--handoff-implement-label", labels.implement,
+      "--handoff-update-branch-label", labels.updateBranch,
+      "--handoff-in-progress-label", labels.inProgress,
+      "--handoff-blocked-label", labels.blocked,
+    ];
+    const proofLabels = reviewerHandoff ? handoffLabels : [
+      ...expectedLabels.flatMap((label) => ["--expected-label", label]),
+      ...[labels.review, labels.inProgress, labels.blocked, labels.human]
+        .flatMap((label) => ["--managed-label", label]),
+    ];
     const args = [
       path.join(AUTOMATION_DIR, "complete-attempt-workspace.cts"),
       "--attempt-record", attemptRecord,
@@ -1647,9 +1657,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       "--worker-implement-label", labels.implement,
       "--worker-review-label", labels.review,
       "--auto-merge", reviewerAutoMerge ? "true" : "false",
-      ...expectedLabels.flatMap((label) => ["--expected-label", label]),
-      ...[labels.review, labels.inProgress, labels.blocked, labels.human]
-        .flatMap((label) => ["--managed-label", label]),
+      ...proofLabels,
     ];
     const result = await execJson(pi, "node", args, null);
     // `driverResult` carries the failure text in `summary`, so logging only `reason` reduces every
