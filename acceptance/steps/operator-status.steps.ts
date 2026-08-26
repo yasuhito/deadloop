@@ -7,7 +7,7 @@ import { Given, Then, When } from "@cucumber/cucumber";
 
 import { fixtureStateDir } from "../support/fixture-state-dir";
 
-import { EXTENSION_CODE_CHANGED_WARNING, normalizeProject } from "../../src/core";
+import { normalizeProject } from "../../src/core";
 import { buildStatusSnapshot, formatStatusReport, type StatusReportInput } from "../../src/status";
 
 const fixture = JSON.parse(readFileSync("test/fixtures/status/report-case.json", "utf8"));
@@ -107,8 +107,17 @@ Given("Worktree of Issue #13 in progress is up and running", function (this: Ope
   this.statusInput = { ...baseStatusInput(), worktrees: [fixture.worktrees[1]] };
 });
 
-Given("deadloop Extension code update not reflected in status display", function (this: OperatorStatusWorld) {
-  this.statusInput = { ...baseStatusInput(), warnings: [EXTENSION_CODE_CHANGED_WARNING] };
+Given("The loaded deadloop code differs from the deployed code", function (this: OperatorStatusWorld) {
+  this.statusInput = {
+    ...baseStatusInput(),
+    codeIdentity: {
+      loadedIdentity: "a".repeat(40),
+      deployedIdentity: "b".repeat(40),
+      action: "stop",
+      reason: "the loaded deadloop code identity differs from the deployed code identity",
+      recovery: "Run /reload in this session to load the deployed deadloop code.",
+    },
+  };
 });
 
 Given("Automation selected Issue #12 in most recent run", function (this: OperatorStatusWorld) {
@@ -155,8 +164,8 @@ Then("Status displays active worktrees", function (this: OperatorStatusWorld) {
   assert.match(this.report || "", /agent\/issue-13-add-deadloop-status-report -> .*\(workspace-13\)/);
 });
 
-Then("Status shows the code-update warning", function (this: OperatorStatusWorld) {
-  assert.match(this.report || "", new RegExp(EXTENSION_CODE_CHANGED_WARNING));
+Then("Status shows both code identities and the reload recovery", function (this: OperatorStatusWorld) {
+  assert.match(this.report || "", /loaded code identity: a{40}[\s\S]*deployed code identity: b{40}[\s\S]*\/reload/);
 });
 
 Then("Status shows the most recent automation decision", function (this: OperatorStatusWorld) {
