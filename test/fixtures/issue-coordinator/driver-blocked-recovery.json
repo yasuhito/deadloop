@@ -1,0 +1,16 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 14,
+      "title": "Retry exploration",
+      "body": "Retry after resolving the previous failure.",
+      "url": "https://github.com/owner/repo/issues/14",
+      "labels": [{"name": "agent:blocked"}, {"name": "agent:explore"}],
+      "timelineEvents": [
+        {"id": "10", "event": "labeled", "created_at": "2026-08-16T00:00:00Z", "actor": {"login": "deadloop-bot"}, "label": {"name": "agent:blocked"}},
+        {"id": "11", "event": "labeled", "created_at": "2026-08-16T00:00:00Z", "actor": {"login": "human"}, "label": {"name": "agent:explore"}}
+      ]
+    }
+  ]
+}

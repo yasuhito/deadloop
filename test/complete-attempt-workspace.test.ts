@@ -55,8 +55,7 @@ function fixture(withMarker: boolean) {
   };
   const args = {
     attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: root, githubRepo: "owner/repo", stateDir,
-    enabledAt: "1", expectedLabel: [], workerReadyLabel: "ready-for-agent", workerImplementLabel: "agent:implement",
-    workerReviewLabel: "agent:review",
+    enabledAt: "1", expectedLabel: [], workerReviewLabel: "agent:review",
   };
   return {
     args,
@@ -221,6 +220,15 @@ describe("selected attempt workspace completion", () => {
     const data = fixture(true);
     const result = completeLocked(data.args, data.runner, () => undefined);
     expect({ action: result.driverAction, phase: readAttemptRecord(data.runDir).phase }).toEqual({ action: "workspace_closed", phase: "workspace_closed" });
+  });
+
+  it("closes a proven Worker workspace when a later implementation request is queued", () => {
+    const data = fixture(true);
+    data.setIssueObservation({ number: 12, state: "OPEN", labels: [{ name: "ready-for-agent" }, { name: "agent:implement" }], comments: [] });
+
+    const result = completeLocked(data.args, data.runner, () => undefined);
+
+    expect(result.driverAction).toBe("workspace_closed");
   });
 
   it("reconciles an already closed proven attempt idempotently", () => {
