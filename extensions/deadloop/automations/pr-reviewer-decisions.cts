@@ -42,9 +42,8 @@ function defaultDecisionConfig(overrides: Partial<ReviewDecisionConfig> = {}): R
     externalReviewWaitSeconds: 1800,
     projectId: "",
     automationLogin: "",
-    // A `review-repair` request relaunches the stopped repair contract its published evidence
-    // names; the launcher refuses it when no such contract can be proven instead of guessing a
-    // new one, and never falls back to the review request queued behind it.
+    // Every PR request role has a launcher in the driver, so a pull request waiting on any one of
+    // them is selectable; none is skipped as unserved (ADR 0032).
     servedRoles: ["branch-update", "review-repair", "reviewer"],
     // Whether a request post-dates the block that stopped a pull request is a timeline question.
     // A caller that reads labels only cannot answer it, so it sets this and leaves a blocked pull

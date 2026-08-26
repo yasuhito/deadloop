@@ -6,6 +6,7 @@ const path = require("node:path");
 const { normalizeEnablementStateValue } = require("./enablement-state.cts");
 const { acquireLockSync, releaseOwned } = require("./enablement-lock.cjs");
 const { currentDisableGeneration } = require("./disable-generation.cjs");
+const { readValidOneShotExecution } = require("./one-shot-execution.cjs");
 
 function githubRepoFromRemote(remote) {
   const match = /^(?:git@github\.com:|https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(String(remote || ""));
@@ -54,24 +55,40 @@ function assertCanonicalStateDir(stateDir) {
 
 function assertLocallyEnabled(project) {
   assertCanonicalStateDir(project.stateDir);
+  let hasMatchingRecord = false;
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(project.stateDir, "enabled-projects.json"), "utf8"));
     const state = normalizeEnablementStateValue(raw);
-    if (!state) throw new Error("invalid enablement schema");
-    const enabled = state.projects.find((candidate) =>
-      candidate.repoPath === path.resolve(project.repoPath) && candidate.githubRepo === project.githubRepo && candidate.enabled !== false,
-    );
-    if (enabled) {
-      if (!enabled.automationLogin) throw new Error("deadloop enablement has no authorized automation identity");
-      if (project.enabledAt !== undefined && enabled.enabledAt !== project.enabledAt) {
-        throw new Error("deadloop enablement generation changed; operation stopped");
+    if (state) {
+      const enabled = state.projects.find((candidate) =>
+        candidate.repoPath === path.resolve(project.repoPath) && candidate.githubRepo === project.githubRepo && candidate.enabled !== false,
+      );
+      if (enabled) {
+        hasMatchingRecord = true;
+        if (!enabled.automationLogin) throw new Error("deadloop enablement has no authorized automation identity");
+        if (project.enabledAt !== undefined && enabled.enabledAt !== project.enabledAt) {
+          throw new Error("deadloop enablement generation changed; operation stopped");
+        }
+        if (currentDisableGeneration(project.stateDir, project.repoPath) !== enabled.disableGeneration) {
+          throw new Error("deadloop disable was requested for this repository");
+        }
+        return enabled;
       }
-      if (currentDisableGeneration(project.stateDir, project.repoPath) !== enabled.disableGeneration) {
-        throw new Error("deadloop disable was requested for this repository");
-      }
-      return enabled;
     }
   } catch {}
+  // A matching enabled record that fails its own checks keeps stopping the operation, reported
+  // through the ordinary disabled error as before; it never falls back to scoped authority.
+  if (!hasMatchingRecord) {
+    // A one-shot scheduler tick holds a scoped execution authorization instead of persisted
+    // enablement. It stands in only where no enabled record exists at all.
+    const oneShot = readValidOneShotExecution({
+      stateDir: project.stateDir,
+      repoPath: project.repoPath,
+      githubRepo: project.githubRepo,
+      enabledAt: project.enabledAt,
+    });
+    if (oneShot) return oneShot;
+  }
   throw new Error("deadloop is disabled for this repository");
 }
 

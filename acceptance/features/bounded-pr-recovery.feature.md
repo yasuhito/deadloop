@@ -62,17 +62,17 @@ Handle review findings and conflicts safely without arbitrary repair-count or ch
 * When deadloop validates the review result
 * Then The approved review result is rejected
 
-## Scenario: Start a dedicated repair attempt for the first actionable review findings
+## Scenario: Queue a repair request for the first actionable review findings
 
 * Given A pull request has actionable review findings for the first time
 * When deadloop processes the review result
-* Then deadloop starts a dedicated repair attempt
+* Then deadloop queues an agent:implement repair request without starting an agent
 
-## Scenario: Start a fourth repair when every earlier required finding is resolved
+## Scenario: Queue a fourth repair when every earlier required finding is resolved
 
 * Given A pull request has three historical repairs and only new required findings
 * When deadloop processes the review result
-* Then deadloop starts a dedicated repair attempt
+* Then deadloop queues an agent:implement repair request without starting an agent
 
 ## Scenario: Hand a persisted required finding to a person
 

@@ -71,16 +71,12 @@ describe("pull request request-target selection", () => {
     expect(selectPrRequestTarget([conflicted], config).selected).toBe(true);
   });
 
-  it("serves a repair request as the review-repair role", () => {
+  it("selects an implement request as a served review-repair role", () => {
     expect(selectPrRequestTarget([pr(7, ["agent:implement"])], config).role).toBe("review-repair");
   });
 
-  it("does not fall back to the review request behind a repair request that cannot be served", () => {
-    const decision = selectPrRequestTarget(
-      [pr(7, ["agent:implement", "agent:review"])],
-      defaultDecisionConfig({ projectId: "demo", automationLogin: "deadloop-bot", servedRoles: ["branch-update", "reviewer"] }),
-    );
-    expect(decision.selected).toBe(false);
+  it("selects the implement request before the review request queued behind it", () => {
+    expect(selectPrRequestTarget([pr(7, ["agent:implement", "agent:review"])], config).role).toBe("review-repair");
   });
 
   it("does not select a review request while checks are still running", () => {

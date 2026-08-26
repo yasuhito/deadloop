@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 const issueDriver = readFileSync("extensions/deadloop/automations/issue-coordinator-driver.cts", "utf8");
 const reviewerDriver = readFileSync("extensions/deadloop/automations/pr-reviewer-driver.cts", "utf8");
-const repairDriver = readFileSync("extensions/deadloop/automations/pr-review-repair-dispatch.cts", "utf8");
 const extension = readFileSync("extensions/deadloop/index.ts", "utf8");
 
 function namedFunction(source: string, name: string): string {
@@ -26,8 +25,8 @@ describe("Herdr 0.8.0 activation boundary", () => {
   });
 
 
-  it("selects launchRepair for the review-repair role", () => {
-    expect(namedFunction(repairDriver, "dispatchReviewResult")).toContain("launchRepair(");
+  it("selects the review-repair launcher from the PR driver", () => {
+    expect(namedFunction(reviewerDriver, "driveSelectedTarget")).toContain("driveSelectedRepair(");
   });
 
   it("keeps the startup preflight selected", () => {

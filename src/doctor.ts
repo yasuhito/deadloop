@@ -91,6 +91,8 @@ export type DoctorInput = {
   codeSnapshots?: CodeSnapshotInventory | null;
   deployedCodeIdentity?: string | null;
   loadedCodeIdentity?: string | null;
+  enablementStorageExhaustion?: EnablementStorageExhaustionEvidence | null;
+  enablementStorageExhaustionPath?: string;
 };
 
 export type DoctorFindingType =
@@ -106,7 +108,16 @@ export type DoctorFindingType =
   | "workspace_trust"
   | "retained_attempt_workspace"
   | "herdr_unsupported"
-  | "code_snapshot_inventory";
+  | "code_snapshot_inventory"
+  | "enablement_storage_exhaustion";
+
+export type EnablementStorageExhaustionEvidence = {
+  code: string;
+  detail?: string;
+  repoPath?: string;
+  githubRepo?: string;
+  observedAt: number;
+};
 
 export type DoctorFinding = {
   id: string;
@@ -158,6 +169,10 @@ export type DoctorSnapshot = {
   findings: DoctorFinding[];
   verificationCandidates?: VerificationCandidateDiscovery;
   lastWriterCodeIdentity?: string | null;
+  enablementStorageExhaustion?: {
+    evidence: EnablementStorageExhaustionEvidence;
+    evidencePath: string;
+  } | null;
 };
 
 function isPathInside(child: string, parent: string): boolean {
@@ -688,13 +703,58 @@ function buildWorkspaceTrustFindings(
   ];
 }
 
+// The evidence is local-only by contract: it names no GitHub mutation, because an enablement
+// storage stop records no execution permission and touches no Issue, PR, or workflow label.
+function carriedEnablementStorageExhaustion(input: DoctorInput) {
+  if (!input.enablementStorageExhaustion) return null;
+  return {
+    evidence: input.enablementStorageExhaustion,
+    evidencePath: input.enablementStorageExhaustionPath || "~/.pi/agent/deadloop/enablement-storage-exhaustion.json",
+  };
+}
+
+function enablementStorageExhaustionSummary(carried: NonNullable<DoctorSnapshot["enablementStorageExhaustion"]>): string {
+  const evidence = carried.evidence;
+  const where = [evidence.repoPath ? `checkout ${evidence.repoPath}` : null, evidence.githubRepo ? `repository ${evidence.githubRepo}` : null]
+    .filter(Boolean).join(", ");
+  return [
+    `A deterministic enablement host operation observed ${evidence.code}${where ? ` for ${where}` : ""}.`,
+    "Execution permission was not recorded, and no GitHub issue, pull request, or agent workflow label was changed.",
+    "Retained verification worktrees were left untouched.",
+    `Local evidence: ${carried.evidencePath}.`,
+  ].join(" ");
+}
+
+function enablementStorageExhaustionCommands(carried: NonNullable<DoctorSnapshot["enablementStorageExhaustion"]>): string[] {
+  return [
+    `cat ${shellArg(carried.evidencePath)}`,
+    ...(carried.evidence.detail ? [`# recorded failure detail: ${carried.evidence.detail}`] : []),
+    "df -h",
+    "df -i",
+    "/deadloop-enable",
+  ];
+}
+
+function buildEnablementStorageExhaustionFindings(input: DoctorInput): DoctorFinding[] {
+  const carried = carriedEnablementStorageExhaustion(input);
+  if (!carried) return [];
+  return [{
+    id: "enablement-storage-exhaustion",
+    type: "enablement_storage_exhaustion",
+    title: `last enablement stopped: storage exhausted (${carried.evidence.code}) at ${new Date(carried.evidence.observedAt).toISOString()}`,
+    summary: enablementStorageExhaustionSummary(carried),
+    commands: enablementStorageExhaustionCommands(carried),
+  }];
+}
+
 export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   const project = input.selectedProject === undefined
     ? resolveActiveProject(input.cwd, input.projects)
     : input.selectedProject;
   const repositoryEnablement = project ? "enabled" : input.repositoryEnablement || "unavailable";
   const warnings = input.warnings || [];
-  if (!project) return { project: null, repositoryEnablement, cwd: input.cwd, warnings, findings: [] };
+  const enablementStorageExhaustion = carriedEnablementStorageExhaustion(input);
+  if (!project) return { project: null, repositoryEnablement, cwd: input.cwd, warnings, findings: [], enablementStorageExhaustion };
 
   const issues = input.issues || [];
   const openPrs = input.openPrs || [];
@@ -726,8 +786,10 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
       ...buildAutomationFindings(project, state, automationDir, statePath, nowMs),
       ...buildWorkspaceTrustFindings(project, input.claudeConfig),
       ...buildCodeSnapshotInventoryFindings(input),
+      ...buildEnablementStorageExhaustionFindings(input),
     ],
     lastWriterCodeIdentity: input.lastWriterCodeIdentity ?? null,
+    enablementStorageExhaustion,
   };
 }
 
@@ -742,13 +804,20 @@ function formatConfigSource(project: NormalizedProject): string {
 
 export function formatDoctorReport(snapshot: DoctorSnapshot): string {
   if (!snapshot.project) {
-    const lines = snapshot.repositoryEnablement === "disabled"
-      ? ["deadloop is not enabled for this repository.", "", "Enable it:", "  /deadloop-enable", ""]
-      : ["deadloop doctor is unavailable for the current location.", ""];
-    return [
-      ...lines,
+    const lines = [
+      ...(snapshot.repositoryEnablement === "disabled"
+        ? ["deadloop is not enabled for this repository.", "", "Enable it:", "  /deadloop-enable", ""]
+        : ["deadloop doctor is unavailable for the current location.", ""]),
       `cwd: ${snapshot.cwd}`,
       ...snapshot.warnings.map((warning) => `warning: ${warning}`),
+    ];
+    if (!snapshot.enablementStorageExhaustion) return lines.join("\n");
+    return [
+      ...lines,
+      "",
+      "Last enablement stop:",
+      `- [${snapshot.enablementStorageExhaustion.evidence.code}] ${enablementStorageExhaustionSummary(snapshot.enablementStorageExhaustion)}`,
+      ...enablementStorageExhaustionCommands(snapshot.enablementStorageExhaustion).map((command) => `  - ${command}`),
     ].join("\n");
   }
 

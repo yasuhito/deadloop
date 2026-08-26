@@ -128,7 +128,7 @@ describe("PR reviewer precheck", () => {
     expect(runPrecheck("precheck-renamed-update-branch.json", { updateBranchLabel: "custom:update-branch" })).toBe(0);
   });
 
-  it("forwards the configured implement label so its repair request stays selectable", () => {
+  it("selects a PR whose renamed implement request outranks a review request", () => {
     expect(runPrecheck("precheck-renamed-implement.json", { implementLabel: "custom:implement" })).toBe(0);
   });
 

@@ -7,13 +7,11 @@ import { Given, Then, When } from "@cucumber/cucumber";
 
 import { deliverPendingDriverHandoff } from "../../src/automation-runner";
 import { runPrReviewerDriverFixture } from "../support/pr-reviewer-driver";
-import { fixtureStateDir } from "../support/fixture-state-dir";
 
 const { applyDeterministicAttemptMonitoring } = require("../../src/deterministic-attempt-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("../../extensions/deadloop/automations/contain-terminal-monitor.cts");
 const { readAttemptRecord } = require("../../src/attempt-lifecycle-runtime.cjs");
 const { observeAttemptMonitoringDirective } = require("../../src/monitor-handoff-observation.cts");
-const { repairWorkerPrompt } = require("../../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
 const { renderRepairMarker, repairAttemptKey, reviewResultFingerprint } = require("../../extensions/deadloop/automations/pr-review-repair-state.cts");
 
 const HEAD = "a".repeat(40);
@@ -265,53 +263,10 @@ Given("A blocked repair runtime failure that gained a new agent:implement reques
   const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-repair-recovery-"));
   const fixturePath = path.join(fixtureDirectory, "recovery.json");
 
-  // The retained evidence the relaunch re-proves locally: contract, journal of the released
-  // attempt, and the prompt that embeds the full findings contract.
-  const stateDir = fixtureStateDir();
-  const runDir = path.join(stateDir, "runs", "stopped-repair-run");
-  fs.mkdirSync(runDir, { recursive: true });
-  fs.writeFileSync(path.join(runDir, "review-contract.json"), `${JSON.stringify({
-    attemptKey: REPAIR_KEY,
-    expectedHead: HEAD,
-    findingTitles: FINDINGS.map((finding) => finding.title),
-  })}\n`);
-  const promptFile = path.join(runDir, "repair-prompt.md");
-  fs.writeFileSync(promptFile, repairWorkerPrompt("42", "pr-42", HEAD, FINDINGS, REPAIR_KEY,
-    path.join(runDir, "promise.json"), "/worktrees/pr-42", {
-      projectId: "demo",
-      repoPath: "/repo",
-      githubRepo: "owner/repo",
-      stateDir,
-      checkCommand: "npm test",
-      workerAgent: "pi",
-      workerModel: "",
-      remote: "origin",
-      reviewLabel: "agent:review",
-      blockedLabel: "agent:blocked",
-      inProgressLabel: "agent:in-progress",
-      automationDir: "/automation",
-      enabledAt: 1,
-    }));
-  fs.writeFileSync(path.join(runDir, "attempt.json"), `${JSON.stringify({
-    attemptId: REPAIR_KEY,
-    launchUuid: "launch-1",
-    project: "demo",
-    repository: "owner/repo",
-    role: "review-repair",
-    target: { kind: "pull-request", number: 42 },
-    inputRevision: { head: HEAD },
-    branch: "pr-42",
-    worktreePath: "/worktrees/pr-42",
-    agentName: "demo-pr-42-review-repair",
-    workspaceLabel: "demo-pr-42-review-repair",
-    promptFile,
-    promiseFile: path.join(runDir, "promise.json"),
-    phase: "authority_released",
-    lastSuccessfulPhase: "agent_started",
-    authorityRelease: { reason: "terminal_missing_report", releasedAt: "2026-07-03T00:10:00Z" },
-  })}\n`);
-
-  const reviewCommentBody = `## Review result: changes required\n\n${renderRepairMarker(HEAD, reviewResultFingerprint(FINDINGS))}\n<!-- deadloop:review-result head=${HEAD} review=${reviewResultFingerprint(FINDINGS)} outcome=changes_requested -->`;
+  // ADR 0032: the findings contract is the one persisted on GitHub — the repair attempt marker
+  // carries it as an encoded payload. The stop explanation from #258's terminal monitor sits beside
+  // it, and the queued agent:implement request strictly post-dates the block.
+  const reviewCommentBody = `## Review result: changes required\n\n${renderRepairMarker(HEAD, reviewResultFingerprint(FINDINGS), { findings: FINDINGS })}\n<!-- deadloop:review-result head=${HEAD} review=${reviewResultFingerprint(FINDINGS)} outcome=changes_requested -->`;
   fs.writeFileSync(fixturePath, JSON.stringify({
     prs: [{
       number: 42,
@@ -320,6 +275,7 @@ Given("A blocked repair runtime failure that gained a new agent:implement reques
       headRefName: "pr-42",
       headRefOid: HEAD,
       updatedAt: "2026-07-04T00:00:00Z",
+      isCrossRepository: false,
       isDraft: false,
       labels: [{ name: "agent:implement" }, { name: "agent:blocked" }],
       statusCheckRollup: [],
@@ -328,10 +284,11 @@ Given("A blocked repair runtime failure that gained a new agent:implement reques
         {
           createdAt: "2026-07-03T00:05:00Z",
           author: { login: "deadloop-bot" },
-          body: `deadloop stopped this attempt because its agent turn ended without a valid completion report.\nPull request head at selection: \`${HEAD}\`\n\n<!-- deadloop:terminal-monitor-stop attempt=${REPAIR_KEY} head=${HEAD} reason=missing_completion_report -->`,
+          body: `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\nPull request head at selection: \`${HEAD}\`\n\n<!-- deadloop:terminal-monitor-stop attempt=${REPAIR_KEY} head=${HEAD} reason=missing_completion_report -->`,
         },
       ],
       reviewRequests: [],
+      mergeable: "MERGEABLE",
       timelineEvents: [
         {
           id: "30",
@@ -368,7 +325,7 @@ Then("deadloop relaunches the stopped repair contract through a new repair monit
     attemptKey: handoff?.input?.attemptKey,
     expectedHead: handoff?.input?.expectedHeadOid,
   }, {
-    action: "repair_request_monitor_request",
+    action: "review_repair_monitor_request",
     starts: 1,
     handoffKind: "repair",
     attemptKey: REPAIR_KEY,
