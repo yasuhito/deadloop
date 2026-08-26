@@ -4,6 +4,7 @@ const {
   attemptRecordPath,
   createPreparedAttempt,
   readAttemptRecord,
+  releasesAttemptOwnership,
   transitionPersistedAttempt,
   writeAttemptRecordAtomically,
 } = require("./attempt-lifecycle-runtime.cjs");
@@ -14,7 +15,7 @@ const { writeWorkerContractSnapshot } = require("./worker-required-verification-
 
 import type { AttemptRecord, AttemptRole, AttemptTarget, InputRevision, PreparedAttemptInput } from "./attempt-lifecycle";
 import type { RequiredVerificationContract } from "./required-verification";
-import type { RunnerAdapter } from "./runner";
+import type { RunnerAdapter, RunnerWorktree, RunnerWorkspace } from "./runner";
 
 type WorktreeRequest =
   | { mode: "create"; branch: string; baseBranch: string }
@@ -220,7 +221,14 @@ function recordAgentLaunchGithubClaimed(input: AgentLaunchFlowInput): AttemptRec
   return transitionPersistedAttempt(prepared.runDir, "github_claimed");
 }
 
-function ensureFreshCheckout(input: AgentLaunchFlowInput, runner: RunnerAdapter): void {
+type CheckoutObservation = {
+  branchMatches: RunnerWorktree[];
+  checkoutMatches: RunnerWorktree[];
+  openWorktree?: RunnerWorktree;
+  openWorkspace?: RunnerWorkspace;
+};
+
+function observeCheckout(input: AgentLaunchFlowInput, runner: RunnerAdapter): CheckoutObservation {
   const expectedPath = path.resolve(input.intendedWorktreePath);
   const worktrees = runner.listWorktrees(input.repoPath);
   const branchMatches = worktrees.filter((worktree) => String(worktree.branch || "") === input.worktree.branch);
@@ -231,25 +239,135 @@ function ensureFreshCheckout(input: AgentLaunchFlowInput, runner: RunnerAdapter)
   const openWorkspace = runner.listWorkspaces().find((workspace) =>
     typeof workspace.worktreePath === "string" && path.resolve(workspace.worktreePath) === expectedPath
   );
-  if (openWorktree || openWorkspace) {
-    throw new Error(`worktree ${input.worktree.branch} already has an open attempt workspace`);
-  }
-  if (input.worktree.mode === "open") {
-    if (branchMatches.length !== 1 || checkoutMatches.length !== 1 || branchMatches[0] !== checkoutMatches[0]) {
-      throw new Error(`worktree ${input.worktree.branch} does not resolve to the recorded canonical checkout`);
+  return {
+    branchMatches,
+    checkoutMatches,
+    ...(openWorktree ? { openWorktree } : {}),
+    ...(openWorkspace ? { openWorkspace } : {}),
+  };
+}
+
+/** Workspace IDs this launch observes open on the intended canonical checkout itself. */
+function observedRetainedWorkspaceIds(observation: CheckoutObservation): string[] {
+  return [...new Set([
+    ...observation.checkoutMatches.map((worktree) => String(worktree.workspaceId || "")),
+    String(observation.openWorkspace?.workspaceId || ""),
+  ].filter(Boolean))];
+}
+
+/**
+ * Closes a retained open workspace this launch can prove belongs to a stopped attempt.
+ *
+ * The proof comes from matching the workspace ID against the prior attempt journals on the same
+ * checkout, so an unknown workspace is never closed on faith: it refuses with the reason instead.
+ * Only a journal whose phase already released ownership counts as stopped; an active or launch-
+ * failed owner keeps its claim until the abandonment driver accounts for it.
+ */
+function releaseStoppedAttemptWorkspace(
+  input: AgentLaunchFlowInput,
+  runner: RunnerAdapter,
+  runsRoot: string,
+  currentRunDir: string,
+  observation: CheckoutObservation,
+): void {
+  const retainedIds = observedRetainedWorkspaceIds(observation);
+  if (!retainedIds.length) return;
+  const prior = priorWorkspaceIdentities(runsRoot, currentRunDir, path.resolve(input.intendedWorktreePath));
+  for (const workspaceId of retainedIds) {
+    const owner = prior.find((record) => record.workspaceId === workspaceId);
+    if (!owner) {
+      throw new Error(`worktree ${input.worktree.branch} already has an open attempt workspace ${workspaceId}`
+        + " that no attempt journal claims; resolve it before this launch");
     }
-  } else if (branchMatches.length || checkoutMatches.length) {
-    throw new Error(`worktree ${input.worktree.branch} already exists before create`);
+    if (!releasesAttemptOwnership(owner.phase)) {
+      throw new Error(`worktree ${input.worktree.branch} already has an open attempt workspace owned by`
+        + ` attempt ${owner.attemptId} (${owner.phase}); resolve it before this launch`);
+    }
+  }
+  for (const workspaceId of retainedIds) runner.closeWorkspace(workspaceId);
+  const after = observeCheckout(input, runner);
+  if (observedRetainedWorkspaceIds(after).length) {
+    throw new Error(`could not close the retained attempt workspace(s) ${retainedIds.join(", ")} on worktree ${input.worktree.branch}`);
   }
 }
 
+/**
+ * Proves the remote still carries exactly the recorded pull-request head and that preparing the
+ * missing canonical checkout cannot move anything. The fetched tip is trusted only for the bytes it
+ * brings: requiring equality with the recorded head makes a wrong remote unable to substitute.
+ */
+function prepareCanonicalCheckout(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): void {
+  const remote = input.worktree.mode === "open" ? input.worktree.remote : undefined;
+  if (!remote) throw new Error("preparing a missing pull-request checkout requires the configured remote");
+  const expectedHead = String(input.inputRevision.head || "").toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(expectedHead)) {
+    throw new Error("canonical checkout preparation requires a full commit identifier");
+  }
+  const git = (args: string[]) => ops.runText(["git", "-C", input.repoPath, ...args]);
+  let fetchedHead: string;
+  try {
+    git(["fetch", "--quiet", remote, `refs/heads/${input.worktree.branch}`]);
+    fetchedHead = git(["rev-parse", "--verify", "FETCH_HEAD^{commit}"]).trim();
+  } catch (error) {
+    throw new Error(`canonical checkout preparation could not fetch ${input.worktree.branch}:`
+      + ` ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!/^[0-9a-f]{40}$/.test(fetchedHead)) {
+    throw new Error(`canonical checkout preparation could not prove ${remote}/${input.worktree.branch} resolves to a commit`);
+  }
+  if (fetchedHead.toLowerCase() !== expectedHead) {
+    throw new Error(`canonical checkout preparation stopped: ${remote}/${input.worktree.branch} does not carry the recorded head ${expectedHead}`);
+  }
+  let localHead = "";
+  try { localHead = git(["rev-parse", "--verify", `refs/heads/${input.worktree.branch}`]).trim(); } catch {}
+  if (localHead && localHead.toLowerCase() !== expectedHead) {
+    throw new Error(`canonical checkout preparation stopped: local branch ${input.worktree.branch}`
+      + ` holds ${localHead.slice(0, 12)}, not the recorded head; align it by hand instead of moving it silently`);
+  }
+}
+
+function exactCanonicalMatch(observation: CheckoutObservation): boolean {
+  return observation.branchMatches.length === 1 && observation.checkoutMatches.length === 1
+    && observation.branchMatches[0] === observation.checkoutMatches[0];
+}
+
 function prepareWorktree(input: AgentLaunchFlowInput, runner: RunnerAdapter, ops: AgentLaunchFlowOps) {
-  ensureFreshCheckout(input, runner);
+  const runsRoot = path.join(input.stateDir, "runs");
+  const currentRunDir = launchPaths(input).runDir;
+  let observation = observeCheckout(input, runner);
+  if (observedRetainedWorkspaceIds(observation).length) {
+    // A retained workspace blocks every shape of relaunch, so it is resolved first: closed when a
+    // released attempt journal proves it stale, otherwise refused with the owning attempt named.
+    releaseStoppedAttemptWorkspace(input, runner, runsRoot, currentRunDir, observation);
+    observation = observeCheckout(input, runner);
+  }
   if (input.worktree.mode === "create") {
+    if (observation.branchMatches.length || observation.checkoutMatches.length) {
+      throw new Error(`worktree ${input.worktree.branch} already exists before create`);
+    }
     return runner.createWorktree({
       repoPath: input.repoPath,
       branch: input.worktree.branch,
       baseBranch: input.worktree.baseBranch,
+      label: input.workspaceLabel,
+      intendedPath: input.intendedWorktreePath,
+    });
+  }
+  if (!exactCanonicalMatch(observation)) {
+    if (observation.branchMatches.length || observation.checkoutMatches.length) {
+      throw new Error(`worktree ${input.worktree.branch} does not resolve to the recorded canonical checkout`);
+    }
+    if (input.target.kind !== "pull-request") {
+      throw new Error(`worktree ${input.worktree.branch} does not resolve to the recorded canonical checkout`);
+    }
+    // The canonical checkout is gone (cleaned up, never created, or lost with a failed host).
+    // Preparing it again is deterministic: fetch, require the exact recorded head, and refuse to
+    // move a diverged local branch. Herdr then creates the checkout and its fresh workspace.
+    prepareCanonicalCheckout(input, ops);
+    return runner.createWorktree({
+      repoPath: input.repoPath,
+      branch: input.worktree.branch,
+      baseBranch: String(input.inputRevision.head || ""),
       label: input.workspaceLabel,
       intendedPath: input.intendedWorktreePath,
     });

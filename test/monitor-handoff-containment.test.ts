@@ -38,6 +38,10 @@ describe("retained monitor containment", () => {
     expect(decideMonitorContainment({ record: activeRecord, report: missingReport, runtime: { kind: "terminal", status: "done", terminalEvidence: "The implementation discusses a model unavailable state." } })).toEqual({ action: "stop", reason: "missing_completion_report" });
   });
 
+  it("never calls a stop storage exhaustion on terminal output alone, even when it names ENOSPC", () => {
+    expect(decideMonitorContainment({ record: activeRecord, report: missingReport, runtime: { kind: "terminal", status: "done", terminalEvidence: "write failed: ENOSPC: no space left on device" } })).toEqual({ action: "stop", reason: "missing_completion_report" });
+  });
+
   it("preserves an unobservable attempt without invoking the monitor", () => {
     expect(decideMonitorContainment({ record: activeRecord, report: missingReport, runtime: { kind: "ambiguous" } })).toEqual({ action: "preserve", reason: "runtime_ambiguous" });
   });

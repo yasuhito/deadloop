@@ -16,13 +16,13 @@ A Git worktree is durable branch state. A Herdr attempt workspace is disposable 
 
 Every role writes an atomic `prepared` attempt journal before its first external mutation, but its GitHub transition is role-specific:
 
-- A Worker uses the guarded Issue label move selected by the Issue coordinator.
+- An explorer or Worker binds its journal to the selected immutable Issue request event, deletes only that request label, and verifies the resulting timeline before adding `agent:in-progress`. A missing label cancels launch; a newer generation remains queued; an ambiguous deletion creates a visible stop. Only proven consumption permits `github_claimed`.
 - A reviewer or branch-update launch records the selected PR request event, adds `agent:in-progress`, normalizes baseline managed labels individually, and deletes the selected request last. Only a documented HTTP 200 response plus complete postvalidation permits `github_claimed`. A crash before that phase advance retains `prepared` and blocks reconciliation because restart cannot prove the 200 response.
 - Review repair launches from a bound reviewer outcome; it does not consume a PR request label.
 
 After that role-specific transition, every launch follows the same workspace contract:
 
-1. Reconcile retained workspaces and refuse a launch while the checkout is already open or ownership is ambiguous.
+1. Reconcile retained workspaces: close one a released attempt journal proves stale, and refuse the launch while an active or unclaimed owner keeps the checkout open or ownership is ambiguous. When no canonical checkout exists at all, a pull-request launch prepares it deterministically — fetch, require the exact recorded head, refuse to move a diverged local branch — and creates the checkout through Herdr.
 2. Create the first linked worktree, or open an existing linked worktree without `--label`.
 3. Require Herdr's response to identify one new workspace, its first tab, root pane, and canonical worktree path. An open response must explicitly report `already_open: false`.
 4. Rename only that confirmed fresh workspace.
@@ -40,7 +40,7 @@ A newly opened workspace can return before its root shell reaches an interactive
 
 A promise file is transport, not cleanup authority. Only a strong V1 report bound to the attempt journal can proceed to role-specific GitHub confirmation.
 
-- Worker: the exact pushed head, open PR, base, closing reference, review label, attempt marker, and non-claimable Issue must agree.
+- Worker: the exact pushed head, open PR, base, closing reference, review label, and attempt marker must agree. Issue request labels are not completion evidence; a request added while the Worker runs remains queued for a later attempt.
 - Reviewer: requested changes or a required human decision may persist without successful required verification. Approval additionally requires the attempt-fixed contract's host-recorded success for the exact reviewed head; the structured result comment, attempt marker, findings/repair marker when applicable, and expected labels must agree.
 - Review repair: the pushed or stale head and finalizer/result evidence must agree.
 - Branch update: the pushed or PR-head-stale result must agree. A base advance alone is not stale.

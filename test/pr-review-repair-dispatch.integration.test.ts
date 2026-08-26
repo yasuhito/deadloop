@@ -153,7 +153,7 @@ function enableProject(state: string, repoPath: string): void {
   spawnSync("git", ["-C", repoPath, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
   spawnSync("git", ["-C", repoPath, "update-ref", "refs/remotes/origin/master", "HEAD"]);
   fs.mkdirSync(state, { recursive: true });
-  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ projects: [{
+  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
     repoPath, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch: "origin/master", automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
@@ -198,7 +198,7 @@ function runStaleWorktreeDispatch(
   spawnSync("git", ["-C", root, "add", "README.md", "deadloop.json"]);
   spawnSync("git", ["-C", root, "commit", "--quiet", "-m", "fixture"]);
   spawnSync("git", ["-C", root, "update-ref", "refs/remotes/origin/master", "HEAD"]);
-  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
+  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), 
     projects: [{
       repoPath: root, githubRepo: "yasuhito/deadloop", githubRepositoryId: "R_repo", baseBranch: "origin/master", automationLogin: "deadloop-bot", enabledAt: 1,
       firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
@@ -659,7 +659,7 @@ function runV1ChangesRequestedTwice(options: {
     }));
   }
   fs.writeFileSync(runtime, JSON.stringify({ workspace: "reviewer-workspace", agent: null, launches: 0 }));
-  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ projects: [{
+  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
     repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch: "origin/master", automationLogin: "deadloop-bot", enabledAt: 1,
     firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
     autoMergeAcknowledged: false, enabled: true,
@@ -1053,24 +1053,25 @@ describe("review repair dispatch integration", () => {
     });
   });
 
-  it("writes no approved comment or persistence marker when the trusted policy changes during the last PR read", () => {
-    expect(runApprovedAuthorizationRace({ policyChangeAfter: 3 }).comments).toEqual([]);
+  it("writes only a recovery stop when the trusted policy changes during the last PR read", () => {
+    const comments = runApprovedAuthorizationRace({ policyChangeAfter: 3 }).comments as Array<{ body?: string }>;
+    expect(comments.map((comment) => comment.body)).toEqual([expect.stringContaining("target=pr-243")]);
   });
 
-  it("writes no changes-requested comment when the trusted policy changes during the attempt", () => {
-    expect(runV1ChangesRequestedTwice({ attempts: 1, policyRaceAfterViews: 1 }).comments).toBe(0);
+  it("records the changes-requested result and one recovery notice when trusted policy changes", () => {
+    expect(runV1ChangesRequestedTwice({ attempts: 1, policyRaceAfterViews: 1 }).comments).toBe(2);
   });
 
   it("launches no repair when the trusted policy changes during the attempt", () => {
     expect(runV1ChangesRequestedTwice({ attempts: 1, policyRaceAfterViews: 1 }).launches).toBe(0);
   });
 
-  it("reports the trusted-policy change instead of recording the failing result", () => {
-    expect(runV1ChangesRequestedTwice({ attempts: 1, policyRaceAfterViews: 1 }).actions[0]).toBe("review_policy_changed");
+  it("stops the failing review for explicit recovery", () => {
+    expect(runV1ChangesRequestedTwice({ attempts: 1, policyRaceAfterViews: 1 }).actions[0]).toBe("review_verification_blocked");
   });
 
-  it("reports the trusted-policy change instead of persisting the approval", () => {
-    expect(runApprovedAuthorizationRace({ policyChangeAfter: 3 }).output.driverAction).toBe("review_policy_changed");
+  it("stops approval instead of persisting it when trusted policy changes", () => {
+    expect(runApprovedAuthorizationRace({ policyChangeAfter: 3 }).output.driverAction).toBe("review_verification_blocked");
   });
 
   it("serializes concurrent approved retries to one review-result comment", async () => {
@@ -1087,7 +1088,7 @@ describe("review repair dispatch integration", () => {
     const promise = path.join(runDir, "promise.json");
     fs.mkdirSync(bin);
     fs.mkdirSync(runDir, { recursive: true });
-    fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({
+    fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), 
       projects: [{
         repoPath: root, githubRepo: "owner/repo", githubRepositoryId: "R_repo", automationLogin: "deadloop-bot", enabledAt: 7,
         firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,

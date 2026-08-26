@@ -1,4 +1,6 @@
 const { compareGithubTimelineEvents } = require("./github-timeline-order.cts");
+const { redactLocalDetail } = require("./local-detail-redaction.cts");
+const { containsStorageExhaustion } = require("./storage-exhaustion.cjs");
 
 type JsonObject = Record<string, any>;
 
@@ -19,12 +21,16 @@ type ReconciliationInput = {
   inProgressLabel: string;
   blockedLabel: string;
   completion?: CompletionObservation;
+  /** Launch errors recorded by this PR's attempts that failed before starting any agent. */
+  launchFailures?: string[];
+  /** ENOSPC/EDQUOT deadloop's own deterministic processing or a bound completion report observed. */
+  storageExhaustion?: boolean;
 };
 
 type ReconciliationDecision =
   | { action: "keep_active"; cleanup: "none" }
   | { action: "release_for_request"; reason: "request_superseded_absent_owner"; labels: string[]; cleanup: "close_owned_workspace" }
-  | { action: "block"; reason: "attempt_missing" | "attempt_ambiguous" | "runtime_unreachable" | "runtime_ambiguous" | "runtime_owner_absent" | "completion_handoff_refused"; labels: string[]; cleanup: "none" | "close_owned_workspace" | "preserve_workspace"; invalidatesRequests: boolean };
+  | { action: "block"; reason: "attempt_missing" | "attempt_ambiguous" | "runtime_unreachable" | "runtime_ambiguous" | "runtime_owner_absent" | "completion_handoff_refused" | "launch_unprepared" | "storage_exhaustion"; labels: string[]; cleanup: "none" | "close_owned_workspace" | "preserve_workspace"; invalidatesRequests: boolean };
 
 function labelNames(labels: Array<string | { name?: string }>): string[] {
   return labels.map((label) => typeof label === "string" ? label : String(label.name || "")).filter(Boolean);
@@ -48,6 +54,13 @@ function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDec
   if (input.request.kind === "superseded" && input.runtime.kind === "owner_absent_owned") {
     return { action: "release_for_request", reason: "request_superseded_absent_owner", labels: releaseLabels(input), cleanup: "close_owned_workspace" };
   }
+  // An absent journal means the last launch never got as far as opening one when this PR's own
+  // attempts recorded why their launches failed. Naming those failures keeps the stop pointing at
+  // the real cause instead of painting over it as a missing attempt.
+  if (input.request.kind === "missing" && input.runtime.kind === "ambiguous"
+    && input.launchFailures?.length) {
+    return { action: "block", reason: "launch_unprepared", labels: blockLabels(input), cleanup: "none", invalidatesRequests: true };
+  }
   const preserveRequests = input.request.kind === "superseded";
   const cleanup = input.runtime.kind === "owner_absent_owned" ? "close_owned_workspace"
     : input.runtime.kind === "unreachable" || input.runtime.kind === "ambiguous" ? "preserve_workspace" : "none";
@@ -57,7 +70,8 @@ function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDec
     : input.request.kind === "ambiguous" ? "attempt_ambiguous"
       : input.runtime.kind === "unreachable" ? "runtime_unreachable"
         : input.runtime.kind === "ambiguous" ? "runtime_ambiguous"
-          : input.completion?.kind === "handoff_refused" ? "completion_handoff_refused" : "runtime_owner_absent";
+          : input.completion?.kind === "handoff_refused" ? "completion_handoff_refused"
+            : input.storageExhaustion ? "storage_exhaustion" : "runtime_owner_absent";
   return { action: "block", reason, labels: blockLabels(input, preserveRequests), cleanup, invalidatesRequests: !preserveRequests };
 }
 
@@ -115,7 +129,35 @@ function recoveryMarker(number: number, head: string, reason: string, cutoffEven
   return `<!-- deadloop:work-authority-block v1=${value} -->`;
 }
 
-function recoveryComment(number: number, head: string, reason: string, cutoffEventId: string): string {
+/**
+ * Operator guidance for a pull request whose Agent requests keep failing before any agent starts.
+ * Each entry maps a recurring failure shape to what an operator can actually do about it.
+ */
+function launchFailureGuidance(failures: string[]): string {
+  const shapes = [
+    {
+      matches: (text: string) => containsStorageExhaustion(text),
+      action: "the host ran out of storage: free up capacity on the machine running deadloop, then add a new Agent request",
+    },
+    {
+      matches: (text: string) => text.includes("does not resolve to the recorded canonical checkout") || text.includes("canonical checkout preparation"),
+      action: "the canonical checkout is missing or diverged: recreate it by hand, or fix why it went away; the next request prepares it again once the cause is resolved",
+    },
+    {
+      matches: (text: string) => text.includes("open attempt workspace"),
+      action: "a retained attempt workspace is still open: resolve the named attempt (close its workspace or run the abandonment driver)",
+    },
+    {
+      matches: (text: string) => text.includes("cannot fast-forward") || text.includes("uncommitted work") || text.includes("alignment"),
+      action: "the retained checkout holds work that cannot be fast-forwarded: inspect it and commit or discard the work by hand",
+    },
+  ];
+  const text = failures.join(" ");
+  const matched = shapes.filter((shape) => shape.matches(text)).map((shape) => `- ${shape.action}`);
+  return matched.length ? matched.join("\n") : "- inspect the retained attempt journals under the deadloop state directory";
+}
+
+function recoveryComment(number: number, head: string, reason: string, cutoffEventId: string, launchFailures?: string[]): string {
   const readable: Record<string, string> = {
     attempt_missing: "the active attempt journal was missing",
     attempt_ambiguous: "the active attempt could not be identified uniquely",
@@ -123,8 +165,26 @@ function recoveryComment(number: number, head: string, reason: string, cutoffEve
     runtime_ambiguous: "workspace ownership could not be proven",
     runtime_owner_absent: "the execution runtime no longer listed the recorded owner",
     completion_handoff_refused: "the completion report could not be handed over for this pull request state",
+    storage_exhaustion: "the host ran out of storage while the attempt was running (a write failed with ENOSPC or EDQUOT)",
   };
-  return `deadloop blocked this PR because ${readable[reason] || reason}. No old completion report may update the PR; inspect the retained attempt evidence, then add a new Agent request after resolving the blocker.\n\n${recoveryMarker(number, head, reason, cutoffEventId)}`;
+  let explanation = `${readable[reason] || reason}`;
+  if (reason === "launch_unprepared") {
+    // The recorded errors quote runtime output that can carry absolute host paths, so the published
+    // bullets scrub those fragments first. The count still reflects every recorded request cycle.
+    const recorded = launchFailures || [];
+    const failures = [...new Set(recorded.map((failure) => redactLocalDetail(failure)))];
+    explanation = `${recorded.length} Agent request(s) failed to launch before any agent started:\n`
+      + failures.map((failure) => `- ${failure}`).join("\n")
+      + `\n\nAdding another Agent request now repeats the same failure.`
+      + `\nOperator actions:\n${launchFailureGuidance(failures)}`;
+  }
+  if (reason === "storage_exhaustion") {
+    explanation = `${explanation}\n\nThe stopped attempt will not retry automatically and consumed no retry allowance.`
+      + `\nOperator actions:`
+      + `\n- free up storage on the machine running deadloop`
+      + `\n- add a new Agent request once storage is available`;
+  }
+  return `deadloop blocked this PR because ${explanation}. No old completion report may update the PR; inspect the retained attempt evidence, then add a new Agent request after resolving the blocker.\n\n${recoveryMarker(number, head, reason, cutoffEventId)}`;
 }
 
 function sameLabels(left: string[], right: string[]): boolean {
@@ -190,7 +250,7 @@ async function applyPrWorkAuthorityReconciliation(
       : latestBlockedEvent(events, input.blockedLabel, operations.automationLogin);
     if (!cutoff) return { action: "blocked_cutoff_unproven", cleanup: "preserve_workspace" };
     cutoffEventId = eventId(cutoff);
-    const body = recoveryComment(input.pr.number, input.pr.headRefOid, decision.reason, cutoffEventId);
+    const body = recoveryComment(input.pr.number, input.pr.headRefOid, decision.reason, cutoffEventId, input.launchFailures);
     const comments = await operations.listComments();
     const alreadyExplained = comments.some((comment) => {
       const marker = parseRecoveryMarker(comment.body);

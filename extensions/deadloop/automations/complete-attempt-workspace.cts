@@ -31,7 +31,27 @@ const {
 
 import type { AttemptRecord, CompletionReportV1 } from "../../../src/attempt-lifecycle";
 import type { GithubCompletionObservation } from "../../../src/attempt-workspace-lifecycle";
+import type { HumanHandoffLabels } from "../../../src/human-handoff-types";
 import type { JsonObject } from "../../../src/automation-driver-kit-types";
+
+/**
+ * The explicit human-handoff expectation, carried by the five --handoff-*-label flags. Present only
+ * when every flag is given; a partial set would describe a handoff nothing defines.
+ */
+function reviewerHumanHandoffExpectation(values: JsonObject): HumanHandoffLabels | undefined {
+  const labels = {
+    reviewLabel: String(values.handoffReviewLabel || ""),
+    implementLabel: String(values.handoffImplementLabel || ""),
+    updateBranchLabel: String(values.handoffUpdateBranchLabel || ""),
+    inProgressLabel: String(values.handoffInProgressLabel || ""),
+    blockedLabel: String(values.handoffBlockedLabel || ""),
+  };
+  if (Object.values(labels).every((label) => label !== "")) return labels;
+  if (Object.values(labels).some((label) => label !== "")) {
+    throw new Error("a human handoff expectation needs every --handoff-*-label flag together");
+  }
+  return undefined;
+}
 
 function parseArgs(argv: string[]): JsonObject {
   const values: JsonObject = { expectedLabel: [], managedLabel: [] };
@@ -92,14 +112,10 @@ function workerObservation(
   runner: ReturnType<typeof createCommandRunner>,
   record: AttemptRecord,
   _report: CompletionReportV1,
-  labels: { ready: string; implement: string },
 ): GithubCompletionObservation {
   const prs = runner.runJson([
     "gh", "pr", "list", "-R", record.repository, "--state", "open", "--head", record.branch,
     "--json", "number,state,headRefName,headRefOid,baseRefName,body,labels,closingIssuesReferences,comments",
-  ]);
-  const issue = runner.runJson([
-    "gh", "issue", "view", String(record.target.number), "-R", record.repository, "--json", "state,labels",
   ]);
   const pullRequests = (Array.isArray(prs) ? prs : []).map((pr: JsonObject) => ({
     repository: record.repository,
@@ -114,11 +130,8 @@ function workerObservation(
     labels: labelsOf(pr),
     marker: completionMarkerFromPersisted(persistedMarker(pr.comments || [], record)),
   }));
-  const issueLabels = new Set(labelsOf(issue));
   return {
     kind: "confirmed", role: "worker", repository: record.repository, target: record.target,
-    issueClaimable: String(issue.state || "").toUpperCase() === "OPEN"
-      && issueLabels.has(labels.ready) && issueLabels.has(labels.implement),
     pullRequests,
   };
 }
@@ -274,9 +287,7 @@ function completeLocked(
     if (record.role !== "worker" && (!same(pr?.headRefOid, outputRevision(report) || record.inputRevision.head))) {
       return driverResult("done", "attempt workspace retained because the live PR head differs", { driverAction: "workspace_retained" });
     }
-    if (record.role === "worker" && !completionStop) github = workerObservation(commandRunner, record, report, {
-      ready: String(args.workerReadyLabel || ""), implement: String(args.workerImplementLabel || ""),
-    });
+    if (record.role === "worker" && !completionStop) github = workerObservation(commandRunner, record, report);
     else if (record.role !== "worker") github = record.role === "reviewer"
       ? reviewerObservation(record, report, pr as JsonObject)
       : writerObservation(record, report, pr as JsonObject);
@@ -330,6 +341,7 @@ function completeLocked(
       ]);
       completionStopConfirmed = isExactRequiredVerificationStop(issue, completionStop.resolution, completionStop.labels);
     }
+    const reviewerHumanHandoff = reviewerHumanHandoffExpectation(args);
     const decision = completionStop
       ? { action: completionStopConfirmed ? "close" as const : "retain" as const }
       : evaluateCompletionPersistence({
@@ -337,11 +349,10 @@ function completeLocked(
         report: { kind: "v1", promisePath: record.promiseFile, report },
         github,
         context: {
-          workerReadyLabel: String(args.workerReadyLabel || ""),
-          workerImplementLabel: String(args.workerImplementLabel || ""),
           workerReviewLabel: String(args.workerReviewLabel || ""),
           reviewerExpectedLabels: args.expectedLabel || [],
           reviewerManagedLabels: args.managedLabel?.length ? args.managedLabel : args.expectedLabel || [],
+          ...(reviewerHumanHandoff ? { reviewerHumanHandoff } : {}),
         },
       });
     if (decision.action !== "close") {

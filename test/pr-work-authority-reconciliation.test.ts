@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 const {
   applyPrWorkAuthorityReconciliation,
+  postBlockRequestIsEligible,
   reconcilePrWorkAuthority,
   recoveryComment,
 } = require("../src/pr-work-authority-reconciliation.cts");
@@ -16,7 +17,178 @@ const base = {
   blockedLabel: "agent:blocked",
 };
 
-describe("PR runtime reconciliation", () => {
+describe("launch failures recorded by the pull request's own attempts", () => {
+  const missingJournal = {
+    ...base,
+    request: { kind: "missing" },
+    runtime: { kind: "ambiguous" },
+    pr: { ...base.pr, labels: ["agent:blocked"] },
+  };
+
+  it("blocks a missing journal with the recorded launch failures instead of attempt_missing", () => {
+    const decision = reconcilePrWorkAuthority({
+      ...missingJournal,
+      launchFailures: ["worktree agent/issue-42 does not resolve to the recorded canonical checkout"],
+    });
+    expect(decision.reason).toBe("launch_unprepared");
+  });
+
+  it("keeps naming a missing journal when no launch failure is recorded", () => {
+    expect(reconcilePrWorkAuthority(missingJournal).reason).toBe("attempt_missing");
+  });
+
+  it("names the actual failure in the blocked explanation", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "worktree agent/issue-42 does not resolve to the recorded canonical checkout",
+    ]);
+    expect(body).toContain("does not resolve to the recorded canonical checkout");
+  });
+
+  it("counts every failed request cycle in the blocked explanation", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "checkout alignment stopped: cannot fast-forward", "checkout alignment stopped: cannot fast-forward",
+    ]);
+    expect(body).toContain("2 Agent request(s) failed to launch");
+  });
+
+  it("tells the operator what to do about the failing shape", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "worktree agent/issue-42 already has an open attempt workspace",
+    ]);
+    expect(body).toContain("resolve the named attempt");
+  });
+
+  it("posts the launch failure evidence when reconciliation blocks", async () => {
+    const comments: string[] = [];
+    const events = [{ id: "block-1", event: "labeled", created_at: "2026-07-20T10:02:00Z", label: { name: "agent:blocked" }, actor: { login: "deadloop-bot" } }];
+    await applyPrWorkAuthorityReconciliation(
+      { ...missingJournal, launchFailures: ["worktree agent/issue-42 does not resolve to the recorded canonical checkout"] },
+      {
+        automationLogin: "deadloop-bot",
+        // Labels already show the blocked state, so the cutoff comes from the single timeline read.
+        listTimelineEvents: () => events,
+        listComments: () => [],
+        replaceLabels: () => {},
+        comment: (body: string) => { comments.push(body); },
+      },
+    );
+    expect(comments.some((body) => body.includes("does not resolve to the recorded canonical checkout"))).toBe(true);
+  });
+
+  // Launch errors quote runtime output, and that output embeds host command lines with absolute
+  // local paths. The published explanation keeps the reason but scrubs the locations.
+  it("keeps local paths out of the published failure explanation", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "Command failed: herdr worktree create --cwd /home/me/work/deadloop --path /home/me/work/deadloop/.worktrees/agent-issue-24 --json",
+    ]);
+    expect(body).not.toContain("/home/me");
+  });
+
+  it("names the omission instead of the local path", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "worktree create failed because /srv/deadloop/state/attempt.json is unusable",
+    ]);
+    expect(body).toContain("[internal path omitted]");
+  });
+
+  it("does not repeat the explanation when the same failure is reprocessed", async () => {
+    const comments: string[] = [];
+    const failure = "worktree agent/issue-42 does not resolve to the recorded canonical checkout";
+    const events = [{ id: "block-1", event: "labeled", created_at: "2026-07-20T10:02:00Z", label: { name: "agent:blocked" }, actor: { login: "deadloop-bot" } }];
+    await applyPrWorkAuthorityReconciliation(
+      { ...missingJournal, launchFailures: [failure] },
+      {
+        automationLogin: "deadloop-bot",
+        listTimelineEvents: () => events,
+        listComments: () => [{ author: { login: "deadloop-bot" }, body: recoveryComment(24, "a".repeat(40), "launch_unprepared", "block-1", [failure]) }],
+        replaceLabels: () => {},
+        comment: (body: string) => { comments.push(body); },
+      },
+    );
+    expect(comments).toHaveLength(0);
+  });
+
+  it("leaves no request behind for the loop to retry automatically", () => {
+    const decision = reconcilePrWorkAuthority({
+      ...missingJournal,
+      pr: { ...missingJournal.pr, labels: [...missingJournal.pr.labels, "agent:review"] },
+      launchFailures: ["worktree agent/issue-42 does not resolve to the recorded canonical checkout"],
+    });
+    expect(decision.labels).toEqual(["agent:blocked"]);
+  });
+
+  it("keeps a request added after the block queued for the next launch", () => {
+    const events = [
+      { id: "31", event: "labeled", created_at: "2026-07-20T10:02:00Z", label: { name: "agent:blocked" }, actor: { login: "deadloop-bot" } },
+      { id: "32", event: "labeled", created_at: "2026-07-20T10:05:00Z", label: { name: "agent:review" }, actor: { login: "yasuhito" } },
+    ];
+    expect(postBlockRequestIsEligible({ request: events[1], events, blockedLabel: "agent:blocked" })).toBe(true);
+  });
+});
+
+describe("storage exhaustion stops observed by deadloop itself", () => {
+  const absentOwner = {
+    ...base,
+    runtime: { kind: "owner_absent_owned" },
+    pr: { ...base.pr, labels: ["agent:blocked"] },
+  };
+
+  it("names storage exhaustion instead of an unknown cause when ENOSPC was observed", () => {
+    expect(reconcilePrWorkAuthority({ ...absentOwner, storageExhaustion: true }).reason).toBe("storage_exhaustion");
+  });
+
+  it("keeps reporting a reportless termination as the generic owner-absent failure", () => {
+    expect(reconcilePrWorkAuthority(absentOwner).reason).toBe("runtime_owner_absent");
+  });
+
+  it("keeps a live attempt running even when storage exhaustion was observed earlier", () => {
+    expect(reconcilePrWorkAuthority({ ...base, storageExhaustion: true }).action).toBe("keep_active");
+  });
+
+  it("leaves no request behind for the loop to retry automatically", () => {
+    const decision = reconcilePrWorkAuthority({
+      ...absentOwner,
+      pr: { ...absentOwner.pr, labels: [...absentOwner.pr.labels, "agent:review"] },
+      storageExhaustion: true,
+    });
+    expect(decision.labels).toEqual(["agent:blocked"]);
+  });
+
+  it("tells the operator to free capacity before adding a new request", () => {
+    const body = recoveryComment(24, "a".repeat(40), "storage_exhaustion", "event-30");
+    expect(body).toContain("free up storage on the machine running deadloop");
+  });
+
+  it("names the recovery step of adding a new Agent request", () => {
+    const body = recoveryComment(24, "a".repeat(40), "storage_exhaustion", "event-30");
+    expect(body).toContain("add a new Agent request once storage is available");
+  });
+
+  it("posts exactly one idempotent comment when the stop blocks", async () => {
+    const comments: string[] = [];
+    const events = [{ id: "block-1", event: "labeled", created_at: "2026-07-20T10:02:00Z", label: { name: "agent:blocked" }, actor: { login: "deadloop-bot" } }];
+    const operations = (posted: string[]) => ({
+      automationLogin: "deadloop-bot",
+      listTimelineEvents: () => events,
+      listComments: () => posted.map((body) => ({ author: { login: "deadloop-bot" }, body })),
+      replaceLabels: () => {},
+      comment: (body: string) => { posted.push(body); },
+      closeOwnedWorkspace: () => true,
+    });
+    await applyPrWorkAuthorityReconciliation({ ...absentOwner, storageExhaustion: true }, operations(comments));
+    await applyPrWorkAuthorityReconciliation({ ...absentOwner, storageExhaustion: true }, operations(comments));
+    expect(comments).toHaveLength(1);
+  });
+
+  it("adds free-capacity guidance to launch failures that name ENOSPC", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "worktree create failed with EDQUOT: disk quota exceeded",
+    ]);
+    expect(body).toContain("the host ran out of storage");
+  });
+});
+
+ describe("PR runtime reconciliation", () => {
   it("keeps an attempt active when the runtime reports it live", () => {
     expect(reconcilePrWorkAuthority(base).action).toBe("keep_active");
   });

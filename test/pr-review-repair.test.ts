@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 const { decideRepairPushGuard, parseArgs: parseFinalizerArgs } = require("../extensions/deadloop/automations/pr-review-repair-finalize.cts");
 const { recoveryComment, sameFindingTitles } = require("../extensions/deadloop/automations/pr-review-repair-complete.cts");
 const { repairWorkerPrompt, requireManagedPr } = require("../extensions/deadloop/automations/pr-review-repair-dispatch.cts");
-const { renderRepairMarker, repairAttempts, reviewResultFingerprint, selectRepairAttempt } = require("../extensions/deadloop/automations/pr-review-repair-state.cts");
+const { decideTechnicalReviewFailure, renderRepairMarker, repairAttempts, reviewResultFingerprint, selectRepairAttempt } = require("../extensions/deadloop/automations/pr-review-repair-state.cts");
 
 const head = "a".repeat(40);
 const automationLogin = "deadloop-bot";
@@ -34,6 +34,17 @@ function repairContract(requiredFindings: Array<Record<string, unknown>>) {
   });
   return JSON.parse(rendered.match(/Required findings contract:\n```json\n([\s\S]*?)\n```/)?.[1] || "[]");
 }
+
+describe("technical review failures and storage exhaustion", () => {
+  it("stops a blocked report naming observed ENOSPC without spending the retry", () => {
+    const report = { status: "blocked", result: { reason: "ENOSPC", explanation: "the host ran out of storage" } };
+    expect(decideTechnicalReviewFailure([], head, report).action).toBe("storage_exhaustion");
+  });
+
+  it("still retries an ordinary first technical failure once", () => {
+    expect(decideTechnicalReviewFailure([], head, { status: "blocked", result: { reason: "merge_conflict" } }).action).toBe("retry");
+  });
+});
 
 describe("automatic review repair", () => {
   it("permits a same-repository open PR at the exact head", () => {

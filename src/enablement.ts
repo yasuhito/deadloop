@@ -18,7 +18,10 @@ export type EnabledProject = {
   enabled: boolean;
 };
 
-export type EnablementState = { projects: EnabledProject[]; lastWriterCodeIdentity?: string };
+export type EnablementState = { projects: EnabledProject[] };
+
+/** The persisted shared enablement state always names the Automation host code that wrote it. */
+export type EnablementStateFile = EnablementState & { lastWriterCodeIdentity: string };
 
 export type ProjectIdentity = Pick<EnabledProject, "repoPath" | "githubRepo"> &
   Partial<Pick<EnabledProject, "githubRepositoryId" | "baseBranch" | "automationLogin" | "disableGeneration">>;
@@ -27,7 +30,7 @@ function normalizedPath(value: string): string {
   return path.resolve(value);
 }
 
-export function normalizeEnablementState(value: unknown): EnablementState | null {
+export function normalizeEnablementState(value: unknown): EnablementStateFile | null {
   return normalizeEnablementStateValue(value);
 }
 

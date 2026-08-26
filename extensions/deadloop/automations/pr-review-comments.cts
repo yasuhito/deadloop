@@ -1,11 +1,11 @@
 const { renderRepairMarker } = require("./pr-review-repair-state.cts");
+const { LOCAL_DETAIL_RE } = require("../../../src/local-detail-redaction.cts");
 
 type JsonObject = Record<string, any>;
 
 const REVIEW_RESULT_RE = /<!--\s*deadloop:review-result\s+head=([0-9a-f]+)\s+review=([0-9a-f]+)\s+outcome=(approved|changes_requested|human_required)\s*-->/gi;
 const REPAIR_RESULT_RE = /<!--\s*deadloop:review-repair-result\s+key=([0-9a-f]+)\s+head=([0-9a-f]+)\s*-->/gi;
 
-const LOCAL_DETAIL_RE = /(?:\bfile:\/\/+|(?<!:)\/\/|\\\\)[^\s`'")]+|(?:^|[^A-Za-z0-9_/])(?:\/(?!\/)[^\s`'")]+|[A-Za-z]:\\)[^\s`'")]*/gi;
 const INTERNAL_TERM_RE = /(?:worker|review-repair)-prompt(?:\.md)?|promise(?:\.json)?|(?:\.pi(?:-subagents)?|\.deadloop)[\\/][^\s`'")]*|[\\/]prompts?[\\/][^\s`'")]*|review-repair worker|deterministic dispatcher|\bherdr\b|\brunner\b|\bsession\b|\b[a-z0-9_.-]+-pr-\d+-(?:reviewer|review-repair(?:-[a-z0-9-]+)?)\b/gi;
 const PROMPT_DETAIL_RE = /\bprompts?\b/i;
 const INTERNAL_DETAIL_RE = new RegExp(`${LOCAL_DETAIL_RE.source}|(?:worker|review-repair)-prompt(?:\\.md)?|promise\\.json|(?:\\.pi(?:-subagents)?|\\.deadloop)[\\\\/]|[\\\\/]prompts?[\\\\/]|${PROMPT_DETAIL_RE.source}`, "i");
@@ -110,10 +110,12 @@ function renderPriorFindingLine(input: JsonObject): string {
 }
 
 function renderChangesRequestedComment(input: JsonObject): string {
-  const marker = renderRepairMarker(input.headOid, input.reviewFingerprint);
-  const nextStep = input.repairAlreadyStarted
-    ? "This exact review result already started its one automatic repair. The repair will not be launched again."
-    : "Exactly one automatic repair for this review result will now start and will change only the findings listed above. The updated head will be reviewed again after a successful push.";
+  const marker = input.repairBlocked ? "" : renderRepairMarker(input.headOid, input.reviewFingerprint);
+  const nextStep = input.repairBlocked
+    ? "Automatic repair did not start because required verification is blocked. Resolve the verification policy and use `/deadloop-doctor` before requeueing this PR."
+    : input.repairAlreadyStarted
+      ? "This exact review result already started its one automatic repair. The repair will not be launched again."
+      : "Exactly one automatic repair for this review result will now start and will change only the findings listed above. The updated head will be reviewed again after a successful push.";
   return `## Review result: changes required
 
 - Reviewed commit: ${code(input.headOid)}${renderPriorFindingLine(input)}

@@ -11,6 +11,8 @@ const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-aut
 const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.cts");
 const { provenPushedHeadTransition } = require("./pushed-head-proof.cts");
 const { provenAttemptCompletion } = require("./attempt-completion-proof.cts");
+const { containsStorageExhaustion, reportNamesStorageExhaustion } = require("../../../src/storage-exhaustion.cjs");
+const { validatePromise } = require("./extract-worker-promise.cts");
 
 type JsonObject = Record<string, any>;
 
@@ -122,6 +124,25 @@ const PHASES_BEFORE_WORKSPACE = ["prepared", "github_claimed"];
 function releasableUnlaunchedAttempt(record: JsonObject): boolean {
   return record.phase === "launch_failed" && PHASES_BEFORE_WORKSPACE.includes(record.lastSuccessfulPhase)
     && !record.workspaceId && !record.tabId && !record.rootPaneId;
+}
+
+/**
+ * Storage exhaustion deadloop observed for one attempt, per ADR 0018.
+ *
+ * Two channels count: deadloop's own journal of its deterministic launch writes, and the attempt's
+ * completion report — either a blocked report naming ENOSPC/EDQUOT as its result, or a report file
+ * deadloop could not even read because the same exhaustion broke that read. An agent's terminal
+ * output names neither, so it feeds nothing here; a stop without a completion report stays a
+ * generic technical failure unless one of these deterministic channels actually observed the code.
+ */
+function observedAttemptStorageExhaustion(record: JsonObject): boolean {
+  if (containsStorageExhaustion(record.launchError)) return true;
+  const promiseFile = String(record.promiseFile || "");
+  const runDir = String(record.runDir || "");
+  if (!promiseFile || !runDir || !fs.existsSync(promiseFile)) return false;
+  const validation = validatePromise(promiseFile, path.join(runDir, "attempt.json"));
+  if (validation.status === "invalid") return /storage_exhaustion:/.test(String(validation.error || ""));
+  return validation.status === "blocked" && reportNamesStorageExhaustion(validation.promise);
 }
 
 function latestConfiguredRequest(events: JsonObject[], currentLabels: string[], requestLabels: string[]): JsonObject | null {
@@ -322,6 +343,19 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       } catch {}
     }
     const malformed = attempts.malformed.filter((attempt) => Number(attempt.target?.number) === number);
+    // Every recorded reason this PR's launches failed before starting an agent: the attempts still
+    // waiting to be released this cycle, and the ones earlier cycles already released. This is what
+    // lets a stop name the real failure instead of a missing journal.
+    const launchFailures = [
+      ...claimed.filter(releasableUnlaunchedAttempt),
+      ...attempts.released.filter((attempt) => attempt.target?.kind === "pull-request"
+        && Number(attempt.target?.number) === number
+        && attempt.authorityRelease?.reason === "never_launched"),
+    ].map((attempt) => String(attempt.launchError || "")).filter(Boolean);
+    // A stop keeps an observed ENOSPC/EDQUOT instead of reporting an unknown cause. Completion proof
+    // outranks this evidence: the completed handoff above continues past any blocking below.
+    const storageExhaustion = launchFailures.some((failure) => containsStorageExhaustion(failure))
+      || matching.some((attempt) => observedAttemptStorageExhaustion(attempt));
     const events = github.listPrTimelineEvents(args.githubRepo, number);
     let request: { kind: string };
     let runtime: { kind: string };
@@ -365,7 +399,9 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       }
     }
 
-    const input = { pr: { ...pr, labels: labels(pr) }, request, runtime, requestLabels, inProgressLabel, blockedLabel, completion };
+    const input = { pr: { ...pr, labels: labels(pr) }, request, runtime, requestLabels, inProgressLabel, blockedLabel, completion,
+      ...(launchFailures.length ? { launchFailures } : {}),
+      ...(storageExhaustion ? { storageExhaustion: true } : {}) };
     let blockStarted: { reason: string; timelineEventIds: string[] } | undefined;
     try {
       const receipt = JSON.parse(fs.readFileSync(recoveryFile, "utf8"));

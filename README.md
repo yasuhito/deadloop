@@ -25,7 +25,7 @@ This installs the deadloop extension and its setup skill together.
 - Workers and reviewers run `pi`, `claude`, or `omp`, chosen with `workerAgent` and `reviewerAgent` independently of which host runs the automations.
 - The default runner is [Herdr](https://herdr.dev/).
 - The supported host platform currently requires a Unix-like system with a compatible `flock` executable (normally provided by util-linux) and nonblocking file-descriptor locks. `/deadloop-enable` verifies this capability before enabling automation.
-- Each Automation host fixes the deadloop checkout commit as its code identity when the extension loads. If the checkout advances, shared enablement writes and scheduler ticks stop until the operator runs `/reload`; status and doctor remain available and show both identities and the recovery step.
+- Each Automation host fixes the deadloop checkout commit as its code identity when the extension loads. If the checkout advances, shared enablement writes and scheduler ticks stop until the operator runs `/reload`; status and doctor remain available and show both identities and the recovery step. The shared enablement state records the last writer's code identity for diagnosis only, and `/deadloop-doctor` reports it together with the code snapshot inventory (generations and capacity) plus cleanup commands; snapshots are never removed automatically.
 
 ## Configure
 
@@ -44,18 +44,22 @@ You need an authenticated `gh` CLI and a running [Herdr](https://herdr.dev/) 0.8
    /deadloop-enable
    ```
 
-3. To request implementation, add `agent:implement` to the Issue. `ready-for-agent` remains an optional triage label and is not required to start work.
+3. Add `agent:implement` to request implementation, or `agent:explore` to request a read-only investigation. `ready-for-agent` remains optional triage metadata. When both requests are present, exploration runs first and its result is posted to the Issue before implementation starts.
 
 That is enough to start. During enablement, deadloop runs `npm run check`, creates any missing standard labels, and leaves automatic merge off. If the repository does not provide an `npm run check` script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
 
 ## Control the loop with labels
 
-You start the loop by labeling an Issue. deadloop owns the implementation and review transitions, then either hands the approved PR to a human or merges it according to policy.
+You start the loop by labeling an Issue. deadloop owns the exploration, implementation, and review transitions, then either hands the approved PR to a human or merges it according to policy.
 
 ```mermaid
 flowchart TD
     I["`**Issue queued**
-    agent:implement`"]
+    agent:explore or agent:implement`"]
+    E["`**Read-only exploration**
+    agent:in-progress`"]
+    X["`**Exploration complete**
+    no agent request`"]
     W["`**Implementation**
     agent:in-progress`"]
     R["`**PR review requested**
@@ -70,9 +74,13 @@ flowchart TD
     B["`**Needs attention**
     agent:blocked`"]
 
-    I -->|deadloop claims Issue| W
+    I -->|exploration request consumed| E
+    E -->|implementation request queued| I
+    E -->|no queued request| X
+    E -. problem .-> B
+    I -->|implementation request consumed| W
     W -->|draft PR created| R
-    R -->|deadloop claims review| V
+    R -->|review request consumed| V
     V -->|changes pushed| R
     V -->|merge conflict| U
     U -->|branch updated| R
@@ -83,9 +91,9 @@ flowchart TD
     V -. problem .-> B
 ```
 
-1. **Request implementation** — `agent:implement` requests implementation; `ready-for-agent` is optional triage metadata. Remove `agent:implement` before deadloop consumes the selected request generation to cancel it.
-2. **Let deadloop work** — deadloop durably records the attempt, consumes only the selected request, then adds `agent:in-progress` and starts the Worker. It creates a draft PR with `agent:review` and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
-3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help, and a stopped PR keeps no agent request; fix the cause reported in the Issue or PR comment, then add the request label for the role you want next. `agent:blocked` clears when that attempt starts.
+1. **Request work** — `agent:explore` requests a read-only investigation and takes priority over `agent:implement`; `agent:implement` requests implementation. `ready-for-agent` is optional triage metadata. Remove a request label before deadloop consumes its selected generation to cancel it.
+2. **Let deadloop work** — deadloop durably records the attempt, then consumes only the selected request and creates `agent:in-progress` as one proven transition before it starts the explorer or Worker. One Issue runs one attempt, and exploration wins: if exploration and implementation are consumed at the same moment, only exploration starts and `agent:implement` is put back, so implementation stays queued for the attempt after the exploration result is available; a comment explains it and nothing is needed from you. A successful exploration posts its result without erasing a queued implementation request. Implementation creates a draft PR with `agent:review` and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
+3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help. A failed or unsafe exploration clears requests that predate its block; a request added after the block remains the recovery interface. Most stopped PRs keep no agent request; a required-verification stop keeps `agent:review` only to identify the review target, but its request event predates the block and cannot restart work. Fix the reported cause, then use `/deadloop-doctor` after required verification resolves or add the request label for the role you want next. `agent:blocked` clears when that attempt starts.
 4. **Declare dependencies in the Issue body** — A `## Blocked by` (or `Depends on`) section gates selection: a bare `#123` or a link naming this repository blocks until its Issue closes, and a number that does not exist here also blocks (fail closed) with an explanatory comment on the Issue. References to another repository's Issues — links or `owner/repo#123` — are ignored, because deadloop works per repository.
 
 ## Operator commands
@@ -122,6 +130,8 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 
 If an implementation Issue reaches a required-verification block, deadloop preserves unrelated triage labels, removes the implementation request or in-progress state, and adds `agent:blocked` with reason-specific recovery guidance. It suppresses duplicate guidance for the same recovery, does not resume merely because configuration changes, and shows that Issue's requeue command in `/deadloop-doctor` only after required verification resolves.
 
+A review stopped by required verification records actionable findings without launching repair, never records a finding-free result as approved, keeps `agent:review`, removes `agent:in-progress`, and adds `agent:blocked` without adding `ready-for-human`. The same recovery fingerprint suppresses duplicate stop comments. Configuration changes alone do not requeue the PR; after required verification resolves, `/deadloop-doctor` shows the PR-specific command that creates a new review request event.
+
 ## Safety controls
 
 `autoMerge` controls whether deadloop merges reviewed PRs automatically.
@@ -135,6 +145,8 @@ Reviewers can still report requested changes or a required human decision when r
 Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
 
 Reviewer and branch-update attempts are monitored deterministically without using the Automation host's model. Runtime-reported working status wins over quiet output, the configured 24-hour limit applies to active work, and a terminal attempt without a valid completion report is never prompted or nudged through conversation.
+
+A terminal turn whose evidence matches only a known billing or access rejection pauses the attempt instead of stopping it: deadloop posts one idempotent GitHub explanation, keeps the same attempt, workspace, worktree, pane, and agent session, and excludes the waiting time from active-work accounting. A provider-stated retry time gates the retry; without one, the normal next scheduler tick is the only retry trigger, and each retry sends one fixed continuation prompt to the same agent session with no Automation-host model calls. Status reports the retry count, waiting start, waiting duration, next retry time, and active-work duration separately.
 
 ## Merge-conflict recovery
 
@@ -180,7 +192,7 @@ A changed head starts a fresh review cycle.
 
 A stale head stops the repair without pushing or changing labels.
 
-If an earlier required finding persists, a resolved finding regresses, or earlier and new required findings are mixed, deadloop starts no repair and hands the completed review to a person. Technical or safety retries that are exhausted still add `agent:blocked` with recovery guidance and clear every request label. A human-required result is recorded, the draft becomes ready, and every agent workflow label is removed, so the PR waits on a person and on no agent request.
+If an earlier required finding persists, a resolved finding regresses, or earlier and new required findings are mixed, deadloop starts no repair and hands the completed review to a person. Technical or safety retries that are exhausted still add `agent:blocked` with recovery guidance and clear every request label; a blocked report naming an observed `ENOSPC` or `EDQUOT` stops without spending a retry, and its guidance points at freeing host capacity before adding a new request. A human-required result is recorded, the draft becomes ready, and every agent workflow label is removed, so the PR waits on a person and on no agent request.
 
 Required-verification failure still blocks a repair push. A stale head stops without push or label mutation, and the finalizer updates only the exact verified branch through a push bound to the verified head by an expected-object-ID lease; because the repair commit must contain that head, the lease can only fast-forward.
 

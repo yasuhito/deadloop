@@ -72,7 +72,7 @@ function stoppedAttempt(overrides: { role?: string; reason?: string; receipt?: u
 }
 
 /** A review that stopped after writing its report. It pushes nothing, so it leaves no receipt. */
-function stoppedReview(outcome = "human_required") {
+function stoppedReview(outcome = "human_required", summary = "two required findings need a person") {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-complete-stopped-review-"));
   roots.push(runDir);
   const record = {
@@ -93,7 +93,7 @@ function stoppedReview(outcome = "human_required") {
     status: "complete",
     target: { kind: "pull-request", number: 31, repository: "owner/repo" },
     inputRevision: record.inputRevision,
-    summary: "two required findings need a person",
+    summary,
     result: {
       outcome,
       reviewedHead: startHead,
@@ -169,6 +169,13 @@ describe("completing a proven stopped attempt", () => {
     complete(stoppedReview(), startHead, calls);
 
     expect(calls[0].role).toBe("reviewer");
+  });
+
+  it("picks up a finished review whose report mentions the storage exhaustion that killed its owner", () => {
+    const calls: any[] = [];
+    complete(stoppedReview("changes_requested", "review ended after ENOSPC: no space left on device"), startHead, calls);
+
+    expect(calls).toHaveLength(1);
   });
 
   it("hands a stopped review the head it reported reviewing", () => {

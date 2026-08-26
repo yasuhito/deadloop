@@ -4,6 +4,8 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
+// The one storage-exhaustion judgment (ADR 0018), shared with every reader of attempt evidence.
+const { isStorageExhaustionError } = require("../../../src/storage-exhaustion.cjs");
 
 type PromiseValidation = Record<string, any>;
 
@@ -107,6 +109,12 @@ function validWriterResult(promise: PromiseValidation): string | undefined {
 
 function invalidPromise(filePath: string, error: string): PromiseValidation {
   return { status: "invalid", file: filePath, error };
+}
+
+/** The read-failure label for attempt evidence. An observed ENOSPC/EDQUOT never folds into read_error. */
+function promiseReadErrorLabel(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return isStorageExhaustionError(error) ? `storage_exhaustion: ${message}` : `read_error: ${message}`;
 }
 
 function validNonEmptyString(value: unknown): boolean {
@@ -244,7 +252,7 @@ function validatePromise(filePath: string, attemptRecordFile?: string): PromiseV
     payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch (error) {
     if (error instanceof SyntaxError) return invalidPromise(filePath, "invalid_json");
-    return invalidPromise(filePath, `read_error: ${error instanceof Error ? error.message : String(error)}`);
+    return invalidPromise(filePath, promiseReadErrorLabel(error));
   }
 
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return invalidPromise(filePath, "not_object");
@@ -266,7 +274,7 @@ function validatePromise(filePath: string, attemptRecordFile?: string): PromiseV
     if (!reportMatchesRecord(promise, record)) return invalidPromise(filePath, "attempt_binding_mismatch");
     return { status: promise.status, file: filePath, promise: normalized, evidenceStrength: "strong", attemptRecord: recordFile };
   } catch (error) {
-    return invalidPromise(filePath, `invalid_attempt_record: ${error instanceof Error ? error.message : String(error)}`);
+    return invalidPromise(filePath, `invalid_attempt_record: ${promiseReadErrorLabel(error)}`);
   }
 }
 
@@ -332,4 +340,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { validatePromise };
+module.exports = { promiseReadErrorLabel, validatePromise };

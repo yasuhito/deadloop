@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { deliverPendingDriverHandoff } from "../src/automation-runner";
+const { applyDeterministicAttemptMonitoring } = require("../src/deterministic-pr-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("../extensions/deadloop/automations/contain-terminal-monitor.cts");
 const { readAttemptRecord } = require("../src/attempt-lifecycle-runtime.cjs");
 const { observeAttemptMonitoringDirective } = require("../src/monitor-handoff-observation.cts");
@@ -266,5 +267,62 @@ describe("terminal monitor transition", () => {
     }
 
     expect({ comments: state.comments.length, monitorTurns }).toEqual({ comments: 1, monitorTurns: [] });
+  });
+
+  it("posts one model-availability explanation across waiting and retries on the deterministic reviewer path", () => {
+    const state = fixture("Your credit balance is too low to access this model", "pull-request");
+    const runDir = path.dirname(state.attemptRecordFile);
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "monitor",
+        monitorHandoff: { kind: "reviewer", input: state.input.handoff.input },
+        monitorAccounting: { activeMilliseconds: 60_000, observedAt: new Date(0).toISOString(), runtimeWasWorking: false },
+      },
+    };
+    const automationState = { automations: { reviewer: entry } };
+    const hostModelTurns: string[] = [];
+    let now = 0;
+
+    const dependencies = {
+      enabledAt: () => 1,
+      isEnabled: () => true,
+      observeAttemptMonitoring: (_handoff: Record<string, unknown>, accounting: any, observedAt: number) =>
+        observeAttemptMonitoringDirective(
+          readAttemptRecord(runDir), accounting, observedAt, 86_400_000,
+          { runner: state.runner, readTerminalEvidence: () => "Your credit balance is too low to access this model" },
+        ),
+      applyAttemptMonitoring: (handoff: Record<string, unknown>, directive: Record<string, any>) =>
+        applyDeterministicAttemptMonitoring(handoff, directive as never, (currentHandoff: Record<string, unknown>, disposition: Record<string, unknown>) =>
+          applyTerminalMonitorDisposition(
+            { handoff: currentHandoff, disposition, project: state.input.project },
+            state.dependencies,
+          )),
+      retryModelWait: () => {
+        // The same agent session accepts the continuation input; the turn resumes working.
+        state.setAgentStatus("working");
+        return true;
+      },
+      now: () => now,
+      saveState: () => undefined,
+      sendUserMessage: (prompt: string) => hostModelTurns.push(prompt),
+    };
+    const tick = () => deliverPendingDriverHandoff(entry, automationState, "PR reviewer", dependencies);
+
+    tick();
+    const waitRecorded = (entry.pendingDriverHandoff as Record<string, any>).modelWait?.nextRetryAt === null;
+    now = 60_000;
+    tick();
+    state.setAgentStatus("done");
+    now = 120_000;
+    tick();
+    now = 180_000;
+    tick();
+
+    expect({
+      comments: state.comments.length,
+      hostModelTurns,
+      waitRecorded,
+      retriesAcrossEpisodes: (entry.pendingDriverHandoff as Record<string, any>).modelRetryCount,
+    }).toEqual({ comments: 1, hostModelTurns: [], waitRecorded: true, retriesAcrossEpisodes: 2 });
   });
 });

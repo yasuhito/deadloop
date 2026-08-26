@@ -8,7 +8,7 @@ const { readAttemptRecord, validateCompletionReportBinding } = require("../../..
 const { createCommandRunner } = require("../../../src/automation-driver-kit.cts");
 const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { closeCompletionStoppedWorkerAttempt } = require("./complete-attempt-workspace.cts");
-const { applyIssueRequiredVerificationStop, hasRequiredVerificationStopMarker, planIssueRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.cts");
+const { applyIssueRequiredVerificationStop, hasRequiredVerificationStopMarker, planIssueRequiredVerificationStop, requiredVerificationStopDiagnosis } = require("../../../src/issue-required-verification-stop.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
@@ -91,25 +91,7 @@ function writeVerificationLog(logPath: string, contents: string): void {
   }
 }
 
-function completionStopDiagnosis(attempt: Record<string, any>, error: unknown) {
-  const contract = attempt.requiredVerification || {};
-  const inspectedSources = error instanceof Error
-    ? (error as Error & { requiredVerificationSources?: Array<Record<string, unknown>> }).requiredVerificationSources
-    : undefined;
-  const fixedSources = [
-    ...(contract.source ? [{ ...contract.source, command: String(contract.command || "") }] : []),
-    ...(contract.override?.source ? [{ ...contract.override.source, command: String(contract.override.command || "") }] : []),
-  ];
-  return {
-    status: "blocked" as const,
-    reason: "stale_policy" as const,
-    repository: attempt.repository,
-    baseRevision: String(contract.baseRevision || attempt.inputRevision?.head || "unknown"),
-    sources: inspectedSources || fixedSources,
-    sourceScope: inspectedSources ? "current" as const : "fixed" as const,
-    detail: error instanceof Error ? error.message : String(error),
-  };
-}
+const completionStopDiagnosis = requiredVerificationStopDiagnosis;
 
 function applyCompletionRequiredVerificationStop(
   args: Args,

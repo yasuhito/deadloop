@@ -7,6 +7,7 @@ import path from "node:path";
 import { reconcileAndSelectDueAutomation } from "../../src/automation-scheduler";
 import { decideCodeIdentity, observeGitCodeIdentity, type CodeIdentityDecision } from "../../src/code-identity";
 import { ensureCodeSnapshot } from "../../src/code-snapshot";
+import { collectCodeSnapshotInventory } from "../../src/code-snapshot-inventory";
 import {
   DEFAULT_TIMEZONE,
   REPO_POLICY_FILE,
@@ -47,6 +48,7 @@ const {
   applyDeterministicAttemptMonitoring,
   monitorRuntimeRunner,
   observeDeterministicAttemptMonitoring,
+  retryWaitingAgentSession,
 } = require("../../src/deterministic-pr-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("./automations/contain-terminal-monitor.cts");
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
@@ -432,14 +434,18 @@ function resolveEnableProject(cwd, identity) {
   return implicit.projects[0];
 }
 
-function loadEnablementState() {
+// A persisted state always names the code identity that last wrote it. Before the first write there is
+// no file, so the loader returns an empty placeholder whose writer identity is undefined.
+type LoadedEnablementState = ReturnType<typeof normalizeEnablementState> | { projects: []; lastWriterCodeIdentity: undefined };
+
+function loadEnablementState(): LoadedEnablementState {
   try {
     const text = fs.readFileSync(ENABLEMENT_PATH, "utf8");
     const state = normalizeEnablementState(JSON.parse(text));
     if (!state) throw new Error("schema is invalid");
     return state;
   } catch (error) {
-    if (error?.code === "ENOENT") return { projects: [] };
+    if (error?.code === "ENOENT") return { projects: [], lastWriterCodeIdentity: undefined };
     throw new Error(`enablement state is invalid at ${ENABLEMENT_PATH}: ${error?.message || error}. Inspect and move the file aside, then run /deadloop-enable again to recover.`);
   }
 }
@@ -783,9 +789,6 @@ async function collectLiveSnapshotData(
   const projects = projectsResult.ok ? projectsResult.projects : [];
   const state = loadState();
   const configuredProject = activeProject(cwd, projects);
-  const project = configuredProject
-    ? firstEnableAutoMergeGate(loadEnablementState(), configuredProject).project
-    : null;
   const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
   const repositoryEnablement = repositoryEnablementForRoot(repositoryRoot);
   const diagnosticWarnings = projectsResult.ok
@@ -793,8 +796,11 @@ async function collectLiveSnapshotData(
     : [projectsResult.reason, ...(repositoryEnablement === "unavailable" ? ["current directory is not inside a Git repository"] : [])];
   const codeIdentity = options.codeIdentityDecision?.();
   const warnings = statusWarnings(diagnosticWarnings, codeIdentity);
+  // The recorded writer identity is diagnostic only: it never gates reads or writes (ADR 0016).
+  const enablementState = configuredProject ? loadEnablementState() : null;
+  const project = configuredProject ? firstEnableAutoMergeGate(enablementState, configuredProject).project : null;
   if (!project) {
-    return { cwd, projects, state, repositoryEnablement, warnings, codeIdentity, selectedProject: null };
+    return { cwd, projects, state, repositoryEnablement, warnings, codeIdentity, lastWriterCodeIdentity: enablementState?.lastWriterCodeIdentity ?? null, selectedProject: null };
   }
 
   const issueFields = includeIssueComments
@@ -914,6 +920,7 @@ async function collectLiveSnapshotData(
     repositoryEnablement,
     warnings,
     codeIdentity,
+    lastWriterCodeIdentity: enablementState?.lastWriterCodeIdentity ?? null,
     selectedProject: project,
   };
 }
@@ -1028,10 +1035,17 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
       ));
       continue;
     }
+    const explorerCleanupPending = successfulExplorerCleanupPending(runDir, record);
     if (record.project !== project?.id || record.repository !== project?.githubRepo
-      || releasesAttemptOwnership(record.phase)) continue;
+      || releasesAttemptOwnership(record.phase) && !explorerCleanupPending) continue;
     let status: import("../../src/doctor").HerdrDoctorStatus = "missing_report";
     let detail = `attempt ${record.attemptId} (${record.role}) is retained at phase ${record.phase}`;
+    if (explorerCleanupPending) {
+      status = "cleanup_pending";
+      detail = `${detail}; successful exploration worktree cleanup is pending; outcome receipt: ${path.join(runDir, "exploration-outcome.json")}; cleanup receipt: ${path.join(runDir, "exploration-worktree-cleaned.json")}; local diagnostic: ${path.join(runDir, "exploration-diagnostic.json")}`;
+      findings.push(herdrDoctorFinding(status, detail));
+      continue;
+    }
     if (record.phase === "launch_failed") {
       status = "launch_failed";
       const guidance = launchFailedRecoveryGuidance(record, runDir, project, workspaces, agents, evidence);
@@ -1147,6 +1161,9 @@ async function buildLiveDoctorReport(pi, cwd, codeIdentityDecision?: () => CodeI
     ...data,
     retainedClaims: retained.claims,
     retainedClaimOwnershipAmbiguous: retained.ownershipAmbiguous,
+    codeSnapshots: collectCodeSnapshotInventory(STATE_DIR),
+    deployedCodeIdentity: data.codeIdentity?.deployedIdentity ?? null,
+    loadedCodeIdentity: data.codeIdentity?.loadedIdentity ?? null,
     ...(data.selectedProject?.repoPath && data.selectedProject.requiredVerification.status === "blocked"
       ? { verificationCandidates: discoverVerificationCandidates({ repositoryRoot: data.selectedProject.repoPath }) }
       : {}),
@@ -1470,6 +1487,18 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
       if (!isCurrentSchedulerRun()) return false;
       return applyMonitorHandoffDisposition(handoff, disposition, project);
     },
+    retryModelWait: (handoff) => {
+      if (!isCurrentSchedulerRun()) return false;
+      try {
+        return withEnabledProjectLock(
+          { repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt },
+          (_enabled, recheck) => (recheck(), retryWaitingAgentSession(handoff)),
+        );
+      } catch (error) {
+        if (error instanceof Error && error.message === "deadloop is disabled for this repository") return false;
+        throw error;
+      }
+    },
     notify: (message, level) => {
       if (!isCurrentSchedulerRun()) return;
       try {
@@ -1571,6 +1600,31 @@ async function reconcilePrWorkAuthority(pi, project): Promise<{ reconciled: bool
   return { reconciled: true, reason: "" };
 }
 
+function successfulExplorerCleanupPending(runDir, record): boolean {
+  if (record.role !== "explorer" || record.phase !== "workspace_closed" || record.agentRequest?.role !== "explorer") return false;
+  try {
+    const receipt = JSON.parse(fs.readFileSync(path.join(runDir, "exploration-outcome.json"), "utf8"));
+    const outcomeIsBound = receipt.schemaVersion === 1
+      && receipt.attemptId === record.attemptId
+      && receipt.requestEventId === record.agentRequest.eventId
+      && receipt.outcome === "persisted";
+    if (!outcomeIsBound) return false;
+    try {
+      const cleanup = JSON.parse(fs.readFileSync(path.join(runDir, "exploration-worktree-cleaned.json"), "utf8"));
+      const cleanupIsBound = cleanup.schemaVersion === 1
+        && cleanup.attemptId === record.attemptId
+        && cleanup.requestEventId === record.agentRequest.eventId
+        && cleanup.branch === record.branch
+        && path.resolve(cleanup.worktreePath) === path.resolve(record.worktreePath);
+      return !cleanupIsBound;
+    } catch {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+}
+
 async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> {
   const runsDir = path.join(STATE_DIR, "runs");
   let runs: string[];
@@ -1590,8 +1644,9 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       }
       continue;
     }
+    const explorerCleanupPending = successfulExplorerCleanupPending(runDir, record);
     if (record.project !== project.id || record.repository !== project.githubRepo
-      || releasesAttemptOwnership(record.phase)) continue;
+      || releasesAttemptOwnership(record.phase) && !explorerCleanupPending) continue;
     const labels = projectLabels(project);
     if (record.phase === "prepared") {
       const claimResult = await execJson(pi, "node", [
@@ -1603,10 +1658,12 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
         "--state-dir", STATE_DIR,
         "--enabled-at", String(project.enabledAt),
         "--ready-label", labels.ready,
+        "--explore-label", labels.explore,
         "--implement-label", labels.implement,
         "--in-progress-label", labels.inProgress,
         "--review-label", labels.review,
         "--update-branch-label", labels.updateBranch,
+        "--automation-logins", (project.automationLogins || []).join(","),
         "--blocked-label", labels.blocked,
       ], null);
       if (claimResult?.action === "error") debugLog("prepared attempt claim reconciliation blocked", claimResult.reason || claimResult.driverAction, claimResult.summary);
@@ -1619,38 +1676,63 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
     }
 
     let report;
-    if (record.phase !== "github_persisted") {
+    if (record.phase !== "github_persisted" && !explorerCleanupPending) {
       try {
         report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
         validateCompletionReportBinding(record, report);
       } catch { continue; }
-      if (report.status !== "complete") continue;
+      if (record.role === "explorer"
+        ? !["complete", "blocked"].includes(report.status)
+        : report.status !== "complete") continue;
     }
     const reviewerAutoMerge = record.autoMergePolicy ?? project.autoMerge;
-    // A review that neither repairs nor merges hands its pull request to a person, and that state
-    // carries no agent workflow label. The human handoff label classifies Issues, so expecting it
-    // on a pull request would describe a state nothing ever writes.
-    const expectedLabels = report?.role === "reviewer"
-      ? decideReviewTransition(report.result || {}).transition === "repair" || reviewerAutoMerge
-        ? [labels.review, labels.inProgress]
-        : []
-      : [];
-    const args = [
-      path.join(AUTOMATION_DIR, "complete-attempt-workspace.cts"),
-      "--attempt-record", attemptRecord,
-      "--project-id", project.id,
-      "--project-repo", project.repoPath,
-      "--github-repo", project.githubRepo,
-      "--state-dir", STATE_DIR,
-      "--enabled-at", String(project.enabledAt),
-      "--worker-ready-label", labels.ready,
-      "--worker-implement-label", labels.implement,
-      "--worker-review-label", labels.review,
-      "--auto-merge", reviewerAutoMerge ? "true" : "false",
+    // A review that neither repairs nor merges hands its pull request to a person. That handoff is
+    // expected explicitly, through the shared human-handoff definition, instead of as an empty
+    // label set: the closure proof must see the pull request ready and no agent workflow label left.
+    const expectedLabels = report?.role === "reviewer" ? [labels.review, labels.inProgress] : [];
+    const reviewerHandoff = report?.role === "reviewer"
+      && decideReviewTransition(report.result || {}).transition !== "repair" && !reviewerAutoMerge;
+    const handoffLabels = [
+      "--handoff-review-label", labels.review,
+      "--handoff-implement-label", labels.implement,
+      "--handoff-update-branch-label", labels.updateBranch,
+      "--handoff-in-progress-label", labels.inProgress,
+      "--handoff-blocked-label", labels.blocked,
+    ];
+    const proofLabels = reviewerHandoff ? handoffLabels : [
       ...expectedLabels.flatMap((label) => ["--expected-label", label]),
       ...[labels.review, labels.inProgress, labels.blocked, labels.human]
         .flatMap((label) => ["--managed-label", label]),
     ];
+    const args = record.role === "explorer"
+      ? [
+          path.join(AUTOMATION_DIR, "complete-issue-exploration.cts"),
+          "--attempt-record", attemptRecord,
+          "--project-id", project.id,
+          "--project-repo", project.repoPath,
+          "--github-repo", project.githubRepo,
+          "--state-dir", STATE_DIR,
+          "--enabled-at", String(project.enabledAt),
+          "--explore-label", labels.explore,
+          "--implement-label", labels.implement,
+          "--in-progress-label", labels.inProgress,
+          "--automation-logins", (project.automationLogins || []).join(","),
+          "--blocked-label", labels.blocked,
+        ]
+      : [
+          path.join(AUTOMATION_DIR, "complete-attempt-workspace.cts"),
+          "--attempt-record", attemptRecord,
+          "--project-id", project.id,
+          "--project-repo", project.repoPath,
+          "--github-repo", project.githubRepo,
+          "--state-dir", STATE_DIR,
+          "--enabled-at", String(project.enabledAt),
+          "--worker-ready-label", labels.ready,
+          "--worker-implement-label", labels.implement,
+          "--worker-review-label", labels.review,
+          "--auto-merge", reviewerAutoMerge ? "true" : "false",
+          ...proofLabels,
+        ];
     const result = await execJson(pi, "node", args, null);
     // `driverResult` carries the failure text in `summary`, so logging only `reason` reduces every
     // exception to the word "exception" and leaves a per-tick retry with nothing to diagnose it by.
