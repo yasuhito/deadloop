@@ -10,6 +10,7 @@ const {
   releasesAttemptOwnership,
 } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { closeReceiptPath, observeAttemptRuntime, observeAttemptTurn } = require("../../../src/attempt-runtime-observation.cts");
+const { latestPrRequestEvent } = require("../../../src/pr-request-selection.cts");
 const { observeMonitorHandoffDisposition, terminalEvidenceArgs } = require("../../../src/monitor-handoff-observation.cts");
 
 import type { MonitorHandoffDisposition } from "../../../src/monitor-handoff-types";
@@ -77,6 +78,13 @@ function exactTarget(github: JsonObject, input: ContainmentInput, record: JsonOb
     && String(target.headRefOid || "").toLowerCase() !== String(record.inputRevision.head || "").toLowerCase()) {
     throw new Error("terminal monitor pull request head changed");
   }
+  // A branch update exists only while the pull request still conflicts with the base selected for
+  // it; once GitHub reports the conflict resolved, the queued update is obsolete and no failure
+  // record applies. A missing or still-computing state proves nothing either way.
+  if (record.role === "branch-update" && record.inputRevision?.base
+    && String(target.mergeable || "").toUpperCase() === "MERGEABLE") {
+    throw new Error("terminal monitor pull request base became obsolete");
+  }
   const handoffInput = input.handoff.input || {};
   if (record.target.kind === "issue" && (
     Number(handoffInput.issueNumber) !== number
@@ -89,13 +97,19 @@ function exactTarget(github: JsonObject, input: ContainmentInput, record: JsonOb
 /**
  * The published failure record for a terminal monitor stop.
  *
- * Every variant binds its hidden marker to one review attempt and the pull-request head fixed at
- * selection time, so reprocessing the same failure cannot duplicate the comment and a changed head
- * starts a different record. Public text names no local worktree or completion-report path.
+ * Every variant binds its hidden marker to one attempt, the pull-request head fixed at selection
+ * time, and — for a branch update — the base head it was selected against, so reprocessing the same
+ * failure cannot duplicate the comment and any changed revision starts a different record. Public
+ * text names no local worktree or completion-report path.
  */
 function commentBody(record: JsonObject, disposition: JsonObject): string {
   const head = String(record.inputRevision?.head || "").toLowerCase();
-  const binding = `Pull request head at selection: \`${head}\``;
+  const base = String(record.inputRevision?.base || "").toLowerCase();
+  const binding = [
+    `Pull request head at selection: \`${head}\``,
+    ...(base ? [`Selected base head at selection: \`${base}\``] : []),
+  ].join("\n");
+  const stopMarker = `<!-- deadloop:terminal-monitor-stop attempt=${record.attemptId} head=${head}${base ? ` base=${base}` : ""} reason=${disposition.reason} -->`;
   if (disposition.action === "wait_for_model") {
     return `deadloop paused this attempt because the agent's terminal result reported a recognized model billing or access rejection. The same attempt, workspace, worktree, and agent session remain retained; no monitor prompt will be sent while access is unavailable.\n\n<!-- deadloop:model-availability-wait attempt=${record.attemptId} -->`;
   }
@@ -103,9 +117,9 @@ function commentBody(record: JsonObject, disposition: JsonObject): string {
     return `deadloop stopped this attempt because its active work reached the configured runtime limit. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n\n<!-- deadloop:attempt-timeout attempt=${record.attemptId} -->`;
   }
   if (disposition.reason === "storage_exhaustion") {
-    return `deadloop stopped this attempt because the host ran out of storage while it ran (a write failed with ENOSPC or EDQUOT, and deadloop could not even read this attempt's completion report because of it). The stopped attempt will not retry automatically and consumed no retry allowance.\nOperator actions:\n- free up storage on the machine running deadloop\n- add a new Agent request once storage is available\n${binding}\n\n<!-- deadloop:terminal-monitor-stop attempt=${record.attemptId} head=${head} reason=${disposition.reason} -->`;
+    return `deadloop stopped this attempt because the host ran out of storage while it ran (a write failed with ENOSPC or EDQUOT, and deadloop could not even read this attempt's completion report because of it). The stopped attempt will not retry automatically and consumed no retry allowance.\nOperator actions:\n- free up storage on the machine running deadloop\n- add a new Agent request once storage is available\n${binding}\n\n${stopMarker}`;
   }
-  return `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n${binding}\n\n<!-- deadloop:terminal-monitor-stop attempt=${record.attemptId} head=${head} reason=${disposition.reason} -->`;
+  return `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n${binding}\n\n${stopMarker}`;
 }
 
 function dispositionStillApplies(commandRunner: JsonObject, runner: JsonObject, record: JsonObject, disposition: JsonObject): boolean {
@@ -140,6 +154,23 @@ function writeCloseReceipt(record: JsonObject): void {
     startedAt: new Date().toISOString(),
   })}\n`, { encoding: "utf8", mode: 0o600 });
   fs.renameSync(temporary, destination);
+}
+
+/**
+ * A branch-update stop must never stomp a queued `agent:update-branch` request that appeared after
+ * this attempt consumed its own generation: moving labels would silently delete that request.
+ * Right before the label move, the consumed request event is therefore re-checked; an advanced
+ * generation aborts the mutation instead of overwriting newer workflow intent.
+ */
+function assertBranchUpdateStopGeneration(github: JsonObject, input: ContainmentInput, record: JsonObject): void {
+  if (record.role !== "branch-update" || !record.requestEventId || typeof github.listPrTimelineEvents !== "function") return;
+  const latest = latestPrRequestEvent(
+    github.listPrTimelineEvents(input.project.githubRepo, record.target.number) || [],
+    input.project.labels.updateBranch,
+  );
+  if (latest && String(latest.id || latest.node_id || "") !== String(record.requestEventId)) {
+    throw new Error("terminal monitor branch update request generation changed");
+  }
 }
 
 function replaceStoppedLabels(commandRunner: JsonObject, input: ContainmentInput, record: JsonObject, target: JsonObject): void {
@@ -219,6 +250,7 @@ function applyTerminalMonitorDisposition(
       recheck();
       record = readBoundAttempt(recordFile);
       target = exactTarget(github, input, record);
+      assertBranchUpdateStopGeneration(github, input, record);
       if (!dispositionStillApplies(commandRunner, runner, record, observed)) return false;
       replaceStoppedLabels(commandRunner, input, record, target);
     }

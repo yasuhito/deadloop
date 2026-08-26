@@ -653,6 +653,77 @@ function branchUpdatePairWasAttempted(
   return !matchingNeverLaunched;
 }
 
+const PUBLISHED_BRANCH_UPDATE_STOP_RE = /<!--[\s]*deadloop:terminal-monitor-stop[\s]+attempt=([^\s]+)[\s]+head=([0-9a-f]+)[\s]+base=([0-9a-f]+)[\s]+reason=[a-z_]+[\s]*-->/gi;
+
+/**
+ * Whether every prior attempt for this exact head/base pair ended as a published runtime failure
+ * whose three records agree: the authorized stop comment on the pull request binds the attempt id
+ * to this pair, the retained journal released its authority as a terminal missing-report failure,
+ * and the runtime proves no agent still occupies the stopped checkout. Then — and only then — a new
+ * `agent:update-branch` request may restart the pair instead of being blocked as exhausted.
+ */
+function branchUpdateFailureRestartable(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  headOid: string,
+  baseOid: string,
+): boolean {
+  const number = Number(pr.number || 0);
+  const head = String(headOid || "").toLowerCase();
+  const base = String(baseOid || "").toLowerCase();
+  const publishedStops = new Set<string>();
+  for (const comment of pr.comments || []) {
+    if (String(comment?.author?.login || comment?.user?.login || "").toLowerCase() !== env.automationLogin.toLowerCase()) continue;
+    PUBLISHED_BRANCH_UPDATE_STOP_RE.lastIndex = 0;
+    for (
+      let match = PUBLISHED_BRANCH_UPDATE_STOP_RE.exec(String(comment?.body || ""));
+      match;
+      match = PUBLISHED_BRANCH_UPDATE_STOP_RE.exec(String(comment?.body || ""))
+    ) {
+      if (match[2].toLowerCase() === head && match[3].toLowerCase() === base) publishedStops.add(match[1]);
+    }
+  }
+  if (!publishedStops.size) return false;
+
+  const runsRoot = path.join(env.stateDir, "runs");
+  let entries: string[];
+  try { entries = fs.readdirSync(runsRoot); } catch { return false; }
+  const agents = fixture
+    ? (fixture.agents?.result?.agents || [])
+    : liveAgents();
+  const observedRunner = { listAgents: () => agents } as never;
+  let provenAttempts = 0;
+  for (const entry of entries) {
+    let record: JsonObject;
+    try { record = readAttemptRecord(path.join(runsRoot, entry)); } catch { continue; }
+    if (
+      record.project !== env.projectId ||
+      record.repository !== env.githubRepo ||
+      record.role !== "branch-update" ||
+      record.target?.kind !== "pull-request" ||
+      Number(record.target.number) !== number ||
+      String(record.inputRevision?.head || "") !== headOid ||
+      String(record.inputRevision?.base || "") !== baseOid
+    ) continue;
+    // A never-launched record carries no contract verdict either way, exactly like the pair rule.
+    if (record.phase === "authority_released" && record.authorityRelease?.reason === "never_launched") continue;
+    const failedAsPublished = record.phase === "authority_released"
+      && record.authorityRelease?.reason === "terminal_missing_report"
+      && publishedStops.has(String(record.attemptId || ""));
+    if (!failedAsPublished) return false;
+    // The old workspace must be provably free before anything reopens it: an unresolvable runtime
+    // or any remaining occupant keeps the restart refused behind agent:blocked.
+    try {
+      if (observeAttemptLiveness(observedRunner, record).kind !== "owner_absent") return false;
+    } catch {
+      return false;
+    }
+    provenAttempts += 1;
+  }
+  return provenAttempts > 0;
+}
+
 function recoverableBlockedBranchUpdateHead(
   pr: JsonObject,
   env: ReturnType<typeof envConfig>,
@@ -669,14 +740,23 @@ function recoverableBlockedBranchUpdateHead(
   for (const entry of entries) {
     const runDir = path.join(runsRoot, entry);
     let record: JsonObject;
-    let report: JsonObject;
+    let releasedMissingReport = false;
+    let blockedReport = false;
     try {
       record = readAttemptRecord(runDir);
-      report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
-      validateCompletionReportBinding(record, report);
+      if (record.phase === "authority_released" && record.authorityRelease?.reason === "terminal_missing_report") {
+        // A runtime-failed attempt keeps its mid-merge checkout without any completion report; its
+        // journal alone proves what the stopped update was working on.
+        releasedMissingReport = true;
+      } else {
+        const report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
+        validateCompletionReportBinding(record, report);
+        blockedReport = report.status === "blocked";
+      }
     } catch {
       continue;
     }
+    if (!blockedReport && !releasedMissingReport) continue;
     if (
       record.project !== env.projectId ||
       record.repository !== env.githubRepo ||
@@ -686,8 +766,7 @@ function recoverableBlockedBranchUpdateHead(
       record.branch !== branch ||
       path.resolve(String(record.worktreePath || "")) !== path.resolve(worktreePath) ||
       record.phase !== "authority_released" ||
-      String(record.inputRevision?.head || "").toLowerCase() !== remoteHead ||
-      report.status !== "blocked"
+      String(record.inputRevision?.head || "").toLowerCase() !== remoteHead
     ) continue;
     matchedReleasedAttempt = true;
     break;
@@ -1900,7 +1979,10 @@ function driveSelectedTarget(
       });
     }
     const marker = renderBranchUpdateMarker(headOid, baseOid);
-    if (branchUpdatePairWasAttempted(plan.pr, env, headOid, baseOid)) {
+    if (
+      branchUpdatePairWasAttempted(plan.pr, env, headOid, baseOid)
+      && !branchUpdateFailureRestartable(plan.pr, env, fixture, headOid, baseOid)
+    ) {
       const transition = applyBranchUpdateBlocked(
         plan.pr, env, fixture, "this exact PR head/base head pair already used its one attempt",
         (_livePlan, live) => {
@@ -2101,6 +2183,7 @@ module.exports = {
   assertBranchUpdateRequestSelectable,
   assertTrustedReviewIdentity,
   recoverableBlockedBranchUpdateHead,
+  branchUpdateFailureRestartable,
   branchUpdatePairWasAttempted,
   branchUpdateLaunchPlan,
   consumeRequestEvent,
