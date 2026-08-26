@@ -112,7 +112,9 @@ function applyDeterministicAttemptMonitoring(
   const disposition = directive.action === "missing_report"
     ? directive.reason === "model_availability"
       ? { action: "wait_for_model", reason: "model_availability" }
-      : { action: "stop", reason: directive.reason === "invalid_completion_report" ? "invalid_completion_report" : "missing_completion_report" }
+      : directive.reason === "storage_exhaustion"
+        ? { action: "stop", reason: "storage_exhaustion" }
+        : { action: "stop", reason: directive.reason === "invalid_completion_report" ? "invalid_completion_report" : "missing_completion_report" }
     : {
         action: "stop",
         reason: "active_work_timeout",

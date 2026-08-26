@@ -76,10 +76,6 @@ const {
   releaseSchedulerLock: releaseSchedulerFileLock,
 } = require("../../src/scheduler-lock.cjs");
 import { inferredProjectId, schedulerLockName } from "../../src/project-identity";
-import {
-  inspectRetainedEnablementVerifications,
-  runEnablementVerification,
-} from "../../src/enablement-verification";
 type RetainedProjectCheckFailure = {
   attemptId?: string;
   worktreePath: string;
@@ -1095,34 +1091,6 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
   return findings;
 }
 
-function shellCommandArgument(value: string): string {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
-
-function retainedVerificationReport(repositoryRoot: string | undefined): string {
-  const retained = inspectRetainedEnablementVerifications(STATE_DIR, repositoryRoot);
-  if (!retained.length) return "";
-  const lines = ["", `Retained required-verification worktrees: ${retained.length}`];
-  for (const item of retained) {
-    const worktree = shellCommandArgument(item.worktreePath);
-    const confirmation = item.primaryRepoPath
-      ? `git -C ${shellCommandArgument(item.primaryRepoPath)} worktree list --porcelain && git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all --ignored`
-      : `git -C ${worktree} rev-parse HEAD && git -C ${worktree} status --short --untracked-files=all --ignored`;
-    lines.push(
-      `- ${item.worktreePath}`,
-      `  repository: ${item.repository}`,
-      `  revision: ${item.targetRevision}`,
-      `  reason: ${item.retentionReason}`,
-      `  journal: ${item.journalPath}`,
-      `  record: ${item.recordPath || "not written"}`,
-      `  log: ${item.logPath || "not written"}`,
-      `  confirm: ${confirmation}`,
-    );
-  }
-  return lines.join("\n");
-}
-
 function renderRetainedProjectCheckReport(title: string, retained: RetainedProjectCheckFailure[]): string {
   if (!retained.length) return "";
   const lines = ["", `${title}: ${retained.length}`];
@@ -1182,8 +1150,7 @@ async function buildLiveDoctorReport(pi, cwd, codeIdentityDecision?: () => CodeI
       herdrVersionDiagnosticData({ probeFailure: error instanceof Error ? error.message : String(error) }),
     ));
   }
-  const repositoryRoot = (await gitText(pi, ["-C", cwd, "rev-parse", "--show-toplevel"]))?.trim();
-  return `${formatDoctorReport(snapshot)}${retainedVerificationReport(repositoryRoot)}${retainedProjectCheckReport(data.selectedProject)}${unresolvedProjectCheckReport()}`;
+  return `${formatDoctorReport(snapshot)}${retainedProjectCheckReport(data.selectedProject)}${unresolvedProjectCheckReport()}`;
 }
 
 const STANDARD_LABELS = [
@@ -1879,30 +1846,6 @@ export default function (pi) {
   let stopRequested = false;
   let pendingStart = null;
   let activeTickPromise = null;
-  const activeEnablementVerifications = new Map();
-
-  function registerEnablementVerification(repoPath, controller, settled) {
-    const key = path.resolve(repoPath);
-    const runs = activeEnablementVerifications.get(key) || new Set();
-    runs.add({ controller, settled });
-    activeEnablementVerifications.set(key, runs);
-  }
-
-  function unregisterEnablementVerification(repoPath, controller) {
-    const key = path.resolve(repoPath);
-    const runs = activeEnablementVerifications.get(key);
-    if (!runs) return;
-    for (const run of runs) if (run.controller === controller) runs.delete(run);
-    if (!runs.size) activeEnablementVerifications.delete(key);
-  }
-
-  async function interruptEnablementVerifications(repoPath?) {
-    const runs = repoPath
-      ? [...(activeEnablementVerifications.get(path.resolve(repoPath)) || [])]
-      : [...activeEnablementVerifications.values()].flatMap((entries) => [...entries]);
-    for (const run of runs) run.controller.abort();
-    await Promise.allSettled(runs.map((run) => run.settled));
-  }
 
   async function tick(ctx) {
     if (!active) return;
@@ -2141,19 +2084,18 @@ export default function (pi) {
   }
 
   pi.registerCommand("deadloop-enable", {
-    description: "Enable deadloop locally for this primary Git checkout",
+    description: "Enable deadloop locally after fast prerequisite checks; repository tests are not run here",
     handler: async (_args, ctx) => {
       let primaryRepoPath;
       let identity;
       let previousEnabledAt;
       let previousEnabledProject;
-      let retainedVerificationJournalPath;
       let enablementSaved = false;
       const enableAttemptToken = crypto.randomUUID();
       const progressKey = `deadloop-enable:${enableAttemptToken}`;
       const showProgress = ctx.hasUI;
       if (showProgress) {
-        ctx.ui.notify("Enabling deadloop. Required verification may take several minutes.", "info");
+        ctx.ui.notify("Enabling deadloop. Enablement runs fast prerequisite checks only and does not run repository tests.", "info");
         ctx.ui.setStatus(progressKey, "deadloop: enabling…");
       }
       try {
@@ -2171,48 +2113,11 @@ export default function (pi) {
         });
         identity = await detectProjectIdentity(pi, primaryRepoPath);
         previousEnabledAt = await withEnablementStateLock(async () => findEnabledProject(loadEnablementState(), identity)?.enabledAt);
+        // Fast preflight only: resolve the required-verification contract without executing it.
+        // Produced revisions are still gated by required verification before push, handoff, or merge.
         const preflightProject = resolveEnableProject(ctx.cwd, identity);
-        const verificationController = new AbortController();
-        let settleVerification;
-        const verificationSettled = new Promise<void>((resolve) => { settleVerification = resolve; });
-        registerEnablementVerification(primaryRepoPath, verificationController, verificationSettled);
-        let verification;
-        try {
-          if (showProgress) ctx.ui.setStatus(progressKey, "deadloop: running required verification…");
-          verification = await runEnablementVerification({
-            stateDir: STATE_DIR,
-            primaryRepoPath,
-            repository: identity.githubRepo,
-            resolution: preflightProject.requiredVerification,
-            beforeWorktreeCreate: pi.testing?.beforeEnablementWorktreeCreate,
-            beforeProjectCheck: pi.testing?.beforeEnablementProjectCheck,
-            signal: verificationController.signal,
-          });
-        } finally {
-          unregisterEnablementVerification(primaryRepoPath, verificationController);
-          settleVerification();
-        }
-        if (verification.outcome !== "passed") {
-          const retained = verification.cleanup === "retained" ? `; retained worktree journal: ${verification.journalPath}` : "";
-          const failure = verification.outcome === "interrupted"
-            ? "was interrupted"
-            : verification.outcome === "timed_out"
-              ? "timed out"
-              : `failed (exit ${verification.exitCode})`;
-          throw new Error(`required verification ${failure}; log: ${verification.logPath}${retained}`);
-        }
-        if (verification.cleanup === "retained") {
-          retainedVerificationJournalPath = verification.journalPath;
-        }
         if (!ownsEnableAttempt(primaryRepoPath, enableAttemptToken)) {
-          throw new Error("enablement was revoked while required verification was running");
-        }
-        const verifiedProject = resolveEnableProject(ctx.cwd, identity);
-        if (!requiredVerificationMatches(verifiedProject.requiredVerification, preflightProject.requiredVerification)) {
-          throw new Error("required verification contract changed during enablement");
-        }
-        if (verifiedProject.baseBranch !== preflightProject.baseBranch) {
-          throw new Error("base branch changed during enablement");
+          throw new Error("enablement was revoked while preflight was running");
         }
         if (showProgress) ctx.ui.setStatus(progressKey, "deadloop: checking GitHub access and labels…");
         const automationLogin = await prepareGithub(pi, identity, primaryRepoPath, enableAttemptToken, disableGeneration, assertCodeIdentityCurrent);
@@ -2285,10 +2190,7 @@ export default function (pi) {
           throw error;
         }
         const owner = ownsLock ? "this session" : `another session (pid ${readLock(projectLockPath(project))?.pid || "unknown"})`;
-        const retainedVerification = retainedVerificationJournalPath
-          ? ` Required-verification worktree was retained for inspection because cleanup was not proven safe; journal: ${retainedVerificationJournalPath}.`
-          : "";
-        const message = `deadloop enabled for ${identity.githubRepo}; scheduler owner: ${owner}. autoMerge is ${project.autoMerge ? "on (existing local setting preserved)" : "off"}.${retainedVerification}`;
+        const message = `deadloop enabled for ${identity.githubRepo}; scheduler owner: ${owner}. autoMerge is ${project.autoMerge ? "on (existing local setting preserved)" : "off"}. Enablement did not run repository tests; required verification still gates produced revisions.`;
         if (ctx.mode === "print" || ctx.mode === "json") console.log(message);
         else pi.sendMessage({ customType: "deadloop-enable", content: message, display: true });
       } catch (error) {
@@ -2313,7 +2215,6 @@ export default function (pi) {
         let message;
         const repoPath = await detectPrimaryCheckout(pi, ctx.cwd, true);
         advanceDisableGeneration(STATE_DIR, repoPath, writeJsonFile);
-        await interruptEnablementVerifications(repoPath);
         await pi.testing?.beforeDisableLock?.();
         await withEnablementStateLock(async () => {
           const attempt = readJsonFile(enableAttemptPath(repoPath), null);
@@ -2353,7 +2254,6 @@ export default function (pi) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    await interruptEnablementVerifications();
     await stopScheduler(ctx);
   });
 }

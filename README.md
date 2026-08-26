@@ -46,7 +46,7 @@ You need an authenticated `gh` CLI and a running [Herdr](https://herdr.dev/) 0.8
 
 3. Add `agent:implement` to request implementation, or `agent:explore` to request a read-only investigation. `ready-for-agent` remains optional triage metadata. When both requests are present, exploration runs first and its result is posted to the Issue before implementation starts.
 
-That is enough to start. During enablement, deadloop runs `npm run check`, creates any missing standard labels, and leaves automatic merge off. If the repository does not provide an `npm run check` script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
+That is enough to start. Enablement is a fast control-plane check: it resolves the required-verification contract but does not run repository tests, and it creates any missing standard labels with automatic merge off. Repository tests still run as required verification before deadloop pushes, hands off, or merges a produced revision. The default verification command is `npm run check`; if the repository does not provide that script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
 
 ## Control the loop with labels
 
@@ -102,7 +102,7 @@ Run these commands from the Pi session in the target repository:
 
 | Command | Purpose |
 | --- | --- |
-| `/deadloop-enable` | Verify the repository and enable new deadloop work. |
+| `/deadloop-enable` | Run fast prerequisite checks and enable new deadloop work. |
 | `/deadloop-disable` | Stop new work from starting; running attempts may finish. |
 | `/deadloop-status` | Show whether deadloop is enabled and summarize its current state. |
 | `/deadloop-doctor` | Diagnose configuration and retained attempts without changing them. |
@@ -153,6 +153,8 @@ Reviewers can still report requested changes or a required human decision when r
 Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
 
 Reviewer, branch-update, and review-repair attempts are monitored deterministically without using the Automation host's model. Runtime-reported working status wins over quiet output, the configured 24-hour limit applies to active work, and a terminal attempt without a valid completion report is never prompted or nudged through conversation.
+
+When the runtime confirms a stopped review, deadloop re-reads its completion report once more before recording anything, and publishes the stop on the PR bound to the attempt and the exact head selected for review. A stop whose report file itself could not be read because of `ENOSPC` or `EDQUOT` is recorded as a capacity stop with free-storage recovery steps; pane output alone never names that cause. Both failure classes skip the bounded technical retry and never retry automatically.
 
 A terminal turn whose evidence matches only a known billing or access rejection pauses the attempt instead of stopping it: deadloop posts one idempotent GitHub explanation, keeps the same attempt, workspace, worktree, pane, and agent session, and excludes the waiting time from active-work accounting. A provider-stated retry time gates the retry; without one, the normal next scheduler tick is the only retry trigger, and each retry sends one fixed continuation prompt to the same agent session with no Automation-host model calls. Status reports the retry count, waiting start, waiting duration, next retry time, and active-work duration separately.
 

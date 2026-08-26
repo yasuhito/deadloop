@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
-import { runEnablementVerification } from "../src/enablement-verification";
 import { schedulerLockName } from "../src/project-identity";
 const { withEnabledProjectLock } = require("../src/enabled-operation.cjs");
 const { projectCheckMain } = require("../src/project-check.cts") as {
@@ -167,8 +166,6 @@ async function loadExtension(
     afterEnablementSaved?: () => Promise<void>;
     afterEnablementSchedulerStart?: () => Promise<void>;
     afterTickReconciliation?: () => Promise<void>;
-    beforeEnablementWorktreeCreate?: (journalPath: string) => Promise<void>;
-    beforeEnablementProjectCheck?: (worktreePath: string) => Promise<void>;
     runAutomationScript?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
     herdrPreflight?: () => void;
     // null keeps the hook off the testing object so the host runs its own reconciliation.
@@ -280,8 +277,6 @@ async function loadExtension(
       afterEnablementSaved: options.afterEnablementSaved,
       afterEnablementSchedulerStart: options.afterEnablementSchedulerStart,
       afterTickReconciliation: options.afterTickReconciliation,
-      beforeEnablementWorktreeCreate: options.beforeEnablementWorktreeCreate,
-      beforeEnablementProjectCheck: options.beforeEnablementProjectCheck,
       herdrPreflight: options.herdrPreflight || (() => undefined),
       ...(options.reconcilePrWorkAuthority === null
         ? {}
@@ -375,25 +370,16 @@ async function waitForFile(filePath: string): Promise<void> {
 }
 
 async function enablementProgressObservation(): Promise<{
-  notificationWhileVerificationRuns: string | undefined;
-  statusWhileVerificationRuns: { key: string; value: string | undefined } | undefined;
+  notificationAtStart: string | undefined;
+  initialStatus: { key: string; value: string | undefined } | undefined;
   finalStatus: { key: string; value: string | undefined } | undefined;
   statuses: Array<{ key: string; value: string | undefined }>;
 }> {
   const { root, repoPath } = fixtureRepository();
-  let verificationStarted!: () => void;
-  let finishVerification!: () => void;
-  const started = new Promise<void>((resolve) => { verificationStarted = resolve; });
-  const blocked = new Promise<void>((resolve) => { finishVerification = resolve; });
-  const extension = await loadExtension(root, {
-    beforeEnablementProjectCheck: async () => {
-      verificationStarted();
-      await blocked;
-    },
-  });
+  const extension = await loadExtension(root);
   const notifications: string[] = [];
   const statuses: Array<{ key: string; value: string | undefined }> = [];
-  const enabling = extension.commands.get("deadloop-enable")!("", {
+  await extension.commands.get("deadloop-enable")!("", {
     cwd: repoPath,
     mode: "tui",
     hasUI: true,
@@ -402,13 +388,7 @@ async function enablementProgressObservation(): Promise<{
       setStatus: (key: string, value: string | undefined) => { statuses.push({ key, value }); },
     },
   });
-
-  await started;
-  const notificationWhileVerificationRuns = notifications.at(-1);
-  const statusWhileVerificationRuns = statuses.at(-1);
-  finishVerification();
-  await enabling;
-  return { notificationWhileVerificationRuns, statusWhileVerificationRuns, finalStatus: statuses.at(-1), statuses };
+  return { notificationAtStart: notifications[0], initialStatus: statuses[0], finalStatus: statuses.at(-1), statuses };
 }
 
 afterAll(() => {
@@ -435,118 +415,6 @@ afterEach(async () => {
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
-
-async function explicitNpmCommandWithoutLockfileObservation(): Promise<string | undefined> {
-  const { root, repoPath } = fixtureRepository();
-  writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({ scripts: { verify: "true" } }));
-  writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({ checkCommand: "npm run verify" }));
-  git(repoPath, ["add", "package.json", "deadloop.json"]);
-  git(repoPath, ["commit", "--quiet", "-m", "add explicit npm verification"]);
-  git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
-  const extension = await loadExtension(root);
-
-  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-  return extension.messages.at(-1);
-}
-
-async function timedOutVerificationObservation(): Promise<{
-  record: { outcome: string; exitCode: number | null; terminationReason?: string; timedOut: boolean; timeoutMs: number };
-  log: string;
-}> {
-  const { root, repoPath } = fixtureRepository();
-  const baseRevision = git(repoPath, ["rev-parse", "origin/master"]).trim();
-  const result = await runEnablementVerification({
-    stateDir: path.join(root, ".pi", "agent", "deadloop"),
-    primaryRepoPath: repoPath,
-    repository: "owner/demo",
-    resolution: {
-      status: "resolved",
-      contract: {
-        repository: "owner/demo",
-        command: "sleep 60",
-        source: { kind: "repo_policy", location: "deadloop.json" },
-        baseRevision,
-      },
-    },
-    timeoutMs: 25,
-  });
-  return {
-    record: JSON.parse(readFileSync(result.recordPath, "utf8")),
-    log: readFileSync(result.logPath, "utf8"),
-  };
-}
-
-async function interruptedVerificationObservation(): Promise<{
-  outcome: string;
-  exitCode: number | null;
-  terminationReason?: string;
-}> {
-  const { root, repoPath } = fixtureRepository();
-  const baseRevision = git(repoPath, ["rev-parse", "origin/master"]).trim();
-  const controller = new AbortController();
-  controller.abort();
-  const result = await runEnablementVerification({
-    stateDir: path.join(root, ".pi", "agent", "deadloop"),
-    primaryRepoPath: repoPath,
-    repository: "owner/demo",
-    resolution: {
-      status: "resolved",
-      contract: {
-        repository: "owner/demo",
-        command: "sleep 60",
-        source: { kind: "repo_policy", location: "deadloop.json" },
-        baseRevision,
-      },
-    },
-    signal: controller.signal,
-  });
-  return JSON.parse(readFileSync(result.recordPath, "utf8"));
-}
-
-async function interruptedEnablementCommandObservation(trigger: "disable" | "shutdown"): Promise<{
-  outcome: string;
-  restoredArtifact: string;
-  message: string | undefined;
-}> {
-  const { root, repoPath } = fixtureRepository();
-  writeConfig(root, repoPath);
-  const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
-  const config = JSON.parse(readFileSync(configPath, "utf8"));
-  config.projects[0].checkCommand = "sleep 60";
-  writeFileSync(configPath, JSON.stringify(config));
-  let worktreePath = "";
-  let projectCheckStarted!: () => void;
-  const started = new Promise<void>((resolve) => { projectCheckStarted = resolve; });
-  const extension = await loadExtension(root, {
-    beforeEnablementProjectCheck: async (candidate) => {
-      worktreePath = candidate;
-      mkdirSync(path.join(candidate, ".pi", "subagents"), { recursive: true });
-      writeFileSync(path.join(candidate, ".pi", "subagents", "evidence"), "restored\n");
-      projectCheckStarted();
-    },
-  });
-
-  const enabling = invoke(extension.commands.get("deadloop-enable")!, repoPath);
-  await started;
-  if (trigger === "disable") {
-    await invoke(extension.commands.get("deadloop-disable")!, repoPath);
-  } else {
-    await extension.events.get("session_shutdown")?.({}, {
-      cwd: repoPath,
-      mode: "interactive",
-      ui: { notify: () => undefined, setStatus: () => undefined },
-    });
-  }
-  await enabling;
-  const attemptsRoot = path.join(root, ".pi", "agent", "deadloop", "required-verification", "enablement");
-  const attemptDir = path.join(attemptsRoot, readdirSync(attemptsRoot)[0]);
-  return {
-    outcome: JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome,
-    restoredArtifact: readFileSync(path.join(worktreePath, ".pi", "subagents", "evidence"), "utf8"),
-    message: extension.messages.find((message) => message.startsWith("deadloop was not enabled:")),
-  };
-}
 
 async function lostAutomationAuthorityObservation(): Promise<{
   report: string | undefined;
@@ -604,67 +472,6 @@ async function repeatedEnablementAuthorityLossObservation(): Promise<{
     report: extension.messages.filter((message) => message.startsWith("deadloop was not enabled:")).at(-1),
     before,
     after,
-  };
-}
-
-async function dirtyFailureObservation(): Promise<{ messageIncludesLogPath: boolean; logIncludesDirtyFailure: boolean }> {
-  const { root, repoPath } = fixtureRepository();
-  writeConfig(root, repoPath);
-  const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
-  const config = JSON.parse(readFileSync(configPath, "utf8"));
-  config.projects[0].checkCommand = "touch retained-artifact; echo dirty-failure >&2; exit 23";
-  writeFileSync(configPath, JSON.stringify(config));
-  let logPath = "";
-  const extension = await loadExtension(root, {
-    beforeEnablementWorktreeCreate: async (journalPath) => {
-      logPath = path.join(path.dirname(journalPath), "check.log");
-    },
-  });
-
-  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-  return {
-    messageIncludesLogPath: (extension.messages.at(-1) || "").includes(logPath),
-    logIncludesDirtyFailure: readFileSync(logPath, "utf8").includes("dirty-failure"),
-  };
-}
-
-async function verifierExceptionObservation(): Promise<{
-  journal: string;
-  record: string;
-  exitCode: number | null;
-  terminationReason?: string;
-  log: string;
-  worktreeExists: boolean;
-  message: string | undefined;
-  logPath: string;
-}> {
-  const { root, repoPath } = fixtureRepository();
-  let attemptDir = "";
-  let worktreePath = "";
-  const extension = await loadExtension(root, {
-    beforeEnablementWorktreeCreate: async (journalPath) => {
-      attemptDir = path.dirname(journalPath);
-      worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
-      const quarantineRoot = path.join(root, ".pi", "agent", "deadloop", "check-quarantine");
-      mkdirSync(path.dirname(quarantineRoot), { recursive: true });
-      writeFileSync(quarantineRoot, "blocks quarantine setup\n");
-    },
-  });
-
-  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-  const logPath = path.join(attemptDir, "check.log");
-  const record = JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8"));
-  return {
-    journal: JSON.parse(readFileSync(path.join(attemptDir, "journal.json"), "utf8")).state,
-    record: record.outcome,
-    exitCode: record.exitCode,
-    terminationReason: record.terminationReason,
-    log: readFileSync(logPath, "utf8"),
-    worktreeExists: existsSync(worktreePath),
-    message: extension.messages.at(-1),
-    logPath,
   };
 }
 
@@ -765,82 +572,6 @@ else process.exit(1);
   return { extension, repoPath, runDir, targetState };
 }
 
-async function ownedWorktreeIntentObservation(): Promise<{
-  state?: string;
-  repository?: string;
-  primaryRepoPath?: string;
-  repoPath: string;
-}> {
-  const { root, repoPath } = fixtureRepository();
-  let preparedJournal: unknown;
-  const extension = await loadExtension(root, {
-    beforeEnablementWorktreeCreate: async (journalPath) => {
-      preparedJournal = JSON.parse(readFileSync(journalPath, "utf8"));
-    },
-  });
-
-  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-  return { ...(preparedJournal as { state?: string; repository?: string; primaryRepoPath?: string }), repoPath };
-}
-
-async function retainedVerificationDoctorObservation(): Promise<{
-  report: string;
-  journal: Record<string, string>;
-  journalPath: string;
-}> {
-  const { root, repoPath } = fixtureRepository();
-  writeConfig(root, repoPath);
-  const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
-  const config = JSON.parse(readFileSync(configPath, "utf8"));
-  config.projects[0].checkCommand = "touch retained-by-verification";
-  writeFileSync(configPath, JSON.stringify(config));
-  let journalPath = "";
-  const extension = await loadExtension(root, {
-    beforeEnablementWorktreeCreate: async (value) => { journalPath = value; },
-  });
-  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-  const journal = JSON.parse(readFileSync(journalPath, "utf8"));
-
-  await invoke(extension.commands.get("deadloop-doctor")!, repoPath);
-
-  return { report: extension.messages.at(-1) || "", journal, journalPath };
-}
-
-async function dependencySetupObservation(): Promise<{
-  enabled: boolean;
-  retentionReported: boolean;
-  cleanup: string;
-}> {
-  const { root, repoPath } = fixtureRepository();
-  mkdirSync(path.join(repoPath, "vendor", "fixture-dependency"), { recursive: true });
-  writeFileSync(path.join(repoPath, "vendor", "fixture-dependency", "package.json"), JSON.stringify({ name: "fixture-dependency", version: "1.0.0" }));
-  writeFileSync(path.join(repoPath, "package.json"), JSON.stringify({ dependencies: { "fixture-dependency": "file:vendor/fixture-dependency" } }));
-  writeFileSync(path.join(repoPath, ".gitignore"), "node_modules/\n");
-  execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: repoPath, stdio: "ignore" });
-  rmSync(path.join(repoPath, "node_modules"), { recursive: true, force: true });
-  writeFileSync(path.join(repoPath, "deadloop.json"), JSON.stringify({
-    checkCommand: "npm ci --ignore-scripts --no-audit --no-fund && test -f node_modules/fixture-dependency/package.json",
-  }));
-  git(repoPath, ["add", ".gitignore", "package.json", "package-lock.json", "vendor", "deadloop.json"]);
-  git(repoPath, ["commit", "--quiet", "-m", "add dependency verification fixture"]);
-  git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
-  let journalPath = "";
-  const extension = await loadExtension(root, {
-    beforeEnablementWorktreeCreate: async (path) => {
-      journalPath = path;
-    },
-  });
-
-  await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-  return {
-    enabled: extension.messages.at(-1)?.includes("deadloop enabled") || false,
-    retentionReported: extension.messages.at(-1)?.includes(journalPath) || false,
-    cleanup: JSON.parse(readFileSync(journalPath, "utf8")).state,
-  };
-}
-
 async function retainedGeneralProjectCheckDoctorObservation(): Promise<{ report: string; quarantinePath: string }> {
   const { root, repoPath } = fixtureRepository();
   writeConfig(root, repoPath);
@@ -926,19 +657,13 @@ async function unresolvedProjectCheckDoctorObservation(attemptRecord: "missing" 
 }
 
 describe("enablement command integration", () => {
-  it("acknowledges enablement before required verification completes", async () => {
-    expect((await enablementProgressObservation()).notificationWhileVerificationRuns).toBe(
-      "Enabling deadloop. Required verification may take several minutes.",
+  it("notifies that enablement only runs fast prerequisite checks", async () => {
+    expect((await enablementProgressObservation()).notificationAtStart).toBe(
+      "Enabling deadloop. Enablement runs fast prerequisite checks only and does not run repository tests.",
     );
   });
 
-  it("shows required verification progress while the command is blocked", async () => {
-    expect((await enablementProgressObservation()).statusWhileVerificationRuns?.value).toBe(
-      "deadloop: running required verification…",
-    );
-  });
-
-  it("shows GitHub access and label progress after required verification", async () => {
+  it("shows GitHub access and label progress during the fast preflight", async () => {
     expect((await enablementProgressObservation()).statuses.map(({ value }) => value)).toContain(
       "deadloop: checking GitHub access and labels…",
     );
@@ -947,7 +672,7 @@ describe("enablement command integration", () => {
   it("clears enablement progress after the command completes", async () => {
     const observation = await enablementProgressObservation();
     expect(observation.finalStatus).toEqual({
-      key: observation.statusWhileVerificationRuns?.key,
+      key: observation.initialStatus?.key,
       value: undefined,
     });
   });
@@ -999,6 +724,86 @@ describe("enablement command integration", () => {
     await invoke(extension.commands.get("deadloop-enable")!, repoPath);
 
     expect(extension.messages.at(-1)).toContain("nonblocking file-descriptor locks");
+  });
+
+  it("persists execution permission after the fast preflight succeeds", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    expect(state.projects[0].enabled).toBe(true);
+  });
+
+  it("does not execute the repository verification command during enablement", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const marker = path.join(root, "verification-marker");
+    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.projects[0].checkCommand = `touch ${marker}`;
+    writeFileSync(configPath, JSON.stringify(config));
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("creates no temporary verification worktree or journal on successful enablement", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", "required-verification"))).toBe(false);
+  });
+
+  it("creates no temporary verification worktree or journal when the preflight fails", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root, { failLabel: true });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", "required-verification"))).toBe(false);
+  });
+
+  it("leaves the repository disabled when project configuration cannot be resolved", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    writeFileSync(path.join(root, ".pi", "agent", "deadloop", "projects.json"), "{");
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"))).toBe(false);
+  });
+
+  it("does not record enablement when the authenticated account lacks write permission", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root, { viewerPermission: "READ" });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"))).toBe(false);
+  });
+
+  it("leaves the repository disabled when the runtime fails the compatibility preflight", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root, {
+      herdrPreflight: () => { throw new Error("herdr 0.7.0 is unsupported; upgrade to 0.8.0 or newer"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const state = JSON.parse(readFileSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"), "utf8"));
+    expect(state.projects[0].enabled).toBe(false);
   });
   it("persists the configured base branch instead of the current branch upstream", async () => {
     const { root, repoPath } = fixtureRepository();
@@ -1076,7 +881,7 @@ describe("enablement command integration", () => {
     }).toEqual({
       automationLogin: "deadloop-bot",
       enabled: true,
-      report: "deadloop enabled for owner/demo; scheduler owner: this session. autoMerge is off.",
+      report: "deadloop enabled for owner/demo; scheduler owner: this session. autoMerge is off. Enablement did not run repository tests; required verification still gates produced revisions.",
       schedulerOwned: true,
     });
   });
@@ -1197,328 +1002,6 @@ describe("enablement command integration", () => {
     expect(await unreconciledAuthorityStatus()).toContain("the reconciliation driver returned no result");
   }, SCHEDULED_DRIVER_TIMEOUT_MS);
 
-  it("records prepared verification worktree intent before creation", async () => {
-    expect((await ownedWorktreeIntentObservation()).state).toBe("prepared");
-  });
-
-  it("binds verification worktree intent to the repository identity", async () => {
-    expect((await ownedWorktreeIntentObservation()).repository).toBe("owner/demo");
-  });
-
-  it("binds verification worktree intent to the primary repository path", async () => {
-    const observation = await ownedWorktreeIntentObservation();
-    expect(observation.primaryRepoPath).toBe(observation.repoPath);
-  });
-
-  it("records the trusted target revision before worktree creation", async () => {
-    const { root, repoPath } = fixtureRepository();
-    let targetRevision = "";
-    const extension = await loadExtension(root, {
-      beforeEnablementWorktreeCreate: async (journalPath) => {
-        targetRevision = JSON.parse(readFileSync(journalPath, "utf8")).targetRevision;
-      },
-    });
-
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-    expect(targetRevision).toBe(git(repoPath, ["rev-parse", "origin/master"]).trim());
-  });
-
-  it("verifies the exact trusted base revision without ordinary checkout changes", async () => {
-    const { root, repoPath } = fixtureRepository();
-    writeFileSync(path.join(repoPath, "ordinary-uncommitted.txt"), "local only\n");
-    const revision = git(repoPath, ["rev-parse", "origin/master"]).trim();
-    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
-    mkdirSync(path.dirname(configPath), { recursive: true });
-    writeFileSync(configPath, JSON.stringify({ projects: [{
-      id: "demo", repoPath, githubRepo: "owner/demo",
-      checkCommand: `test ! -e ordinary-uncommitted.txt && test \"$(git rev-parse HEAD)\" = ${revision}`,
-    }] }));
-    const extension = await loadExtension(root);
-
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-    expect(extension.messages.at(-1)).toContain("deadloop enabled");
-  });
-
-  it("runs an explicit npm verification command without requiring a lockfile", async () => {
-    expect(await explicitNpmCommandWithoutLockfileObservation()).toContain("deadloop enabled");
-  });
-
-  it("enables after an aggregate command installs dependencies in the verification worktree", async () => {
-    expect((await dependencySetupObservation()).enabled).toBe(true);
-  });
-
-  it("reports retained verification setup after dependency installation", async () => {
-    expect((await dependencySetupObservation()).retentionReported).toBe(true);
-  });
-
-  it("retains verification setup after dependency installation", async () => {
-    expect((await dependencySetupObservation()).cleanup).toBe("retained");
-  });
-
-  it.skipIf(process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK === "1" || git(process.cwd(), ["status", "--short", "docs", "test"]).trim() !== "")(
-    "runs an explicit aggregate command that includes its dependency setup",
-    async () => {
-      const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-real-enablement-"));
-      sandboxes.push(root);
-      const repoPath = path.join(root, "primary");
-      execFileSync("git", ["clone", "--quiet", "--no-hardlinks", process.cwd(), repoPath]);
-      const baseRevision = git(repoPath, ["rev-parse", "HEAD"]).trim();
-      const aggregateCommand = JSON.parse(readFileSync(path.join(repoPath, "deadloop.json"), "utf8")).checkCommand;
-      const command = `npm ci --ignore-scripts --no-audit --no-fund && ${aggregateCommand}`;
-      const previousNestedCheck = process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK;
-      const previousMaxForks = process.env.VITEST_MAX_FORKS;
-      const previousMaxThreads = process.env.VITEST_MAX_THREADS;
-      process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK = "1";
-      // Keep the nested full suite from starting a second process fleet alongside the outer suite in constrained CI runners.
-      process.env.VITEST_MAX_FORKS = "1";
-      process.env.VITEST_MAX_THREADS = "1";
-      try {
-        const result = await runEnablementVerification({
-          stateDir: path.join(root, "state"),
-          primaryRepoPath: repoPath,
-          repository: "yasuhito/deadloop",
-          resolution: {
-            status: "resolved",
-            contract: {
-              repository: "yasuhito/deadloop",
-              command,
-              source: { kind: "repo_policy", location: "deadloop.json" },
-              baseRevision,
-            },
-          },
-        });
-        expect(result.outcome, readFileSync(result.logPath, "utf8")).toBe("passed");
-      } finally {
-        if (previousNestedCheck === undefined) delete process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK;
-        else process.env.DEADLOOP_NESTED_ENABLEMENT_CHECK = previousNestedCheck;
-        if (previousMaxForks === undefined) delete process.env.VITEST_MAX_FORKS;
-        else process.env.VITEST_MAX_FORKS = previousMaxForks;
-        if (previousMaxThreads === undefined) delete process.env.VITEST_MAX_THREADS;
-        else process.env.VITEST_MAX_THREADS = previousMaxThreads;
-      }
-    },
-    10 * 60_000,
-  );
-
-  it("records timed-out required verification as timed out", async () => {
-    expect((await timedOutVerificationObservation()).record.outcome).toBe("timed_out");
-  });
-
-  it("records no exit code when required verification times out", async () => {
-    expect((await timedOutVerificationObservation()).record.exitCode).toBeNull();
-  });
-
-  it("records a typed termination reason when required verification times out", async () => {
-    expect((await timedOutVerificationObservation()).record.terminationReason).toBe("timeout");
-  });
-
-  it("records when required verification times out", async () => {
-    expect((await timedOutVerificationObservation()).record.timedOut).toBe(true);
-  });
-
-  it("records the timeout applied to required verification", async () => {
-    expect((await timedOutVerificationObservation()).record.timeoutMs).toBe(25);
-  });
-
-  it("records interrupted required verification as interrupted", async () => {
-    expect((await interruptedVerificationObservation()).outcome).toBe("interrupted");
-  });
-
-  it("records no exit code when required verification is interrupted", async () => {
-    expect((await interruptedVerificationObservation()).exitCode).toBeNull();
-  });
-
-  it("records a typed termination reason when required verification is interrupted", async () => {
-    expect((await interruptedVerificationObservation()).terminationReason).toBe("interrupted");
-  });
-
-  it("records disable of the public enable command as interrupted", async () => {
-    expect((await interruptedEnablementCommandObservation("disable")).outcome).toBe("interrupted");
-  });
-
-  it("records session shutdown of the public enable command as interrupted", async () => {
-    expect((await interruptedEnablementCommandObservation("shutdown")).outcome).toBe("interrupted");
-  });
-
-  it("reports interrupted required verification", async () => {
-    expect((await interruptedEnablementCommandObservation("disable")).message).toContain(
-      "required verification was interrupted",
-    );
-  });
-
-  it("does not report a null exit code for interrupted required verification", async () => {
-    expect((await interruptedEnablementCommandObservation("disable")).message).not.toContain("exit null");
-  });
-
-  it("waits for isolated artifacts to be restored during enable-command shutdown", async () => {
-    expect((await interruptedEnablementCommandObservation("shutdown")).restoredArtifact).toBe("restored\n");
-  });
-
-  it("writes timeout-specific evidence to the durable verification log", async () => {
-    expect((await timedOutVerificationObservation()).log).toContain("required verification timed out after 25ms");
-  });
-
-  it("does not use Herdr workspaces or agents for enablement verification", async () => {
-    const { root, repoPath } = fixtureRepository();
-    const extension = await loadExtension(root);
-
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-    expect(extension.execCommands.some(([command, noun]) => command === "herdr" && ["workspace", "agent"].includes(noun))).toBe(false);
-  });
-
-  it("retains disabled state when baseline verification fails", async () => {
-    const { root, repoPath } = fixtureRepository();
-    writeConfig(root, repoPath);
-    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
-    config.projects[0].checkCommand = "exit 23";
-    writeFileSync(configPath, JSON.stringify(config));
-    const extension = await loadExtension(root);
-
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-    expect(existsSync(path.join(root, ".pi", "agent", "deadloop", "enabled-projects.json"))).toBe(false);
-  });
-
-  it("shows the durable log location when baseline verification fails", async () => {
-    const { root, repoPath } = fixtureRepository();
-    writeConfig(root, repoPath);
-    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
-    config.projects[0].checkCommand = "echo baseline-broke >&2; exit 23";
-    writeFileSync(configPath, JSON.stringify(config));
-    const extension = await loadExtension(root);
-
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-    const logPath = /log: (.+)$/.exec(extension.messages.at(-1) || "")?.[1] || "";
-    expect(readFileSync(logPath, "utf8")).toContain("baseline-broke");
-  });
-
-  it("shows the durable log path when failed verification retains a dirty worktree", async () => {
-    expect((await dirtyFailureObservation()).messageIncludesLogPath).toBe(true);
-  });
-
-  it("records failed verification output when its worktree is dirty", async () => {
-    expect((await dirtyFailureObservation()).logIncludesDirtyFailure).toBe(true);
-  });
-
-  it("journals cleanup after a verifier exception", async () => {
-    expect((await verifierExceptionObservation()).journal).toBe("cleaned");
-  });
-
-  it("records failure after a verifier exception", async () => {
-    expect((await verifierExceptionObservation()).record).toBe("failed");
-  });
-
-  it("records no exit code after a verifier exception", async () => {
-    expect((await verifierExceptionObservation()).exitCode).toBeNull();
-  });
-
-  it("records a typed termination reason after a verifier exception", async () => {
-    expect((await verifierExceptionObservation()).terminationReason).toBe("runner_failure");
-  });
-
-  it("logs a verifier exception", async () => {
-    expect((await verifierExceptionObservation()).log).toContain("required verification runner failed");
-  });
-
-  it("removes the clean worktree after a verifier exception", async () => {
-    expect((await verifierExceptionObservation()).worktreeExists).toBe(false);
-  });
-
-  it("reports the log path after a verifier exception", async () => {
-    const observation = await verifierExceptionObservation();
-    expect(observation.message).toContain(observation.logPath);
-  });
-
-  it("removes a clean owned temporary Git worktree after verification", async () => {
-    const { root, repoPath } = fixtureRepository();
-    let worktreePath = "";
-    const extension = await loadExtension(root, {
-      beforeEnablementWorktreeCreate: async (journalPath) => {
-        worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
-      },
-    });
-
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-    expect(existsSync(worktreePath)).toBe(false);
-  });
-
-  it("retains a temporary Git worktree that verification leaves dirty", async () => {
-    const { root, repoPath } = fixtureRepository();
-    writeConfig(root, repoPath);
-    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
-    config.projects[0].checkCommand = "touch created-by-check";
-    writeFileSync(configPath, JSON.stringify(config));
-    let worktreePath = "";
-    const extension = await loadExtension(root, {
-      beforeEnablementWorktreeCreate: async (journalPath) => {
-        worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
-      },
-    });
-
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-    expect(existsSync(path.join(worktreePath, "created-by-check"))).toBe(true);
-  });
-
-  it("retains a temporary Git worktree containing an ignored artifact", async () => {
-    const { root, repoPath } = fixtureRepository();
-    writeFileSync(path.join(repoPath, ".gitignore"), "ignored-by-check\n");
-    git(repoPath, ["add", ".gitignore"]);
-    git(repoPath, ["commit", "--quiet", "-m", "ignore verification artifact"]);
-    git(repoPath, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
-    writeConfig(root, repoPath);
-    const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
-    config.projects[0].checkCommand = "touch ignored-by-check";
-    writeFileSync(configPath, JSON.stringify(config));
-    let worktreePath = "";
-    const extension = await loadExtension(root, {
-      beforeEnablementWorktreeCreate: async (journalPath) => {
-        worktreePath = JSON.parse(readFileSync(journalPath, "utf8")).worktreePath;
-      },
-    });
-
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-    expect(existsSync(path.join(worktreePath, "ignored-by-check"))).toBe(true);
-  });
-
-  it("persists a passed record before saving enablement", async () => {
-    const { root, repoPath } = fixtureRepository();
-    let attemptDir = "";
-    const extension = await loadExtension(root, {
-      beforeEnablementWorktreeCreate: async (journalPath) => {
-        attemptDir = path.dirname(journalPath);
-      },
-    });
-
-    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
-
-    expect(JSON.parse(readFileSync(path.join(attemptDir, "record.json"), "utf8")).outcome).toBe("passed");
-  });
-
-  it.each([
-    ["temporary worktree path", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journal.worktreePath],
-    ["target revision", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journal.targetRevision],
-    ["journal path", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journalPath],
-    ["record path", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journal.recordPath],
-    ["log path", (observation: Awaited<ReturnType<typeof retainedVerificationDoctorObservation>>) => observation.journal.logPath],
-    ["confirmation command Git prefix", () => "git -C"],
-    ["confirmation command status arguments", () => "status --short --untracked-files=all --ignored"],
-  ] as const)("shows retained verification %s in doctor", async (_name, expectedValue) => {
-    const observation = await retainedVerificationDoctorObservation();
-
-    expect(observation.report).toContain(expectedValue(observation));
-  });
-
   it("shows a general project-check restoration quarantine in doctor", async () => {
     const observation = await retainedGeneralProjectCheckDoctorObservation();
 
@@ -1536,6 +1019,17 @@ describe("enablement command integration", () => {
       hasSection: observation.report.includes("Unresolved retained project-check artifacts"),
       hasQuarantine: observation.report.includes(observation.quarantinePath),
     }).toEqual({ hasSection: true, hasQuarantine: true });
+  });
+
+  it("shows no enablement-verification phase in doctor", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    await invoke(extension.commands.get("deadloop-doctor")!, repoPath);
+
+    expect(extension.messages.at(-1)).not.toContain("Retained required-verification worktrees");
   });
 
   it("registers the explicit launch-failed attempt abandonment command", async () => {
@@ -1901,7 +1395,7 @@ describe("enablement command integration", () => {
 
     expect({ disabled: disabledState.projects.length === 0, finalMessage: extension.messages.at(-1) }).toEqual({
       disabled: true,
-      finalMessage: "deadloop was not enabled: enablement was revoked while required verification was running",
+      finalMessage: "deadloop was not enabled: enablement was revoked while preflight was running",
     });
   });
 
@@ -2267,7 +1761,7 @@ describe("enablement command integration", () => {
     }).toEqual({
       firstEnableAutoMerge: true,
       autoMergeAcknowledged: false,
-      message: "deadloop enabled for owner/demo; scheduler owner: this session. autoMerge is off.",
+      message: "deadloop enabled for owner/demo; scheduler owner: this session. autoMerge is off. Enablement did not run repository tests; required verification still gates produced revisions.",
     });
   });
 

@@ -47,7 +47,7 @@ An agent scratch area is an untracked directory that the launched agent CLI crea
 
 **Applied to everything that asks about someone else's unsaved work.** The gates: repair dispatch, the branch-update decision, the Issue coordinator's reuse of an abandoned checkout, attempt abandonment, checkout alignment, worktree cleanup, required verification. The ADR 0010 quarantine, which asks the same question of the same paths. And the host's own worktree-status snapshot, which `/deadloop-status`, `/deadloop-doctor`, and the local recovery guidance all read — otherwise the loop repairs a pull request while the operator asking about the same worktree is told it is changed, which is the original confusion moved one layer out.
 
-Not applied to the two finalize gates, which ask whether deadloop itself left something behind before a push, nor to enablement verification, whose `--ignored` scan exists to prove a throwaway worktree is pristine.
+Not applied to the two finalize gates, which ask whether deadloop itself left something behind before a push.
 
 **Read with `--untracked-files=all`.** Git collapses a fully untracked directory to a single `?? .pi/` line, which cannot be told apart from a change to `.pi/settings.json`. Cleanup's `git status --short` moves to the explicit form.
 

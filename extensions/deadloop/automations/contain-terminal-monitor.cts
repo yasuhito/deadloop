@@ -86,14 +86,26 @@ function exactTarget(github: JsonObject, input: ContainmentInput, record: JsonOb
   return target;
 }
 
+/**
+ * The published failure record for a terminal monitor stop.
+ *
+ * Every variant binds its hidden marker to one review attempt and the pull-request head fixed at
+ * selection time, so reprocessing the same failure cannot duplicate the comment and a changed head
+ * starts a different record. Public text names no local worktree or completion-report path.
+ */
 function commentBody(record: JsonObject, disposition: JsonObject): string {
+  const head = String(record.inputRevision?.head || "").toLowerCase();
+  const binding = `Pull request head at selection: \`${head}\``;
   if (disposition.action === "wait_for_model") {
     return `deadloop paused this attempt because the agent's terminal result reported a recognized model billing or access rejection. The same attempt, workspace, worktree, and agent session remain retained; no monitor prompt will be sent while access is unavailable.\n\n<!-- deadloop:model-availability-wait attempt=${record.attemptId} -->`;
   }
   if (disposition.reason === "active_work_timeout") {
     return `deadloop stopped this attempt because its active work reached the configured runtime limit. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n\n<!-- deadloop:attempt-timeout attempt=${record.attemptId} -->`;
   }
-  return `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n\n<!-- deadloop:terminal-monitor-stop attempt=${record.attemptId} reason=${disposition.reason} -->`;
+  if (disposition.reason === "storage_exhaustion") {
+    return `deadloop stopped this attempt because the host ran out of storage while it ran (a write failed with ENOSPC or EDQUOT, and deadloop could not even read this attempt's completion report because of it). The stopped attempt will not retry automatically and consumed no retry allowance.\nOperator actions:\n- free up storage on the machine running deadloop\n- add a new Agent request once storage is available\n${binding}\n\n<!-- deadloop:terminal-monitor-stop attempt=${record.attemptId} head=${head} reason=${disposition.reason} -->`;
+  }
+  return `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n${binding}\n\n<!-- deadloop:terminal-monitor-stop attempt=${record.attemptId} head=${head} reason=${disposition.reason} -->`;
 }
 
 function dispositionStillApplies(commandRunner: JsonObject, runner: JsonObject, record: JsonObject, disposition: JsonObject): boolean {
