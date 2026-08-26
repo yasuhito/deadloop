@@ -25,7 +25,7 @@ afterEach(() => {
  * The state PR #228 reached: one review that completed and still owes its handoff, beside a second
  * attempt for the same pull request that failed to launch before any workspace was opened.
  */
-function pullRequestWithUnlaunchedSecondAttempt(options: { unlaunchedHoldsWorkspace?: boolean; blocked?: boolean } = {}) {
+function pullRequestWithUnlaunchedSecondAttempt(options: { unlaunchedHoldsWorkspace?: boolean; blocked?: boolean; completed?: boolean; repeatFailure?: boolean } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "deadloop-unlaunched-"));
   roots.push(root);
   const repo = path.join(root, "repo");
@@ -115,6 +115,7 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
     },
     ...overrides,
   });
+  if (options.completed !== false) {
   writeFileSync(path.join(completedRun, "attempt.json"), JSON.stringify(attempt({
     attemptId: "completed", promptFile: path.join(completedRun, "prompt.md"),
     promiseFile: path.join(completedRun, "promise.json"),
@@ -132,30 +133,42 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
     },
     evidence: { reviewed: ["the exact diff"] },
   }));
+  }
   // The second attempt never opened a workspace: it stopped on the launch that found the first
   // attempt's checkout still occupied.
-  writeFileSync(path.join(unlaunchedRun, "attempt.json"), JSON.stringify(attempt({
-    attemptId: "unlaunched", promptFile: path.join(unlaunchedRun, "prompt.md"),
-    promiseFile: path.join(unlaunchedRun, "promise.json"),
+  const unlaunchedRuns = options.repeatFailure ? ["unlaunched", "unlaunched-2"] : ["unlaunched"];
+  for (const runName of unlaunchedRuns) {
+    const runDir = path.join(stateDir, "runs", runName);
+    mkdirSync(runDir, { recursive: true });
+  writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt({
+    attemptId: runName, launchUuid: `${runName}-launch`, promptFile: path.join(runDir, "prompt.md"),
+    promiseFile: path.join(runDir, "promise.json"),
     phase: "launch_failed",
     lastSuccessfulPhase: options.unlaunchedHoldsWorkspace ? "workspace_opened" : "github_claimed",
     ...(options.unlaunchedHoldsWorkspace
-      ? { workspaceId: "workspace-2", tabId: "tab-2", rootPaneId: "pane-2" }
+      ? { workspaceId: `workspace-${runName}`, tabId: `tab-${runName}`, rootPaneId: `pane-${runName}` }
       : {}),
-    requestEventId: "20",
+    requestEventId: runName === "unlaunched" ? "20" : "21",
     launchError: "worktree agent/issue-42 already has an open attempt workspace",
   })));
-  writeWorkerContractSnapshot(unlaunchedRun, JSON.parse(readFileSync(path.join(unlaunchedRun, "attempt.json"), "utf8")));
+  writeWorkerContractSnapshot(runDir, JSON.parse(readFileSync(path.join(runDir, "attempt.json"), "utf8")));
+  }
   return { root, repo, stateDir, worktree, completedRun, mutations: path.join(root, "mutations.log") };
 }
 
-async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunchedSecondAttempt>) {
-  const labels = ["agent:blocked"];
+async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunchedSecondAttempt>, observe: { labels?: string[]; blockedEventAppearsLater?: boolean } = {}) {
+  const labels = [...(observe.labels || ["agent:blocked"])];
   const comments: Record<string, unknown>[] = [];
-  const events = [
+  const postedComments: string[] = [];
+  const baseEvents = [
     { id: "10", event: "labeled", created_at: "2026-08-01T09:00:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:review" } },
     { id: "20", event: "labeled", created_at: "2026-08-01T10:04:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:review" } },
   ];
+  // A block this host applies mid-reconciliation only shows up in the timeline after its own label
+  // write lands, which is what lets applyPrWorkAuthorityReconciliation find its own cutoff event.
+  const events = () => observe.blockedEventAppearsLater && labels.includes("agent:blocked")
+    ? [...baseEvents, { id: "30", event: "labeled", created_at: "2026-08-01T10:06:00Z", actor: { login: "deadloop-bot" }, label: { name: "agent:blocked" } }]
+    : baseEvents;
   const pr = () => ({ number: 42, state: "OPEN", headRefOid: HEAD, labels: labels.map((name) => ({ name })) });
   const commandRunner = {
     runText: (argv: string[]) => {
@@ -163,7 +176,7 @@ async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunche
       if (argv[2] === "user") return "deadloop-bot\n";
       return "date: Sat, 01 Aug 2026 10:06:01 GMT";
     },
-    runJson: (argv: string[]) => {
+    runJson: (argv: string[], options: { input?: string } = {}) => {
       const command = argv.slice(0, 3).join(" ");
       // The completed attempt's workspace is still open with its agent gone, which is the state
       // PR #228 was measured in.
@@ -173,9 +186,22 @@ async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunche
       if (command === "gh repo view") return { id: "repo-id", nameWithOwner: "owner/repo" };
       if (command === "gh pr list") return [pr()];
       if (command === "gh pr view") return pr();
+      // Label writes and comment posts are observed so a test can prove what reached GitHub.
+      if (argv[0] === "gh" && argv[1] === "api" && argv.includes("--method")) {
+        const method = argv[Number(argv.indexOf("--method")) + 1];
+        const endpointArg = String(argv.find((token) => typeof token === "string" && token.startsWith("repos/")));
+        if (endpointArg.endsWith("/labels") && method === "PUT" && options.input) {
+          labels.splice(0, labels.length, ...JSON.parse(options.input).labels);
+          return labels.map((name) => ({ name }));
+        }
+        if (endpointArg.endsWith("/comments") && method === "POST") {
+          postedComments.push(String(argv.at(-1)).replace(/^body=/, ""));
+          return { id: "comment-new" };
+        }
+      }
       const endpoint = String(argv.at(-1) || "");
       if (endpoint.endsWith("/labels")) return [labels.map((name) => ({ name }))];
-      if (endpoint.endsWith("/events")) return [[...events]];
+      if (endpoint.endsWith("/events")) return [[...events()]];
       if (endpoint.endsWith("/comments")) return [[...comments]];
       return [];
     },
@@ -186,6 +212,7 @@ async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunche
   }, commandRunner);
   return {
     result,
+    postedComments,
     unlaunched: JSON.parse(readFileSync(path.join(fixture.stateDir, "runs", "unlaunched", "attempt.json"), "utf8")),
   };
 }
@@ -249,5 +276,22 @@ describe("a second attempt that never opened a workspace", () => {
     const { result } = await reconcileOnce(fixture);
 
     expect(result.results.some((entry: { prNumber?: number }) => entry.prNumber === 42)).toBe(true);
+  });
+
+  // The loop the issue measured: the request is consumed, the launch cannot prepare a checkout,
+  // and every following cycle would repeat it. The block has to name that failure, not a missing
+  // journal.
+  it("blocks the requeued request with the recorded launch failure", async () => {
+    const fixture = pullRequestWithUnlaunchedSecondAttempt({ completed: false });
+    const { postedComments } = await reconcileOnce(fixture, { labels: ["agent:in-progress"], blockedEventAppearsLater: true });
+
+    expect(postedComments.join("\n")).toContain("worktree agent/issue-42 already has an open attempt workspace");
+  });
+
+  it("tells the operator how many requests failed to launch when failures repeat", async () => {
+    const fixture = pullRequestWithUnlaunchedSecondAttempt({ completed: false, repeatFailure: true });
+    const { postedComments } = await reconcileOnce(fixture, { labels: ["agent:in-progress"], blockedEventAppearsLater: true });
+
+    expect(postedComments.join("\n")).toContain("2 Agent request(s) failed to launch");
   });
 });

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const driverScript = "extensions/deadloop/automations/issue-coordinator-driver.cts";
 const { acquireLockSync, releaseOwned } = require("../src/enablement-lock.cjs");
+const { renderUnresolvedDependencyComment, unresolvedDependencyCommentPresent, unresolvedDependencyEntryFingerprint } = require("../extensions/deadloop/automations/issue-coordinator-driver.cts");
 
 // The dispatch lock writes under the state directory, so a fixture run needs one of its own rather
 // than the operator's live deadloop state.
@@ -46,6 +47,42 @@ function runDriverFixture(fixtureName: string, extraEnv: Record<string, string> 
 describe("issue coordinator deterministic driver", () => {
   it("skips candidate-free runs", () => {
     expect(runDriverFixture("driver-no-candidate.json").action).toBe("skip");
+  });
+
+  it("reports an Issue skipped for unresolvable dependency references", () => {
+    expect(runDriverFixture("driver-unresolved-dependency.json").summary).toContain(
+      "#208 skipped for unresolvable dependency references (#999)",
+    );
+  });
+
+  it("fingerprints an unchanged unresolved reference set identically regardless of order", () => {
+    const entry = (numbers: number[]) => ({ dependencies: numbers.map((number) => ({ number, state: "UNKNOWN" })) });
+
+    expect(unresolvedDependencyEntryFingerprint(entry([999, 404]))).toBe(unresolvedDependencyEntryFingerprint(entry([404, 999])));
+  });
+
+  it("changes the fingerprint when the unresolved reference set changes", () => {
+    const entry = (numbers: number[]) => ({ dependencies: numbers.map((number) => ({ number, state: "UNKNOWN" })) });
+
+    expect(unresolvedDependencyEntryFingerprint(entry([404]))).not.toBe(unresolvedDependencyEntryFingerprint(entry([999])));
+  });
+
+  it("renders the dedupe marker into the unresolved-dependency comment", () => {
+    const comment = renderUnresolvedDependencyComment("owner/repo", { dependencies: [{ number: 999, state: "UNKNOWN" }] }, "abc123");
+
+    expect(comment).toContain("<!-- deadloop:unresolved-dependency:v1 fingerprint=abc123 -->");
+  });
+
+  it("detects an existing comment that carries the same fingerprint", () => {
+    const issue = { comments: [{ body: "note\n<!-- deadloop:unresolved-dependency:v1 fingerprint=abc123 -->" }] };
+
+    expect(unresolvedDependencyCommentPresent(issue, "abc123")).toBe(true);
+  });
+
+  it("treats a different fingerprint as not yet reported", () => {
+    const issue = { comments: [{ body: "<!-- deadloop:unresolved-dependency:v1 fingerprint=abc123 -->" }] };
+
+    expect(unresolvedDependencyCommentPresent(issue, "def456")).toBe(false);
   });
 
   it("completes cleanup-only runs deterministically", () => {

@@ -26,6 +26,11 @@ const { renderRepairMonitorPrompt } = require("../../../src/monitor-prompts.cts"
 const { blockedPrLabelMove } = require("../../../src/pr-request-selection.cts");
 const { decideReviewTransition } = require("../../../src/reviewer-outcome-contract.cts");
 const {
+  isPrRequiredVerificationStopComment,
+  planPrRequiredVerificationStop,
+  requiredVerificationStopDiagnosis,
+} = require("../../../src/issue-required-verification-stop.cts");
+const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
   driverResult,
@@ -87,6 +92,7 @@ function envConfig(args: JsonObject = {}) {
     implementLabel: configValue(args, "implementLabel", process.env.DEADLOOP_IMPLEMENT_LABEL, "agent:implement"),
     updateBranchLabel: configValue(args, "updateBranchLabel", process.env.DEADLOOP_UPDATE_BRANCH_LABEL, "agent:update-branch"),
     inProgressLabel: configValue(args, "inProgressLabel", process.env.DEADLOOP_IN_PROGRESS_LABEL, "agent:in-progress"),
+    humanLabel: configValue(args, "humanLabel", process.env.DEADLOOP_HUMAN_LABEL, "ready-for-human"),
     // Every guarded write of this dispatch re-reads the bound reviewer attempt from here, so the
     // attempt's fixed required-verification contract can be re-authenticated against the current
     // trusted policy immediately before the write.
@@ -691,18 +697,100 @@ function assertReviewerDispatchAttemptBinding(record: JsonObject, input: JsonObj
   }
 }
 
-/**
- * A trusted-policy change during the attempt is a race, not a failure of this result: every write
- * boundary refuses it, so the attempt reports it and leaves GitHub untouched for a fresh review.
- */
+function applyPrRequiredVerificationStop(args: JsonObject, error: unknown): DriverResult {
+  const env = envConfig(args);
+  const prNumber = String(args.pr);
+  const attemptRecord = readAttemptRecord(path.dirname(String(args.attemptRecord)));
+  const report = JSON.parse(fs.readFileSync(String(args.promise), "utf8"));
+  const expectedHead = String(args.expectedHead || "").toLowerCase();
+  const diagnosis = requiredVerificationStopDiagnosis(attemptRecord, error);
+  let reviewComment = "";
+  let stopComment = "Required-verification stop comment already exists.";
+
+  withEnabledDriverLock(env, (enabled: { automationLogin?: string; githubRepositoryId?: string; githubRepo?: string }, recheck: () => void) => {
+    const observe = (): JsonObject => {
+      const authenticated = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
+      if (!authenticated || authenticated !== String(enabled.automationLogin || "").trim().toLowerCase()) {
+        throw new StaleLaunchError(`PR #${prNumber} authenticated identity no longer matches enablement authority`);
+      }
+      const repository = commandRunner.runJson(["gh", "repo", "view", env.githubRepo, "--json", "id,nameWithOwner"]);
+      if (String(repository.id || "") !== String(enabled.githubRepositoryId || "")
+        || String(repository.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
+        throw new StaleLaunchError(`PR #${prNumber} repository identity changed before required-verification stop`);
+      }
+      const live = readLivePr(env.githubRepo, prNumber);
+      if (String(live.state || "").toUpperCase() !== "OPEN"
+        || String(live.headRefOid || "").toLowerCase() !== expectedHead
+        || String(live.headRefName || "") !== String(args.branch || "")) {
+        throw new StaleLaunchError(`PR #${prNumber} changed before required-verification stop`);
+      }
+      const labels = labelNames(live.labels);
+      const resumable = labels.includes(env.blockedLabel)
+        && (live.comments || []).some((comment: JsonObject) => isPrRequiredVerificationStopComment(comment.body));
+      if (!labels.includes(env.inProgressLabel) && !resumable) {
+        throw new StaleLaunchError(`PR #${prNumber} no longer has the review attempt claim`);
+      }
+      return live;
+    };
+
+    let livePr = observe();
+    const beforeMutation = () => { recheck(); livePr = observe(); };
+    const github = createGithubOperations(commandRunner, beforeMutation);
+    const outcome = String(report.result?.outcome || "");
+    if (outcome === "changes_requested") {
+      const findings = Array.isArray(report.result?.findings) ? report.result.findings : [];
+      const advisories = Array.isArray(report.result?.advisories) ? report.result.advisories : [];
+      const fingerprint = reviewOutcomeFingerprint(outcome, "", report.summary || "", findings, advisories);
+      if (!reviewCommentExists(livePr.comments || [], expectedHead, fingerprint, outcome)) {
+        reviewComment = renderChangesRequestedComment({
+          headOid: expectedHead,
+          summary: report.summary || "",
+          findings,
+          advisories,
+          priorRequiredFindings: report.result?.priorRequiredFindings,
+          reviewFingerprint: fingerprint,
+          repairBlocked: true,
+        });
+        github.commentPr(env.githubRepo, prNumber, reviewComment);
+        livePr = observe();
+      }
+    }
+    const plan = planPrRequiredVerificationStop({
+      pr: livePr,
+      resolution: diagnosis,
+      labels: {
+        review: env.reviewLabel,
+        implement: env.implementLabel,
+        updateBranch: env.updateBranchLabel,
+        inProgress: env.inProgressLabel,
+        blocked: env.blockedLabel,
+        human: env.humanLabel,
+      },
+    });
+    if (plan.comment) {
+      stopComment = plan.comment;
+      github.commentPr(env.githubRepo, prNumber, plan.comment);
+    }
+    if (plan.removeLabels.length || plan.addLabels.length) {
+      github.movePrLabels(env.githubRepo, prNumber, { remove: plan.removeLabels, add: plan.addLabels });
+    }
+  });
+
+  return driverResult("done", `PR #${prNumber} review stopped by required verification`, {
+    driverAction: "review_verification_blocked",
+    comment: stopComment,
+    findingsRecorded: Boolean(reviewComment),
+    labelsPreserved: [env.reviewLabel],
+    labelsRemoved: [env.inProgressLabel],
+  });
+}
+
 function dispatch(args: JsonObject): DriverResult {
   try {
     return dispatchReviewResult(args);
   } catch (error) {
     if (!isRequiredVerificationPolicyBlock(error)) throw error;
-    return driverResult("done", `PR #${String(args.pr)} required verification policy changed during the attempt; left GitHub state untouched`, {
-      driverAction: "review_policy_changed",
-    });
+    return applyPrRequiredVerificationStop(args, error);
   }
 }
 
@@ -893,26 +981,7 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
     if (headChangedDuringAuthorization) {
       return driverResult("done", `PR #${prNumber} head changed during approval authorization; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
-    if (authorizationError) {
-      const explanation = publicText(authorizationError instanceof Error ? authorizationError.message : String(authorizationError), "required verification evidence is missing or invalid");
-      const marker = `<!-- deadloop:review-verification-blocked head=${expectedHead} -->`;
-      let comment = "Required-verification stop comment already exists.";
-      withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub, livePr) => {
-        if (!(livePr.comments || []).some((item: JsonObject) => String(item.body || "").includes(marker))) {
-          comment = `## Review approval stopped\n\n- Reviewed commit: \`${expectedHead}\`\n- Required verification: ${explanation}\n- The review result was retained, but this head was not approved for handoff or merge.\n\n## Recovery steps\nRun the fixed required verification for this exact head and retry approval processing.\n\n${marker}`;
-          guardedGithub.commentPr(env.githubRepo, prNumber, comment);
-        }
-        const labels = labelNames(livePr.labels);
-        if (labels.includes(env.inProgressLabel)
-          || !labels.includes(env.reviewLabel) || !labels.includes(env.blockedLabel)) {
-          guardedGithub.movePrLabels(env.githubRepo, prNumber, blockedClaimMove(env));
-        }
-      });
-      return driverResult("done", `PR #${prNumber} approval stopped by required verification`, {
-        driverAction: "review_verification_blocked",
-        comment,
-      });
-    }
+    if (authorizationError) return applyPrRequiredVerificationStop(args, authorizationError);
     if (historyFile && fs.existsSync(historyFile)) {
       const expectedHistory = readPrHistoryObservation(historyFile);
       const afterPersistence = observePrHistory(env.githubRepo, Number(prNumber), commandRunner);

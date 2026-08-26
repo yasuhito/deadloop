@@ -25,6 +25,7 @@ This installs the deadloop extension and its setup skill together.
 - Workers and reviewers run `pi`, `claude`, or `omp`, chosen with `workerAgent` and `reviewerAgent` independently of which host runs the automations.
 - The default runner is [Herdr](https://herdr.dev/).
 - The supported host platform currently requires a Unix-like system with a compatible `flock` executable (normally provided by util-linux) and nonblocking file-descriptor locks. `/deadloop-enable` verifies this capability before enabling automation.
+- Each Automation host fixes the deadloop checkout commit as its code identity when the extension loads. If the checkout advances, shared enablement writes and scheduler ticks stop until the operator runs `/reload`; status and doctor remain available and show both identities and the recovery step.
 
 ## Configure
 
@@ -84,7 +85,8 @@ flowchart TD
 
 1. **Request implementation** — `agent:implement` requests implementation; `ready-for-agent` is optional triage metadata. Remove `agent:implement` before deadloop consumes the selected request generation to cancel it.
 2. **Let deadloop work** — deadloop durably records the attempt, consumes only the selected request, then adds `agent:in-progress` and starts the Worker. It creates a draft PR with `agent:review` and repeats review and repair as needed. Pull request work is queued only by request labels, consumed one at a time in the order `agent:update-branch`, `agent:implement`, `agent:review`.
-3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help, and a stopped PR keeps no agent request; fix the cause reported in the Issue or PR comment, then add the request label for the role you want next. `agent:blocked` clears when that attempt starts.
+3. **Finish or intervene** — An approved PR becomes ready and keeps no agent workflow label when automatic merge is off, or is merged when it is on. `ready-for-human` is an Issue triage label and is never added to a PR. `agent:blocked` stops the loop when deadloop needs help. Most stopped PRs keep no agent request; a required-verification stop keeps `agent:review` only to identify the review target, but its request event predates the block and cannot restart work. Fix the reported cause, then use `/deadloop-doctor` after required verification resolves or add the request label for the role you want next. `agent:blocked` clears when that attempt starts.
+4. **Declare dependencies in the Issue body** — A `## Blocked by` (or `Depends on`) section gates selection: a bare `#123` or a link naming this repository blocks until its Issue closes, and a number that does not exist here also blocks (fail closed) with an explanatory comment on the Issue. References to another repository's Issues — links or `owner/repo#123` — are ignored, because deadloop works per repository.
 
 ## Operator commands
 
@@ -119,6 +121,8 @@ $EDITOR ~/.pi/agent/deadloop/projects.json
 `projects.json` contains local paths and rollout choices. Do not commit it. Prefer the repository-owned `deadloop.json` for shared, reviewable policy.
 
 If an implementation Issue reaches a required-verification block, deadloop preserves unrelated triage labels, removes the implementation request or in-progress state, and adds `agent:blocked` with reason-specific recovery guidance. It suppresses duplicate guidance for the same recovery, does not resume merely because configuration changes, and shows that Issue's requeue command in `/deadloop-doctor` only after required verification resolves.
+
+A review stopped by required verification records actionable findings without launching repair, never records a finding-free result as approved, keeps `agent:review`, removes `agent:in-progress`, and adds `agent:blocked` without adding `ready-for-human`. The same recovery fingerprint suppresses duplicate stop comments. Configuration changes alone do not requeue the PR; after required verification resolves, `/deadloop-doctor` shows the PR-specific command that creates a new review request event.
 
 ## Safety controls
 

@@ -51,6 +51,18 @@ This prevents duplicate work on an Issue that is closed, unrequested, in progres
 * When deadloop selects a work target
 * Then Issue #2 is selected for work
 
+## Scenario: Select an Issue whose only dependency reference is another repository's Issue
+
+* Given An eligible Issue depends on an Issue in another repository
+* When deadloop selects a work target
+* Then Issue #2 is selected for work
+
+## Scenario: Do not select an Issue whose dependency number does not exist
+
+* Given An eligible Issue depends on an Issue number that does not exist
+* When deadloop selects a work target
+* Then The Issue with an unresolvable dependency reference is not selected for work
+
 ## Scenario: Do not select an Issue with an unfinished GitHub dependency
 
 * Given An Issue with all required public labels has an unfinished dependency on GitHub

@@ -16,7 +16,66 @@ const base = {
   blockedLabel: "agent:blocked",
 };
 
-describe("PR runtime reconciliation", () => {
+describe("launch failures recorded by the pull request's own attempts", () => {
+  const missingJournal = {
+    ...base,
+    request: { kind: "missing" },
+    runtime: { kind: "ambiguous" },
+    pr: { ...base.pr, labels: ["agent:blocked"] },
+  };
+
+  it("blocks a missing journal with the recorded launch failures instead of attempt_missing", () => {
+    const decision = reconcilePrWorkAuthority({
+      ...missingJournal,
+      launchFailures: ["worktree agent/issue-42 does not resolve to the recorded canonical checkout"],
+    });
+    expect(decision.reason).toBe("launch_unprepared");
+  });
+
+  it("keeps naming a missing journal when no launch failure is recorded", () => {
+    expect(reconcilePrWorkAuthority(missingJournal).reason).toBe("attempt_missing");
+  });
+
+  it("names the actual failure in the blocked explanation", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "worktree agent/issue-42 does not resolve to the recorded canonical checkout",
+    ]);
+    expect(body).toContain("does not resolve to the recorded canonical checkout");
+  });
+
+  it("counts every failed request cycle in the blocked explanation", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "checkout alignment stopped: cannot fast-forward", "checkout alignment stopped: cannot fast-forward",
+    ]);
+    expect(body).toContain("2 Agent request(s) failed to launch");
+  });
+
+  it("tells the operator what to do about the failing shape", () => {
+    const body = recoveryComment(24, "a".repeat(40), "launch_unprepared", "event-30", [
+      "worktree agent/issue-42 already has an open attempt workspace",
+    ]);
+    expect(body).toContain("resolve the named attempt");
+  });
+
+  it("posts the launch failure evidence when reconciliation blocks", async () => {
+    const comments: string[] = [];
+    const events = [{ id: "block-1", event: "labeled", created_at: "2026-07-20T10:02:00Z", label: { name: "agent:blocked" }, actor: { login: "deadloop-bot" } }];
+    await applyPrWorkAuthorityReconciliation(
+      { ...missingJournal, launchFailures: ["worktree agent/issue-42 does not resolve to the recorded canonical checkout"] },
+      {
+        automationLogin: "deadloop-bot",
+        // Labels already show the blocked state, so the cutoff comes from the single timeline read.
+        listTimelineEvents: () => events,
+        listComments: () => [],
+        replaceLabels: () => {},
+        comment: (body: string) => { comments.push(body); },
+      },
+    );
+    expect(comments.some((body) => body.includes("does not resolve to the recorded canonical checkout"))).toBe(true);
+  });
+});
+
+ describe("PR runtime reconciliation", () => {
   it("keeps an attempt active when the runtime reports it live", () => {
     expect(reconcilePrWorkAuthority(base).action).toBe("keep_active");
   });
