@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { Given, Then, When } from "@cucumber/cucumber";
 
 import {
-  observeCiFallbackDecision,
+  observeCiEquivalentContractEnvironment,
   observeReviewerLaunch,
   observeStatus,
   observeWorkerLaunch,
@@ -12,7 +12,7 @@ import {
 import type { RawProject } from "../../src/core";
 
 type ConfigurationWorld = {
-  ciFallbackDecision?: Record<string, unknown>;
+  ciEquivalentCommandEnvironment?: string | undefined;
   env?: Record<string, string | undefined>;
   files?: Record<string, RawProject>;
   policy?: RawProject;
@@ -102,6 +102,11 @@ Given("Shared policy enables external review and local configuration is empty", 
   this.policy = { externalReview: { enabled: true } };
 });
 
+Given("Shared policy declares ciEquivalentCommand `make ci` and local configuration is empty", function (this: ConfigurationWorld) {
+  local(this, {});
+  this.policy = { ciEquivalentCommand: "make ci" };
+});
+
 function projectFor(world: ConfigurationWorld) {
   if (!world.files) throw new Error("configuration precondition is missing");
   return resolveSelectedProject({ env: world.env, files: world.files, policy: world.policy });
@@ -119,8 +124,8 @@ When("A Reviewer launch is requested", function (this: ConfigurationWorld) {
   this.reviewerLaunch = observeReviewerLaunch(projectFor(this));
 });
 
-When("CI fallback permission is determined from public configuration", function (this: ConfigurationWorld) {
-  this.ciFallbackDecision = observeCiFallbackDecision(projectFor(this));
+When("Automation launch commands are prepared from public configuration", function (this: ConfigurationWorld) {
+  this.ciEquivalentCommandEnvironment = observeCiEquivalentContractEnvironment(projectFor(this));
 });
 
 Then("Status shows the user configuration file", function (this: ConfigurationWorld) {
@@ -196,8 +201,8 @@ Then("Status shows automatic merge as disabled", function (this: ConfigurationWo
   assert.match(this.status ?? "", /autoMerge: off/);
 });
 
-Then("Public configuration does not allow CI fallback verification", function (this: ConfigurationWorld) {
-  assert.equal(this.ciFallbackDecision?.fallbackAllowed, false);
+Then("Automations receive `make ci` as the CI-equivalent command", function (this: ConfigurationWorld) {
+  assert.equal(this.ciEquivalentCommandEnvironment, "make ci");
 });
 
 Then("Status shows external review as disabled", function (this: ConfigurationWorld) {

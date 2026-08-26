@@ -8,11 +8,6 @@
       "worktreeRoot": "/absolute/path/to/herdr/worktrees/example-project/",
       "autoMerge": false,
       "automationLogins": [],
-      "ciFallback": {
-        "enabled": false,
-        "mode": "billing-only",
-        "localCommands": ["git diff --check"]
-      },
       "externalReview": {
         "enabled": false,
         "waitSeconds": 1800
