@@ -3,7 +3,20 @@ const { reportNamesStorageExhaustion } = require("../../../src/storage-exhaustio
 
 type JsonObject = Record<string, any>;
 
-const REPAIR_MARKER_RE = /<!--\s*deadloop:review-repair-attempt\s+key=([0-9a-f]+)\s+head=([0-9a-f]+)\s+review=([0-9a-f]+)(?:\s+findings=([1-9][0-9]*))?\s*-->/gi;
+function encodeMarkerPayload(value: JsonObject): string {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}
+
+function decodeMarkerPayload(value: string): JsonObject | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+const REPAIR_MARKER_RE = /<!--\s*deadloop:review-repair-attempt\s+key=([0-9a-f]+)\s+head=([0-9a-f]+)\s+review=([0-9a-f]+)(?:\s+findings=([1-9][0-9]*))?(?:\s+data=([A-Za-z0-9_-]+))?\s*-->/gi;
 const TECHNICAL_MARKER_RE = /<!--\s*deadloop:review-technical-failure\s+head=([0-9a-f]+)\s*-->/gi;
 
 function normalizedFinding(finding: JsonObject): JsonObject {
@@ -52,8 +65,9 @@ function repairAttemptKey(headOid: string, reviewFingerprint: string): string {
     .slice(0, 20);
 }
 
-function renderRepairMarker(headOid: string, reviewFingerprint: string): string {
-  return `<!-- deadloop:review-repair-attempt key=${repairAttemptKey(headOid, reviewFingerprint)} head=${headOid.toLowerCase()} review=${reviewFingerprint.toLowerCase()} -->`;
+function renderRepairMarker(headOid: string, reviewFingerprint: string, payload?: JsonObject): string {
+  const data = payload ? ` data=${encodeMarkerPayload(payload)}` : "";
+  return `<!-- deadloop:review-repair-attempt key=${repairAttemptKey(headOid, reviewFingerprint)} head=${headOid.toLowerCase()} review=${reviewFingerprint.toLowerCase()}${data} -->`;
 }
 
 function repairAttempts(comments: JsonObject[], authorLogin?: string): JsonObject[] {
@@ -68,6 +82,7 @@ function repairAttempts(comments: JsonObject[], authorLogin?: string): JsonObjec
         headOid: match[2].toLowerCase(),
         reviewFingerprint: match[3].toLowerCase(),
         ...(match[4] === undefined ? {} : { findingCount: Number(match[4]) }),
+        ...(match[5] ? { payload: decodeMarkerPayload(match[5]) } : {}),
       });
     }
   }
@@ -113,7 +128,9 @@ function technicalFailureCount(comments: JsonObject[], headOid: string): number 
 }
 
 module.exports = {
+  decodeMarkerPayload,
   decideTechnicalReviewFailure,
+  encodeMarkerPayload,
   renderRepairMarker,
   renderTechnicalFailureMarker,
   repairAttemptKey,

@@ -201,18 +201,19 @@ describe("deterministic PR attempt completion", () => {
     expect(scripts).not.toContain("merge-reviewed-pr.cts");
   });
 
-  it("hands a CI fallback repair monitor handoff to the deterministic chain like any repair", () => {
+  it("records a queued CI fallback repair request as applied without closing a second workspace", () => {
     const state = fixture("reviewer", { outcome: "approved", reviewedHead: "a".repeat(40) }, { autoMerge: true });
+    const scripts: string[] = [];
 
     const result = processInput(state.handoff, { run: (script: string) => {
+      scripts.push(script);
       if (script === "pr-review-repair-dispatch.cts") return { action: "done", driverAction: "review_approved" };
-      if (script === "ci-fallback-gate.cts") {
-        return { action: "monitor", driverAction: "ci_fallback_repair_monitor_request", monitorHandoff: { kind: "repair", input: {} } };
-      }
+      if (script === "ci-fallback-gate.cts") return { action: "done", reason: "ci_fallback_repair_requested", driverAction: "ci_fallback_repair_requested" };
       throw new Error(`unexpected script ${script}`);
     } });
 
-    expect(result.nextHandoff?.monitorHandoff?.kind).toBe("repair");
+    expect(result.applied).toBe(true);
+    expect(scripts).not.toContain("complete-attempt-workspace.cts");
   });
 
   it("closes an approved non-autoMerge review through the explicit human handoff expectation", () => {

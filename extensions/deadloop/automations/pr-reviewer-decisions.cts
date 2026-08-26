@@ -42,10 +42,9 @@ function defaultDecisionConfig(overrides: Partial<ReviewDecisionConfig> = {}): R
     externalReviewWaitSeconds: 1800,
     projectId: "",
     automationLogin: "",
-    // The review-result dispatcher still owns the repair launch under the review claim, so this
-    // driver serves no `review-repair` request. A pull request waiting on one is skipped whole,
-    // never downgraded to the review request queued behind it.
-    servedRoles: ["branch-update", "reviewer"],
+    // Every PR request role has a launcher in the driver, so a pull request waiting on any one of
+    // them is selectable; none is skipped as unserved (ADR 0032).
+    servedRoles: ["branch-update", "review-repair", "reviewer"],
     // Whether a request post-dates the block that stopped a pull request is a timeline question.
     // A caller that reads labels only cannot answer it, so it sets this and leaves a blocked pull
     // request carrying a request to the caller that can. A gate must never skip work its authority

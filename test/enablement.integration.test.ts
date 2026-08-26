@@ -2443,3 +2443,121 @@ fs.writeFileSync(reportPath, JSON.stringify({ reads, errors }));
     expect(existsSync(path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ githubRepositoryId: "R_demo" })))).toBe(false);
   });
 });
+
+describe("enablement storage-exhaustion diagnosis", () => {
+  function hostError(code: string): NodeJS.ErrnoException {
+    const error: NodeJS.ErrnoException = new Error(`${code}: simulated deterministic host failure`);
+    error.code = code;
+    return error;
+  }
+
+  function storageStateDir(root: string): string {
+    return path.join(root, ".pi", "agent", "deadloop");
+  }
+
+  async function lockPreflightExhaustionObservation(code: string) {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    return {
+      extension: await loadExtension(root, {
+        schedulerLockCapabilityPreflight: () => { throw hostError(code); },
+      }),
+      repoPath,
+      stateDir: storageStateDir(root),
+    };
+  }
+
+  async function lateStageStorageExhaustionObservation() {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root, {
+      afterEnablementSchedulerStart: async () => { throw hostError("ENOSPC"); },
+    });
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    return { extension, repoPath, stateDir: storageStateDir(root), doctorCommand: extension.commands.get("deadloop-doctor")! };
+  }
+
+  it("reports an observed ENOSPC as a local enablement stop", async () => {
+    const observation = await lockPreflightExhaustionObservation("ENOSPC");
+    await invoke(observation.extension.commands.get("deadloop-enable")!, observation.repoPath);
+
+    expect(observation.extension.messages.at(-1)).toContain("enablement stopped because a deterministic host operation ran out of local storage (ENOSPC)");
+  });
+
+  it("reports an observed EDQUOT as a local enablement stop", async () => {
+    const observation = await lockPreflightExhaustionObservation("EDQUOT");
+    await invoke(observation.extension.commands.get("deadloop-enable")!, observation.repoPath);
+
+    expect(observation.extension.messages.at(-1)).toContain("ran out of local storage (EDQUOT)");
+  });
+
+  it("records no execution permission for a repository that failed on capacity", async () => {
+    const observation = await lockPreflightExhaustionObservation("ENOSPC");
+    await invoke(observation.extension.commands.get("deadloop-enable")!, observation.repoPath);
+
+    expect(existsSync(path.join(observation.stateDir, "enabled-projects.json"))).toBe(false);
+  });
+
+  it("keeps retained verification worktrees untouched after the capacity stop", async () => {
+    const observation = await lockPreflightExhaustionObservation("ENOSPC");
+    const sentinelDir = path.join(observation.stateDir, "verification-worktrees", "demo");
+    mkdirSync(sentinelDir, { recursive: true });
+    const sentinelFile = path.join(sentinelDir, "attempt-evidence.json");
+    writeFileSync(sentinelFile, "{\n");
+
+    await invoke(observation.extension.commands.get("deadloop-enable")!, observation.repoPath);
+
+    expect(readFileSync(sentinelFile, "utf8")).toBe("{\n");
+  });
+
+  it("posts no Issue comment when a late-stage enablement stops on capacity", async () => {
+    const observation = await lateStageStorageExhaustionObservation();
+
+    expect(observation.extension.ghCommands.some((args: string[]) => args[0] === "issue" && args[1] === "comment")).toBe(false);
+  });
+
+  it("posts no PR comment when a late-stage enablement stops on capacity", async () => {
+    const observation = await lateStageStorageExhaustionObservation();
+
+    expect(observation.extension.ghCommands.some((args: string[]) => args[0] === "pr" && args[1] === "comment")).toBe(false);
+  });
+
+  it("changes no agent workflow labels beyond the normal preflight when enablement stops on capacity", async () => {
+    const observation = await lateStageStorageExhaustionObservation();
+
+    expect(observation.extension.ghCommands.some((args: string[]) => args[0] === "label" && ["edit", "delete"].includes(args[1]))).toBe(false);
+  });
+
+  it("shows the local failure evidence in the doctor diagnosis", async () => {
+    const observation = await lateStageStorageExhaustionObservation();
+
+    await invoke(observation.doctorCommand, observation.repoPath);
+
+    expect(observation.extension.messages.at(-1)).toContain("enablement-storage-exhaustion.json");
+  });
+
+  it("keeps a stderr mention of ENOSPC unclassified in the command result", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root, {
+      beforePrimaryCheckout: async () => { throw new Error("git fetch failed: ENOSPC: no space left on device"); },
+    });
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(extension.messages.at(-1)?.includes("ran out of local storage")).toBe(false);
+  });
+
+  it("clears retained evidence after a later successful enablement", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const stateDir = storageStateDir(root);
+    const { recordEnablementStorageExhaustion, readEnablementStorageExhaustion } = require("../src/enablement-storage-diagnosis.cjs");
+    recordEnablementStorageExhaustion(stateDir, { code: "ENOSPC", detail: "older stop", observedAt: 1 });
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    expect(readEnablementStorageExhaustion(stateDir)).toBeNull();
+  });
+});

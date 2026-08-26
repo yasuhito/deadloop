@@ -13,6 +13,8 @@ const { launchAgentFlow, prepareAgentLaunchFlow, recordAgentLaunchGithubClaimed 
 const { renderProjectCheckCommand } = require("../../../src/project-check.cts");
 const { decideBranchUpdateLive } = require("./pr-branch-update-decision.cts");
 const { branchUpdateAttemptExists, branchUpdateRetryKey, renderBranchUpdateMarker } = require("./pr-branch-update-state.cts");
+const { inspectRepairWorktree, repairLaunchInput } = require("./pr-review-repair-launch.cts");
+const { repairAttempts } = require("./pr-review-repair-state.cts");
 const {
   createCommandRunner,
   createHerdrRunnerFromCommandRunner,
@@ -1403,6 +1405,330 @@ function revalidateConsumedReviewerLaunch(
   return assertReviewHistoryUnchanged(env, number, history);
 }
 
+/**
+ * The repair contract a review result persisted on GitHub: the latest automation-authored changes-
+ * requested comment for the exact head, carrying its required findings inside the repair-attempt
+ * marker payload. Advisory observations never enter it, and comments without a payload carry no
+ * contract (ADR 0032).
+ */
+function persistedRepairContract(comments: JsonObject[], headOid: string, automationLogin: string): JsonObject | null {
+  const attempts = repairAttempts(comments || [], automationLogin)
+    .filter((attempt: JsonObject) => String(attempt.headOid) === headOid.toLowerCase()
+      && Array.isArray(attempt.payload?.findings) && attempt.payload.findings.length > 0);
+  const attempt = attempts.at(-1) as JsonObject | undefined;
+  return attempt ? { key: attempt.key, findings: attempt.payload.findings, reviewFingerprint: attempt.reviewFingerprint } : null;
+}
+
+/** Whether the one repair for this attempt key already produced its public outcome or stop. */
+function repairOutcomeAlreadyRecorded(comments: JsonObject[], key: string): boolean {
+  return (comments || []).some((comment: JsonObject) => {
+    const body = String(comment?.body || "");
+    return body.includes(`deadloop:review-repair-result key=${String(key).toLowerCase()}`)
+      || body.includes(`deadloop:review-repair-stop key=${String(key).toLowerCase()}`)
+      || body.includes(`deadloop:review-repair-dispatch-stop key=${String(key).toLowerCase()}`);
+  });
+}
+
+function obsoleteRepairRequestComment(pr: JsonObject, env: ReturnType<typeof envConfig>, reason: string): string {
+  return `## What happened
+- PR #${Number(pr.number || 0)} no longer needs the queued automatic repair: ${reason}.
+- deadloop consumed \`${env.implementLabel}\` without launching an agent and without changing the branch.
+
+## Next step
+The current head goes back to normal review under \`${env.reviewLabel}\`.`;
+}
+
+function repairBlockedComment(pr: JsonObject, env: ReturnType<typeof envConfig>, reason: string): string {
+  return `## What happened
+- Automatic review repair for PR #${Number(pr.number || 0)} stopped because ${reason}.
+- Nothing was pushed and no history was rewritten. A human must inspect the existing PR branch before re-queueing it.
+
+## Recovery steps
+1. Inspect the current head, review findings, checks, and deadloop attempt markers.
+   \`\`\`bash
+gh pr view ${Number(pr.number || 0)} -R ${shellQuote(env.githubRepo)} --json number,state,headRefName,headRefOid,labels,statusCheckRollup
+   \`\`\`
+2. Correct the branch or resolve the blocked condition without rewriting history.
+3. Push a new commit, then add ${env.reviewLabel}; the changed head starts a new review cycle and ${env.blockedLabel} clears with it.`;
+}
+
+function consumeObsoleteRepairRequest(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  reason: string,
+): DriverResult {
+  const number = Number(pr.number || 0);
+  const comment = obsoleteRepairRequestComment(pr, env, reason);
+  const applied = applyPrTransition(pr, env, fixture, (livePlan) =>
+    livePlan.kind === "repair_required" && Number(livePlan.pr.number) === number,
+  (github, live) => {
+    consumeRequestWithIdentity(github, live, env, fixture, "review-repair", {});
+    github.commentPr(env.githubRepo, Number(live.number || 0), comment);
+    github.movePrLabels(env.githubRepo, Number(live.number || 0), {
+      remove: env.inProgressLabel, add: env.reviewLabel,
+    });
+  });
+  if (!applied) {
+    return driverResult("skip", `PR #${number} changed before its obsolete repair request was consumed`, {
+      driverAction: "repair_obsolete_stale", prNumber: number,
+    });
+  }
+  return driverResult("done", `PR #${number}'s repair request is obsolete; consumed without launching`, {
+    driverAction: "repair_obsolete",
+    prNumber: number,
+    comment,
+    ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
+  });
+}
+
+function blockRepairLaunch(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  reason: string,
+): DriverResult {
+  const number = Number(pr.number || 0);
+  const comment = repairBlockedComment(pr, env, reason);
+  const applied = applyPrTransition(pr, env, fixture, (livePlan) =>
+    livePlan.kind === "repair_required" && Number(livePlan.pr.number) === number,
+  (github, live) => {
+    consumeRequestWithIdentity(github, live, env, fixture, "review-repair", {});
+    github.commentPr(env.githubRepo, Number(live.number || 0), comment);
+    github.movePrLabels(env.githubRepo, Number(live.number || 0), blockedPrLabelMove(prRequestLabels(env), env.inProgressLabel, env.blockedLabel));
+  });
+  if (!applied) {
+    return driverResult("skip", `PR #${number} changed before repair blocking`, { driverAction: "repair_block_stale", prNumber: number });
+  }
+  return driverResult("done", `PR #${number} repair launch is unsafe; marked blocked`, {
+    driverAction: "repair_blocked",
+    prNumber: number,
+    comment,
+    ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
+  });
+}
+
+function repairLaunchEnv(env: ReturnType<typeof envConfig>): Record<string, unknown> {
+  return {
+    projectId: env.projectId,
+    repoPath: env.repoPath,
+    githubRepo: env.githubRepo,
+    baseBranch: env.baseBranch,
+    remote: env.reviewRepairRemote,
+    checkCommand: env.checkCommand,
+    workerAgent: env.branchUpdateAgent,
+    workerModel: env.branchUpdateModel,
+    requiredVerification: env.requiredVerification,
+    enabledAt: env.enabledAt,
+    automationDir: env.automationDir,
+    stateDir: env.stateDir,
+    worktreeRoot: env.worktreeRoot,
+    inProgressLabel: env.inProgressLabel,
+    blockedLabel: env.blockedLabel,
+  };
+}
+
+/** Revalidate the consumed implement request and unchanged target after its label has gone. */
+function revalidateConsumedRepairLaunch(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  number: number,
+  requestEventId: string,
+  history: JsonObject | null,
+  requestEventIds: Record<string, string>,
+  expectedKey: string,
+): void {
+  const github = githubOperations();
+  const live = liveExposedPr(number, env, github);
+  assertSamePrRevision(pr, live);
+  const managedLabels = managedWorkflowLabels(env).filter((label) => new Set(labelNames(live)).has(label));
+  if (managedLabels.length !== 1 || managedLabels[0] !== env.inProgressLabel) {
+    throw new StaleLaunchError(`PR #${number} no longer has the exact consumed repair state`);
+  }
+  const request = currentReviewRequest(github, env, number, env.implementLabel);
+  if (String(request.id || request.node_id || "") !== requestEventId) {
+    throw new StaleLaunchError(`PR #${number} implement request changed before repair launch`);
+  }
+  assertLatestRequestEventIds(github, env, number, requestEventIds);
+  assertReviewHistoryUnchanged(env, number, history);
+  const liveContract = persistedRepairContract(github.listPrComments(env.githubRepo, number), String(live.headRefOid || ""), env.automationLogin);
+  if (!liveContract || liveContract.key !== expectedKey) {
+    throw new StaleLaunchError(`PR #${number} persisted repair contract changed before launch`);
+  }
+}
+
+/** Claim the agent:implement request and launch the one repair worker for the persisted contract. */
+function launchPrRepair(
+  pr: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  fixture: JsonObject | null,
+  contract: JsonObject,
+): JsonObject {
+  const number = Number(pr.number || 0);
+  const uuid = fixture ? "fixture-review-repair-uuid" : randomUUID();
+  const branch = String(pr.headRefName || "");
+  const expectedHead = String(pr.headRefOid || "");
+  if (!fixture) runText(["git", "check-ref-format", "--branch", branch]);
+  const history = fixture ? null : observePrHistory(env.githubRepo, number, commandRunner);
+  const input = repairLaunchInput(number, branch, expectedHead, contract.findings, contract.key, repairLaunchEnv(env) as never, uuid);
+  let requestEventId = "";
+  let requestEventIds: Record<string, string> = {};
+  let enabledAutomationLogin = "";
+  const launch = launchWithAdapters(
+    env,
+    fixture,
+    input,
+    (github) => {
+      const consumed = consumeRequestEvent(
+        github,
+        pr,
+        env,
+        "review-repair",
+        fixture ? () => env.automationLogin : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
+        requestEventIds,
+        input.uuid,
+      );
+      requestEventId = String(consumed.requestEventId || "");
+      requestEventIds = consumed.requestEventIds || {};
+      input.requestEventId = requestEventId;
+    },
+    (enabled) => {
+      if (fixture) {
+        if (!requestEventId) {
+          const observed = observeRequestConsumption(
+            fixtureGithubOperations(fixture) as ReturnType<typeof githubOperations>,
+            pr,
+            env,
+            orderedPrRequestLabels(prRequestLabels(env)),
+            () => env.automationLogin,
+          );
+          requestEventIds = Object.fromEntries(observed.requestEventIds);
+          requestEventId = String(requestEventIds[env.implementLabel] || "");
+          if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.implementLabel} request event`);
+          input.requestEventId = requestEventId;
+        }
+        return;
+      }
+      enabledAutomationLogin = String(enabled?.automationLogin || enabledAutomationLogin).trim().toLowerCase();
+      assertAuthenticatedReviewIdentity(env, enabledAutomationLogin);
+      if (requestEventId) {
+        try {
+          revalidateConsumedRepairLaunch(pr, env, number, requestEventId, history, requestEventIds, contract.key);
+        } catch (error) {
+          if (error instanceof Error) (error as Error & { claimed?: boolean }).claimed = true;
+          throw error;
+        }
+        return;
+      }
+      // Before the claim: the waiting request must still select this pull request for repair, on a
+      // contract identical to the one selection observed.
+      const live = liveExposedPrs(env).find((candidate: JsonObject) => Number(candidate.number) === number);
+      if (!live || String(live.state || "").toUpperCase() !== "OPEN"
+        || String(live.headRefOid || "").toLowerCase() !== expectedHead.toLowerCase()) {
+        throw new StaleLaunchError(`PR #${number} changed before repair launch`);
+      }
+      const liveContract = persistedRepairContract(live.comments || [], expectedHead.toLowerCase(), env.automationLogin);
+      if (!liveContract || liveContract.key !== contract.key) {
+        throw new StaleLaunchError(`PR #${number} persisted repair contract changed before launch`);
+      }
+      assertReviewHistoryUnchanged(env, number, history);
+      const observed = observeRequestConsumption(
+        githubOperations(),
+        pr,
+        env,
+        orderedPrRequestLabels(prRequestLabels(env)),
+        () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
+      );
+      requestEventIds = Object.fromEntries(observed.requestEventIds);
+      requestEventId = String(requestEventIds[env.implementLabel] || "");
+      if (!requestEventId) throw new StaleLaunchError(`PR #${number} has no stable ${env.implementLabel} request event`);
+      input.requestEventId = requestEventId;
+    },
+  );
+  void history;
+  return { repairName: String(launch.repairName || input.workspaceLabel), requestEventId, ...launch, ...(fixture && !fixture.simulated ? { simulated: true } : {}) };
+}
+
+function driveSelectedRepair(plan: Extract<SelectedPrPlan, { kind: "repair_required" }>, env: ReturnType<typeof envConfig>, fixture: JsonObject | null): DriverResult {
+  const pr = plan.pr;
+  const number = Number(plan.decision.number);
+  const branch = String(pr.headRefName || "");
+  const expectedHead = String(pr.headRefOid || "").toLowerCase();
+  const automationLogin = fixture ? String(fixture.automationLogin || "deadloop-bot") : env.automationLogin;
+  const comments = (pr.comments || []) as JsonObject[];
+
+  // Revalidate whether the repair is still needed before consuming the request. A head with no
+  // persisted required-findings contract, or whose one repair already produced an outcome, holds an
+  // obsolete request: consume it with a readable explanation instead of launching anything.
+  const contract = persistedRepairContract(comments, expectedHead, automationLogin);
+  if (!contract) {
+    return consumeObsoleteRepairRequest(pr, env, fixture, `no required findings from review are recorded on this head (${expectedHead.slice(0, 12)})`);
+  }
+  if (repairOutcomeAlreadyRecorded(comments, contract.key)) {
+    return consumeObsoleteRepairRequest(pr, env, fixture, "this exact review result already completed its one automatic repair");
+  }
+
+  if (!fixture) {
+    const worktree = inspectRepairWorktree(env.repoPath, branch, runText);
+    const blockReason = worktree.kind === "ambiguous"
+      ? "more than one worktree claims the repair branch; worktree ownership must be made unambiguous"
+      : worktree.kind === "present" && !worktree.clean
+        ? "the existing repair worktree holds uncommitted work that must be inspected first"
+        : worktree.kind === "present" && worktree.head !== expectedHead
+          ? "the clean repair worktree does not match the current PR head and must be reconciled without rewriting history"
+          : "";
+    if (blockReason) {
+      return blockRepairLaunch(pr, env, fixture, blockReason);
+    }
+  }
+
+  let launch: JsonObject;
+  try {
+    launch = launchPrRepair(pr, env, fixture, contract);
+  } catch (error) {
+    if (isStaleLaunchError(error)) {
+      const claimed = Boolean((error as Error & { claimed?: boolean }).claimed);
+      return driverResult("skip", staleReviewerLaunchSummary(error, claimed), {
+        driverAction: claimed ? "repair_launch_stale_after_claim" : "repair_launch_stale",
+        prNumber: number,
+        requestConsumed: claimed,
+      });
+    }
+    const reason = `the bounded repair launch failed after its attempt marker was recorded: ${error instanceof Error ? error.message : String(error)}`;
+    return blockRepairLaunch(pr, env, fixture, reason);
+  }
+  const monitorInput = {
+    prNumber: number,
+    expectedHeadOid: expectedHead,
+    branch,
+    automationDir: env.automationDir,
+    promiseFile: String(launch.promiseFile || ""),
+    attemptRecordFile: String(launch.attemptRecordFile || path.join(path.dirname(String(launch.promiseFile || "")), "attempt.json")),
+    actorName: "review-repair worker",
+    projectId: env.projectId,
+    repoPath: env.repoPath,
+    githubRepo: env.githubRepo,
+    stateDir: env.stateDir,
+    enabledAt: env.enabledAt,
+    reviewLabel: env.reviewLabel,
+    implementLabel: env.implementLabel,
+    updateBranchLabel: env.updateBranchLabel,
+    inProgressLabel: env.inProgressLabel,
+    blockedLabel: env.blockedLabel,
+    attemptKey: contract.key,
+    maxActiveMilliseconds: env.reviewerMaxRuntimeSeconds * 1000,
+  };
+  return driverResult("monitor", `Launched review-repair worker for PR #${number}`, {
+    driverAction: "review_repair_monitor_request",
+    prNumber: number,
+    decision: plan.decision,
+    labelsPreserved: [env.inProgressLabel],
+    launch,
+    monitorHandoff: { kind: "repair", input: monitorInput },
+    ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
+  });
+}
+
 function drive(fixturePath: string | undefined): DriverResult {
   if (!fixturePath) {
     runHerdrPreflight({ run: (command: string, commandArgs: string[]) => commandRunner.runText([command, ...commandArgs]) });
@@ -1520,6 +1846,10 @@ function driveSelectedTarget(
       comment: transition.comment,
       ...(fixture ? { testAdapterEffects: fixtureEffects(fixture) } : {}),
     });
+  }
+
+  if (plan.kind === "repair_required") {
+    return driveSelectedRepair(plan, env, fixture);
   }
 
   if (plan.kind !== "branch_update_required") {
@@ -1761,6 +2091,8 @@ function main(): void {
 if (require.main === module) main();
 
 module.exports = {
+  persistedRepairContract,
+  repairOutcomeAlreadyRecorded,
   resolveAuthorizedAutomationLogins,
   staleReviewerLaunchSummary,
   assertAuthenticatedReviewIdentity,

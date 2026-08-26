@@ -7,9 +7,7 @@
 // base diagnosis; base blocking suppresses new launches until base or contract changes; base success
 // allows exactly one existing-path review repair per episode.
 
-const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
-const { randomUUID } = require("node:crypto");
 
 const {
   classifyCheckObservations,
@@ -24,7 +22,7 @@ const {
   driverResult,
 } = require("../../../src/automation-driver-kit.cts");
 const { createGithubOperations } = require("../../../src/github-operations.cts");
-const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
+const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { reauthorizeReviewWrite } = require("../../../src/worker-required-verification-runtime.cjs");
 import type { JsonObject } from "../../../src/automation-driver-kit-types";
@@ -141,86 +139,42 @@ function ciFallbackRepairFindings(failure: JsonObject, contractCommand: string):
   }];
 }
 
-function readLiveManagedPr(env: ReturnType<typeof envConfig>, prNumber: string): JsonObject {
-  const pr = commandRunner.runJson([
-    "gh", "pr", "view", prNumber, "-R", env.githubRepo,
-    "--json", "number,state,isDraft,headRefName,headRefOid,isCrossRepository,labels,comments",
-  ]);
-  const labels = (pr.labels || []).map((label: JsonObject) => label?.name).filter(Boolean);
-  if (String(pr.state || "").toUpperCase() !== "OPEN"
-    || !labels.includes(env.inProgressLabel)
-    || labels.includes(env.blockedLabel)) {
-    throw new Error(`PR #${prNumber} no longer has the active review claim state`);
-  }
-  return pr;
-}
-
 /**
- * Revalidate the managed pull request immediately before each launch stage: same head, active
- * claim, and the attempt's fixed required-verification contract still current.
+ * Publish the typed CI fallback failure with its required-findings repair marker, idempotently for
+ * the exact head and failure fingerprint (ADR 0032): the driver reads the contract from this marker.
  */
-function revalidateRepairTarget(
+function postCiFallbackFailure(
   env: ReturnType<typeof envConfig>,
   prNumber: number,
   expectedHead: string,
-  enabled: { automationLogin?: string; githubRepositoryId?: string; githubRepo?: string },
+  findings: JsonObject[],
 ): void {
-  const authenticated = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
-  const enabledLogin = String(enabled?.automationLogin || "").trim().toLowerCase();
-  if (!authenticated || !enabledLogin || authenticated !== enabledLogin) {
-    throw new Error(`PR #${prNumber} authenticated identity no longer matches enablement authority`);
-  }
-  const repository = commandRunner.runJson(["gh", "repo", "view", env.githubRepo, "--json", "id,nameWithOwner"]);
-  if (String(repository.id || "") !== String(enabled.githubRepositoryId || "")
-    || String(repository.nameWithOwner || "") !== String(enabled.githubRepo || "")) {
-    throw new Error(`PR #${prNumber} repository identity changed before CI fallback repair`);
-  }
-  const livePr = readLiveManagedPr(env, String(prNumber));
-  if (String(livePr.headRefOid || "").toLowerCase() !== expectedHead.toLowerCase()) {
-    throw new Error(`PR #${prNumber} head changed before CI fallback repair launch`);
-  }
-  if (!env.attemptRecordFile) throw new Error("bound reviewer attempt is missing before CI fallback repair mutation");
-  reauthorizeReviewWrite(readAttemptRecord(path.dirname(env.attemptRecordFile)), {
-    projectRepo: env.repoPath,
-    localConfigPath: process.env.DEADLOOP_CONFIG || path.join(env.stateDir, "projects.json"),
-    repositoryId: enabled.githubRepositoryId,
-  });
-}
+  const { reviewResultFingerprint, renderRepairMarker } = require("./pr-review-repair-state.cts");
+  const reviewFingerprint = reviewResultFingerprint(findings);
+  const marker = renderRepairMarker(expectedHead, reviewFingerprint, { findings });
+  const body = [
+    "## What happened",
+    `- CI fallback verification failed for the prospective merge tree of head \`${expectedHead}\`.`,
+    "",
+    ...findings.map((finding) => [`### ${finding.title}`, String(finding.body)].join("\n")),
+    "",
+    marker,
+  ].join("\n");
 
-function launchCiFallbackRepair(
-  env: ReturnType<typeof envConfig>,
-  input: { prNumber: number; branch: string; expectedHead: string; findings: JsonObject[]; attemptKey: string },
-): JsonObject {
-  const dispatch = repairDispatchModule();
-  const uuid = randomUUID();
-  return withEnabledDriverLaunch(
-    env,
-    () => {},
-    (recheck: () => void) =>
-      dispatch.launchRepair(input.prNumber, input.branch, input.expectedHead, input.findings, input.attemptKey, env, recheck, uuid),
-    {
-      prepareAttempt: () =>
-        dispatch.launchRepair(input.prNumber, input.branch, input.expectedHead, input.findings, input.attemptKey, env, undefined, uuid, true),
-      recordGithubMutation: () =>
-        dispatch.recordRepairLaunchGithubClaim(input.prNumber, input.branch, input.expectedHead, input.findings, input.attemptKey, env, uuid),
-      revalidate: (enabled: { automationLogin?: string; githubRepositoryId?: string; githubRepo?: string }) =>
-        revalidateRepairTarget(env, input.prNumber, input.expectedHead, enabled),
-    },
-  );
-}
-
-function blockOnLaunchFailure(
-  env: ReturnType<typeof envConfig>,
-  prNumber: number,
-  error: unknown,
-): JsonObject {
-  const reason = `the automatic CI fallback repair could not be launched: ${error instanceof Error ? error.message : String(error)}`;
   withEnabledDriverLock(env, () => {
-    const guardedGithub = createGithubOperations(commandRunner);
-    guardedGithub.commentPr(env.githubRepo, prNumber, `## What happened\n- ${reason}.\n- The PR keeps its current head and claim; a person should inspect the CI fallback failure before adding a new Agent request.\n\n## Recovery steps\n1. Run the repository's CI-equivalent check locally against the merged tree.\n2. Fix or update the branch, then add ${env.reviewLabel}.`);
-    guardedGithub.movePrLabels(env.githubRepo, prNumber, repairDispatchModule().blockedClaimMove(env));
+    const livePr = commandRunner.runJson([
+      "gh", "pr", "view", String(prNumber), "-R", env.githubRepo,
+      "--json", "state,headRefOid,labels,comments",
+    ]);
+    if (String(livePr.state || "").toUpperCase() !== "OPEN"
+      || String(livePr.headRefOid || "").toLowerCase() !== expectedHead.toLowerCase()) {
+      throw new Error(`PR #${prNumber} changed before its CI fallback repair request comment`);
+    }
+    const alreadyPosted = ((livePr.comments || []) as JsonObject[]).some((comment) => String(comment.body || "").includes(marker));
+    if (!alreadyPosted) {
+      createGithubOperations(commandRunner).commentPr(env.githubRepo, prNumber, body);
+    }
   });
-  return { action: "stop", reason: "ci_fallback_repair_launch_failed" };
 }
 
 function gate(args: JsonObject): JsonObject {
@@ -274,8 +228,10 @@ function gate(args: JsonObject): JsonObject {
     return { action: "stop", reason: "base_verification_blocked", baseRevision: policyBaseRevision, command: contract.command };
   }
 
-  // Base healthy: exactly one existing-path review repair per fallback episode.
+  // Base healthy: exactly one repair per fallback episode, queued through the existing
+  // agent:implement request path so the PR reviewer driver launches it with its own revalidation.
   const episodeKey = store.episodeKeyFor(env.githubRepo, prNumber, policyBaseRevision, contract.command);
+  const findings = ciFallbackRepairFindings(verification, contract.command);
   let episode = store.readRepairEpisode(env.stateDir, env.projectId, prNumber);
   const directive = decideCiFallbackRepair({
     episode,
@@ -295,48 +251,31 @@ function gate(args: JsonObject): JsonObject {
     return { action: "stop", reason: "ci_fallback_repair_exhausted", episodeKey };
   }
 
-  // The episode consumes its one repair even if the launch fails, so repeated failures cannot loop.
-  store.writeRepairEpisode(env.stateDir, env.projectId, { ...episode, repairsUsed: 1 });
-
-  if (env.attemptRecordFile && fs.existsSync(path.dirname(String(env.attemptRecordFile)))) {
-    closeReviewerWorkspace(env);
-  }
-  try {
-    const launch = launchCiFallbackRepair(env, {
-      prNumber,
-      branch: String(args.branch),
-      expectedHead,
-      findings: ciFallbackRepairFindings(verification, contract.command),
-      attemptKey: episodeKey,
+  // The attempt's fixed required-verification contract must still be current before any mutation;
+  // the reviewer workspace then closes exactly like the review-repair request path expects.
+  withEnabledDriverLock(env, (enabled: { automationLogin?: string; githubRepositoryId?: string; githubRepo?: string }, recheck: () => void) => {
+    void enabled; void recheck;
+    if (!env.attemptRecordFile) throw new Error("bound reviewer attempt is missing before the CI fallback repair request");
+    reauthorizeReviewWrite(readAttemptRecord(path.dirname(String(env.attemptRecordFile))), {
+      projectRepo: env.repoPath,
+      localConfigPath: process.env.DEADLOOP_CONFIG || path.join(env.stateDir, "projects.json"),
     });
-    const monitorInput = {
-      prNumber,
-      expectedHeadOid: expectedHead,
-      branch: String(args.branch),
-      automationDir: env.automationDir,
-      promiseFile: launch.promiseFile,
-      attemptRecordFile: launch.attemptRecordFile || path.join(path.dirname(String(launch.promiseFile)), "attempt.json"),
-      actorName: "review-repair worker",
-      projectId: env.projectId,
-      repoPath: env.repoPath,
-      githubRepo: env.githubRepo,
-      stateDir: env.stateDir,
-      enabledAt: env.enabledAt,
-      reviewLabel: env.reviewLabel,
-      implementLabel: env.implementLabel,
-      updateBranchLabel: env.updateBranchLabel,
-      inProgressLabel: env.inProgressLabel,
-      blockedLabel: env.blockedLabel,
-      attemptKey: episodeKey,
-      maxActiveMilliseconds: env.reviewerMaxRuntimeSeconds * 1000,
-    };
-    return driverResult("monitor", `Launched CI fallback repair worker for PR #${prNumber}`, {
-      driverAction: "ci_fallback_repair_monitor_request",
-      monitorHandoff: { kind: "repair", input: monitorInput },
-    }) as unknown as JsonObject;
-  } catch (error) {
-    return blockOnLaunchFailure(env, prNumber, error);
+    closeReviewerWorkspace(env);
+  });
+
+  // Post the typed CI fallback failure carrying the required-findings repair marker, then replace
+  // the active claim with an agent:implement request. Both steps are idempotent for this exact
+  // head and failure fingerprint, so an interrupted dispatch completes its own transition.
+  postCiFallbackFailure(env, prNumber, expectedHead, findings);
+  const requested = repairDispatchModule().queueRepairRequest(String(prNumber), env, expectedHead);
+  if (!requested.applied) {
+    return { action: "stop", reason: "ci_fallback_repair_request_stale" };
   }
+  // The queue transition is the episode's one repair: repeated failures cannot loop it again.
+  store.writeRepairEpisode(env.stateDir, env.projectId, { ...episode, repairsUsed: 1 });
+  return driverResult("done", `PR #${prNumber} CI fallback failure queued an agent:implement repair request`, {
+    driverAction: "ci_fallback_repair_requested",
+  }) as unknown as JsonObject;
 }
 
 function main(): void {

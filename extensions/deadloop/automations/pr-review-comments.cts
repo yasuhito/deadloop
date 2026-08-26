@@ -110,7 +110,7 @@ function renderPriorFindingLine(input: JsonObject): string {
 }
 
 function renderChangesRequestedComment(input: JsonObject): string {
-  const marker = input.repairBlocked ? "" : renderRepairMarker(input.headOid, input.reviewFingerprint);
+  const marker = input.repairBlocked ? "" : renderRepairMarker(input.headOid, input.reviewFingerprint, { findings: input.findings || [] });
   const nextStep = input.repairBlocked
     ? "Automatic repair did not start because required verification is blocked. Resolve the verification policy and use `/deadloop-doctor` before requeueing this PR."
     : input.repairAlreadyStarted

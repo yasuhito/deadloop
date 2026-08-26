@@ -65,12 +65,8 @@ function dispatcherArgs(input: JsonObject, record: JsonObject): string[] {
     ...flag("request-event-id", input.requestEventId || record.requestEventId),
     ...flag("pr", input.prNumber), ...flag("expected-head", input.expectedHeadOid),
     ...flag("branch", input.branch), ...flag("github-repo", input.githubRepo),
-    ...flag("repo-path", input.repoPath), ...flag("worktree-root", input.worktreeRoot),
+    ...flag("repo-path", input.repoPath),
     ...flag("project-id", input.projectId), ...flag("state-dir", input.stateDir), ...flag("enabled-at", input.enabledAt),
-    ...flag("check-command", input.projectCheckCommand),
-    ...flag("required-verification", input.requiredVerification ? JSON.stringify(input.requiredVerification) : undefined),
-    ...flag("worker-agent", input.workerAgent || "pi"),
-    ...flag("worker-model", input.workerModel), ...flag("remote", input.repairRemote || "origin"),
     ...flag("review-label", input.reviewLabel), ...flag("blocked-label", input.blockedLabel),
     ...flag("implement-label", input.implementLabel), ...flag("update-branch-label", input.updateBranchLabel),
     ...flag("in-progress-label", input.inProgressLabel),
@@ -162,8 +158,9 @@ function processReviewer(input: JsonObject, record: JsonObject, report: JsonObje
       // GitHub checks are one health signal: a failed terminal check set may be replaced by fresh
       // CI-equivalent verification of the exact prospective merge tree (ADR 0030).
       const gate = ops.run("ci-fallback-gate.cts", ciFallbackGateArgs(input));
-      if (gate.action === "monitor" && gate.monitorHandoff?.kind === "repair") {
-        return { applied: true, nextHandoff: gate, result: gate.driverAction };
+      if (String(gate.driverAction || "") === "ci_fallback_repair_requested") {
+        // The gate already closed the reviewer workspace as part of the request transition.
+        return { applied: true, result: gate.driverAction };
       }
       if (gate.action !== "proceed_merge") {
         return { applied: false, result: String(gate.reason || "ci_fallback_gate_stopped"), gate };

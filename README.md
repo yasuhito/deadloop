@@ -48,6 +48,8 @@ You need an authenticated `gh` CLI and a running [Herdr](https://herdr.dev/) 0.8
 
 That is enough to start. Enablement is a fast control-plane check: it resolves the required-verification contract but does not run repository tests, and it creates any missing standard labels with automatic merge off. Repository tests still run as required verification before deadloop pushes, hands off, or merges a produced revision. The default verification command is `npm run check`; if the repository does not provide that script, set a different `checkCommand` in `deadloop.json` as described in [Advanced configuration](#advanced-configuration).
 
+If a deterministic enablement operation itself fails because local storage ran out (`ENOSPC` or `EDQUOT`), the command reports that capacity stop and keeps a small local evidence file; `/deadloop-doctor` shows it until the next successful enablement. The stop records no execution permission and touches no GitHub issue, pull request, or agent workflow label — fix storage, then run `/deadloop-enable` again.
+
 ## Control the loop with labels
 
 You start the loop by labeling an Issue. deadloop owns the exploration, implementation, and review transitions, then either hands the approved PR to a human or merges it according to policy.
@@ -104,6 +106,7 @@ Run these commands from the Pi session in the target repository:
 | --- | --- |
 | `/deadloop-enable` | Run fast prerequisite checks and enable new deadloop work. |
 | `/deadloop-disable` | Stop new work from starting; running attempts may finish. |
+| `/deadloop-run-once` | Run exactly one normal scheduler tick while scheduling stays disabled; no later tick is scheduled. |
 | `/deadloop-status` | Show whether deadloop is enabled and summarize its current state. |
 | `/deadloop-doctor` | Diagnose configuration and retained attempts without changing them. |
 | `/deadloop-abandon-attempt <attempt-id>` | Safely abandon a retained attempt only when doctor presents this command. |
@@ -165,6 +168,8 @@ Reviewers can still report requested changes or a required human decision when r
 Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
 
 Issue implementation Workers, explorers, PR reviewers, review-repair workers, and branch-update attempts are monitored deterministically without using the Automation host's model. Runtime-reported working status wins over quiet output, the configured 24-hour limit applies to active work, and a terminal attempt without a valid completion report is never prompted or nudged through conversation. A Worker completion report runs the required verification, destination-bound push, draft PR creation with review request, and attempt persistence as one deterministic chain; an explorer result is validated and persisted with its next Issue action.
+
+A Worker whose monitoring was lost after it filed a completion report is not stranded either: once no pending handoff remains and the runtime stops reporting active work, reconciliation collects the bound report through the same deterministic chain — push and draft PR included when the local branch survives. If the report no longer proves its binding to the attempt's target revision, the Issue gets one reasoned `agent:blocked` stop with manual recovery steps instead of a dangling claim; the retained branch and journal are left as evidence.
 
 When the runtime confirms a stopped review, deadloop re-reads its completion report once more before recording anything, and publishes the stop on the PR bound to the attempt and the exact head selected for review. A stop whose report file itself could not be read because of `ENOSPC` or `EDQUOT` is recorded as a capacity stop with free-storage recovery steps; pane output alone never names that cause. Both failure classes skip the bounded technical retry and never retry automatically.
 
