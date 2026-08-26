@@ -1,0 +1,148 @@
+#!/usr/bin/env node
+
+const fs = require("node:fs") as typeof import("node:fs");
+const path = require("node:path") as typeof import("node:path");
+const { createCommandRunner } = require("../../../src/automation-driver-kit.cts");
+const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
+
+type JsonObject = Record<string, any>;
+type CompletionOps = { run(script: string, args: string[]): JsonObject };
+
+function flag(name: string, value: unknown): string[] {
+  return value === undefined || value === null || value === "" ? [] : [`--${name}`, String(value)];
+}
+
+function common(input: JsonObject): string[] {
+  return [
+    ...flag("attempt-record", input.attemptRecordFile),
+    ...flag("project-id", input.projectId),
+    ...flag("project-repo", input.repoPath),
+    ...flag("github-repo", input.githubRepo),
+    ...flag("state-dir", input.stateDir),
+    ...flag("enabled-at", input.enabledAt),
+  ];
+}
+
+function managedLabels(input: JsonObject): string[] {
+  return [input.reviewLabel, input.implementLabel, input.updateBranchLabel, input.inProgressLabel, input.blockedLabel]
+    .filter(Boolean).flatMap((label) => flag("managed-label", label));
+}
+
+function completeWorkspace(input: JsonObject, ops: CompletionOps, expectedLabels: string[] = []): JsonObject {
+  return ops.run("complete-attempt-workspace.cts", [
+    ...common(input),
+    ...expectedLabels.flatMap((label) => flag("expected-label", label)),
+    ...managedLabels(input),
+    ...("autoMerge" in input ? flag("auto-merge", String(Boolean(input.autoMerge))) : []),
+  ]);
+}
+
+function persistAttempt(input: JsonObject, ops: CompletionOps): JsonObject {
+  return ops.run("persist-attempt-result.cts", [...common(input), ...flag("review-label", input.reviewLabel)]);
+}
+
+function dispatcherArgs(input: JsonObject, record: JsonObject): string[] {
+  return [
+    ...flag("promise", input.promiseFile), ...flag("attempt-record", input.attemptRecordFile),
+    ...flag("request-event-id", input.requestEventId || record.requestEventId),
+    ...flag("pr", input.prNumber), ...flag("expected-head", input.expectedHeadOid),
+    ...flag("branch", input.branch), ...flag("github-repo", input.githubRepo),
+    ...flag("repo-path", input.repoPath), ...flag("worktree-root", input.worktreeRoot),
+    ...flag("project-id", input.projectId), ...flag("state-dir", input.stateDir), ...flag("enabled-at", input.enabledAt),
+    ...flag("check-command", input.projectCheckCommand),
+    ...flag("required-verification", input.requiredVerification ? JSON.stringify(input.requiredVerification) : undefined),
+    ...flag("worker-agent", input.workerAgent || "pi"),
+    ...flag("worker-model", input.workerModel), ...flag("remote", input.repairRemote || "origin"),
+    ...flag("review-label", input.reviewLabel), ...flag("blocked-label", input.blockedLabel),
+    ...flag("implement-label", input.implementLabel), ...flag("update-branch-label", input.updateBranchLabel),
+    ...flag("in-progress-label", input.inProgressLabel),
+  ];
+}
+
+function processBranchUpdate(input: JsonObject, report: JsonObject, ops: CompletionOps): JsonObject {
+  if (report.status === "blocked") return { applied: true, result: "branch_update_blocked_retained" };
+  if (report.result?.outcome === "stale_head") {
+    return { applied: completeWorkspace(input, ops).driverAction === "workspace_closed", result: "branch_update_stale_head" };
+  }
+  const completed = ops.run("pr-branch-update-complete.cts", [
+    ...flag("promise", input.promiseFile), ...common(input), ...flag("pr", input.prNumber),
+    ...flag("expected-head", input.expectedHeadOid), ...flag("review-label", input.reviewLabel),
+    ...flag("implement-label", input.implementLabel), ...flag("update-branch-label", input.updateBranchLabel),
+    ...flag("in-progress-label", input.inProgressLabel), ...flag("blocked-label", input.blockedLabel),
+  ]);
+  if (!["branch_update_review_requested", "branch_update_review_already_requested"].includes(String(completed.driverAction))) {
+    return { applied: false, result: completed };
+  }
+  const persisted = persistAttempt(input, ops);
+  if (persisted.driverAction !== "result_persisted") return { applied: false, result: persisted };
+  const closed = completeWorkspace(input, ops, [input.reviewLabel]);
+  return { applied: closed.driverAction === "workspace_closed", result: completed.driverAction };
+}
+
+function processReviewer(input: JsonObject, record: JsonObject, report: JsonObject, ops: CompletionOps): JsonObject {
+  if (report.status === "blocked") return { applied: true, result: "reviewer_blocked_retained" };
+  if (report.result?.outcome === "approved") {
+    const verification = ops.run("run-worker-required-verification.cts", [
+      ...common(input), ...flag("worktree", input.worktreePath),
+      ...flag("quarantine-root", path.join(input.stateDir, "check-quarantine")), ...flag("role", "reviewer"),
+    ]);
+    if (verification.status !== "passed") return { applied: true, result: verification };
+  }
+  const dispatched = ops.run("pr-review-repair-dispatch.cts", dispatcherArgs(input, record));
+  if (dispatched.action === "needs_llm" && dispatched.monitorHandoff?.kind === "repair") {
+    return { applied: true, nextHandoff: dispatched, result: dispatched.driverAction };
+  }
+  if (dispatched.driverAction === "review_approved") {
+    const acceptedHistory = path.join(path.dirname(input.promiseFile), "pr-review-history-accepted.json");
+    const policyResult = input.autoMerge
+      ? ops.run("merge-reviewed-pr.cts", [
+          ...flag("attempt-record", input.attemptRecordFile), ...flag("project-repo", input.repoPath),
+          ...flag("github-repo", input.githubRepo), ...flag("state-dir", input.stateDir), ...flag("enabled-at", input.enabledAt),
+          ...flag("pr", input.prNumber), ...flag("expected-head", input.expectedHeadOid), ...flag("review-promise", input.promiseFile),
+          ...flag("history-observation", acceptedHistory), ...flag("in-progress-label", input.inProgressLabel), ...flag("blocked-label", input.blockedLabel),
+        ])
+      : ops.run("handoff-reviewed-pr.cts", [
+          ...flag("project-repo", input.repoPath), ...flag("github-repo", input.githubRepo),
+          ...flag("state-dir", input.stateDir), ...flag("enabled-at", input.enabledAt), ...flag("pr", input.prNumber),
+          ...flag("expected-head", input.expectedHeadOid), ...flag("review-promise", input.promiseFile),
+          ...flag("history-observation", acceptedHistory), ...flag("review-label", input.reviewLabel),
+          ...flag("implement-label", input.implementLabel), ...flag("update-branch-label", input.updateBranchLabel),
+          ...flag("in-progress-label", input.inProgressLabel), ...flag("blocked-label", input.blockedLabel),
+        ]);
+    if (policyResult.action === "error") return { applied: false, result: policyResult };
+    const closed = completeWorkspace(input, ops, input.autoMerge ? [input.inProgressLabel] : []);
+    return { applied: closed.driverAction === "workspace_closed", result: policyResult.driverAction };
+  }
+  if (dispatched.driverAction === "review_human_handoff") {
+    const closed = completeWorkspace(input, ops);
+    return { applied: closed.driverAction === "workspace_closed", result: dispatched.driverAction };
+  }
+  return { applied: true, result: dispatched.driverAction || "review_completion_retained" };
+}
+
+function processInput(handoff: JsonObject, ops?: CompletionOps): JsonObject {
+  if (!handoff?.input || !["reviewer", "branch-update"].includes(String(handoff.kind))) {
+    throw new Error("deterministic PR completion requires a reviewer or branch-update handoff");
+  }
+  const input = handoff.input;
+  const record = readAttemptRecord(path.dirname(input.attemptRecordFile));
+  const report = JSON.parse(fs.readFileSync(input.promiseFile, "utf8"));
+  validateCompletionReportBinding(record, report);
+  const commandRunner = createCommandRunner({ timeoutMs: 15 * 60_000 });
+  const operations = ops || { run: (script: string, args: string[]) => commandRunner.runJson(["node", path.join(input.automationDir, script), ...args]) };
+  return handoff.kind === "branch-update"
+    ? processBranchUpdate(input, report, operations)
+    : processReviewer(input, record, report, operations);
+}
+
+function main(): void {
+  try {
+    const handoff = JSON.parse(fs.readFileSync(0, "utf8"));
+    process.stdout.write(`${JSON.stringify(processInput(handoff))}\n`);
+  } catch (error) {
+    process.stdout.write(`${JSON.stringify({ applied: false, error: error instanceof Error ? error.message : String(error) })}\n`);
+  }
+}
+
+if (require.main === module) main();
+module.exports = { completeWorkspace, dispatcherArgs, processBranchUpdate, processInput, processReviewer };

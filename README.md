@@ -132,6 +132,8 @@ Reviewers can still report requested changes or a required human decision when r
 
 Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
 
+Reviewer and branch-update attempts are monitored deterministically without using the Automation host's model. Runtime-reported working status wins over quiet output, the configured 24-hour limit applies to active work, and a terminal attempt without a valid completion report is never prompted or nudged through conversation.
+
 ## Merge-conflict recovery
 
 Automatic branch updates are currently unavailable. deadloop detects merge conflicts but does not update the branch until #241 connects the `agent:update-branch` request to its worker. The existing exact-head, required-verification, and normal-merge safety contracts remain required, and the finalizer push stays bound to the verified head by an expected-object-ID lease.

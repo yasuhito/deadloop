@@ -52,7 +52,7 @@ function parseAttemptRecord(value) {
   let authorityRelease;
   if (value.phase === "authority_released") {
     if (!value.authorityRelease || typeof value.authorityRelease !== "object" || Array.isArray(value.authorityRelease)) throw new Error("Invalid attempt record: authority_released requires authorityRelease evidence");
-    if (!["owner_absent", "terminal_missing_report", "never_launched", "superseded_by_request"].includes(value.authorityRelease.reason)) throw new Error("Invalid attempt record: authorityRelease.reason is invalid");
+    if (!["owner_absent", "terminal_missing_report", "runtime_timeout", "never_launched", "superseded_by_request"].includes(value.authorityRelease.reason)) throw new Error("Invalid attempt record: authorityRelease.reason is invalid");
     const releasedAt = nonEmpty(value.authorityRelease.releasedAt, "authorityRelease.releasedAt");
     if (!Number.isFinite(Date.parse(releasedAt))) throw new Error("Invalid attempt record: authorityRelease.releasedAt must be an ISO timestamp");
     const cutoffEventId = value.authorityRelease.cutoffEventId === undefined ? undefined : nonEmpty(value.authorityRelease.cutoffEventId, "authorityRelease.cutoffEventId");

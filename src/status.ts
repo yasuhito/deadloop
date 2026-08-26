@@ -371,6 +371,7 @@ export function formatStatusReport(snapshot: StatusSnapshot): string {
     formatRequiredVerification(project.requiredVerification),
     `autoMerge: ${project.autoMerge ? "on" : "off"}`,
     `externalReview: ${project.externalReview.enabled ? "on" : "off"}`,
+    "attemptMonitoring: deterministic for reviewer and branch-update (no Automation-host model)",
     "",
     "Automations:",
   ];

@@ -43,7 +43,7 @@ function branchUpdateMonitorHandoff() {
   };
 }
 
-function monitorDeliveryFixture(kind = "branch-update") {
+function monitorDeliveryFixture(kind = "repair") {
   const handoff = branchUpdateMonitorHandoff();
   handoff.kind = kind;
   const entry: Record<string, unknown> = {
@@ -249,13 +249,41 @@ describe("deterministic automation driver runner", () => {
     expect({ sent, pending: entry.pendingDriverHandoff }).toEqual({ sent: ["driver prompt"], pending: undefined });
   });
 
+  it("observes reviewer attempts without sending an Automation-host model message", () => {
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "monitor",
+        monitorHandoff: { kind: "reviewer", input: { enabledAt: 1 } },
+        monitorAccounting: { activeMilliseconds: 0, observedAt: "1970-01-01T00:00:00.000Z", runtimeWasWorking: false },
+      },
+    };
+    const state = { automations: { auto: entry } };
+    const sent: string[] = [];
+    let observed = 0;
+
+    deliverPendingDriverHandoff(entry, state, "auto", {
+      enabledAt: () => 1,
+      isEnabled: () => true,
+      now: () => 60_000,
+      observeAttemptMonitoring: (_handoff, accounting) => {
+        observed += 1;
+        return { action: "working", accounting: { ...accounting, observedAt: "1970-01-01T00:01:00.000Z", runtimeWasWorking: true } };
+      },
+      applyAttemptMonitoring: () => ({ applied: false }),
+      saveState: () => undefined,
+      sendUserMessage: (prompt) => sent.push(prompt),
+    });
+
+    expect({ observed, sent }).toEqual({ observed: 1, sent: [] });
+  });
+
   it("retains a queued monitor handoff until the attempt settles", () => {
     const fixture = monitorDeliveryFixture();
 
     deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
 
     expect(fixture.entry.pendingDriverHandoff).toMatchObject({
-      monitorHandoff: { kind: "branch-update" },
+      monitorHandoff: { kind: "repair" },
     });
   });
 
@@ -300,7 +328,7 @@ describe("deterministic automation driver runner", () => {
       deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
     }
 
-    expect(fixture.sent).toHaveLength(1);
+    expect(fixture.sent).toHaveLength(["reviewer", "branch-update"].includes(kind) ? 0 : 1);
   });
 
   it("applies a terminal stop once", () => {
