@@ -646,6 +646,7 @@ describe("model availability waiting in deterministic attempt monitoring", () =>
     const sent: string[] = [];
     const applied: Array<Record<string, any>> = [];
     const retries: Array<Record<string, unknown>> = [];
+    const hostLogEvents: Array<Record<string, unknown>> = [];
     let enabled = true;
     let reusable = true;
     let directive: AttemptMonitoringDirective | undefined;
@@ -667,10 +668,11 @@ describe("model availability waiting in deterministic attempt monitoring", () =>
       },
       saveState: () => undefined,
       sendUserMessage: (prompt: string) => sent.push(prompt),
+      emitHostLog: (event) => hostLogEvents.push(event as Record<string, unknown>),
     };
-    const tick = () => deliverPendingDriverHandoff(entry, state, "auto", deps);
+    const tick = (logContext?: Record<string, string>) => deliverPendingDriverHandoff(entry, state, "auto", deps, logContext as never);
     return {
-      applied, deps, entry, retries, sent, tick,
+      applied, deps, entry, retries, sent, hostLogEvents, tick,
       payload: () => entry.pendingDriverHandoff as Record<string, any>,
       setApplication: (value: typeof application) => { application = value; },
       setDirective: (value: AttemptMonitoringDirective) => { directive = value; },
@@ -706,6 +708,51 @@ describe("model availability waiting in deterministic attempt monitoring", () =>
       wait: { startedAt: "2026-08-21T00:00:00.000Z", nextRetryAt: null },
       retained: true,
     });
+  });
+
+  it("logs each model-wait transition observationally with its automation identity", () => {
+    const fixture = modelWaitFixture();
+    fixture.setDirective(rejectionDirective(null));
+
+    fixture.tick({ projectId: "demo", automationId: "demo:ticker" });
+    const established = fixture.hostLogEvents[0];
+    expect(established).toMatchObject({
+      kind: "model_wait_transitioned",
+      projectId: "demo",
+      automationId: "demo:ticker",
+      result: "driver_monitor_waiting_for_model",
+      reason: "waiting for model availability",
+    });
+
+    fixture.setNow(Date.parse("2026-08-21T00:10:00.000Z"));
+    fixture.tick({ projectId: "demo", automationId: "demo:ticker" });
+    expect(fixture.hostLogEvents[1]).toMatchObject({
+      kind: "model_wait_transitioned",
+      result: "driver_monitor_model_retry",
+      reason: "model availability retry sent",
+    });
+  });
+
+  it("keeps the tick outcome intact when the host log sink throws during a model-wait transition", () => {
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "monitor",
+        monitorHandoff: { kind: "reviewer", input: { enabledAt: 1 } },
+        monitorAccounting: accounting,
+      },
+    };
+    const state = { automations: { auto: entry } };
+    deliverPendingDriverHandoff(entry, state, "auto", {
+      enabledAt: () => 1,
+      isEnabled: () => true,
+      notify: () => undefined,
+      now: () => Date.parse("2026-08-21T00:00:00.000Z"),
+      observeAttemptMonitoring: () => rejectionDirective(null),
+      applyAttemptMonitoring: () => ({ applied: true, retain: true }),
+      saveState: () => undefined,
+      emitHostLog: () => { throw new Error("log write exploded"); },
+    });
+    expect(entry.lastResult).toBe("driver_monitor_waiting_for_model");
   });
 
   it("posts the model availability explanation once while waiting holds", () => {

@@ -132,6 +132,53 @@ describe("shared scheduler tick", () => {
     const outcome = await executeSchedulerTick(dueProject(), tickDeps(freshHarness(), { guard: () => false }));
     expect(outcome.status).toBe("blocked");
   });
+
+  it("records one tick_started line per tick in the host activity log", async () => {
+    const events: unknown[] = [];
+    await executeSchedulerTick(dueProject(), tickDeps(freshHarness(), { emitHostLog: (event) => events.push(event) }));
+    expect(events[0]).toEqual({ kind: "tick_started", projectId: "demo" });
+  });
+
+  it("closes a selected tick with one automation_result judgment naming id, result, and driver action", async () => {
+    const events: unknown[] = [];
+    await executeSchedulerTick(dueProject(), tickDeps(freshHarness(), { emitHostLog: (event) => events.push(event) }));
+    expect(events[1]).toEqual({
+      kind: "automation_result",
+      projectId: "demo",
+      automationId: "demo:ticker",
+      result: "driver_done",
+      reason: "driver ran",
+      driverAction: "done",
+    });
+  });
+
+  it("answers an idle tick with its own judgment line instead of an automation result", async () => {
+    const events: unknown[] = [];
+    const quiet = normalizeProject({
+      id: "demo",
+      workerModel: "test-model",
+      reviewerModel: "test-review-model",
+      automations: [{ id: "demo:ticker", name: "demo ticker", schedule: "*/10 * * * *", initialLastScheduledAt: NOW }],
+    });
+    await executeSchedulerTick(quiet, tickDeps(freshHarness(), { emitHostLog: (event) => events.push(event) }));
+    expect(events.at(-1)).toEqual({ kind: "tick_idle", projectId: "demo" });
+  });
+
+  it("answers a blocked tick with the blocking reason", async () => {
+    const events: unknown[] = [];
+    await executeSchedulerTick(dueProject(), tickDeps(freshHarness(), {
+      reconcileWorkAuthority: async () => "work authority is unreconciled",
+      emitHostLog: (event) => events.push(event),
+    }));
+    expect(events.at(-1)).toEqual({ kind: "tick_blocked", reason: "work authority is unreconciled", projectId: "demo" });
+  });
+
+  it("keeps the whole tick observable even when the log sink throws on every event", async () => {
+    const outcome = await executeSchedulerTick(dueProject(), tickDeps(freshHarness(), {
+      emitHostLog: () => { throw new Error("log write exploded"); },
+    }));
+    expect(outcome).toEqual({ status: "selected", automationName: "demo ticker", result: "driver_done", summary: "driver ran" });
+  });
 });
 
 describe("one-shot start gate", () => {

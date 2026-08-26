@@ -11,6 +11,7 @@ const {
 const { alignOpenedCheckout } = require("./checkout-alignment.cts");
 const { deriveHerdrAgentName } = require("./herdr-agent-name.cjs");
 const { createHerdrRunner } = require("./herdr-runner.cts");
+const { appendHostLogEvent } = require("./host-log.cts");
 const { writeWorkerContractSnapshot } = require("./worker-required-verification-runtime.cjs");
 
 import type { AttemptRecord, AttemptRole, AttemptTarget, InputRevision, PreparedAttemptInput } from "./attempt-lifecycle";
@@ -468,6 +469,16 @@ function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): 
       throw new Error("Herdr did not confirm the launched agent in the recorded root pane");
     }
     transitionPersistedAttempt(prepared.runDir, "agent_started");
+    // Observational telemetry (#370): one line per launched attempt, every role. A failed log
+    // write never affects the launch that was just proven; appendHostLogEvent swallows failures.
+    appendHostLogEvent(input.stateDir, {
+      kind: "attempt_launched",
+      projectId: input.project,
+      role: input.role,
+      attemptId: record.attemptId,
+      result: "agent_started",
+      reason: `${input.role} attempt launched for ${record.target.kind} #${record.target.number} as ${prepared.agentName}`,
+    });
     return {
       ...launch,
       promptFile: prepared.promptFile,

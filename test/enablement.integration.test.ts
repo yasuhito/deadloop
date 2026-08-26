@@ -741,6 +741,24 @@ describe("enablement command integration", () => {
     expect(state.projects[0].enabled).toBe(true);
   });
 
+  it("appends an enablement_written line to the host activity log on each persisted enablement change", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+
+    const hostLogLines = readFileSync(path.join(root, ".pi", "agent", "deadloop", "host-log.jsonl"), "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(hostLogLines.filter((event) => event.kind === "enablement_written").at(-1)).toMatchObject({
+      schemaVersion: 1,
+      result: "enablement_state_saved",
+      reason: "enabled projects now: owner/demo",
+    });
+  });
+
   it("does not execute the repository verification command during enablement", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);

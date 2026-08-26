@@ -9,6 +9,7 @@ import type {
   AttemptMonitoringApplication,
   AttemptMonitoringDirective,
 } from "./monitor-handoff-types";
+import type { HostLogEventContext, HostLogEventInput } from "./host-log-types";
 const { passesIssueLabelGate } = require("./issue-eligibility.cjs");
 
 export type AutomationExecResult = {
@@ -76,7 +77,26 @@ export type AutomationRunnerDeps = {
   sendUserMessage: (prompt: string) => void;
   sendUserMessageIfEnabled?: (prompt: string) => boolean;
   setStatus?: (text: string) => void;
+  /**
+   * Observational host activity-log sink (#370), wired by the host to STATE_DIR. Model-wait
+   * transitions use it; failures (including a throwing sink) never change the runner's outcome.
+   */
+  emitHostLog?: (event: HostLogEventInput) => void;
 };
+
+function observeHostLog(deps: { emitHostLog?: (event: HostLogEventInput) => void }, event: HostLogEventInput): void {
+  try {
+    deps.emitHostLog?.(event);
+  } catch {}
+}
+
+function logIdentity(entry: Record<string, unknown>, logContext?: HostLogEventContext): HostLogEventContext {
+  const projectId = logContext?.projectId ?? entry.projectId;
+  return {
+    ...(typeof projectId === "string" && projectId.trim() ? { projectId: projectId.trim() } : {}),
+    ...(logContext?.automationId ? { automationId: logContext.automationId } : {}),
+  };
+}
 
 export function isPendingIssueHandoffEligible(
   handoff: Record<string, unknown>,
@@ -136,8 +156,9 @@ function handleModelAvailabilityWait(
   state: AutomationState,
   deps: Pick<
     AutomationRunnerDeps,
-    "applyAttemptMonitoring" | "isEnabled" | "notify" | "now" | "retryModelWait" | "saveState"
+    "applyAttemptMonitoring" | "isEnabled" | "notify" | "now" | "retryModelWait" | "saveState" | "emitHostLog"
   >,
+  logContext?: HostLogEventContext,
 ): boolean {
   const now = deps.now();
   const wait = payload.modelWait;
@@ -152,6 +173,12 @@ function handleModelAvailabilityWait(
     entry.lastSummary = "waiting for model availability";
     entry.updatedAt = now;
     deps.saveState(state);
+    observeHostLog(deps, {
+      kind: "model_wait_transitioned",
+      ...logIdentity(entry, logContext),
+      result: application.applied ? "driver_monitor_waiting_for_model" : "driver_attempt_completion_pending",
+      reason: "waiting for model availability",
+    });
     deps.notify?.(`deadloop waits for model availability: ${automationName}`, "warning");
     return true;
   }
@@ -173,6 +200,12 @@ function handleModelAvailabilityWait(
     recordAutomationResult(entry, "disabled_before_model_retry");
     entry.updatedAt = now;
     deps.saveState(state);
+    observeHostLog(deps, {
+      kind: "model_wait_transitioned",
+      ...logIdentity(entry, logContext),
+      result: "disabled_before_model_retry",
+      reason: "repository became disabled before the model wait retry",
+    });
     return true;
   }
   if (deps.retryModelWait?.(monitorHandoff) === true) {
@@ -183,6 +216,12 @@ function handleModelAvailabilityWait(
     entry.lastSummary = "model availability retry sent";
     entry.updatedAt = now;
     deps.saveState(state);
+    observeHostLog(deps, {
+      kind: "model_wait_transitioned",
+      ...logIdentity(entry, logContext),
+      result: "driver_monitor_model_retry",
+      reason: "model availability retry sent",
+    });
     return true;
   }
   const stopped = deps.applyAttemptMonitoring?.(
@@ -198,9 +237,20 @@ function handleModelAvailabilityWait(
   entry.lastSummary = "agent session cannot be reused";
   entry.updatedAt = now;
   deps.saveState(state);
+  observeHostLog(deps, {
+    kind: "model_wait_transitioned",
+    ...logIdentity(entry, logContext),
+    result: stopped.applied ? "driver_attempt_missing_report" : "driver_attempt_completion_pending",
+    reason: "agent session cannot be reused; the model wait ended",
+  });
   return true;
 }
 
+/**
+ * Delivers one pending deterministic monitor handoff against its automation entry. The optional
+ * `logContext` only feeds the observational host activity log (`model_wait_transitioned` lines);
+ * both call sites already know their project and automation ids.
+ */
 export function deliverPendingDriverHandoff(
   entry: Record<string, unknown>,
   state: AutomationState,
@@ -216,7 +266,9 @@ export function deliverPendingDriverHandoff(
     | "retryModelWait"
     | "revalidatePendingDriverHandoff"
     | "saveState"
+    | "emitHostLog"
   >,
+  logContext?: HostLogEventContext,
 ): boolean {
   const handoff = entry.pendingDriverHandoff;
   if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) return false;
@@ -289,6 +341,7 @@ export function deliverPendingDriverHandoff(
           automationName,
           state,
           deps,
+          logContext,
         );
       } else {
         const application = deps.applyAttemptMonitoring?.(monitorHandoff, directive) ?? { applied: false };
@@ -462,7 +515,7 @@ async function runConfiguredDriver(
     recordAutomationResult(entry, "driver_attempt_monitoring");
     entry.updatedAt = deps.now();
     deps.saveState(state);
-    deliverPendingDriverHandoff(entry, state, automation.name, deps);
+    deliverPendingDriverHandoff(entry, state, automation.name, deps, { projectId: project.id, automationId: automation.id });
     return true;
   }
 

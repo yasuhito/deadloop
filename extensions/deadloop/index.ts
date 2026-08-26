@@ -34,6 +34,12 @@ const { formatAttemptUsageDetail, formatUsageWindowReport } = require("../../src
 const { summarizeAttemptUsage } = require("../../src/model-usage-report.cts") as {
   summarizeAttemptUsage: (stateDir: string) => import("../../src/model-usage-types").AttemptUsageSummary[];
 };
+const { appendHostLogEvent } = require("../../src/host-log.cts") as {
+  appendHostLogEvent: (stateDir: string, event: Record<string, unknown>, now?: Date) => boolean;
+};
+const { formatHostLogTail } = require("../../src/host-log-report.cts") as {
+  formatHostLogTail: (stateDir: string, count?: number) => string;
+};
 import { readClaudeConfig } from "../../src/agent-trust.cjs";
 import { isPendingIssueHandoffEligible } from "../../src/automation-runner";
 import {
@@ -116,6 +122,18 @@ const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".
 const STATE_DIR = path.join(CONFIG_DIR, EXTENSION_NAME);
 const STATE_PATH = path.join(STATE_DIR, "state.json");
 const ENABLEMENT_PATH = path.join(STATE_DIR, "enabled-projects.json");
+const HOST_LOG_TAIL_DEFAULT_COUNT = 20;
+const HOST_LOG_TAIL_MAX_COUNT = 500;
+
+/**
+ * Observational host activity-log sink (#370): every scheduler tick judgment, launched attempt,
+ * model-wait transition, and enablement write lands in `$STATE_DIR/host-log.jsonl`. Appending is
+ * best-effort by contract — appendHostLogEvent swallows its own failures, and neither the host
+ * loop nor any completion, push, or merge decision depends on this log.
+ */
+function emitHostLogEvent(event: Record<string, unknown>): void {
+  appendHostLogEvent(STATE_DIR, event);
+}
 
 function resolveExtensionDir() {
   const candidates = [
@@ -465,6 +483,13 @@ function saveEnablementState(state, writerCodeIdentity: string) {
     ...state,
     lastWriterCodeIdentity: writerCodeIdentity,
   }));
+  // Observational telemetry (#370): the persisted write is the event; a failed host-log append
+  // never undoes or delays this already-saved state change.
+  appendHostLogEvent(STATE_DIR, {
+    kind: "enablement_written",
+    result: "enablement_state_saved",
+    reason: `enabled projects now: ${(state.projects || []).map((project) => project.githubRepo).filter(Boolean).join(", ") || "none"}`,
+  });
 }
 
 
@@ -1461,6 +1486,7 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
       } catch {}
     },
     now: () => Date.now(),
+    emitHostLog: (event) => emitHostLogEvent(event),
     prepareExecutionSupply: () => {
       try {
         return ensureCodeSnapshot({ packageRoot: PACKAGE_ROOT, stateDir: STATE_DIR, codeIdentity: LOADED_CODE_IDENTITY });
@@ -1836,6 +1862,24 @@ export default function (pi) {
       displayCommandResult(pi, ctx, "deadloop-usage", report);
     },
   });
+  pi.registerCommand("deadloop-hostlog", {
+    description: "Tail the host activity log (tick judgments, launched attempts, model waits): last N entries, default 20",
+    handler: async (args, ctx) => {
+      const requested = String(args || "").trim();
+      let report: string;
+      try {
+        if (requested && !/^\d+$/.test(requested)) throw new Error("usage: /deadloop-hostlog [N]");
+        const count = Math.min(
+          Math.max(Number(requested) || HOST_LOG_TAIL_DEFAULT_COUNT, 1),
+          HOST_LOG_TAIL_MAX_COUNT,
+        );
+        report = formatHostLogTail(STATE_DIR, count);
+      } catch (error) {
+        report = `host log unavailable: ${error instanceof Error ? error.message : String(error)}`;
+      }
+      displayCommandResult(pi, ctx, "deadloop-hostlog", report);
+    },
+  });
   pi.registerCommand("deadloop-abandon-attempt", {
     description: "Safely abandon one proven launch-failed attempt and requeue its unchanged Issue or PR",
     handler: async (args, ctx) => {
@@ -1935,6 +1979,7 @@ export default function (pi) {
           loadState,
           updateStatus: (state) => updateStatus(ctx, oneShotProject, state),
           now: () => Date.now(),
+          emitHostLog: emitHostLogEvent,
           buildRunnerDeps: () => ({
             ...automationRunnerDeps(pi, ctx, oneShotProject, oneShotGuard),
             // Mutation gates follow the scoped authority instead of persisted enablement.
@@ -2032,6 +2077,7 @@ export default function (pi) {
         loadState,
         updateStatus: (state) => updateStatus(ctx, project, state),
         now: () => Date.now(),
+        emitHostLog: emitHostLogEvent,
         buildRunnerDeps: () => automationRunnerDeps(pi, ctx, project, guard),
       });
       completedSafely = outcome.status !== "stopped";

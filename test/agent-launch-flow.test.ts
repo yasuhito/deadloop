@@ -368,6 +368,24 @@ describe("0.8.0 エージェント起動フロー", () => {
       ]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+
+  it("起動が確認できた試行ごとに host-log.jsonl へ 1 行ずつ attempt_launched を追記する", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-hostlog-"));
+    try {
+      const launchInput = input(root, "reviewer");
+      const ops = operations(root, "reviewer", []);
+      prepareAgentLaunchFlow(launchInput, ops);
+      recordAgentLaunchGithubClaimed(launchInput);
+      launchAgentFlow(launchInput, ops);
+      const recorded = JSON.parse(readFileSync(path.join(root, "host-log.jsonl"), "utf8").trimEnd());
+      expect(recorded).toMatchObject({
+        kind: "attempt_launched",
+        projectId: "demo",
+        role: "reviewer",
+        result: "agent_started",
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 });
 
 describe("opened checkout alignment at launch", () => {

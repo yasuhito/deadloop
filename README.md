@@ -165,6 +165,15 @@ If an implementation Issue reaches a required-verification block, deadloop prese
 
 A review stopped by required verification records actionable findings without launching repair, never records a finding-free result as approved, keeps `agent:review`, removes `agent:in-progress`, and adds `agent:blocked` without adding `ready-for-human`. The same recovery fingerprint suppresses duplicate stop comments. Configuration changes alone do not requeue the PR; after required verification resolves, `/deadloop-doctor` shows the PR-specific command that creates a new review request event.
 
+### Host activity log
+
+Every scheduler tick appends what it judged to `~/.pi/agent/deadloop/host-log.jsonl`, one JSON object per line: tick starts, per-automation results (including the driver action), launched attempts with their role, model-wait transitions, and enablement writes. Each line carries an ISO timestamp, project id, automation id, result, and reason summary, so you can answer "why did nothing happen this tick?" or "when was what selected?" without reading live state.
+
+Logging is observational: a failed append is recorded beside the log in `host-log-errors.jsonl` and never affects completion, push, merge, or the tick itself.
+
+- Tail it from Pi: `/deadloop-hostlog [N]` shows the last N entries (default 20).
+- Read it directly: `tail -n 20 ~/.pi/agent/deadloop/host-log.jsonl | jq .` — one machine-readable object per line.
+
 ## Workflow state lives on GitHub
 
 The Issue / PR state, head revision, labels, comments, and checks are the only workflow state. Request labels (`agent:explore`, `agent:implement`, `agent:review`, `agent:update-branch`) are one-shot events: each labeled event asks for one attempt of that role, deadloop consumes it by removing exactly that label before starting work, and adding the same label again is the only way to retry or queue more work. `agent:in-progress` marks consumed work in motion, `agent:blocked` marks a stop, and neither is combined with a waiting request left behind by the stop.

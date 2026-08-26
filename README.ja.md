@@ -110,6 +110,7 @@ flowchart TD
 | `/deadloop-status` | deadloop が有効かどうかと、現在の状態の概要を表示します。 |
 | `/deadloop-doctor` | 設定や保持された試行を変更せずに診断します。 |
 | `/deadloop-usage [attempt-id]` | 直近7日間のトークン使用量を役割別・モデル別に表示します。試行IDを付けると、その試行の応答単位の詳細を表示します。 |
+| `/deadloop-hostlog [N]` | ホスト活動ログ（`host-log.jsonl`）の直近 N 行を表示します。既定値は 20 です。 |
 | `/deadloop-abandon-attempt <attempt-id>` | doctor に表示された場合だけ、保持された試行を安全に放棄します。 |
 
 ## 詳細設定
@@ -164,6 +165,15 @@ deadloop は追跡可能なすべてのモデル応答（親エージェント�
 実装 Issue が必須検証停止になった場合、deadloop は無関係なトリアージ用ラベルを残し、実装要求または進行中を示すラベルを外して、理由別の復旧案内とともに `agent:blocked` を付けます。同じ復旧内容の案内は重複させず、設定変更だけでは再投入しません。必須検証が解決した後に限り、`/deadloop-doctor` が対象 Issue の再投入コマンドを表示します。
 
 レビューが必須検証で停止した場合、修正が必要な指摘は記録しますが、修復担当は起動せず、指摘のない結果を承認として記録しません。`agent:review` を残し、`agent:in-progress` を外して `agent:blocked` を付けます。`ready-for-human` は付けません。同じ復旧内容の停止コメントは重複させず、設定変更だけでは再投入しません。必須検証が解決した後に限り、`/deadloop-doctor` が PR 固有の再投入コマンドを表示します。
+
+### ホスト活動ログ
+
+スケジューラーは各 tick の判定結果を、1 行に 1 個の JSON オブジェクトとして `~/.pi/agent/deadloop/host-log.jsonl` に追記します。記録対象は、tick の開始、自動化ごとの実行結果（driver action を含む）、役割付きの試行起動、モデル利用待機への遷移、有効化状態の書き込みです。各行には ISO タイムスタンプ、project id、automation id、result、理由の要約が入るため、「なぜこの tick では何も起きなかったのか」「いつ何が選ばれたのか」を実行中の状態を読まずに確認できます。
+
+ログの追記は観測的な処理です。書き込みに失敗した場合は、ログの横にある `host-log-errors.jsonl` に失敗理由が記録されるだけで、完了・push・マージや tick 本体には影響しません。
+
+- Pi から確認する: `/deadloop-hostlog [N]` で直近 N 行（既定値は 20）を表示します。
+- 直接読む: `tail -n 20 ~/.pi/agent/deadloop/host-log.jsonl | jq .` — 1 行 1 オブジェクトで機械可読です。
 
 ## ワークフロー状態は GitHub 上だけにあります
 

@@ -7,6 +7,7 @@ import {
   runScheduledAutomation,
 } from "./automation-runner";
 import { automationStateKey, type NormalizedProject } from "./core";
+import type { TickHostLogEvent } from "./host-log-types";
 
 /**
  * The one observable result of a scheduler tick. Both the continuous host and the one-shot command
@@ -38,6 +39,11 @@ export type SchedulerTickDeps = {
   buildRunnerDeps: () => SchedulerTickRunnerDeps;
   /** Current time semantics, identical between the continuous host and the one-shot command. */
   now: () => number;
+  /**
+   * Observational host activity-log sink (#370), wired by the host to STATE_DIR. The tick treats
+   * emitting as best-effort — including a throwing sink — because log writes never gate outcomes.
+   */
+  emitHostLog?: (event: TickHostLogEvent) => void;
 };
 
 type TickEntry = Record<string, unknown>;
@@ -49,6 +55,58 @@ function entrySummary(entry: TickEntry): { result: string; summary: string } {
   };
 }
 
+function entryText(entry: Record<string, unknown>, key: string): string {
+  return typeof entry[key] === "string" ? (entry[key] as string).trim() : "";
+}
+
+function observeTickEvent(deps: SchedulerTickDeps, event: TickHostLogEvent): void {
+  try {
+    deps.emitHostLog?.(event);
+  } catch {}
+}
+
+// 自動化に触れない観測でも、行形状の統一は writer 側が空文字で保つ。
+function contextFor(projectId: string, automationId?: string): { projectId: string; automationId?: string } {
+  return { projectId, ...(automationId === undefined ? {} : { automationId }) };
+}
+
+/** Emits the one judgment line a tick recorded for an automation it touched. */
+function observeAutomationResult(
+  deps: SchedulerTickDeps,
+  projectId: string,
+  automationId: string,
+  entry: Record<string, unknown>,
+): void {
+  const observed = entrySummary(entry);
+  const driverAction = entryText(entry, "lastDriverAction");
+  observeTickEvent(deps, {
+    kind: "automation_result",
+    projectId,
+    automationId,
+    result: observed.result,
+    reason: observed.summary,
+    ...(driverAction ? { driverAction } : {}),
+  });
+}
+
+/**
+ * Observes `executeSchedulerTick` for the host activity log: every tick starts with one
+ * `tick_started` line and closes with exactly one judgment line — either the automation-level
+ * result emitted inside `performSchedulerTick` when work was selected or retained, or a tick-level
+ * idle/blocked/stopped record that answers "why did nothing happen this tick".
+ */
+export async function executeSchedulerTick(
+  project: NormalizedProject,
+  deps: SchedulerTickDeps,
+): Promise<SchedulerTickOutcome> {
+  observeTickEvent(deps, { kind: "tick_started", ...contextFor(project.id) });
+  const outcome = await performSchedulerTick(project, deps);
+  if (outcome.status === "blocked") observeTickEvent(deps, { kind: "tick_blocked", reason: outcome.reason, ...contextFor(project.id) });
+  else if (outcome.status === "stopped") observeTickEvent(deps, { kind: "tick_stopped", reason: outcome.reason, ...contextFor(project.id) });
+  else if (outcome.status === "idle") observeTickEvent(deps, { kind: "tick_idle", ...contextFor(project.id) });
+  return outcome;
+}
+
 /**
  * One scheduler tick against a resolved project: work-authority reconciliation, retained-attempt
  * reconciliation, pending deterministic handoff delivery, due-automation selection, driver or
@@ -58,7 +116,7 @@ function entrySummary(entry: TickEntry): { result: string; summary: string } {
  * Every mutation stage rechecks `guard` (the caller's execution authority) and the deployed code
  * identity first, so an authority change during the tick blocks the next mutation.
  */
-export async function executeSchedulerTick(
+async function performSchedulerTick(
   project: NormalizedProject,
   deps: SchedulerTickDeps,
 ): Promise<SchedulerTickOutcome> {
@@ -80,7 +138,8 @@ export async function executeSchedulerTick(
     const entry = state.automations[key] || {};
     state.automations[key] = entry;
     if (!deps.codeIdentityAllowsTick()) return { status: "stopped", reason: "deployed deadloop code changed" };
-    if (deliverPendingDriverHandoff(entry, state, automation.name, runnerDeps)) {
+    if (deliverPendingDriverHandoff(entry, state, automation.name, runnerDeps, contextFor(project.id, automation.id))) {
+      observeAutomationResult(deps, project.id, automation.id, entry);
       if (deps.guard()) runnerDeps.saveState(state);
       return { status: "retained", ...entrySummary(entry) };
     }
@@ -98,6 +157,7 @@ export async function executeSchedulerTick(
       automationName: selected.automation.name,
       ...entrySummary(state.automations[key] || {}),
     };
+    observeAutomationResult(deps, project.id, selected.automation.id, state.automations[key] || {});
     if (deps.guard()) deps.updateStatus(state);
   }
 
