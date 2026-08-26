@@ -204,7 +204,7 @@ Handle review findings and conflicts safely without arbitrary repair-count or ch
 
 * Given A verified repair necessarily changes twenty-one files
 * When deadloop completes the repair
-* Then deadloop pushes non-forcibly to the verified branch
+* Then deadloop pushes to the verified branch under a lease on the verified head
 
 ## Scenario: Do not push a repair whose required verification fails
 

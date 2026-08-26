@@ -331,7 +331,11 @@ function finalizerOps(
   changedFiles: string[] = [],
 ) {
   return {
-    ensureVerification: (_args: unknown, _candidate: string, _repositoryId: string, run: (args: string[]) => unknown) => run(["node", "/automation/run-project-check.ts"]),
+    ensureVerification: async (_args: unknown, _candidate: string, _repositoryId: string, run: (args: string[]) => unknown) => {
+      const result = run(["node", "/automation/run-project-check.ts"]) as { status?: number };
+      if (checkFails && result.status !== 0) throw new Error("required verification failed");
+      return result;
+    },
     loadAttemptRecord: () => ({
       role: "review-repair", repository: "owner/repo", target: { kind: "pull-request", number: 31 },
       inputRevision: { head },

@@ -182,7 +182,7 @@ A stale head stops the repair without pushing or changing labels.
 
 If an earlier required finding persists, a resolved finding regresses, or earlier and new required findings are mixed, deadloop starts no repair and hands the completed review to a person. Technical or safety retries that are exhausted still add `agent:blocked` with recovery guidance and clear every request label. A human-required result is recorded, the draft becomes ready, and every agent workflow label is removed, so the PR waits on a person and on no agent request.
 
-Required-verification failure still blocks a repair push. A stale head stops without push or label mutation, and the finalizer updates only the exact verified branch with a normal non-force fast-forward push.
+Required-verification failure still blocks a repair push. A stale head stops without push or label mutation, and the finalizer updates only the exact verified branch through a push bound to the verified head by an expected-object-ID lease; because the repair commit must contain that head, the lease can only fast-forward.
 
 See [ADR 0031](docs/adr/0031-review-history-based-repair-progress.md) for the current decision and superseded [ADR 0012](docs/adr/0012-automatic-pr-review-repair.md) for the historical quantitative policy.
 
