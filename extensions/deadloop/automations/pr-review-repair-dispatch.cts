@@ -859,7 +859,23 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
     if (String(pr.headRefOid || "").toLowerCase() !== expectedHead) {
       return driverResult("done", `PR #${prNumber} head changed; left labels untouched for re-evaluation`, { driverAction: "review_stale_head" });
     }
-    const technicalDecision = decideTechnicalReviewFailure(pr.comments || [], expectedHead);
+    const technicalDecision = decideTechnicalReviewFailure(pr.comments || [], expectedHead, promise);
+    if (technicalDecision.action === "storage_exhaustion") {
+      const block = applyHumanBlock(
+        prNumber,
+        env,
+        pr,
+        "the host ran out of storage during the review; free up storage on the automation host, then add a new Agent request",
+        promise.summary,
+        "",
+        historyFile,
+      );
+      if (block.staleComparison) return staleHistoryResult(prNumber, block.staleComparison, "before storage-exhaustion stop");
+      return driverResult("done", `PR #${prNumber} review stopped because the host ran out of storage`, {
+        driverAction: "review_storage_exhaustion_blocked",
+        comment: block.comment,
+      });
+    }
     if (technicalDecision.action === "retry") {
       const staleComparison = withRevalidatedPrMutation(prNumber, env, pr, (guardedGithub) => {
         guardedGithub.commentPr(

@@ -13,15 +13,26 @@ describe("monitor prompts for roles not yet migrated", () => {
     expect(prompt).toContain("If the promise status is `complete` or `blocked`, break polling immediately");
   });
 
-  it("passes configured Worker labels to the completion proof", () => {
+  it("passes the configured Worker review label to attempt persistence", () => {
     const prompt = renderIssueMonitorPrompt({
-      issueNumber: 12, automationDir: "/automation", promiseFile: "/state/promise.json", actorName: "Worker",
-      worktreePath: "/wt", branch: "agent/issue-12", checkCommand: "npm test", readyLabel: "custom:ready",
+      issueNumber: 12, automationDir: "/automation", promiseFile: "/state/runs/one/promise.json", actorName: "Worker",
+      worktreePath: "/wt", branch: "agent/issue-12", checkCommand: "npm test",
       implementLabel: "custom:implement", reviewLabel: "custom:review", inProgressLabel: "custom:claimed",
       blockedLabel: "custom:blocked",
     });
 
-    expect(prompt).toContain("--worker-ready-label custom:ready --worker-implement-label custom:implement --worker-review-label custom:review");
+    expect(prompt).toMatch(/persist-attempt-result\.cts[^`]+--review-label custom:review/);
+  });
+
+  it("passes configured Worker labels to the completion proof", () => {
+    const prompt = renderIssueMonitorPrompt({
+      issueNumber: 12, automationDir: "/automation", promiseFile: "/state/runs/one/promise.json", actorName: "Worker",
+      worktreePath: "/wt", branch: "agent/issue-12", checkCommand: "npm test",
+      implementLabel: "custom:implement", reviewLabel: "custom:review", inProgressLabel: "custom:claimed",
+      blockedLabel: "custom:blocked",
+    });
+
+    expect(prompt).toContain("--worker-review-label custom:review");
   });
 
   it("keeps manual Issue close forbidden", () => {
