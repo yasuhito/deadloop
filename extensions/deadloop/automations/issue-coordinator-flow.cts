@@ -56,13 +56,14 @@ function decisionForIssues(
   timelineEvents?: (issue: JsonObject) => JsonObject[],
 ): JsonObject {
   const config = issueDecisionConfig(env);
-  if (fixturePath) return fixtureDecision(fixturePath, config);
+  if (fixturePath) return fixtureDecision(fixturePath, config, repo || undefined);
   return selectIssueForImplementation(
     issues,
     config,
     (issue: JsonObject) => issueBlockedByNumbers(repo, issueNumberForDecision(issue), deadline),
     (number: number) => liveDependencyState(repo, number, deadline),
     timelineEvents,
+    repo,
   );
 }
 
