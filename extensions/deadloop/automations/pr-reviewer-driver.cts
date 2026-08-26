@@ -268,7 +268,7 @@ type DriverLaunchInput = {
   promptFilePrefix: string;
   project: string;
   repository: string;
-  role: "reviewer" | "branch-update";
+  role: "reviewer" | "branch-update" | "review-repair";
   target: { kind: "pull-request"; number: number };
   inputRevision: { head: string; base?: string };
   preservedCheckoutHead?: string;
