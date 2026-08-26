@@ -97,6 +97,30 @@ function processBranchUpdate(input: JsonObject, report: JsonObject, ops: Complet
   return { applied: closed.driverAction === "workspace_closed", result: completed.driverAction };
 }
 
+// Repair results whose public evidence is confirmed (posted, already posted, or stale) close the
+// workspace exactly like the migrated prompt contract; every other result keeps its workspace for
+// inspection and leaves recovery to the existing surfaces.
+const REPAIR_CLOSING_RESULTS = new Set(["repair_result_posted", "repair_result_duplicate", "repair_stale_head"]);
+
+function processRepair(input: JsonObject, ops: CompletionOps): JsonObject {
+  const runDir = path.dirname(String(input.promiseFile));
+  const completed = ops.run("pr-review-repair-complete.cts", [
+    ...flag("promise", input.promiseFile), ...common(input),
+    ...flag("result", path.join(runDir, "finalizer-result.json")),
+    ...flag("contract", path.join(runDir, "review-contract.json")),
+    ...flag("pr", input.prNumber), ...flag("branch", input.branch),
+    ...flag("expected-head", input.expectedHeadOid), ...flag("attempt-key", input.attemptKey),
+    ...flag("review-label", input.reviewLabel), ...flag("implement-label", input.implementLabel),
+    ...flag("update-branch-label", input.updateBranchLabel), ...flag("in-progress-label", input.inProgressLabel),
+    ...flag("blocked-label", input.blockedLabel),
+  ]);
+  if (!REPAIR_CLOSING_RESULTS.has(String(completed.driverAction))) {
+    return { applied: true, result: completed };
+  }
+  const closed = completeWorkspace(input, ops);
+  return { applied: closed.driverAction === "workspace_closed", result: completed.driverAction };
+}
+
 function processReviewer(input: JsonObject, record: JsonObject, report: JsonObject, ops: CompletionOps): JsonObject {
   if (report.status === "complete" && report.result?.outcome === "approved") {
     try {
@@ -111,7 +135,7 @@ function processReviewer(input: JsonObject, record: JsonObject, report: JsonObje
     }
   }
   const dispatched = ops.run("pr-review-repair-dispatch.cts", dispatcherArgs(input, record));
-  if (dispatched.action === "needs_llm" && dispatched.monitorHandoff?.kind === "repair") {
+  if (dispatched.action === "monitor" && dispatched.monitorHandoff?.kind === "repair") {
     return { applied: true, nextHandoff: dispatched, result: dispatched.driverAction };
   }
   if (dispatched.driverAction === "review_approved") {
@@ -156,8 +180,8 @@ function processReviewer(input: JsonObject, record: JsonObject, report: JsonObje
 }
 
 function processInput(handoff: JsonObject, ops?: CompletionOps): JsonObject {
-  if (!handoff?.input || !["reviewer", "branch-update"].includes(String(handoff.kind))) {
-    throw new Error("deterministic PR completion requires a reviewer or branch-update handoff");
+  if (!handoff?.input || !["reviewer", "branch-update", "repair"].includes(String(handoff.kind))) {
+    throw new Error("deterministic PR completion requires a reviewer, branch-update, or repair handoff");
   }
   const input = handoff.input;
   const record = readAttemptRecord(path.dirname(input.attemptRecordFile));
@@ -165,6 +189,7 @@ function processInput(handoff: JsonObject, ops?: CompletionOps): JsonObject {
   validateCompletionReportBinding(record, report);
   const commandRunner = createCommandRunner({ timeoutMs: 15 * 60_000 });
   const operations = ops || { run: (script: string, args: string[]) => commandRunner.runJson(["node", path.join(input.automationDir, script), ...args]) };
+  if (handoff.kind === "repair") return processRepair(input, operations);
   return handoff.kind === "branch-update"
     ? processBranchUpdate(input, report, operations)
     : processReviewer(input, record, report, operations);
@@ -180,4 +205,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { completeWorkspace, completeHumanHandoffWorkspace, dispatcherArgs, processBranchUpdate, processInput, processReviewer };
+module.exports = { completeWorkspace, completeHumanHandoffWorkspace, dispatcherArgs, processBranchUpdate, processInput, processRepair, processReviewer };
