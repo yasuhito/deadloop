@@ -22,7 +22,8 @@ Handle the JSON action exactly:
 - `skip`: no target, pending checks, or external review wait; report only `summary`.
 - `done`: a deterministic Agent-request transition is already complete; report only `summary`.
 - `error`: report `summary` and `driverAction`; do not improvise recovery.
-- `needs_llm`: treat the returned `prompt` as the whole task.
+- `monitor`: the scheduler handles reviewer and branch-update monitoring deterministically. Do not send this prompt to a model.
+- `needs_llm`: treat the returned `prompt` as the whole task. This remains only for roles not yet migrated.
 
 ## Bounded path
 

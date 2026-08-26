@@ -25,6 +25,7 @@ This installs the deadloop extension and its setup skill together.
 - Workers and reviewers run `pi`, `claude`, or `omp`, chosen with `workerAgent` and `reviewerAgent` independently of which host runs the automations.
 - The default runner is [Herdr](https://herdr.dev/).
 - The supported host platform currently requires a Unix-like system with a compatible `flock` executable (normally provided by util-linux) and nonblocking file-descriptor locks. `/deadloop-enable` verifies this capability before enabling automation.
+- Each Automation host fixes the deadloop checkout commit as its code identity when the extension loads. If the checkout advances, shared enablement writes and scheduler ticks stop until the operator runs `/reload`; status and doctor remain available and show both identities and the recovery step.
 
 ## Configure
 
@@ -131,6 +132,8 @@ With `true`, deadloop squash-merges PRs that pass its safety checks and deletes 
 Reviewers can still report requested changes or a required human decision when required verification is missing or failing. Approval, successful human handoff, and merge consideration require a host-recorded successful required-verification result for the current PR head; agent-reported validations remain additional evidence only.
 
 Start with `false`. Enable `true` only after verifying branch protection, CI, permissions, and stop conditions.
+
+Reviewer and branch-update attempts are monitored deterministically without using the Automation host's model. Runtime-reported working status wins over quiet output, the configured 24-hour limit applies to active work, and a terminal attempt without a valid completion report is never prompted or nudged through conversation.
 
 ## Merge-conflict recovery
 
