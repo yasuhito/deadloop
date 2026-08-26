@@ -2,28 +2,41 @@
 
 When the reviewer agent stops without a completion report, deadloop publishes the stop on the pull request bound to its selection-time head, and restarts only through a new `agent:review` Agent request.
 
-## Scenario: Publish the stopped review as a generic technical failure on its exact head
+## Scenario: Replace a stopped review's active claim with agent:blocked
 
 * Given A pull request under review whose reviewer stopped without writing a completion report
 * When deadloop applies deterministic attempt monitoring
 * Then deadloop replaces the active review claim with agent:blocked
-* And deadloop posts one stop explanation on the pull request
-* And The stop explanation is bound to the attempt and the exact pull request head
-* And The stopped attempt releases its ownership as a terminal missing-report failure
 
-## Scenario: Name only formally observed storage exhaustion as a capacity stop
+## Scenario: Post one stop explanation for the stopped review
+
+* Given A pull request under review whose reviewer stopped without writing a completion report
+* When deadloop applies deterministic attempt monitoring
+* Then deadloop posts one stop explanation on the pull request
+
+## Scenario: Bind the stop explanation to the review attempt and its selection-time head
+
+* Given A pull request under review whose reviewer stopped without writing a completion report
+* When deadloop applies deterministic attempt monitoring
+* Then The stop explanation is bound to the attempt and the exact pull request head
+
+## Scenario: Release the stopped reviewer attempt's ownership as a terminal missing-report failure
+
+* Given A pull request under review whose reviewer stopped without writing a completion report
+* When deadloop applies deterministic attempt monitoring
+* Then The stopped attempt releases its ownership as a terminal missing-report failure
+
+## Scenario: Name formally observed storage exhaustion as a capacity stop
 
 * Given A pull request under review whose reviewer stopped while deadloop could not read the completion report because the host ran out of storage
 * When deadloop applies deterministic attempt monitoring
-* Then deadloop replaces the active review claim with agent:blocked
-* And The capacity stop names the observed storage exhaustion with recovery steps and no local paths
+* Then The capacity stop names the observed storage exhaustion with recovery steps and no local paths
 
 ## Scenario: Keep pane output alone from naming a capacity stop
 
 * Given A pull request under review whose reviewer stopped with pane output naming ENOSPC but no formal storage failure
 * When deadloop applies deterministic attempt monitoring
-* Then deadloop replaces the active review claim with agent:blocked
-* And The published stop stays a generic technical failure
+* Then The published stop stays a generic technical failure
 
 ## Scenario: Requeue a blocked review through a new agent:review Agent request
 
