@@ -1,0 +1,8 @@
+{
+  "defaultProvider": "openrouter",
+  "defaultModel": "stealth/ox-alpha",
+  "defaultThinkingLevel": "high",
+  "enabledModels": [
+    "openrouter/stealth/ox-alpha"
+  ]
+}
