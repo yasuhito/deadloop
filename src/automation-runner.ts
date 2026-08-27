@@ -30,6 +30,8 @@ export type AutomationExecutionSupply = {
   dependencyRoot: string;
 };
 
+type RetainedHandoffSettlement = { settled: true; reason: string } | { settled: false };
+
 export type AutomationRunnerDeps = {
   herdrPreflight?: () => void | Promise<void>;
   enabledAt?: () => number;
@@ -45,6 +47,13 @@ export type AutomationRunnerDeps = {
     directive: Exclude<AttemptMonitoringDirective, { action: "working" | "ambiguity" | "settled" }>,
   ) => AttemptMonitoringApplication;
   retryModelWait?: (handoff: Record<string, unknown>) => boolean;
+  /**
+   * Observes one settlement proof beyond the live monitoring vocabulary for a retained handoff,
+   * such as an attempt journal that already released its authority or a closed pull request. A
+   * truthy `settled` result clears the retention before any further delivery work happens; the
+   * observer itself must never throw, so a failed read keeps the retention for the next tick.
+   */
+  proveRetainedHandoffSettled?: (handoff: Record<string, unknown>) => RetainedHandoffSettlement;
   notify?: (message: string, level: "info" | "warning" | "error") => void;
   now: () => number;
   prepareExecutionSupply: () => AutomationExecutionSupply | Promise<AutomationExecutionSupply>;
@@ -263,6 +272,7 @@ export function deliverPendingDriverHandoff(
     | "now"
     | "observeAttemptMonitoring"
     | "applyAttemptMonitoring"
+    | "proveRetainedHandoffSettled"
     | "retryModelWait"
     | "revalidatePendingDriverHandoff"
     | "saveState"
@@ -310,6 +320,15 @@ export function deliverPendingDriverHandoff(
       return true;
     }
     {
+      const settlementProof = deps.proveRetainedHandoffSettled?.(monitorHandoff);
+      if (settlementProof?.settled === true) {
+        delete entry.pendingDriverHandoff;
+        recordAutomationResult(entry, "driver_monitor_settled");
+        entry.lastSummary = settlementProof.reason;
+        entry.updatedAt = deps.now();
+        deps.saveState(state);
+        return true;
+      }
       const storedAccounting = payload.monitorAccounting;
       const accounting: ActiveWorkAccounting = storedAccounting && typeof storedAccounting === "object" && !Array.isArray(storedAccounting)
         ? storedAccounting as unknown as ActiveWorkAccounting

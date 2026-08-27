@@ -64,6 +64,9 @@ const {
   retryWaitingAgentSession,
 } = require("../../src/deterministic-attempt-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("./automations/contain-terminal-monitor.cts");
+const { proveRetainedHandoffSettlement } = require("../../src/retained-handoff-settlement.cts");
+const { createGithubOperations } = require("../../src/github-operations.cts");
+const { createCommandRunner } = require("../../src/automation-driver-kit.cts");
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
 const {
   defaultIssueDecisionConfig,
@@ -1454,11 +1457,22 @@ function applyMonitorHandoffDisposition(handoff, disposition, project) {
 
 function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => true) {
   const ownedAutomationKeys = project.automations.map((automation) => automationStateKey(project, automation));
+  // Settlement proofs for retained handoffs read GitHub target state through one shared gh runner;
+  // a failed read proves nothing and simply keeps the retention for the next tick.
+  const settlementGithub = createGithubOperations(createCommandRunner());
   return {
     enabledAt: () => project.enabledAt,
     isEnabled: () => isCurrentSchedulerRun() && isProjectEnabled(project),
     isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
     observeAttemptMonitoring: observeDeterministicAttemptMonitoring,
+    proveRetainedHandoffSettled: (handoff) =>
+      proveRetainedHandoffSettlement(handoff, {
+        targetState: (repository, kind, number) => String(
+          kind === "issue"
+            ? settlementGithub.getIssue(repository, number).state
+            : settlementGithub.getPr(repository, number).state,
+        ),
+      }),
     applyAttemptMonitoring: (handoff, directive) => {
       if (!isCurrentSchedulerRun()) return { applied: false };
       return applyDeterministicAttemptMonitoring(
