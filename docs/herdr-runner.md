@@ -2,6 +2,21 @@
 
 deadloop v0 uses stable Herdr 0.8.0 or newer as its default runner.
 
+## Host state layout
+
+All persistent host state lives under `STATE_DIR` (default: `~/.pi/agent/deadloop/`):
+
+| Path | Purpose |
+|---|---|
+| `enabled-projects.json` | Enabled projects. Every write records a `lastWriterCodeIdentity` SHA; a schema-invalid file fails closed and stops the host until it is moved aside and `/deadloop-enable` runs again |
+| `projects.json` | Local project configuration including role models and automations. Local only, never committed |
+| `state.json` | Scheduler tick bookkeeping: per-automation `lastScheduledAt`, `lastResult`, `lastDriverAction`, etc. |
+| `runs/<attempt-id>/` | Per-attempt journal: `attempt.json`, prompt, promise file, review history, close receipts |
+| `code-snapshots/<sha>/` | Code snapshots bound to specific commits. Doctor reports generations tied to no active identity as manual cleanup candidates |
+| `disable-generation.json` | Generation counter incremented by every `/deadloop-disable` |
+
+Uncommitted edits inside the loaded deadloop checkout do not trip the code-identity gate (HEAD-based), but they are live for driver execution because drivers resolve from the same tree.
+
 ## Version gate
 
 The Automation host checks Herdr at startup and before every tick, before candidate selection or any side effect.
