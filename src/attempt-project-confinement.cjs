@@ -42,8 +42,13 @@ function assertWorktreeBelongsToProject(commandRunner, record, args) {
   if (projectCommon !== worktreeCommon) throw new Error("attempt worktree does not belong to the configured project checkout");
   const observedTop = canonicalExisting(gitText(commandRunner, worktreePath, ["rev-parse", "--show-toplevel"]), "attempt canonical worktree");
   if (observedTop !== worktreePath) throw new Error("attempt worktree path is not its canonical Git worktree root");
+  // A registered entry whose directory is gone (a prunable leftover from any other tool) cannot be
+  // the live attempt worktree proven above, so it is excluded from the proof instead of failing it.
   const registered = parseWorktreePaths(gitText(commandRunner, projectRepo, ["worktree", "list", "--porcelain"]))
-    .map((candidate) => canonicalExisting(candidate, "registered worktree"));
+    .flatMap((candidate) => {
+      try { return [canonicalExisting(candidate, "registered worktree")]; }
+      catch { return []; }
+    });
   if (!registered.includes(worktreePath)) throw new Error("attempt worktree is not registered by the configured project checkout");
   return { projectRepo, worktreePath, commonDir: projectCommon };
 }
