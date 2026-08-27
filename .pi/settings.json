@@ -1,8 +1,8 @@
 {
   "defaultProvider": "openrouter",
-  "defaultModel": "stealth/ox-alpha",
+  "defaultModel": "z-ai/glm-5.3-flash",
   "defaultThinkingLevel": "max",
   "enabledModels": [
-    "openrouter/stealth/ox-alpha"
+    "openrouter/z-ai/glm-5.3-flash"
   ]
 }
