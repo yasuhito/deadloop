@@ -1,7 +1,7 @@
 import {
   automationStateKey,
   cronSlotAt,
-  getDueSlot,
+  decideDueSlot,
   parseEveryMinutes,
   type AutomationStateEntry,
   type NormalizedAutomation,
@@ -18,9 +18,10 @@ export function reconcileAndSelectDueAutomation(
   for (const automation of project.automations) {
     const key = automationStateKey(project, automation);
     const entry = state[key] || {};
-    state[key] = entry;
-    const dueSlot = getDueSlot(automation, entry, nowMs);
-    if (dueSlot === null) continue;
+    const decision = decideDueSlot(automation, entry, nowMs);
+    state[key] = decision.kind === "missed" ? decision.entry : entry;
+    if (decision.kind !== "due") continue;
+    const dueSlot = decision.dueSlot;
 
     const intervalMinutes = parseEveryMinutes(automation.schedule);
     if (intervalMinutes === null) continue;

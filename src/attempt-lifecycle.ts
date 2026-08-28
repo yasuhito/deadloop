@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -449,9 +450,16 @@ export function writeAttemptRecordAtomically(file: string, record: AttemptRecord
   parseAttemptRecord(record);
   if (fs.existsSync(file)) assertRecordAdvance(parseRecordFile(file), record);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
-  fs.renameSync(temporary, file);
+  // Host and agent-run scripts write the same journal from separate processes; a per-write
+  // temporary name keeps their replacements from colliding before the rename.
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
 }
 
 /** Creates and durably stores the prepared record before an external mutation. */

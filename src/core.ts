@@ -743,30 +743,39 @@ export function automationStateKey(
   return `${project.id}:${automation.id}`;
 }
 
-export function getDueSlot(
+export type DueSlotDecision =
+  | { kind: "due"; dueSlot: number }
+  | { kind: "missed"; entry: AutomationStateEntry }
+  | { kind: "not_due" };
+
+/**
+ * Decides whether an automation is due at `nowMs`. A slot missed outside the grace window is
+ * returned as a new entry value; the caller stores it. The given entry is never changed.
+ */
+export function decideDueSlot(
   automation: Pick<NormalizedAutomation, "schedule" | "graceMinutes" | "initialLastScheduledAt">,
   entry: AutomationStateEntry,
   nowMs: number,
-): number | null {
+): DueSlotDecision {
   const intervalMinutes = parseEveryMinutes(automation.schedule);
-  if (!intervalMinutes) return null;
+  if (!intervalMinutes) return { kind: "not_due" };
 
   const latestSlot = cronSlotAt(nowMs, intervalMinutes);
   const lastScheduledAt = Number.isFinite(entry.lastScheduledAt)
     ? entry.lastScheduledAt!
     : automation.initialLastScheduledAt;
 
-  if (latestSlot <= lastScheduledAt) return null;
+  if (latestSlot <= lastScheduledAt) return { kind: "not_due" };
 
   const graceMs = automation.graceMinutes * 60_000;
   if (nowMs - latestSlot > graceMs) {
-    entry.lastScheduledAt = latestSlot;
-    entry.lastResult = "missed_outside_grace";
-    entry.updatedAt = nowMs;
-    return null;
+    return {
+      kind: "missed",
+      entry: { ...entry, lastScheduledAt: latestSlot, lastResult: "missed_outside_grace", updatedAt: nowMs },
+    };
   }
 
-  return latestSlot;
+  return { kind: "due", dueSlot: latestSlot };
 }
 
 export function nextSlotAfter(

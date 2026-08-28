@@ -144,4 +144,24 @@ describe("project base blocking evaluation", () => {
     const cleared = evaluateProjectBaseBlocking({ stateDir: root, projectId: "demo", repoPath, baseBranch: "main" });
     expect(cleared.active).toBe(false);
   });
+
+  it("observing a stale base/contract pair reports it inactive", () => {
+    const { observeProjectBaseBlocking } = require("../src/ci-base-blocking.cts");
+    const root = realRepo();
+    const repoPath = path.join(root, "repo");
+    store.writeBaseBlocking(root, "demo", { baseRevision: "0".repeat(40), command: "make ci", prNumber: 24 });
+
+    expect(observeProjectBaseBlocking({ stateDir: root, projectId: "demo", repoPath, baseBranch: "main" }).active).toBe(false);
+  });
+
+  it("observing a stale base/contract pair leaves the record in place", () => {
+    const { observeProjectBaseBlocking } = require("../src/ci-base-blocking.cts");
+    const root = realRepo();
+    const repoPath = path.join(root, "repo");
+    store.writeBaseBlocking(root, "demo", { baseRevision: "0".repeat(40), command: "make ci", prNumber: 24 });
+
+    observeProjectBaseBlocking({ stateDir: root, projectId: "demo", repoPath, baseBranch: "main" });
+
+    expect(store.readBaseBlocking(root, "demo")).not.toBeNull();
+  });
 });

@@ -10,8 +10,8 @@ const { formatCurrentAttemptUsage } = require("./model-usage-report.cts") as {
 };
 import { formatRequiredVerification } from "./required-verification";
 
-const { evaluateProjectBaseBlocking } = require("./ci-base-blocking.cts") as {
-  evaluateProjectBaseBlocking: (input: { stateDir: string; projectId: string; repoPath: string; baseBranch?: string }) => { active: boolean; reason?: string; record?: Record<string, unknown> };
+const { observeProjectBaseBlocking } = require("./ci-base-blocking.cts") as {
+  observeProjectBaseBlocking: (input: { stateDir: string; projectId: string; repoPath: string; baseBranch?: string }) => { active: boolean; reason?: string; record?: Record<string, unknown> };
 };
 
 export type LabelLike = string | { name?: string | null };
@@ -276,7 +276,7 @@ export function buildStatusSnapshot(input: StatusReportInput): StatusSnapshot {
   let baseVerificationBlocked: StatusSnapshot["baseVerificationBlocked"];
   if (project.repoPath && input.statePath) {
     try {
-      const blocking = evaluateProjectBaseBlocking({
+      const blocking = observeProjectBaseBlocking({
         stateDir: path.dirname(input.statePath),
         projectId: project.id,
         repoPath: project.repoPath,

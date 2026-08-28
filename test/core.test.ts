@@ -7,7 +7,7 @@ import {
   DEFAULT_WORKER_LAUNCH_POLICY,
   automationEnvironment,
   cronSlotAt,
-  getDueSlot,
+  decideDueSlot,
   isLinkedGitWorktree,
   nextSlotAfter,
   normalizeProject,
@@ -183,10 +183,10 @@ describe("deterministic extension core", () => {
     };
     const entry: Record<string, unknown> = { lastScheduledAt: 0 };
 
-    expect(getDueSlot(automation, entry, 21 * 60_000 + 30_000)).toBeNull();
+    expect(decideDueSlot(automation, entry, 21 * 60_000 + 30_000).kind).toBe("missed");
   });
 
-  it("records missed slots outside the grace window", () => {
+  it("returns the missed slot as a new entry value", () => {
     const automation = {
       schedule: "*/10 * * * *",
       graceMinutes: 1,
@@ -194,13 +194,37 @@ describe("deterministic extension core", () => {
     };
     const entry: Record<string, unknown> = { lastScheduledAt: 0 };
 
-    getDueSlot(automation, entry, 21 * 60_000 + 30_000);
-
-    expect(entry).toEqual({
-      lastScheduledAt: 20 * 60_000,
-      lastResult: "missed_outside_grace",
-      updatedAt: 21 * 60_000 + 30_000,
+    expect(decideDueSlot(automation, entry, 21 * 60_000 + 30_000)).toEqual({
+      kind: "missed",
+      entry: {
+        lastScheduledAt: 20 * 60_000,
+        lastResult: "missed_outside_grace",
+        updatedAt: 21 * 60_000 + 30_000,
+      },
     });
+  });
+
+  it("leaves the given entry unchanged when a slot is missed", () => {
+    const automation = {
+      schedule: "*/10 * * * *",
+      graceMinutes: 1,
+      initialLastScheduledAt: 0,
+    };
+    const entry: Record<string, unknown> = { lastScheduledAt: 0 };
+
+    decideDueSlot(automation, entry, 21 * 60_000 + 30_000);
+
+    expect(entry).toEqual({ lastScheduledAt: 0 });
+  });
+
+  it("returns the due slot when the grace window still holds", () => {
+    const automation = {
+      schedule: "*/10 * * * *",
+      graceMinutes: 1,
+      initialLastScheduledAt: 0,
+    };
+
+    expect(decideDueSlot(automation, { lastScheduledAt: 0 }, 20 * 60_000 + 30_000)).toEqual({ kind: "due", dueSlot: 20 * 60_000 });
   });
 
   it("calculates the current cron slot", () => {

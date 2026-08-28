@@ -126,23 +126,36 @@ function clearBaseBlocking(stateDir, projectId) {
   try { fs.rmSync(baseBlockingRecordPath(stateDir, projectId)); } catch {}
 }
 
+/** The stored base-blocking record, or null when none stands. Never changes the store. */
+function readBaseBlocking(stateDir, projectId) {
+  const record = readJson(baseBlockingRecordPath(stateDir, projectId));
+  if (!record || typeof record !== "object" || record.version !== RECORD_VERSION) return null;
+  return record;
+}
+
 /**
  * Whether base blocking still applies. The stored pair is compared with the caller-observed base
- * revision and current contract command; any difference clears the block instead of honoring it.
+ * revision and current contract command; any difference reports the record as stale. Reads only.
  */
-function evaluateBaseBlocking(stateDir, projectId, observed) {
-  const record = readJson(baseBlockingRecordPath(stateDir, projectId));
-  if (!record || typeof record !== "object" || record.version !== RECORD_VERSION) return { active: false };
+function observeBaseBlocking(stateDir, projectId, observed) {
+  const record = readBaseBlocking(stateDir, projectId);
+  if (!record) return { active: false };
   // An unobservable command proves nothing about a contract change, so it never clears the block.
   const commandUnchanged = observed.command === undefined
     || String(record.command) === String(observed.command);
   const active = sameOid(record.baseRevision, String(observed.baseRevision || ""))
     && commandUnchanged;
-  if (!active) {
+  return active ? { active: true, record } : { active: false, stale: true };
+}
+
+/** Observes base blocking and clears a stale record. The only reader that also writes. */
+function evaluateBaseBlocking(stateDir, projectId, observed) {
+  const observation = observeBaseBlocking(stateDir, projectId, observed);
+  if (observation.stale) {
     clearBaseBlocking(stateDir, projectId);
     return { active: false, clearedStale: true };
   }
-  return { active: true, record };
+  return observation;
 }
 
 /** Repair-episode bookkeeping: at most one automatic repair until a human Agent request resets it. */
@@ -174,6 +187,8 @@ module.exports = {
   diagnosisRecordPath,
   episodeKeyFor,
   evaluateBaseBlocking,
+  observeBaseBlocking,
+  readBaseBlocking,
   mergeCandidateRecordPath,
   newLogIdentity,
   readDiagnosisRecord,

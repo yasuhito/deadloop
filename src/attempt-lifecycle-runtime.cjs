@@ -1,3 +1,4 @@
+const { randomUUID } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -209,9 +210,16 @@ function writeAttemptRecordAtomically(file, record) {
   parseAttemptRecord(record);
   if (fs.existsSync(file)) assertAdvance(readAttemptRecord(path.dirname(file)), record);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
-  fs.renameSync(temporary, file);
+  // Host and agent-run scripts write the same journal from separate processes; a per-write
+  // temporary name keeps their replacements from colliding before the rename.
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
 }
 function createPreparedAttempt(runDir, input) { const record = { ...input, phase: "prepared", lastSuccessfulPhase: "prepared" }; writeAttemptRecordAtomically(attemptRecordPath(runDir), record); return record; }
 function transitionAttempt(record, phase, launchError) {
