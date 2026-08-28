@@ -1,12 +1,34 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { normalizeProject } from "../src/core";
 import { buildStatusSnapshot, formatStatusReport, resolveActiveProject } from "../src/status";
 
 const fixture = JSON.parse(readFileSync("test/fixtures/status/report-case.json", "utf8"));
 const projects = fixture.projects.map(normalizeProject);
+const store = require("../src/ci-fallback-store.cjs");
+const roots: string[] = [];
+
+function realRepo(): { root: string; repoPath: string } {
+  const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-status-"));
+  roots.push(root);
+  const repoPath = path.join(root, "repo");
+  execFileSync("git", ["init", "--quiet", "-b", "main", repoPath]);
+  execFileSync("git", ["-C", repoPath, "config", "user.email", "t@t"]);
+  execFileSync("git", ["-C", repoPath, "config", "user.name", "T"]);
+  writeFileSync(path.join(repoPath, "f.txt"), "x\n");
+  execFileSync("git", ["-C", repoPath, "add", "."]);
+  execFileSync("git", ["-C", repoPath, "commit", "--quiet", "-m", "c"]);
+  return { root, repoPath };
+}
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
+});
 
 
 describe("deadloop status report", () => {
@@ -44,4 +66,14 @@ describe("deadloop status report", () => {
     expect(report).toContain("cache-read=12000");
   });
 
+
+  it("leaves a stale base-blocking record in place when building the snapshot", () => {
+    const { root, repoPath } = realRepo();
+    const project = normalizeProject({ id: "demo", repoPath, baseBranch: "main", workerModel: "test-model", reviewerModel: "review-model" });
+    store.writeBaseBlocking(root, "demo", { baseRevision: "0".repeat(40), command: "make ci", prNumber: 24 });
+
+    buildStatusSnapshot({ cwd: repoPath, projects: [project], statePath: path.join(root, "state.json") });
+
+    expect(store.readBaseBlocking(root, "demo")).not.toBeNull();
+  });
 });

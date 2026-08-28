@@ -704,15 +704,15 @@ function buildWorkspaceTrustFindings(
   ];
 }
 
-const { evaluateProjectBaseBlocking } = require("./ci-base-blocking.cts") as {
-  evaluateProjectBaseBlocking: (input: { stateDir: string; projectId: string; repoPath: string; baseBranch?: string }) => { active: boolean; reason?: string; record?: Record<string, unknown> };
+const { observeProjectBaseBlocking } = require("./ci-base-blocking.cts") as {
+  observeProjectBaseBlocking: (input: { stateDir: string; projectId: string; repoPath: string; baseBranch?: string }) => { active: boolean; reason?: string; record?: Record<string, unknown> };
 };
 
 /** The failed trusted-base/contract pair that currently suppresses every launch, if one stands. */
 function activeBaseVerificationBlocking(project: NormalizedProject, stateDir: string): DoctorFinding[] {
   if (!project.repoPath) return [];
   try {
-    const blocking = evaluateProjectBaseBlocking({
+    const blocking = observeProjectBaseBlocking({
       stateDir,
       projectId: project.id,
       repoPath: project.repoPath,
