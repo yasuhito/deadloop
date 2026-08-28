@@ -45,7 +45,7 @@ When no host-run module is executed by bare `node`, the package moves to `"type"
 ## Consequences
 
 - Duplication that existed only to cross the process boundary — twin implementations, type sidecars, argv marshalling, stdout JSON parsing, per-process journal re-reads and Herdr preflights — is deleted, not maintained.
-- Later refactors can pass observations by value (ADR 0028 permits consolidating redundant observations without an intervening external operation) and can declare outcome types as unions; this decision does not do either.
+- Later refactors can pass observations by value (ADR 0028 permits consolidating redundant observations without an intervening external operation) and can declare outcome types as unions; this decision does not do either. [ADR 0034](0034-workflows-plan-as-calculations-and-execute-steps.md) does both, and PRD stages 2 and 4 split each moved workflow into `observe` / `plan` / `execute` so that it need not move files again.
 - A completion handler runs the host's current code instead of the snapshot path stored in a retained handoff, which resolves #373.
 - Cross-process exclusion still matters for agent-run finalizers; the enablement file lock is kept for them.
 - `projects.json` written for the driver-file model stops loading with a clear configuration error; there is no migration path.
