@@ -41,8 +41,12 @@ Automation host が実行している deadloop 自身のコードを一意に定
 _Avoid_: revision(対象リポジトリの commit を指すため)、version(`package.json` の version と混同するため)、generation(disableGeneration と衝突するため)、鮮度(比較結果であって識別子ではないため)、ファイル更新時刻(戻した編集と進めた編集を区別できないため)
 
 **コードスナップショット (Code snapshot)**:
-一つのコード識別子につき一度だけ作られる、読み取り専用の deadloop パッケージ複製。そのコード識別子の commit から作るため、未コミットの変更を含まない。試行はこれを指して開始から完了まで同じコードで動き、Automation host はこれを読み込んで起動する。可変な working tree の代わりに置かれる、実行コードの唯一の供給元。
-_Avoid_: 試行ごとのコピー(識別子ごとに共有するため)、キャッシュ(性能目的ではないため)、working tree(可変であり供給元にしないため)
+一つのコード識別子につき一度だけ作られる、読み取り専用の deadloop パッケージ複製。そのコード識別子の commit から作るため、未コミットの変更を含まない。エージェントが自分の session 内で実行するエージェント実行スクリプトの唯一の供給元であり、プロンプトに埋め込む絶対パスはここを指す。Automation host 自身はロード時の checkout のコードで動き、host が実行する workflow はその読み込み済みコードを in-process で呼ぶ。tick の開始が許される限り両者は同じコード識別子である。
+_Avoid_: 試行ごとのコピー(識別子ごとに共有するため)、キャッシュ(性能目的ではないため)、working tree(可変でありエージェント向け供給元にしないため)、host が読み込む配備先(host は checkout から読み込むため)、`__dirname` から作るエージェント向けパス
+
+**エージェント実行スクリプト (Agent-run script)**:
+エージェントが自分の session から `node` で実行する deadloop のスクリプト。`run-project-check`、`pr-review-repair-finalize`、`pr-branch-update-finalize` の 3 本で、`extensions/deadloop/automations/` に置く薄い CLI の殻であり、実装は `src/` のモジュールを呼ぶ。host と agent の 2 つの利用者を持つ seam であり、Automation host が自分の処理をこの形で子プロセスとして起動することはない。
+_Avoid_: driver、automation スクリプト(host が起動する意味を含むため)、`--fixture` による起動、host↔host の subprocess
 
 **ワークフロー状態 (Workflow state)**:
 GitHub上だけで読める、対象のIssueまたはPRの仕事の現在状態。Issue / PRの状態、head、ラベル、コメント、checksで表す。唯一の正本であり、ローカルの試行journalや実行基盤の観測結果はこれを複製しない。待機中の仕事はAgent要求ラベル、消費されて動いている仕事は`agent:in-progress`、安全に続行できない仕事は`agent:blocked`で表す。ローカルの資源だけを理由にGitHubへ見えない待機や状態を作ってはならない。

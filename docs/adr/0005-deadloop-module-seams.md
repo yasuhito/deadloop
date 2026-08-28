@@ -98,3 +98,5 @@ GitHub とローカル状態を跨ぐ完全な exactly-once は保証しない�
 最初の抽出対象は汎用 `RunnerAdapter` の拡張ではなく、現行 driver から `coordinateIssue` と `reviewPullRequest` を分離することである。次に監視を `advanceImplementation` と `advanceReview` へ移し、Pi + Herdr の launcher を組み立てる。その後、Codex または Claude の二つ目の `AgentProgram` で seam を検証する。
 
 `src/herdr-runner.cts` の Herdr 応答正規化と、現行の純粋な Issue / PR 選定ロジックは再利用できる。一方、同期・非同期の二重 runner interface、暗黙の Herdr 生成、launcher subprocess の二重境界、標準経路での monitor prompt 依存は段階的に解消する。
+
+**ADR 0033 による追記(2026-08-28)。** 公開インターフェースは `reconcile` / `coordinateIssue` / `reviewPullRequest` / `advanceAttempt` の 4 つとする。ADR 0032 の reconciliation は選定に先立つ tick ごとの段階なので独立して公開し、`advanceImplementation` と `advanceReview` は ADR 0029 が監視をモデル非依存・役割非依存にした帰結として、役割別の完了ハンドラを内側に持つ 1 つの `advanceAttempt` に統合する。本 ADR が「段階的に解消する」と書いた launcher subprocess の二重境界は、ADR 0033 でホスト→ホストの subprocess を全廃することで解消する。実装の置き場所は `src/workflows/`。
