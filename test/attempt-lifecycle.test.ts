@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   abandonPersistedAttempt,
@@ -24,8 +24,8 @@ function runDirectory(): string {
   return root;
 }
 
-function preparedAttempt(runDir = runDirectory()) {
-  return createPreparedAttempt(runDir, {
+function preparedInput(runDir: string): Parameters<typeof createPreparedAttempt>[1] {
+  return {
     attemptId: "attempt-001",
     launchUuid: "launch-001",
     project: "demo",
@@ -40,7 +40,11 @@ function preparedAttempt(runDir = runDirectory()) {
     workspaceLabel: "Review PR #42",
     promptFile: path.join(runDir, "reviewer-prompt.md"),
     promiseFile: path.join(runDir, "promise.json"),
-  });
+  };
+}
+
+function preparedAttempt(runDir = runDirectory()) {
+  return createPreparedAttempt(runDir, preparedInput(runDir));
 }
 
 function matchingReport() {
@@ -518,5 +522,32 @@ describe("attempt lifecycle contract", () => {
 
     expect(() => releasePersistedAttemptAuthority(path.dirname(record.promptFile), "2026-08-01T10:00:00Z", undefined, "github_authority_lost" as never))
       .toThrow(/authorityRelease.reason is invalid/);
+  });
+
+  it("writes each record through a distinct temporary file", () => {
+    const runDir = runDirectory();
+    const spy = vi.spyOn(fs, "writeFileSync");
+    try {
+      preparedAttempt(runDir);
+      transitionPersistedAttempt(runDir, "github_claimed");
+      const temporaries = spy.mock.calls.map((call) => String(call[0])).filter((file) => file.endsWith(".tmp"));
+      expect(new Set(temporaries).size).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("the direct Node runtime writes each record through a distinct temporary file", () => {
+    const runtime = require("../src/attempt-lifecycle-runtime.cjs");
+    const runDir = runDirectory();
+    const spy = vi.spyOn(fs, "writeFileSync");
+    try {
+      runtime.createPreparedAttempt(runDir, preparedInput(runDir));
+      runtime.transitionPersistedAttempt(runDir, "github_claimed");
+      const temporaries = spy.mock.calls.map((call) => String(call[0])).filter((file) => file.endsWith(".tmp"));
+      expect(new Set(temporaries).size).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
