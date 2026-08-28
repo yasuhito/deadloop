@@ -152,6 +152,37 @@ describe("shared scheduler tick", () => {
     });
   });
 
+  it("carries a failed completion's child summary into the automation_result reason", async () => {
+    const childSummary = "registered worktree is not an existing canonical path: /tmp/pi-worktree-5d624d9c-0";
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "monitor",
+        monitorHandoff: { kind: "branch-update", input: { enabledAt: ENABLED_AT } },
+        monitorAccounting: { activeMilliseconds: 0, observedAt: new Date(0).toISOString(), runtimeWasWorking: false },
+      },
+    };
+    const events: unknown[] = [];
+    await executeSchedulerTick(dueProject(), tickDeps(freshHarness(), {
+      loadState: () => ({ automations: { "demo:demo:ticker": entry } }),
+      buildRunnerDeps: () => ({
+        ...driverDoneRunnerDeps(freshHarness()),
+        observeAttemptMonitoring: () => ({
+          action: "completion",
+          accounting: { activeMilliseconds: 0, observedAt: new Date(0).toISOString(), runtimeWasWorking: false },
+          report: {},
+        }),
+        applyAttemptMonitoring: () => ({ applied: false, result: { summary: childSummary } }),
+      }),
+      emitHostLog: (event) => events.push(event),
+    }));
+
+    expect(events.at(-1)).toMatchObject({
+      kind: "automation_result",
+      result: "driver_attempt_completion_pending",
+      reason: childSummary,
+    });
+  });
+
   it("answers an idle tick with its own judgment line instead of an automation result", async () => {
     const events: unknown[] = [];
     const quiet = normalizeProject({

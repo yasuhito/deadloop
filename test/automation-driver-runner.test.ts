@@ -264,6 +264,86 @@ describe("deterministic automation driver runner", () => {
     expect(observed).toBe(1);
   });
 
+  const CHILD_SUMMARY = "registered worktree is not an existing canonical path: /tmp/pi-worktree-5d624d9c-0";
+
+  function completionMonitorEntry(): { entry: Record<string, unknown>; state: { automations: Record<string, Record<string, unknown>> } } {
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "monitor",
+        monitorHandoff: { kind: "branch-update", input: { enabledAt: 1 } },
+        monitorAccounting: { activeMilliseconds: 0, observedAt: new Date(0).toISOString(), runtimeWasWorking: false },
+      },
+    };
+    return { entry, state: { automations: { auto: entry } } };
+  }
+
+  function completionMonitorDeps(application: () => unknown) {
+    return {
+      enabledAt: () => 1,
+      isEnabled: () => true,
+      now: () => 60_000,
+      observeAttemptMonitoring: () => ({
+        action: "completion",
+        accounting: { activeMilliseconds: 0, observedAt: new Date(0).toISOString(), runtimeWasWorking: false },
+        report: {},
+      }) as AttemptMonitoringDirective,
+      applyAttemptMonitoring: application as never,
+      saveState: () => undefined,
+    };
+  }
+
+  it("surfaces a child-script summary as lastError when a deterministic completion fails", () => {
+    const { entry, state } = completionMonitorEntry();
+    deliverPendingDriverHandoff(entry, state, "auto", completionMonitorDeps(() => ({
+      applied: false,
+      result: { driverAction: "branch_update_stale_head", summary: CHILD_SUMMARY },
+    })));
+
+    expect(entry.lastError).toBe(CHILD_SUMMARY);
+  });
+
+  it("surfaces a child-script summary as the host-log reason when a deterministic completion fails", () => {
+    const { entry, state } = completionMonitorEntry();
+    deliverPendingDriverHandoff(entry, state, "auto", completionMonitorDeps(() => ({
+      applied: false,
+      result: { driverAction: "branch_update_stale_head", summary: CHILD_SUMMARY },
+    })));
+
+    expect(entry.lastSummary).toBe(CHILD_SUMMARY);
+  });
+
+  it("surfaces a thrown child-script error as lastError when a deterministic completion fails", () => {
+    const { entry, state } = completionMonitorEntry();
+    deliverPendingDriverHandoff(entry, state, "auto", completionMonitorDeps(() => ({ applied: false, error: CHILD_SUMMARY })));
+
+    expect(entry.lastError).toBe(CHILD_SUMMARY);
+  });
+
+  it("surfaces a string completion result as lastError when the deterministic completion fails", () => {
+    const { entry, state } = completionMonitorEntry();
+    deliverPendingDriverHandoff(entry, state, "auto", completionMonitorDeps(() => ({ applied: false, result: "ci_fallback_gate_stopped" })));
+
+    expect(entry.lastError).toBe("ci_fallback_gate_stopped");
+  });
+
+  it("keeps lastError empty for a failed deterministic completion without a readable reason", () => {
+    const { entry, state } = completionMonitorEntry();
+    deliverPendingDriverHandoff(entry, state, "auto", completionMonitorDeps(() => ({ applied: false })));
+
+    expect(entry.lastError).toBeUndefined();
+  });
+
+  it("clears lastError in the tick where the deterministic completion finally succeeds", () => {
+    const { entry, state } = completionMonitorEntry();
+    let application: Record<string, unknown> = { applied: false, result: { summary: CHILD_SUMMARY } };
+    const deps = completionMonitorDeps(() => application);
+    deliverPendingDriverHandoff(entry, state, "auto", deps);
+    application = { applied: true, result: "review_completion_retained" };
+    deliverPendingDriverHandoff(entry, state, "auto", deps);
+
+    expect(entry.lastError).toBeUndefined();
+  });
+
   it("persists paused active-work accounting across deterministic monitor ticks", () => {
     const payload: Record<string, any> = {
       action: "monitor",

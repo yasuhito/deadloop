@@ -17,6 +17,8 @@ export type AttemptMonitoringApplication = {
   retain?: boolean;
   nextHandoff?: Record<string, unknown>;
   error?: unknown;
+  /** Child completion-script output; a failed sub-step carries its reason in `result.summary`. */
+  result?: unknown;
 };
 
 export type MonitorHandoffDisposition =

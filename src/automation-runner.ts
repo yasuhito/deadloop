@@ -369,12 +369,16 @@ export function deliverPendingDriverHandoff(
         } else if (application.applied && !application.retain) {
           delete entry.pendingDriverHandoff;
         }
-        // A retained completion carries its own visible failure, e.g. the verification log path.
-        if (!application.applied && typeof application.error === "string" && application.error.trim()) {
-          entry.lastError = application.error;
-        }
+        const failureReason = application.applied ? "" : completionApplicationFailureReason(application);
         recordAutomationResult(entry, application.applied ? `driver_attempt_${directive.action}` : "driver_attempt_completion_pending");
-        entry.lastSummary = "reason" in directive ? directive.reason : `deterministic ${directive.action}`;
+        // Set after recordAutomationResult: that call resets the entry surfaces, and a failed
+        // completion must stay readable from lastError and from the host-log reason (lastSummary).
+        if (failureReason) {
+          entry.lastError = failureReason;
+          entry.lastSummary = failureReason;
+        } else {
+          entry.lastSummary = "reason" in directive ? directive.reason : `deterministic ${directive.action}`;
+        }
       }
       entry.updatedAt = deps.now();
       deps.saveState(state);
@@ -388,6 +392,29 @@ export function deliverPendingDriverHandoff(
     deps.saveState(state);
     return true;
   }
+}
+
+/**
+ * A failed deterministic completion application reports its reason where the child completion
+ * script put it: either the thrown error text, or a failed sub-step driver output carried in
+ * `result` (usually its `summary`, e.g. a vanished canonical worktree path). Distills one
+ * operator-readable reason; empty when the application carries nothing readable.
+ */
+function completionApplicationFailureReason(application: AttemptMonitoringApplication): string {
+  const errorText = typeof application.error === "string" ? trimText(application.error) : "";
+  const result = application.result;
+  const child = result && typeof result === "object" && !Array.isArray(result)
+    ? result as Record<string, unknown>
+    : undefined;
+  return firstNonEmpty(
+    errorText,
+    typeof result === "string" ? result : undefined,
+    child?.summary,
+    child?.error,
+    child?.reason,
+    child?.driverAction,
+    child?.action,
+  );
 }
 
 export function isAutomationFailureResult(result: string): boolean {
