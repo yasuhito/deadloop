@@ -65,4 +65,18 @@ describe("Automation host scheduling", () => {
 
     expect(reconcileAndSelectDueAutomation(project, state, 30 * 60_000)?.automation.id).not.toBe(first.automation.id);
   });
+
+  it("records a missed slot on the state entry", () => {
+    const project = normalizeProject({
+      id: "demo",
+      workerModel: "test-model",
+      reviewerModel: "review-model",
+      automations: [{ id: "late", name: "late", schedule: "*/10 * * * *", graceMinutes: 1, initialLastScheduledAt: 0 }],
+    });
+    const state: Record<string, Record<string, unknown>> = { "demo:late": { lastScheduledAt: 0 } };
+
+    reconcileAndSelectDueAutomation(project, state, 21 * 60_000 + 30_000);
+
+    expect(state["demo:late"]).toEqual({ lastScheduledAt: 20 * 60_000, lastResult: "missed_outside_grace", updatedAt: 21 * 60_000 + 30_000 });
+  });
 });
