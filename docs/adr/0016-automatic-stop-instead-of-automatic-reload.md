@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR 0035](0035-code-reload-at-the-tick-boundary.md). コード識別子の定義、未コミットの変更を含めないこと、走っている試行を殺さないこと、停止中も status と doctor が動くことは ADR 0035 に引き継がれた。「自動停止」の決定だけが「tick 境界での自動取り込み」に置き換わった。
 
 ## Context
 
