@@ -180,13 +180,14 @@ async function loadExtension(
       runNodeScript?: (args: string[]) => { code: number; stdout: string; stderr: string };
     };
   } = {},
-): Promise<{ commands: Map<string, CommandHandler>; events: Map<string, EventHandler>; execCommands: string[][]; ghCommands: string[][]; messages: string[] }> {
+): Promise<{ commands: Map<string, CommandHandler>; events: Map<string, EventHandler>; execCommands: string[][]; ghCommands: string[][]; messages: string[]; userMessages: string[] }> {
   process.env.HOME = root;
   process.env.PI_CODING_AGENT_DIR = path.join(root, ".pi", "agent");
   process.env.PATH = `${path.join(root, "bin")}:${originalPath || ""}`;
   const commands = new Map<string, CommandHandler>();
   const events = new Map<string, EventHandler>();
   const messages: string[] = [];
+  const userMessages: string[] = [];
   const execCommands: string[][] = [];
   const ghCommands: string[][] = [];
   // @ts-expect-error Vitest transforms this runtime extension import.
@@ -271,7 +272,7 @@ async function loadExtension(
     registerCommand: (name: string, command: { handler: CommandHandler }) => commands.set(name, command.handler),
     on: (name: string, handler: EventHandler) => events.set(name, handler),
     sendMessage: (message: { content: string }) => messages.push(message.content),
-    sendUserMessage: () => undefined,
+    sendUserMessage: (content: string) => { userMessages.push(content); },
     testing: {
       beforeDisableLock: options.beforeDisableLock,
       afterEnablementSaved: options.afterEnablementSaved,
@@ -292,7 +293,7 @@ async function loadExtension(
       ui: { notify: () => undefined, setStatus: () => undefined },
     });
   });
-  return { commands, events, execCommands, ghCommands, messages };
+  return { commands, events, execCommands, ghCommands, messages, userMessages };
 }
 
 function writeConfig(root: string, repoPath: string, options: { autoMerge?: boolean; worktreeRoot?: string; githubRepo?: string; enabled?: boolean } = {}): void {
@@ -2121,6 +2122,58 @@ describe("enablement command integration", () => {
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(automationRuns).toBe(0);
+  });
+
+  it("requests a code reload when the deployed code identity changed and the session is idle", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    let deployed = "a".repeat(40);
+    const extension = await loadExtension(root, { observeDeployedCodeIdentity: () => deployed });
+    vi.useFakeTimers();
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    deployed = "b".repeat(40);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(extension.userMessages).toEqual(["/deadloop-reload"]);
+  });
+
+  it("requests the code reload once for the same deployed identity", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    let deployed = "a".repeat(40);
+    const extension = await loadExtension(root, { observeDeployedCodeIdentity: () => deployed });
+    vi.useFakeTimers();
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    deployed = "b".repeat(40);
+
+    await vi.advanceTimersByTimeAsync(3_000 + 30_000 + 30_000);
+
+    expect(extension.userMessages).toHaveLength(1);
+  });
+
+  it("does not request a code reload while the session is busy", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    let deployed = "a".repeat(40);
+    const extension = await loadExtension(root, { observeDeployedCodeIdentity: () => deployed });
+    vi.useFakeTimers();
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath, { isIdle: () => false });
+    deployed = "b".repeat(40);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(extension.userMessages).toEqual([]);
+  });
+
+  it("reloads the session through the deadloop-reload command", async () => {
+    const { root, repoPath } = fixtureRepository();
+    const extension = await loadExtension(root);
+    let reloads = 0;
+
+    await extension.commands.get("deadloop-reload")!("", { cwd: repoPath, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined }, reload: async () => { reloads += 1; } } as never);
+
+    expect(reloads).toBe(1);
   });
 
   it("does not change a running attempt record when code identity stops the tick", async () => {

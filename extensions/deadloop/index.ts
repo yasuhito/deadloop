@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { decideCodeIdentity, observeGitCodeIdentity, type CodeIdentityDecision } from "../../src/code-identity";
+import { decideCodeIdentity, decideCodeReload, observeGitCodeIdentity, type CodeIdentityDecision } from "../../src/code-identity";
 import { ensureCodeSnapshot } from "../../src/code-snapshot";
 import { collectCodeSnapshotInventory } from "../../src/code-snapshot-inventory";
 import {
@@ -1839,6 +1839,31 @@ export default function (pi) {
       return false;
     }
   };
+  // Code reload (ADR 0035): a tick that finds newer deployed code asks the session to reload the
+  // extension instead of waiting for a human. One request per deployed identity; the request is a
+  // user-level command because ctx.reload() is available to command handlers only.
+  let codeReloadRequestedFor: string | null = null;
+  const requestCodeReload = () => pi.sendUserMessage("/deadloop-reload", { expandPromptTemplates: true });
+  const codeIdentityAllowsTickStart = (ctx) => {
+    const decision = decideCodeReload({
+      identity: currentCodeIdentityDecision(),
+      requestedFor: codeReloadRequestedFor,
+      sessionIdle: typeof ctx.isIdle === "function" ? ctx.isIdle() : true,
+      pendingMessages: typeof ctx.hasPendingMessages === "function" ? ctx.hasPendingMessages() : false,
+    });
+    if (decision.action === "continue") return true;
+    if (decision.action === "request_reload") {
+      codeReloadRequestedFor = decision.deployedIdentity;
+      try {
+        requestCodeReload();
+      } catch (error) {
+        setLooperStatus(ctx, `stopped: code reload request failed: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
+    }
+    setLooperStatus(ctx, decision.status);
+    return false;
+  };
   const loadedCodeIdentityForWrite = () => {
     assertCodeIdentityCurrent();
     if (!loadedCodeIdentity) throw new Error("the loaded deadloop code identity could not be determined");
@@ -1861,6 +1886,12 @@ export default function (pi) {
     "deadloop-doctor",
     (reportPi, cwd) => buildLiveDoctorReport(reportPi, cwd, currentCodeIdentityDecision),
   );
+  pi.registerCommand("deadloop-reload", {
+    description: "Reload the deadloop extension so the host runs the deployed code identity (same as /reload)",
+    handler: async (_args, ctx) => {
+      await ctx.reload();
+    },
+  });
   pi.registerCommand("deadloop-usage", {
     description: "Show normalized model usage: the last 7 days by role and model, or one attempt with --attempt <id>",
     handler: async (args, ctx) => {
@@ -2025,7 +2056,8 @@ export default function (pi) {
     const schedulerRun = active;
 
     // Global fail-closed gate: no candidate selection or workflow/runner mutation may happen first.
-    if (!codeIdentityAllowsAutomation(ctx)) return;
+    // Newer deployed code is taken in by reloading the extension at this tick boundary (ADR 0035).
+    if (!codeIdentityAllowsTickStart(ctx)) return;
     try {
       preflight();
     } catch (error) {
