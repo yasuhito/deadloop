@@ -510,13 +510,6 @@ describe("attempt lifecycle contract", () => {
     expect(releasePersistedAttemptAuthority(path.dirname(record.promptFile), "2026-08-01T10:00:00Z").authorityRelease?.reason).toBe("owner_absent");
   });
 
-  it("records why a superseded attempt released its authority", () => {
-    const record = preparedAttempt();
-    const released = releasePersistedAttemptAuthority(path.dirname(record.promptFile), "2026-08-01T10:00:00Z", undefined, "superseded_by_request");
-
-    expect(released.authorityRelease?.reason).toBe("superseded_by_request");
-  });
-
   it("refuses a release reason the contract does not define", () => {
     const record = preparedAttempt();
 

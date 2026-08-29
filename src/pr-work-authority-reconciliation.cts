@@ -4,22 +4,27 @@ const { containsStorageExhaustion } = require("./storage-exhaustion.cjs");
 
 type JsonObject = Record<string, any>;
 
-type RequestObservation = { kind: "current" | "superseded" | "missing" | "ambiguous" };
+/**
+ * Liveness has one authority: the execution runtime. Deadloop never proves ownership, so there is
+ * no second observation to reconcile against and no ambiguous middle: an answer the runtime cannot
+ * give is unobservable, and unobservable fails closed.
+ */
 type RuntimeObservation =
-  | { kind: "live_matching_owner" }
-  | { kind: "owner_absent_owned" }
-  | { kind: "unreachable" }
-  | { kind: "ambiguous" };
+  | { kind: "running" }
+  | { kind: "stopped" }
+  | { kind: "unobservable" };
 
-type CompletionObservation = { kind: "handoff_refused" | "none" };
+/** Whether the completion handler ran, answered by the finalizer receipt and the attempt journal. */
+type CompletionObservation = { kind: "handoff_refused" | "not_run" };
 
 type ReconciliationInput = {
   pr: { number: number; headRefOid: string; labels: Array<string | { name?: string }> };
-  request: RequestObservation;
   runtime: RuntimeObservation;
   requestLabels: string[];
   inProgressLabel: string;
   blockedLabel: string;
+  /** The request label a stopped attempt returns the pull request to. */
+  restoreRequestLabel?: string;
   completion?: CompletionObservation;
   /** Launch errors recorded by this PR's attempts that failed before starting any agent. */
   launchFailures?: string[];
@@ -29,8 +34,8 @@ type ReconciliationInput = {
 
 type ReconciliationDecision =
   | { action: "keep_active"; cleanup: "none" }
-  | { action: "release_for_request"; reason: "request_superseded_absent_owner"; labels: string[]; cleanup: "close_owned_workspace" }
-  | { action: "block"; reason: "attempt_missing" | "attempt_ambiguous" | "runtime_unreachable" | "runtime_ambiguous" | "runtime_owner_absent" | "completion_handoff_refused" | "launch_unprepared" | "storage_exhaustion"; labels: string[]; cleanup: "none" | "close_owned_workspace" | "preserve_workspace"; invalidatesRequests: boolean };
+  | { action: "restore_request"; labels: string[]; cleanup: "close_stopped_workspace" }
+  | { action: "block"; reason: "runtime_unobservable" | "completion_handoff_refused" | "launch_unprepared" | "storage_exhaustion"; labels: string[]; cleanup: "close_stopped_workspace" | "preserve_workspace" };
 
 function labelNames(labels: Array<string | { name?: string }>): string[] {
   return labels.map((label) => typeof label === "string" ? label : String(label.name || "")).filter(Boolean);
@@ -38,41 +43,53 @@ function labelNames(labels: Array<string | { name?: string }>): string[] {
 
 function unique(values: string[]): string[] { return [...new Set(values)]; }
 
-function blockLabels(input: ReconciliationInput, preserveRequests = false): string[] {
-  const managed = new Set([...input.requestLabels, input.inProgressLabel, input.blockedLabel]);
-  const requests = preserveRequests ? labelNames(input.pr.labels).filter((label) => input.requestLabels.includes(label)) : [];
-  return unique([...labelNames(input.pr.labels).filter((label) => !managed.has(label)), ...requests, input.blockedLabel]);
+function managedWorkflowLabels(input: ReconciliationInput): Set<string> {
+  return new Set([...input.requestLabels, input.inProgressLabel, input.blockedLabel]);
 }
 
-function releaseLabels(input: ReconciliationInput): string[] {
-  return labelNames(input.pr.labels).filter((label) => label !== input.inProgressLabel);
+/**
+ * A stopped attempt hands the pull request back to its request state. Requests queued while the
+ * attempt ran are concurrent demand and stay; the request state the attempt consumed is restored
+ * beside them.
+ */
+function restoreRequestLabels(input: ReconciliationInput): string[] {
+  const managed = managedWorkflowLabels(input);
+  return unique([
+    ...labelNames(input.pr.labels).filter((label) => !managed.has(label)),
+    ...labelNames(input.pr.labels).filter((label) => input.requestLabels.includes(label)),
+    ...(input.restoreRequestLabel ? [input.restoreRequestLabel] : []),
+  ]);
 }
 
-/** Runtime alone answers liveness; request event ids only detect a later generation to expose. */
+function blockedLabels(input: ReconciliationInput): string[] {
+  const managed = managedWorkflowLabels(input);
+  return unique([...labelNames(input.pr.labels).filter((label) => !managed.has(label)), input.blockedLabel]);
+}
+
+/**
+ * The one axis reconciliation still answers: a pull request carrying the active attempt state whose
+ * attempt the runtime reports stopped, and whose completion handler did not run, returns to a
+ * request state or blocks with an explanation. There is no claim to classify.
+ */
 function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDecision {
-  if (input.runtime.kind === "live_matching_owner") return { action: "keep_active", cleanup: "none" };
-  if (input.request.kind === "superseded" && input.runtime.kind === "owner_absent_owned") {
-    return { action: "release_for_request", reason: "request_superseded_absent_owner", labels: releaseLabels(input), cleanup: "close_owned_workspace" };
-  }
-  // An absent journal means the last launch never got as far as opening one when this PR's own
-  // attempts recorded why their launches failed. Naming those failures keeps the stop pointing at
-  // the real cause instead of painting over it as a missing attempt.
-  if (input.request.kind === "missing" && input.runtime.kind === "ambiguous"
-    && input.launchFailures?.length) {
-    return { action: "block", reason: "launch_unprepared", labels: blockLabels(input), cleanup: "none", invalidatesRequests: true };
-  }
-  const preserveRequests = input.request.kind === "superseded";
-  const cleanup = input.runtime.kind === "owner_absent_owned" ? "close_owned_workspace"
-    : input.runtime.kind === "unreachable" || input.runtime.kind === "ambiguous" ? "preserve_workspace" : "none";
+  if (input.runtime.kind === "running") return { action: "keep_active", cleanup: "none" };
   // A refused handoff is a completed attempt whose result the role's finalizer would not apply, so
-  // naming the absent owner there would contradict the review result already posted on the PR.
-  const reason = input.request.kind === "missing" ? "attempt_missing"
-    : input.request.kind === "ambiguous" ? "attempt_ambiguous"
-      : input.runtime.kind === "unreachable" ? "runtime_unreachable"
-        : input.runtime.kind === "ambiguous" ? "runtime_ambiguous"
-          : input.completion?.kind === "handoff_refused" ? "completion_handoff_refused"
-            : input.storageExhaustion ? "storage_exhaustion" : "runtime_owner_absent";
-  return { action: "block", reason, labels: blockLabels(input, preserveRequests), cleanup, invalidatesRequests: !preserveRequests };
+  // it names its own reason instead of reading as an abandoned attempt.
+  if (input.runtime.kind === "stopped" && input.completion?.kind === "handoff_refused") {
+    return { action: "block", reason: "completion_handoff_refused", labels: blockedLabels(input), cleanup: "close_stopped_workspace" };
+  }
+  // A stop whose launches keep failing before any agent starts is explained by the failures: adding
+  // another request repeats them, so the block carries the operator guidance instead.
+  if (input.launchFailures?.length) {
+    return { action: "block", reason: "launch_unprepared", labels: blockedLabels(input), cleanup: "close_stopped_workspace" };
+  }
+  if (input.storageExhaustion) {
+    return { action: "block", reason: "storage_exhaustion", labels: blockedLabels(input), cleanup: "close_stopped_workspace" };
+  }
+  if (input.runtime.kind === "unobservable") {
+    return { action: "block", reason: "runtime_unobservable", labels: blockedLabels(input), cleanup: "preserve_workspace" };
+  }
+  return { action: "restore_request", labels: restoreRequestLabels(input), cleanup: "close_stopped_workspace" };
 }
 
 function eventId(event: JsonObject): string {
@@ -153,17 +170,13 @@ function launchFailureGuidance(failures: string[]): string {
     },
   ];
   const text = failures.join(" ");
-  const matched = shapes.filter((shape) => shape.matches(text)).map((shape) => `- ${shape.action}`);
+  const matched = shapes.filter((shape) => shape.matches(text)).map((shape) => shape.action);
   return matched.length ? matched.join("\n") : "- inspect the retained attempt journals under the deadloop state directory";
 }
 
 function recoveryComment(number: number, head: string, reason: string, cutoffEventId: string, launchFailures?: string[]): string {
   const readable: Record<string, string> = {
-    attempt_missing: "the active attempt journal was missing",
-    attempt_ambiguous: "the active attempt could not be identified uniquely",
-    runtime_unreachable: "the execution runtime could not be reached",
-    runtime_ambiguous: "workspace ownership could not be proven",
-    runtime_owner_absent: "the execution runtime no longer listed the recorded owner",
+    runtime_unobservable: "the execution runtime could not describe this pull request's attempt",
     completion_handoff_refused: "the completion report could not be handed over for this pull request state",
     storage_exhaustion: "the host ran out of storage while the attempt was running (a write failed with ENOSPC or EDQUOT)",
   };
@@ -200,9 +213,7 @@ type ReconciliationOperations = {
   listComments(): JsonObject[] | Promise<JsonObject[]>;
   replaceLabels(labels: string[], options: { invalidatesRequests: boolean }): void | Promise<void>;
   comment(body: string): void | Promise<void>;
-  recordReleaseStarted?(): void | Promise<void>;
-  closeOwnedWorkspace?(): boolean | Promise<boolean>;
-  releaseLocalOwnership?(cutoffEventId?: string, reason?: "owner_absent" | "superseded_by_request"): void | Promise<void>;
+  closeStoppedWorkspace?(): boolean | Promise<boolean>;
 };
 
 /** Executes only recovery effects. It exposes no push, ready, merge, or request-claim operation. */
@@ -215,63 +226,55 @@ async function applyPrWorkAuthorityReconciliation(
 
   const currentLabels = labelNames(input.pr.labels);
   const labelsChange = !sameLabels(currentLabels, decision.labels);
-  if (decision.action === "release_for_request") {
-    await operations.recordReleaseStarted?.();
-    const closed = await operations.closeOwnedWorkspace?.();
-    if (closed !== true) return { action: decision.action, cleanup: "preserve_workspace" };
-    // Keep the local owner recoverable until GitHub visibly exposes the queued request.
-    // A retry can finish either side of this journaled transition idempotently.
+  if (decision.action === "restore_request") {
     if (labelsChange) await operations.replaceLabels(decision.labels, { invalidatesRequests: false });
-    await operations.releaseLocalOwnership?.(undefined, "superseded_by_request");
-    return { action: decision.action, cleanup: "ownership_released" };
+    const closed = await operations.closeStoppedWorkspace?.();
+    return { action: decision.action, cleanup: closed === true ? "workspace_closed" : "preserve_workspace" };
   }
-  const recordedTimelineEventIds = decision.action === "block" && operations.blockStarted?.reason === decision.reason
+  const recordedTimelineEventIds = operations.blockStarted?.reason === decision.reason
     ? operations.blockStarted.timelineEventIds
     : undefined;
-  const timelineBaseline = decision.action === "block" && labelsChange && !recordedTimelineEventIds
+  const timelineBaseline = labelsChange && !recordedTimelineEventIds
     ? await operations.listTimelineEvents()
     : [];
   const timelineBaselineIds = recordedTimelineEventIds || timelineBaseline.map(eventId);
-  if (decision.action === "block" && labelsChange && !recordedTimelineEventIds) {
+  if (labelsChange && !recordedTimelineEventIds) {
     await operations.recordBlockStarted?.({ reason: decision.reason, timelineEventIds: timelineBaselineIds });
   }
-  if (labelsChange) await operations.replaceLabels(decision.labels, { invalidatesRequests: decision.invalidatesRequests });
+  // A block invalidates every request: the stopped work is not wanted until a person asks again,
+  // so the label replacement is full rather than preserving concurrent requests.
+  if (labelsChange) await operations.replaceLabels(decision.labels, { invalidatesRequests: true });
 
-  let cutoffEventId: string | undefined;
-  if (decision.action === "block") {
-    const events = await operations.listTimelineEvents();
-    const baselineIds = new Set(timelineBaselineIds);
-    const newBlockedEvents = events.filter((event) => !baselineIds.has(eventId(event))
-      && eventAction(event) === "labeled"
-      && eventLabel(event) === input.blockedLabel
-      && eventActor(event) === operations.automationLogin.toLowerCase());
-    const cutoff = labelsChange || recordedTimelineEventIds
-      ? newBlockedEvents.length === 1 ? newBlockedEvents[0] : null
-      : latestBlockedEvent(events, input.blockedLabel, operations.automationLogin);
-    if (!cutoff) return { action: "blocked_cutoff_unproven", cleanup: "preserve_workspace" };
-    cutoffEventId = eventId(cutoff);
-    const body = recoveryComment(input.pr.number, input.pr.headRefOid, decision.reason, cutoffEventId, input.launchFailures);
-    const comments = await operations.listComments();
-    const alreadyExplained = comments.some((comment) => {
-      const marker = parseRecoveryMarker(comment.body);
-      return String(comment.author?.login || comment.user?.login || "").toLowerCase() === operations.automationLogin.toLowerCase()
-        && Number(marker?.number) === input.pr.number
-        && String(marker?.head || "").toLowerCase() === input.pr.headRefOid.toLowerCase()
-        && String(marker?.cutoffEventId || "") === cutoffEventId;
-    });
-    if (!alreadyExplained) await operations.comment(body);
-    await operations.completeBlock?.(cutoffEventId);
-  }
+  const events = await operations.listTimelineEvents();
+  const baselineIds = new Set(timelineBaselineIds);
+  const newBlockedEvents = events.filter((event) => !baselineIds.has(eventId(event))
+    && eventAction(event) === "labeled"
+    && eventLabel(event) === input.blockedLabel
+    && eventActor(event) === operations.automationLogin.toLowerCase());
+  const cutoff = labelsChange || recordedTimelineEventIds
+    ? newBlockedEvents.length === 1 ? newBlockedEvents[0] : null
+    : latestBlockedEvent(events, input.blockedLabel, operations.automationLogin);
+  if (!cutoff) return { action: "blocked_cutoff_unproven", cleanup: "preserve_workspace" };
+  const cutoffEventId = eventId(cutoff);
+  const body = recoveryComment(input.pr.number, input.pr.headRefOid, decision.reason, cutoffEventId, input.launchFailures);
+  const comments = await operations.listComments();
+  const alreadyExplained = comments.some((comment) => {
+    const marker = parseRecoveryMarker(comment.body);
+    return String(comment.author?.login || comment.user?.login || "").toLowerCase() === operations.automationLogin.toLowerCase()
+      && Number(marker?.number) === input.pr.number
+      && String(marker?.head || "").toLowerCase() === input.pr.headRefOid.toLowerCase()
+      && String(marker?.cutoffEventId || "") === cutoffEventId;
+  });
+  if (!alreadyExplained) await operations.comment(body);
+  await operations.completeBlock?.(cutoffEventId);
 
-  let cleanup: string = decision.cleanup;
-  if (decision.cleanup === "close_owned_workspace") {
-    const closed = await operations.closeOwnedWorkspace?.();
-    if (closed === true) {
-      await operations.releaseLocalOwnership?.(cutoffEventId);
-      cleanup = "ownership_released";
-    } else cleanup = "preserve_workspace";
-  }
-  return { action: decision.action, ...(cutoffEventId ? { cutoffEventId } : {}), cleanup };
+  const closed = decision.cleanup === "close_stopped_workspace"
+    ? await operations.closeStoppedWorkspace?.() : undefined;
+  return {
+    action: decision.action,
+    cutoffEventId,
+    cleanup: decision.cleanup === "close_stopped_workspace" ? (closed === true ? "workspace_closed" : "preserve_workspace") : decision.cleanup,
+  };
 }
 
 function parseRecoveryMarker(body: unknown): JsonObject | null {
