@@ -87,13 +87,28 @@ function retryWaitingAgentSession(handoff: JsonObject): boolean {
   return retry(record);
 }
 
-function runDeterministicCompletion(handoff: JsonObject): AttemptMonitoringApplication {
-  const completionScript = ["issue", "explorer"].includes(String(handoff.kind))
+/** The code generation the host currently loads; the completion runs from it (ADR 0036). */
+type CompletionCodeSupply = { automationDir?: string };
+
+/**
+ * The handoff records the launch-time snapshot for the agent's own run. The host-side completion
+ * (verification, push, PR, persistence, closure) must be fixable by deploying new code, so the
+ * current automation directory replaces the recorded one for the completion process and for the
+ * sibling scripts it resolves from `input.automationDir` (ADR 0036).
+ */
+function completionHandoff(handoff: JsonObject, supply?: CompletionCodeSupply): JsonObject {
+  if (!supply?.automationDir) return handoff;
+  return { ...handoff, input: { ...(handoff.input || {}), automationDir: supply.automationDir } };
+}
+
+function runDeterministicCompletion(handoff: JsonObject, supply?: CompletionCodeSupply): AttemptMonitoringApplication {
+  const current = completionHandoff(handoff, supply);
+  const completionScript = ["issue", "explorer"].includes(String(current.kind))
     ? "complete-deterministic-issue-attempt.cts"
     : "complete-deterministic-pr-attempt.cts";
-  const script = path.join(String(handoff.input?.automationDir || ""), completionScript);
+  const script = path.join(String(current.input?.automationDir || ""), completionScript);
   const completed = childProcess.spawnSync("node", [script], {
-    input: JSON.stringify(handoff),
+    input: JSON.stringify(current),
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
     timeout: 15 * 60_000,
@@ -110,8 +125,9 @@ function applyDeterministicAttemptMonitoring(
   handoff: JsonObject,
   directive: Exclude<AttemptMonitoringDirective, { action: "working" | "ambiguity" | "settled" }>,
   applyTerminalDisposition: (handoff: JsonObject, disposition: JsonObject) => boolean,
+  supply?: CompletionCodeSupply,
 ): AttemptMonitoringApplication {
-  if (directive.action === "completion") return runDeterministicCompletion(handoff);
+  if (directive.action === "completion") return runDeterministicCompletion(handoff, supply);
   const disposition = directive.action === "missing_report"
     ? directive.reason === "model_availability"
       ? { action: "wait_for_model", reason: "model_availability" }

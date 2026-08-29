@@ -1475,10 +1475,16 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
       }),
     applyAttemptMonitoring: (handoff, directive) => {
       if (!isCurrentSchedulerRun()) return { applied: false };
+      // The completion runs from the code this host loaded, not from the snapshot the attempt was
+      // launched with, so a deployed fix reaches retained attempts (ADR 0036).
+      const completionCode = directive.action === "completion"
+        ? { automationDir: ensureCodeSnapshot({ packageRoot: PACKAGE_ROOT, stateDir: STATE_DIR, codeIdentity: LOADED_CODE_IDENTITY }).automationDir }
+        : undefined;
       return applyDeterministicAttemptMonitoring(
         handoff,
         directive,
         (currentHandoff, disposition) => applyMonitorHandoffDisposition(currentHandoff, disposition, project),
+        completionCode,
       );
     },
     retryModelWait: (handoff) => {

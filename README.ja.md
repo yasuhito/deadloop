@@ -25,7 +25,7 @@ pi install git:github.com/yasuhito/deadloop
 - 作業担当とレビュー担当は `pi`、`claude`、`omp` から選べます。`workerAgent` と `reviewerAgent` で指定し、どのホストが自動処理を動かしているかとは独立です。
 - 既定の実行基盤は [Herdr](https://herdr.dev/) です。
 - 現在対応しているホスト環境は、互換性のある `flock` 実行ファイル（通常は util-linux が提供）と、非待機のファイル記述子ロックを利用できる Unix 系システムです。`/deadloop-enable` は自動処理を有効化する前に、この機能を検査します。
-- 各 Automation host は、拡張の読み込み時に deadloop checkout の commit をコード識別子として固定します。checkout が進んだ場合、ホストはセッションが空いている次の tick 境界で自分を読み直し（`/deadloop-reload`、配備 commit ごとに一回）、新しいコードで続行します。読み直しが効かなかった場合だけ、共有 enablement 状態の書き込みと tick は停止し、status と doctor が両方の識別子と復旧手順を表示します。ホストは自分の checkout を pull しません。`main` を進めるのは operator の操作です。共有 enablement 状態には診断専用として最後の書き込み元のコード識別子が記録され、`/deadloop-doctor` がそれに加えてコードスナップショットの在庫（世代数と容量）と掃除コマンドを報告します。スナップショットを自動で削除することはありません。
+- 各 Automation host は、拡張の読み込み時に deadloop checkout の commit をコード識別子として固定します。checkout が進んだ場合、ホストはセッションが空いている次の tick 境界で自分を読み直し（`/deadloop-reload`、配備 commit ごとに一回）、新しいコードで続行します。読み直しが効かなかった場合だけ、共有 enablement 状態の書き込みと tick は停止し、status と doctor が両方の識別子と復旧手順を表示します。ホストは自分の checkout を pull しません。`main` を進めるのは operator の操作です。共有 enablement 状態には診断専用として最後の書き込み元のコード識別子が記録され、`/deadloop-doctor` がそれに加えてコードスナップショットの在庫（世代数と容量）と掃除コマンドを報告します。スナップショットを自動で削除することはありません。 保持中の試行の完了処理（検証、push、PR 作成、記録、閉鎖）はホストが現在ロードしているコードで実行するため、配備した修正は進行中だった試行にも次の tick で届きます（ADR 0036）。
 
 ## 設定
 
