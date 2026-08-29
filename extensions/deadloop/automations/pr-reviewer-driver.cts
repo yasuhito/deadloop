@@ -28,7 +28,7 @@ const {
 const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { postBlockRequestIsEligible } = require("../../../src/pr-work-authority-reconciliation.cts");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
-const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { observeAttemptLiveness } = require("../../../src/attempt-runtime-observation.cts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
@@ -42,7 +42,6 @@ const {
 } = require("../../../src/pr-review-history.cts");
 const { evaluateProjectBaseBlocking } = require("../../../src/ci-base-blocking.cts");
 
-import type { AttemptAgentRunner } from "../../../src/attempt-runtime-observation-types";
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
 import type { RunnerAdapter } from "../../../src/runner";
 
@@ -549,7 +548,6 @@ function consumeRequestWithIdentity(
   role: string,
   enabled: EnabledIdentity = {},
   expectedRequestEventIds: Record<string, string> = {},
-  currentAttemptId = "",
 ): JsonObject {
   const enabledAutomationLogin = String(enabled.automationLogin || "").trim().toLowerCase();
   return consumeRequestEvent(
@@ -559,7 +557,6 @@ function consumeRequestWithIdentity(
     role,
     fixture ? () => env.automationLogin : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
     expectedRequestEventIds,
-    currentAttemptId,
   );
 }
 
@@ -924,7 +921,7 @@ function launchBranchUpdate(
     plan.input,
     (github) => {
       const consumed = consumeRequestWithIdentity(
-        github, pr, env, fixture, "branch-update", enabledIdentity, requestEventIds, plan.input.uuid,
+        github, pr, env, fixture, "branch-update", enabledIdentity, requestEventIds,
       );
       requestEventId = String(consumed.requestEventId || "");
       requestEventIds = consumed.requestEventIds || {};
@@ -1222,7 +1219,6 @@ function consumeRequestEvent(
   role: string,
   authenticate: () => string = () => assertAuthenticatedReviewIdentity(env),
   expectedRequestEventIds: Record<string, string> = {},
-  currentAttemptId = "",
 ): JsonObject {
   const number = Number(pr.number || 0);
   const requestLabel = requestLabelForRole(env, role);
@@ -1269,89 +1265,11 @@ function consumeRequestEvent(
   expectedManaged.delete(requestLabel);
   assertConsumptionObservation(observed, baseline.requestEventIds, expectedManaged, env, number);
 
-  takeWorkAuthorityFromRetainedAttempts({
-    stateDir: env.stateDir,
-    projectId: env.projectId,
-    githubRepo: env.githubRepo,
-    prNumber: number,
-    currentAttemptId,
-  });
   return {
     requestEventId,
     requestEventIds: Object.fromEntries(baseline.requestEventIds),
     labels: [...observed.labels],
   };
-}
-
-type WorkAuthorityTakeover = {
-  stateDir: string;
-  projectId: string;
-  githubRepo: string;
-  prNumber: number;
-  currentAttemptId?: string;
-};
-
-function retainedAttemptsForPr(input: WorkAuthorityTakeover): Array<{ runDir: string; record: JsonObject }> {
-  const runsRoot = path.join(input.stateDir, "runs");
-  let entries: string[];
-  try { entries = fs.readdirSync(runsRoot); } catch { return []; }
-  const retained: Array<{ runDir: string; record: JsonObject }> = [];
-  for (const entry of entries) {
-    const runDir = path.join(runsRoot, entry);
-    if (!fs.existsSync(path.join(runDir, "attempt.json"))) continue;
-    let record: JsonObject;
-    // A journal this host cannot parse proves nothing, so it keeps whatever authority it claims and
-    // the reconciler still stops the pull request for a person to read.
-    try { record = readAttemptRecord(runDir); } catch { continue; }
-    if (record.project !== input.projectId || record.repository !== input.githubRepo) continue;
-    if (record.target?.kind !== "pull-request" || Number(record.target?.number) !== input.prNumber) continue;
-    if (input.currentAttemptId && record.attemptId === input.currentAttemptId) continue;
-    if (releasesAttemptOwnership(record.phase)) continue;
-    retained.push({ runDir, record: { ...record, runDir } });
-  }
-  return retained;
-}
-
-/**
- * Take work authority from the retained attempts the execution runtime reports stopped, as part of
- * winning a new Agent request. Only the authority claim is dropped: the journal and its worktree
- * stay as evidence, and nothing is published to GitHub.
- *
- * A stopped attempt releases whatever else it carries. ADR 0020 leaves the runtime the only
- * authority on liveness, so neither the revision the attempt was launched against nor the request
- * its saved claim consumed takes part. The head still guards every GitHub mutation and decides
- * whether a completion report may be applied; neither question is answered here.
- */
-function takeWorkAuthorityFromRetainedAttempts(
-  input: WorkAuthorityTakeover,
-  observe: { runner?: AttemptAgentRunner } = {},
-): string[] {
-  const released: string[] = [];
-  for (const { runDir, record } of retainedAttemptsForPr(input)) {
-    if (!attemptOwnerAbsentForTakeover(record, observe.runner)) continue;
-    releasePersistedAttemptAuthority(runDir, new Date().toISOString(), undefined, "superseded_by_request");
-    released.push(String(record.attemptId));
-  }
-  return released;
-}
-
-/**
- * Whether a retained attempt's owner is absent, asked of the execution runtime and nothing else.
- *
- * ADR 0020 leaves one authority on this question, and ADR 0027 fixes what it is asked: whether the
- * agent is listed at all. So the journal's phase, its claim marker, and the receipts beside it do not
- * take part: an attempt whose agent is gone has ended even if its completion was never handed to
- * GitHub, and an attempt whose agent is still listed keeps its authority however finished it looks on
- * disk or however idle the runtime reports it. A runtime that cannot be reached, or that reports an
- * agent this attempt cannot be told apart from, proves nothing, and an unproven attempt keeps its
- * authority.
- */
-function attemptOwnerAbsentForTakeover(record: JsonObject, runner?: AttemptAgentRunner): boolean {
-  try {
-    return observeAttemptLiveness(runner || herdrRunner(), record).kind === "owner_absent";
-  } catch {
-    return false;
-  }
 }
 
 /** The review history observed before request consumption must remain unchanged before launch. */
@@ -1391,7 +1309,6 @@ function launchPrReviewer(pr: JsonObject, env: ReturnType<typeof envConfig>, fix
           "reviewer",
           fixture ? () => env.automationLogin : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
           requestEventIds,
-          plan.input.uuid,
         );
         requestEventId = String(consumed.requestEventId || "");
         requestEventIds = consumed.requestEventIds || {};
@@ -1666,7 +1583,6 @@ function launchPrRepair(
         "review-repair",
         fixture ? () => env.automationLogin : () => assertAuthenticatedReviewIdentity(env, enabledAutomationLogin),
         requestEventIds,
-        input.uuid,
       );
       requestEventId = String(consumed.requestEventId || "");
       requestEventIds = consumed.requestEventIds || {};
@@ -2180,7 +2096,6 @@ module.exports = {
   resolveAuthorizedAutomationLogins,
   staleReviewerLaunchSummary,
   assertAuthenticatedReviewIdentity,
-  takeWorkAuthorityFromRetainedAttempts,
   assertBranchUpdateRequestConsumed,
   assertBranchUpdateRequestSelectable,
   assertTrustedReviewIdentity,

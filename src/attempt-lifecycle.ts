@@ -146,7 +146,7 @@ export type AttemptAbandonment = {
 // and `github_persisted` to `workspace_closed`, which releases ownership on its own. These reasons
 // therefore name the ways an attempt can end without completing.
 export type AttemptAuthorityRelease = {
-  reason: "owner_absent" | "terminal_missing_report" | "runtime_timeout" | "never_launched" | "superseded_by_request";
+  reason: "owner_absent" | "terminal_missing_report" | "runtime_timeout" | "never_launched";
   releasedAt: string;
   cutoffEventId?: string;
 };
@@ -313,7 +313,7 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
       fail("authority_released requires authorityRelease evidence");
     }
     const evidence = record.authorityRelease as Record<string, unknown>;
-    const reasons: AttemptAuthorityRelease["reason"][] = ["owner_absent", "terminal_missing_report", "runtime_timeout", "never_launched", "superseded_by_request"];
+    const reasons: AttemptAuthorityRelease["reason"][] = ["owner_absent", "terminal_missing_report", "runtime_timeout", "never_launched"];
     if (!reasons.includes(evidence.reason as AttemptAuthorityRelease["reason"])) fail("authorityRelease.reason is invalid");
     const releasedAt = nonEmptyString(evidence.releasedAt, "authorityRelease.releasedAt");
     if (!Number.isFinite(Date.parse(releasedAt))) fail("authorityRelease.releasedAt must be an ISO timestamp");

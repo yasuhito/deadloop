@@ -4,12 +4,10 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, createHerdrRunnerFromCommandRunner, driverResult } = require("../../../src/automation-driver-kit.cts");
 const { createGithubOperations } = require("../../../src/github-operations.cts");
-const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.cts");
 const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.cts");
-const { provenPushedHeadTransition } = require("./pushed-head-proof.cts");
 const { provenAttemptCompletion } = require("./attempt-completion-proof.cts");
 const { containsStorageExhaustion, reportNamesStorageExhaustion } = require("../../../src/storage-exhaustion.cjs");
 const { validatePromise } = require("./extract-worker-promise.cts");
@@ -145,34 +143,20 @@ function observedAttemptStorageExhaustion(record: JsonObject): boolean {
   return validation.status === "blocked" && reportNamesStorageExhaustion(validation.promise);
 }
 
-function latestConfiguredRequest(events: JsonObject[], currentLabels: string[], requestLabels: string[]): JsonObject | null {
-  const queued = new Set(currentLabels.filter((label) => requestLabels.includes(label)));
-  return events.filter((event) => String(event.event || "").toLowerCase() === "labeled"
-    && queued.has(String(event.label?.name || ""))
-    && String(event.id || event.node_id || ""))
-    .sort(compareGithubTimelineEvents).at(-1) || null;
+function sameStringSet(left: string[], right: string[]): boolean {
+  return left.length === right.length && [...left].sort().every((value, index) => value === [...right].sort()[index]);
 }
 
-/** Every role whose completion is still owed to GitHub, and the handler that owes it. */
-const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonObject, runDir: string) => JsonObject }> = {
-  "branch-update": {
-    module: "./pr-branch-update-complete.cts",
-    args: () => ({}),
-  },
-  reviewer: {
-    module: "./pr-review-complete.cts",
-    args: () => ({}),
-  },
-  "review-repair": {
-    module: "./pr-review-repair-complete.cts",
-    args: (record, runDir) => ({
-      result: path.join(runDir, "finalizer-result.json"),
-      contract: path.join(runDir, "review-contract.json"),
-      branch: String(record.branch || ""),
-      attemptKey: String(record.attemptId || ""),
-    }),
-  },
-};
+/** The request label each role's stopped attempt returns its pull request to. */
+function requestLabelForRole(role: string, requestLabels: { reviewLabel: string; implementLabel: string; updateBranchLabel: string }): string | undefined {
+  return ({
+    worker: requestLabels.implementLabel,
+    explorer: requestLabels.implementLabel,
+    reviewer: requestLabels.reviewLabel,
+    "review-repair": requestLabels.reviewLabel,
+    "branch-update": requestLabels.updateBranchLabel,
+  } as Record<string, string | undefined>)[role];
+}
 
 /**
  * Finishes a stopped attempt that proved it completed against the pull request's current head.
@@ -249,43 +233,43 @@ function completeProvenStoppedAttempt(
   }
 }
 
+/** Every role whose completion is still owed to GitHub, and the handler that owes it. */
+const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonObject, runDir: string) => JsonObject }> = {
+  "branch-update": {
+    module: "./pr-branch-update-complete.cts",
+    args: () => ({}),
+  },
+  reviewer: {
+    module: "./pr-review-complete.cts",
+    args: () => ({}),
+  },
+  "review-repair": {
+    module: "./pr-review-repair-complete.cts",
+    args: (record, runDir) => ({
+      result: path.join(runDir, "finalizer-result.json"),
+      contract: path.join(runDir, "review-contract.json"),
+      branch: String(record.branch || ""),
+      attemptKey: String(record.attemptId || ""),
+    }),
+  },
+};
+
 /**
- * The head change an attempt proved it produced and still holds, or null when it proved none.
- *
- * The proof itself is the finalizer receipt and the bound completion report agreeing on one push.
- * Currency is this caller's part: a proven push the pull request has since moved past says nothing
- * about who owns the head reconciliation is looking at now.
+ * The one-axis runtime answer for one attempt journal, collapsed from the runtime observation.
+ * Running means the runtime lists the attempt's agent; stopped means it reports the attempt ended;
+ * an answer the runtime cannot give — unreachable, or a checkout it cannot describe — is
+ * unobservable, and unobservable fails closed.
  */
-function pushedHeadTransition(record: JsonObject, pr: JsonObject): { originalHeadOid: string; headOid: string } | null {
-  const transition = provenPushedHeadTransition(String(record.runDir || ""), record);
-  if (!transition) return null;
-  return transition.headOid === String(pr.headRefOid || "").toLowerCase() ? transition : null;
-}
-
-function classifyRequest(
-  events: JsonObject[],
-  currentLabels: string[],
+function observeJournalRuntime(
+  runner: any,
   record: JsonObject,
-  requestLabels: string[],
-): { request: { kind: string }; requestEventId: string } {
-  const latest = latestConfiguredRequest(events, currentLabels, requestLabels);
-  const requestEventId = String(latest?.id || latest?.node_id || "");
-  const consumedEventId = String(record.requestEventId || "");
-  if (!consumedEventId) return { request: { kind: "ambiguous" }, requestEventId };
-  if (requestEventId && requestEventId !== consumedEventId) return { request: { kind: "superseded" }, requestEventId };
-  return { request: { kind: "current" }, requestEventId };
-}
-
-function sameStringSet(left: string[], right: string[]): boolean {
-  return left.length === right.length && [...left].sort().every((value, index) => value === [...right].sort()[index]);
-}
-
-function reconciliationAuthorityMatches(expected: JsonObject, observed: JsonObject): boolean {
-  return String(observed.state || "").toUpperCase() === "OPEN"
-    && String(observed.headRefOid || "").toLowerCase() === String(expected.headRefOid || "").toLowerCase()
-    && observed.requestKind === expected.requestKind
-    && observed.requestEventId === expected.requestEventId
-    && sameStringSet(observed.managedLabels || [], expected.managedLabels || []);
+  projectRepo: string,
+): "running" | "stopped" | "unobservable" {
+  try {
+    const observed = observeAttemptRuntime(runner, record, projectRepo);
+    return observed.kind === "live_matching_owner" ? "running"
+      : observed.kind === "owner_absent_owned" ? "stopped" : "unobservable";
+  } catch { return "unobservable"; }
 }
 
 async function reconcile(args: JsonObject, commandRunner = createCommandRunner()): Promise<JsonObject> {
@@ -332,16 +316,6 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       releasePersistedAttemptAuthority(attempt.runDir, new Date().toISOString(), undefined, "never_launched");
       results.push({ number, action: "released_unlaunched_attempt", attemptId: attempt.attemptId });
     }
-    if (matching.length === 0 && fs.existsSync(recoveryFile)) {
-      try {
-        const receipt = JSON.parse(fs.readFileSync(recoveryFile, "utf8"));
-        const released = attempts.released.find((attempt) => attempt.attemptId === receipt.attemptId && attempt.phase === "authority_released");
-        if (receipt.action === "authority_release_started" && released) {
-          fs.rmSync(recoveryFile, { force: true });
-          continue;
-        }
-      } catch {}
-    }
     const malformed = attempts.malformed.filter((attempt) => Number(attempt.target?.number) === number);
     // Every recorded reason this PR's launches failed before starting an agent: the attempts still
     // waiting to be released this cycle, and the ones earlier cycles already released. This is what
@@ -356,50 +330,50 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     // outranks this evidence: the completed handoff above continues past any blocking below.
     const storageExhaustion = launchFailures.some((failure) => containsStorageExhaustion(failure))
       || matching.some((attempt) => observedAttemptStorageExhaustion(attempt));
-    const events = github.listPrTimelineEvents(args.githubRepo, number);
-    let request: { kind: string };
-    let runtime: { kind: string };
-    let record: JsonObject | undefined;
-    let completion: { kind: "handoff_refused" | "none" } = { kind: "none" };
 
-    if (malformed.length || matching.length > 1) {
-      request = { kind: "ambiguous" };
-      runtime = { kind: "ambiguous" };
-    } else if (matching.length === 0) {
-      request = { kind: "missing" };
-      runtime = { kind: "ambiguous" };
-    } else {
-      record = matching[0];
-      request = classifyRequest(events, labels(pr), record, requestLabels).request;
-      try { runtime = observeAttemptRuntime(runner, record, args.projectRepo); }
-      catch { runtime = { kind: "unreachable" }; }
-    }
+    // Liveness is asked per journal and answered by the runtime alone. One live agent keeps the
+    // pull request active; one unreadable answer makes the whole observation unobservable.
+    const journals = matching.map((record) => ({ record, kind: observeJournalRuntime(runner, record, args.projectRepo) }));
+    const runtime = journals.some((journal) => journal.kind === "running") ? { kind: "running" }
+      : journals.length === 0 || malformed.length > 0 || journals.some((journal) => journal.kind === "unobservable")
+        ? { kind: "unobservable" } : { kind: "stopped" };
 
-    // An absent owner that left proof of a completed attempt is finished, not abandoned. Handing it
-    // over here is what keeps a successful attempt from being blocked for ending on success.
-    if (record && runtime.kind === "owner_absent_owned") {
-      const completed = completeProvenStoppedAttempt(record, pr, args, {
+    // A stopped attempt that left proof of a completed attempt is finished, not abandoned. Handing
+    // it over here is what keeps a successful attempt from being blocked for ending on success.
+    let completion: { kind: "handoff_refused" | "not_run" } = { kind: "not_run" };
+    let completionHandled = false;
+    for (const journal of journals.filter((candidate) => candidate.kind === "stopped")) {
+      const completed = completeProvenStoppedAttempt(journal.record, pr, args, {
         reviewLabel: args.reviewLabel || "agent:review",
         implementLabel: args.implementLabel || "agent:implement",
         updateBranchLabel: args.updateBranchLabel || "agent:update-branch",
         inProgressLabel,
         blockedLabel,
       });
-      if (completed?.kind === "completed") {
-        results.push({ number, action: "completed_proven_attempt", attemptId: record.attemptId, result: completed.result });
-        continue;
-      }
-      if (completed?.kind === "pending_head_visibility") {
-        results.push({ number, action: "completion_pending_head_visibility", attemptId: record.attemptId });
-        continue;
-      }
-      if (completed?.kind === "refused") {
-        results.push({ number, action: "completion_refused", attemptId: record.attemptId, reason: completed.reason });
+      if (!completed) continue;
+      if (completed.kind === "completed") {
+        results.push({ number, action: "completed_proven_attempt", attemptId: journal.record.attemptId, result: completed.result });
+        completionHandled = true;
+      } else if (completed.kind === "pending_head_visibility") {
+        results.push({ number, action: "completion_pending_head_visibility", attemptId: journal.record.attemptId });
+        completionHandled = true;
+      } else {
+        results.push({ number, action: "completion_refused", attemptId: journal.record.attemptId, reason: completed.reason });
         completion = { kind: "handoff_refused" };
       }
+      break;
     }
+    if (completionHandled) continue;
 
-    const input = { pr: { ...pr, labels: labels(pr) }, request, runtime, requestLabels, inProgressLabel, blockedLabel, completion,
+    const restoreRequestLabel = journals
+      .map((journal) => requestLabelForRole(String(journal.record.role || ""), {
+        reviewLabel: args.reviewLabel || "agent:review",
+        implementLabel: args.implementLabel || "agent:implement",
+        updateBranchLabel: args.updateBranchLabel || "agent:update-branch",
+      }))
+      .find((label) => label !== undefined);
+    const input = { pr: { ...pr, labels: labels(pr) }, runtime, requestLabels, inProgressLabel, blockedLabel, completion,
+      ...(restoreRequestLabel ? { restoreRequestLabel } : {}),
       ...(launchFailures.length ? { launchFailures } : {}),
       ...(storageExhaustion ? { storageExhaustion: true } : {}) };
     let blockStarted: { reason: string; timelineEventIds: string[] } | undefined;
@@ -413,29 +387,15 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         blockStarted = { reason: receipt.reason, timelineEventIds: receipt.timelineEventIds };
       }
     } catch {}
-    const initialRequest = latestConfiguredRequest(events, labels(input.pr), requestLabels);
-    let expectedRequestEventId = record
-      ? classifyRequest(events, labels(input.pr), record, requestLabels).requestEventId
-      : String(initialRequest?.id || initialRequest?.node_id || "");
     const managed = [...requestLabels, inProgressLabel, blockedLabel];
-    const revalidate = (expectedManagedLabels: string[], expectedRequestKind: string): string[] => {
+    const revalidate = (expectedManagedLabels: string[]): string[] => {
       const livePr = github.getPr(args.githubRepo, number);
       const liveLabels = labels({ labels: github.listPrLabels(args.githubRepo, number) });
-      const liveEvents = github.listPrTimelineEvents(args.githubRepo, number);
-      const liveRequest = latestConfiguredRequest(liveEvents, liveLabels, requestLabels);
-      const observed = record ? classifyRequest(liveEvents, liveLabels, record, requestLabels) : {
-        request: { kind: expectedRequestKind },
-        requestEventId: String(liveRequest?.id || liveRequest?.node_id || ""),
-      };
-      if (!reconciliationAuthorityMatches({
-        state: "OPEN", headRefOid: pr.headRefOid, requestKind: expectedRequestKind,
-        requestEventId: expectedRequestEventId,
-        managedLabels: expectedManagedLabels.filter((label) => managed.includes(label)),
-      }, {
-        state: livePr.state, headRefOid: livePr.headRefOid, requestKind: observed.request.kind,
-        requestEventId: observed.requestEventId,
-        managedLabels: liveLabels.filter((label) => managed.includes(label)),
-      })) throw new Error("PR reconciliation state changed before recovery mutation");
+      if (String(livePr.state || "").toUpperCase() !== "OPEN"
+        || String(livePr.headRefOid || "").toLowerCase() !== String(pr.headRefOid || "").toLowerCase()
+        || !sameStringSet(liveLabels.filter((label) => managed.includes(label)), expectedManagedLabels.filter((label) => managed.includes(label)))) {
+        throw new Error("PR reconciliation state changed before recovery mutation");
+      }
       return liveLabels;
     };
     const result = await applyPrWorkAuthorityReconciliation(input, {
@@ -443,43 +403,32 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       blockStarted,
       recordBlockStarted: (started: JsonObject) => writeJsonAtomically(recoveryFile, {
         schemaVersion: 1, repository: args.githubRepo, repositoryId: String(repositoryIdentity.id || ""),
-        prNumber: number, headRefOid: String(pr.headRefOid || ""), attemptId: record?.attemptId,
+        prNumber: number, headRefOid: String(pr.headRefOid || ""), attemptId: journals[0]?.record.attemptId,
         ...started,
       }),
-      completeBlock: record ? undefined : () => fs.rmSync(recoveryFile, { force: true }),
+      completeBlock: journals.length === 0 ? () => fs.rmSync(recoveryFile, { force: true }) : undefined,
       listTimelineEvents: () => github.listPrTimelineEvents(args.githubRepo, number),
       listComments: () => github.listPrComments(args.githubRepo, number),
       replaceLabels: (next: string[], options: { invalidatesRequests: boolean }) => guarded(() => {
-        const current = revalidate(input.pr.labels, request.kind);
+        const current = revalidate(input.pr.labels);
         const apply = options.invalidatesRequests ? replaceReconciledLabels : moveReconciledLabels;
         input.pr.labels = apply(github, args.githubRepo, number, current, next, managed);
-        if (!next.some((label) => requestLabels.includes(label))) expectedRequestEventId = "";
       }),
       comment: (body: string) => guarded(() => {
-        revalidate(input.pr.labels, request.kind);
+        revalidate(input.pr.labels);
         return github.createPrComment(args.githubRepo, number, body);
       }),
-      recordReleaseStarted: record ? () => writeJsonAtomically(recoveryFile, {
-        schemaVersion: 1, action: "authority_release_started", repository: args.githubRepo,
-        repositoryId: String(repositoryIdentity.id || ""), prNumber: number,
-        headRefOid: String(pr.headRefOid || ""), attemptId: record!.attemptId,
-        requestEventId: expectedRequestEventId,
-      }) : undefined,
-      closeOwnedWorkspace: record && runtime.kind === "owner_absent_owned" ? () => guarded(() => {
-        if (observeAttemptRuntime(runner, record!, args.projectRepo).kind !== "owner_absent_owned") return false;
-        writeJsonAtomically(closeReceiptPath(record!), {
-          schemaVersion: 1, attemptId: record!.attemptId, workspaceId: record!.workspaceId,
-          worktreePath: record!.worktreePath, startedAt: new Date().toISOString(),
-        });
-        const alreadyAbsent = !runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record!.workspaceId));
-        if (!alreadyAbsent) runner.closeWorkspace(record!.workspaceId);
-        return observeAttemptRuntime(runner, record!, args.projectRepo).kind === "owner_absent_owned";
-      }) : undefined,
-      releaseLocalOwnership: record ? (cutoffEventId?: string, reason: "owner_absent" | "superseded_by_request" = "owner_absent") => {
-        releasePersistedAttemptAuthority(record!.runDir, new Date().toISOString(), cutoffEventId, reason);
-        fs.rmSync(recoveryFile, { force: true });
-      } : undefined,
+      closeStoppedWorkspace: journals.length ? () => guarded(() => closeStoppedAttemptWorkspaces(runner, journals, args.projectRepo)) : undefined,
     });
+    // A stopped attempt whose workspace is closed again has nothing left to hold. Writing that into
+    // its journal keeps the restored request launchable: an unsettled journal still counts as a
+    // claim, and a claim beside a fresh request would stop the next launch dead.
+    if ((result.action === "restore_request" || result.action === "block") && result.cleanup === "workspace_closed") {
+      for (const journal of journals) {
+        try { releasePersistedAttemptAuthority(journal.record.runDir, new Date().toISOString(), undefined, "owner_absent"); } catch {}
+      }
+      fs.rmSync(recoveryFile, { force: true });
+    }
     results.push({ prNumber: number, ...result });
   }
   // A refused handoff has to reach the summary, not only the structured results. Callers keep the
@@ -491,6 +440,33 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
   return driverResult("done", summary, { driverAction: "pr_work_authority_reconciled", results });
 }
 
+/**
+ * Closes every stopped attempt workspace this pull request still holds, one journal at a time.
+ * Closing is idempotent: a workspace already closed left the receipt that says so, and the runtime
+ * re-observed absence is what makes the close count. Any journal this cannot confirm keeps its
+ * workspace, and the caller reports the workspace as preserved instead of closed.
+ */
+function closeStoppedAttemptWorkspaces(
+  runner: any,
+  journals: Array<{ record: JsonObject; kind: string }>,
+  projectRepo: string,
+): boolean {
+  let allClosed = true;
+  for (const { record } of journals.filter((journal) => journal.kind === "stopped")) {
+    try {
+      if (observeAttemptRuntime(runner, record, projectRepo).kind !== "owner_absent_owned") { allClosed = false; continue; }
+      writeJsonAtomically(closeReceiptPath(record), {
+        schemaVersion: 1, attemptId: record.attemptId, workspaceId: record.workspaceId,
+        worktreePath: record.worktreePath, startedAt: new Date().toISOString(),
+      });
+      const alreadyAbsent = !runner.listWorkspaces().some((workspace: JsonObject) => String(workspace.workspaceId || "") === String(record.workspaceId));
+      if (!alreadyAbsent) runner.closeWorkspace(record.workspaceId);
+      if (observeAttemptRuntime(runner, record, projectRepo).kind !== "owner_absent_owned") allClosed = false;
+    } catch { allClosed = false; }
+  }
+  return allClosed;
+}
+
 async function main(): Promise<void> {
   try { process.stdout.write(`${JSON.stringify(await reconcile(parseArgs(process.argv.slice(2))))}\n`); }
   catch (error) { process.stdout.write(`${JSON.stringify(driverResult("error", error instanceof Error ? error.message : String(error), { driverAction: "pr_work_authority_reconciliation_failed" }))}\n`); }
@@ -498,14 +474,11 @@ async function main(): Promise<void> {
 
 if (require.main === module) void main();
 module.exports = {
-  classifyRequest,
   completeProvenStoppedAttempt,
-  latestConfiguredRequest,
   loadAttempts,
   moveReconciledLabels,
-  pushedHeadTransition,
+  observeJournalRuntime,
   reconcile,
   reconciledLabelReplacement,
-  reconciliationAuthorityMatches,
   replaceReconciledLabels,
 };
