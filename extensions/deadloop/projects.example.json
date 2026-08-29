@@ -17,19 +17,13 @@
           "id": "example-project:issue-coordinator",
           "name": "example-project issue coordinator",
           "schedule": "*/10 * * * *",
-          "promptFile": "issue-coordinator.prompt.md",
-          "precheckFile": "issue-coordinator.precheck.sh",
-          "driverFile": "issue-coordinator-driver.cts",
-          "precheckTimeoutSeconds": 60
+          "driverFile": "issue-coordinator-driver.cts"
         },
         {
           "id": "example-project:pr-reviewer",
           "name": "example-project PR reviewer",
           "schedule": "*/10 * * * *",
-          "promptFile": "pr-reviewer.prompt.md",
-          "precheckFile": "pr-reviewer.precheck.sh",
-          "driverFile": "pr-reviewer-driver.cts",
-          "precheckTimeoutSeconds": 60
+          "driverFile": "pr-reviewer-driver.cts"
         }
       ],
       "workerModel": "openai-codex/gpt-5.6-sol",

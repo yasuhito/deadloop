@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
 const {
@@ -23,8 +21,6 @@ const blockedInput = {
   worktreePath: "/tmp/work tree",
   branch: "agent/issue-72-renderers",
 };
-
-const issueCoordinatorPrompt = readFileSync("extensions/deadloop/automations/issue-coordinator.prompt.md", "utf8");
 
 const workerInput = {
   launchReason: "medium: ordinary implementation.",
@@ -127,9 +123,5 @@ describe("issue coordinator renderers", () => {
     expect(renderIssueWorkerPrompt(workerInput)).toContain(
       '"schemaVersion":1,'
     );
-  });
-
-  it("keeps the driver-first coordinator pointed at the deterministic renderers", () => {
-    expect(issueCoordinatorPrompt).toContain("issue-coordinator-driver.cts");
   });
 });

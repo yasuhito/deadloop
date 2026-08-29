@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -337,6 +338,30 @@ describe("branch update launch plan", () => {
         headOid,
         baseOid,
       )).toBe(false);
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  // The removed precheck skipped candidate-free ticks before any driver ran; the driver's own
+  // first skip branch now observes the same early skip.
+  it("skips candidate-free runs", () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "deadloop-reviewer-state-"));
+    try {
+      const result = spawnSync("node", ["extensions/deadloop/automations/pr-reviewer-driver.cts", "--fixture", "test/fixtures/pr-reviewer-driver/no-candidate.json"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          DEADLOOP_PROJECT_ID: "demo",
+          DEADLOOP_REPO_PATH: "/repo",
+          DEADLOOP_GITHUB_REPO: "owner/repo",
+          DEADLOOP_AUTHORIZED_AUTOMATION_LOGINS: "deadloop-bot",
+          DEADLOOP_STATE_DIR: stateDir,
+        },
+      });
+      if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+      expect(JSON.parse(result.stdout)).toMatchObject({ action: "skip" });
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
     }

@@ -14,12 +14,14 @@
         {
           "id": "deadloop:issue-coordinator",
           "name": "deadloop issue coordinator",
-          "schedule": "*/10 * * * *"
+          "schedule": "*/10 * * * *",
+          "driverFile": "issue-coordinator-driver.cts"
         },
         {
           "id": "deadloop:pr-reviewer",
           "name": "deadloop PR reviewer",
-          "schedule": "*/10 * * * *"
+          "schedule": "*/10 * * * *",
+          "driverFile": "pr-reviewer-driver.cts"
         }
       ],
       "workerModel": "openai-codex/gpt-5.6-sol",

@@ -321,84 +321,6 @@ function liveDependencyState(repo: string, number: number, deadline?: number): s
   }
 }
 
-function loadIssues(file: string | undefined): IssueDecisionRecord[] {
-  const data = JSON.parse(file ? fs.readFileSync(file, "utf8") : fs.readFileSync(0, "utf8"));
-  if (!Array.isArray(data)) throw new Error("issue JSON must be a list");
-  return data.filter((issue: unknown) => issue && typeof issue === "object");
-}
-
-const ISSUE_DECISION_VALUE_FLAGS = new Set([
-  "--input",
-  "--fixture",
-  "--repo",
-  "--ready-label",
-  "--explore-label",
-  "--implement-label",
-  "--in-progress-label",
-  "--blocked-label",
-  "--human-label",
-  "--needs-info-label",
-  "--wontfix-label",
-]);
-
-function issueDecisionHelp(): string {
-  return [
-    "Usage: issue-coordinator-decisions.cts [--input FILE | --fixture FILE] [--repo owner/name] [--json] [--exit-code]",
-    "",
-    "Options:",
-    "  --input FILE                    Path to issue JSON. Defaults to stdin.",
-    "  --fixture FILE                  Load issues and dependency states from fixture JSON.",
-    "  --repo owner/name               GitHub repository for live dependency checks.",
-    "  --ready-label LABEL             Ready label. Default: ready-for-agent.",
-    "  --explore-label LABEL           Explore label. Default: agent:explore.",
-    "  --implement-label LABEL         Implement label. Default: agent:implement.",
-    "  --in-progress-label LABEL       In-progress label. Default: agent:in-progress.",
-    "  --blocked-label LABEL           Blocked label. Default: agent:blocked.",
-    "  --human-label LABEL             Human handoff label. Default: ready-for-human.",
-    "  --needs-info-label LABEL        Needs-info label. Default: needs-info.",
-    "  --wontfix-label LABEL           Wontfix label. Default: wontfix.",
-    "  --json                          Print JSON output.",
-    "  --exit-code                     Exit 0 only when an issue is selected.",
-  ].join("\n");
-}
-
-function parseArgsForIssueDecision(argv: string[]): IssueDecisionRecord {
-  const parsed: IssueDecisionRecord = { json: false };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    if (token === "--help" || token === "-h") {
-      parsed.help = true;
-      continue;
-    }
-    if (token === "--json") {
-      parsed.json = true;
-      continue;
-    }
-    if (token === "--exit-code") {
-      parsed.exitCode = true;
-      continue;
-    }
-    if (!ISSUE_DECISION_VALUE_FLAGS.has(token)) throw new Error(`unknown flag: ${token}`);
-    const key = token.slice(2).replace(/-([a-z])/g, (_match, char) => char.toUpperCase());
-    parsed[key] = argv[index + 1] || "";
-    index += 1;
-  }
-  return parsed;
-}
-
-function configFromIssueArgs(args: IssueDecisionRecord): IssueDecisionConfig {
-  return defaultIssueDecisionConfig({
-    readyLabel: args.readyLabel || process.env.DEADLOOP_READY_LABEL || DEFAULT_READY_LABEL,
-    exploreLabel: args.exploreLabel || process.env.DEADLOOP_EXPLORE_LABEL || DEFAULT_EXPLORE_LABEL,
-    implementLabel: args.implementLabel || process.env.DEADLOOP_IMPLEMENT_LABEL || DEFAULT_IMPLEMENT_LABEL,
-    inProgressLabel: args.inProgressLabel || process.env.DEADLOOP_IN_PROGRESS_LABEL || DEFAULT_IN_PROGRESS_LABEL,
-    blockedLabel: args.blockedLabel || process.env.DEADLOOP_BLOCKED_LABEL || DEFAULT_BLOCKED_LABEL,
-    humanLabel: args.humanLabel || process.env.DEADLOOP_HUMAN_LABEL || DEFAULT_HUMAN_LABEL,
-    needsInfoLabel: args.needsInfoLabel || process.env.DEADLOOP_NEEDS_INFO_LABEL || DEFAULT_NEEDS_INFO_LABEL,
-    wontfixLabel: args.wontfixLabel || process.env.DEADLOOP_WONTFIX_LABEL || DEFAULT_WONTFIX_LABEL,
-  });
-}
-
 type IssueRequestRole = "exploration" | "implementation";
 
 type IssueRequestStopResult = {
@@ -462,46 +384,6 @@ function issueRequestStopResult(
     };
   }
   return null;
-}
-
-function main(argv: string[] = process.argv.slice(2)): number {
-  const args = parseArgsForIssueDecision(argv);
-  if (args.help) {
-    process.stdout.write(`${issueDecisionHelp()}\n`);
-    return 0;
-  }
-  const config = configFromIssueArgs(args);
-  let decision: IssueDecisionRecord;
-  if (args.fixture) {
-    decision = fixtureDecision(args.fixture, config, args.repo || undefined);
-  } else {
-    const repo = args.repo || process.env.DEADLOOP_GITHUB_REPO || "";
-    if (!repo) throw new Error("--repo or DEADLOOP_GITHUB_REPO is required");
-    const issues = loadIssues(args.input);
-    const deadline = issueDecisionDeadline();
-    decision = selectIssueForImplementation(
-      issues,
-      config,
-      (issue) => issueBlockedByNumbers(repo, issueNumberForDecision(issue), deadline),
-      (number) => liveDependencyState(repo, number, deadline),
-      undefined,
-      repo,
-    );
-  }
-
-  if (args.json) process.stdout.write(`${JSON.stringify(decision)}\n`);
-  else if (decision.selected) process.stdout.write(`selected issue #${decision.number}\n`);
-  else process.stdout.write("no selectable issue\n");
-  return args.exitCode && !decision.selected ? 1 : 0;
-}
-
-if (require.main === module) {
-  try {
-    process.exitCode = main();
-  } catch (error) {
-    console.error(`issue-coordinator-decisions.cts: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 2;
-  }
 }
 
 module.exports = {

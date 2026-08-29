@@ -90,7 +90,7 @@ Given("Shared policy contains no automations and local configuration is empty", 
 
 Given("Shared policy contains automation and local configuration is empty", function (this: ConfigurationWorld) {
   local(this, {});
-  this.policy = { automations: [{ id: "demo:shared", name: "shared automation" }] };
+  this.policy = { automations: [{ id: "demo:shared", name: "shared automation", driverFile: "driver.cts" }] };
 });
 
 Given("Local configuration explicitly enables automatic merge", function (this: ConfigurationWorld) {

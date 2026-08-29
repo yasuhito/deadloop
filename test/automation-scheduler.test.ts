@@ -20,8 +20,8 @@ describe("Automation host scheduling", () => {
       workerModel: "test-model",
       reviewerModel: "review-model",
       automations: [
-        { id: "became-due-now", name: "became due now", schedule: "*/30 * * * *", initialLastScheduledAt: 0 },
-        { id: "waiting", name: "waiting", schedule: "*/10 * * * *", initialLastScheduledAt: 10 * 60_000 },
+        { id: "became-due-now", name: "became due now", schedule: "*/30 * * * *", initialLastScheduledAt: 0, driverFile: "driver.cts" },
+        { id: "waiting", name: "waiting", schedule: "*/10 * * * *", initialLastScheduledAt: 10 * 60_000, driverFile: "driver.cts" },
       ],
     });
 
@@ -34,8 +34,8 @@ describe("Automation host scheduling", () => {
       workerModel: "test-model",
       reviewerModel: "review-model",
       automations: [
-        { id: "due-at-fifteen", name: "due at fifteen", schedule: "*/15 * * * *", initialLastScheduledAt: 0 },
-        { id: "due-at-ten", name: "due at ten", schedule: "*/10 * * * *", initialLastScheduledAt: 9 * 60_000 },
+        { id: "due-at-fifteen", name: "due at fifteen", schedule: "*/15 * * * *", initialLastScheduledAt: 0, driverFile: "driver.cts" },
+        { id: "due-at-ten", name: "due at ten", schedule: "*/10 * * * *", initialLastScheduledAt: 9 * 60_000, driverFile: "driver.cts" },
       ],
     });
 
@@ -71,7 +71,7 @@ describe("Automation host scheduling", () => {
       id: "demo",
       workerModel: "test-model",
       reviewerModel: "review-model",
-      automations: [{ id: "late", name: "late", schedule: "*/10 * * * *", graceMinutes: 1, initialLastScheduledAt: 0 }],
+      automations: [{ id: "late", name: "late", schedule: "*/10 * * * *", graceMinutes: 1, initialLastScheduledAt: 0, driverFile: "driver.cts" }],
     });
     const state: Record<string, Record<string, unknown>> = { "demo:late": { lastScheduledAt: 0 } };
 

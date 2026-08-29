@@ -54,14 +54,12 @@ function monitorDeliveryFixture(kind = "explorer") {
     },
   };
   const state = { automations: { auto: entry } };
-  const sent: string[] = [];
   const applied: string[] = [];
   let now = 0;
   let directive: AttemptMonitoringDirective | null = { action: "working", accounting: { activeMilliseconds: 0, observedAt: new Date(0).toISOString(), runtimeWasWorking: true } };
   return {
     entry,
     state,
-    sent,
     applied,
     deps: {
       enabledAt: () => 1,
@@ -75,7 +73,6 @@ function monitorDeliveryFixture(kind = "explorer") {
       retryModelWait: () => true,
       now: () => now,
       saveState: () => undefined,
-      sendUserMessage: (prompt: string) => sent.push(prompt),
     },
     setNow: (value: number) => { now = value; },
     setDisposition: (value: AttemptMonitoringDirective | null) => { directive = value; },
@@ -92,46 +89,35 @@ async function exerciseDriver(
     enabledAt?: () => number;
     observeAttemptMonitoring?: Parameters<typeof deliverPendingDriverHandoff>[3]["observeAttemptMonitoring"];
     runDriver?: () => void;
-    runPrecheck?: () => void;
-    sendUserMessageIfEnabled?: (prompt: string) => boolean;
   } = {},
 ) {
   const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
     id: "demo",
     automations: [
-      { id: "demo:auto", name: "auto", precheckFile: "precheck.sh", promptFile: "full.md", driverFile: "driver.py" },
+      { id: "demo:auto", name: "auto", driverFile: "driver.py" },
     ],
   });
   const state = {
     automations: options.initialEntry ? { "demo:demo:auto": { ...options.initialEntry } } : {},
   };
-  const sent: string[] = [];
 
   await runScheduledAutomation(project, project.automations[0], 123, state, {
     isEnabled: options.isEnabled,
     enabledAt: options.enabledAt,
     observeAttemptMonitoring: options.observeAttemptMonitoring,
-    isIdle: () => true,
     notify: () => undefined,
     now: () => 456,
     prepareExecutionSupply: executionSupply,
-    readPrompt: () => "full prompt",
     resolveAutomationFileInDir: (_kind, _automation, requested) => foundFile(requested),
     runDriver: async () => {
       options.runDriver?.();
       return { code: options.code ?? 0, stdout, stderr: options.stderr ?? "" };
     },
-    runPrecheck: async () => {
-      options.runPrecheck?.();
-      return { code: 0, stdout: "", stderr: "" };
-    },
     saveState: () => undefined,
-    sendUserMessage: (prompt) => sent.push(prompt),
-    sendUserMessageIfEnabled: options.sendUserMessageIfEnabled,
     setStatus: () => undefined,
   });
 
-  return { sent, entry: state.automations["demo:demo:auto"] };
+  return { entry: state.automations["demo:demo:auto"] };
 }
 
 describe("deterministic automation driver runner", () => {
@@ -178,25 +164,17 @@ describe("deterministic automation driver runner", () => {
     expect(result.entry.lastError).toBe("operator attention required");
   });
 
-  it("does not dispatch a driver after enablement is removed during precheck", async () => {
-    let enabled = true;
-    const result = await exerciseDriver(JSON.stringify({ action: "done", summary: "cleanup complete" }), {
-      isEnabled: () => enabled,
-      runPrecheck: () => { enabled = false; },
-    });
-
-    expect(result.sent).toEqual([]);
-  });
-
-  it("does not start a side-effecting driver when enablement changes after the post-precheck gate", async () => {
-    let checks = 0;
+  it("does not start a side-effecting driver when enablement was removed before the driver", async () => {
     let driverStarted = false;
-    await exerciseDriver(JSON.stringify({ action: "done", summary: "cleanup complete" }), {
-      isEnabled: () => ++checks === 1,
+    const result = await exerciseDriver(JSON.stringify({ action: "done", summary: "cleanup complete" }), {
+      isEnabled: () => false,
       runDriver: () => { driverStarted = true; },
     });
 
-    expect(driverStarted).toBe(false);
+    expect({ driverStarted, result: result.entry.lastResult }).toEqual({
+      driverStarted: false,
+      result: "disabled_before_driver",
+    });
   });
 
   it("retains the registered monitor across an enablement removal during driver execution", async () => {
@@ -211,10 +189,7 @@ describe("deterministic automation driver runner", () => {
       },
     );
 
-    expect({
-      pending: (result.entry.pendingDriverHandoff as Record<string, any>)?.monitorHandoff?.kind,
-      sent: result.sent,
-    }).toEqual({ pending: "reviewer", sent: [] });
+    expect((result.entry.pendingDriverHandoff as Record<string, any>)?.monitorHandoff?.kind).toBe("reviewer");
   });
 
   it("reports a stored prompt-only handoff as unsupported and never redelivers it", () => {
@@ -367,7 +342,6 @@ describe("deterministic automation driver runner", () => {
       },
       applyAttemptMonitoring: () => ({ applied: true, retain: true }),
       saveState: () => undefined,
-      sendUserMessage: () => undefined,
     };
     deliverPendingDriverHandoff(entry, state, "auto", deps);
     now = 120_000;
@@ -413,8 +387,7 @@ describe("deterministic automation driver runner", () => {
         deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
       }
 
-      expect({ sent: fixture.sent, applied: fixture.applied, pending: fixture.entry.pendingDriverHandoff }).toEqual({
-        sent: [],
+      expect({ applied: fixture.applied, pending: fixture.entry.pendingDriverHandoff }).toEqual({
         applied: ["terminal_without_report"],
         pending: undefined,
       });
@@ -633,81 +606,27 @@ describe("deterministic automation driver runner", () => {
     });
   });
 
-  it("does not dispatch a prompt when disable wins the enqueue lock", async () => {
+  it("does not start a driver when execution supply cannot be fixed", async () => {
     const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
       id: "demo",
-      automations: [{ id: "demo:auto", name: "auto", precheckFile: "precheck.sh", promptFile: "full.md" }],
+      automations: [{ id: "demo:auto", name: "auto", driverFile: "driver.py" }],
     });
-    const state = { automations: {} };
-    const sent: string[] = [];
-
-    await runScheduledAutomation(project, project.automations[0], 123, state, {
-      isEnabled: () => true,
-      now: () => 456,
-      prepareExecutionSupply: executionSupply,
-      readPrompt: () => "full prompt",
-      resolveAutomationFileInDir: (_kind, _automation, requested) => foundFile(requested),
-      runDriver: async () => ({ code: 99, stdout: "should not run", stderr: "" }),
-      runPrecheck: async () => ({ code: 0, stdout: "", stderr: "" }),
-      saveState: () => undefined,
-      sendUserMessage: (prompt) => sent.push(prompt),
-      sendUserMessageIfEnabled: () => false,
-    });
-
-    expect(sent).toEqual([]);
-  });
-
-  it("does not start precheck when execution supply cannot be fixed", async () => {
-    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
-      id: "demo",
-      automations: [{ id: "demo:auto", name: "auto", precheckFile: "precheck.sh", promptFile: "full.md" }],
-    });
-    let precheckStarted = false;
+    let driverStarted = false;
 
     let message = "";
     try {
       await runScheduledAutomation(project, project.automations[0], 123, { automations: {} }, {
         now: () => 456,
         prepareExecutionSupply: () => { throw new Error("dependency snapshot unavailable"); },
-        readPrompt: () => "full prompt",
         resolveAutomationFileInDir: (_kind, _automation, requested) => foundFile(requested),
-        runDriver: async () => ({ code: 0 }),
-        runPrecheck: async () => { precheckStarted = true; return { code: 0 }; },
+        runDriver: async () => { driverStarted = true; return { code: 0 }; },
         saveState: () => undefined,
-        sendUserMessage: () => undefined,
       });
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
 
-    expect({ message, precheckStarted }).toEqual({ message: "dependency snapshot unavailable", precheckStarted: false });
-  });
-
-  it("does not dispatch a prompt after enablement is removed during precheck", async () => {
-    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
-      id: "demo",
-      automations: [{ id: "demo:auto", name: "auto", precheckFile: "precheck.sh", promptFile: "full.md" }],
-    });
-    const state = { automations: {} };
-    const sent: string[] = [];
-    let enabled = true;
-
-    await runScheduledAutomation(project, project.automations[0], 123, state, {
-      isEnabled: () => enabled,
-      now: () => 456,
-      prepareExecutionSupply: executionSupply,
-      readPrompt: () => "full prompt",
-      resolveAutomationFileInDir: (_kind, _automation, requested) => foundFile(requested),
-      runDriver: async () => ({ code: 99, stdout: "should not run", stderr: "" }),
-      runPrecheck: async () => {
-        enabled = false;
-        return { code: 0, stdout: "", stderr: "" };
-      },
-      saveState: () => undefined,
-      sendUserMessage: (prompt) => sent.push(prompt),
-    });
-
-    expect(sent).toEqual([]);
+    expect({ message, driverStarted }).toEqual({ message: "dependency snapshot unavailable", driverStarted: false });
   });
 });
 
@@ -723,7 +642,6 @@ describe("model availability waiting in deterministic attempt monitoring", () =>
       },
     };
     const state = { automations: { auto: entry } };
-    const sent: string[] = [];
     const applied: Array<Record<string, any>> = [];
     const retries: Array<Record<string, unknown>> = [];
     const hostLogEvents: Array<Record<string, unknown>> = [];
@@ -747,12 +665,11 @@ describe("model availability waiting in deterministic attempt monitoring", () =>
         return reusable;
       },
       saveState: () => undefined,
-      sendUserMessage: (prompt: string) => sent.push(prompt),
       emitHostLog: (event) => hostLogEvents.push(event as Record<string, unknown>),
     };
     const tick = (logContext?: Record<string, string>) => deliverPendingDriverHandoff(entry, state, "auto", deps, logContext as never);
     return {
-      applied, deps, entry, retries, sent, hostLogEvents, tick,
+      applied, deps, entry, retries, hostLogEvents, tick,
       payload: () => entry.pendingDriverHandoff as Record<string, any>,
       setApplication: (value: typeof application) => { application = value; },
       setDirective: (value: AttemptMonitoringDirective) => { directive = value; },
@@ -918,10 +835,7 @@ describe("model availability waiting in deterministic attempt monitoring", () =>
 
     fixture.tick();
 
-    expect({ sent: fixture.sent, retriesAtSameTick: fixture.retries.length }).toEqual({
-      sent: [],
-      retriesAtSameTick: 0,
-    });
+    expect(fixture.retries.length).toBe(0);
   });
 
   it("keeps waiting and retrying free of Automation-host model calls", () => {
@@ -933,7 +847,7 @@ describe("model availability waiting in deterministic attempt monitoring", () =>
       fixture.tick();
     }
 
-    expect(fixture.sent).toEqual([]);
+    expect(fixture.retries.length).toBeGreaterThanOrEqual(1);
   });
 
   it("routes reviewer completion to the ordinary path after model access recovers", () => {
@@ -986,14 +900,21 @@ describe("model availability waiting in deterministic attempt monitoring", () =>
       result: fixture.entry.lastResult,
       retained: fixture.entry.pendingDriverHandoff !== undefined,
       retries: fixture.retries.length,
-      promptsSent: fixture.sent,
-    }).toEqual({ result: "driver_monitor_waiting_for_model", retained: true, retries: 0, promptsSent: [] });
+    }).toEqual({ result: "driver_monitor_waiting_for_model", retained: true, retries: 0 });
 
     fixture.setNow(Date.parse("2026-08-21T00:10:00.000Z"));
     fixture.tick();
-    expect({ retries: fixture.retries.length, promptsSent: fixture.sent }).toEqual({ retries: 1, promptsSent: [] });
+    expect(fixture.retries.length).toBe(1);
   });
 });
+
+const REPAIR_DIRECTIVE_RESULTS: Record<string, string[]> = {
+  working: ["driver_attempt_working"],
+  completion: ["driver_attempt_completion", "driver_attempt_completion_pending"],
+  missing_report: ["driver_monitor_waiting_for_model", "driver_attempt_missing_report"],
+  timeout: ["driver_attempt_timeout", "driver_attempt_completion_pending"],
+  ambiguity: ["driver_monitor_observation_ambiguous"],
+};
 
 describe("deterministic monitoring of repair attempts", () => {
   const accounting = { activeMilliseconds: 60_000, observedAt: "1970-01-01T00:01:00.000Z", runtimeWasWorking: false };
@@ -1007,7 +928,6 @@ describe("deterministic monitoring of repair attempts", () => {
       },
     };
     const state = { automations: { auto: entry } };
-    const sent: string[] = [];
     let directive: AttemptMonitoringDirective | undefined;
     const deps = {
       enabledAt: () => 1,
@@ -1017,10 +937,9 @@ describe("deterministic monitoring of repair attempts", () => {
       observeAttemptMonitoring: () => directive ?? null,
       applyAttemptMonitoring: () => ({ applied: true }),
       saveState: () => undefined,
-      sendUserMessage: (prompt: string) => sent.push(prompt),
     };
     return {
-      deps, entry, sent, state,
+      deps, entry, state,
       setDirective: (value: AttemptMonitoringDirective) => { directive = value; },
     };
   }
@@ -1039,7 +958,7 @@ describe("deterministic monitoring of repair attempts", () => {
 
     deliverPendingDriverHandoff(fixture.entry, fixture.state, "auto", fixture.deps);
 
-    expect(fixture.sent).toEqual([]);
+    expect(REPAIR_DIRECTIVE_RESULTS[action]).toContain(fixture.entry.lastResult);
   });
 
   it("keeps a working repair check active with its persisted active-work accounting", () => {

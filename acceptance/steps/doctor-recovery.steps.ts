@@ -13,7 +13,7 @@ const project = normalizeProject({ workerModel: "test-model", reviewerModel: "re
   repoPath: "/repo",
   githubRepo: "owner/repo",
   worktreeRoot: "/wt",
-  automations: [{ id: "auto", name: "issue-coordinator", schedule: "*/10 * * * *", precheckFile: "issue-coordinator.precheck.sh" }],
+  automations: [{ id: "auto", name: "issue-coordinator", schedule: "*/10 * * * *", driverFile: "issue-coordinator-driver.cts" }],
 });
 
 function input(overrides: Partial<DoctorInput> = {}): DoctorInput {
@@ -24,7 +24,6 @@ function input(overrides: Partial<DoctorInput> = {}): DoctorInput {
     openPrs: [],
     worktrees: [],
     gitStatuses: {},
-    automationDir: "/ext/automations",
     statePath: "/state/state.json",
     nowMs,
     ...overrides,
@@ -140,28 +139,20 @@ Given("An Issue has `needs-triage`", function (this: DoctorWorld) {
   setInput(this, { issues: [{ number: 7, labels: ["needs-triage"] }] });
 });
 
-Given("A record says the precheck is unavailable", function (this: DoctorWorld) {
-  setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "precheck_skipped:127", lastAttemptAt: nowMs } } } });
-});
-
-Given("A record says the precheck file is missing", function (this: DoctorWorld) {
-  setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "precheck_file_missing", lastAttemptAt: nowMs } } } });
-});
-
 Given("A record contains repeated instances of the same automation failure", function (this: DoctorWorld) {
-  setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "precheck_error", lastAttemptAt: nowMs, failureStreak: 3 } } } });
+  setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "driver_error", lastAttemptAt: nowMs, failureStreak: 3 } } } });
 });
 
 Given("A record contains a normal idle wait with no work", function (this: DoctorWorld) {
-  setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "precheck_skipped:1", lastAttemptAt: nowMs, failureStreak: 3 } } } });
+  setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "driver_skip", lastAttemptAt: nowMs, failureStreak: 3 } } } });
 });
 
 Given("Automation has been stuck for at least three attempts", function (this: DoctorWorld) {
-  setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "queued", lastAttemptAt: nowMs - 1_800_001 } } } });
+  setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "driver_done", lastAttemptAt: nowMs - 1_800_001 } } } });
 });
 
 Given("There is a recent normal automation attempt", function (this: DoctorWorld) {
-  setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "queued", lastAttemptAt: nowMs } } } });
+  setInput(this, { state: { automations: { "deadloop:auto": { lastResult: "driver_done", lastAttemptAt: nowMs } } } });
 });
 
 Given("A Claude worktree is not trusted", function (this: DoctorWorld) {
@@ -324,10 +315,6 @@ Then("doctor shows a command to inspect the Issue", function (this: DoctorWorld)
 
 Then("doctor shows a command to requeue the Issue that needs triage", function (this: DoctorWorld) {
   assert.match(this.report || "", /gh issue edit 7 --remove-label needs-triage --add-label ready-for-agent --add-label agent:implement/);
-});
-
-Then("doctor shows a command to inspect the precheck file", function (this: DoctorWorld) {
-  assert.match(this.report || "", /ls \/ext\/automations\/issue-coordinator\.precheck\.sh/);
 });
 
 Then("doctor shows the recurring automation failure", function (this: DoctorWorld) {

@@ -218,9 +218,6 @@ export function formatOneShotTickReport(outcome: SchedulerTickOutcome): string {
       return `one-shot tick handled a retained attempt (${resultDetail(outcome)}).`;
     }
     case "selected": {
-      if (outcome.result === "queued") {
-        return `one-shot tick launched "${outcome.automationName}" (${resultDetail(outcome)}). The agent runs outside this command; later ticks handle its completion.`;
-      }
       if (MODEL_WAIT_RESULTS.has(outcome.result)) {
         return `one-shot tick ran "${outcome.automationName}" and recorded that deadloop waits for model availability (${resultDetail(outcome)}). No retry was scheduled.`;
       }

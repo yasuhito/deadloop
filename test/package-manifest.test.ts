@@ -39,7 +39,7 @@ describe("package manifest files", () => {
 
   it("defines a conventional check command", () => {
     expect(packageJson.scripts.check).toBe(
-      "npm run check:acceptance-rules && npm test && npm run lint && npm run typecheck && bash -n extensions/deadloop/automations/*.sh && npm pack --dry-run",
+      "npm run check:acceptance-rules && npm test && npm run lint && npm run typecheck && npm pack --dry-run",
     );
   });
 

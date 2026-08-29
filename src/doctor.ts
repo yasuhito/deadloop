@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { hasUncommittedWork } from "./agent-scratch-area.cjs";
 import { evaluateWorkspaceTrust } from "./agent-trust.cjs";
+import { isAutomationFailureResult } from "./automation-runner";
 import type { CodeSnapshotInventory } from "./code-snapshot-inventory";
 import { type NormalizedAutomation, type NormalizedProject, automationStateKey, parseEveryMinutes } from "./core";
 const { isPrRequiredVerificationStopComment, isRequiredVerificationStopComment } = require("./issue-required-verification-stop.cts") as {
@@ -29,7 +30,6 @@ const STALE_IN_PROGRESS_MS = 24 * 60 * 60 * 1000;
 const MAX_COMMENT_SUMMARY_LENGTH = 180;
 const STALLED_SLOT_THRESHOLD = 3;
 const SPINNING_STREAK_THRESHOLD = 3;
-const UNAVAILABLE_PRECHECK_CODES = new Set([126, 127]);
 
 type DoctorAutomationEntry = {
   lastResult?: string | null;
@@ -80,7 +80,6 @@ export type DoctorInput = {
   agents?: HerdrAgent[];
   gitStatuses?: Record<string, string>;
   state?: DoctorState | null;
-  automationDir?: string;
   statePath?: string;
   claudeConfig?: ClaudeConfigResult;
   nowMs?: number;
@@ -540,28 +539,9 @@ function automationRef(project: NormalizedProject, automation: NormalizedAutomat
   return `${project.id} ${name.replace(new RegExp(`^${project.id}[:\\s]+`), "")}`.trim();
 }
 
-function precheckSkippedCode(result: string): number | null {
-  const match = /^precheck_skipped:(\d+)$/.exec(result);
-  if (!match) return null;
-  const code = Number(match[1]);
-  return Number.isFinite(code) ? code : null;
-}
-
-function isFailureResult(result: string): boolean {
-  return result === "precheck_error" || result === "send_error" || result === "precheck_file_missing";
-}
-
-function precheckCheckCommand(automationDir: string, automation: NormalizedAutomation): string {
-  const target = automation.precheckFile
-    ? path.posix.join(automationDir, automation.precheckFile)
-    : automationDir;
-  return `ls ${shellArg(target)}`;
-}
-
 function buildAutomationFindings(
   project: NormalizedProject,
   state: DoctorState,
-  automationDir: string,
   statePath: string,
   nowMs: number,
 ): DoctorFinding[] {
@@ -588,27 +568,14 @@ function buildAutomationFindings(
       continue;
     }
 
-    const code = precheckSkippedCode(result);
-    if ((code !== null && UNAVAILABLE_PRECHECK_CODES.has(code)) || result === "precheck_file_missing") {
-      const reason = code !== null ? `skipped with code ${code}` : "the configured precheck file was not found";
-      findings.push({
-        id: `automation-unavailable-${automation.id}`,
-        type: "automation_unavailable",
-        title: `precheck unavailable: ${ref}`,
-        summary: `Precheck ${reason}, so the automation did not start. The precheck script may be missing or not executable.`,
-        commands: [precheckCheckCommand(automationDir, automation)],
-      });
-      continue;
-    }
-
     const failureStreak = Number(entry.failureStreak) || 0;
-    if (isFailureResult(result) && failureStreak >= SPINNING_STREAK_THRESHOLD) {
+    if (isAutomationFailureResult(result) && failureStreak >= SPINNING_STREAK_THRESHOLD) {
       findings.push({
         id: `automation-spinning-${automation.id}`,
         type: "automation_spinning",
         title: `automation spinning: ${ref}`,
         summary: `The same failure (${result}) has occurred ${failureStreak} times in a row. The loop is spinning.`,
-        commands: [precheckCheckCommand(automationDir, automation)],
+        commands: [`cat ${shellArg(statePath)}`],
       });
     }
   }
@@ -795,7 +762,6 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   const agents = input.agents || [];
   const gitStatuses = input.gitStatuses || {};
   const state = input.state || {};
-  const automationDir = input.automationDir || ".";
   const statePath = input.statePath || "state.json";
   const nowMs = input.nowMs ?? Date.now();
   const retainedClaims = new Set((input.retainedClaims || []).map((claim) => `${claim.kind}:${claim.number}`));
@@ -816,7 +782,7 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
       ...(retainedClaimOwnershipAmbiguous ? [] : buildStuckReviewClaimFindings(project, openPrs, worktrees, agents, retainedClaims)),
       ...(retainedClaimOwnershipAmbiguous ? [] : buildStuckImplementClaimFindings(project, issues, worktrees, agents, retainedClaims, openPrs)),
       ...buildUnrequestedPullRequestFindings(project, issues, openPrs),
-      ...buildAutomationFindings(project, state, automationDir, statePath, nowMs),
+      ...buildAutomationFindings(project, state, statePath, nowMs),
       ...buildWorkspaceTrustFindings(project, input.claudeConfig),
       ...activeBaseVerificationBlocking(project, path.dirname(statePath)),
       ...buildCodeSnapshotInventoryFindings(input),

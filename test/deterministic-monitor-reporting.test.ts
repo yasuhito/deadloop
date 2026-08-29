@@ -9,7 +9,7 @@ const project = normalizeProject({
   githubRepo: "octo/demo",
   workerModel: "test-model",
   reviewerModel: "review-model",
-  automations: [{ id: "demo:reviewer", name: "PR reviewer", precheckFile: "precheck.sh", promptFile: "prompt.md", driverFile: "driver.cts" }],
+  automations: [{ id: "demo:reviewer", name: "PR reviewer", driverFile: "driver.cts" }],
 });
 const shared = { project, repositoryEnablement: "enabled" as const, cwd: "/repo", warnings: [] };
 

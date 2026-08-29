@@ -35,10 +35,6 @@ describe("GitHub Actions CI workflow", () => {
     expect(checkScript).toContain("npm run typecheck");
   });
 
-  it("runs shell syntax checks through the complete check", () => {
-    expect(checkScript).toContain("bash -n extensions/deadloop/automations/*.sh");
-  });
-
   it("runs npm pack dry run through the complete check", () => {
     expect(checkScript).toContain("npm pack --dry-run");
   });

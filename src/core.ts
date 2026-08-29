@@ -61,10 +61,7 @@ export type RawAutomation = {
   schedule?: string;
   timezone?: string;
   graceMinutes?: number;
-  promptFile?: string;
-  precheckFile?: string;
   driverFile?: string;
-  precheckTimeoutSeconds?: number;
   maxRuntimeSeconds?: number;
   shutdownGraceSeconds?: number;
   initialLastScheduledAt?: number;
@@ -76,10 +73,7 @@ export type NormalizedAutomation = {
   schedule: string;
   timezone: string;
   graceMinutes: number;
-  promptFile?: string;
-  precheckFile?: string;
-  driverFile?: string;
-  precheckTimeoutSeconds: number;
+  driverFile: string;
   maxRuntimeSeconds: number;
   shutdownGraceSeconds: number;
   initialLastScheduledAt: number;
@@ -250,23 +244,31 @@ export function normalizeLabels(labels: LabelConfig = {}): NormalizedLabels {
   };
 }
 
+// Removed with the unreachable prompt path (issue #375): drivers decide every automation
+// action, so a leftover front-end prompt or precheck configuration is a configuration error.
+const REMOVED_AUTOMATION_KEYS = ["promptFile", "precheckFile", "precheckTimeoutSeconds"] as const;
+
 export function normalizeAutomation(
   project: Pick<NormalizedProject, "id">,
   automation: RawAutomation,
 ): NormalizedAutomation {
-  const id = automation.id || `${project.id}:${automation.name || automation.promptFile || "automation"}`;
+  const raw = automation as Record<string, unknown>;
+  for (const key of REMOVED_AUTOMATION_KEYS) {
+    if (raw[key] !== undefined) {
+      throw new Error(`automation config key is removed: ${key}; the deterministic driver decides every automation action`);
+    }
+  }
+  if (!automation.driverFile) {
+    throw new Error("automation driverFile is required: every automation runs its deterministic driver");
+  }
+  const id = automation.id || `${project.id}:${automation.name || "automation"}`;
   return {
     id,
     name: automation.name || id,
     schedule: automation.schedule || "*/10 * * * *",
     timezone: automation.timezone || DEFAULT_TIMEZONE,
     graceMinutes: Number.isFinite(automation.graceMinutes) ? automation.graceMinutes! : 720,
-    promptFile: automation.promptFile,
-    precheckFile: automation.precheckFile,
     driverFile: automation.driverFile,
-    precheckTimeoutSeconds: Number.isFinite(automation.precheckTimeoutSeconds)
-      ? automation.precheckTimeoutSeconds!
-      : 60,
     maxRuntimeSeconds: Number.isFinite(automation.maxRuntimeSeconds) && automation.maxRuntimeSeconds! > 0
       ? automation.maxRuntimeSeconds!
       : 86_400,
@@ -324,9 +326,7 @@ const REPO_POLICY_LABEL_KEYS = new Set([
   "wontfix",
   "needsTriage",
 ]);
-const REPO_POLICY_AUTOMATION_KEYS = new Set([
-  "id", "name", "promptFile", "precheckFile", "driverFile", "maxRuntimeSeconds", "shutdownGraceSeconds",
-]);
+const REPO_POLICY_AUTOMATION_KEYS = new Set(["id", "name", "driverFile", "maxRuntimeSeconds", "shutdownGraceSeconds"]);
 
 function validateObject(value: unknown, context: string): asserts value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -565,15 +565,11 @@ function defaultAutomationsForProject(project: Pick<NormalizedProject, "id">): R
     {
       id: `${project.id}:issue-coordinator`,
       name: `${project.id} issue coordinator`,
-      promptFile: "issue-coordinator.prompt.md",
-      precheckFile: "issue-coordinator.precheck.sh",
       driverFile: "issue-coordinator-driver.cts",
     },
     {
       id: `${project.id}:pr-reviewer`,
       name: `${project.id} PR reviewer`,
-      promptFile: "pr-reviewer.prompt.md",
-      precheckFile: "pr-reviewer.precheck.sh",
       driverFile: "pr-reviewer-driver.cts",
     },
   ];
@@ -838,14 +834,6 @@ function automationRuntimeValues(
   };
 }
 
-export function templateValues(
-  project: NormalizedProject,
-  automation: NormalizedAutomation,
-  automationDir: string,
-): TemplateValueMap {
-  return automationRuntimeValues(project, automation, automationDir);
-}
-
 function envText(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value === "boolean") return value ? "1" : "0";
@@ -904,11 +892,4 @@ export function automationEnvironment(
     DEADLOOP_AUTOMATION_ID: envText(values.automationId),
     DEADLOOP_AUTOMATION_NAME: envText(values.automationName),
   };
-}
-
-export function renderTemplate(text: string, values: TemplateValueMap): string {
-  return text.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_match, key) => {
-    const value = values[key];
-    return value == null ? "" : String(value);
-  });
 }
