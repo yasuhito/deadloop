@@ -86,18 +86,6 @@ Operators can check blocked work simply by viewing `/deadloop-doctor`, clean up 
 * When The operator runs doctor
 * Then doctor shows a command to requeue the Issue that needs triage
 
-## Scenario: Show precheck file when precheck is not available
-
-* Given A record says the precheck is unavailable
-* When The operator runs doctor
-* Then doctor shows a command to inspect the precheck file
-
-## Scenario: Show the precheck file when there is no precheck file
-
-* Given A record says the precheck file is missing
-* When The operator runs doctor
-* Then doctor shows a command to inspect the precheck file
-
 ## Scenario: Show repeated instances of the same automation failure
 
 * Given A record contains repeated instances of the same automation failure

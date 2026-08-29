@@ -203,7 +203,7 @@ describe("retained driver-handoff settlement proofs", () => {
       authorityRelease: { reason: "terminal_missing_report", releasedAt: new Date(NOW).toISOString() },
     });
     const entry = retainedEntry(world);
-    const reviewerAutomation = { id: "reviewer-auto", name: "PR reviewer", schedule: "*/10 * * * *", initialLastScheduledAt: NOW };
+    const reviewerAutomation = { id: "reviewer-auto", name: "PR reviewer", schedule: "*/10 * * * *", initialLastScheduledAt: NOW, driverFile: "driver.cts" };
     const state = { automations: { [automationStateKey({ id: "demo" }, reviewerAutomation)]: entry } };
     const project = normalizeProject({
       id: "demo",
@@ -216,7 +216,6 @@ describe("retained driver-handoff settlement proofs", () => {
           name: "ticker",
           schedule: "*/10 * * * *",
           initialLastScheduledAt: 0,
-          precheckFile: "ticker-precheck.sh",
           driverFile: "ticker-driver.cts",
         },
       ],

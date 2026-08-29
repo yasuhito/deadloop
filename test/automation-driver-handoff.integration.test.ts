@@ -29,7 +29,6 @@ describe("real driver handoff across disable and re-enable", () => {
       automations: [{
         id: "demo:issue-coordinator",
         name: "issue coordinator",
-        precheckFile: "issue-coordinator.precheck.sh",
         driverFile: "issue-coordinator-driver.cts",
       }],
     });
@@ -43,7 +42,6 @@ describe("real driver handoff across disable and re-enable", () => {
         isEnabled: () => enabled,
         now: () => 456,
         prepareExecutionSupply: () => ({ codeIdentity: "a".repeat(40), lockHash: "b".repeat(64), packageRoot: "/snapshot", automationDir: "/snapshot/automations", dependencyRoot: "/dependencies" }),
-        readPrompt: () => "unused",
         resolveAutomationFileInDir: (_kind, _automation, requested) => foundFile(requested),
         observeAttemptMonitoring: () => ({ action: "working", accounting: { activeMilliseconds: 0, observedAt: new Date(456).toISOString(), runtimeWasWorking: true } }),
         runDriver: async () => {
@@ -70,9 +68,7 @@ describe("real driver handoff across disable and re-enable", () => {
           enabled = false;
           return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
         },
-        runPrecheck: async () => ({ code: 0, stdout: "", stderr: "" }),
         saveState: (next) => writeFileSync(statePath, JSON.stringify(next)),
-        sendUserMessage: (prompt) => sent.push(prompt),
       });
 
       const reloaded = JSON.parse(readFileSync(statePath, "utf8")) as AutomationState;

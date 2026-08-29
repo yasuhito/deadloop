@@ -9,12 +9,6 @@ This prevents duplicate work on an Issue that is closed, unrequested, in progres
 * When deadloop selects a work target
 * Then Issue #1 is selected for work
 
-## Scenario: Do not select a closed Issue for work
-
-* Given An Issue with all required public labels is closed
-* When deadloop searches for a work target
-* Then The closed Issue is not selected for work
-
 ## Scenario: Do not select an Issue without an implementation request
 
 * Given An Issue lacks the required implementation request

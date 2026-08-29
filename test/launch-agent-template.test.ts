@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,10 +9,6 @@ import { AGENT_KINDS } from "../src/agent-profiles.cjs";
 
 const automationDir = path.join(process.cwd(), "extensions/deadloop/automations");
 const driverScript = path.join(automationDir, "issue-coordinator-driver.cts");
-
-function readTemplate(name: string): string {
-  return fs.readFileSync(path.join(automationDir, name), "utf8");
-}
 
 function issueCoordinatorWorkerResult(): Record<string, any> {
   const result = spawnSync("node", [driverScript, "--fixture", "test/fixtures/issue-coordinator/driver-ready-worker.json"], {
@@ -51,29 +46,9 @@ describe("agent launch template", () => {
     expect(issueCoordinatorWorkerResult().driverAction).toBe("worker_monitor_request");
   });
 
-  it("keeps review launch inside the deterministic driver", () => {
-    expect(readTemplate("pr-reviewer.prompt.md")).toContain("deterministic driver opens one fresh Herdr workspace");
-  });
-
-  it("keeps reviewerAgent as driver configuration", () => {
-    expect(readTemplate("pr-reviewer.prompt.md")).toContain("reviewerAgent: `{{reviewerAgent}}`");
-  });
-
-  it("keeps no hard-coded pi agent kind in the pr reviewer launch", () => {
-    expect(readTemplate("pr-reviewer.prompt.md")).not.toMatch(/--agent\s+pi\b/);
-  });
-
   it("keeps no raw agent-start launch branch in the issue coordinator", () => {
     const result = issueCoordinatorWorkerResult();
 
     expect(JSON.stringify(result.monitorHandoff)).not.toMatch(rawLaunchBranch);
-  });
-
-  it("keeps no raw agent-start launch branch in the pr reviewer", () => {
-    expect(readTemplate("pr-reviewer.prompt.md")).not.toMatch(rawLaunchBranch);
-  });
-
-  it("keeps issue coordinator fallback focused on the driver", () => {
-    expect(readTemplate("issue-coordinator.prompt.md")).toMatch(/issue-coordinator-driver\.cts/);
   });
 });

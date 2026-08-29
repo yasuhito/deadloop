@@ -39,7 +39,6 @@ function dueProject(): NormalizedProject {
       name: "demo ticker",
       schedule: "*/10 * * * *",
       initialLastScheduledAt: 0,
-      precheckFile: "ticker-precheck.sh",
       driverFile: "ticker-driver.cts",
     }],
   });
@@ -66,12 +65,9 @@ function driverDoneRunnerDeps(harness: Harness) {
       automationDir: "/snapshot/automations",
       dependencyRoot: "/dependencies",
     }),
-    readPrompt: () => "prompt",
     resolveAutomationFileInDir: (_kind: unknown, _automation: unknown, requested?: string) => foundFile(requested),
-    runPrecheck: async () => ({ code: 0, stdout: "", stderr: "" }),
     runDriver: async () => ({ code: 0, stdout: JSON.stringify({ action: "done", summary: "driver ran" }), stderr: "" }),
     saveState: (state: AutomationState) => harness.savedStates.push(JSON.parse(JSON.stringify(state))),
-    sendUserMessage: (prompt: string) => prompt,
   };
 }
 
@@ -189,7 +185,7 @@ describe("shared scheduler tick", () => {
       id: "demo",
       workerModel: "test-model",
       reviewerModel: "test-review-model",
-      automations: [{ id: "demo:ticker", name: "demo ticker", schedule: "*/10 * * * *", initialLastScheduledAt: NOW }],
+      automations: [{ id: "demo:ticker", name: "demo ticker", schedule: "*/10 * * * *", initialLastScheduledAt: NOW, driverFile: "driver.cts" }],
     });
     await executeSchedulerTick(quiet, tickDeps(freshHarness(), { emitHostLog: (event) => events.push(event) }));
     expect(events.at(-1)).toEqual({ kind: "tick_idle", projectId: "demo" });
@@ -421,11 +417,6 @@ describe("one-shot tick reports", () => {
   it("reports idle ticks as a distinguishable no-op", () => {
     const report = formatOneShotTickReport({ status: "idle" });
     expect(report).toMatch(/no automation was due/);
-  });
-
-  it("reports launched work", () => {
-    const report = formatOneShotTickReport({ status: "selected", automationName: "demo ticker", result: "queued", summary: "" });
-    expect(report).toMatch(/launched/);
   });
 
   it("reports a retained running attempt as needing another later tick", () => {

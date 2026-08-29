@@ -147,69 +147,6 @@ function runCleanupApply(scratchArea: ".pi/subagents" | ".pi/npm" | ".pi/git", t
   }
 }
 
-function runIssuePrecheckWithCleanupCandidate(): number | null {
-  const tempRoot = mkdtempSync(path.join(tmpdir(), "deadloop-issue-precheck-"));
-  try {
-    const repoPath = path.join(tempRoot, "repo");
-    mkdirSync(repoPath);
-    const fakeGhPath = path.join(tempRoot, "gh");
-    const fakeHerdrPath = path.join(tempRoot, "herdr");
-    const fakeGitPath = path.join(tempRoot, "git");
-
-    writeExecutable(fakeGhPath, [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      "if [ \"${1:-}\" = \"pr\" ] && [ \"${2:-}\" = \"list\" ] && [[ \" $* \" = *\" --state merged \"* ]]; then",
-      "  printf '%s\n' '[{\"number\":2,\"state\":\"MERGED\",\"mergedAt\":\"2026-07-04T00:00:00Z\",\"headRefName\":\"agent/issue-1-cleanup\",\"headRefOid\":\"final\",\"labels\":[{\"name\":\"agent:review\"}]}]'",
-      "  exit 0",
-      "fi",
-      "if [ \"${1:-}\" = \"pr\" ] && [ \"${2:-}\" = \"list\" ] && [[ \" $* \" = *\" --state closed \"* ]]; then",
-      "  printf '%s\n' '[]'",
-      "  exit 0",
-      "fi",
-      "echo \"unexpected gh invocation: $*\" >&2",
-      "exit 2",
-    ]);
-    writeExecutable(fakeHerdrPath, [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      "if [ \"${1:-}\" = \"worktree\" ] && [ \"${2:-}\" = \"list\" ]; then",
-      "  printf '%s\n' '{\"result\":{\"worktrees\":[{\"branch\":\"agent/issue-1-cleanup\",\"is_linked_worktree\":true,\"path\":\"/worktrees/repo/agent-issue-1-cleanup\"}]}}'",
-      "  exit 0",
-      "fi",
-      "echo \"unexpected herdr invocation: $*\" >&2",
-      "exit 2",
-    ]);
-    writeExecutable(fakeGitPath, [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      "if [ \"${1:-}\" = \"-C\" ] && [ \"${3:-}\" = \"status\" ] && [ \"${4:-}\" = \"--porcelain\" ]; then",
-      "  exit 0",
-      "fi",
-      "echo \"unexpected git invocation: $*\" >&2",
-      "exit 2",
-    ]);
-
-    const result = spawnSync("bash", ["extensions/deadloop/automations/issue-coordinator.precheck.sh"], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        PATH: `${tempRoot}:${process.env.PATH || ""}`,
-        DEADLOOP_REPO_PATH: repoPath,
-        DEADLOOP_GITHUB_REPO: "owner/repo",
-        DEADLOOP_WORKTREE_ROOT: "/worktrees/repo",
-        DEADLOOP_REVIEW_LABEL: "agent:review",
-        DEADLOOP_HUMAN_LABEL: "ready-for-human",
-      },
-      encoding: "utf8",
-    });
-
-    return result.status;
-  } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
-  }
-}
-
 describe("issue coordinator cleanup", () => {
   it("ignores agent scratch areas when selecting cleanup candidates", () => {
     expect(runCleanupFixture("cleanup-generated-artifacts.json").candidates).toEqual([
@@ -260,10 +197,6 @@ describe("issue coordinator cleanup", () => {
     expect(runCleanupFixture("cleanup-outside-root.json").skipped[0].reason).toBe("outside_worktree_root");
   });
 
-  it("wakes the coordinator for cleanup when no issue is required", () => {
-    expect(runIssuePrecheckWithCleanupCandidate()).toBe(0);
-  });
-
   it("passes a unique worker agent name to deterministic launch", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.workerName).toBe("demo-issue-12-worker");
   });
@@ -284,22 +217,6 @@ describe("issue coordinator cleanup", () => {
     expect(String(input.attemptRecordFile)).toMatch(/attempt\.json$/);
   });
 
-  it("documents direct root-pane startup for review workers", () => {
-    expect(readFileSync("extensions/deadloop/automations/pr-reviewer.prompt.md", "utf8")).toContain(
-      "starts the agent in its returned root pane",
-    );
-  });
-
-  it("does not forward a tab to the launcher for review agents", () => {
-    expect(readFileSync("extensions/deadloop/automations/pr-reviewer.prompt.md", "utf8")).not.toContain("--tab");
-  });
-
-  it("does not document workspace split startup for review workers", () => {
-    expect(readFileSync("extensions/deadloop/automations/pr-reviewer.prompt.md", "utf8")).not.toMatch(
-      /herdr agent start[^`\n]*--workspace <workspaceId>/,
-    );
-  });
-
   // The claude/pi launch argv details (session id, effort, bypass permissions,
   // positional prompt) now live in the launcher and are covered by
   // test/agent-profiles.test.ts. The coordinator keeps only the uuid coupling:
@@ -308,10 +225,4 @@ describe("issue coordinator cleanup", () => {
     expect(runDriverFixture("driver-ready-worker.json").launch.promiseFile).toContain("fixture-worker-demo-12");
   });
 
-
-  it("documents fresh workspace startup for branch update workers", () => {
-    expect(readFileSync("extensions/deadloop/automations/pr-reviewer.prompt.md", "utf8")).toContain(
-      "one fresh Herdr workspace for each reviewer or branch-update attempt",
-    );
-  });
 });

@@ -36,7 +36,6 @@ export type AutomationRunnerDeps = {
   herdrPreflight?: () => void | Promise<void>;
   enabledAt?: () => number;
   isEnabled?: () => boolean;
-  isIdle?: () => boolean;
   observeAttemptMonitoring?: (
     handoff: Record<string, unknown>,
     accounting: ActiveWorkAccounting,
@@ -57,15 +56,9 @@ export type AutomationRunnerDeps = {
   notify?: (message: string, level: "info" | "warning" | "error") => void;
   now: () => number;
   prepareExecutionSupply: () => AutomationExecutionSupply | Promise<AutomationExecutionSupply>;
-  readPrompt: (
-    project: NormalizedProject,
-    automation: NormalizedAutomation,
-    promptFile: string,
-    supply: AutomationExecutionSupply,
-  ) => string;
   revalidatePendingDriverHandoff?: (handoff: Record<string, unknown>) => boolean;
   resolveAutomationFileInDir: (
-    kind: "precheck" | "prompt" | "driver",
+    kind: "driver",
     automation: NormalizedAutomation,
     requested: string | undefined,
     supply: AutomationExecutionSupply,
@@ -76,15 +69,7 @@ export type AutomationRunnerDeps = {
     driverFile: string,
     supply: AutomationExecutionSupply,
   ) => Promise<AutomationExecResult>;
-  runPrecheck: (
-    project: NormalizedProject,
-    automation: NormalizedAutomation,
-    precheckFile: string,
-    supply: AutomationExecutionSupply,
-  ) => Promise<AutomationExecResult>;
   saveState: (state: AutomationState) => void;
-  sendUserMessage: (prompt: string) => void;
-  sendUserMessageIfEnabled?: (prompt: string) => boolean;
   setStatus?: (text: string) => void;
   /**
    * Observational host activity-log sink (#370), wired by the host to STATE_DIR. Model-wait
@@ -419,9 +404,6 @@ function completionApplicationFailureReason(application: AttemptMonitoringApplic
 
 export function isAutomationFailureResult(result: string): boolean {
   return (
-    result === "precheck_error" ||
-    result === "send_error" ||
-    result === "precheck_file_missing" ||
     result === "driver_file_missing" ||
     result === "driver_error" ||
     result === "driver_invalid_json" ||
@@ -595,9 +577,9 @@ export async function runScheduledAutomation(
   state: AutomationState,
   deps: AutomationRunnerDeps,
 ): Promise<void> {
-  // This is deliberately before state setup, precheck, candidate selection, or any mutation-capable driver.
+  // This is deliberately before state setup, candidate selection, or any mutation-capable driver.
   await deps.herdrPreflight?.();
-  // Execution supply is fixed before any state setup, precheck, candidate selection,
+  // Execution supply is fixed before any state setup, candidate selection,
   // or mutation-capable driver. A provisioning failure therefore starts nothing.
   const supply = await deps.prepareExecutionSupply();
   const key = automationStateKey(project, automation);
@@ -612,92 +594,5 @@ export async function runScheduledAutomation(
   entry.schedule = automation.schedule;
   deps.saveState(state);
 
-  const precheck = deps.resolveAutomationFileInDir("precheck", automation, automation.precheckFile, supply);
-  if (!precheck.found) {
-    recordAutomationResult(entry, "precheck_file_missing");
-    entry.lastError = `precheck file not found: ${automation.precheckFile}`;
-    entry.updatedAt = deps.now();
-    deps.saveState(state);
-    deps.notify?.(`deadloop precheck file missing: ${automation.name}`, "warning");
-    return;
-  }
-
-  deps.setStatus?.(`precheck: ${automation.name}`);
-
-  let result: AutomationExecResult;
-  try {
-    result = await deps.runPrecheck(project, automation, precheck.resolved, supply);
-  } catch (error) {
-    recordAutomationResult(entry, "precheck_error");
-    entry.lastError = error instanceof Error ? error.message : String(error);
-    entry.updatedAt = deps.now();
-    deps.saveState(state);
-    deps.notify?.(`deadloop precheck failed: ${automation.name}`, "warning");
-    return;
-  }
-
-  if (result.code !== 0) {
-    recordAutomationResult(entry, `precheck_skipped:${result.code}`);
-    entry.lastSkippedAt = deps.now();
-    entry.updatedAt = deps.now();
-    deps.saveState(state);
-    return;
-  }
-
-  if (deps.isIdle && !deps.isIdle()) {
-    recordAutomationResult(entry, "deferred_busy_after_precheck");
-    entry.updatedAt = deps.now();
-    deps.saveState(state);
-    return;
-  }
-
-  if (deps.isEnabled && !deps.isEnabled()) {
-    recordAutomationResult(entry, "disabled_after_precheck");
-    entry.updatedAt = deps.now();
-    deps.saveState(state);
-    return;
-  }
-
   if (await runConfiguredDriver(project, automation, entry, state, deps, supply)) return;
-
-  const promptResolution = deps.resolveAutomationFileInDir("prompt", automation, automation.promptFile, supply);
-  if (!promptResolution.found) {
-    recordAutomationResult(entry, "prompt_file_missing");
-    entry.lastError = `prompt file not found: ${automation.promptFile}`;
-    entry.updatedAt = deps.now();
-    deps.saveState(state);
-    deps.notify?.(`deadloop prompt file missing: ${automation.name}`, "warning");
-    return;
-  }
-
-  if (deps.isEnabled && !deps.isEnabled()) {
-    recordAutomationResult(entry, "disabled_before_prompt");
-    entry.updatedAt = deps.now();
-    deps.saveState(state);
-    return;
-  }
-
-  try {
-    const prompt = deps.readPrompt(project, automation, promptResolution.resolved, supply);
-    const queued = deps.sendUserMessageIfEnabled
-      ? deps.sendUserMessageIfEnabled(prompt)
-      : (deps.sendUserMessage(prompt), true);
-    if (!queued) {
-      recordAutomationResult(entry, "disabled_before_prompt");
-      entry.updatedAt = deps.now();
-      deps.saveState(state);
-      return;
-    }
-    recordAutomationResult(entry, "queued");
-    entry.lastQueuedAt = deps.now();
-    entry.updatedAt = deps.now();
-    deps.saveState(state);
-    deps.notify?.(`deadloop queued: ${automation.name}`, "info");
-  } catch (error) {
-    recordAutomationResult(entry, "send_error");
-    entry.lastError = error instanceof Error ? error.message : String(error);
-    entry.updatedAt = deps.now();
-    deps.saveState(state);
-    deps.notify?.(`deadloop send failed: ${automation.name}`, "error");
-  }
 }

@@ -15,11 +15,9 @@ import {
   parseEveryMinutes,
   projectsFromConfig,
   REPO_POLICY_FILE,
-  renderTemplate,
   resolveConfigPath,
   resolveProjectForTick,
   sanitizeId,
-  templateValues,
 } from "../src/core";
 
 describe("deterministic extension core", () => {
@@ -72,7 +70,7 @@ describe("deterministic extension core", () => {
       workerModel: "openai-codex/gpt-5.6-sol",
       reviewerModel: "openai-codex/gpt-5.6-sol",
       labels: { ready: "agent-ready" },
-      automations: [{ name: "issue coordinator", promptFile: "issue.md" }],
+      automations: [{ name: "issue coordinator", driverFile: "issue-coordinator-driver.cts" }],
     });
 
     expect(project).toEqual({
@@ -127,10 +125,7 @@ describe("deterministic extension core", () => {
           schedule: "*/10 * * * *",
           timezone: "Asia/Tokyo",
           graceMinutes: 720,
-          promptFile: "issue.md",
-          precheckFile: undefined,
-          driverFile: undefined,
-          precheckTimeoutSeconds: 60,
+          driverFile: "issue-coordinator-driver.cts",
           maxRuntimeSeconds: 86_400,
           shutdownGraceSeconds: 300,
           initialLastScheduledAt: 0,
@@ -151,6 +146,42 @@ describe("deterministic extension core", () => {
     const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", id: "demo" });
 
     expect(project.automations.map((automation) => automation.id)).toEqual(["demo:issue-coordinator", "demo:pr-reviewer"]);
+  });
+
+  it("rejects an automation without a driverFile", () => {
+    expect(() =>
+      normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", id: "demo", automations: [{ name: "no driver" }] }),
+    ).toThrow(/driverFile is required/);
+  });
+
+  it.each(["promptFile", "precheckFile", "precheckTimeoutSeconds"])("rejects the removed automation key %s", (key) => {
+    expect(() =>
+      normalizeProject({
+        workerModel: "test-model",
+        reviewerModel: "review-model",
+        id: "demo",
+        automations: [{ ...{ driverFile: "driver.cts" }, [key]: "leftover" } as never],
+      }),
+    ).toThrow(new RegExp(`automation config key is removed: ${key}`));
+  });
+
+  it("rejects a repo policy automation that still names a front-end prompt file", () => {
+    const result = parseProjectsConfig(JSON.stringify({
+      projects: [{
+        id: "demo",
+        workerModel: "test-model",
+        reviewerModel: "review-model",
+        automations: [{ driverFile: "driver.cts" }],
+      }],
+    }), undefined, {
+      repoPolicyProvider: () => ({
+        status: "loaded",
+        text: JSON.stringify({ automations: [{ promptFile: "leftover.prompt.md" }] }),
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.reason).toMatch(/key is not allowed: promptFile/);
   });
 
   it("keeps explicit empty automations disabled", () => {
@@ -243,27 +274,13 @@ describe("deterministic extension core", () => {
     expect(nextSlotAfter({ lastScheduledAt: 20 * 60_000 }, automation, 35 * 60_000)).toBe(40 * 60_000);
   });
 
-  it("renders prompt templates from public template values", () => {
-    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
-      id: "demo",
-      repoPath: "/repo",
-      githubRepo: "owner/repo",
-      automations: [{ id: "demo:issue", name: "issue coordinator" }],
-    });
-    const values = templateValues(project, project.automations[0], "/ext/automations");
-
-    expect(
-      renderTemplate("{{ projectId }} {{githubRepo}} {{automationDir}} {{ missing.value }} {{readyLabel}}", values),
-    ).toBe("demo owner/repo /ext/automations  ready-for-agent");
-  });
-
   it("builds automation script environment from the shared runtime values", () => {
     const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model",
       id: "demo",
       repoPath: "/repo",
       githubRepo: "owner/repo",
       autoMerge: true,
-      automations: [{ id: "demo:issue", name: "issue coordinator" }],
+      automations: [{ id: "demo:issue", name: "issue coordinator", driverFile: "driver.cts" }],
     });
 
     expect(automationEnvironment(project, project.automations[0])).toMatchObject({
@@ -278,7 +295,7 @@ describe("deterministic extension core", () => {
 
   it("passes the selected projects.json path to completion automations", () => {
     const project = projectsFromConfig(
-      { projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", automations: [{}] }] },
+      { projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", automations: [{ driverFile: "driver.cts" }] }] },
       undefined,
       { configPath: "/extension/projects.json" },
     )[0];
@@ -287,7 +304,7 @@ describe("deterministic extension core", () => {
   });
 
   it("does not expose the retired CI fallback auto-merge environment variable", () => {
-    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", automations: [{}] });
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", automations: [{ driverFile: "driver.cts" }] });
 
     expect(automationEnvironment(project, project.automations[0])).not.toHaveProperty(
       "DEADLOOP_CI_FALLBACK_ALLOW_AUTO_MERGE",
@@ -361,27 +378,6 @@ describe("deterministic extension core", () => {
     const project = normalizeProject({ workerModel: "anthropic/claude-opus-4-8", reviewerModel: "openai-codex/gpt-5.2-codex" });
 
     expect(project.reviewerModel).toBe("openai-codex/gpt-5.2-codex");
-  });
-
-  it("exposes worker and reviewer models to prompt templates", () => {
-    const project = normalizeProject({ reviewerModel: "review-model", workerModel: "anthropic/claude-opus-4-8", automations: [{}] });
-    const values = templateValues(project, project.automations[0], "/auto");
-
-    expect(renderTemplate("{{workerModel}}|{{reviewerModel}}", values)).toBe("anthropic/claude-opus-4-8|review-model");
-  });
-
-  it("exposes the worker agent to prompt templates", () => {
-    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", workerAgent: "claude", automations: [{}] });
-
-    expect(renderTemplate("{{workerAgent}}", templateValues(project, project.automations[0], "/auto"))).toBe("claude");
-  });
-
-  it("exposes the reviewer agent to prompt templates", () => {
-    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", reviewerAgent: "claude", automations: [{}] });
-
-    expect(renderTemplate("{{reviewerAgent}}", templateValues(project, project.automations[0], "/auto"))).toBe(
-      "claude",
-    );
   });
 
   it("retains overrides from a project whose obsolete enabled field is false", () => {
@@ -458,7 +454,7 @@ describe("deterministic extension core", () => {
   });
 
   it("carries the shared-policy CI-equivalent command into automation environment", () => {
-    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", automations: [{}] }, {
+    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", automations: [{ driverFile: "driver.cts" }] }, {
       repoPolicyPath: "deadloop.json",
       repoPolicyBaseBranch: "origin/main",
       repoPolicyStatus: "loaded",
@@ -467,20 +463,8 @@ describe("deterministic extension core", () => {
     } as never);
 
     expect(project.ciEquivalentCommand).toBeUndefined();
-    const configured = normalizeProject({ ciEquivalentCommand: "make ci", workerModel: "test-model", reviewerModel: "review-model", automations: [{}] });
+    const configured = normalizeProject({ ciEquivalentCommand: "make ci", workerModel: "test-model", reviewerModel: "review-model", automations: [{ driverFile: "driver.cts" }] });
     expect(automationEnvironment(configured, configured.automations[0]).DEADLOOP_CI_EQUIVALENT_COMMAND).toBe("make ci");
-  });
-
-  it("exposes auto merge state to prompt templates", () => {
-    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", automations: [{}] });
-
-    expect(renderTemplate("{{autoMerge}}", templateValues(project, project.automations[0], "/auto"))).toBe("false");
-  });
-
-  it("exposes external review state to prompt templates", () => {
-    const project = normalizeProject({ workerModel: "test-model", reviewerModel: "review-model", externalReview: { enabled: true, waitSeconds: 60 }, automations: [{}] });
-
-    expect(renderTemplate("{{externalReviewEnabled}}|{{externalReviewWaitSeconds}}", templateValues(project, project.automations[0], "/auto"))).toBe("true|60");
   });
 
   it("preserves an automation driver file from project config", () => {
@@ -573,7 +557,7 @@ describe("deterministic extension core", () => {
     const result = parseProjectsConfig(JSON.stringify({ projects: [{ id: "demo", workerModel: "repo-model", reviewerModel: "review-model", repoPath: "/repo" }] }), "", {
       repoPolicyProvider: () => ({
         status: "loaded",
-        text: JSON.stringify({ automations: [{ id: "demo:auto", promptFile: "issue-coordinator.prompt.md" }] }),
+        text: JSON.stringify({ automations: [{ id: "demo:auto", driverFile: "issue-coordinator-driver.cts" }] }),
       }),
     });
 

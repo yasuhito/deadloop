@@ -16,11 +16,9 @@ import {
   isLinkedGitWorktree,
   nextSlotAfter,
   parseProjectsConfig,
-  renderTemplate,
   resolveAutomationFile,
   resolveConfigPath,
   sanitizeId,
-  templateValues,
 } from "../../src/core";
 import { buildDoctorSnapshot, formatDoctorReport, herdrDoctorFinding } from "../../src/doctor";
 import { herdrVersionDiagnosticData, parseHerdrVersions } from "../../src/herdr-version";
@@ -728,6 +726,9 @@ function resolveAutomationFileInDir(_kind, _automation, requested, supply) {
   return resolveAutomationFile(requested, (fileName) => fs.existsSync(path.join(automationDir, fileName)));
 }
 
+// Drivers decide every automation action; one script runs per scheduled tick.
+const AUTOMATION_SCRIPT_TIMEOUT_MS = 60_000;
+
 async function runAutomationScript(pi, project, automation, automationFile, supply) {
   const automationDir = supply.automationDir;
   const scriptPath = path.join(automationDir, automationFile);
@@ -741,14 +742,8 @@ async function runAutomationScript(pi, project, automation, automationFile, supp
     .map(([key, value]) => `${key}=${shellQuote(value)}`)
     .join(" ");
   return await pi.exec("bash", ["-lc", `${exports} ${shellQuote(scriptPath)}`], {
-    timeout: automation.precheckTimeoutSeconds * 1000,
+    timeout: AUTOMATION_SCRIPT_TIMEOUT_MS,
   });
-}
-
-function readPrompt(project, automation, promptFile, supply) {
-  const automationDir = supply.automationDir;
-  const template = fs.readFileSync(path.join(automationDir, promptFile), "utf8");
-  return renderTemplate(template, templateValues(project, automation, automationDir));
 }
 
 async function execJson(pi, command, args, fallback, options: { timeout?: number } = {}) {
@@ -946,7 +941,6 @@ async function collectLiveSnapshotData(
     workspaces,
     gitStatuses,
     gitHeads,
-    automationDir: AUTOMATION_DIR,
     statePath: STATE_PATH,
     claudeConfig,
     repositoryEnablement,
@@ -1463,7 +1457,6 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
   return {
     enabledAt: () => project.enabledAt,
     isEnabled: () => isCurrentSchedulerRun() && isProjectEnabled(project),
-    isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : undefined,
     observeAttemptMonitoring: observeDeterministicAttemptMonitoring,
     proveRetainedHandoffSettled: (handoff) =>
       proveRetainedHandoffSettlement(handoff, {
@@ -1512,35 +1505,17 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
         return ensureCodeSnapshot({ packageRoot: PACKAGE_ROOT, stateDir: STATE_DIR, codeIdentity: LOADED_CODE_IDENTITY });
       } catch (error) {
         // A stop nobody can see is indistinguishable from an idle host, so publish the reason
-        // before the throw stops this automation short of precheck and every driver.
+        // before the throw stops this automation short of any driver.
         setLooperStatus(ctx, `skipped: ${error instanceof Error ? error.message : String(error)}`);
         throw error;
       }
     },
-    readPrompt,
     revalidatePendingDriverHandoff: revalidatePendingIssueHandoff,
     resolveAutomationFileInDir,
     runDriver: async (driverProject, driverAutomation, driverFile, supply) =>
       await runAutomationScript(pi, driverProject, driverAutomation, driverFile, supply),
-    runPrecheck: async (precheckProject, precheckAutomation, precheckFile, supply) =>
-      await runAutomationScript(pi, precheckProject, precheckAutomation, precheckFile, supply),
     saveState: (state) => {
       if (isCurrentSchedulerRun()) saveState(state, ownedAutomationKeys);
-    },
-    sendUserMessage: (prompt) => {
-      if (isCurrentSchedulerRun()) pi.sendUserMessage(prompt);
-    },
-    sendUserMessageIfEnabled: (prompt) => {
-      if (!isCurrentSchedulerRun()) return false;
-      try {
-        return withEnabledProjectLock(
-          { repoPath: project.repoPath, githubRepo: project.githubRepo, stateDir: STATE_DIR, enabledAt: project.enabledAt },
-          (_enabled, recheck) => (recheck(), pi.sendUserMessage(prompt), true),
-        );
-      } catch (error) {
-        if (error instanceof Error && error.message === "deadloop is disabled for this repository") return false;
-        throw error;
-      }
     },
     setStatus: (text) => {
       if (isCurrentSchedulerRun()) setLooperStatus(ctx, text);

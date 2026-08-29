@@ -324,8 +324,6 @@ function reviewerFixtureRepository(): { root: string; repoPath: string } {
     automations: [{
       id: "demo:pr-reviewer",
       name: "demo PR reviewer",
-      promptFile: "pr-reviewer.prompt.md",
-      precheckFile: "pr-reviewer.precheck.sh",
       driverFile: "pr-reviewer-driver.cts",
     }],
   }));
@@ -1744,8 +1742,7 @@ describe("enablement command integration", () => {
     config.projects[0].automations = [{
       name: "first tick",
       schedule: "*/1 * * * *",
-      precheckFile: "issue-coordinator.precheck.sh",
-      promptFile: "issue-coordinator.md",
+      driverFile: "issue-coordinator-driver.cts",
     }];
     writeFileSync(configPath, JSON.stringify(config));
     let effectiveAutoMerge = "";
@@ -2107,7 +2104,7 @@ describe("enablement command integration", () => {
     writeConfig(root, repoPath);
     const configPath = path.join(root, ".pi", "agent", "deadloop", "projects.json");
     const config = JSON.parse(readFileSync(configPath, "utf8"));
-    config.projects[0].automations = [{ name: "identity guarded", schedule: "*/1 * * * *", precheckFile: "issue-coordinator.precheck.sh", promptFile: "issue-coordinator.md" }];
+    config.projects[0].automations = [{ name: "identity guarded", schedule: "*/1 * * * *", driverFile: "issue-coordinator-driver.cts" }];
     writeFileSync(configPath, JSON.stringify(config));
     let deployed = "a".repeat(40);
     let automationRuns = 0;
@@ -2302,8 +2299,7 @@ describe("enablement command integration", () => {
     config.projects[0].automations = [{
       name: "blocked",
       schedule: "*/1 * * * *",
-      precheckFile: "issue-coordinator.precheck.sh",
-      promptFile: "issue-coordinator.md",
+      driverFile: "issue-coordinator-driver.cts",
     }];
     writeFileSync(configPath, JSON.stringify(config));
     let releasePrecheck!: () => void;
@@ -2360,8 +2356,7 @@ describe("enablement command integration", () => {
     config.projects[0].automations = [{
       name: "blocked",
       schedule: "*/1 * * * *",
-      precheckFile: "issue-coordinator.precheck.sh",
-      promptFile: "issue-coordinator.md",
+      driverFile: "issue-coordinator-driver.cts",
     }];
     writeFileSync(configPath, JSON.stringify(config));
     let releasePrecheck!: () => void;
