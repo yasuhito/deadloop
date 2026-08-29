@@ -55,3 +55,7 @@ pi の package 参照を、可変な working tree から固定名の配備先へ
 本 ADR の「working tree 直ロードを廃止し、配備コマンドで配備先を張り替える」は実装されていない。Automation host は `extensions/deadloop/index.ts` をロード時の checkout から読み込み、`deployedIdentity` は checkout の `HEAD` である。ホストのコード世代のずれは ADR 0016 の識別子照合(ロード時識別子 ≠ checkout の HEAD なら tick を開始しない)が防いでいる。
 
 コードスナップショットの役割は、エージェントが自分の session 内で実行するスクリプト(`run-project-check`、`pr-review-repair-finalize`、`pr-branch-update-finalize`)の供給元である。ホストが実行する処理(driver、reconciler、完了ハンドラ)はホストの読み込み済みコードを in-process で呼ぶ。tick の開始が許される限り、両者は同じコード識別子である。エージェント向けの絶対パスは引数で渡される供給元(`supply.automationDir`)から作り、`__dirname` からは作らない。
+
+## ADR 0036 による追記(2026-08-29)
+
+保持中の試行の完了処理（必須検証、push、PR 作成、結果の記録、workspace 閉鎖）は、引き渡しに記録された起動時のスナップショットではなく、ホストが現在ロードしているコード世代から実行する（[ADR 0036](0036-completion-runs-from-the-current-code.md)）。エージェント自身の実行と、引き渡しに記録する `automationDir` は本 ADR のまま起動時の世代に固定する。

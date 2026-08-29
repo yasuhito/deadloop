@@ -155,9 +155,17 @@ function runGuardedPush(
   );
 }
 
+/** The deterministic completion parses stdout as JSON, so a finished push reports itself as one line. */
+function completionLine(code: number): string | undefined {
+  return code === 0 ? `${JSON.stringify({ driverAction: "pushed" })}\n` : undefined;
+}
+
 function main(): void {
   try {
-    process.exitCode = runGuardedPush(parseArgs(process.argv.slice(2)));
+    const code = runGuardedPush(parseArgs(process.argv.slice(2)));
+    const line = completionLine(code);
+    if (line) process.stdout.write(line);
+    process.exitCode = code;
   } catch (error) {
     console.error(`guarded-push.cts: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
@@ -165,4 +173,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { assertAuthorizedSource, assertVerifiedWorkerOutput, assertWorkerHead, assertWorkerPushBinding, parseArgs, runGuardedPush };
+module.exports = { assertAuthorizedSource, assertVerifiedWorkerOutput, assertWorkerHead, assertWorkerPushBinding, completionLine, parseArgs, runGuardedPush };
