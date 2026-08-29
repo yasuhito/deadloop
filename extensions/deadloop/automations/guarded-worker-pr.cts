@@ -157,6 +157,20 @@ function run(args: Args): number {
     },
   );
 }
-function main() { try { process.exitCode = run(parseArgs(process.argv.slice(2))); } catch (error) { console.error(`guarded-worker-pr.cts: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 2; } }
+/** The deterministic completion parses stdout as JSON, so an ensured Worker PR reports itself as one line. */
+function completionLine(code: number): string | undefined {
+  return code === 0 ? `${JSON.stringify({ driverAction: "worker_pr_ensured" })}\n` : undefined;
+}
+function main() {
+  try {
+    const code = run(parseArgs(process.argv.slice(2)));
+    const line = completionLine(code);
+    if (line) process.stdout.write(line);
+    process.exitCode = code;
+  } catch (error) {
+    console.error(`guarded-worker-pr.cts: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 2;
+  }
+}
 if (require.main === module) main();
-module.exports = { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrAwaitingReview, ensureWorkerPr, parseArgs, run, verified };
+module.exports = { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrAwaitingReview, completionLine, ensureWorkerPr, parseArgs, run, verified };

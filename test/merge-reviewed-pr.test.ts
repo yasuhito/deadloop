@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const { mergeReviewedPr } = require("../extensions/deadloop/automations/merge-reviewed-pr.cts");
+const { completionLine, mergeReviewedPr } = require("../extensions/deadloop/automations/merge-reviewed-pr.cts");
 
 const expectedHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const trustedBase = "cccccccccccccccccccccccccccccccccccccccc";
@@ -364,4 +364,9 @@ describe("reviewed PR merge", () => {
   it("fails closed when GitHub's atomic head guard rejects the merge", () => {
     expect(() => runMerge({ mergeStatus: 1 })).toThrow("head commit changed");
   });
+});
+
+describe("reviewed PR merge completion line", () => {
+  it("reports a finished merge as one JSON line for the deterministic completion", () => { expect(JSON.parse(completionLine(0))).toEqual({ driverAction: "merged" }); });
+  it("reports nothing when the merge did not finish", () => { expect(completionLine(2)).toBeUndefined(); });
 });

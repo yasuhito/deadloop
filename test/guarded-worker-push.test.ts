@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.cts");
+const { completionLine, runGuardedPush } = require("../extensions/deadloop/automations/guarded-push.cts");
 const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
 const roots: string[] = [];
 const originalConfigDir = process.env.PI_CODING_AGENT_DIR;
@@ -123,4 +123,9 @@ describe("verified Worker push boundary", () => {
     } catch (caught) { error = String(caught); }
     expect({ calls, pushed: f.pushedRef(), stale: error.includes("stale_policy") }).toEqual({ calls: 3, pushed: "", stale: true });
   });
+});
+
+describe("guarded push completion line", () => {
+  it("reports a finished push as one JSON line for the deterministic completion", () => { expect(JSON.parse(completionLine(0))).toEqual({ driverAction: "pushed" }); });
+  it("reports nothing when the push did not finish", () => { expect(completionLine(2)).toBeUndefined(); });
 });

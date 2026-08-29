@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrAwaitingReview, ensureWorkerPr } = require("../extensions/deadloop/automations/guarded-worker-pr.cts");
+const { addWorkerReviewLabel, assertWorkerPrBinding, assertWorkerPrAwaitingReview, completionLine, ensureWorkerPr } = require("../extensions/deadloop/automations/guarded-worker-pr.cts");
 
 describe("guarded Worker PR binding", () => {
   it("rejects another GitHub repository before PR creation", () => {
@@ -272,4 +272,9 @@ describe("guarded Worker PR binding", () => {
     } catch (caught) { error = String(caught); }
     expect({ created, stale: error.includes("stale_policy") }).toEqual({ created: false, stale: true });
   });
+});
+
+describe("guarded Worker PR completion line", () => {
+  it("reports an ensured Worker PR as one JSON line for the deterministic completion", () => { expect(JSON.parse(completionLine(0))).toEqual({ driverAction: "worker_pr_ensured" }); });
+  it("reports nothing when the Worker PR was not ensured", () => { expect(completionLine(2)).toBeUndefined(); });
 });
