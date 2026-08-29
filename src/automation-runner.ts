@@ -36,7 +36,6 @@ export type AutomationRunnerDeps = {
   herdrPreflight?: () => void | Promise<void>;
   enabledAt?: () => number;
   isEnabled?: () => boolean;
-  isIdle?: () => boolean;
   observeAttemptMonitoring?: (
     handoff: Record<string, unknown>,
     accounting: ActiveWorkAccounting,
