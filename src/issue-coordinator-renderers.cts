@@ -175,8 +175,9 @@ Hard limits:
 Promise report:
 - Write one JSON object to \`${markdownCode(input.promiseFile)}\` before stopping.
 - Start with this exact identity: \`${markdownCode(reportBase)}\`.
-- On success add \`"status":"complete"\`, a concise \`summary\`, \`"result":{"difficulty":"low|medium|high","relevantFiles":["path"],"verifiedClaims":["claim"],"disprovedClaims":[],"openQuestions":[],"approach":"optional approach"}\`, and \`"evidence":{"commands":["command and result"]}\`.
-- On failure add \`"status":"blocked"\`, \`summary\`, \`"result":{"reason":"typed_reason_code","explanation":"what failed","recovery":"safe next step"}\`, and \`"evidence":{}\`.
+- Every report must also include the summary field beside the identity: \`"summary":"<three sentences>"\`. A report without it is invalid and discarded.
+- On success add \`"status":"complete"\`, \`"result":{"difficulty":"low|medium|high","relevantFiles":["path"],"verifiedClaims":["claim"],"disprovedClaims":[],"openQuestions":[],"approach":"optional approach"}\`, and \`"evidence":{"commands":["command and result"]}\`.
+- On failure add \`"status":"blocked"\`, \`"result":{"reason":"typed_reason_code","explanation":"what failed","recovery":"safe next step"}\`, and \`"evidence":{}\`.
 - Always write the promise file; do not exit silently.`;
 }
 
@@ -226,8 +227,9 @@ Hard limits:
 Promise report:
 - Before stopping, write JSON to the orchestrator promise file: \`${markdownCode(input.promiseFile)}\`.
 - Every report must start with this exact V1 identity: \`${markdownCode(reportBase)}\`.
-- On success, add \`"status":"complete"\`, a three-sentence \`summary\`, \`"result":{"outputRevision":"<commit SHA>"}\`, and \`"evidence":{"validations":["<command and result>"]}\`.
-- If blocked by failure, missing spec, risky change, or uncertainty, add \`"status":"blocked"\`, a three-sentence \`summary\`, \`"result":{"reason":"typed_reason_code","explanation":"what is unsafe","recovery":"safe next step"}\`, and \`"evidence":{}\`.
+- Every report must also include the summary field beside the identity: \`"summary":"<three sentences>"\`. A report without it is invalid and discarded.
+- On success, add \`"status":"complete"\`, \`"result":{"outputRevision":"<commit SHA>"}\`, and \`"evidence":{"validations":["<command and result>"]}\`.
+- If blocked by failure, missing spec, risky change, or uncertainty, add \`"status":"blocked"\`, \`"result":{"reason":"typed_reason_code","explanation":"what is unsafe","recovery":"safe next step"}\`, and \`"evidence":{}\`.
 - Write one complete JSON object; do not nest the identity JSON as a string.
 - Always write the promise file, even on failure. Do not exit silently.`;
 }

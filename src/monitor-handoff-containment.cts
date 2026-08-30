@@ -6,7 +6,7 @@ type JsonObject = Record<string, any>;
 
 type MonitorContainmentInput = {
   record: JsonObject;
-  report: { kind: "missing" | "valid" | "invalid"; cause?: "storage_exhaustion" };
+  report: { kind: "missing" | "valid" | "invalid"; cause?: "storage_exhaustion"; detail?: string };
   runtime:
     | { kind: "working" }
     | { kind: "terminal"; status: string; terminalEvidence?: string }
@@ -35,6 +35,7 @@ function decideMonitorContainment(input: MonitorContainmentInput): MonitorHandof
     reason: input.report.kind === "invalid"
       ? input.report.cause === "storage_exhaustion" ? "storage_exhaustion" : "invalid_completion_report"
       : "missing_completion_report",
+    ...(input.report.detail ? { detail: input.report.detail } : {}),
   };
 }
 

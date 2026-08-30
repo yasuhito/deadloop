@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 const {
   renderIssueBlockedComment,
+  renderIssueExplorerPrompt,
   renderIssuePlanningComment,
   renderIssueWorkerPrompt,
 } = require("../src/issue-coordinator-renderers.cts");
@@ -32,6 +33,16 @@ const workerInput = {
   workerInstructions: "Read AGENTS.md. Do not paste unsafe fences.",
   checkCommand: "npm test && echo ```not a fence```",
   promiseFile: "/tmp/worktree/.deadloop/promise-123.json",
+};
+
+const explorerInput = {
+  issueNumber: 72,
+  issueTitle: "Explore the issue",
+  issueUrl: "https://github.com/owner/repo/issues/72",
+  githubRepo: "owner/repo",
+  workerInstructions: "Read AGENTS.md. Do not paste unsafe fences.",
+  promiseFile: "/tmp/worktree/.deadloop/promise-124.json",
+  reportIdentity: { attemptId: "attempt-124", inputRevision: { head: "a".repeat(40) } },
 };
 
 describe("issue coordinator renderers", () => {
@@ -123,5 +134,13 @@ describe("issue coordinator renderers", () => {
     expect(renderIssueWorkerPrompt(workerInput)).toContain(
       '"schemaVersion":1,'
     );
+  });
+
+  it("requires a three-sentence summary in the worker report template", () => {
+    expect(renderIssueWorkerPrompt(workerInput)).toContain('"summary":"<three sentences>"');
+  });
+
+  it("requires a three-sentence summary in the explorer report template", () => {
+    expect(renderIssueExplorerPrompt(explorerInput)).toContain('"summary":"<three sentences>"');
   });
 });
