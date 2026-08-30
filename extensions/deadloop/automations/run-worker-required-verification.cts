@@ -5,6 +5,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { normalizeCompletionReportCommitShas } = require("../../../src/completion-report-normalization.cjs");
 const { createCommandRunner } = require("../../../src/automation-driver-kit.cts");
 const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { closeCompletionStoppedWorkerAttempt } = require("./complete-attempt-workspace.cts");
@@ -149,7 +150,7 @@ async function run(
   const runner = createCommandRunner();
   const confinement = assertWorktreeBelongsToProject(runner, attempt, args);
   if (path.resolve(args.worktree) !== confinement.worktreePath) throw new Error("--worktree does not match the attempt worktree");
-  const report = JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8"));
+  const report = normalizeCompletionReportCommitShas(attempt, JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8")));
   validateCompletionReportBinding(attempt, report);
   const role = args.role || "worker";
   if (attempt.role !== role || report.role !== role || report.status !== "complete") throw new Error(`complete ${role} report is required`);

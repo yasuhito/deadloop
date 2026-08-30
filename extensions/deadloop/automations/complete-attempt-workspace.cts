@@ -12,6 +12,7 @@ const {
   transitionPersistedAttempt,
 } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { validatePromise } = require("./extract-worker-promise.cts");
+const { readNormalizedCompletionReport } = require("../../../src/completion-report-normalization.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { parseAttemptPersistenceMarkers } = require("../../../src/attempt-persistence-marker.cjs");
@@ -260,7 +261,7 @@ function completeLocked(
     if (validation.evidenceStrength !== "strong") {
       return driverResult("done", "attempt workspace retained because the completion report is not strongly bound", { driverAction: "workspace_retained" });
     }
-    try { report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8")) as CompletionReportV1; }
+    try { report = readNormalizedCompletionReport(record) as CompletionReportV1; }
     catch (error) {
       return driverResult("done", "attempt workspace retained because the completion report is malformed", {
         driverAction: "workspace_retained", detail: error instanceof Error ? error.message : String(error),

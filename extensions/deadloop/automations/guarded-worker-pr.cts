@@ -9,6 +9,7 @@ const { spawnSync } = require("node:child_process") as typeof import("node:child
 const { assertLocallyEnabled, withEnabledProjectLock, MAX_GUARDED_OPERATION_MS } = require("../../../src/enabled-operation.cjs");
 const { resolveVerifiedPushDestination } = require("./verified-push-destination.cts");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { normalizeCompletionReportCommitShas } = require("../../../src/completion-report-normalization.cjs");
 const { createCommandRunner } = require("../../../src/automation-driver-kit.cts");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
@@ -125,7 +126,7 @@ function verified(args: Args) {
   assertWorkerPrBinding(attempt, args);
   assertAttemptProjectBinding(attempt, args);
   assertWorktreeBelongsToProject(createCommandRunner(), attempt, args);
-  const report = JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8"));
+  const report = normalizeCompletionReportCommitShas(attempt, JSON.parse(fs.readFileSync(attempt.promiseFile, "utf8")));
   validateCompletionReportBinding(attempt, report);
   const enabled = assertLocallyEnabled({ repoPath: args.projectRepo, githubRepo: args.githubRepo, stateDir: args.stateDir, enabledAt: args.enabledAt });
   const configFile = process.env.DEADLOOP_CONFIG || path.join(args.stateDir, "projects.json");

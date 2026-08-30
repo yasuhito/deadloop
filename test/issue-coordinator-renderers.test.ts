@@ -140,6 +140,18 @@ describe("issue coordinator renderers", () => {
     expect(renderIssueWorkerPrompt(workerInput)).toContain('"summary":"<three sentences>"');
   });
 
+  it("requires the 40-hex outputRevision in the worker report JSON template", () => {
+    expect(renderIssueWorkerPrompt(workerInput)).toContain(
+      '"result":{"outputRevision":"<40-hex output of git rev-parse HEAD>"}',
+    );
+  });
+
+  it("tells the worker to copy git rev-parse HEAD verbatim for outputRevision", () => {
+    expect(renderIssueWorkerPrompt(workerInput)).toContain(
+      "Write `outputRevision` exactly as the full 40-hex output of `git rev-parse HEAD`; a short SHA invalidates the whole report.",
+    );
+  });
+
   it("requires a three-sentence summary in the explorer report template", () => {
     expect(renderIssueExplorerPrompt(explorerInput)).toContain('"summary":"<three sentences>"');
   });
