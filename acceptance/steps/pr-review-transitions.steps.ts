@@ -65,7 +65,7 @@ Then("deadloop starts normal review", function (this: TransitionWorld) {
   assert.equal(this.result?.testAdapterEffects?.herdrStarts?.length, 1);
 });
 
-Then("deadloop leaves the external review request untouched before claim", function (this: TransitionWorld) {
+Then("deadloop leaves the external review request untouched before consumption", function (this: TransitionWorld) {
   const effects = this.result?.testAdapterEffects as { githubComments?: unknown[]; labelMutations?: unknown[]; herdrStarts?: unknown[] } | undefined;
   assert.deepEqual({
     action: this.result?.driverAction,

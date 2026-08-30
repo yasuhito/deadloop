@@ -221,7 +221,7 @@ When("deadloop applies deterministic attempt monitoring to the stopped update", 
   withBrokenReportRead(this, () => driveMonitoringOnce(this));
 });
 
-Then("deadloop replaces the active update claim with agent:blocked", function (this: BranchUpdateFailureWorld) {
+Then("deadloop replaces the active update state with agent:blocked", function (this: BranchUpdateFailureWorld) {
   assert.deepEqual(this.prTarget?.labels, ["triage", "agent:blocked"]);
 });
 

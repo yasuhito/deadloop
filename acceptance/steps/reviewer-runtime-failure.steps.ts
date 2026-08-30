@@ -217,7 +217,7 @@ When("deadloop applies deterministic attempt monitoring", function (this: Review
   withBrokenReportRead(this, () => driveMonitoringOnce(this));
 });
 
-Then("deadloop replaces the active review claim with agent:blocked", function (this: ReviewerFailureWorld) {
+Then("deadloop replaces the active review state with agent:blocked", function (this: ReviewerFailureWorld) {
   assert.deepEqual(this.prTarget?.labels, ["triage", "agent:blocked"]);
 });
 
@@ -307,7 +307,7 @@ When("deadloop processes the review target after recovery", function (this: Revi
   this.driverResult = runPrReviewerDriverFixture(this.recoveryFixturePath);
 });
 
-Then("deadloop claims the new review request through the recovery view", function (this: ReviewerFailureWorld) {
+Then("deadloop consumes the new review request through the recovery view", function (this: ReviewerFailureWorld) {
   assert.deepEqual({
     action: this.driverResult?.driverAction,
     starts: this.driverResult?.testAdapterEffects?.herdrStarts?.length ?? 0,

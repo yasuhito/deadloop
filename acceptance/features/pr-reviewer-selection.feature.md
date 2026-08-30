@@ -63,14 +63,14 @@ This prevents duplicate and early reviews of pull requests that are being prepar
 * When deadloop searches for review target
 * Then No review target is selected
 
-## Scenario: Do not request external review before an active claim
+## Scenario: Do not request external review before the request is consumed
 
 * Given There is a pull request waiting for review.
 * And External review is enabled
 * When deadloop decides how to handle external reviews
-* Then deadloop leaves external-review request state untouched before claim
+* Then deadloop leaves external-review request state untouched before consumption
 
-## Scenario: Do not mutate while waiting for external review before an active claim
+## Scenario: Do not mutate while waiting for external review before the request is consumed
 
 * Given There is a pull request waiting for external review
 * And External review is enabled
@@ -108,23 +108,23 @@ This prevents duplicate and early reviews of pull requests that are being prepar
 * When deadloop selects and processes the review target
 * Then deadloop skips pull request #14 as blocked
 
-## Scenario: Claim the review request of a draft pull request
+## Scenario: Consume the review request of a draft pull request
 
 * Given There is a draft pull request
 * When deadloop tries to start a review
-* Then deadloop claims the draft pull request's review request
+* Then deadloop consumes the draft pull request's review request
 
-## Scenario: Reclaim a stale review claim and select its pull request
+## Scenario: Recover a stale in-progress state and select its pull request
 
 * Given There is a pull request under review with no active agents.
 * When deadloop searches for review target
 * Then deadloop selects pull request #13 for review
 
-## Scenario: Record stale review claim recovery as the selection reason
+## Scenario: Record stale in-progress recovery as the selection reason
 
 * Given There is a pull request under review with no active agents.
 * When deadloop searches for review target
-* Then The selection reason is stale review claim recovery
+* Then The selection reason is stale in-progress recovery
 
 ## Scenario: Record repair re-review as the selection reason
 

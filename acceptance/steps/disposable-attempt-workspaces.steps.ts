@@ -412,10 +412,10 @@ function launchRepairBoundary(workspaceId: string) {
   const uuid = "cucumber-review-repair";
   const operations = roleLaunchOps(root, workspaceId);
   launchRepair("12", branch, inputHead, findings, key, env, undefined, uuid, true, operations);
-  // Between preparation and launch the driver records its GitHub claim; the boundary replays the
+  // Between preparation and launch the driver records the GitHub consumption; the boundary replays the
   // same transition through the shared launch seam so the phases match production exactly.
-  const claimInput = repairLaunchInput("12", branch, inputHead, findings, key, env, uuid);
-  recordAgentLaunchGithubClaimed(claimInput);
+  const consumptionInput = repairLaunchInput("12", branch, inputHead, findings, key, env, uuid);
+  recordAgentLaunchGithubClaimed(consumptionInput);
   const launched = launchRepair("12", branch, inputHead, findings, key, env, undefined, uuid, false, operations);
   rmSync(root, { recursive: true, force: true });
   return launched;

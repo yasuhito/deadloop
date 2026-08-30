@@ -2,11 +2,11 @@
 
 When the reviewer agent stops without a completion report, deadloop publishes the stop on the pull request bound to its selection-time head, and restarts only through a new `agent:review` Agent request.
 
-## Scenario: Replace a stopped review's active claim with agent:blocked
+## Scenario: Replace a stopped review's in-progress state with agent:blocked
 
 * Given A pull request under review whose reviewer stopped without writing a completion report
 * When deadloop applies deterministic attempt monitoring
-* Then deadloop replaces the active review claim with agent:blocked
+* Then deadloop replaces the active review state with agent:blocked
 
 ## Scenario: Post one stop explanation for the stopped review
 
@@ -42,4 +42,4 @@ When the reviewer agent stops without a completion report, deadloop publishes th
 
 * Given A pull request blocked by a reviewer runtime failure that gained a new agent:review request after the block
 * When deadloop processes the review target after recovery
-* Then deadloop claims the new review request through the recovery view
+* Then deadloop consumes the new review request through the recovery view

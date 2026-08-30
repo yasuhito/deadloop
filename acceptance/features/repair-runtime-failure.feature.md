@@ -2,11 +2,11 @@
 
 When the repair worker stops without a completion report, deadloop publishes the stop on the pull request bound to its selection-time head and the review-finding contract it was repairing, keeps the stopped worktree for inspection, and restarts only through a new `agent:implement` Agent request.
 
-## Scenario: Replace a stopped repair's active claim with agent:blocked
+## Scenario: Replace a stopped repair's in-progress state with agent:blocked
 
 * Given A pull request under automatic repair whose repair worker stopped without writing a completion report
 * When deadloop applies deterministic attempt monitoring to the stopped repair
-* Then deadloop replaces the active repair claim with agent:blocked
+* Then deadloop replaces the active repair state with agent:blocked
 
 ## Scenario: Post one stop explanation for the stopped repair
 

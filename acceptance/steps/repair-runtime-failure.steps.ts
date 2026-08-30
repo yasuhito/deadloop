@@ -221,7 +221,7 @@ When("deadloop applies deterministic attempt monitoring to the stopped repair", 
   withBrokenReportRead(this, () => driveMonitoringOnce(this));
 });
 
-Then("deadloop replaces the active repair claim with agent:blocked", function (this: RepairFailureWorld) {
+Then("deadloop replaces the active repair state with agent:blocked", function (this: RepairFailureWorld) {
   assert.deepEqual(this.prTarget?.labels, ["triage", "agent:blocked"]);
 });
 

@@ -2,11 +2,11 @@
 
 When the branch-update worker stops without a completion report, deadloop publishes the stop on the pull request bound to its attempt, the selection-time head, and the selected base, keeps the mid-update worktree evidence, and restarts only through a new `agent:update-branch` Agent request.
 
-## Scenario: Replace a stopped update's active claim with agent:blocked
+## Scenario: Replace a stopped update's in-progress state with agent:blocked
 
 * Given A pull request under branch update whose update worker stopped without writing a completion report
 * When deadloop applies deterministic attempt monitoring to the stopped update
-* Then deadloop replaces the active update claim with agent:blocked
+* Then deadloop replaces the active update state with agent:blocked
 
 ## Scenario: Post one stop explanation for the stopped update
 

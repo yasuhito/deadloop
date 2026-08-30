@@ -215,7 +215,7 @@ Then("The blocking comment shows recovery steps of pull request", function (this
   assert.match(this.blockedComment || "", /## Recovery steps/);
 });
 
-Then("No draft blocking comment is posted before claim", function (this: OperatorStatusWorld) {
+Then("No draft blocking comment is posted before consumption", function (this: OperatorStatusWorld) {
   assert.equal(this.blockedComment || "", "");
 });
 
