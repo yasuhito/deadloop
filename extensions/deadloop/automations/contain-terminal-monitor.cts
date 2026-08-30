@@ -10,6 +10,7 @@ const {
   releasesAttemptOwnership,
 } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { closeReceiptPath, observeAttemptRuntime, observeAttemptTurn } = require("../../../src/attempt-runtime-observation.cts");
+const { withinLaunchGrace } = require("../../../src/attempt-monitoring.cts");
 const { latestPrRequestEvent } = require("../../../src/pr-request-selection.cts");
 const { observeMonitorHandoffDisposition, terminalEvidenceArgs } = require("../../../src/monitor-handoff-observation.cts");
 
@@ -137,12 +138,17 @@ function commentBody(record: JsonObject, disposition: JsonObject): string {
   return `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n${binding}\n\n${stopMarker}`;
 }
 
-function dispositionStillApplies(commandRunner: JsonObject, runner: JsonObject, record: JsonObject, disposition: JsonObject): boolean {
+function dispositionStillApplies(commandRunner: JsonObject, runner: JsonObject, record: JsonObject, disposition: JsonObject, now: number): boolean {
   if (disposition.action === "stop" && disposition.reason === "active_work_timeout") {
     const active = Number(disposition.accounting?.activeMilliseconds || 0);
     const maximum = Number(disposition.maxActiveMilliseconds || 0);
     return maximum > 0 && active >= maximum && observeAttemptTurn(runner, record).kind === "working";
   }
+  // A just-launched turn may not have started yet, so a missing-report stop observed within the
+  // launch grace measured from the journal's recorded launch time is not confirmed: the attempt
+  // keeps monitoring, and a genuinely dead early attempt is stopped once the grace has expired.
+  if (disposition.action === "stop" && disposition.reason === "missing_completion_report"
+    && withinLaunchGrace(record, new Date(now).toISOString())) return false;
   const observed = currentDisposition(commandRunner, runner, record);
   return observed.action === disposition.action
     && (!("reason" in disposition) || "reason" in observed && observed.reason === disposition.reason);
@@ -212,6 +218,7 @@ function applyTerminalMonitorDisposition(
     commandRunner?: JsonObject;
     runner?: JsonObject;
     github?: JsonObject;
+    now?: () => number;
     withEnabledProjectLock?: typeof withEnabledProjectLock;
   } = {},
 ): boolean {
@@ -220,6 +227,7 @@ function applyTerminalMonitorDisposition(
   const commandRunner = dependencies.commandRunner || createCommandRunner();
   const runner = dependencies.runner || createHerdrRunnerFromCommandRunner(commandRunner);
   const github = dependencies.github || createGithubOperations(commandRunner);
+  const now = (dependencies.now as (() => number) | undefined) || (() => Date.now());
   const withProjectLock = dependencies.withEnabledProjectLock || withEnabledProjectLock;
   return withProjectLock({
     repoPath: input.project.repoPath,
@@ -232,24 +240,22 @@ function applyTerminalMonitorDisposition(
       throw new Error("terminal monitor attempt identity changed");
     }
     if (releasesAttemptOwnership(record.phase)) return true;
-    if (!dispositionStillApplies(commandRunner, runner, record, input.disposition)) return false;
+    if (!dispositionStillApplies(commandRunner, runner, record, input.disposition, now())) return false;
     const observed = input.disposition;
     if (observed.action !== "wait_for_model" && observed.action !== "stop") return false;
     let target = exactTarget(github, input, record);
     const body = commentBody(record, observed);
 
-    if (observed.action === "wait_for_model") {
-      if (!authorizedCommentExists(github, input, record, body)) {
-        recheck();
-        record = readBoundAttempt(recordFile);
-        target = exactTarget(github, input, record);
-        if (!dispositionStillApplies(commandRunner, runner, record, observed)) return false;
-        if (!labels(target).includes(input.project.labels.inProgress)) return false;
-        if (record.target.kind === "issue") github.commentIssue(input.project.githubRepo, record.target.number, body);
-        else github.commentPr(input.project.githubRepo, record.target.number, body);
-      }
-      return authorizedCommentExists(github, input, record, body);
+    if (observed.action === "wait_for_model" && !authorizedCommentExists(github, input, record, body)) {
+      recheck();
+      record = readBoundAttempt(recordFile);
+      target = exactTarget(github, input, record);
+      if (!dispositionStillApplies(commandRunner, runner, record, observed, now())) return false;
+      if (!labels(target).includes(input.project.labels.inProgress)) return false;
+      if (record.target.kind === "issue") github.commentIssue(input.project.githubRepo, record.target.number, body);
+      else github.commentPr(input.project.githubRepo, record.target.number, body);
     }
+    if (observed.action === "wait_for_model") return authorizedCommentExists(github, input, record, body);
 
     const currentLabels = labels(target);
     const stopped = currentLabels.includes(input.project.labels.blocked)
@@ -266,33 +272,39 @@ function applyTerminalMonitorDisposition(
       record = readBoundAttempt(recordFile);
       target = exactTarget(github, input, record);
       assertBranchUpdateStopGeneration(github, input, record);
-      if (!dispositionStillApplies(commandRunner, runner, record, observed)) return false;
-      // This confirmation is the last gate before GitHub writes. The label move and the stop
-      // comment run back to back under it: aborting between them would strand a half-applied
-      // stop — moved labels without the explanation, or the reverse.
-      replaceStoppedLabels(commandRunner, input, record, target);
-      if (!authorizedCommentExists(github, input, record, body)) {
-        if (record.target.kind === "issue") github.commentIssue(input.project.githubRepo, record.target.number, body);
-        else github.commentPr(input.project.githubRepo, record.target.number, body);
-      }
+      if (!dispositionStillApplies(commandRunner, runner, record, observed, now())) return false;
     } else if (!authorizedCommentExists(github, input, record, body)) {
       recheck();
       record = readBoundAttempt(recordFile);
-      exactTarget(github, input, record);
-      if (!dispositionStillApplies(commandRunner, runner, record, observed)) return false;
+      target = exactTarget(github, input, record);
+      if (!dispositionStillApplies(commandRunner, runner, record, observed, now())) return false;
+    }
+    // The runtime liveness reading is part of the stop reason's final confirmation too, so it is
+    // taken before any GitHub write: a turn that starts between the observations aborts here with
+    // nothing moved. A live runtime gets one more stop-reason confirmation under it.
+    const runtime = observeAttemptRuntime(runner, record, input.project.repoPath);
+    if (runtime.kind === "live_matching_owner") {
+      if (!dispositionStillApplies(commandRunner, runner, record, observed, now())) return false;
+    } else if (runtime.kind !== "owner_absent_owned") {
+      return false;
+    }
+    // Committed section: the label move and the stop comment run back to back under the
+    // confirmations above, and nothing past the first write aborts the stop — a half-applied stop
+    // (moved labels without the explanation, or the reverse) would strand the target on
+    // agent:blocked with no live attempt behind it.
+    if (!stopped) replaceStoppedLabels(commandRunner, input, record, target);
+    if (!authorizedCommentExists(github, input, record, body)) {
       if (record.target.kind === "issue") github.commentIssue(input.project.githubRepo, record.target.number, body);
       else github.commentPr(input.project.githubRepo, record.target.number, body);
     }
     if (!authorizedCommentExists(github, input, record, body)) return false;
 
-    const runtime = observeAttemptRuntime(runner, record, input.project.repoPath);
     if (runtime.kind === "live_matching_owner") {
-      if (!dispositionStillApplies(commandRunner, runner, record, observed)) return false;
       writeCloseReceipt(record);
       runner.closeWorkspace(record.workspaceId);
+      // The stop is already on GitHub at this point; when the closed workspace is not yet visible,
+      // the attempt stays retained so a later tick finishes the release instead of aborting.
       if (observeAttemptRuntime(runner, record, input.project.repoPath).kind !== "owner_absent_owned") return false;
-    } else if (runtime.kind !== "owner_absent_owned") {
-      return false;
     }
     releasePersistedAttemptAuthority(
       record.runDir,
