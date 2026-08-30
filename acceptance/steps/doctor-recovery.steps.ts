@@ -182,14 +182,14 @@ Given("A pull request has `agent:in-progress` but no active review agent", funct
 Given("A pull request has `agent:in-progress` and a retained launch-failed attempt", function (this: DoctorWorld) {
   setInput(this, {
     openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:in-progress"] }],
-    retainedClaims: [{ kind: "pull-request", number: 10 }],
+    retainedTargets: [{ kind: "pull-request", number: 10 }],
   });
 });
 
-Given("A pull request has `agent:in-progress` and ownership of its retained attempt record cannot be determined", function (this: DoctorWorld) {
+Given("A pull request has `agent:in-progress` and its retained attempt records cannot be read", function (this: DoctorWorld) {
   setInput(this, {
     openPrs: [{ number: 10, headRefName: "agent/issue-10-demo", labels: ["agent:in-progress"] }],
-    retainedClaimOwnershipAmbiguous: true,
+    retainedTargetsAmbiguous: true,
   });
 });
 
@@ -221,7 +221,7 @@ Given("An Issue with `agent:in-progress` has an open pull request that holds no 
   });
 });
 
-Given("An Issue with `agent:in-progress` has a pull request that an agent already claimed", function (this: DoctorWorld) {
+Given("An Issue with `agent:in-progress` has a pull request whose review an agent already started", function (this: DoctorWorld) {
   setInput(this, {
     issues: [{ number: 16, labels: ["agent:in-progress"] }],
     openPrs: [{ number: 26, headRefName: "agent/issue-16-demo", labels: ["agent:in-progress"], isDraft: true }],
@@ -244,7 +244,7 @@ Given("An Issue with `agent:in-progress` has only a person's pull request naming
   });
 });
 
-Given("An Issue and a pull request have no claim labels", function (this: DoctorWorld) {
+Given("An Issue and a pull request have no request or current-state labels", function (this: DoctorWorld) {
   setInput(this, { issues: [{ number: 13, labels: [] }], openPrs: [{ number: 12, headRefName: "agent/issue-12-demo", labels: [] }] });
 });
 
@@ -333,11 +333,11 @@ Then("doctor shows a command to inspect Claude trust configuration", function (t
   assert.match(this.report || "", /jq --arg p \/repo '.projects\[\$p\]\.hasTrustDialogAccepted' ~\/\.claude\.json/);
 });
 
-Then("doctor shows a command to release the review claim", function (this: DoctorWorld) {
+Then("doctor shows a command to clear the in-progress label", function (this: DoctorWorld) {
   assert.match(this.report || "", /gh pr edit 10 -R owner\/repo --remove-label agent:in-progress/);
 });
 
-Then("doctor does not show a command that releases only the review claim", function (this: DoctorWorld) {
+Then("doctor does not show a command that clears only the in-progress label", function (this: DoctorWorld) {
   assert.doesNotMatch(this.report || "", /gh pr edit 10 .*--remove-label agent:in-progress/);
 });
 

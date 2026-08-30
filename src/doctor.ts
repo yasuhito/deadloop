@@ -83,8 +83,8 @@ export type DoctorInput = {
   statePath?: string;
   claudeConfig?: ClaudeConfigResult;
   nowMs?: number;
-  retainedClaims?: Array<{ kind: "issue" | "pull-request"; number: number }>;
-  retainedClaimOwnershipAmbiguous?: boolean;
+  retainedTargets?: Array<{ kind: "issue" | "pull-request"; number: number }>;
+  retainedTargetsAmbiguous?: boolean;
   verificationCandidates?: VerificationCandidateDiscovery;
   lastWriterCodeIdentity?: string | null;
   codeSnapshots?: CodeSnapshotInventory | null;
@@ -100,7 +100,7 @@ export type DoctorFindingType =
   | "stale_in_progress"
   | "orphan_worktree"
   | "queue_jam"
-  | "stuck_claim"
+  | "stuck_in_progress"
   | "automation_unavailable"
   | "automation_spinning"
   | "coordinator_stalled"
@@ -424,17 +424,17 @@ function requeueImplementCommand(project: NormalizedProject, issueNumber: number
   return `gh issue edit ${issueNumber ?? "<number>"} -R ${shellArg(repo)} --remove-label ${shellArg(project.labels.inProgress)} --add-label ${shellArg(project.labels.ready)} --add-label ${shellArg(project.labels.implement)}`;
 }
 
-function buildStuckReviewClaimFindings(
+function buildStuckReviewStateFindings(
   project: NormalizedProject,
   openPrs: DoctorGithubItem[],
   worktrees: HerdrWorktree[],
   agents: HerdrAgent[],
-  retainedClaims: Set<string>,
+  retainedTargets: Set<string>,
 ): DoctorFinding[] {
   const repo = project.githubRepo || "<repo>";
   return openPrs
     .filter((pr) => labelsOf(pr).has(project.labels.inProgress))
-    .filter((pr) => !retainedClaims.has(`pull-request:${pr.number}`))
+    .filter((pr) => !retainedTargets.has(`pull-request:${pr.number}`))
     .filter((pr) => {
       const reviewerName = `${project.id}-pr-${pr.number ?? "?"}-reviewer`;
       const worktree = findWorktreeForBranch(String(pr.headRefName || ""), worktrees);
@@ -442,7 +442,7 @@ function buildStuckReviewClaimFindings(
     })
     .map((pr) => ({
       id: `stuck-review-state-${pr.number ?? "unknown"}`,
-      type: "stuck_claim" as const,
+      type: "stuck_in_progress" as const,
       title: `stuck reviewing state: ${issueRef(pr)}`,
       summary: `${project.labels.inProgress} is present, but the matching reviewer agent is not present in Herdr. This may be a stale interrupted review run.`,
       commands: [`gh pr edit ${pr.number ?? "<number>"} -R ${shellArg(repo)} --remove-label ${shellArg(project.labels.inProgress)}`],
@@ -462,17 +462,17 @@ function openPrForIssue(issueNumber: number | undefined, openPrs: DoctorGithubIt
   return openPrs.find((pr) => String(pr.headRefName || "").startsWith(prefix)) || null;
 }
 
-function buildStuckImplementClaimFindings(
+function buildStuckImplementStateFindings(
   project: NormalizedProject,
   issues: DoctorGithubItem[],
   worktrees: HerdrWorktree[],
   agents: HerdrAgent[],
-  retainedClaims: Set<string>,
+  retainedTargets: Set<string>,
   openPrs: DoctorGithubItem[],
 ): DoctorFinding[] {
   return issues
     .filter((issue) => labelsOf(issue).has(project.labels.inProgress))
-    .filter((issue) => !retainedClaims.has(`issue:${issue.number}`))
+    .filter((issue) => !retainedTargets.has(`issue:${issue.number}`))
     .filter((issue) => !openPrForIssue(issue.number, openPrs))
     .filter((issue) => {
       const workerName = `${project.id}-issue-${issue.number ?? "?"}-worker`;
@@ -488,9 +488,9 @@ function buildStuckImplementClaimFindings(
           ? `herdr worktree list --cwd ${shellArg(project.repoPath)} --json`
           : "herdr worktree list --json";
       return {
-        id: `stuck-implement-claim-${issue.number ?? "unknown"}`,
-        type: "stuck_claim" as const,
-        title: `stuck implement claim: ${issueRef(issue)}`,
+        id: `stuck-implement-state-${issue.number ?? "unknown"}`,
+        type: "stuck_in_progress" as const,
+        title: `stuck implementation state: ${issueRef(issue)}`,
         summary: `${project.labels.inProgress} is present, but the matching Worker is not present in Herdr. This may be a stale interrupted implementation run. Check for uncollected commits before re-queueing.`,
         commands: [confirmCommand, requeueImplementCommand(project, issue.number)],
       };
@@ -764,8 +764,8 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   const state = input.state || {};
   const statePath = input.statePath || "state.json";
   const nowMs = input.nowMs ?? Date.now();
-  const retainedClaims = new Set((input.retainedClaims || []).map((claim) => `${claim.kind}:${claim.number}`));
-  const retainedClaimOwnershipAmbiguous = input.retainedClaimOwnershipAmbiguous === true;
+  const retainedTargets = new Set((input.retainedTargets || []).map((target) => `${target.kind}:${target.number}`));
+  const retainedTargetsAmbiguous = input.retainedTargetsAmbiguous === true;
 
   return {
     project,
@@ -779,8 +779,8 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
       ...buildStaleInProgressFindings(project, issues, worktrees, nowMs),
       ...buildOrphanWorktreeFindings(project, issues, openPrs, worktrees, gitStatuses),
       ...buildQueueJamFindings(project, issues),
-      ...(retainedClaimOwnershipAmbiguous ? [] : buildStuckReviewClaimFindings(project, openPrs, worktrees, agents, retainedClaims)),
-      ...(retainedClaimOwnershipAmbiguous ? [] : buildStuckImplementClaimFindings(project, issues, worktrees, agents, retainedClaims, openPrs)),
+      ...(retainedTargetsAmbiguous ? [] : buildStuckReviewStateFindings(project, openPrs, worktrees, agents, retainedTargets)),
+      ...(retainedTargetsAmbiguous ? [] : buildStuckImplementStateFindings(project, issues, worktrees, agents, retainedTargets, openPrs)),
       ...buildUnrequestedPullRequestFindings(project, issues, openPrs),
       ...buildAutomationFindings(project, state, statePath, nowMs),
       ...buildWorkspaceTrustFindings(project, input.claudeConfig),

@@ -1024,24 +1024,24 @@ function launchFailedRecoveryGuidance(record, runDir, project, workspaces, agent
   return { commands: [`/deadloop-abandon-attempt ${record.attemptId}`], detail: "safe abandonment and requeue prerequisites are currently proven" };
 }
 
-function retainedAttemptClaimSnapshot(project) {
+function retainedAttemptTargetsSnapshot(project) {
   const runsDir = path.join(STATE_DIR, "runs");
   let runs = [];
-  try { runs = fs.readdirSync(runsDir); } catch { return { claims: [], ownershipAmbiguous: false }; }
-  const claims = [];
-  let ownershipAmbiguous = false;
+  try { runs = fs.readdirSync(runsDir); } catch { return { targets: [], targetsAmbiguous: false }; }
+  const targets = [];
+  let targetsAmbiguous = false;
   for (const run of runs) {
     const runDir = path.join(runsDir, run);
     if (!fs.existsSync(path.join(runDir, "attempt.json"))) continue;
     try {
       const record = readAttemptRecord(runDir);
       if (record.project === project?.id && record.repository === project?.githubRepo
-        && !releasesAttemptOwnership(record.phase)) claims.push(record.target);
+        && !releasesAttemptOwnership(record.phase)) targets.push(record.target);
     } catch {
-      ownershipAmbiguous = true;
+      targetsAmbiguous = true;
     }
   }
-  return { claims, ownershipAmbiguous };
+  return { targets, targetsAmbiguous };
 }
 
 function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidence = {}) {
@@ -1057,7 +1057,7 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
     catch (error) {
       if (fs.existsSync(attemptRecord)) findings.push(herdrDoctorFinding(
         "malformed_journal",
-        `attempt journal ${attemptRecord} is malformed: ${error instanceof Error ? error.message : String(error)}; manual review required before changing any claim label`,
+        `attempt journal ${attemptRecord} is malformed: ${error instanceof Error ? error.message : String(error)}; manual review required before changing any workflow label`,
       ));
       continue;
     }
@@ -1160,11 +1160,11 @@ function unresolvedProjectCheckReport(): string {
 
 async function buildLiveDoctorReport(pi, cwd, codeIdentityDecision?: () => CodeIdentityDecision) {
   const data = await collectLiveSnapshotData(pi, cwd, { includeIssueComments: true, includeAgents: true, codeIdentityDecision });
-  const retained = retainedAttemptClaimSnapshot(data.selectedProject);
+  const retained = retainedAttemptTargetsSnapshot(data.selectedProject);
   const snapshot = buildDoctorSnapshot({
     ...data,
-    retainedClaims: retained.claims,
-    retainedClaimOwnershipAmbiguous: retained.ownershipAmbiguous,
+    retainedTargets: retained.targets,
+    retainedTargetsAmbiguous: retained.targetsAmbiguous,
     codeSnapshots: collectCodeSnapshotInventory(STATE_DIR),
     deployedCodeIdentity: data.codeIdentity?.deployedIdentity ?? null,
     loadedCodeIdentity: data.codeIdentity?.loadedIdentity ?? null,
@@ -1758,7 +1758,7 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
 export {
   reconcilePersistedAttemptJournals,
   reconcilePrWorkAuthority,
-  retainedAttemptClaimSnapshot,
+  retainedAttemptTargetsSnapshot,
   retainedAttemptDoctorFindings,
 };
 
