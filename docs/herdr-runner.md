@@ -37,7 +37,7 @@ Every role writes an atomic `prepared` attempt journal before its first external
 
 After that role-specific transition, every launch follows the same workspace contract:
 
-1. Reconcile retained workspaces: close one a released attempt journal proves stale, and refuse the launch while an active or unclaimed owner keeps the checkout open or ownership is ambiguous. When no canonical checkout exists at all, a pull-request launch prepares it deterministically — fetch, require the exact recorded head, refuse to move a diverged local branch — and creates the checkout through Herdr.
+1. Reconcile retained workspaces: close one a released attempt journal proves stale, and refuse the launch while the execution runtime reports the checkout's agent still present or cannot say. When no canonical checkout exists at all, a pull-request launch prepares it deterministically — fetch, require the exact recorded head, refuse to move a diverged local branch — and creates the checkout through Herdr.
 2. Create the first linked worktree, or open an existing linked worktree without `--label`.
 3. Require Herdr's response to identify one new workspace, its first tab, root pane, and canonical worktree path. An open response must explicitly report `already_open: false`.
 4. Rename only that confirmed fresh workspace.
