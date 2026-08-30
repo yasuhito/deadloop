@@ -1,6 +1,7 @@
 const { compareGithubTimelineEvents } = require("./github-timeline-order.cts");
 const { redactLocalDetail } = require("./local-detail-redaction.cts");
 const { containsStorageExhaustion } = require("./storage-exhaustion.cjs");
+const { isStopCode, stopCodeAction } = require("./stop-codes.cts");
 
 type JsonObject = Record<string, any>;
 
@@ -147,6 +148,19 @@ function recoveryMarker(number: number, head: string, reason: string, cutoffEven
 }
 
 /**
+ * The published stop code for a block decision: the one operation a person performs. A launch that
+ * never prepared an agent splits by the recorded failure shape, because running out of storage and
+ * a diverged checkout are different operations even though both block before any agent starts.
+ */
+function reconciliationStopCode(reason: string, launchFailures?: string[]): string {
+  if (reason === "storage_exhaustion") return "free_storage";
+  if (reason === "launch_unprepared") {
+    return (launchFailures || []).some((failure) => containsStorageExhaustion(failure)) ? "free_storage" : "fix_environment";
+  }
+  return "add_request";
+}
+
+/**
  * Operator guidance for a pull request whose Agent requests keep failing before any agent starts.
  * Each entry maps a recurring failure shape to what an operator can actually do about it.
  */
@@ -175,6 +189,7 @@ function launchFailureGuidance(failures: string[]): string {
 }
 
 function recoveryComment(number: number, head: string, reason: string, cutoffEventId: string, launchFailures?: string[]): string {
+  const stopCode = isStopCode(reason) ? reason : reconciliationStopCode(reason, launchFailures);
   const readable: Record<string, string> = {
     runtime_unobservable: "the execution runtime could not describe this pull request's attempt",
     completion_handoff_refused: "the completion report could not be handed over for this pull request state",
@@ -197,7 +212,7 @@ function recoveryComment(number: number, head: string, reason: string, cutoffEve
       + `\n- free up storage on the machine running deadloop`
       + `\n- add a new Agent request once storage is available`;
   }
-  return `deadloop blocked this PR because ${explanation}. No old completion report may update the PR; inspect the retained attempt evidence, then add a new Agent request after resolving the blocker.\n\n${recoveryMarker(number, head, reason, cutoffEventId)}`;
+  return `deadloop blocked this PR because ${explanation}. No old completion report may update the PR; ${stopCodeAction(stopCode)}\n\n${recoveryMarker(number, head, stopCode, cutoffEventId)}`;
 }
 
 function sameLabels(left: string[], right: string[]): boolean {
@@ -307,5 +322,6 @@ module.exports = {
   postBlockRequestIsEligible,
   reconcilePrWorkAuthority,
   recoveryComment,
+  reconciliationStopCode,
   requestAfterInvalidationCutoff,
 };

@@ -231,7 +231,7 @@ Then("deadloop posts one stop explanation for the stopped repair", function (thi
 
 Then("The stop explanation is bound to the repair attempt key and the exact pull request head", function (this: RepairFailureWorld) {
   assert.ok(String(this.comments?.[0]?.body)
-    .includes(`<!-- deadloop:terminal-monitor-stop attempt=${REPAIR_KEY} head=${HEAD} reason=missing_completion_report -->`));
+    .includes(`<!-- deadloop:terminal-monitor-stop attempt=${REPAIR_KEY} head=${HEAD} reason=add_request -->`));
 });
 
 Then("The stopped attempt releases its ownership as a terminal missing-report failure and keeps its worktree", function (this: RepairFailureWorld) {
@@ -294,7 +294,7 @@ Given("A blocked repair runtime failure that gained a new agent:implement reques
         {
           createdAt: "2026-07-03T00:05:00Z",
           author: { login: "deadloop-bot" },
-          body: `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\nPull request head at selection: \`${HEAD}\`\n\n<!-- deadloop:terminal-monitor-stop attempt=${REPAIR_KEY} head=${HEAD} reason=missing_completion_report -->`,
+          body: `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\nPull request head at selection: \`${HEAD}\`\n\n<!-- deadloop:terminal-monitor-stop attempt=${REPAIR_KEY} head=${HEAD} reason=add_request -->`,
         },
       ],
       reviewRequests: [],

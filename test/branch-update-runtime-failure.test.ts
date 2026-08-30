@@ -183,7 +183,7 @@ describe("the published failure record for a stopped branch update", () => {
     applyTerminalMonitorDisposition(world.input as never, world.dependencies as never);
 
     expect(String(world.comments[0]?.body))
-      .toContain(`<!-- deadloop:terminal-monitor-stop attempt=${ATTEMPT_ID} head=${HEAD} base=${BASE} reason=storage_exhaustion -->`);
+      .toContain(`<!-- deadloop:terminal-monitor-stop attempt=${ATTEMPT_ID} head=${HEAD} base=${BASE} reason=free_storage -->`);
   });
 
   it("binds the generic technical failure to the attempt, the selection-time head, and the selected base", () => {
@@ -282,7 +282,7 @@ function restartWorld(options: {
     headRefOid: HEAD,
     comments: [{
       author: { login: "deadloop-bot" },
-      body: `deadloop stopped this attempt.\n\n<!-- deadloop:terminal-monitor-stop attempt=${STOP_ATTEMPT_ID} head=${HEAD} base=${BASE} reason=missing_completion_report -->`,
+      body: `deadloop stopped this attempt.\n\n<!-- deadloop:terminal-monitor-stop attempt=${STOP_ATTEMPT_ID} head=${HEAD} base=${BASE} reason=add_request -->`,
     }],
   };
   const env = {

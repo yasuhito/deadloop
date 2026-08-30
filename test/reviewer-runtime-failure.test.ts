@@ -306,7 +306,7 @@ describe("the published reviewer failure record", () => {
     applyTerminalMonitorDisposition(world.input, world.dependencies);
 
     expect(String(world.comments[0]?.body))
-      .toContain(`<!-- deadloop:terminal-monitor-stop attempt=attempt-1 head=${HEAD} reason=storage_exhaustion -->`);
+      .toContain(`<!-- deadloop:terminal-monitor-stop attempt=attempt-1 head=${HEAD} reason=free_storage -->`);
   });
 
   it("omits local worktree and completion-report paths from the public comment", () => {
@@ -332,7 +332,7 @@ describe("the published reviewer failure record", () => {
     applyTerminalMonitorDisposition(world.input, world.dependencies);
 
     expect(String(world.comments[0]?.body))
-      .toContain(`<!-- deadloop:terminal-monitor-stop attempt=attempt-1 head=${HEAD} reason=missing_completion_report -->`);
+      .toContain(`<!-- deadloop:terminal-monitor-stop attempt=attempt-1 head=${HEAD} reason=add_request -->`);
   });
 
   it("names the rejected field when the report is invalid", () => {

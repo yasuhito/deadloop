@@ -94,6 +94,13 @@ function exactTarget(github: JsonObject, input: ContainmentInput, record: JsonOb
   return target;
 }
 
+/** Maps a monitoring disposition to the published stop code: the one operation a person performs. */
+function terminalMonitorStopCode(disposition: JsonObject): string {
+  if (disposition.action === "wait_for_model") return "wait";
+  if (disposition.reason === "storage_exhaustion") return "free_storage";
+  return "add_request";
+}
+
 /**
  * The published failure record for a terminal monitor stop.
  *
@@ -109,7 +116,10 @@ function commentBody(record: JsonObject, disposition: JsonObject): string {
     `Pull request head at selection: \`${head}\``,
     ...(base ? [`Selected base head at selection: \`${base}\``] : []),
   ].join("\n");
-  const stopMarker = `<!-- deadloop:terminal-monitor-stop attempt=${record.attemptId} head=${head}${base ? ` base=${base}` : ""} reason=${disposition.reason} -->`;
+  // The published reason is the stop code: the one operation a person performs. The cause stays in
+  // the prose above it, and the monitoring disposition keeps its own internal vocabulary.
+  const stopCode = terminalMonitorStopCode(disposition);
+  const stopMarker = `<!-- deadloop:terminal-monitor-stop attempt=${record.attemptId} head=${head}${base ? ` base=${base}` : ""} reason=${stopCode} -->`;
   if (disposition.action === "wait_for_model") {
     return `deadloop paused this attempt because the agent's terminal result reported a recognized model billing or access rejection. The same attempt, workspace, worktree, and agent session remain retained; no monitor prompt will be sent while access is unavailable.\n\n<!-- deadloop:model-availability-wait attempt=${record.attemptId} -->`;
   }

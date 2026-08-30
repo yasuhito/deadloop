@@ -231,7 +231,7 @@ Then("deadloop posts one stop explanation for the stopped update", function (thi
 
 Then("The stop explanation is bound to the update attempt, the exact pull request head, and the selected base", function (this: BranchUpdateFailureWorld) {
   assert.ok(String(this.comments?.[0]?.body)
-    .includes(`<!-- deadloop:terminal-monitor-stop attempt=${ATTEMPT_ID} head=${HEAD} base=${BASE} reason=missing_completion_report -->`));
+    .includes(`<!-- deadloop:terminal-monitor-stop attempt=${ATTEMPT_ID} head=${HEAD} base=${BASE} reason=add_request -->`));
 });
 
 Then("The stopped update releases its ownership as a terminal missing-report failure and keeps its worktree", function (this: BranchUpdateFailureWorld) {
@@ -292,7 +292,7 @@ Given("A pull request blocked by a published branch-update runtime failure that 
     authorityRelease: { reason: "terminal_missing_report", releasedAt: "2026-07-03T00:00:00Z" },
   })}\n`);
 
-  const stopComment = `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\nPull request head at selection: \`${HEAD}\`\nSelected base head at selection: \`${BASE}\`\n\n<!-- deadloop:terminal-monitor-stop attempt=${STOP_ATTEMPT_ID} head=${HEAD} base=${BASE} reason=missing_completion_report -->`;
+  const stopComment = `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\nPull request head at selection: \`${HEAD}\`\nSelected base head at selection: \`${BASE}\`\n\n<!-- deadloop:terminal-monitor-stop attempt=${STOP_ATTEMPT_ID} head=${HEAD} base=${BASE} reason=add_request -->`;
   const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-update-recovery-"));
   const fixturePath = path.join(fixtureDirectory, "recovery.json");
   fs.writeFileSync(fixturePath, JSON.stringify({
