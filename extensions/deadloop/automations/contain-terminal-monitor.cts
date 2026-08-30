@@ -119,6 +119,11 @@ function commentBody(record: JsonObject, disposition: JsonObject): string {
   if (disposition.reason === "storage_exhaustion") {
     return `deadloop stopped this attempt because the host ran out of storage while it ran (a write failed with ENOSPC or EDQUOT, and deadloop could not even read this attempt's completion report because of it). The stopped attempt will not retry automatically and consumed no retry allowance.\nOperator actions:\n- free up storage on the machine running deadloop\n- add a new Agent request once storage is available\n${binding}\n\n${stopMarker}`;
   }
+  if (disposition.reason === "invalid_completion_report") {
+    // The validation message names the rejected report field (for example a missing summary).
+    const detail = String(disposition.detail || "").replace(/^Invalid attempt record: /, "").trim();
+    return `deadloop stopped this attempt because its agent turn ended with an invalid completion report. The completion report was rejected: ${detail || "the report did not satisfy the completion contract"}. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n${binding}\n\n${stopMarker}`;
+  }
   return `deadloop stopped this attempt because its agent turn ended without a valid completion report. No monitor prompt will be redelivered. Inspect the retained attempt evidence, then add a new Agent request after resolving the failure.\n${binding}\n\n${stopMarker}`;
 }
 

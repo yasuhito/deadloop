@@ -24,15 +24,21 @@ function terminalEvidenceArgs(record: JsonObject): string[] {
 }
 
 /** The report file itself is evidence; only its own read failure can name a formal cause. */
-function reportObservation(record: JsonObject): { kind: "missing" | "valid" | "invalid"; value?: JsonObject; cause?: "storage_exhaustion" } {
+function reportObservation(record: JsonObject): { kind: "missing" | "valid" | "invalid"; value?: JsonObject; cause?: "storage_exhaustion"; detail?: string } {
+  let value: unknown;
   try {
-    const value = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
-    validateCompletionReportBinding(record, value);
-    return { kind: "valid", value };
+    value = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return { kind: "missing" };
     if (isStorageExhaustionError(error)) return { kind: "invalid", cause: "storage_exhaustion" };
     return { kind: "invalid" };
+  }
+  try {
+    validateCompletionReportBinding(record, value);
+    return { kind: "valid", value };
+  } catch (error) {
+    // Validation messages name the rejected report field; they never contain local paths.
+    return { kind: "invalid", detail: String((error as Error | undefined)?.message || "") };
   }
 }
 

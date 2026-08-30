@@ -44,6 +44,41 @@ describe("formal storage-exhaustion evidence from deadloop's own processing", ()
 
     expect(reportObservation(record)).toEqual({ kind: "invalid" });
   });
+
+  it("carries the validator message when the report lacks a summary", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-report-detail-"));
+    const runDir = path.join(root, "runs", "attempt-1");
+    fs.mkdirSync(runDir, { recursive: true });
+    const record = {
+      attemptId: "attempt-1",
+      launchUuid: "launch-1",
+      project: "demo",
+      repository: "octo/demo",
+      role: "reviewer",
+      target: { kind: "pull-request", number: 42 },
+      inputRevision: { head: HEAD },
+      branch: "pr-42",
+      worktreePath: path.join(root, "worktree"),
+      agentName: "reviewer",
+      workspaceLabel: "reviewer 42",
+      promptFile: path.join(runDir, "prompt.md"),
+      promiseFile: path.join(runDir, "promise.json"),
+      phase: "agent_started",
+      lastSuccessfulPhase: "agent_started",
+    };
+    fs.writeFileSync(record.promiseFile, JSON.stringify({
+      schemaVersion: 1,
+      attemptId: "attempt-1",
+      role: "reviewer",
+      target: { repository: "octo/demo", kind: "pull-request", number: 42 },
+      inputRevision: { head: HEAD },
+      status: "complete",
+      result: { outcome: "approved", reviewedHead: HEAD, findings: [] },
+      evidence: { reviewed: ["diff and configured checks"] },
+    }));
+
+    expect(String((reportObservation(record) as { detail?: string }).detail)).toContain("summary");
+  });
 });
 
 describe("the reviewer stop classification for a storage-broken report", () => {
@@ -82,6 +117,41 @@ describe("the reviewer stop classification for a storage-broken report", () => {
     );
 
     expect(appliedDispositions).toEqual([{ action: "stop", reason: "storage_exhaustion" }]);
+  });
+
+  it("carries the validation detail on the invalid-report directive", () => {
+    expect(decideAttemptMonitoring({
+      ...input,
+      report: { kind: "invalid", detail: "completion report summary must be a non-empty string" },
+      runtime: { kind: "terminal", status: "done" },
+    })).toMatchObject({
+      action: "missing_report",
+      reason: "invalid_completion_report",
+      detail: "completion report summary must be a non-empty string",
+    });
+  });
+
+  it("carries the validation detail on the stop disposition", () => {
+    const appliedDispositions: unknown[] = [];
+    applyDeterministicAttemptMonitoring(
+      { input: {} },
+      {
+        action: "missing_report",
+        reason: "invalid_completion_report",
+        detail: "completion report summary must be a non-empty string",
+        accounting: input.accounting,
+      },
+      (_handoff, disposition) => {
+        appliedDispositions.push(disposition);
+        return true;
+      },
+    );
+
+    expect(appliedDispositions).toEqual([{
+      action: "stop",
+      reason: "invalid_completion_report",
+      detail: "completion report summary must be a non-empty string",
+    }]);
   });
 });
 
@@ -263,6 +333,29 @@ describe("the published reviewer failure record", () => {
 
     expect(String(world.comments[0]?.body))
       .toContain(`<!-- deadloop:terminal-monitor-stop attempt=attempt-1 head=${HEAD} reason=missing_completion_report -->`);
+  });
+
+  it("names the rejected field when the report is invalid", () => {
+    const world = fixture("invalid_completion_report");
+    fs.writeFileSync(world.promiseFile, JSON.stringify({
+      schemaVersion: 1,
+      attemptId: "attempt-1",
+      role: "reviewer",
+      target: { repository: "octo/demo", kind: "pull-request", number: 42 },
+      inputRevision: { head: HEAD },
+      status: "complete",
+      result: { outcome: "approved", reviewedHead: HEAD, findings: [] },
+      evidence: { reviewed: ["diff and configured checks"] },
+    }));
+    world.input.disposition = {
+      action: "stop",
+      reason: "invalid_completion_report",
+      detail: "completion report summary must be a non-empty string",
+    } as any;
+
+    applyTerminalMonitorDisposition(world.input, world.dependencies);
+
+    expect(String(world.comments[0]?.body)).toContain("summary");
   });
 });
 

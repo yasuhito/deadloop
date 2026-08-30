@@ -8,7 +8,7 @@ export type AttemptMonitoringDirective =
   | { action: "settled"; accounting: ActiveWorkAccounting }
   | { action: "working"; accounting: ActiveWorkAccounting }
   | { action: "completion"; accounting: ActiveWorkAccounting; report: Record<string, unknown> }
-  | { action: "missing_report"; accounting: ActiveWorkAccounting; reason: "terminal_without_report" | "invalid_completion_report" | "storage_exhaustion" | "model_availability"; providerRetryAt?: string | null }
+  | { action: "missing_report"; accounting: ActiveWorkAccounting; reason: "terminal_without_report" | "invalid_completion_report" | "storage_exhaustion" | "model_availability"; providerRetryAt?: string | null; detail?: string }
   | { action: "timeout"; accounting: ActiveWorkAccounting; reason: "active_work_limit" }
   | { action: "ambiguity"; accounting: ActiveWorkAccounting; reason: "runtime_ambiguous" | "runtime_unreachable" };
 
@@ -25,5 +25,5 @@ export type MonitorHandoffDisposition =
   | { action: "continue_monitoring" }
   | { action: "settled" }
   | { action: "wait_for_model"; reason: "model_availability" }
-  | { action: "stop"; reason: "missing_completion_report" | "invalid_completion_report" | "storage_exhaustion" | "active_work_timeout" }
+  | { action: "stop"; reason: "missing_completion_report" | "invalid_completion_report" | "storage_exhaustion" | "active_work_timeout"; detail?: string }
   | { action: "preserve"; reason: "runtime_ambiguous" | "runtime_unreachable" };

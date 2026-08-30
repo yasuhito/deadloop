@@ -377,13 +377,14 @@ Contract:
 Promise report:
 - Before stopping, write JSON to the promise file: \`${promiseFile.replace(/`/g, "\\`")}\`.
 - Every report must include this exact V1 identity: ${reportBase}.
+- Every report must also include the summary field beside the identity: "summary":"<three sentences>". A report without it is invalid and discarded.
 - Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
 - Separate the two kinds of observation: findings are the required corrections and the repair worker's entire contract, while advisories are optional observations that are published for humans and never repaired. Each advisory is {title,body,path?,line?}.
 - priorRequiredFindings states how the required findings raised by earlier reviews of this PR stand on the reviewed head: "none" when no earlier review raised one, "all_resolved" when every earlier one is fixed, "persisted" when at least one is still unresolved, "regressed" when a fixed one came back, "mixed" when unresolved earlier ones stand next to new ones. An earlier advisory that later became a required correction counts as a new required finding.
-- If no required correction remains, write a V1 report with a three-sentence summary, status="complete", result={outcome:"approved",reviewedHead:"${String(pr.headRefOid || "")}",findings:[],advisories:<advisory observations, may be empty>}, and evidence={reviewed:["diff and configured checks"],validations:["optional additional validation and result"]}. approved requires an empty findings list. The host independently runs required verification; validations are display-only additional evidence.
-- If required corrections exist, include a three-sentence summary and use result={outcome:"changes_requested",reviewedHead:"${String(pr.headRefOid || "")}",findings:[{title:"concise defect",body:"bounded required correction and evidence",path:"optional/repo/path",line:1,severity:"blocker|major|minor"}],advisories:<advisory observations, may be empty>,priorRequiredFindings:"none|all_resolved"} with non-empty evidence.reviewed and optional evidence.validations. Only "none" or "all_resolved" may accompany changes_requested, because automatic repair continues only on reported repair progress.
-- Use outcome=human_required when a persisted, regressed, or mixed prior required finding leaves no repair progress to report, or when a product/spec/safety decision cannot be repaired within the PR. Include a three-sentence summary and write result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:<required findings, may be empty>,advisories:<advisory observations, may be empty>,priorRequiredFindings:"persisted|regressed|mixed|all_resolved|none"}, and evidence={reviewed:["decision boundary and supporting evidence"],validations:["optional additional validation and result"]}.
-- For blocked reports include a three-sentence summary, result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
+- If no required correction remains, write a V1 report with "summary":"<three sentences>", status="complete", result={outcome:"approved",reviewedHead:"${String(pr.headRefOid || "")}",findings:[],advisories:<advisory observations, may be empty>}, and evidence={reviewed:["diff and configured checks"],validations:["optional additional validation and result"]}. approved requires an empty findings list. The host independently runs required verification; validations are display-only additional evidence.
+- If required corrections exist, use "summary":"<three sentences>" and result={outcome:"changes_requested",reviewedHead:"${String(pr.headRefOid || "")}",findings:[{title:"concise defect",body:"bounded required correction and evidence",path:"optional/repo/path",line:1,severity:"blocker|major|minor"}],advisories:<advisory observations, may be empty>,priorRequiredFindings:"none|all_resolved"} with non-empty evidence.reviewed and optional evidence.validations. Only "none" or "all_resolved" may accompany changes_requested, because automatic repair continues only on reported repair progress.
+- Use outcome=human_required when a persisted, regressed, or mixed prior required finding leaves no repair progress to report, or when a product/spec/safety decision cannot be repaired within the PR. Write "summary":"<three sentences>" and result={outcome:"human_required",reviewedHead:"${String(pr.headRefOid || "")}",findings:<required findings, may be empty>,advisories:<advisory observations, may be empty>,priorRequiredFindings:"persisted|regressed|mixed|all_resolved|none"}, and evidence={reviewed:["decision boundary and supporting evidence"],validations:["optional additional validation and result"]}.
+- For blocked reports include "summary":"<three sentences>", result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
 - Include only verified defects as findings; #243-style lint or repository-contract failures are changes_requested, not blocked.
 - The reason, summary, and the titles, bodies, and paths of both findings and advisories can be published in a PR comment. Keep them human-readable and never include prompts, promise paths, absolute/local paths, internal agent names, or other runtime details.
 - Always write the promise file, even on failure. Do not exit silently.`;
@@ -455,10 +456,10 @@ Safety contract:
 - If the finalizer returns stale_head, stop without pushing or changing GitHub state so the next cycle can re-evaluate.
 
 Promise report:
-- Always write one V1 JSON object to ${promiseFile}. Its immutable identity is ${reportBase}.
-- After finalizer action=pushed, read the finalizer result file beside the promise and write a summary plus status="complete", result={outcome:"branch_update_pushed",outputRevision:"<finalizer headOid>"}, and evidence={finalizer:<entire receipt>,validations:<receipt checks>}.
-- After finalizer action=stale_head, read the finalizer result file and write a summary plus status="complete", result={outcome:"stale_head",outputRevision:"<finalizer currentRemoteHeadOid>"}, and evidence={finalizer:<entire receipt>}. The outputRevision is required and must be the current remote head recorded by the finalizer.
-- On merge, validation, invariant, or push failure, write a summary plus status="blocked", result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
+- Always write one V1 JSON object to ${promiseFile}. Its immutable identity is ${reportBase}. Every report must also include the summary field beside the identity: "summary":"<three sentences>"; a report without it is invalid.
+- After finalizer action=pushed, read the finalizer result file beside the promise and write "summary":"<three sentences>" plus status="complete", result={outcome:"branch_update_pushed",outputRevision:"<finalizer headOid>"}, and evidence={finalizer:<entire receipt>,validations:<receipt checks>}.
+- After finalizer action=stale_head, read the finalizer result file and write "summary":"<three sentences>" plus status="complete", result={outcome:"stale_head",outputRevision:"<finalizer currentRemoteHeadOid>"}, and evidence={finalizer:<entire receipt>}. The outputRevision is required and must be the current remote head recorded by the finalizer.
+- On merge, validation, invariant, or push failure, write "summary":"<three sentences>" plus status="blocked", result={reason:"typed_reason_code",explanation:"what failed",recovery:"safe next step"}, and evidence={}.
 - Do not claim complete unless the finalizer returned pushed or stale_head.`;
 }
 
@@ -2108,5 +2109,7 @@ module.exports = {
   exposePostBlockReviewRequests,
   launchBranchUpdate,
   launchRequestBoundPrReviewerFlow,
+  reviewAgentPrompt,
+  branchUpdateWorkerPrompt,
   revalidateConsumedReviewerLaunch,
 };
