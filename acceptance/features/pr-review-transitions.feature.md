@@ -22,12 +22,12 @@ This prevents approval based on stale results, review before CI completes, and l
 * When deadloop decides the pull request's next action
 * Then deadloop starts normal review
 
-## Scenario: Do not replace an old external review request before an active claim
+## Scenario: Do not replace an old external review request before the request is consumed
 
 * Given External review was requested only for a previous pull request head
 * And External review is configured as enabled
 * When deadloop decides the pull request's next action
-* Then deadloop leaves the external review request untouched before claim
+* Then deadloop leaves the external review request untouched before consumption
 
 ## Scenario: Do not merge the current pull request using approval for a previous head
 

@@ -726,7 +726,7 @@ Then("The selection reason after conflict recovery is repair re-review", functio
 
 Then("deadloop preserves the review state", function (this: RecoveryWorld) {
   const labels = adapterEffects(this.result)?.labels?.["31"] ?? this.result?.observedLabels;
-  // The conflict case holds its review claim; the repair-dispatch case releases the claim into
+  // The conflict case keeps its in-progress state; the repair-dispatch case releases it into
   // the queued agent:implement request (ADR 0032).
   const expected = this.case === "conflict"
     ? ["agent:review", "agent:in-progress"]
@@ -739,8 +739,8 @@ Then("deadloop queues an agent:implement repair request without starting an agen
     action: this.result?.driverAction,
     starts: loggedAgentStartCount(this.result),
     requested: observedLabels(this.result).includes("agent:implement"),
-    claimReleased: !observedLabels(this.result).includes("agent:in-progress"),
-  }, { action: "review_repair_requested", starts: 0, requested: true, claimReleased: true });
+    inProgressReleased: !observedLabels(this.result).includes("agent:in-progress"),
+  }, { action: "review_repair_requested", starts: 0, requested: true, inProgressReleased: true });
 });
 
 Then("deadloop does not start another dedicated repair attempt", function (this: RecoveryWorld) {

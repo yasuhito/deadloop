@@ -1,3 +1,5 @@
+const { isStopCode } = require("./stop-codes.cts");
+
 type JsonObject = Record<string, any>;
 
 type IssueRequestGithub = {
@@ -382,9 +384,19 @@ function ownedActiveState(
   return removed ? { request, activation, active: false, removed: true } : null;
 }
 
+/**
+ * The stop code an Issue stop marker publishes. Agents and internal decision vocabularies may name
+ * anything in `failure.reason`; the marker is a published surface, so it carries only one of the
+ * stop codes (`src/stop-codes.cts`). An unknown reason folds into `add_request`: a new Agent request
+ * is the one operation every such stop asks for, and the cause stays in the comment's prose.
+ */
+function issueStopMarkerReason(reason: string): string {
+  return isStopCode(reason) ? reason : "add_request";
+}
+
 function failedExplorationBody(input: PersistFailedExplorationInput): string {
   return [
-    `<!-- deadloop:issue-attempt-stop:v1 role=${input.stopNoun} attempt=${input.attemptId} request=${input.requestEventId} reason=${input.failure.reason} -->`,
+    `<!-- deadloop:issue-attempt-stop:v1 role=${input.stopNoun} attempt=${input.attemptId} request=${input.requestEventId} reason=${issueStopMarkerReason(input.failure.reason)} -->`,
     `## deadloop ${input.stopNoun} stopped`,
     "",
     input.failure.explanation.trim(),
@@ -868,6 +880,7 @@ module.exports = {
   issueLabelIsActive,
   issueRecoveryBlockCanBeCleared,
   issueRecoveryRequestIsEligible,
+  issueStopMarkerReason,
   persistIssueAttemptStop,
   persistSuccessfulExploration,
   trustedExplorationResultComment,

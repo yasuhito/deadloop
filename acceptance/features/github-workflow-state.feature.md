@@ -20,11 +20,11 @@ This prevents local state from silently overriding what GitHub shows.
 * When deadloop searches for review target
 * Then deadloop selects pull request #7 for review
 
-## Scenario: Reclaim a migrating pull request whose reviewing state has no live owner
+## Scenario: Recover a migrating pull request whose reviewing state has no live agent
 
 * Given A migrating pull request carries both the retired reviewing label and a review request with stale in-progress state
 * When deadloop searches for review target
-* Then The selection reason is stale review claim recovery
+* Then The selection reason is stale in-progress recovery
 
 ## Scenario: Start exploration when exploration and implementation requests wait on one Issue
 

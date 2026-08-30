@@ -10,14 +10,14 @@ const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-doctor-attempt-"));
 const stateDir = path.join(root, "deadloop");
 let observeMonitorHandoffDisposition: (record: unknown, kind: unknown, deps: unknown) => { action: string };
 let retainedAttemptDoctorFindings: (...args: any[]) => any[];
-let retainedAttemptClaimSnapshot: (...args: any[]) => { claims: unknown[]; ownershipAmbiguous: boolean };
+let retainedAttemptTargetsSnapshot: (...args: any[]) => { targets: unknown[]; targetsAmbiguous: boolean };
 let reconcilePersistedAttemptJournals: (...args: any[]) => Promise<boolean>;
 
 beforeAll(async () => {
   vi.stubEnv("PI_CODING_AGENT_DIR", root);
   vi.resetModules();
   // @ts-expect-error Vitest transforms this runtime extension import.
-  ({ retainedAttemptDoctorFindings, retainedAttemptClaimSnapshot, reconcilePersistedAttemptJournals } = await import("../extensions/deadloop/index"));
+  ({ retainedAttemptDoctorFindings, retainedAttemptTargetsSnapshot, reconcilePersistedAttemptJournals } = await import("../extensions/deadloop/index"));
   ({ observeMonitorHandoffDisposition } = require("../src/monitor-handoff-observation.cts"));
 });
 afterAll(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
@@ -160,9 +160,9 @@ describe("attempt workspace doctor classifications", () => {
     resetRuns(); const runDir = path.join(stateDir, "runs", "one"); mkdirSync(runDir); writeFileSync(path.join(runDir, "attempt.json"), "malformed");
     expect(retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], [])[0].title).toContain("malformed_journal");
   });
-  it("marks retained claim ownership ambiguous for a malformed journal", () => {
+  it("marks retained targets ambiguous for a malformed journal", () => {
     resetRuns(); const runDir = path.join(stateDir, "runs", "one"); mkdirSync(runDir); writeFileSync(path.join(runDir, "attempt.json"), "malformed");
-    expect(retainedAttemptClaimSnapshot({ id: "demo", githubRepo: "octo/demo" }).ownershipAmbiguous).toBe(true);
+    expect(retainedAttemptTargetsSnapshot({ id: "demo", githubRepo: "octo/demo" }).targetsAmbiguous).toBe(true);
   });
   it("fails startup reconciliation closed for a malformed journal", async () => {
     resetRuns(); const runDir = path.join(stateDir, "runs", "one"); mkdirSync(runDir); writeFileSync(path.join(runDir, "attempt.json"), "malformed");

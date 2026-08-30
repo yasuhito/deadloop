@@ -179,9 +179,9 @@ deadloop は追跡可能なすべてのモデル応答（親エージェント�
 
 Issue / PR の状態、head、ラベル、コメント、checks が唯一のワークフロー状態です。要求ラベル（`agent:explore`、`agent:implement`、`agent:review`、`agent:update-branch`）は一回限りのイベントです。ラベルを付けた一つひとつのイベントがその役割の試行を一度だけ依頼し、deadloop は作業開始前にそのラベルだけを外して消費します。再試行や追加の依頼は、同じ要求ラベルをもう一度付けることだけで表せます。`agent:in-progress` は消費されて動いている仕事、`agent:blocked` は停止を示し、停止した対象が停止より前の要求を持つことはありません。
 
-1 つのリポジトリを同時に駆動するのはリポジトリ ID 単位のロックで守られた 1 ホストだけですが、複数のマシンや identity が 1 つのリポジトリを担当できます。誰が仕事を所有しているかは公開タイムラインから同じように導かれるため、どのホストも同じ結論に達します。試行が時間切れになった場合、ホストが落ちた場合、安全を証明できない場合は、対象は人間が読める理由とともに `agent:blocked` へ移ります。人が新しい要求ラベルを追加するまで、自動では何も再開しません。`/deadloop-doctor` はローカル向けの手順ではなく、そのコマンドを表示します。
+1 つのリポジトリを同時に駆動するのはリポジトリ ID 単位のロックで守られた 1 ホストだけですが、複数のマシンや identity が 1 つのリポジトリを担当できます。どのホストも同じ公開タイムラインを読むため、どの仕事が求められているかについて同じ結論に達します。動いている試行の生存は実行基盤の観測だけで判定し、仕事を壊しかねない書き込みは対象 head の compare-and-swap で守ります。試行が時間切れになった場合、ホストが落ちた場合、安全を証明できない場合は、対象は人間が読める理由とともに `agent:blocked` へ移ります。人が新しい要求ラベルを追加するまで、自動では何も再開しません。`/deadloop-doctor` はローカル向けの手順ではなく、そのコマンドを表示します。
 
-このモデルは Matt Pocock の Sandcastle dogfood workflow を基調とします（調査記録は [docs/research/matt-pocock-sandcastle-github-state-model.md](docs/research/matt-pocock-sandcastle-github-state-model.md)）。ただし deadloop は安全のための違いを意図的に保ちます。検証済み head に厳密に束縛した非 force push、push・引き渡し・マージ前の必須検証、毎 tick の古い状態との照合、複数ホスト間での claim 導出です。判断の詳細は [ADR 0032](docs/adr/0032-github-is-the-workflow-state-source-of-truth.md) を参照してください。
+このモデルは Matt Pocock の Sandcastle dogfood workflow を基調とします（調査記録は [docs/research/matt-pocock-sandcastle-github-state-model.md](docs/research/matt-pocock-sandcastle-github-state-model.md)）。ただし deadloop は安全のための違いを意図的に保ちます。検証済み head に厳密に束縛した非 force push（compare-and-swap）、push・引き渡し・マージ前の必須検証、毎 tick の古い状態との照合、複数ホストで共有する対象単位のローカル排他ロックです。判断の詳細は [ADR 0032](docs/adr/0032-github-is-the-workflow-state-source-of-truth.md) と [ADR 0020](docs/adr/0020-stop-proving-work-authority.md) を参照してください。
 
 ## 安全装置
 

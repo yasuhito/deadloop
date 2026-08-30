@@ -100,7 +100,7 @@ function stopBlockedWorkerAttempt(
     automationLogins: authorizedLogins(input, automationLogin),
     attemptId: String(record.attemptId),
     failure: {
-      reason: String(report.result?.reason || "worker_blocked"),
+      reason: String(report.result?.reason || "add_request"),
       explanation: String(report.result?.explanation || report.summary || ""),
       recovery: String(report.result?.recovery || report.result?.informationRequest || ""),
     },

@@ -140,23 +140,23 @@ Operators can check blocked work simply by viewing `/deadloop-doctor`, clean up 
 * When The operator runs doctor
 * Then doctor shows a command to inspect Claude trust configuration
 
-## Scenario: Show a command to release an inactive review claim
+## Scenario: Show a command to clear an interrupted review in-progress state
 
 * Given A pull request has `agent:in-progress` but no active review agent
 * When The operator runs doctor
-* Then doctor shows a command to release the review claim
+* Then doctor shows a command to clear the in-progress label
 
-## Scenario: Do not show incomplete release commands for review claims with held attempts
+## Scenario: Do not show incomplete clearing commands for targets with held attempts
 
 * Given A pull request has `agent:in-progress` and a retained launch-failed attempt
 * When The operator runs doctor
-* Then doctor does not show a command that releases only the review claim
+* Then doctor does not show a command that clears only the in-progress label
 
-## Scenario: Do not display incomplete release commands when held attempt records are corrupted
+## Scenario: Do not display incomplete clearing commands when held attempt records are corrupted
 
-* Given A pull request has `agent:in-progress` and ownership of its retained attempt record cannot be determined
+* Given A pull request has `agent:in-progress` and its retained attempt records cannot be read
 * When The operator runs doctor
-* Then doctor does not show a command that releases only the review claim
+* Then doctor does not show a command that clears only the in-progress label
 
 ## Scenario: Do not report a review agent between turns as a problem
 
@@ -184,7 +184,7 @@ Operators can check blocked work simply by viewing `/deadloop-doctor`, clean up 
 
 ## Scenario: Do not report a pull request an agent is already working as holding no request
 
-* Given An Issue with `agent:in-progress` has a pull request that an agent already claimed
+* Given An Issue with `agent:in-progress` has a pull request whose review an agent already started
 * When The operator runs doctor
 * Then doctor shows no command that requests review
 
@@ -200,9 +200,9 @@ Operators can check blocked work simply by viewing `/deadloop-doctor`, clean up 
 * When The operator runs doctor
 * Then doctor shows a command to inspect commits in the worktree
 
-## Scenario: Do not report unclaimed targets as problems
+## Scenario: Do not report targets without labels as problems
 
-* Given An Issue and a pull request have no claim labels
+* Given An Issue and a pull request have no request or current-state labels
 * When The operator runs doctor
 * Then doctor shows no findings
 

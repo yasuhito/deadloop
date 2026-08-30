@@ -19,8 +19,9 @@ This glossary defines the English terms used when translating the executable acc
 | 完了報告 / 完了ファイル | completion report / promise file | Use “promise file” when referring to the concrete file contract. |
 | 停止中 / 遮断 | blocked | Preserve the literal label `agent:blocked`. |
 | 再投入 | requeue | Returning an Issue or pull request to selection. |
-| 占有 | claim | Ownership represented by live attempt evidence and labels. |
-| 回収 | reclaim | Recovering a stale claim or completed resource. |
+| 要求消費 | request consumption | Removing the selected Agent request label after the documented verification. |
+| 作業状態 | in-progress state | The `agent:in-progress` label marking consumed work in motion. |
+| 回収 | reclaim | Recovering a stale in-progress state or completed resource. |
 | 片付け | cleanup | Guarded removal of completed resources. |
 | 必須検証 | required verification | The resolved repository check contract. |
 | 自動チェック | project check | The configured check run by deadloop. |

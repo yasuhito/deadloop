@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 const {
   applyPrWorkAuthorityReconciliation,
+  parseRecoveryMarker,
   postBlockRequestIsEligible,
   reconcilePrWorkAuthority,
   recoveryComment,
@@ -227,5 +228,26 @@ describe("requests queued after a block", () => {
 
   it("keeps a request added after the block queued for the next launch", () => {
     expect(postBlockRequestIsEligible({ request: events[1], events, blockedLabel: "agent:blocked" })).toBe(true);
+  });
+});
+
+describe("published stop codes name one operation", () => {
+  it("publishes free_storage for a launch failure shaped like storage exhaustion", () => {
+    const body = recoveryComment(24, HEAD, "launch_unprepared", "event-30", [
+      "worktree create failed with EDQUOT: disk quota exceeded",
+    ]);
+    expect(parseRecoveryMarker(body)?.reason).toBe("free_storage");
+  });
+
+  it("publishes fix_environment for a launch failure shaped like a diverged checkout", () => {
+    const body = recoveryComment(24, HEAD, "launch_unprepared", "event-30", [
+      "worktree agent/issue-42 does not resolve to the recorded canonical checkout",
+    ]);
+    expect(parseRecoveryMarker(body)?.reason).toBe("fix_environment");
+  });
+
+  it("publishes add_request for a stop the runtime could not describe", () => {
+    const body = recoveryComment(24, HEAD, "runtime_unobservable", "event-30");
+    expect(parseRecoveryMarker(body)?.reason).toBe("add_request");
   });
 });

@@ -219,7 +219,7 @@ Then("No review target is selected", function (this: SelectionWorld) {
   assert.equal(this.decision?.selected, false);
 });
 
-Then("The selection reason is stale review claim recovery", function (this: SelectionWorld) {
+Then("The selection reason is stale in-progress recovery", function (this: SelectionWorld) {
   assert.equal(this.decision?.reason, "stale_reclaim");
 });
 
@@ -227,7 +227,7 @@ Then("The selection reason is repair re-review", function (this: SelectionWorld)
   assert.equal(this.decision?.reason, "repair_rereview");
 });
 
-Then("deadloop leaves external-review request state untouched before claim", function (this: SelectionWorld) {
+Then("deadloop leaves external-review request state untouched before consumption", function (this: SelectionWorld) {
   assert.deepEqual({
     action: this.driverResult?.driverAction,
     comments: this.driverResult?.testAdapterEffects?.githubComments?.length ?? 0,
@@ -257,7 +257,7 @@ Then("deadloop starts the Reviewer for normal review", function (this: Selection
   assert.equal(this.driverResult?.testAdapterEffects?.herdrStarts?.length, 1);
 });
 
-Then("deadloop claims the draft pull request's review request", function (this: SelectionWorld) {
+Then("deadloop consumes the draft pull request's review request", function (this: SelectionWorld) {
   assert.deepEqual({
     action: this.driverResult?.driverAction,
     labels: this.driverResult?.testAdapterEffects?.labelMutations?.length ?? 0,

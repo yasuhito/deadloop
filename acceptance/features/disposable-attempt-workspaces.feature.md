@@ -68,7 +68,7 @@ Safely hand a worktree to the next attempt without leaving the completed agent's
 * When deadloop considers starting the next agent
 * Then deadloop does not start a new agent on the same worktree
 
-## Scenario: Reclaim a persisted success safely after restart
+## Scenario: Reconcile a persisted success safely after restart
 
 * Given The automation host stopped after persisting the result to GitHub
 * When deadloop reconciles the attempt after restart
