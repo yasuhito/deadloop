@@ -23,6 +23,7 @@ const {
 } = require("../../../src/worker-required-verification-runtime.cjs");
 const issueRequestTransition = require("../../../src/issue-request-transition.cts");
 const issueExploration = require("./complete-issue-exploration.cts");
+const { normalizeCompletionReportCommitShas } = require("../../../src/completion-report-normalization.cjs");
 
 type JsonObject = Record<string, any>;
 
@@ -192,7 +193,7 @@ function processInput(handoff: JsonObject, injectedOps?: CompletionOps): JsonObj
   }
   const input = handoff.input;
   const record = readAttemptRecord(path.dirname(String(input.attemptRecordFile)));
-  const report = JSON.parse(fs.readFileSync(String(input.promiseFile), "utf8"));
+  const report = normalizeCompletionReportCommitShas(record, JSON.parse(fs.readFileSync(String(input.promiseFile), "utf8")));
   validateCompletionReportBinding(record, report);
 
   if (handoff.kind === "explorer") {

@@ -378,6 +378,7 @@ Promise report:
 - Before stopping, write JSON to the promise file: \`${promiseFile.replace(/`/g, "\\`")}\`.
 - Every report must include this exact V1 identity: ${reportBase}.
 - Every report must also include the summary field beside the identity: "summary":"<three sentences>". A report without it is invalid and discarded.
+- Write reviewedHead exactly as the full 40-hex SHA given in the templates above; a short SHA invalidates the whole report.
 - Keep status limited to complete|blocked. Use blocked only when the review itself could not complete for a technical reason; actionable code, lint, test, documentation, or contract defects are a successful review.
 - Separate the two kinds of observation: findings are the required corrections and the repair worker's entire contract, while advisories are optional observations that are published for humans and never repaired. Each advisory is {title,body,path?,line?}.
 - priorRequiredFindings states how the required findings raised by earlier reviews of this PR stand on the reviewed head: "none" when no earlier review raised one, "all_resolved" when every earlier one is fixed, "persisted" when at least one is still unresolved, "regressed" when a fixed one came back, "mixed" when unresolved earlier ones stand next to new ones. An earlier advisory that later became a required correction counts as a new required finding.

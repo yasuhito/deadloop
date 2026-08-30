@@ -228,7 +228,8 @@ Promise report:
 - Before stopping, write JSON to the orchestrator promise file: \`${markdownCode(input.promiseFile)}\`.
 - Every report must start with this exact V1 identity: \`${markdownCode(reportBase)}\`.
 - Every report must also include the summary field beside the identity: \`"summary":"<three sentences>"\`. A report without it is invalid and discarded.
-- On success, add \`"status":"complete"\`, \`"result":{"outputRevision":"<commit SHA>"}\`, and \`"evidence":{"validations":["<command and result>"]}\`.
+- On success, add \`"status":"complete"\`, \`"result":{"outputRevision":"<40-hex output of git rev-parse HEAD>"}\`, and \`"evidence":{"validations":["<command and result>"]}\`.
+- Write \`outputRevision\` exactly as the full 40-hex output of \`git rev-parse HEAD\`; a short SHA invalidates the whole report.
 - If blocked by failure, missing spec, risky change, or uncertainty, add \`"status":"blocked"\`, \`"result":{"reason":"typed_reason_code","explanation":"what is unsafe","recovery":"safe next step"}\`, and \`"evidence":{}\`.
 - Write one complete JSON object; do not nest the identity JSON as a string.
 - Always write the promise file, even on failure. Do not exit silently.`;
