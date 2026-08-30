@@ -6,6 +6,7 @@
 // report. An ambiguous short SHA is rejected with the field name and the expected format so a stop
 // comment can name both.
 const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
 
 const SHORT_SHA_PATTERN = /^[0-9a-f]{4,39}$/i;
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/i;
@@ -60,8 +61,18 @@ function normalizeCompletionReportCommitShas(record, report, deps = {}) {
   return Object.keys(expansions).length ? { ...report, result: { ...result, ...expansions } } : report;
 }
 
+/**
+ * Reads the attempt's completion report from `record.promiseFile` with its short commit SHAs
+ * expanded, so every step that binds the report to a commit sees the same normalized value the
+ * validators saw. Callers that must not normalize (e.g. evidence copies) read the file directly.
+ */
+function readNormalizedCompletionReport(record, deps = {}) {
+  const report = JSON.parse(fs.readFileSync(String(record.promiseFile), "utf8"));
+  return normalizeCompletionReportCommitShas(record, report, deps);
+}
 module.exports = {
   ambiguousShortShaError,
+  readNormalizedCompletionReport,
   commitShaFieldsForRole,
   isShortCommitSha,
   normalizeCompletionReportCommitShas,

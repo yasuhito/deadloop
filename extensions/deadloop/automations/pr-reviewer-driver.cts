@@ -29,6 +29,7 @@ const { createGithubOperations } = require("../../../src/github-operations.cts")
 const { postBlockRequestIsEligible } = require("../../../src/pr-work-authority-reconciliation.cts");
 const { withDispatchLock } = require("../../../src/dispatch-lock.cjs");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { readNormalizedCompletionReport } = require("../../../src/completion-report-normalization.cjs");
 const { observeAttemptLiveness } = require("../../../src/attempt-runtime-observation.cts");
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
@@ -749,7 +750,7 @@ function recoverableBlockedBranchUpdateHead(
         // journal alone proves what the stopped update was working on.
         releasedMissingReport = true;
       } else {
-        const report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
+        const report = readNormalizedCompletionReport(record);
         validateCompletionReportBinding(record, report);
         blockedReport = report.status === "blocked";
       }

@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { ambiguousShortShaError, normalizeCompletionReportCommitShas } = require("../src/completion-report-normalization.cjs");
+const { ambiguousShortShaError, normalizeCompletionReportCommitShas, readNormalizedCompletionReport } = require("../src/completion-report-normalization.cjs");
 const { reportObservation } = require("../src/monitor-handoff-observation.cts");
 const { validatePromise } = require("../extensions/deadloop/automations/extract-worker-promise.cts");
 
@@ -200,5 +200,25 @@ describe("the executable promise validation of a short-SHA report", () => {
     const validated = validatePromise(promiseFile, path.join(runDir, "attempt.json"));
 
     expect(validated.status).toBe("invalid");
+  });
+});
+
+describe("readNormalizedCompletionReport", () => {
+  function reportFile(root: string, outputRevision: string): string {
+    const promiseFile = path.join(root, "promise.json");
+    fs.writeFileSync(promiseFile, JSON.stringify({ status: "complete", role: "worker", result: { outputRevision } }));
+    return promiseFile;
+  }
+
+  it("expands a uniquely resolvable short outputRevision read from the promise file", () => {
+    const { root, head } = initRepo();
+    const record = { role: "worker", worktreePath: root, promiseFile: reportFile(root, head.slice(0, 8)) };
+    expect(readNormalizedCompletionReport(record).result.outputRevision).toBe(head);
+  });
+
+  it("leaves a full outputRevision unchanged", () => {
+    const { root, head } = initRepo();
+    const record = { role: "worker", worktreePath: root, promiseFile: reportFile(root, head) };
+    expect(readNormalizedCompletionReport(record).result.outputRevision).toBe(head);
   });
 });
