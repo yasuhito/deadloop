@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const { applyCompletionRequiredVerificationStop, assertCleanOutput, completionStopDiagnosis, run, runWorkerProjectCheck } = require("../extensions/deadloop/automations/run-worker-required-verification.cts");
 const { inspectUnresolvedProjectCheckFailures } = require("../src/project-check.cts");
-const { writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
+const { persistHostVerificationEvidence, writeWorkerContractSnapshot } = require("../src/worker-required-verification-runtime.cjs");
+const { planVerificationFailureNotice, readLogTail } = require("../src/issue-required-verification-failure-notice.cts");
 const roots: string[] = [];
 function verificationAttempt(source: "repo_policy" | "default" = "repo_policy") {
   const fixture = repository();
@@ -26,7 +27,7 @@ function verificationAttempt(source: "repo_policy" | "default" = "repo_policy") 
   writeWorkerContractSnapshot(runDir, attempt);
   writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(attempt));
   writeFileSync(promiseFile, JSON.stringify({ schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head }, status: "complete", summary: "done", result: { outputRevision: head }, evidence: { validations: ["additional check"] } }));
-  return { args: { attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: fixture.root, githubRepo: "owner/repo", stateDir, enabledAt: 1, worktree: fixture.root, quarantineRoot: path.join(stateDir, "check-quarantine") }, record: path.join(runDir, "required-verification.json"), log: path.join(runDir, "required-verification.log"), root: fixture.root, head };
+  return { args: { attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: fixture.root, githubRepo: "owner/repo", stateDir, enabledAt: 1, worktree: fixture.root, quarantineRoot: path.join(stateDir, "check-quarantine") }, record: path.join(runDir, "required-verification.json"), log: path.join(runDir, "required-verification.log"), promiseFile, root: fixture.root, head };
 }
 function repository() {
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-worker-verification-"));
@@ -41,6 +42,19 @@ function repository() {
   return { root, head };
 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+
+function failedRecord(fixture?: { head: string; log: string }) {
+  const head = fixture?.head ?? "b".repeat(40);
+  return {
+    version: 1 as const,
+    binding: { repository: "owner/repo", targetCommit: head, command: "true", source: { kind: "repo_policy", location: "deadloop.json" }, baseRevision: head },
+    outcome: "failed" as const,
+    exitCode: 2,
+    startedAt: "2026-08-29T00:00:00.000Z",
+    durationMs: 94000,
+    logPath: fixture?.log ?? "/state/runs/attempt-1/required-verification.log",
+  };
+}
 
 describe("Worker required-verification checkout binding", () => {
   it("binds completion-stop enablement to the configured project repository path", () => {
@@ -175,6 +189,84 @@ describe("Worker required-verification checkout binding", () => {
     }, () => ({}));
 
     expect(invocations).toBe(1);
+  });
+
+  it("does not rerun when an authenticated failed record has the same binding", async () => {
+    const fixture = verificationAttempt();
+    writeFileSync(fixture.log, "npm ERR! exited 2\nlast log line\n");
+    persistHostVerificationEvidence(fixture.record, failedRecord(fixture));
+    let invocations = 0;
+
+    await expect(run(fixture.args, undefined, async () => {
+      invocations += 1;
+      return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
+    }, () => ({}), undefined, () => {})).rejects.toThrow("required verification failed");
+
+    expect(invocations).toBe(0);
+  });
+
+  it("reruns when the target commit moves past an authenticated failed record", async () => {
+    const fixture = verificationAttempt();
+    persistHostVerificationEvidence(fixture.record, failedRecord(fixture));
+    writeFileSync(path.join(fixture.root, "next.txt"), "next\n");
+    execFileSync("git", ["-C", fixture.root, "add", "next.txt"]);
+    execFileSync("git", ["-C", fixture.root, "commit", "--quiet", "-m", "next"]);
+    const nextHead = execFileSync("git", ["-C", fixture.root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(fixture.promiseFile, JSON.stringify({ schemaVersion: 1, attemptId: "attempt-1", role: "worker", target: { repository: "owner/repo", kind: "issue", number: 1 }, inputRevision: { head: fixture.head }, status: "complete", summary: "done", result: { outputRevision: nextHead }, evidence: { validations: ["additional check"] } }));
+    let invocations = 0;
+
+    await run(fixture.args, undefined, async () => {
+      invocations += 1;
+      return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
+    }, () => ({}));
+
+    expect(invocations).toBe(1);
+  });
+
+  it("reruns when an attempt-local failed record has no host evidence", async () => {
+    const fixture = verificationAttempt();
+    writeFileSync(fixture.record, JSON.stringify(failedRecord(fixture)));
+    let invocations = 0;
+
+    await run(fixture.args, undefined, async () => {
+      invocations += 1;
+      return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
+    }, () => ({}));
+
+    expect(invocations).toBe(1);
+  });
+
+  it("comments about a same-binding failure once across repeated ticks", async () => {
+    const fixture = verificationAttempt();
+    writeFileSync(fixture.log, "npm ERR! exited 2\nlast log line\n");
+    persistHostVerificationEvidence(fixture.record, failedRecord(fixture));
+    const issue = { number: 1, state: "OPEN", labels: ["agent:in-progress"], comments: [] as Array<{ body: string }> };
+    const comments: string[] = [];
+    const noticeOnce = () => {
+      const plan = planVerificationFailureNotice({ issue, record: failedRecord(fixture), logTail: readLogTail(fixture.log) });
+      if (plan.comment) { comments.push(plan.comment); issue.comments.push({ body: plan.comment }); }
+    };
+
+    await expect(run(fixture.args, undefined, async () => { throw new Error("must not run"); }, () => ({}), undefined, noticeOnce)).rejects.toThrow("required verification failed");
+    await expect(run(fixture.args, undefined, async () => { throw new Error("must not run"); }, () => ({}), undefined, noticeOnce)).rejects.toThrow("required verification failed");
+
+    expect(comments).toHaveLength(1);
+  });
+
+  it("includes the exit code in the failure notice", () => {
+    const plan = planVerificationFailureNotice({ issue: { number: 7, comments: [] }, record: failedRecord(), logTail: "" });
+    expect(plan.comment).toContain("exit code: 2");
+  });
+
+  it("includes the log tail in the failure notice", () => {
+    const plan = planVerificationFailureNotice({ issue: { number: 7, comments: [] }, record: failedRecord(), logTail: "npm ERR! exited 2\nlast log line\n" });
+    expect(plan.comment).toContain("last log line");
+  });
+
+  it("does not comment again when the same failure marker already exists", () => {
+    const first = planVerificationFailureNotice({ issue: { number: 7, comments: [] }, record: failedRecord(), logTail: "" });
+    const second = planVerificationFailureNotice({ issue: { number: 7, comments: [{ body: first.comment || "" }] }, record: failedRecord(), logTail: "" });
+    expect(second.comment).toBeUndefined();
   });
 
   it("persists evidence that a later host process can authorize", async () => {

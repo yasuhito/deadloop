@@ -213,6 +213,24 @@ function assertCurrentWorkerContract(attempt, projectRepo, localConfigPath, repo
   if (!isDeepStrictEqual(current, contract)) throw stalePolicyError("current policy differs from the fixed attempt contract", currentSources);
   return current;
 }
+function assertVerificationRecordHostAuthenticity(attempt, record) {
+  if (authenticatedRecords.has(record)) return;
+  const provenance = record ? record.provenance : undefined;
+  if (!provenance || provenance.kind !== "host_gate_execution" || !nonEmpty(provenance.recordPath) || !nonEmpty(attempt.promiseFile)) {
+    throw new Error("required verification host execution authenticity is missing");
+  }
+  const expectedDirectory = hostEvidenceDirectory(path.dirname(attempt.promiseFile));
+  if (path.dirname(provenance.recordPath) !== expectedDirectory) throw new Error("required verification host execution authenticity is missing");
+  let persisted; let stat;
+  try { stat = fs.lstatSync(provenance.recordPath); persisted = JSON.parse(fs.readFileSync(provenance.recordPath, "utf8")); }
+  catch { throw new Error("required verification host execution authenticity is missing"); }
+  if (!stat.isFile() || stat.isSymbolicLink() || !isDeepStrictEqual(persisted, record)) {
+    throw new Error("required verification host execution authenticity is missing");
+  }
+}
+function isHostExecutedVerificationRecord(attempt, record) {
+  try { assertVerificationRecordHostAuthenticity(attempt, record); return true; } catch { return false; }
+}
 function assertRequiredVerificationAuthorized(attempt, targetCommit, record, currentContract, allowedRoles) {
   if (!Array.isArray(allowedRoles) || !allowedRoles.includes(attempt.role)) throw new Error("required verification gate does not authorize this attempt role");
   assertContract(attempt.requiredVerification); assertContract(currentContract);
@@ -222,20 +240,7 @@ function assertRequiredVerificationAuthorized(attempt, targetCommit, record, cur
   if (!nonEmpty(record.startedAt) || !Number.isFinite(record.durationMs) || record.durationMs < 0 || !nonEmpty(record.logPath)) throw new Error("required verification record is invalid");
   if (record.outcome !== "passed" || record.exitCode !== 0) throw new Error("required verification record did not pass");
   if (!isDeepStrictEqual(record.binding, requiredVerificationBinding(attempt.requiredVerification, targetCommit))) throw new Error("required verification record does not match the output commit/current target commit and fixed contract");
-  if (!authenticatedRecords.has(record)) {
-    const provenance = record.provenance;
-    if (!provenance || provenance.kind !== "host_gate_execution" || !nonEmpty(provenance.recordPath) || !nonEmpty(attempt.promiseFile)) {
-      throw new Error("required verification host execution authenticity is missing");
-    }
-    const expectedDirectory = hostEvidenceDirectory(path.dirname(attempt.promiseFile));
-    if (path.dirname(provenance.recordPath) !== expectedDirectory) throw new Error("required verification host execution authenticity is missing");
-    let persisted; let stat;
-    try { stat = fs.lstatSync(provenance.recordPath); persisted = JSON.parse(fs.readFileSync(provenance.recordPath, "utf8")); }
-    catch { throw new Error("required verification host execution authenticity is missing"); }
-    if (!stat.isFile() || stat.isSymbolicLink() || !isDeepStrictEqual(persisted, record)) {
-      throw new Error("required verification host execution authenticity is missing");
-    }
-  }
+  assertVerificationRecordHostAuthenticity(attempt, record);
   return { outputRevision: targetCommit, record };
 }
 function assertWorkerCompletionAuthorized(attempt, report, record, currentContract) {
@@ -270,4 +275,4 @@ function reauthorizeReviewWrite(attempt, options) {
   );
   return contract;
 }
-module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertRequiredVerificationAuthorized, assertReviewApprovalAuthorized, assertWorkerCompletionAuthorized, isRequiredVerificationPolicyBlock, persistHostVerificationEvidence, readRequiredVerificationRecord, readWorkerContractSnapshot, reauthorizeReviewWrite, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };
+module.exports = { WORKER_REQUIRED_VERIFICATION_FILE, assertCurrentWorkerContract, assertRequiredVerificationAuthorized, assertReviewApprovalAuthorized, assertVerificationRecordHostAuthenticity, assertWorkerCompletionAuthorized, isHostExecutedVerificationRecord, isRequiredVerificationPolicyBlock, persistHostVerificationEvidence, readRequiredVerificationRecord, readWorkerContractSnapshot, reauthorizeReviewWrite, requiredVerificationBinding, workerContractSnapshotPath, workerRequiredVerificationPath, writeRequiredVerificationRecord, writeWorkerContractSnapshot };

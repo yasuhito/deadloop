@@ -58,6 +58,8 @@ Worker and remaining role-specific monitor prompts run the configured project ch
 
 A Worker or reviewer attempt stores its resolved required-verification contract in `attempt.json` before consuming its GitHub Agent request and keeps a host-persisted launch snapshot outside that attempt's run directory. Worker completion runs the fixed contract against the reported output commit; reviewer approval runs it against the fixed PR head. Both write authoritative records outside the worktree. Worker write gates and reviewer approval, successful human handoff, and merge gates reject missing, failed, mismatched, empty, or stale-policy evidence, while `changes_requested` and `human_required` remain reportable without success. Agent-reported additional validations remain non-authoritative evidence. These gates assume an instruction-following but fallible Worker; same-user hostile-process containment requires execution-runtime isolation that the Pi + Herdr support path does not currently provide. See [ADR 0015](../../docs/adr/0015-worker-trust-boundary.md).
 
+A failed Worker-completion record is kept instead of rerun: while its binding (repository, target commit, command, source, base revision) is unchanged, later ticks skip re-execution, and the host posts one fingerprint-marked, idempotent Issue comment containing the exit code and log tail. Only a host-authenticated failed record (provenance in the host evidence directory) qualifies; any binding change, a passed record, or an unauthenticated record triggers a fresh fixed-command run that replaces the record.
+
 ## Commands
 
 ```text
