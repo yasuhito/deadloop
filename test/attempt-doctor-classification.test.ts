@@ -136,6 +136,18 @@ describe("attempt workspace doctor classifications", () => {
     );
     expect(findings[0].commands).toEqual([`/deadloop-abandon-attempt ${record.attemptId}`]);
   });
+  it("shows the deterministic recovery command for an unmonitored completed report at agent_started", () => {
+    const fixture = workerFixture();
+    const record = { ...fixture.record, phase: "agent_started", lastSuccessfulPhase: "agent_started", outputRevision: undefined };
+    writeAttempt(record, fixture.report);
+    const findings = retainedAttemptDoctorFindings(
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" } },
+      [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath, tabCount: 1, paneCount: 1 }],
+      [],
+      {},
+    );
+    expect(findings[0].commands[0]).toContain("reconcile-report-received-attempt.cts");
+  });
   it("requires manual review instead of a partial recovery command when an agent owns the pane", () => {
     const fixture = reviewerFixture("approved");
     const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };

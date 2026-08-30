@@ -193,4 +193,18 @@ describe("report_received attempt reconciliation", () => {
     });
     expect(result.driverAction).toBe("recovery_not_applicable");
   });
+
+  it("collects an agent_started orphan whose monitoring handoff was lost", () => {
+    const data = setup();
+    // The observed incident: the Worker already wrote its bound report while the journal stayed
+    // at agent_started because no monitor ever received the handoff (#386).
+    const record = readAttemptRecord(data.runDir);
+    const orphan = { ...record, phase: "agent_started", lastSuccessfulPhase: "agent_started", outputRevision: undefined };
+    fs.writeFileSync(path.join(data.runDir, "attempt.json"), JSON.stringify(orphan));
+    const result = reconcileReportReceivedLocked(data.args, undefined, { automationLogin: "deadloop-bot" }, () => {}, {
+      observeDirective: () => stoppedRuntimeDirective("completion"),
+      runCompletion: () => ({ applied: true, result: "issue_attempt_completed" }),
+    });
+    expect(result.driverAction).toBe("report_received_persisted");
+  });
 });

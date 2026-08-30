@@ -10,6 +10,7 @@ import type {
   AttemptMonitoringDirective,
 } from "./monitor-handoff-types";
 import type { HostLogEventContext, HostLogEventInput } from "./host-log-types";
+import path from "node:path";
 const { passesIssueLabelGate } = require("./issue-eligibility.cjs");
 
 export type AutomationExecResult = {
@@ -76,6 +77,19 @@ export type AutomationRunnerDeps = {
    * transitions use it; failures (including a throwing sink) never change the runner's outcome.
    */
   emitHostLog?: (event: HostLogEventInput) => void;
+  /**
+   * Consumes the durable monitor-handoff sidecar of a just-registered monitor result (#386). The
+   * host deletes the sidecar beside the attempt journal so an adopted handoff is never re-adopted
+   * after it settles; a failure never changes the outcome that already adopted it.
+   */
+  consumeLaunchHandoffSidecar?: (payload: Record<string, unknown>) => void;
+  /**
+   * Returns orphaned durable launch handoffs for this automation (#386): sidecars whose attempt
+   * launched but whose monitoring handoff was lost to an invalid driver outcome. The caller adopts
+   * one payload into `pendingDriverHandoff`; the host consumes each returned sidecar after its
+   * state write, so a failed save simply re-adopts the same payload next tick.
+   */
+  adoptOrphanedLaunchHandoffs?: (state: AutomationState, automation: NormalizedAutomation) => Record<string, unknown>[];
 };
 
 function observeHostLog(deps: { emitHostLog?: (event: HostLogEventInput) => void }, event: HostLogEventInput): void {
@@ -443,6 +457,10 @@ function recordDriverFailure(
   entry.lastDriverAction = result === "driver_error" || result === "driver_file_missing" ? "error" : "invalid";
   entry.lastError = message;
   recordAutomationResult(entry, result);
+  // Set after recordAutomationResult: the host-log reason reads lastSummary, so a failure must
+  // stay readable there too — the driver's own success summary would otherwise mask what was
+  // actually invalid (#386).
+  entry.lastSummary = message;
   entry.updatedAt = deps.now();
   deps.saveState(state);
 }
@@ -545,6 +563,8 @@ async function runConfiguredDriver(
     recordAutomationResult(entry, "driver_attempt_monitoring");
     entry.updatedAt = deps.now();
     deps.saveState(state);
+    // The handoff is registered in state, so its durable sidecar copy is consumed.
+    deps.consumeLaunchHandoffSidecar?.(payload);
     deliverPendingDriverHandoff(entry, state, automation.name, deps, { projectId: project.id, automationId: automation.id });
     return true;
   }
@@ -596,5 +616,48 @@ export async function runScheduledAutomation(
   entry.schedule = automation.schedule;
   deps.saveState(state);
 
-  if (await runConfiguredDriver(project, automation, entry, state, deps, supply)) return;
+  if (await runConfiguredDriver(project, automation, entry, state, deps, supply)) {
+    // A driver that launched an attempt and then failed must not leave it unmonitored: any
+    // surviving durable sidecar from this launch is adopted here (#386).
+    adoptOrphanedLaunchHandoffs(entry, state, automation, deps);
+    return;
+  }
+}
+
+/**
+ * Restores the monitoring handoff of a launched attempt whose driver outcome failed to carry it.
+ * The sidecar is written beside the attempt journal immediately after the launch, so the adoption
+ * re-binds exactly the handoff the driver meant to deliver; delivery happens on the next tick.
+ */
+function adoptOrphanedLaunchHandoffs(
+  entry: Record<string, unknown>,
+  state: AutomationState,
+  automation: NormalizedAutomation,
+  deps: Pick<AutomationRunnerDeps, "adoptOrphanedLaunchHandoffs" | "consumeLaunchHandoffSidecar" | "saveState" | "now">,
+): void {
+  let adopted: Record<string, unknown>[];
+  try {
+    adopted = deps.adoptOrphanedLaunchHandoffs?.(state, automation) ?? [];
+  } catch {
+    return;
+  }
+  const payload = adopted.find((candidate) => candidate && typeof candidate === "object" && !Array.isArray(candidate));
+  if (!payload || entry.pendingDriverHandoff) return;
+  entry.pendingDriverHandoff = payload;
+  entry.lastSummary = `${typeof entry.lastSummary === "string" && entry.lastSummary ? `${entry.lastSummary}; ` : ""}`
+    + `re-adopted the durable monitor handoff of launched attempt ${attemptIdOf(payload) || "<unknown>"}`;
+  entry.updatedAt = deps.now();
+  deps.saveState(state);
+  deps.consumeLaunchHandoffSidecar?.(payload);
+}
+
+function attemptIdOf(payload: Record<string, unknown>): string {
+  const handoff = payload.monitorHandoff;
+  const input = handoff && typeof handoff === "object" && !Array.isArray(handoff)
+    ? (handoff as Record<string, unknown>).input
+    : undefined;
+  const attemptRecordFile = input && typeof input === "object" && !Array.isArray(input)
+    ? (input as Record<string, unknown>).attemptRecordFile
+    : undefined;
+  return typeof attemptRecordFile === "string" ? path.basename(path.dirname(attemptRecordFile)) : "";
 }

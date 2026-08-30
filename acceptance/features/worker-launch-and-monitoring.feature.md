@@ -33,6 +33,12 @@ This avoids disrupting an active agent or an agent on another worktree and avoid
 * When deadloop starts work on the selected Issue
 * Then The monitor handoff carries the consumed request generation
 
+## Scenario: Keep the launched attempt's monitoring handoff on disk beside its journal
+
+* Given An Issue ready for work has been selected
+* When deadloop starts work on the selected Issue
+* Then The driver records a durable launch handoff beside the attempt journal
+
 ## Scenario: Keep a working runtime active on quiet output through the shared directive interface
 
 * Given A monitored Issue Worker whose runtime reports working status past its last observation

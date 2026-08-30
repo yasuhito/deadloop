@@ -63,6 +63,7 @@ const {
 } = require("../../src/deterministic-attempt-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("./automations/contain-terminal-monitor.cts");
 const { proveRetainedHandoffSettlement } = require("../../src/retained-handoff-settlement.cts");
+const { consumeLaunchHandoffSidecar, collectOrphanedLaunchHandoffs } = require("../../src/launch-handoff-sidecar.cts");
 const { createGithubOperations } = require("../../src/github-operations.cts");
 const { createCommandRunner } = require("../../src/automation-driver-kit.cts");
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
@@ -1049,6 +1050,7 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
   let runs = [];
   try { runs = fs.readdirSync(runsDir); } catch { return []; }
   const findings = [];
+  const monitoredAttemptRecords = monitoredAttemptRecordFiles(loadState());
   for (const run of runs) {
     const runDir = path.join(runsDir, run);
     const attemptRecord = path.join(runDir, "attempt.json");
@@ -1118,11 +1120,18 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
     }
     // A stranded Worker completion report is collectable, so doctor names the deterministic path
     // instead of leaving the persistence_unconfirmed state looking like a permanent manual task.
-    const collectionHint = status === "persistence_unconfirmed"
-      && record.phase === "report_received" && record.role === "worker"
-      ? "; once no pending handoff remains and the runtime stops reporting active work, journal reconciliation persists this bound report deterministically"
+    // A stranded Worker completion report is collectable, so doctor names the deterministic path
+    // instead of leaving the persistence_unconfirmed state looking like a permanent manual task.
+    const collectable = status === "persistence_unconfirmed" && record.role === "worker"
+      && record.target.kind === "issue"
+      && ["agent_started", "report_received"].includes(record.phase)
+      && !monitoredAttemptRecords.has(path.resolve(attemptRecord))
+      && reconcileReportReceivedCommand(project, attemptRecord) !== "";
+    const recoveryCommand = collectable ? reconcileReportReceivedCommand(project, attemptRecord) : "";
+    const collectionHint = collectable
+      ? `; journal reconciliation persists this bound report deterministically once the runtime stops reporting active work; it can also be run now with: ${reconcileReportReceivedCommand(project, attemptRecord)}`
       : "";
-    findings.push(herdrDoctorFinding(status, `${detail}${collectionHint}`));
+    findings.push(herdrDoctorFinding(status, `${detail}${collectionHint}`, collectable ? [recoveryCommand] : []));
   }
   return findings;
 }
@@ -1511,6 +1520,23 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
       }
     },
     revalidatePendingDriverHandoff: revalidatePendingIssueHandoff,
+    // A driver that launched an attempt and then lost its result must not orphan it (#386): the
+    // durable sidecar beside the attempt journal re-binds the exact monitoring handoff.
+    adoptOrphanedLaunchHandoffs: (state, automation) => {
+      if (automation.driverFile !== "issue-coordinator-driver.cts") return [];
+      try {
+        return collectOrphanedLaunchHandoffs({
+          runsRoot: path.join(STATE_DIR, "runs"),
+          projectId: project.id,
+          monitoredAttemptRecordFiles: monitoredAttemptRecordFiles(state),
+          now: Date.now(),
+        }).map((found) => found.payload);
+      } catch (error) {
+        debugLog("orphaned launch handoff adoption failed", error instanceof Error ? error.message : String(error));
+        return [];
+      }
+    },
+    consumeLaunchHandoffSidecar: (payload) => consumeLaunchHandoffSidecar(payload),
     resolveAutomationFileInDir,
     runDriver: async (driverProject, driverAutomation, driverFile, supply) =>
       await runAutomationScript(pi, driverProject, driverAutomation, driverFile, supply),
@@ -1611,6 +1637,38 @@ function monitoredAttemptRecordFiles(state) {
   return files;
 }
 
+/** The argv that deterministically reconciles one unmonitored Worker completion report. */
+function reconcileReportReceivedArgv(project, attemptRecord: string): string[] {
+  const labels = projectLabels(project);
+  return [
+    "node", path.join(AUTOMATION_DIR, "reconcile-report-received-attempt.cts"),
+    "--attempt-record", attemptRecord,
+    "--project-id", project.id,
+    "--project-repo", project.repoPath,
+    "--github-repo", project.githubRepo,
+    "--state-dir", STATE_DIR,
+    "--enabled-at", String(project.enabledAt),
+    "--ready-label", labels.ready,
+    "--explore-label", labels.explore,
+    "--implement-label", labels.implement,
+    "--review-label", labels.review,
+    "--in-progress-label", labels.inProgress,
+    "--automation-logins", (project.automationLogins || []).join(","),
+    "--blocked-label", labels.blocked,
+  ];
+}
+
+/** The operator-runnable form of the deterministic reconciliation command for one attempt. */
+/** The operator-runnable form of the deterministic reconciliation command for one attempt; empty
+ * when the project cannot produce a normalized command (for example without normalized labels). */
+function reconcileReportReceivedCommand(project, attemptRecord: string): string {
+  try {
+    return reconcileReportReceivedArgv(project, attemptRecord).map((value) => shellQuote(value)).join(" ");
+  } catch {
+    return "";
+  }
+}
+
 async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> {
   const runsDir = path.join(STATE_DIR, "runs");
   let runs: string[];
@@ -1657,28 +1715,15 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       try { record = readAttemptRecord(runDir); }
       catch { safeToSchedule = false; continue; }
     }
-    // A Worker stranded at report_received after monitoring loss has no pendingDriverHandoff left to
-    // drive it. The same deterministic attemptMonitoring vocabulary status and doctor publish decides
-    // here too: persist the bound completion report through the guarded chain once the execution
-    // runtime stops reporting active work, or stop with reason and recovery steps when proof fails.
-    if (record.phase === "report_received" && record.role === "worker" && record.target.kind === "issue"
+    // A Worker stranded at agent_started or report_received after monitoring loss has no
+    // pendingDriverHandoff left to drive it (#386). The same deterministic attemptMonitoring
+    // vocabulary status and doctor publish decides here too: persist the bound completion report
+    // through the guarded chain once the execution runtime stops reporting active work, or stop
+    // with reason and recovery steps when proof fails.
+    if (record.role === "worker" && record.target.kind === "issue"
+      && ["agent_started", "report_received"].includes(record.phase)
       && !monitoredRecords.has(path.resolve(attemptRecord))) {
-      const recovered = await execJson(pi, "node", [
-        path.join(AUTOMATION_DIR, "reconcile-report-received-attempt.cts"),
-        "--attempt-record", attemptRecord,
-        "--project-id", project.id,
-        "--project-repo", project.repoPath,
-        "--github-repo", project.githubRepo,
-        "--state-dir", STATE_DIR,
-        "--enabled-at", String(project.enabledAt),
-        "--ready-label", labels.ready,
-        "--explore-label", labels.explore,
-        "--implement-label", labels.implement,
-        "--review-label", labels.review,
-        "--in-progress-label", labels.inProgress,
-        "--automation-logins", (project.automationLogins || []).join(","),
-        "--blocked-label", labels.blocked,
-      ], null, { timeout: 15 * 60_000 });
+      const recovered = await execJson(pi, "node", reconcileReportReceivedArgv(project, attemptRecord), null, { timeout: 15 * 60_000 });
       if (recovered?.action === "error") debugLog("report_received attempt recovery failed", recovered.summary);
       try { record = readAttemptRecord(runDir); }
       catch { safeToSchedule = false; continue; }
