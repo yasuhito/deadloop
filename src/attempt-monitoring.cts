@@ -37,6 +37,15 @@ type AttemptMonitoringDirective =
   | { action: "ambiguity"; accounting: ActiveWorkAccounting; reason: "runtime_ambiguous" | "runtime_unreachable" };
 
 const RELEASED_PHASES = new Set(["github_persisted", "workspace_closed", "authority_released", "abandoned"]);
+
+/** A just-launched turn may not have started yet; this window keeps such an attempt monitored. */
+const LAUNCH_GRACE_MILLISECONDS = 60_000;
+
+function withinLaunchGrace(attempt: JsonObject, now: string): boolean {
+  const launchedAt = Date.parse(String(attempt?.launchedAt || ""));
+  return Number.isFinite(launchedAt) && Date.parse(now) - launchedAt < LAUNCH_GRACE_MILLISECONDS;
+}
+
 function accountActiveWork(
   accounting: ActiveWorkAccounting,
   now: string,
@@ -87,6 +96,12 @@ function decideAttemptMonitoring(input: AttemptMonitoringInput): AttemptMonitori
       reason: "model_availability",
       providerRetryAt: parseProviderRetryAt(input.runtime.terminalEvidence, Date.parse(input.now)),
     };
+  }
+  // A launch observed as terminal without a report before any working turn is the not-yet-started
+  // turn race, not a dead agent: within the launch grace measured from the journal's recorded
+  // launch time, such an attempt keeps monitoring instead of stopping.
+  if (accounting.activeMilliseconds === 0 && withinLaunchGrace(input.attempt, input.now)) {
+    return { action: "working", accounting };
   }
   return { action: "missing_report", accounting, reason: "terminal_without_report" };
 }

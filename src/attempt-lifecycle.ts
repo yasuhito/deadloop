@@ -174,6 +174,8 @@ export type AttemptRecord = AttemptIdentity & {
   tabId?: string;
   rootPaneId?: string;
   outputRevision?: string;
+  /** The launch confirmation time, stamped when the record reached `agent_started`. */
+  launchedAt?: string;
   autoMergePolicy?: boolean;
   reviewHistoryRequired?: boolean;
   requiredVerification?: RequiredVerificationContract;
@@ -222,6 +224,12 @@ function commitSha(value: unknown, name: string): string {
   const revision = nonEmptyString(value, name);
   if (!/^[0-9a-f]{40}$/i.test(revision)) fail(`${name} must be a full 40-hex commit SHA`);
   return revision;
+}
+
+function isoTimestampField(value: unknown, name: string): string {
+  const text = nonEmptyString(value, name);
+  if (!Number.isFinite(Date.parse(text))) fail(`${name} must be an ISO timestamp`);
+  return text;
 }
 
 function parseTarget(value: unknown, name: string): AttemptTarget {
@@ -345,6 +353,7 @@ function parseAttemptRecord(value: unknown): AttemptRecord {
     ...(record.outputRevision === undefined
       ? {}
       : { outputRevision: commitSha(record.outputRevision, "outputRevision") }),
+    ...(record.launchedAt === undefined ? {} : { launchedAt: isoTimestampField(record.launchedAt, "launchedAt") }),
     ...(record.autoMergePolicy === undefined
       ? {}
       : typeof record.autoMergePolicy === "boolean" ? { autoMergePolicy: record.autoMergePolicy } : fail("autoMergePolicy must be boolean")),
@@ -419,7 +428,7 @@ function assertRecordAdvance(current: AttemptRecord, next: AttemptRecord): void 
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
   if (current.requestEventId !== next.requestEventId) throw new Error("Attempt record requestEventId cannot change");
   if (JSON.stringify(current.agentRequest) !== JSON.stringify(next.agentRequest)) throw new Error("Attempt record agentRequest cannot change");
-  for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"] as const) {
+  for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision", "launchedAt"] as const) {
     if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   }
   if (current.abandonment !== undefined && JSON.stringify(current.abandonment) !== JSON.stringify(next.abandonment)) {
@@ -578,7 +587,9 @@ export function transitionPersistedAttempt(
 ): AttemptRecord {
   const current = readAttemptRecord(runDir);
   if ((nextPhase === "github_persisted" || nextPhase === "workspace_closed") && current.phase === nextPhase) return current;
-  const record = transitionAttempt(current, nextPhase, launchError);
+  const next = transitionAttempt(current, nextPhase, launchError);
+  // The launch confirmation stamps the launch time the monitoring launch grace reads.
+  const record = nextPhase === "agent_started" ? { ...next, launchedAt: new Date().toISOString() } : next;
   writeAttemptRecordAtomically(attemptRecordPath(runDir), record);
   return record;
 }

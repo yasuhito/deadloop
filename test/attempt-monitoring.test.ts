@@ -115,4 +115,69 @@ describe("attempt monitoring", () => {
       reason: "terminal_without_report",
     });
   });
+
+  it("keeps monitoring a just-launched turn that has not started yet", () => {
+    expect(decideAttemptMonitoring({
+      ...input,
+      attempt: { phase: "agent_started", launchedAt: started },
+      runtime: { kind: "terminal", status: "idle" },
+      accounting: { activeMilliseconds: 0, observedAt: started, runtimeWasWorking: false },
+      now: "2026-08-21T00:00:02.000Z",
+    })).toEqual({
+      action: "working",
+      accounting: { activeMilliseconds: 0, observedAt: "2026-08-21T00:00:02.000Z", runtimeWasWorking: false },
+    });
+  });
+
+  it("stops a terminal attempt without a report once the launch grace expires", () => {
+    expect(decideAttemptMonitoring({
+      ...input,
+      attempt: { phase: "agent_started", launchedAt: started },
+      runtime: { kind: "terminal", status: "idle" },
+      accounting: { activeMilliseconds: 0, observedAt: started, runtimeWasWorking: false },
+      now: "2026-08-21T00:01:01.000Z",
+    })).toEqual({
+      action: "missing_report",
+      accounting: { activeMilliseconds: 0, observedAt: "2026-08-21T00:01:01.000Z", runtimeWasWorking: false },
+      reason: "terminal_without_report",
+    });
+  });
+
+  it("does not extend the launch grace over a turn that was observed working", () => {
+    expect(decideAttemptMonitoring({
+      ...input,
+      attempt: { phase: "agent_started", launchedAt: started },
+      runtime: { kind: "terminal", status: "done" },
+      accounting: { activeMilliseconds: 2_000, observedAt: started, runtimeWasWorking: false },
+      now: "2026-08-21T00:00:30.000Z",
+    })).toEqual({
+      action: "missing_report",
+      accounting: { activeMilliseconds: 2_000, observedAt: "2026-08-21T00:00:30.000Z", runtimeWasWorking: false },
+      reason: "terminal_without_report",
+    });
+  });
+
+  it("still recognizes model availability during the launch grace", () => {
+    expect(decideAttemptMonitoring({
+      ...input,
+      attempt: { phase: "agent_started", launchedAt: started },
+      runtime: { kind: "terminal", status: "done", terminalEvidence: "credit balance is too low" },
+      accounting: { activeMilliseconds: 0, observedAt: started, runtimeWasWorking: false },
+      now: "2026-08-21T00:00:02.000Z",
+    })).toMatchObject({ action: "missing_report", reason: "model_availability" });
+  });
+
+  it("gives no launch grace to an attempt journal without a recorded launch time", () => {
+    expect(decideAttemptMonitoring({
+      ...input,
+      attempt: { phase: "agent_started" },
+      runtime: { kind: "terminal", status: "idle" },
+      accounting: { activeMilliseconds: 0, observedAt: started, runtimeWasWorking: false },
+      now: "2026-08-21T00:00:02.000Z",
+    })).toEqual({
+      action: "missing_report",
+      accounting: { activeMilliseconds: 0, observedAt: "2026-08-21T00:00:02.000Z", runtimeWasWorking: false },
+      reason: "terminal_without_report",
+    });
+  });
 });

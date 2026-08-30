@@ -252,9 +252,15 @@ function applyTerminalMonitorDisposition(
       target = exactTarget(github, input, record);
       assertBranchUpdateStopGeneration(github, input, record);
       if (!dispositionStillApplies(commandRunner, runner, record, observed)) return false;
+      // This confirmation is the last gate before GitHub writes. The label move and the stop
+      // comment run back to back under it: aborting between them would strand a half-applied
+      // stop — moved labels without the explanation, or the reverse.
       replaceStoppedLabels(commandRunner, input, record, target);
-    }
-    if (!authorizedCommentExists(github, input, record, body)) {
+      if (!authorizedCommentExists(github, input, record, body)) {
+        if (record.target.kind === "issue") github.commentIssue(input.project.githubRepo, record.target.number, body);
+        else github.commentPr(input.project.githubRepo, record.target.number, body);
+      }
+    } else if (!authorizedCommentExists(github, input, record, body)) {
       recheck();
       record = readBoundAttempt(recordFile);
       exactTarget(github, input, record);
