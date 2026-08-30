@@ -92,6 +92,7 @@ export type DoctorInput = {
   loadedCodeIdentity?: string | null;
   enablementStorageExhaustion?: EnablementStorageExhaustionEvidence | null;
   enablementStorageExhaustionPath?: string;
+  enablementPendingFiles?: number;
 };
 
 export type DoctorFindingType =
@@ -109,7 +110,8 @@ export type DoctorFindingType =
   | "base_verification_blocked"
   | "herdr_unsupported"
   | "code_snapshot_inventory"
-  | "enablement_storage_exhaustion";
+  | "enablement_storage_exhaustion"
+  | "enablement_pending_lock_files";
 
 export type EnablementStorageExhaustionEvidence = {
   code: string;
@@ -173,6 +175,7 @@ export type DoctorSnapshot = {
     evidence: EnablementStorageExhaustionEvidence;
     evidencePath: string;
   } | null;
+  enablementPendingFiles?: number;
 };
 
 function isPathInside(child: string, parent: string): boolean {
@@ -747,6 +750,17 @@ function buildEnablementStorageExhaustionFindings(input: DoctorInput): DoctorFin
   }];
 }
 
+function buildEnablementPendingFilesFindings(count: number): DoctorFinding[] {
+  if (!count) return [];
+  return [{
+    id: "enablement-pending-lock-files",
+    type: "enablement_pending_lock_files",
+    title: `enablement lock has ${count} residual .pending temp file(s)`,
+    summary: "Interrupted enablement lock acquisitions left temporary files behind. The next enablement state lock acquisition verifies each owner process and removes the ones whose process is gone, so no manual action is required.",
+    commands: [],
+  }];
+}
+
 export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   const project = input.selectedProject === undefined
     ? resolveActiveProject(input.cwd, input.projects)
@@ -754,7 +768,10 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
   const repositoryEnablement = project ? "enabled" : input.repositoryEnablement || "unavailable";
   const warnings = input.warnings || [];
   const enablementStorageExhaustion = carriedEnablementStorageExhaustion(input);
-  if (!project) return { project: null, repositoryEnablement, cwd: input.cwd, warnings, findings: [], enablementStorageExhaustion };
+  const enablementPendingFiles = input.enablementPendingFiles ?? 0;
+  if (!project) {
+    return { project: null, repositoryEnablement, cwd: input.cwd, warnings, findings: [], enablementStorageExhaustion, enablementPendingFiles };
+  }
 
   const issues = input.issues || [];
   const openPrs = input.openPrs || [];
@@ -787,9 +804,11 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
       ...activeBaseVerificationBlocking(project, path.dirname(statePath)),
       ...buildCodeSnapshotInventoryFindings(input),
       ...buildEnablementStorageExhaustionFindings(input),
+      ...buildEnablementPendingFilesFindings(enablementPendingFiles),
     ],
     lastWriterCodeIdentity: input.lastWriterCodeIdentity ?? null,
     enablementStorageExhaustion,
+    enablementPendingFiles,
   };
 }
 
@@ -810,6 +829,7 @@ export function formatDoctorReport(snapshot: DoctorSnapshot): string {
         : ["deadloop doctor is unavailable for the current location.", ""]),
       `cwd: ${snapshot.cwd}`,
       ...snapshot.warnings.map((warning) => `warning: ${warning}`),
+      `enablement lock pending files: ${snapshot.enablementPendingFiles ?? 0}`,
     ];
     if (!snapshot.enablementStorageExhaustion) return lines.join("\n");
     return [
@@ -830,6 +850,7 @@ export function formatDoctorReport(snapshot: DoctorSnapshot): string {
     formatRequiredVerification(snapshot.project.requiredVerification),
     "attemptMonitoring: deterministic for all roles (no Automation-host model)",
     ...(snapshot.lastWriterCodeIdentity ? [`last enablement write by code identity: ${snapshot.lastWriterCodeIdentity}`] : []),
+    `enablement lock pending files: ${snapshot.enablementPendingFiles ?? 0}`,
     ...(snapshot.verificationCandidates ? formatVerificationCandidates(snapshot.verificationCandidates) : []),
     "",
   ];

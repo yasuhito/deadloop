@@ -167,7 +167,7 @@ A review stopped by required verification records actionable findings without la
 
 ### Host activity log
 
-Every scheduler tick appends what it judged to `~/.pi/agent/deadloop/host-log.jsonl`, one JSON object per line: tick starts, per-automation results (including the driver action), launched attempts with their role, model-wait transitions, and enablement writes. Each line carries an ISO timestamp, project id, automation id, result, and reason summary, so you can answer "why did nothing happen this tick?" or "when was what selected?" without reading live state.
+Every scheduler tick appends what it judged to `~/.pi/agent/deadloop/host-log.jsonl`, one JSON object per line: tick starts, per-automation results (including the driver action), launched attempts with their role, model-wait transitions, and enablement writes. An enablement write is recorded only when the persisted enablement state actually changes, so a quiet tick adds no `enablement_written` line. Each line carries an ISO timestamp, project id, automation id, result, and reason summary, so you can answer "why did nothing happen this tick?" or "when was what selected?" without reading live state.
 
 Logging is observational: a failed append is recorded beside the log in `host-log-errors.jsonl` and never affects completion, push, merge, or the tick itself.
 
