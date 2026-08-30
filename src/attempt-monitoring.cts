@@ -107,4 +107,4 @@ function decideAttemptMonitoring(input: AttemptMonitoringInput): AttemptMonitori
   return { action: "missing_report", accounting, reason: "terminal_without_report" };
 }
 
-module.exports = { accountActiveWork, decideAttemptMonitoring };
+module.exports = { accountActiveWork, decideAttemptMonitoring, withinLaunchGrace };

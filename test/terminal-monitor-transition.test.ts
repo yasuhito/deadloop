@@ -65,6 +65,7 @@ function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-requ
   let open = true;
   let agentStatus = "done";
   let labelWrites = 0;
+  let githubCalls = 0;
   const runner = {
     listAgents: () => open ? [{ name: "owner", paneId: "pane-1", cwd: worktreePath, status: agentStatus }] : [],
     listWorkspaces: () => open ? [{ workspaceId: "workspace-1", worktreePath, tabCount: 1, paneCount: 1 }] : [],
@@ -79,17 +80,21 @@ function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-requ
       return target.labels;
     },
   };
+  const counted = <T extends unknown[]>(operation: (...args: T) => unknown) => (...args: T) => {
+    githubCalls += 1;
+    return operation(...args);
+  };
   const github = {
-    getIssue: () => ({ ...target, labels: [...target.labels] }),
-    getPr: () => ({ ...target, labels: [...target.labels] }),
-    listIssueComments: () => [...comments],
-    listPrComments: () => [...comments],
-    commentIssue: (_repo: string, _number: number, body: string) => comments.push({
+    getIssue: counted(() => ({ ...target, labels: [...target.labels] })),
+    getPr: counted(() => ({ ...target, labels: [...target.labels] })),
+    listIssueComments: counted(() => [...comments]),
+    listPrComments: counted(() => [...comments]),
+    commentIssue: counted((_repo: string, _number: number, body: string) => comments.push({
       user: { login: "deadloop-bot" }, body, created_at: "2026-08-21T00:00:00Z", updated_at: "2026-08-21T00:00:00Z",
-    }),
-    commentPr: (_repo: string, _number: number, body: string) => comments.push({
+    })),
+    commentPr: counted((_repo: string, _number: number, body: string) => comments.push({
       user: { login: "deadloop-bot" }, body, created_at: "2026-08-21T00:00:00Z", updated_at: "2026-08-21T00:00:00Z",
-    }),
+    })),
   };
   const handoffInput = pullRequest
     ? {
@@ -146,7 +151,7 @@ function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-requ
     github,
     withEnabledProjectLock: (_project: unknown, operation: (enabled: unknown, recheck: () => void) => boolean) => operation({}, () => undefined),
   };
-  return { attemptRecordFile, comments, dependencies, input, labelWrites, runner, setAgentStatus: (status: string) => { agentStatus = status; }, target };
+  return { attemptRecordFile, comments, dependencies, githubCalls, input, labelWrites, runner, setAgentStatus: (status: string) => { agentStatus = status; }, target };
 }
 
 describe("terminal monitor transition", () => {
@@ -221,7 +226,7 @@ describe("terminal monitor transition", () => {
     });
   });
 
-  it("moves the labels and posts the comment under one confirmation without aborting between them", () => {
+  it("leaves GitHub unwritten when the turn starts before the runtime liveness confirmation", () => {
     const state = fixture();
     let reads = 0;
     const listAgents = state.runner.listAgents;
@@ -233,8 +238,34 @@ describe("terminal monitor transition", () => {
 
     const applied = applyTerminalMonitorDisposition(state.input, state.dependencies);
 
-    expect({ applied, labels: state.target.labels, comments: state.comments.map((comment: any) => comment.body) }).toEqual({
+    expect({ applied, labels: state.target.labels, comments: state.comments, labelWrites: state.labelWrites }).toEqual({
       applied: false,
+      labels: ["agent:implement", "agent:in-progress", "triage"],
+      comments: [],
+      labelWrites: 0,
+    });
+  });
+
+  it("confirms no stop during the launch grace without touching GitHub", () => {
+    const state = fixture("terminal failure", "issue", { launchedAt: new Date(Date.now() - 2_000).toISOString() });
+
+    const applied = applyTerminalMonitorDisposition(state.input, state.dependencies);
+
+    expect({ applied, labels: state.target.labels, comments: state.comments, githubCalls: state.githubCalls }).toEqual({
+      applied: false,
+      labels: ["agent:implement", "agent:in-progress", "triage"],
+      comments: [],
+      githubCalls: 0,
+    });
+  });
+
+  it("stops a just-launched attempt once the launch grace has expired", () => {
+    const state = fixture("terminal failure", "issue", { launchedAt: new Date(Date.now() - 61_000).toISOString() });
+
+    const applied = applyTerminalMonitorDisposition(state.input, state.dependencies);
+
+    expect({ applied, labels: state.target.labels, comments: state.comments.map((comment: any) => comment.body) }).toEqual({
+      applied: true,
       labels: ["triage", "agent:blocked"],
       comments: [expect.stringContaining("deadloop stopped this attempt")],
     });
