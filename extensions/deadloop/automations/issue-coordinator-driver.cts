@@ -37,6 +37,7 @@ const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require
 const { attemptRecordPath, readAttemptRecord, releasesAttemptOwnership, releasePersistedAttemptAuthority } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { evaluateProjectBaseBlocking } = require("../../../src/ci-base-blocking.cts");
 const { assertCurrentWorkerContract, requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
+const { writeLaunchHandoffSidecar } = require("../../../src/launch-handoff-sidecar.cts");
 
 import type { DriverResult, JsonObject } from "../../../src/automation-driver-kit-types";
 
@@ -1161,6 +1162,13 @@ function driveSelectedIssue(
       requestEventId: String(launch.agentRequest?.eventId || ""),
       maxActiveMilliseconds: env.coordinatorMaxRuntimeSeconds * 1000,
     };
+    // Durable launch handoff (#386): if this driver's result is lost after the launch, the runner
+    // re-adopts the monitoring handoff from this sidecar instead of orphaning the attempt.
+    writeLaunchHandoffSidecar(String(launch.attemptRecordFile || ""), {
+      action: "monitor",
+      summary: `Launched read-only explorer for Issue #${issue.number}`,
+      monitorHandoff: { kind: "explorer", input: monitorInput },
+    });
     return driverResult("monitor", `Launched read-only explorer for Issue #${issue.number}`, {
       driverAction: "explorer_monitor_request",
       issueNumber: issue.number,
@@ -1238,6 +1246,13 @@ function driveSelectedIssue(
     requestEventId: String(launch.agentRequest?.eventId || ""),
     maxActiveMilliseconds: env.coordinatorMaxRuntimeSeconds * 1000,
   };
+  // Durable launch handoff (#386): recorded right after the successful launch so a lost driver
+  // result still leaves the monitoring handoff beside the attempt journal for the runner to adopt.
+  writeLaunchHandoffSidecar(String(launch.attemptRecordFile || ""), {
+    action: "monitor",
+    summary: `Launched Worker for Issue #${issue.number}`,
+    monitorHandoff: { kind: "issue", input: monitorInput },
+  });
   return driverResult("monitor", `Launched Worker for Issue #${issue.number}`, {
     driverAction: "worker_monitor_request",
     issueNumber: issue.number,

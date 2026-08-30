@@ -164,6 +164,16 @@ Then("The monitor handoff carries the consumed request generation", function (th
   assert.equal(handoffInput.requestEventId, String(launch.agentRequest.eventId));
 });
 
+Then("The driver records a durable launch handoff beside the attempt journal", function (this: WorkerWorld) {
+  const launch = this.coordinatorResult?.launch as Record<string, any>;
+  const sidecar = JSON.parse(readFileSync(path.join(path.dirname(String(launch.attemptRecordFile)), "monitor-handoff.json"), "utf8"));
+  assert.deepEqual(sidecar, {
+    action: "monitor",
+    summary: (this.coordinatorResult as Record<string, unknown>).summary,
+    monitorHandoff: this.coordinatorResult?.monitorHandoff,
+  });
+});
+
 /**
  * Evaluate the shared directive interface against the launched fixture attempt. The runtime agent
  * list decides whether the attempt observes as working; no report exists, so terminal evidence is empty.

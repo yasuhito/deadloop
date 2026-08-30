@@ -188,7 +188,10 @@ function reconcileReportReceivedLocked(
   const { runDir, runsRoot, attemptRecord } = canonicalAttemptLocation(args);
   const record = readAttemptRecord(runDir);
   assertAttemptProjectBinding(record, args);
-  if (record.phase !== "report_received") {
+  // An orphan whose monitoring handoff was lost can sit at agent_started with its completion
+  // report already written; the same directive vocabulary decides retention, persistence, or a
+  // reasoned stop from the report, the runtime, and the launch grace regardless of phase (#386).
+  if (!record.phase || !["report_received", "agent_started"].includes(String(record.phase))) {
     return driverResult("done", `attempt is already ${record.phase}`, { driverAction: "recovery_not_applicable" });
   }
   if (record.role !== "worker" || record.target.kind !== "issue") {
