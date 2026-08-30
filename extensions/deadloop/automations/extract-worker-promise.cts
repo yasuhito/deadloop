@@ -6,6 +6,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 // The one storage-exhaustion judgment (ADR 0018), shared with every reader of attempt evidence.
 const { isStorageExhaustionError } = require("../../../src/storage-exhaustion.cjs");
+const { normalizeCompletionReportCommitShas } = require("../../../src/completion-report-normalization.cjs");
 
 type PromiseValidation = Record<string, any>;
 
@@ -244,6 +245,10 @@ function reportMatchesRecord(promise: PromiseValidation, record: PromiseValidati
     sameOptionalRevision(promise.inputRevision?.base, record.inputRevision?.base);
 }
 
+function ambiguousShortShaLabel(field: unknown): string {
+  return field === "reviewedHead" ? "ambiguous_reviewed_head" : "ambiguous_output_revision";
+}
+
 function validatePromise(filePath: string, attemptRecordFile?: string): PromiseValidation {
   if (!fs.existsSync(filePath)) return { status: "none", file: filePath };
 
@@ -256,11 +261,23 @@ function validatePromise(filePath: string, attemptRecordFile?: string): PromiseV
   }
 
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return invalidPromise(filePath, "not_object");
-  const promise = payload as PromiseValidation;
+  let promise = payload as PromiseValidation;
   if (promise.schemaVersion !== 1) return invalidPromise(filePath, "unknown_schema_version");
+  const recordFile = attemptRecordFile || path.join(path.dirname(filePath), "attempt.json");
+  // A uniquely resolvable short outputRevision/reviewedHead is expanded before validation.
+  if (fs.existsSync(recordFile)) {
+    let rawRecord: unknown;
+    try { rawRecord = JSON.parse(fs.readFileSync(recordFile, "utf8")); } catch { rawRecord = undefined; }
+    if (rawRecord && typeof rawRecord === "object" && typeof (rawRecord as PromiseValidation).worktreePath === "string") {
+      try {
+        promise = normalizeCompletionReportCommitShas(rawRecord, promise);
+      } catch (error) {
+        return invalidPromise(filePath, ambiguousShortShaLabel((error as PromiseValidation).field));
+      }
+    }
+  }
   const error = validV1Report(promise);
   if (error) return invalidPromise(filePath, error);
-  const recordFile = attemptRecordFile || path.join(path.dirname(filePath), "attempt.json");
   const normalized = normalizeV1Report(promise);
   if (!fs.existsSync(recordFile)) {
     return { status: promise.status, file: filePath, promise: normalized, evidenceStrength: "unbound-v1" };

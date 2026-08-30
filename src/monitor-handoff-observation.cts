@@ -1,6 +1,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 
 const { validateCompletionReportBinding } = require("./attempt-lifecycle-runtime.cjs");
+const { normalizeCompletionReportCommitShas } = require("./completion-report-normalization.cjs");
 const { observeAttemptTurn } = require("./attempt-runtime-observation.cts");
 const { decideMonitorContainment } = require("./monitor-handoff-containment.cts");
 const { decideAttemptMonitoring } = require("./attempt-monitoring.cts");
@@ -34,6 +35,7 @@ function reportObservation(record: JsonObject): { kind: "missing" | "valid" | "i
     return { kind: "invalid" };
   }
   try {
+    value = normalizeCompletionReportCommitShas(record, value);
     validateCompletionReportBinding(record, value);
     return { kind: "valid", value };
   } catch (error) {

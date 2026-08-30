@@ -4,6 +4,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner } = require("../../../src/automation-driver-kit.cts");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { normalizeCompletionReportCommitShas } = require("../../../src/completion-report-normalization.cjs");
 
 type JsonObject = Record<string, any>;
 type CompletionOps = { run(script: string, args: string[]): JsonObject };
@@ -214,7 +215,7 @@ function processInput(handoff: JsonObject, ops?: CompletionOps): JsonObject {
   }
   const input = handoff.input;
   const record = readAttemptRecord(path.dirname(input.attemptRecordFile));
-  const report = JSON.parse(fs.readFileSync(input.promiseFile, "utf8"));
+  const report = normalizeCompletionReportCommitShas(record, JSON.parse(fs.readFileSync(input.promiseFile, "utf8")));
   validateCompletionReportBinding(record, report);
   const commandRunner = createCommandRunner({ timeoutMs: 15 * 60_000 });
   const operations = ops || { run: (script: string, args: string[]) => commandRunner.runJson(["node", path.join(input.automationDir, script), ...args]) };

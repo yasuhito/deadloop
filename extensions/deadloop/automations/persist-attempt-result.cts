@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Persist an attempt-bound marker only after the role's existing GitHub result is independently confirmed.
-const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, driverResult } = require("../../../src/automation-driver-kit.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertLocallyEnabled } = require("../../../src/enabled-operation.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { readAttemptRecord } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { readNormalizedCompletionReport } = require("../../../src/completion-report-normalization.cjs");
 const { validatePromise } = require("./extract-worker-promise.cts");
 const { authorizeFinalizerRequiredVerification } = require("./finalizer-required-verification.cts");
 const { parseAttemptPersistenceMarkers, renderAttemptPersistenceMarker } = require("../../../src/attempt-persistence-marker.cjs");
@@ -53,7 +53,7 @@ function persist(args: JsonObject) {
   assertAttemptProjectBinding(record, args);
   const validation = validatePromise(record.promiseFile, attemptRecord);
   if (validation.evidenceStrength !== "strong") return driverResult("done", "strong report is required", { driverAction: "result_not_persisted" });
-  const report = JSON.parse(fs.readFileSync(record.promiseFile, "utf8"));
+  const report = readNormalizedCompletionReport(record);
   if (report.status !== "complete" || !["worker", "branch-update"].includes(record.role)) return driverResult("done", "role result is not marker-eligible", { driverAction: "result_not_persisted" });
   const authorizeWorker = () => {
     const enabled = assertLocallyEnabled({ repoPath: String(args.projectRepo), githubRepo: String(args.githubRepo), stateDir: String(args.stateDir), enabledAt: Number(args.enabledAt) });
