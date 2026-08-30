@@ -534,10 +534,12 @@ async function runConfiguredDriver(
       deps.notify?.(`deadloop driver returned invalid result: ${automation.name}`, "warning");
       return true;
     }
+    // Only observed working turns accumulate active work: the quiet launch window is covered by
+    // the monitoring launch grace, not by accounting credit.
     payload.monitorAccounting = {
       activeMilliseconds: 0,
       observedAt: new Date(deps.now()).toISOString(),
-      runtimeWasWorking: true,
+      runtimeWasWorking: false,
     };
     entry.pendingDriverHandoff = payload;
     recordAutomationResult(entry, "driver_attempt_monitoring");

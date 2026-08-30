@@ -12,6 +12,7 @@ const NEXT = { prepared: "github_claimed", github_claimed: "workspace_opened", w
 function attemptRecordPath(runDir) { return path.join(runDir, ATTEMPT_RECORD_FILE); }
 function releasesAttemptOwnership(phase) { return phase === "workspace_closed" || phase === "abandoned" || phase === "authority_released"; }
 function nonEmpty(value, field) { if (typeof value !== "string" || !value.trim()) throw new Error(`Invalid attempt record: ${field} must be a non-empty string`); return value; }
+function isoTimestamp(value, field) { const text = nonEmpty(value, field); if (!Number.isFinite(Date.parse(text))) throw new Error(`Invalid attempt record: ${field} must be an ISO timestamp`); return text; }
 function sha(value, field) { const text = nonEmpty(value, field); if (!/^[0-9a-f]{40}$/i.test(text)) throw new Error(`Invalid attempt record: ${field} must be a full 40-hex commit SHA`); return text; }
 function requiredVerification(value, required) {
   if (value === undefined && !required) return undefined;
@@ -67,6 +68,7 @@ function parseAttemptRecord(value) {
   for (const field of ["attemptId", "launchUuid", "project", "repository", "branch", "worktreePath", "agentName", "workspaceLabel", "promptFile", "promiseFile"]) nonEmpty(value[field], field);
   for (const field of ["baseBranch", "workspaceId", "tabId", "rootPaneId"]) if (value[field] !== undefined) nonEmpty(value[field], field);
   if (value.outputRevision !== undefined) sha(value.outputRevision, "outputRevision");
+  if (value.launchedAt !== undefined) isoTimestamp(value.launchedAt, "launchedAt");
   if (value.agent !== undefined && !AGENT_KINDS.has(value.agent)) throw new Error("Invalid attempt record: agent is invalid");
   if (value.autoMergePolicy !== undefined && typeof value.autoMergePolicy !== "boolean") throw new Error("Invalid attempt record: autoMergePolicy must be boolean");
   if (value.reviewHistoryRequired !== undefined && typeof value.reviewHistoryRequired !== "boolean") throw new Error("Invalid attempt record: reviewHistoryRequired must be boolean");
@@ -97,6 +99,7 @@ function parseAttemptRecord(value) {
     ...(value.tabId === undefined ? {} : { tabId: nonEmpty(value.tabId, "tabId") }),
     ...(value.rootPaneId === undefined ? {} : { rootPaneId: nonEmpty(value.rootPaneId, "rootPaneId") }),
     ...(value.outputRevision === undefined ? {} : { outputRevision: sha(value.outputRevision, "outputRevision") }),
+    ...(value.launchedAt === undefined ? {} : { launchedAt: isoTimestamp(value.launchedAt, "launchedAt") }),
     ...(value.autoMergePolicy === undefined ? {} : { autoMergePolicy: value.autoMergePolicy }),
     ...(value.reviewHistoryRequired === undefined ? {} : { reviewHistoryRequired: value.reviewHistoryRequired }),
     ...(requiredVerification(value.requiredVerification, false) ? { requiredVerification: requiredVerification(value.requiredVerification, true) } : {}),
@@ -198,7 +201,7 @@ function assertAdvance(current, next) {
   if (JSON.stringify(current.requiredVerification) !== JSON.stringify(next.requiredVerification)) throw new Error("Attempt record requiredVerification cannot change");
   if (current.requestEventId !== next.requestEventId) throw new Error("Attempt record requestEventId cannot change");
   if (JSON.stringify(current.agentRequest) !== JSON.stringify(next.agentRequest)) throw new Error("Attempt record agentRequest cannot change");
-  for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision"]) if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
+  for (const field of ["workspaceId", "tabId", "rootPaneId", "outputRevision", "launchedAt"]) if (current[field] !== undefined && current[field] !== next[field]) throw new Error(`Attempt record ${field} cannot change`);
   if (current.abandonment !== undefined && JSON.stringify(current.abandonment) !== JSON.stringify(next.abandonment)) throw new Error("Attempt record abandonment evidence cannot change");
   if (current.authorityRelease !== undefined && JSON.stringify(current.authorityRelease) !== JSON.stringify(next.authorityRelease)) throw new Error("Attempt record authority-release evidence cannot change");
   if (next.phase === "authority_released") { if (!next.authorityRelease) throw new Error("authority_released requires authority-release evidence"); if (current.lastSuccessfulPhase !== next.lastSuccessfulPhase) throw new Error("Attempt record lastSuccessfulPhase cannot change"); return; }
@@ -253,7 +256,10 @@ function abandonPersistedAttempt(runDir, abandonedAt) {
 function transitionPersistedAttempt(runDir, phase, launchError) {
   const current = readAttemptRecord(runDir);
   if ((phase === "github_persisted" || phase === "workspace_closed") && current.phase === phase) return current;
-  const next = transitionAttempt(current, phase, launchError); writeAttemptRecordAtomically(attemptRecordPath(runDir), next); return next;
+  const next = transitionAttempt(current, phase, launchError);
+  // The launch confirmation stamps the launch time the monitoring launch grace reads.
+  const record = phase === "agent_started" ? { ...next, launchedAt: new Date().toISOString() } : next;
+  writeAttemptRecordAtomically(attemptRecordPath(runDir), record); return record;
 }
 function recordPersistedCompletionReport(runDir, report) {
   const record = readAttemptRecord(runDir);

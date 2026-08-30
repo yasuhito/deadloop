@@ -15,7 +15,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-request" = "issue") {
+function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-request" = "issue", options: { launchedAt?: string } = {}) {
   const pullRequest = targetKind === "pull-request";
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-terminal-monitor-"));
   roots.push(root);
@@ -48,6 +48,7 @@ function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-requ
     promiseFile: path.join(runDir, "promise.json"),
     phase: "agent_started",
     lastSuccessfulPhase: "agent_started",
+    ...(options.launchedAt ? { launchedAt: options.launchedAt } : {}),
     workspaceId: "workspace-1",
     tabId: "tab-1",
     rootPaneId: "pane-1",
@@ -63,6 +64,7 @@ function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-requ
   const comments: Record<string, unknown>[] = [];
   let open = true;
   let agentStatus = "done";
+  let labelWrites = 0;
   const runner = {
     listAgents: () => open ? [{ name: "owner", paneId: "pane-1", cwd: worktreePath, status: agentStatus }] : [],
     listWorkspaces: () => open ? [{ workspaceId: "workspace-1", worktreePath, tabCount: 1, paneCount: 1 }] : [],
@@ -71,7 +73,8 @@ function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-requ
   };
   const commandRunner = {
     runText: () => evidence,
-    runJson: (_args: string[], options: { input?: string } = {}) => {
+    runJson: (args: string[], options: { input?: string } = {}) => {
+      if (args[0] === "gh") labelWrites += 1;
       if (options.input) target.labels = JSON.parse(options.input).labels;
       return target.labels;
     },
@@ -143,10 +146,99 @@ function fixture(evidence = "terminal failure", targetKind: "issue" | "pull-requ
     github,
     withEnabledProjectLock: (_project: unknown, operation: (enabled: unknown, recheck: () => void) => boolean) => operation({}, () => undefined),
   };
-  return { attemptRecordFile, comments, dependencies, input, runner, setAgentStatus: (status: string) => { agentStatus = status; }, target };
+  return { attemptRecordFile, comments, dependencies, input, labelWrites, runner, setAgentStatus: (status: string) => { agentStatus = status; }, target };
 }
 
 describe("terminal monitor transition", () => {
+  it("keeps a just-launched Issue's labels unchanged during the launch grace, then stops it after it expires", () => {
+    const state = fixture("terminal failure", "issue", { launchedAt: new Date(0).toISOString() });
+    const entry: Record<string, unknown> = {
+      pendingDriverHandoff: {
+        action: "monitor",
+        monitorHandoff: { kind: "issue", input: state.input.handoff.input },
+        monitorAccounting: { activeMilliseconds: 0, observedAt: new Date(0).toISOString(), runtimeWasWorking: false },
+      },
+    };
+    const automationState = { automations: { coordinator: entry } };
+    let now = 0;
+    const dependencies = {
+      enabledAt: () => 1,
+      isEnabled: () => true,
+      observeAttemptMonitoring: (_handoff: Record<string, unknown>, accounting: any, observedAt: number) =>
+        observeAttemptMonitoringDirective(
+          readAttemptRecord(path.dirname(state.attemptRecordFile)), accounting, observedAt, 86_400_000,
+          { runner: state.runner, readTerminalEvidence: () => "terminal failure" },
+        ),
+      applyAttemptMonitoring: (handoff: Record<string, unknown>, directive: Record<string, any>) => ({
+        applied: applyDeterministicAttemptMonitoring(handoff, directive as never, (currentHandoff: Record<string, unknown>, disposition: Record<string, unknown>) =>
+          applyTerminalMonitorDisposition(
+            { handoff: currentHandoff, disposition, project: state.input.project },
+            state.dependencies,
+          )),
+      }),
+      now: () => now,
+      saveState: () => undefined,
+      sendUserMessage: () => undefined,
+    };
+    const tick = () => deliverPendingDriverHandoff(entry, automationState, "issue coordinator", dependencies);
+
+    now = 2_000;
+    tick();
+    now = 4_000;
+    tick();
+
+    expect({ labels: state.target.labels, comments: state.comments.map((comment: any) => comment.body) }).toEqual({
+      labels: ["agent:implement", "agent:in-progress", "triage"],
+      comments: [],
+    });
+
+    now = 61_000;
+    tick();
+
+    expect({ labels: state.target.labels, comments: state.comments.map((comment: any) => comment.body) }).toEqual({
+      labels: ["triage", "agent:blocked"],
+      comments: [expect.stringContaining("deadloop stopped this attempt")],
+    });
+  });
+
+  it("leaves GitHub untouched when the stop confirmation finds the turn working again", () => {
+    const state = fixture();
+    let reads = 0;
+    const listAgents = state.runner.listAgents;
+    state.runner.listAgents = () => {
+      reads += 1;
+      if (reads >= 2) state.setAgentStatus("working");
+      return listAgents();
+    };
+
+    const applied = applyTerminalMonitorDisposition(state.input, state.dependencies);
+
+    expect({ applied, labels: state.target.labels, comments: state.comments, labelWrites: state.labelWrites }).toEqual({
+      applied: false,
+      labels: ["agent:implement", "agent:in-progress", "triage"],
+      comments: [],
+      labelWrites: 0,
+    });
+  });
+
+  it("moves the labels and posts the comment under one confirmation without aborting between them", () => {
+    const state = fixture();
+    let reads = 0;
+    const listAgents = state.runner.listAgents;
+    state.runner.listAgents = () => {
+      reads += 1;
+      if (reads >= 3) state.setAgentStatus("working");
+      return listAgents();
+    };
+
+    const applied = applyTerminalMonitorDisposition(state.input, state.dependencies);
+
+    expect({ applied, labels: state.target.labels, comments: state.comments.map((comment: any) => comment.body) }).toEqual({
+      applied: false,
+      labels: ["triage", "agent:blocked"],
+      comments: [expect.stringContaining("deadloop stopped this attempt")],
+    });
+  });
   it("stops the exact Issue and releases the terminal attempt", () => {
     const state = fixture();
 
