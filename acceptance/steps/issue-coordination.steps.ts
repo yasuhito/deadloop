@@ -114,7 +114,10 @@ Then("Work on the Issue starts", function (this: IssueCoordinationWorld) {
 });
 
 Then("The work instructions contain only information needed by the implementation agent", function (this: IssueCoordinationWorld) {
-  assert.doesNotMatch(this.result?.launch?.instructions || "", /issue coordinator|driver|renderer/i);
+  // Absolute paths under this checkout are agent-facing execution supply (ADR 0017), not
+  // implementation names, so the check must not depend on what the checkout directory is called.
+  const withoutCheckoutPaths = (this.result?.launch?.instructions || "").split(process.cwd()).join("<checkout>");
+  assert.doesNotMatch(withoutCheckoutPaths, /issue coordinator|driver|renderer/i);
 });
 
 Then("Completion monitoring starts for the Issue", function (this: IssueCoordinationWorld) {
