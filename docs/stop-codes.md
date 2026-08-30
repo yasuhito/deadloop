@@ -30,6 +30,10 @@ storage exhaustion publishes `free_storage`, any other launch failure publishes 
   (`extensions/deadloop/automations/contain-terminal-monitor.cts`): a storage stop publishes
   `free_storage`, a model-availability pause publishes `wait`, every other terminal stop
   (`active_work_timeout`, `invalid_completion_report`, missing report) publishes `add_request`.
+- `deadloop:issue-attempt-stop:v1` markers on Issue stop comments (`src/issue-request-transition.cts`,
+  `issueStopMarkerReason`): the Worker's and explorer's `failure.reason` and deadloop's own
+  `invalid_exploration_report` are folded at the marker boundary; a value outside the five codes
+  publishes `add_request`, and the cause stays in the comment's prose.
 - Blocked completion reports written by agents (`typed_reason_code` in prompts): the prompt names the
   four agent-usable codes; the `worker_blocked` fallback became `add_request`.
 
