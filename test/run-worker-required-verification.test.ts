@@ -196,13 +196,16 @@ describe("Worker required-verification checkout binding", () => {
     writeFileSync(fixture.log, "npm ERR! exited 2\nlast log line\n");
     persistHostVerificationEvidence(fixture.record, failedRecord(fixture));
     let invocations = 0;
+    let rejection = "";
 
-    await expect(run(fixture.args, undefined, async () => {
-      invocations += 1;
-      return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
-    }, () => ({}), undefined, () => {})).rejects.toThrow("required verification failed");
+    try {
+      await run(fixture.args, undefined, async () => {
+        invocations += 1;
+        return { check: { code: 0, stdout: "", stderr: "", timedOut: false, interrupted: false, signal: null } };
+      }, () => ({}), undefined, () => {});
+    } catch (error) { rejection = error instanceof Error ? error.message : String(error); }
 
-    expect(invocations).toBe(0);
+    expect({ rejected: rejection.includes("required verification failed"), invocations }).toEqual({ rejected: true, invocations: 0 });
   });
 
   it("reruns when the target commit moves past an authenticated failed record", async () => {
@@ -247,10 +250,14 @@ describe("Worker required-verification checkout binding", () => {
       if (plan.comment) { comments.push(plan.comment); issue.comments.push({ body: plan.comment }); }
     };
 
-    await expect(run(fixture.args, undefined, async () => { throw new Error("must not run"); }, () => ({}), undefined, noticeOnce)).rejects.toThrow("required verification failed");
-    await expect(run(fixture.args, undefined, async () => { throw new Error("must not run"); }, () => ({}), undefined, noticeOnce)).rejects.toThrow("required verification failed");
+    const rejections: string[] = [];
+    for (let tick = 0; tick < 2; tick += 1) {
+      try { await run(fixture.args, undefined, async () => { throw new Error("must not run"); }, () => ({}), undefined, noticeOnce); }
+      catch (error) { rejections.push(error instanceof Error ? error.message : String(error)); }
+    }
 
-    expect(comments).toHaveLength(1);
+    expect({ rejections: rejections.map((message) => message.includes("required verification failed")), comments: comments.length })
+      .toEqual({ rejections: [true, true], comments: 1 });
   });
 
   it("includes the exit code in the failure notice", () => {
