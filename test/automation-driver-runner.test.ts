@@ -294,6 +294,15 @@ describe("deterministic automation driver runner", () => {
     expect(entry.lastError).toBe(CHILD_SUMMARY);
   });
 
+  it("surfaces a thrown completion error as the host-log reason", () => {
+    const { entry, state } = completionMonitorEntry();
+    deliverPendingDriverHandoff(entry, state, "auto", completionMonitorDeps(() => {
+      throw new Error("deterministic completion exploded");
+    }));
+
+    expect(entry.lastSummary).toBe("deterministic completion exploded");
+  });
+
   it("surfaces a string completion result as lastError when the deterministic completion fails", () => {
     const { entry, state } = completionMonitorEntry();
     deliverPendingDriverHandoff(entry, state, "auto", completionMonitorDeps(() => ({ applied: false, result: "ci_fallback_gate_stopped" })));
@@ -304,6 +313,16 @@ describe("deterministic automation driver runner", () => {
   it("keeps lastError empty for a failed deterministic completion without a readable reason", () => {
     const { entry, state } = completionMonitorEntry();
     deliverPendingDriverHandoff(entry, state, "auto", completionMonitorDeps(() => ({ applied: false })));
+
+    expect(entry.lastError).toBeUndefined();
+  });
+
+  it("does not record the bare exception tag as the whole failure reason", () => {
+    const { entry, state } = completionMonitorEntry();
+    deliverPendingDriverHandoff(entry, state, "auto", completionMonitorDeps(() => ({
+      applied: false,
+      result: { action: "error", driverAction: "exception" },
+    })));
 
     expect(entry.lastError).toBeUndefined();
   });

@@ -107,6 +107,7 @@ function runDeterministicCompletion(handoff: JsonObject, supply?: CompletionCode
     ? "complete-deterministic-issue-attempt.cts"
     : "complete-deterministic-pr-attempt.cts";
   const script = path.join(String(current.input?.automationDir || ""), completionScript);
+  const stage = path.basename(script);
   const completed = childProcess.spawnSync("node", [script], {
     input: JSON.stringify(current),
     encoding: "utf8",
@@ -114,11 +115,19 @@ function runDeterministicCompletion(handoff: JsonObject, supply?: CompletionCode
     timeout: 15 * 60_000,
     killSignal: "SIGKILL",
   });
-  if (completed.error) throw completed.error;
-  if (completed.status !== 0) {
-    throw new Error(String(completed.stderr || completed.stdout || `deterministic ${String(handoff.kind || "attempt")} completion failed`).trim());
+  // Name the failed completion stage in the reason, so a thrown exception says which completion
+  // script crashed instead of leaving only its bare message (#389).
+  if (completed.error) {
+    throw new Error(`${stage}: ${String((completed.error as Error).message || completed.error)}`);
   }
-  return JSON.parse(String(completed.stdout || "{}"));
+  if (completed.status !== 0) {
+    throw new Error(`${stage}: ${String(completed.stderr || completed.stdout || `deterministic ${String(handoff.kind || "attempt")} completion failed`).trim()}`);
+  }
+  try {
+    return JSON.parse(String(completed.stdout || "{}"));
+  } catch {
+    throw new Error(`${stage}: completion did not return a JSON object`);
+  }
 }
 
 function applyDeterministicAttemptMonitoring(
