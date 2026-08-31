@@ -378,6 +378,35 @@ function slugForBranch(value: unknown): string {
   return slug || "task";
 }
 
+/**
+ * The first free branch name for a fresh issue Worker checkout: the plain name, then `-1`, `-2`, ...
+ *
+ * A launch failure that never started its agent used to leave its branch and worktree behind, and
+ * every later request for the same Issue then failed against that leftover. When no stopped-journal
+ * recovery checkout exists, the launch therefore picks the next free suffixed name instead of
+ * failing closed on a leftover it did not create (Issue #394).
+ */
+function nextIssueWorkerBranch(
+  issue: JsonObject,
+  env: ReturnType<typeof envConfig>,
+  ops: { runText: (args: string[]) => string },
+): string {
+  const number = Number(issue.number || 0);
+  const base = `agent/issue-${number}-${slugForBranch(issue.title)}`;
+  let heads: string[] = [];
+  try {
+    heads = ops.runText(["git", "-C", env.repoPath, "for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+      .split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  } catch { heads = []; }
+  const taken = (branch: string): boolean =>
+    heads.includes(branch) || fs.existsSync(path.join(env.worktreeRoot, branch.replace(/\//g, "-")));
+  for (let suffix = 0; suffix <= 64; suffix += 1) {
+    const candidate = suffix === 0 ? base : `${base}-${suffix}`;
+    if (!taken(candidate)) return candidate;
+  }
+  throw new Error(`Issue #${number} has no free Worker branch name up to ${base}-64`);
+}
+
 function shouldSimulateLaunch(fixture: JsonObject | null): boolean {
   return Boolean(fixture);
 }
@@ -525,10 +554,11 @@ function issueWorkerLaunchPlan(
   recovery: StoppedWorkerCheckout | null = null,
   verificationBaseHead: string = baseHead,
   agentRequest?: { role: "worker"; label: string; eventId: string },
+  freshBranch?: string,
 ) {
   const number = Number(issue.number || 0);
   const workerName = `${env.projectId}-issue-${number}-worker`;
-  const branch = recovery?.branch || `agent/issue-${number}-${slugForBranch(issue.title)}`;
+  const branch = recovery?.branch || freshBranch || `agent/issue-${number}-${slugForBranch(issue.title)}`;
   const intendedWorktreePath = recovery?.worktreePath || path.join(env.worktreeRoot, branch.replace(/\//g, "-"));
   return {
     workerName,
@@ -609,7 +639,8 @@ function launchIssueWorkerFlow(
   const recovery = stoppedWorkerCheckout(Number(issue.number || 0), env, ops);
   const currentBaseHead = ops.runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
   const baseHead = recovery?.preservedHead || currentBaseHead;
-  const plan = issueWorkerLaunchPlan(issue, env, randomUUID(), baseHead, recovery, currentBaseHead);
+  const freshBranch = recovery ? undefined : nextIssueWorkerBranch(issue, env, ops);
+  const plan = issueWorkerLaunchPlan(issue, env, randomUUID(), baseHead, recovery, currentBaseHead, undefined, freshBranch);
   if (recovery) assertRecoverableWorkerCheckout(recovery, env, ops as { runner: ReturnType<typeof herdrRunner>; runText: (args: string[]) => string });
   prepareAgentLaunchFlow(plan.input, ops);
   recordAgentLaunchGithubClaimed(plan.input);
@@ -625,6 +656,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     ? "f".repeat(40)
     : runText(["git", "-C", env.repoPath, "rev-parse", "--verify", `${env.baseBranch}^{commit}`]).trim();
   const baseHead = recovery?.preservedHead || currentBaseHead;
+  const freshBranch = recovery || shouldSimulateLaunch(fixture) ? undefined : nextIssueWorkerBranch(issue, env, { runText });
   const requestEvents = fixture
     ? (issue.timelineEvents || [{ id: "1", event: "labeled", created_at: "2026-08-16T00:00:00Z", actor: { login: "fixture-user" }, label: { name: env.implementLabel } }])
     : githubOperations().listIssueTimelineEvents(env.githubRepo, number);
@@ -636,7 +668,7 @@ function launchIssueWorker(issue: JsonObject, env: ReturnType<typeof envConfig>,
     eventId: String(requestEvent.id || requestEvent.node_id || ""),
   };
   if (!agentRequest.eventId) throw new StaleLaunchError(`Issue #${number} request event has no immutable ID`);
-  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery, currentBaseHead, agentRequest);
+  const plan = issueWorkerLaunchPlan(issue, env, uuid, baseHead, recovery, currentBaseHead, agentRequest, freshBranch);
   const { workerName, branch } = plan;
   const simulatedWorktreePath = `/worktrees/${env.projectId}/${branch.replace(/\//g, "-")}`;
 
@@ -1276,6 +1308,7 @@ if (require.main === module) main();
 
 module.exports = {
   assertPreparedWorkerContractCurrent,
+  nextIssueWorkerBranch,
   assertRecoverableWorkerCheckout,
   assertWorkerLaunchBaseCurrent,
   clearIssueRecoveryBlock,

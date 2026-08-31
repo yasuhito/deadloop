@@ -333,7 +333,12 @@ function exactCanonicalMatch(observation: CheckoutObservation): boolean {
     && observation.branchMatches[0] === observation.checkoutMatches[0];
 }
 
-function prepareWorktree(input: AgentLaunchFlowInput, runner: RunnerAdapter, ops: AgentLaunchFlowOps) {
+function prepareWorktree(
+  input: AgentLaunchFlowInput,
+  runner: RunnerAdapter,
+  ops: AgentLaunchFlowOps,
+  onOpened?: (launch: { workspaceId: string; worktreePath: string }) => void,
+) {
   const runsRoot = path.join(input.stateDir, "runs");
   const currentRunDir = launchPaths(input).runDir;
   let observation = observeCheckout(input, runner);
@@ -347,13 +352,15 @@ function prepareWorktree(input: AgentLaunchFlowInput, runner: RunnerAdapter, ops
     if (observation.branchMatches.length || observation.checkoutMatches.length) {
       throw new Error(`worktree ${input.worktree.branch} already exists before create`);
     }
-    return runner.createWorktree({
+    const created = runner.createWorktree({
       repoPath: input.repoPath,
       branch: input.worktree.branch,
       baseBranch: input.worktree.baseBranch,
       label: input.workspaceLabel,
       intendedPath: input.intendedWorktreePath,
     });
+    onOpened?.(created);
+    return created;
   }
   if (!exactCanonicalMatch(observation)) {
     if (observation.branchMatches.length || observation.checkoutMatches.length) {
@@ -366,15 +373,18 @@ function prepareWorktree(input: AgentLaunchFlowInput, runner: RunnerAdapter, ops
     // Preparing it again is deterministic: fetch, require the exact recorded head, and refuse to
     // move a diverged local branch. Herdr then creates the checkout and its fresh workspace.
     prepareCanonicalCheckout(input, ops);
-    return runner.createWorktree({
+    const recreated = runner.createWorktree({
       repoPath: input.repoPath,
       branch: input.worktree.branch,
       baseBranch: String(input.inputRevision.head || ""),
       label: input.workspaceLabel,
       intendedPath: input.intendedWorktreePath,
     });
+    onOpened?.(recreated);
+    return recreated;
   }
   const launch = runner.openWorktree({ repoPath: input.repoPath, branch: input.worktree.branch });
+  onOpened?.(launch);
   // An opened checkout sits wherever the previous attempt left it, and every pull-request role binds
   // to an exact head, so handing one over unaligned makes the agent refuse before doing any work.
   //
@@ -414,15 +424,60 @@ function recordWorkspaceOpened(runDir: string, launch: {
   writeAttemptRecordAtomically(attemptRecordPath(runDir), opened);
 }
 
+/**
+ * Cleans up what this launch created after it failed before starting any agent.
+ *
+ * A launch that never started an agent leaves only debris behind: a fresh workspace it opened and,
+ * in create mode, a worktree and branch it created. Removing exactly those keeps the next request
+ * from being blocked by the previous failure's leftovers. Anything the launch did not create - an
+ * opened checkout, its branch, an unknown workspace - is left untouched.
+ *
+ * Returns one note per cleanup step that failed; a fully cleaned launch returns no notes.
+ */
+function cleanupUnlaunchedLaunch(
+  input: AgentLaunchFlowInput,
+  runner: RunnerAdapter,
+  ops: AgentLaunchFlowOps,
+  launch: { workspaceId: string; worktreePath: string },
+): string[] {
+  const notes: string[] = [];
+  try {
+    runner.closeWorkspace(launch.workspaceId);
+  } catch (error) {
+    notes.push(`workspace ${launch.workspaceId} close failed: ${error instanceof Error ? error.message : String(error)}`);
+    return notes;
+  }
+  if (input.worktree.mode !== "create") return notes;
+  try {
+    runner.removeWorktree({
+      repoPath: input.repoPath,
+      branch: input.worktree.branch,
+      worktreePath: launch.worktreePath,
+    });
+  } catch (error) {
+    notes.push(`worktree ${input.worktree.branch} removal failed: ${error instanceof Error ? error.message : String(error)}`);
+    return notes;
+  }
+  try {
+    ops.runText(["git", "-C", input.repoPath, "branch", "-D", input.worktree.branch]);
+  } catch (error) {
+    notes.push(`branch ${input.worktree.branch} removal failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return notes;
+}
+
 function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): AgentLaunchFlowResult {
   const runner = ops.runner || createHerdrRunner();
   const prepared = prepareAgentLaunchFlow(input, ops);
   let workspaceMayExist = false;
+  let openedLaunch: { workspaceId: string; worktreePath: string } | undefined;
+  let agentStartAttempted = false;
   try {
     const record = readAttemptRecord(prepared.runDir);
     if (record.phase !== "github_claimed") throw new Error(`attempt phase ${record.phase} cannot launch a workspace`);
-    const launch = prepareWorktree(input, runner, ops);
+    const launch = prepareWorktree(input, runner, ops, (opened) => { openedLaunch = opened; });
     workspaceMayExist = true;
+    openedLaunch = launch;
     if (input.worktree.mode === "open" && path.resolve(launch.worktreePath) !== path.resolve(input.intendedWorktreePath)) {
       throw new Error("Herdr returned a worktree path outside the recorded attempt checkout");
     }
@@ -451,6 +506,7 @@ function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): 
     );
 
     ops.beforeAgentStart?.();
+    agentStartAttempted = true;
     const launchOutput = ops.runText([
       "node", path.join(input.automationDir, "launch-agent.cts"),
       "--agent", input.agent,
@@ -488,13 +544,29 @@ function launchAgentFlow(input: AgentLaunchFlowInput, ops: AgentLaunchFlowOps): 
       launchOutput,
     };
   } catch (error) {
+    // An agent that never started leaves no work behind, so this launch removes exactly the
+    // workspace, worktree, and branch it created before the failure is recorded. A launch whose
+    // start command already ran, or whose record already passed agent_started, is fail closed:
+    // its runtime state may hold live work, so it stays for the abandonment or reconciliation path.
+    let cleanupNotes: string[] = [];
+    if (openedLaunch && !agentStartAttempted) {
+      try {
+        const current = readAttemptRecord(prepared.runDir);
+        if (current.phase === "github_claimed" || current.phase === "workspace_opened") {
+          cleanupNotes = cleanupUnlaunchedLaunch(input, runner, ops, openedLaunch);
+        }
+      } catch {}
+    }
     try {
       const current = readAttemptRecord(prepared.runDir);
       if (current.phase !== "launch_failed") {
+        const cleanupAttempted = openedLaunch !== undefined && !agentStartAttempted;
+        const retained = workspaceMayExist && (!cleanupAttempted || cleanupNotes.length > 0) ? "workspace may be retained; " : "";
         transitionPersistedAttempt(
           prepared.runDir,
           "launch_failed",
-          `${workspaceMayExist ? "workspace may be retained; " : ""}${error instanceof Error ? error.message : String(error)}`,
+          `${retained}${error instanceof Error ? error.message : String(error)}`
+            + (cleanupNotes.length ? `; cleanup: ${cleanupNotes.join("; ")}` : ""),
         );
       }
     } catch {}

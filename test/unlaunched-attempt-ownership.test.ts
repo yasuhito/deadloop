@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -156,7 +156,7 @@ else process.stdout.write(JSON.stringify({ result: { workspaces: [] } }));
   return { root, repo, stateDir, worktree, completedRun, mutations: path.join(root, "mutations.log") };
 }
 
-async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunchedSecondAttempt>, observe: { labels?: string[]; blockedEventAppearsLater?: boolean; flipHeadAfterReads?: number; operatorRequestAdded?: boolean } = {}, mutations: string[] = []) {
+async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunchedSecondAttempt>, observe: { labels?: string[]; blockedEventAppearsLater?: boolean; flipHeadAfterReads?: number; operatorRequestAdded?: boolean; workspaces?: Record<string, unknown>[] } = {}, mutations: string[] = []) {
   const labels = [...(observe.labels || ["agent:blocked"])];
   const comments: Record<string, unknown>[] = [];
   const postedComments: string[] = [];
@@ -178,13 +178,26 @@ async function reconcileOnce(fixture: ReturnType<typeof pullRequestWithUnlaunche
     runText: (argv: string[]) => {
       if (argv[0] === "herdr") return "";
       if (argv[2] === "user") return "deadloop-bot\n";
+      if (argv[0] === "gh" && argv[1] === "pr" && argv[2] === "edit") {
+        mutations.push(`EDIT ${argv.join(" ")}`);
+        argv.forEach((token, index) => {
+          if (token === "--add-label" && !labels.includes(argv[index + 1])) labels.push(argv[index + 1]);
+          if (token === "--remove-label") {
+            const position = labels.indexOf(argv[index + 1]);
+            if (position >= 0) labels.splice(position, 1);
+          }
+        });
+        return "";
+      }
       return "date: Sat, 01 Aug 2026 10:06:01 GMT";
     },
     runJson: (argv: string[], options: { input?: string } = {}) => {
       const command = argv.slice(0, 3).join(" ");
       // The completed attempt's workspace is still open with its agent gone, which is the state
       // PR #228 was measured in.
-      if (command === "herdr workspace list") return { result: { workspaces: [{ workspace_id: "workspace-1", pane_count: 1, tab_count: 1, worktree: { checkout_path: fixture.worktree } }] } };
+      if (command === "herdr workspace list") {
+        return { result: { workspaces: observe.workspaces || [{ workspace_id: "workspace-1", pane_count: 1, tab_count: 1, worktree: { checkout_path: fixture.worktree } }] } };
+      }
       if (command === "herdr agent list") return { result: { agents: [] } };
       if (command === "herdr worktree list") return { result: { worktrees: [{ path: fixture.worktree }] } };
       if (command === "gh repo view") return { id: "repo-id", nameWithOwner: "owner/repo" };
@@ -341,5 +354,30 @@ describe("a second attempt that never opened a workspace", () => {
     const second = await reconcileOnce(fixture, { labels: ["agent:blocked", "agent:review"], operatorRequestAdded: true }, secondMutations);
 
     expect(second.mutations).toEqual([]);
+  });
+
+  // Issue #394: a launch-failed attempt never started an agent, so when the operator adds a new
+  // request after that failure, the next tick releases the stale claim and restores the request
+  // instead of blocking the pull request again.
+  it("releases a launch-failed attempt and restores the request a newer request outranks", async () => {
+    const fixture = pullRequestWithUnlaunchedSecondAttempt({ completed: false, unlaunchedHoldsWorkspace: true });
+    const journal = path.join(fixture.stateDir, "runs", "unlaunched", "attempt.json");
+    const failureTime = new Date("2026-08-01T09:30:00Z");
+    utimesSync(journal, failureTime, failureTime);
+    const { result, postedComments, mutations, unlaunched } = await reconcileOnce(
+      fixture,
+      {
+        labels: ["agent:in-progress", "agent:review"],
+        operatorRequestAdded: true,
+        // The launch-failed attempt's workspace is still open and holds no agent, which is what
+        // makes its journal provably stopped rather than unreadable.
+        workspaces: [{ workspace_id: "workspace-unlaunched", pane_count: 1, tab_count: 1, worktree: { checkout_path: fixture.worktree } }],
+      },
+    );
+
+    expect(unlaunched.authorityRelease.reason).toBe("never_launched");
+    expect(result.results.some((entry: { action?: string }) => entry.action === "restore_request")).toBe(true);
+    expect(postedComments).toEqual([]);
+    expect(mutations.some((entry: string) => entry.startsWith("EDIT"))).toBe(true);
   });
 });

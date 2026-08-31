@@ -148,7 +148,7 @@ describe("attempt workspace doctor classifications", () => {
     );
     expect(findings[0].commands[0]).toContain("reconcile-report-received-attempt.cts");
   });
-  it("requires manual review instead of a partial recovery command when an agent owns the pane", () => {
+  it("requires manual review but still names an observation command when an agent owns the pane", () => {
     const fixture = reviewerFixture("approved");
     const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
     writeAttempt(record, undefined);
@@ -158,7 +158,65 @@ describe("attempt workspace doctor classifications", () => {
       [{ name: record.agentName, paneId: record.rootPaneId, status: "working" }],
       {},
     );
-    expect({ commands: findings[0].commands, summary: findings[0].summary }).toEqual({ commands: [], summary: expect.stringContaining("manual review required") });
+    expect(findings[0].summary).toContain("manual review required");
+    expect(findings[0].commands).toEqual(["herdr agent list"]);
+  });
+
+  it("names the retreat commands for a launch failure that left its workspace and checkout", () => {
+    const fixture = workerFixture();
+    const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings(
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" } },
+      [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath, tabCount: 1, paneCount: 1 }],
+      [],
+      {
+        worktrees: [{ branch: record.branch, path: record.worktreePath }],
+        gitStatuses: { [record.worktreePath]: "" },
+      },
+    );
+    expect(findings[0].commands).toEqual([
+      `herdr workspace close '${record.workspaceId}'`,
+      `git worktree remove '${record.worktreePath}'`,
+      `git branch -D '${record.branch}'`,
+    ]);
+  });
+
+  it("falls back to the fresh-request command when a launch failure left nothing behind", () => {
+    const fixture = workerFixture();
+    const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings(
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" } },
+      [],
+      [],
+      {},
+    );
+    expect(findings[0].commands).toEqual([`gh issue edit ${record.target.number} --add-label 'agent:implement'`]);
+  });
+
+  it("observes the remnants of a released never-launched attempt", () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      phase: "authority_released",
+      lastSuccessfulPhase: "workspace_opened",
+      launchError: "worktree agent/issue-42 already exists before create",
+      outputRevision: undefined,
+      authorityRelease: { reason: "never_launched", releasedAt: "2026-08-30T00:00:00Z" },
+    };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings(
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" } },
+      [],
+      [],
+      { worktrees: [{ branch: record.branch, path: record.worktreePath }], gitStatuses: { [record.worktreePath]: "" } },
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0].title).toContain("launch_failed");
+    expect(findings[0].summary).toContain("never_launched");
+    expect(findings[0].summary).toContain("linked worktree");
+    expect(findings[0].commands).toContain(`git worktree remove '${record.worktreePath}'`);
   });
   it("classifies cleanup pending", () => {
     const fixture = workerFixture(); const record = { ...fixture.record, phase: "github_persisted", lastSuccessfulPhase: "github_persisted" };
