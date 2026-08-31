@@ -12,6 +12,8 @@ export type HostLogEventKind =
   | "tick_stopped"
   | "automation_result"
   | "attempt_launched"
+  | "reconcile_started"
+  | "reconcile_finished"
   | "model_wait_transitioned"
   | "enablement_written";
 
@@ -31,6 +33,8 @@ export type HostLogEvent = {
   driverAction?: string;
   role?: string;
   attemptId?: string;
+  /** Milliseconds the reconciled operation held the shared enablement lock (#393). */
+  durationMs?: number;
 };
 
 /**
