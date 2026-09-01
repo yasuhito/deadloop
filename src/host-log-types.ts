@@ -15,6 +15,7 @@ export type HostLogEventKind =
   | "reconcile_started"
   | "reconcile_finished"
   | "model_wait_transitioned"
+  | "automation_starved"
   | "enablement_written";
 
 /**
@@ -35,6 +36,8 @@ export type HostLogEvent = {
   attemptId?: string;
   /** Milliseconds the reconciled operation held the shared enablement lock (#393). */
   durationMs?: number;
+  /** When a starved automation became due, as an ISO timestamp (#402). */
+  dueAt?: string;
 };
 
 /**
@@ -53,6 +56,11 @@ type TickHostLogContext = { projectId: string; automationId?: string };
 export type TickHostLogEvent =
   | (({ kind: "tick_started" } | { kind: "tick_idle" }) & TickHostLogContext)
   | (({ kind: "tick_blocked"; reason: string } | { kind: "tick_stopped"; reason: string }) & TickHostLogContext)
+  | ({
+      kind: "automation_starved";
+      reason?: string;
+      dueAt?: string;
+    } & TickHostLogContext)
   | ({
       kind: "automation_result";
       result?: string;

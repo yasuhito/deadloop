@@ -8,12 +8,19 @@ import {
   type NormalizedProject,
 } from "./core";
 
+export type DueAutomationSelection = {
+  selected: { automation: NormalizedAutomation; dueSlot: number } | null;
+  /** Automations that were due at this tick but lost selection to another due automation (#402). */
+  starved: { automationId: string; dueSince: number }[];
+};
+
 export function reconcileAndSelectDueAutomation(
   project: Pick<NormalizedProject, "id" | "automations">,
   state: Record<string, AutomationStateEntry>,
   nowMs: number,
-): { automation: NormalizedAutomation; dueSlot: number } | null {
+): DueAutomationSelection {
   let selected: { automation: NormalizedAutomation; dueSlot: number; dueSince: number } | null = null;
+  const due: { automation: NormalizedAutomation; dueSlot: number; dueSince: number }[] = [];
 
   for (const automation of project.automations) {
     const key = automationStateKey(project, automation);
@@ -32,7 +39,13 @@ export function reconcileAndSelectDueAutomation(
     if (!selected || dueSince < selected.dueSince) {
       selected = { automation, dueSlot, dueSince };
     }
+    due.push({ automation, dueSlot, dueSince });
   }
 
-  return selected && { automation: selected.automation, dueSlot: selected.dueSlot };
+  const starved = selected
+    ? due
+        .filter((candidate) => candidate.automation !== selected!.automation)
+        .map((candidate) => ({ automationId: candidate.automation.id, dueSince: candidate.dueSince }))
+    : [];
+  return { selected: selected && { automation: selected.automation, dueSlot: selected.dueSlot }, starved };
 }

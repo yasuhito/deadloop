@@ -45,7 +45,7 @@ function hostLogLine(event: Record<string, unknown>, now: Date): string {
     result: textOrEmpty(event.result),
     reason: textOrEmpty(event.reason),
   };
-  for (const key of ["driverAction", "role", "attemptId"] as const) {
+  for (const key of ["driverAction", "role", "attemptId", "dueAt"] as const) {
     const value = textOrEmpty(event[key]);
     if (value) line[key] = value;
   }
