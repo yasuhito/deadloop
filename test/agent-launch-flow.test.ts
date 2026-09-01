@@ -418,12 +418,17 @@ describe("launch failure self-cleanup", () => {
           return originalRunText(args);
         };
       });
-      expect(() => launchAgentFlow(launchInput, ops)).toThrow(/input revision/);
-      expect(calls).toContain("closeWorkspace workspace-1");
-      expect(calls).toContain(`removeWorktree agent/issue-1 ${launchInput.intendedWorktreePath}`);
-      expect(calls).toContain("git -C /repo branch -D agent/issue-1");
+      let failure = "";
+      try { launchAgentFlow(launchInput, ops); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
       const record = JSON.parse(require("node:fs").readFileSync(require("node:path").join(ops.runDir ?? path.join(root, "runs", "launch-worker"), "attempt.json"), "utf8"));
-      expect(record.phase).toBe("launch_failed");
+
+      expect({
+        failed: /input revision/.test(failure),
+        closedWorkspace: calls.includes("closeWorkspace workspace-1"),
+        removedWorktree: calls.includes(`removeWorktree agent/issue-1 ${launchInput.intendedWorktreePath}`),
+        deletedBranch: calls.includes("git -C /repo branch -D agent/issue-1"),
+        phase: record.phase,
+      }).toEqual({ failed: true, closedWorkspace: true, removedWorktree: true, deletedBranch: true, phase: "launch_failed" });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -433,9 +438,14 @@ describe("launch failure self-cleanup", () => {
       const { launchInput, ops, calls } = launchUntilFailure(root, "reviewer", (reviewerOps) => {
         reviewerOps.alignCheckout = () => { throw new Error("alignment failed"); };
       });
-      expect(() => launchAgentFlow(launchInput, ops)).toThrow(/alignment failed/);
-      expect(calls).toContain("closeWorkspace workspace-1");
-      expect(calls.every((call) => !call.startsWith("removeWorktree") && !call.includes("branch -D"))).toBe(true);
+      let failure = "";
+      try { launchAgentFlow(launchInput, ops); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
+
+      expect({
+        failed: /alignment failed/.test(failure),
+        closedWorkspace: calls.includes("closeWorkspace workspace-1"),
+        touchedCheckout: calls.some((call) => call.startsWith("removeWorktree") || call.includes("branch -D")),
+      }).toEqual({ failed: true, closedWorkspace: true, touchedCheckout: false });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -449,8 +459,10 @@ describe("launch failure self-cleanup", () => {
           return originalRunText(args);
         };
       });
-      expect(() => launchAgentFlow(launchInput, ops)).toThrow(/agent start failed/);
-      expect(calls).toEqual([]);
+      let failure = "";
+      try { launchAgentFlow(launchInput, ops); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
+
+      expect({ failed: /agent start failed/.test(failure), calls }).toEqual({ failed: true, calls: [] });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

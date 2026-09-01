@@ -66,9 +66,15 @@ describe("fresh issue Worker branch names", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-branch-"));
     try {
       const plan = issueWorkerLaunchPlan(ISSUE, env(root), "launch-uuid", "a".repeat(40), null, "a".repeat(40), undefined, "agent/issue-394-sluggish");
-      expect(plan.branch).toBe("agent/issue-394-sluggish");
-      expect(plan.input.worktree).toMatchObject({ mode: "create", branch: "agent/issue-394-sluggish" });
-      expect(plan.input.intendedWorktreePath).toBe(path.join(root, "worktrees", "agent-issue-394-sluggish"));
+      expect({
+        branch: plan.branch,
+        worktree: { mode: plan.input.worktree.mode, branch: plan.input.worktree.branch },
+        intendedWorktreePath: plan.input.intendedWorktreePath,
+      }).toEqual({
+        branch: "agent/issue-394-sluggish",
+        worktree: { mode: "create", branch: "agent/issue-394-sluggish" },
+        intendedWorktreePath: path.join(root, "worktrees", "agent-issue-394-sluggish"),
+      });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -84,8 +90,8 @@ describe("fresh issue Worker branch names", () => {
         agentName: "dl-w-394-deadbeef0000",
       };
       const plan = issueWorkerLaunchPlan(ISSUE, env(root), "launch-uuid", "a".repeat(40), recovery as never, "a".repeat(40), undefined, "agent/issue-394-sluggish");
-      expect(plan.branch).toBe("agent/issue-394-recovered");
-      expect(plan.input.worktree).toMatchObject({ mode: "open", branch: "agent/issue-394-recovered" });
+      expect({ branch: plan.branch, worktree: { mode: plan.input.worktree.mode, branch: plan.input.worktree.branch } })
+        .toEqual({ branch: "agent/issue-394-recovered", worktree: { mode: "open", branch: "agent/issue-394-recovered" } });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

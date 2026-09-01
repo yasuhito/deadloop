@@ -111,16 +111,15 @@ describe("blocks whose reasons name an operator action", () => {
       launchFailures: ["worktree agent/issue-42 already exists before create"],
       newerRequestThanFailure: true,
     });
-    expect(decision.action).toBe("block");
-    expect(decision.reason).toBe("runtime_unobservable");
+    expect({ action: decision.action, reason: decision.reason }).toEqual({ action: "block", reason: "runtime_unobservable" });
   });
 
   it("fingersprints the failure set so an unchanged failure set explains once", () => {
     const failures = ["worktree agent/issue-42 already exists before create"];
     const first = parseRecoveryMarker(recoveryComment(24, HEAD, "launch_unprepared", "block-1", failures));
     const second = parseRecoveryMarker(recoveryComment(24, HEAD, "launch_unprepared", "block-2", failures));
-    expect(first?.fingerprint).toBeTruthy();
-    expect(second?.fingerprint).toBe(first?.fingerprint);
+    expect({ present: Boolean(first?.fingerprint), repeated: second?.fingerprint === first?.fingerprint })
+      .toEqual({ present: true, repeated: true });
   });
 
   it("does not repeat the failure explanation while the failure set is unchanged", async () => {

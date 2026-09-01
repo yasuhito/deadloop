@@ -158,8 +158,8 @@ describe("attempt workspace doctor classifications", () => {
       [{ name: record.agentName, paneId: record.rootPaneId, status: "working" }],
       {},
     );
-    expect(findings[0].summary).toContain("manual review required");
-    expect(findings[0].commands).toEqual(["herdr agent list"]);
+    expect({ manualReview: findings[0].summary.includes("manual review required"), commands: findings[0].commands })
+      .toEqual({ manualReview: true, commands: ["herdr agent list"] });
   });
 
   it("names the retreat commands for a launch failure that left its workspace and checkout", () => {
@@ -212,11 +212,13 @@ describe("attempt workspace doctor classifications", () => {
       [],
       { worktrees: [{ branch: record.branch, path: record.worktreePath }], gitStatuses: { [record.worktreePath]: "" } },
     );
-    expect(findings).toHaveLength(1);
-    expect(findings[0].title).toContain("launch_failed");
-    expect(findings[0].summary).toContain("never_launched");
-    expect(findings[0].summary).toContain("linked worktree");
-    expect(findings[0].commands).toContain(`git worktree remove '${record.worktreePath}'`);
+    expect({
+      findings: findings.length,
+      title: findings[0].title.includes("launch_failed"),
+      release: findings[0].summary.includes("never_launched"),
+      worktree: findings[0].summary.includes("linked worktree"),
+      removeCommand: findings[0].commands.includes(`git worktree remove '${record.worktreePath}'`),
+    }).toEqual({ findings: 1, title: true, release: true, worktree: true, removeCommand: true });
   });
   it("classifies cleanup pending", () => {
     const fixture = workerFixture(); const record = { ...fixture.record, phase: "github_persisted", lastSuccessfulPhase: "github_persisted" };

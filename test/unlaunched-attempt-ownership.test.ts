@@ -375,9 +375,11 @@ describe("a second attempt that never opened a workspace", () => {
       },
     );
 
-    expect(unlaunched.authorityRelease.reason).toBe("never_launched");
-    expect(result.results.some((entry: { action?: string }) => entry.action === "restore_request")).toBe(true);
-    expect(postedComments).toEqual([]);
-    expect(mutations.some((entry: string) => entry.startsWith("EDIT"))).toBe(true);
+    expect({
+      release: unlaunched.authorityRelease.reason,
+      restored: result.results.some((entry: { action?: string }) => entry.action === "restore_request"),
+      postedComments,
+      edited: mutations.some((entry: string) => entry.startsWith("EDIT")),
+    }).toEqual({ release: "never_launched", restored: true, postedComments: [], edited: true });
   });
 });
