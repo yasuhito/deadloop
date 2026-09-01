@@ -224,6 +224,59 @@ describe("attempt workspace doctor classifications", () => {
     const fixture = workerFixture(); const record = { ...fixture.record, phase: "github_persisted", lastSuccessfulPhase: "github_persisted" };
     expect(classify(record, undefined)).toContain("cleanup_pending");
   });
+  it("presents the completion-chain closure command for a cleanup-pending github_persisted attempt", () => {
+    const fixture = workerFixture(); const record = { ...fixture.record, phase: "github_persisted", lastSuccessfulPhase: "github_persisted" };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], []);
+    expect(findings[0].commands[0]).toContain("complete-attempt-workspace.cts");
+  });
+  it("presents the settled-workspace closure command for an authority-released attempt whose workspace is still open", () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      phase: "authority_released",
+      lastSuccessfulPhase: "report_received",
+      authorityRelease: { reason: "terminal_missing_report", releasedAt: "2026-08-26T00:00:00.000Z" },
+    };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings(
+      { id: "demo", githubRepo: "octo/demo" },
+      [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath }],
+      [],
+    );
+    expect(findings[0].commands[0]).toContain("close-settled-attempt-workspace.cts");
+  });
+  it("attempts the settled workspace closure exactly once for an authority-released journal", async () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      phase: "authority_released",
+      lastSuccessfulPhase: "report_received",
+      authorityRelease: { reason: "terminal_missing_report", releasedAt: "2026-08-26T00:00:00.000Z" },
+    };
+    writeAttempt(record, undefined);
+    const scripts: string[] = [];
+    await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { scripts.push(args[0]); return { code: 0, stdout: '{"action":"done","driverAction":"workspace_closed"}' }; } }, {
+      id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
+    });
+    expect(scripts[0]).toMatch(/close-settled-attempt-workspace\.cts$/);
+  });
+  it("keeps the patrol from retrying a settled workspace closure after its receipt exists", async () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      phase: "authority_released",
+      lastSuccessfulPhase: "report_received",
+      authorityRelease: { reason: "terminal_missing_report", releasedAt: "2026-08-26T00:00:00.000Z" },
+    };
+    const promiseFile = writeAttempt(record, undefined);
+    writeFileSync(path.join(path.dirname(promiseFile), "settled-workspace-cleanup.json"), JSON.stringify({ schemaVersion: 1, attemptId: record.attemptId, outcome: "failed", detail: "herdr down", at: "2026-08-26T00:00:00.000Z" }));
+    const scripts: string[] = [];
+    await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { scripts.push(args[0]); return { code: 0, stdout: "{}" }; } }, {
+      id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
+    });
+    expect(scripts).toEqual([]);
+  });
   it("classifies workspace ownership mismatch", () => {
     const fixture = workerFixture();
     expect(classify(fixture.record, fixture.report, [])).toContain("ownership_mismatch");

@@ -14,6 +14,7 @@ export type HostLogEventKind =
   | "attempt_launched"
   | "reconcile_started"
   | "reconcile_finished"
+  | "settled_workspace_closure"
   | "model_wait_transitioned"
   | "enablement_written";
 

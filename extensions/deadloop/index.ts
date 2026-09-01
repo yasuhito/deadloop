@@ -63,6 +63,11 @@ const {
 } = require("../../src/deterministic-attempt-monitor-runtime.cts");
 const { applyTerminalMonitorDisposition } = require("./automations/contain-terminal-monitor.cts");
 const { proveRetainedHandoffSettlement } = require("../../src/retained-handoff-settlement.cts");
+const {
+  closeSettledAttemptWorkspace,
+  readSettledWorkspaceCleanupReceipt,
+  recordSettledWorkspaceCleanupReceipt,
+} = require("../../src/settled-workspace-closure.cts");
 const { consumeLaunchHandoffSidecar, collectOrphanedLaunchHandoffs } = require("../../src/launch-handoff-sidecar.cts");
 const { createGithubOperations } = require("../../src/github-operations.cts");
 const { createCommandRunner } = require("../../src/automation-driver-kit.cts");
@@ -1129,8 +1134,26 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
         recovery.commands));
       continue;
     }
-    if (record.project !== project?.id || record.repository !== project?.githubRepo
-      || releasesAttemptOwnership(record.phase) && !explorerCleanupPending) continue;
+    if (record.project !== project?.id || record.repository !== project?.githubRepo) continue;
+    if (record.phase === "authority_released") {
+      // An authority release without an open workspace needs nothing; with one, the exactly-once
+      // patrol closure either succeeded (nothing left to report) or failed into a receipt (#395).
+      if (!record.workspaceId) continue;
+      const owned = workspaces.filter((workspace) => workspace.workspaceId === record.workspaceId);
+      if (!owned.length) continue;
+      const receipt = readSettledWorkspaceCleanupReceipt(runDir);
+      const receiptDetail = receipt?.outcome === "failed" && typeof receipt.detail === "string" && receipt.detail
+        ? `; the automatic closure attempt failed: ${receipt.detail}`
+        : "";
+      const command = closeSettledWorkspaceCommand(project, attemptRecord);
+      findings.push(herdrDoctorFinding(
+        "cleanup_pending",
+        `attempt ${record.attemptId} (${record.role}) released its authority but its workspace ${record.workspaceId} is still open${receiptDetail}; it can be closed with: ${command}`,
+        [command],
+      ));
+      continue;
+    }
+    if (releasesAttemptOwnership(record.phase) && !explorerCleanupPending) continue;
     // A retired record is terminal: the host no longer reconciles it, so doctor's recovery is the
     // one archive command that removes the journal from the host scan (#393).
     const retirement = readReconcileRetirement(runDir, record.attemptId);
@@ -1144,6 +1167,7 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
     }
     let status: import("../../src/doctor").HerdrDoctorStatus = "missing_report";
     let detail = `attempt ${record.attemptId} (${record.role}) is retained at phase ${record.phase}`;
+    let closureCommands: string[] = [];
     if (explorerCleanupPending) {
       status = "cleanup_pending";
       detail = `${detail}; successful exploration worktree cleanup is pending; outcome receipt: ${path.join(runDir, "exploration-outcome.json")}; cleanup receipt: ${path.join(runDir, "exploration-worktree-cleaned.json")}; local diagnostic: ${path.join(runDir, "exploration-diagnostic.json")}`;
@@ -1157,7 +1181,14 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
       findings.push(herdrDoctorFinding(status, detail, guidance.commands));
       continue;
     }
-    else if (record.phase === "github_persisted") status = "cleanup_pending";
+    else if (record.phase === "github_persisted") {
+      status = "cleanup_pending";
+      if (record.workspaceId) {
+        const command = completeAttemptWorkspaceCommand(project, attemptRecord);
+        closureCommands = [command];
+        detail = `${detail}; workspace closure is pending; it can be retried with: ${command}`;
+      }
+    }
     else {
       if (record.workspaceId) {
         const owned = workspaces.filter((workspace) => workspace.workspaceId === record.workspaceId);
@@ -1207,7 +1238,7 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
     const collectionHint = collectable
       ? `; journal reconciliation persists this bound report deterministically once the runtime stops reporting active work; it can also be run now with: ${reconcileReportReceivedCommand(project, attemptRecord)}`
       : "";
-    findings.push(herdrDoctorFinding(status, `${detail}${collectionHint}`, collectable ? [recoveryCommand] : []));
+    findings.push(herdrDoctorFinding(status, `${detail}${collectionHint}`, collectable ? [recoveryCommand] : closureCommands));
   }
   return findings;
 }
@@ -1552,6 +1583,30 @@ function automationRunnerDeps(pi, ctx, project, isCurrentSchedulerRun = () => tr
             : settlementGithub.getPr(repository, number).state,
         ),
       }),
+    // A settled retention still owns an open workspace (#395); close it with the same ownership
+    // proof the completion chain uses. The closure records its own failure receipt beside the
+    // journal, so the patrol's exactly-once attempt and doctor's command see the same evidence.
+    settleRetainedWorkspace: (handoff) => {
+      const input = handoff && typeof handoff === "object" && !Array.isArray(handoff)
+        ? (handoff as Record<string, unknown>).input
+        : undefined;
+      const attemptRecordFile = input && typeof input === "object" && !Array.isArray(input)
+        ? (input as Record<string, unknown>).attemptRecordFile
+        : undefined;
+      if (typeof attemptRecordFile !== "string" || !attemptRecordFile) return { closed: true };
+      try {
+        return closeSettledAttemptWorkspace({
+          attemptRecord: attemptRecordFile,
+          projectId: String((input as Record<string, unknown>).projectId || ""),
+          projectRepo: String((input as Record<string, unknown>).repoPath || ""),
+          githubRepo: String((input as Record<string, unknown>).githubRepo || ""),
+          stateDir: String((input as Record<string, unknown>).stateDir || ""),
+          enabledAt: String((input as Record<string, unknown>).enabledAt || ""),
+        }, createCommandRunner());
+      } catch (error) {
+        return { closed: false, detail: error instanceof Error ? error.message : String(error) };
+      }
+    },
     applyAttemptMonitoring: (handoff, directive) => {
       if (!isCurrentSchedulerRun()) return { applied: false };
       // The completion runs from the code this host loaded, not from the snapshot the attempt was
@@ -1746,6 +1801,29 @@ function reconcileReportReceivedCommand(project, attemptRecord: string): string 
   }
 }
 
+/** The operator-runnable closure commands for pending attempt-workspace cleanup (#395). At phase
+ * `github_persisted` the guarded completion chain owns the closure; a released attempt uses the
+ * settled-workspace closure command. Both need only the project binding flags. */
+function settledWorkspaceCommand(project, script: string, attemptRecord: string): string {
+  return [
+    "node", path.join(AUTOMATION_DIR, script),
+    "--attempt-record", attemptRecord,
+    "--project-id", project.id,
+    "--project-repo", project.repoPath,
+    "--github-repo", project.githubRepo,
+    "--state-dir", STATE_DIR,
+    "--enabled-at", String(project.enabledAt),
+  ].map((value) => shellQuote(value)).join(" ");
+}
+
+function completeAttemptWorkspaceCommand(project, attemptRecord: string): string {
+  return settledWorkspaceCommand(project, "complete-attempt-workspace.cts", attemptRecord);
+}
+
+function closeSettledWorkspaceCommand(project, attemptRecord: string): string {
+  return settledWorkspaceCommand(project, "close-settled-attempt-workspace.cts", attemptRecord);
+}
+
 const RECONCILE_RETIREMENT_FILE = "reconcile-retired.json";
 
 type ReconcileRetirement = { schemaVersion: 1; attemptId: string; reason: string; retiredAt: string };
@@ -1810,8 +1888,43 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       continue;
     }
     const explorerCleanupPending = successfulExplorerCleanupPending(runDir, record);
-    if (record.project !== project.id || record.repository !== project.githubRepo
-      || releasesAttemptOwnership(record.phase) && !explorerCleanupPending) continue;
+    if (record.project !== project.id || record.repository !== project.githubRepo) continue;
+    if (record.phase === "authority_released" && record.workspaceId) {
+      // Settlement released this attempt's authority, but its workspace can still be open (#395).
+      // The host patrol attempts that closure exactly once; the closure's own receipt — success or
+      // failure — is the marker, and a failed attempt leaves the retry to doctor's command.
+      if (!readSettledWorkspaceCleanupReceipt(runDir)) {
+        const result = await execJson(pi, "node", [
+          path.join(AUTOMATION_DIR, "close-settled-attempt-workspace.cts"),
+          "--attempt-record", attemptRecord,
+          "--project-id", project.id,
+          "--project-repo", project.repoPath,
+          "--github-repo", project.githubRepo,
+          "--state-dir", STATE_DIR,
+          "--enabled-at", String(project.enabledAt),
+        ], null);
+        const closureOutcome = String(result?.driverAction || (result?.action === "error" ? "exception" : "unknown"));
+        if (closureOutcome !== "workspace_closed") {
+          const detail = String(result?.reason || result?.summary || closureOutcome);
+          // The receipt is the patrol's exactly-once marker. A command that errored before writing
+          // one would otherwise be retried every tick, so the patrol records the failed attempt
+          // itself and leaves the retry to doctor's command.
+          if (!readSettledWorkspaceCleanupReceipt(runDir)) {
+            recordSettledWorkspaceCleanupReceipt(runDir, { attemptId: record.attemptId, phase: record.phase }, "failed", detail);
+          }
+          emitHostLogEvent({
+            kind: "settled_workspace_closure",
+            attemptId: record.attemptId,
+            role: record.role,
+            result: closureOutcome,
+            reason: detail,
+          });
+          debugLog("settled workspace closure failed", detail);
+        }
+      }
+      continue;
+    }
+    if (releasesAttemptOwnership(record.phase) && !explorerCleanupPending) continue;
     const labels = projectLabels(project);
     if (record.phase === "prepared") {
       const claimResult = await execJson(pi, "node", [
