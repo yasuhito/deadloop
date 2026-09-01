@@ -975,8 +975,55 @@ function projectLabels(project) {
   return labels;
 }
 
+/**
+ * Observes what one launch-failed or never-launched attempt left behind, and names the retreat or
+ * removal commands for it. A launch failure must never leave the operator with an empty command
+ * list: an open workspace closes, a retained checkout is removed when it is clean, and a target
+ * with nothing left behind gets the fresh-request command that starts the next attempt (Issue #394).
+ */
+function launchFailureRecoveryObservation(record, runDir, project, workspaces, agents, evidence): { commands: string[]; observation: string } {
+  let configured: ReturnType<typeof projectLabels> | null = null;
+  try { configured = project ? projectLabels(project) : null; } catch { configured = null; }
+  const workspace = workspaceProof(record, workspaces, readWorkspaceCloseStartedReceipt(runDir, record));
+  const occupied = (agents || []).some((agent) => agentOccupiesAttemptWorkspace(agent, record));
+  if (occupied) {
+    return {
+      commands: [`herdr agent list`],
+      observation: "an agent still owns the recorded pane or launch-unique name; inspect it before closing the workspace",
+    };
+  }
+  const commands: string[] = [];
+  if (workspace.present && workspace.safe) commands.push(`herdr workspace close ${shellQuote(record.workspaceId)}`);
+  const registered = (evidence?.worktrees || []).filter((worktree) => String(worktree.branch || "") === record.branch
+    && worktree.path && path.resolve(worktree.path) === path.resolve(record.worktreePath));
+  if (registered.length === 1) {
+    const clean = !hasUncommittedWork(evidence?.gitStatuses?.[record.worktreePath] ?? "__unknown__");
+    if (clean) {
+      commands.push(`git worktree remove ${shellQuote(record.worktreePath)}`);
+      // A pull-request checkout shares its branch with the open pull request, so only an issue
+      // Worker's own launch-created branch is safe to delete once its checkout is gone.
+      if (record.target.kind === "issue") commands.push(`git branch -D ${shellQuote(record.branch)}`);
+    } else {
+      commands.push(`git -C ${shellQuote(record.worktreePath)} status --short --untracked-files=all`);
+    }
+  }
+  if (!commands.length) {
+    const requestLabel = record.target.kind === "issue" ? (configured?.implement || "agent:implement") : (configured?.review || "agent:review");
+    const editCommand = record.target.kind === "issue" ? "gh issue edit" : "gh pr edit";
+    commands.push(`${editCommand} ${record.target.number} --add-label ${shellQuote(requestLabel)}`);
+  }
+  const remnants = [
+    ...(workspace.present ? [`workspace ${record.workspaceId} is open`] : []),
+    ...(registered.length === 1 ? [`linked worktree ${record.worktreePath} is retained`] : []),
+  ];
+  return { commands, observation: remnants.length ? `leftovers observed: ${remnants.join("; ")}` : "no workspace or worktree is left behind" };
+}
+
 function launchFailedRecoveryGuidance(record, runDir, project, workspaces, agents, evidence) {
-  const refuse = (reason) => ({ commands: [], detail: `manual review required: ${reason}` });
+  const refuse = (reason) => {
+    const recovery = launchFailureRecoveryObservation(record, runDir, project, workspaces, agents, evidence);
+    return { commands: recovery.commands, detail: `manual review required: ${reason}; ${recovery.observation}` };
+  };
   if (!project || !["worker", "reviewer"].includes(record.role)) return refuse(`attempt role ${record.role} has no safe requeue policy`);
   if (record.lastSuccessfulPhase !== "workspace_opened" || !record.workspaceId || !record.tabId || !record.rootPaneId) {
     return refuse("the journal does not prove a fully identified workspace opened before agent start");
@@ -1072,6 +1119,16 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
       continue;
     }
     const explorerCleanupPending = successfulExplorerCleanupPending(runDir, record);
+    if (record.project === project?.id && record.repository === project?.githubRepo
+      && record.phase === "authority_released" && record.authorityRelease?.reason === "never_launched") {
+      // A never-launched journal is evidence, not a claim: doctor still observes what the failed
+      // launch left behind and names the retreat or removal commands instead of staying silent.
+      const recovery = launchFailureRecoveryObservation(record, runDir, project, workspaces, agents, evidence);
+      findings.push(herdrDoctorFinding("launch_failed",
+        `attempt ${record.attemptId} (${record.role}) was released as never_launched: ${String(record.launchError || "launch error not recorded")}; ${recovery.observation}`,
+        recovery.commands));
+      continue;
+    }
     if (record.project !== project?.id || record.repository !== project?.githubRepo
       || releasesAttemptOwnership(record.phase) && !explorerCleanupPending) continue;
     // A retired record is terminal: the host no longer reconciles it, so doctor's recovery is the

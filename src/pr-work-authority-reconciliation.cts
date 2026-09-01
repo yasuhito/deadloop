@@ -1,4 +1,5 @@
 const { compareGithubTimelineEvents } = require("./github-timeline-order.cts");
+const { createHash } = require("node:crypto");
 const { redactLocalDetail } = require("./local-detail-redaction.cts");
 const { containsStorageExhaustion } = require("./storage-exhaustion.cjs");
 const { isStopCode, stopCodeAction } = require("./stop-codes.cts");
@@ -13,6 +14,8 @@ type JsonObject = Record<string, any>;
 type RuntimeObservation =
   | { kind: "running" }
   | { kind: "stopped" }
+  /** The pull request holds an active-attempt state no journal can account for. */
+  | { kind: "absent" }
   | { kind: "unobservable" };
 
 /** Whether the completion handler ran, answered by the finalizer receipt and the attempt journal. */
@@ -29,6 +32,8 @@ type ReconciliationInput = {
   completion?: CompletionObservation;
   /** Launch errors recorded by this PR's attempts that failed before starting any agent. */
   launchFailures?: string[];
+  /** A request event exists that is newer than every recorded launch failure. */
+  newerRequestThanFailure?: boolean;
   /** ENOSPC/EDQUOT deadloop's own deterministic processing or a bound completion report observed. */
   storageExhaustion?: boolean;
 };
@@ -80,14 +85,21 @@ function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDec
     return { action: "block", reason: "completion_handoff_refused", labels: blockedLabels(input), cleanup: "close_stopped_workspace" };
   }
   // A stop whose launches keep failing before any agent starts is explained by the failures: adding
-  // another request repeats them, so the block carries the operator guidance instead.
-  if (input.launchFailures?.length) {
+  // another request repeats them, so the block carries the operator guidance instead. A request
+  // event newer than every failure is a fresh demand the failures never answered, so it outranks
+  // them and the next launch is attempted instead of blocking the pull request again.
+  if (input.launchFailures?.length && !input.newerRequestThanFailure) {
     return { action: "block", reason: "launch_unprepared", labels: blockedLabels(input), cleanup: "close_stopped_workspace" };
   }
   if (input.storageExhaustion) {
     return { action: "block", reason: "storage_exhaustion", labels: blockedLabels(input), cleanup: "close_stopped_workspace" };
   }
   if (input.runtime.kind === "unobservable") {
+    return { action: "block", reason: "runtime_unobservable", labels: blockedLabels(input), cleanup: "preserve_workspace" };
+  }
+  // No journal claims the active state. Without a newer request this stays fail closed; with one,
+  // the failure evidence the journals recorded has already been answered by that request.
+  if (input.runtime.kind === "absent" && !input.newerRequestThanFailure) {
     return { action: "block", reason: "runtime_unobservable", labels: blockedLabels(input), cleanup: "preserve_workspace" };
   }
   return { action: "restore_request", labels: restoreRequestLabels(input), cleanup: "close_stopped_workspace" };
@@ -142,9 +154,19 @@ function latestBlockedEvent(
     .at(-1) || null;
 }
 
-function recoveryMarker(number: number, head: string, reason: string, cutoffEventId: string): string {
-  const value = Buffer.from(JSON.stringify({ number, head: head.toLowerCase(), reason, cutoffEventId })).toString("base64url");
+function recoveryMarker(number: number, head: string, reason: string, cutoffEventId: string, failureFingerprint?: string): string {
+  const value = Buffer.from(JSON.stringify({
+    number, head: head.toLowerCase(), reason, cutoffEventId,
+    ...(failureFingerprint ? { fingerprint: failureFingerprint } : {}),
+  })).toString("base64url");
   return `<!-- deadloop:work-authority-block v1=${value} -->`;
+}
+
+/** One stable fingerprint per distinct launch-failure set, so an unchanged failure set explains once. */
+function launchFailureFingerprint(failures?: string[]): string | undefined {
+  const values = [...new Set(failures || [])].sort();
+  if (!values.length) return undefined;
+  return createHash("sha256").update(values.join("\n")).digest("hex").slice(0, 16);
 }
 
 /**
@@ -212,7 +234,7 @@ function recoveryComment(number: number, head: string, reason: string, cutoffEve
       + `\n- free up storage on the machine running deadloop`
       + `\n- add a new Agent request once storage is available`;
   }
-  return `deadloop blocked this PR because ${explanation}. No old completion report may update the PR; ${stopCodeAction(stopCode)}\n\n${recoveryMarker(number, head, stopCode, cutoffEventId)}`;
+  return `deadloop blocked this PR because ${explanation}. No old completion report may update the PR; ${stopCodeAction(stopCode)}\n\n${recoveryMarker(number, head, stopCode, cutoffEventId, launchFailureFingerprint(launchFailures))}`;
 }
 
 function sameLabels(left: string[], right: string[]): boolean {
@@ -275,10 +297,12 @@ async function applyPrWorkAuthorityReconciliation(
   const comments = await operations.listComments();
   const alreadyExplained = comments.some((comment) => {
     const marker = parseRecoveryMarker(comment.body);
-    return String(comment.author?.login || comment.user?.login || "").toLowerCase() === operations.automationLogin.toLowerCase()
-      && Number(marker?.number) === input.pr.number
-      && String(marker?.head || "").toLowerCase() === input.pr.headRefOid.toLowerCase()
-      && String(marker?.cutoffEventId || "") === cutoffEventId;
+    if (String(comment.author?.login || comment.user?.login || "").toLowerCase() !== operations.automationLogin.toLowerCase()
+      || Number(marker?.number) !== input.pr.number
+      || String(marker?.head || "").toLowerCase() !== input.pr.headRefOid.toLowerCase()) return false;
+    const fingerprint = launchFailureFingerprint(input.launchFailures);
+    return String(marker?.cutoffEventId || "") === cutoffEventId
+      || (Boolean(fingerprint) && String(marker?.fingerprint || "") === fingerprint);
   });
   if (!alreadyExplained) await operations.comment(body);
   await operations.completeBlock?.(cutoffEventId);
