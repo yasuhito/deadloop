@@ -1,6 +1,6 @@
 # Feature: Select only an Issue that is ready to start
 
-deadloop checks Agent requests, dependencies, and Issue state and selects only an Issue that can be started safely.
+deadloop checks Agent requests, GitHub dependencies, and Issue state and selects only an Issue that can be started safely.
 This prevents duplicate work on an Issue that is closed, unrequested, in progress, blocked, or has unfinished dependencies.
 
 ## Scenario: Select an implementation request without a triage label
@@ -27,38 +27,32 @@ This prevents duplicate work on an Issue that is closed, unrequested, in progres
 * When deadloop selects a work target
 * Then The blocked Issue is not selected for work
 
-## Scenario Outline: Do not select an Issue with an unfinished dependency in its body
-
-* Given An Issue with all required public labels has an unfinished dependency in the "<location>"
-* When deadloop selects a work target
-* Then The Issue with an unfinished dependency is not selected for work
-
-### Examples:
-
-  | location |
-  | dependency section |
-  | end |
-
-## Scenario: Select an Issue with a completed dependency in its body
-
-* Given An eligible Issue has a completed dependency in its body
-* When deadloop selects a work target
-* Then Issue #2 is selected for work
-
-## Scenario: Select an Issue whose only dependency reference is another repository's Issue
-
-* Given An eligible Issue depends on an Issue in another repository
-* When deadloop selects a work target
-* Then Issue #2 is selected for work
-
-## Scenario: Do not select an Issue whose dependency number does not exist
-
-* Given An eligible Issue depends on an Issue number that does not exist
-* When deadloop selects a work target
-* Then The Issue with an unresolvable dependency reference is not selected for work
-
 ## Scenario: Do not select an Issue with an unfinished GitHub dependency
 
 * Given An Issue with all required public labels has an unfinished dependency on GitHub
 * When deadloop selects a work target
 * Then The Issue with an unfinished GitHub dependency is not selected for work
+
+## Scenario: Do not select an Issue with an unfinished dependency in another repository
+
+* Given An Issue with all required public labels has an unfinished dependency on another repository
+* When deadloop selects a work target
+* Then The Issue with an unfinished GitHub dependency is not selected for work
+
+## Scenario: Select an Issue whose GitHub dependencies are all closed
+
+* Given An eligible Issue whose GitHub dependencies are all closed
+* When deadloop selects a work target
+* Then Issue #2 is selected for work
+
+## Scenario: Select an Issue whose only dependency is a closed Issue in another repository
+
+* Given An eligible Issue whose only GitHub dependency is a closed Issue in another repository
+* When deadloop selects a work target
+* Then Issue #2 is selected for work
+
+## Scenario: Select an Issue that mentions Blocked by in its body without a GitHub dependency
+
+* Given An eligible Issue whose body mentions Blocked by without a GitHub dependency
+* When deadloop selects a work target
+* Then Issue #2 is selected for work
