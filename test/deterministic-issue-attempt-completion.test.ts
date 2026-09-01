@@ -143,6 +143,45 @@ describe("deterministic Issue attempt completion", () => {
     });
   });
 
+  it("carries a caught sub-step exception message in the completion result instead of the bare exception tag", () => {
+    const state = fixture("issue", "complete");
+
+    const result = processInput(state.handoff, { lock: (operation: (enabled: unknown) => unknown) => operation({}), run: (script: string) => {
+      if (script === "persist-attempt-result.cts") {
+        return { action: "error", summary: "cannot persist the result marker: ENOSPC", driverAction: "exception" };
+      }
+      return script === "complete-attempt-workspace.cts" ? { driverAction: "workspace_closed" } : {};
+    } });
+
+    expect(result.result).toContain("cannot persist the result marker: ENOSPC");
+  });
+
+  it("names the failing sub-step script in the completion result", () => {
+    const state = fixture("issue", "complete");
+
+    const result = processInput(state.handoff, { lock: (operation: (enabled: unknown) => unknown) => operation({}), run: (script: string) => {
+      if (script === "persist-attempt-result.cts") {
+        return { action: "error", summary: "cannot persist the result marker: ENOSPC", driverAction: "exception" };
+      }
+      return script === "complete-attempt-workspace.cts" ? { driverAction: "workspace_closed" } : {};
+    } });
+
+    expect(result.result).toContain("persist-attempt-result.cts");
+  });
+
+  it("carries a caught closure exception message in the completion result", () => {
+    const state = fixture("issue", "complete");
+
+    const result = processInput(state.handoff, { lock: (operation: (enabled: unknown) => unknown) => operation({}), run: (script: string) => {
+      if (script === "complete-attempt-workspace.cts") {
+        return { action: "error", summary: "cannot close the workspace: pane vanished", driverAction: "exception" };
+      }
+      return script === "persist-attempt-result.cts" ? { driverAction: "result_persisted" } : {};
+    } });
+
+    expect(result.result).toContain("cannot close the workspace: pane vanished");
+  });
+
   it("stops after a stale-policy verification block without replaying mutations", () => {
     const state = fixture("issue", "complete");
     const scripts: string[] = [];
