@@ -49,6 +49,7 @@ function hostLogLine(event: Record<string, unknown>, now: Date): string {
     const value = textOrEmpty(event[key]);
     if (value) line[key] = value;
   }
+  if (typeof event.durationMs === "number" && Number.isFinite(event.durationMs)) line.durationMs = event.durationMs;
   return JSON.stringify(line);
 }
 

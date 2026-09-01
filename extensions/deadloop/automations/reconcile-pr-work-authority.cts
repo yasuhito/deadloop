@@ -297,6 +297,36 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
   const runner = createHerdrRunnerFromCommandRunner(commandRunner);
   const results: JsonObject[] = [];
 
+  /**
+   * A request event newer than every recorded launch failure is demand those failures never
+   * answered. Launch-failed attempts never started an agent, so their journals are not evidence
+   * that blocks a new request: the next launch is attempted instead (Issue #394).
+   */
+  const newestFailureTime = (number: number): number | null => {
+    const times: number[] = [];
+    for (const attempt of attempts.valid.filter((candidate) => candidate.target?.kind === "pull-request"
+      && Number(candidate.target.number) === number && candidate.phase === "launch_failed")) {
+      try { times.push(fs.statSync(path.join(attempt.runDir, "attempt.json")).mtime.getTime()); } catch {}
+    }
+    for (const attempt of attempts.released.filter((candidate) => candidate.target?.kind === "pull-request"
+      && Number(candidate.target.number) === number && candidate.authorityRelease?.reason === "never_launched")) {
+      const releasedAt = Date.parse(String(attempt.authorityRelease?.releasedAt || ""));
+      if (Number.isFinite(releasedAt)) times.push(releasedAt);
+    }
+    return times.length ? Math.max(...times) : null;
+  };
+  const requestEventNewerThanFailure = async (number: number, failureTime: number | null): Promise<boolean> => {
+    if (failureTime === null) return false;
+    let events: JsonObject[];
+    try { events = await github.listPrTimelineEvents(args.githubRepo, number); } catch { return false; }
+    const requestTimes = events
+      .filter((event) => String(event.event || "").toLowerCase() === "labeled"
+        && requestLabels.includes(String(event.label?.name || "")))
+      .map((event) => Date.parse(String(event.created_at || "")))
+      .filter((time) => Number.isFinite(time));
+    return requestTimes.length > 0 && Math.max(...requestTimes) > failureTime;
+  };
+
   // A pull request deadloop still holds an attempt journal for is one it owes an answer on, whether
   // or not a request label survives. Selecting on the in-progress label alone made a pull request
   // invisible the moment reconciliation blocked it, which is exactly when it needs looking at.
@@ -308,10 +338,29 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     || fs.existsSync(recoveryReceiptPath(args.stateDir, String(repositoryIdentity.id || ""), Number(candidate.number))))) {
     const number = Number(pr.number);
     const recoveryFile = recoveryReceiptPath(args.stateDir, String(repositoryIdentity.id || ""), number);
+    const failureTime = newestFailureTime(number);
+    const newerRequestThanFailure = await requestEventNewerThanFailure(number, failureTime);
     const claimed = attempts.valid.filter((attempt) => attempt.target?.kind === "pull-request" && Number(attempt.target.number) === number);
     // Counting an attempt that never launched as an owner makes its pull request ambiguous for
-    // good. Releasing it writes that into its journal, so the launch error stays as evidence.
-    const matching = claimed.filter((attempt) => !releasableUnlaunchedAttempt(attempt));
+    // good. Releasing it writes that into its journal, so the launch error stays as evidence. A
+    // request newer than the failure outranks the failed launch entirely: a launch-failed attempt
+    // never started an agent, so its journal is no longer a claim on this pull request. A live
+    // runtime observation keeps the claim; anything else releases it.
+    const outrankedJournals: Array<{ record: JsonObject; kind: string }> = [];
+    const releasedClaims = new Set<JsonObject>();
+    if (newerRequestThanFailure) {
+      for (const attempt of claimed.filter((candidate) => !releasableUnlaunchedAttempt(candidate)
+        && candidate.phase === "launch_failed")) {
+        const kind = observeJournalRuntime(runner, attempt, args.projectRepo);
+        if (kind !== "stopped") continue;
+        releasePersistedAttemptAuthority(attempt.runDir, new Date().toISOString(), undefined, "never_launched");
+        results.push({ number, action: "released_unlaunched_attempt", attemptId: attempt.attemptId });
+        outrankedJournals.push({ record: attempt, kind });
+        releasedClaims.add(attempt);
+      }
+    }
+    const matching = claimed.filter((attempt) => !releasableUnlaunchedAttempt(attempt)
+      && !releasedClaims.has(attempt));
     for (const attempt of claimed.filter(releasableUnlaunchedAttempt)) {
       releasePersistedAttemptAuthority(attempt.runDir, new Date().toISOString(), undefined, "never_launched");
       results.push({ number, action: "released_unlaunched_attempt", attemptId: attempt.attemptId });
@@ -332,11 +381,13 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       || matching.some((attempt) => observedAttemptStorageExhaustion(attempt));
 
     // Liveness is asked per journal and answered by the runtime alone. One live agent keeps the
-    // pull request active; one unreadable answer makes the whole observation unobservable.
+    // pull request active; one unreadable answer makes the whole observation unobservable. No
+    // journal left at all is its own answer: there is nothing to observe, not an unreadable owner.
     const journals = matching.map((record) => ({ record, kind: observeJournalRuntime(runner, record, args.projectRepo) }));
     const runtime = journals.some((journal) => journal.kind === "running") ? { kind: "running" }
-      : journals.length === 0 || malformed.length > 0 || journals.some((journal) => journal.kind === "unobservable")
-        ? { kind: "unobservable" } : { kind: "stopped" };
+      : malformed.length > 0 || journals.some((journal) => journal.kind === "unobservable")
+        ? { kind: "unobservable" }
+        : journals.length === 0 ? { kind: "absent" } : { kind: "stopped" };
 
     // A stopped attempt that left proof of a completed attempt is finished, not abandoned. Handing
     // it over here is what keeps a successful attempt from being blocked for ending on success.
@@ -374,6 +425,7 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       .find((label) => label !== undefined);
     const input = { pr: { ...pr, labels: labels(pr) }, runtime, requestLabels, inProgressLabel, blockedLabel, completion,
       ...(restoreRequestLabel ? { restoreRequestLabel } : {}),
+      ...(newerRequestThanFailure ? { newerRequestThanFailure: true } : {}),
       ...(launchFailures.length ? { launchFailures } : {}),
       ...(storageExhaustion ? { storageExhaustion: true } : {}) };
     let blockStarted: { reason: string; timelineEventIds: string[] } | undefined;
@@ -406,7 +458,7 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         prNumber: number, headRefOid: String(pr.headRefOid || ""), attemptId: journals[0]?.record.attemptId,
         ...started,
       }),
-      completeBlock: journals.length === 0 ? () => fs.rmSync(recoveryFile, { force: true }) : undefined,
+      completeBlock: journals.length + outrankedJournals.length === 0 ? () => fs.rmSync(recoveryFile, { force: true }) : undefined,
       listTimelineEvents: () => github.listPrTimelineEvents(args.githubRepo, number),
       listComments: () => github.listPrComments(args.githubRepo, number),
       replaceLabels: (next: string[], options: { invalidatesRequests: boolean }) => guarded(() => {
@@ -418,7 +470,9 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
         revalidate(input.pr.labels);
         return github.createPrComment(args.githubRepo, number, body);
       }),
-      closeStoppedWorkspace: journals.length ? () => guarded(() => closeStoppedAttemptWorkspaces(runner, journals, args.projectRepo)) : undefined,
+      closeStoppedWorkspace: journals.length || outrankedJournals.length
+        ? () => guarded(() => closeStoppedAttemptWorkspaces(runner, [...journals, ...outrankedJournals], args.projectRepo))
+        : undefined,
     });
     // A stopped attempt whose workspace is closed again has nothing left to hold. Writing that into
     // its journal keeps the restored request launchable: an unsettled journal still counts as a

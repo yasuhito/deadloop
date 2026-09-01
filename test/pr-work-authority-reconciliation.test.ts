@@ -85,6 +85,63 @@ describe("blocks whose reasons name an operator action", () => {
     expect(body).toContain("does not resolve to the recorded canonical checkout");
   });
 
+  it("does not block a request event newer than every recorded launch failure", () => {
+    const decision = reconcilePrWorkAuthority({
+      ...base,
+      launchFailures: ["worktree agent/issue-42 already exists before create"],
+      newerRequestThanFailure: true,
+    });
+    expect(decision.action).toBe("restore_request");
+  });
+
+  it("restores the request when no journal is left and a newer request outranks the failures", () => {
+    const decision = reconcilePrWorkAuthority({
+      ...base,
+      runtime: { kind: "absent" },
+      launchFailures: ["worktree agent/issue-42 already exists before create"],
+      newerRequestThanFailure: true,
+    });
+    expect(decision.action).toBe("restore_request");
+  });
+
+  it("still blocks an unobservable attempt that a newer request cannot outrank", () => {
+    const decision = reconcilePrWorkAuthority({
+      ...base,
+      runtime: { kind: "unobservable" },
+      launchFailures: ["worktree agent/issue-42 already exists before create"],
+      newerRequestThanFailure: true,
+    });
+    expect({ action: decision.action, reason: decision.reason }).toEqual({ action: "block", reason: "runtime_unobservable" });
+  });
+
+  it("fingersprints the failure set so an unchanged failure set explains once", () => {
+    const failures = ["worktree agent/issue-42 already exists before create"];
+    const first = parseRecoveryMarker(recoveryComment(24, HEAD, "launch_unprepared", "block-1", failures));
+    const second = parseRecoveryMarker(recoveryComment(24, HEAD, "launch_unprepared", "block-2", failures));
+    expect({ present: Boolean(first?.fingerprint), repeated: second?.fingerprint === first?.fingerprint })
+      .toEqual({ present: true, repeated: true });
+  });
+
+  it("does not repeat the failure explanation while the failure set is unchanged", async () => {
+    const comments: string[] = [];
+    const failure = "worktree agent/issue-42 already exists before create";
+    const operations = (posted: string[]) => ({
+      automationLogin: "deadloop-bot",
+      listTimelineEvents: () => [{ id: "block-1", event: "labeled", created_at: "2026-07-20T10:02:00Z", label: { name: "agent:blocked" }, actor: { login: "deadloop-bot" } }],
+      listComments: () => posted.map((body) => ({ author: { login: "deadloop-bot" }, body })),
+      replaceLabels: () => {},
+      comment: (body: string) => { posted.push(body); },
+    });
+    const blockedInput = { ...base, pr: { ...base.pr, labels: ["customer:keep", "agent:blocked"] }, launchFailures: [failure] };
+    await applyPrWorkAuthorityReconciliation(blockedInput, operations(comments));
+    // A second block with the same failure set reaches a different cutoff event, and still must
+    // not post the same explanation again.
+    await applyPrWorkAuthorityReconciliation(blockedInput, operations([
+      recoveryComment(24, HEAD, "launch_unprepared", "older-cutoff", [failure]),
+    ]));
+    expect(comments).toHaveLength(1);
+  });
+
   it("counts every failed request cycle in the blocked explanation", () => {
     const body = recoveryComment(24, HEAD, "launch_unprepared", "event-30", [
       "checkout alignment stopped: cannot fast-forward", "checkout alignment stopped: cannot fast-forward",
