@@ -268,6 +268,23 @@ describe("deterministic PR attempt completion", () => {
     expect(result.result).toContain("repair dispatch failed: herdr socket gone");
   });
 
+  it("carries the dispatcher's exit branch and grounding in the reviewer completion result", () => {
+    const state = fixture("reviewer", { outcome: "changes_requested", reviewedHead: "a".repeat(40), findings: [{ title: "bug", body: "fix it", severity: "major" }] });
+
+    const result = processInput(state.handoff, { run: (script: string) => {
+      if (script === "pr-review-repair-dispatch.cts") {
+        return {
+          action: "skip",
+          summary: "PR #243 no longer holds the active review claim (state=OPEN head=unchanged labels=agent:blocked); left workflow state untouched",
+          driverAction: "review_repair_request_stale",
+        };
+      }
+      throw new Error(`unexpected script ${script}`);
+    } });
+
+    expect(result.result).toContain("review_repair_request_stale: PR #243 no longer holds the active review claim (state=OPEN head=unchanged labels=agent:blocked)");
+  });
+
   it("routes a pushed repair report through its completion handler and closes the workspace", () => {
     const state = repairFixture("repair_pushed");
     const scripts: string[] = [];

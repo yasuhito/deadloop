@@ -376,7 +376,13 @@ export function deliverPendingDriverHandoff(
           entry.lastError = failureReason;
           entry.lastSummary = failureReason;
         } else {
-          entry.lastSummary = "reason" in directive ? directive.reason : `deterministic ${directive.action}`;
+          // A successful deterministic completion distills its child result the same way, so the
+          // dispatcher's terminal branch and its grounding stay readable in the host-log reason
+          // instead of collapsing into the bare words "deterministic completion" (#404).
+          const resultReason = completionApplicationFailureReason(application);
+          entry.lastSummary = resultReason
+            ? `deterministic ${directive.action}: ${resultReason}`
+            : "reason" in directive ? directive.reason : `deterministic ${directive.action}`;
         }
       }
       entry.updatedAt = deps.now();

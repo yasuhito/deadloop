@@ -108,7 +108,7 @@ Run these commands from the Pi session in the target repository:
 | `/deadloop-disable` | Stop new work from starting; running attempts may finish. |
 | `/deadloop-run-once` | Run exactly one normal scheduler tick while scheduling stays disabled; no later tick is scheduled. |
 | `/deadloop-status` | Show whether deadloop is enabled and summarize its current state. |
-| `/deadloop-doctor` | Diagnose configuration and retained attempts without changing them. |
+| `/deadloop-doctor` | Diagnose configuration and retained attempts without changing them. It also detects a pull request whose changes-required review result never queued its `agent:implement` repair request and prints the label command that restores it (#404). |
 | `/deadloop-usage [attempt-id]` | Show normalized model usage for the last 7 days by role and model; with an attempt id, show its response-level detail. |
 | `/deadloop-abandon-attempt <attempt-id>` | Safely abandon a retained attempt only when doctor presents this command. |
 
@@ -167,7 +167,7 @@ A review stopped by required verification records actionable findings without la
 
 ### Host activity log
 
-Every scheduler tick appends what it judged to `~/.pi/agent/deadloop/host-log.jsonl`, one JSON object per line: tick starts, per-automation results (including the driver action), launched attempts with their role, model-wait transitions, and enablement writes. An enablement write is recorded only when the persisted enablement state actually changes, so a quiet tick adds no `enablement_written` line. Each line carries an ISO timestamp, project id, automation id, result, and reason summary, so you can answer "why did nothing happen this tick?" or "when was what selected?" without reading live state.
+Every scheduler tick appends what it judged to `~/.pi/agent/deadloop/host-log.jsonl`, one JSON object per line: tick starts, per-automation results (including the driver action), launched attempts with their role, model-wait transitions, and enablement writes. An enablement write is recorded only when the persisted enablement state actually changes, so a quiet tick adds no `enablement_written` line. Each line carries an ISO timestamp, project id, automation id, result, and reason summary, so you can answer "why did nothing happen this tick?" or "when was what selected?" without reading live state. For a deterministic completion the reason names the dispatcher's terminal branch and its grounding — for example `review_repair_request_stale` with the PR state, head match, and labels it observed — instead of only the words "deterministic completion" (#404).
 
 Logging is observational: a failed append is recorded beside the log in `host-log-errors.jsonl` and never affects completion, push, merge, or the tick itself.
 

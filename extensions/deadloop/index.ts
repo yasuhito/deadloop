@@ -875,7 +875,7 @@ async function collectLiveSnapshotData(
           "--limit",
           "100",
           "--json",
-          "number,title,labels,updatedAt,headRefName,headRefOid,isDraft",
+          "number,title,labels,updatedAt,headRefName,headRefOid,isDraft,comments",
         ],
         [],
       )

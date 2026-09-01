@@ -602,6 +602,7 @@ type RepairRequestRun = {
   comments: number;
   launches: number;
   actions: string[];
+  staleReasons: (string | undefined)[];
   reviewerPhase: string;
   labelMoves: string[];
   finalLabels: string[];
@@ -798,6 +799,7 @@ else if(a[0]==="agent"&&a[1]==="start"){s.launches++;s.agent={terminal_id:"termi
     comments: JSON.parse(fs.readFileSync(comments, "utf8")).length,
     launches: JSON.parse(fs.readFileSync(runtime, "utf8")).launches,
     actions: outputs.map((output) => output.driverAction),
+    staleReasons: outputs.map((output) => output.staleReason),
     reviewerPhase: reviewerAttempt.phase,
     labelMoves: fs.existsSync(mutationsLog)
       ? fs.readFileSync(mutationsLog, "utf8").trim().split("\n").filter(Boolean)
@@ -985,6 +987,18 @@ describe("review repair dispatch integration", () => {
     const result = runV1ChangesRequestedTwice({ attempts: 1 });
 
     expect(result.finalLabels).toContain("agent:implement");
+  });
+
+  it("releases the in-progress claim when the implement request is queued", () => {
+    const result = runV1ChangesRequestedTwice({ attempts: 1 });
+
+    expect(result.finalLabels).not.toContain("agent:in-progress");
+  });
+
+  it("records the claim grounding when the replayed dispatch no longer holds the active claim", () => {
+    const result = runV1ChangesRequestedTwice();
+
+    expect(result.staleReasons[1]).toMatch(/state=OPEN head=unchanged labels=agent:implement/);
   });
 
   it("fails closed when metadata requires history but the prompt and history artifacts are missing", () => {
