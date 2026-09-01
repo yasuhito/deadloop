@@ -16,7 +16,8 @@ export type HostLogEventKind =
   | "reconcile_finished"
   | "settled_workspace_closure"
   | "model_wait_transitioned"
-  | "enablement_written";
+  | "enablement_written"
+  | "unreadable_attempt_record";
 
 /**
  * One durable line of the host activity log (`host-log.jsonl`). Every line carries the same core

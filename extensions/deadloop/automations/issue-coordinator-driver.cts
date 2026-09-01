@@ -34,7 +34,7 @@ const {
 const { withEnabledDriverLaunch, withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { StaleLaunchError, assertSameLaunchTarget, isStaleLaunchError } = require("../../../src/launch-revalidation.cts");
-const { attemptRecordPath, readAttemptRecord, releasesAttemptOwnership, releasePersistedAttemptAuthority } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { attemptRecordPath, readAttemptRecord, readAttemptRecordOrUnreadable, isUnreadableAttemptRecord, releasesAttemptOwnership, releasePersistedAttemptAuthority } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { evaluateProjectBaseBlocking } = require("../../../src/ci-base-blocking.cts");
 const { assertCurrentWorkerContract, requiredVerificationBinding } = require("../../../src/worker-required-verification-runtime.cjs");
 const { writeLaunchHandoffSidecar } = require("../../../src/launch-handoff-sidecar.cts");
@@ -452,7 +452,11 @@ function stoppedWorkerCheckout(
   for (const entry of entries) {
     const runDir = path.join(runsRoot, entry);
     if (!fs.existsSync(path.join(runDir, "attempt.json"))) continue;
-    const record = readAttemptRecord(runDir);
+    const read = readAttemptRecordOrUnreadable(runDir);
+    // A finished attempt's unreadable journal is evidence, not a checkout owner: skip it instead
+    // of failing the whole launch scan.
+    if (isUnreadableAttemptRecord(read)) continue;
+    const record = read;
     if (record.project !== env.projectId || record.repository !== env.githubRepo || record.role !== "worker"
       || record.target?.kind !== "issue" || record.target.number !== issueNumber
       || !releasesAttemptOwnership(record.phase) || !holdsStoppedAttemptWorkspace(record)) continue;

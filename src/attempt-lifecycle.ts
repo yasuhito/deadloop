@@ -384,6 +384,106 @@ export function attemptRecordPath(runDir: string): string {
   return path.join(runDir, ATTEMPT_RECORD_FILE);
 }
 
+/** Phases after which an attempt never advances again; a record there is evidence, not live state. */
+export const TERMINAL_ATTEMPT_PHASES = ["github_persisted", "workspace_closed", "abandoned", "authority_released"] as const;
+export type TerminalAttemptPhase = (typeof TERMINAL_ATTEMPT_PHASES)[number];
+
+/**
+ * A terminal record the current contract cannot read. When the record contract changes, finished
+ * attempts keep journals that no longer validate; treating them as unreadable evidence instead of
+ * throwing lets hosts skip and archive them while live records keep failing closed.
+ */
+export type UnreadableAttemptRecord = {
+  unreadable: true;
+  recordPath: string;
+  phase: TerminalAttemptPhase;
+  attemptId?: string;
+  /** The dotted field path the validation message names, when it names one. */
+  field?: string;
+  /** The raw value the record holds at `field`, when the field resolves. */
+  value?: unknown;
+  reason: string;
+};
+
+function terminalPhaseOf(value: unknown): TerminalAttemptPhase | undefined {
+  const phase = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>).phase
+    : undefined;
+  return TERMINAL_ATTEMPT_PHASES.includes(phase as TerminalAttemptPhase) ? (phase as TerminalAttemptPhase) : undefined;
+}
+
+/** Derives the offending dotted field path and its raw value from the validation message. */
+function unreadableFieldOf(record: unknown, message: string): Pick<UnreadableAttemptRecord, "field" | "value"> {
+  const prefix = "Invalid attempt record: ";
+  const detail = message.startsWith(prefix) ? message.slice(prefix.length) : message;
+  const match = /^([A-Za-z][A-Za-z0-9_.]*) (?:is|must) /.exec(detail);
+  if (!match) return {};
+  const field = match[1];
+  let value: unknown = record;
+  for (const segment of field.split(".")) {
+    if (!value || typeof value !== "object" || Array.isArray(value) || !(segment in (value as Record<string, unknown>))) {
+      return { field };
+    }
+    value = (value as Record<string, unknown>)[segment];
+  }
+  return { field, value };
+}
+
+/**
+ * Reads a record without throwing when it is a terminal record the current contract rejects. A
+ * terminal phase proves the attempt finished, so a contract violation there makes the record
+ * unreadable evidence instead of invalid live state. Every other violation — a live phase, an
+ * unparsable file, a missing file — still throws.
+ */
+export function readAttemptRecordOrUnreadable(runDir: string): AttemptRecord | UnreadableAttemptRecord {
+  const file = attemptRecordPath(runDir);
+  if (!fs.existsSync(file)) throw new Error(`Attempt record is missing: ${file}`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    throw new Error(`Invalid attempt record: malformed JSON at ${file}`, { cause: error });
+  }
+  try {
+    const record = parseAttemptRecord(raw);
+    Object.defineProperty(record, ATTEMPT_RUN_DIR, { value: path.resolve(runDir), enumerable: false });
+    return record;
+  } catch (error) {
+    const phase = terminalPhaseOf(raw);
+    if (!phase) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    const rawRecord = raw as Record<string, unknown>;
+    const attemptId = typeof rawRecord.attemptId === "string" && rawRecord.attemptId.trim() ? rawRecord.attemptId : undefined;
+    const { field, value } = unreadableFieldOf(raw, reason);
+    return {
+      unreadable: true,
+      recordPath: file,
+      phase,
+      ...(attemptId ? { attemptId } : {}),
+      ...(field ? { field } : {}),
+      ...(field && value !== undefined ? { value } : {}),
+      reason,
+    };
+  }
+}
+
+const MAX_UNREADABLE_VALUE_CHARS = 200;
+
+function boundedUnreadableValue(value: unknown): string {
+  const text = JSON.stringify(value) ?? "unknown";
+  return text.length > MAX_UNREADABLE_VALUE_CHARS
+    ? `${text.slice(0, MAX_UNREADABLE_VALUE_CHARS - 3)}...`
+    : text;
+}
+
+/** One bounded line naming where the record is, which field failed, and what it holds. */
+export function formatUnreadableAttemptRecord(record: UnreadableAttemptRecord): string {
+  const finding = record.field === undefined
+    ? record.reason
+    : `${record.field} = ${record.value === undefined ? "unknown" : boundedUnreadableValue(record.value)} (${record.reason})`;
+  return `attempt journal ${record.recordPath} is unreadable at terminal phase ${record.phase}: ${finding}`;
+}
+
 function parseRecordFile(file: string): AttemptRecord {
   let value: unknown;
   try {
@@ -398,12 +498,15 @@ function parseRecordFile(file: string): AttemptRecord {
  * Reads the committed record; an incomplete replacement never supersedes it.
  * A surviving temporary file marks a write which never committed, so it is never promoted.
  */
+/** Type guard for the tolerant reader's unreadable result. */
+export function isUnreadableAttemptRecord(read: AttemptRecord | UnreadableAttemptRecord): read is UnreadableAttemptRecord {
+  return (read as UnreadableAttemptRecord).unreadable === true;
+}
+
 export function readAttemptRecord(runDir: string): AttemptRecord {
-  const file = attemptRecordPath(runDir);
-  if (!fs.existsSync(file)) throw new Error(`Attempt record is missing: ${file}`);
-  const record = parseRecordFile(file);
-  Object.defineProperty(record, ATTEMPT_RUN_DIR, { value: path.resolve(runDir), enumerable: false });
-  return record;
+  const read = readAttemptRecordOrUnreadable(runDir);
+  if (isUnreadableAttemptRecord(read)) throw new Error(read.reason);
+  return read;
 }
 
 /** Atomically replaces a valid record and refuses to overwrite malformed state. */

@@ -5,7 +5,8 @@ const path = require("node:path") as typeof import("node:path");
 const { createCommandRunner, createHerdrRunnerFromCommandRunner, driverResult } = require("../../../src/automation-driver-kit.cts");
 const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
-const { readAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { readAttemptRecordOrUnreadable, isUnreadableAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
+const { reportUnreadableAttemptRecordOnce } = require("../../../src/unreadable-attempt-journal.cjs");
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.cts");
 const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.cts");
 const { provenAttemptCompletion } = require("./attempt-completion-proof.cts");
@@ -80,7 +81,11 @@ function loadAttempts(stateDir: string, projectId: string, repository: string): 
     const file = path.join(runDir, "attempt.json");
     if (!fs.existsSync(file)) continue;
     try {
-      const record = readAttemptRecord(runDir);
+      const read = readAttemptRecordOrUnreadable(runDir);
+      // A finished attempt's unreadable journal is evidence, not live state: report it once and
+      // skip it instead of making its pull request unobservable.
+      if (isUnreadableAttemptRecord(read)) { reportUnreadableAttemptRecordOnce(stateDir, read); continue; }
+      const record = read;
       if (record.project === projectId && record.repository === repository) {
         const entry = { ...record, runDir };
         if (releasesAttemptOwnership(record.phase)) released.push(entry);

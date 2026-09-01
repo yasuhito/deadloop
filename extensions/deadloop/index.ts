@@ -55,7 +55,9 @@ const {
   readWorkspaceCloseStartedReceipt,
   workspaceProof,
 } = require("./automations/abandon-launch-failed-attempt.cts");
-const { readAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
+const { readAttemptRecord, readAttemptRecordOrUnreadable, isUnreadableAttemptRecord, releasesAttemptOwnership, validateCompletionReportBinding } = require("../../src/attempt-lifecycle-runtime.cjs");
+const { formatUnreadableAttemptRecord } = require("../../src/attempt-lifecycle-runtime.cjs");
+const { manualReviewArchiveDir, reportUnreadableAttemptRecordOnce } = require("../../src/unreadable-attempt-journal.cjs");
 const {
   applyDeterministicAttemptMonitoring,
   observeDeterministicAttemptMonitoring,
@@ -1094,13 +1096,15 @@ function retainedAttemptTargetsSnapshot(project) {
   for (const run of runs) {
     const runDir = path.join(runsDir, run);
     if (!fs.existsSync(path.join(runDir, "attempt.json"))) continue;
+    let record;
     try {
-      const record = readAttemptRecord(runDir);
-      if (record.project === project?.id && record.repository === project?.githubRepo
-        && !releasesAttemptOwnership(record.phase)) targets.push(record.target);
-    } catch {
-      targetsAmbiguous = true;
-    }
+      const read = readAttemptRecordOrUnreadable(runDir);
+      // A finished attempt's unreadable journal is not a live target.
+      if (isUnreadableAttemptRecord(read)) continue;
+      record = read;
+    } catch { targetsAmbiguous = true; continue; }
+    if (record.project === project?.id && record.repository === project?.githubRepo
+      && !releasesAttemptOwnership(record.phase)) targets.push(record.target);
   }
   return { targets, targetsAmbiguous };
 }
@@ -1115,8 +1119,22 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
     const runDir = path.join(runsDir, run);
     const attemptRecord = path.join(runDir, "attempt.json");
     let record;
-    try { record = readAttemptRecord(runDir); }
-    catch (error) {
+    try {
+      const read = readAttemptRecordOrUnreadable(runDir);
+      if (isUnreadableAttemptRecord(read)) {
+        // A terminal journal the current contract rejects is finished-attempt evidence: name it
+        // once in the host log and hand the operator the archive command instead of failing.
+        reportUnreadableAttemptRecordOnce(STATE_DIR, read);
+        const archive = manualReviewArchiveDir(STATE_DIR);
+        findings.push(herdrDoctorFinding(
+          "malformed_journal",
+          `${formatUnreadableAttemptRecord(read)}; manual review required before changing any workflow label; archive the run directory once reviewed`,
+          [`mkdir -p ${archive}`, `mv ${path.dirname(read.recordPath)} ${archive}/`],
+        ));
+        continue;
+      }
+      record = read;
+    } catch (error) {
       if (fs.existsSync(attemptRecord)) findings.push(herdrDoctorFinding(
         "malformed_journal",
         `attempt journal ${attemptRecord} is malformed: ${error instanceof Error ? error.message : String(error)}; manual review required before changing any workflow label`,
@@ -1877,7 +1895,13 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
     const runDir = path.join(runsDir, run);
     const attemptRecord = path.join(runDir, "attempt.json");
     let record;
-    try { record = readAttemptRecord(runDir); }
+    try {
+      const read = readAttemptRecordOrUnreadable(runDir);
+      // A finished attempt's unreadable journal is evidence, not a live owner: report it once and
+      // keep scheduling instead of blocking every launch behind it.
+      if (isUnreadableAttemptRecord(read)) { reportUnreadableAttemptRecordOnce(STATE_DIR, read); continue; }
+      record = read;
+    }
     catch (error) {
       // The owner cannot be trusted when its journal is malformed. Globally suppress selection
       // rather than silently launching into a possibly conflicting checkout.

@@ -285,6 +285,50 @@ describe("attempt workspace doctor classifications", () => {
     resetRuns(); const runDir = path.join(stateDir, "runs", "one"); mkdirSync(runDir); writeFileSync(path.join(runDir, "attempt.json"), "malformed");
     expect(retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], [])[0].title).toContain("malformed_journal");
   });
+  it("offers the archive command for a terminal journal with a removed reason code", () => {
+    resetRuns();
+    const runDir = path.join(stateDir, "runs", "old"); mkdirSync(runDir);
+    const record = { ...workerFixture().record, phase: "authority_released", authorityRelease: { reason: "github_authority_lost", releasedAt: "2026-08-20T00:00:00.000Z" } };
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(record));
+
+    const finding = retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], [])[0];
+
+    expect({
+      title: finding.title.includes("malformed_journal"),
+      field: finding.summary.includes("authorityRelease.reason = \"github_authority_lost\""),
+      recordPath: finding.summary.includes(path.join(stateDir, "runs", "old", "attempt.json")),
+      commands: finding.commands,
+    }).toEqual({
+      title: true,
+      field: true,
+      recordPath: true,
+      commands: [
+        `mkdir -p ${path.join(stateDir, "manual-review-archive")}`,
+        `mv ${runDir} ${path.join(stateDir, "manual-review-archive")}/`,
+      ],
+    });
+  });
+  it("reports an unreadable terminal journal to the host log once per record", () => {
+    resetRuns();
+    const runDir = path.join(stateDir, "runs", "old"); mkdirSync(runDir);
+    const record = { ...workerFixture().record, phase: "authority_released", authorityRelease: { reason: "github_authority_lost", releasedAt: "2026-08-20T00:00:00.000Z" } };
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(record));
+
+    retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], []);
+    retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], []);
+
+    const events = readFileSync(path.join(stateDir, "host-log.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(events.filter((event) => event.kind === "unreadable_attempt_record")).toHaveLength(1);
+  });
+  it("does not mark retained targets ambiguous for an unreadable terminal journal", () => {
+    resetRuns();
+    const runDir = path.join(stateDir, "runs", "old"); mkdirSync(runDir);
+    const record = { ...workerFixture().record, phase: "authority_released", authorityRelease: { reason: "github_authority_lost", releasedAt: "2026-08-20T00:00:00.000Z" } };
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(record));
+
+    const snapshot = retainedAttemptTargetsSnapshot({ id: "demo", githubRepo: "octo/demo" });
+    expect({ targets: snapshot.targets, targetsAmbiguous: snapshot.targetsAmbiguous }).toEqual({ targets: [], targetsAmbiguous: false });
+  });
   it("marks retained targets ambiguous for a malformed journal", () => {
     resetRuns(); const runDir = path.join(stateDir, "runs", "one"); mkdirSync(runDir); writeFileSync(path.join(runDir, "attempt.json"), "malformed");
     expect(retainedAttemptTargetsSnapshot({ id: "demo", githubRepo: "octo/demo" }).targetsAmbiguous).toBe(true);
