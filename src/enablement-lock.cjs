@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 function processStartIdentity(pid, hooks = {}) {
@@ -24,14 +25,15 @@ function processStartIdentity(pid, hooks = {}) {
   }
 }
 
-function isLockOwnerAlive(owner) {
+function isLockOwnerAlive(owner, hooks = {}) {
   if (!owner?.startIdentity) return false;
+  const kill = hooks.kill || ((pid) => process.kill(pid, 0));
   try {
-    process.kill(owner.pid, 0);
+    kill(owner.pid);
   } catch (error) {
     if (!error || error.code !== "EPERM") return false;
   }
-  return processStartIdentity(owner.pid) === owner.startIdentity;
+  return processStartIdentity(owner.pid, hooks) === owner.startIdentity;
 }
 
 function readMetadata(file) {
@@ -90,7 +92,7 @@ function reclaimStale(lockPath, hooks = {}) {
   const capturedPath = `${claimPath}.${process.pid}.${crypto.randomUUID()}.captured`;
   try {
     const owner = readMetadata(claimPath);
-    if ((!owner && !isOldMalformedLock(claimPath)) || (owner && isLockOwnerAlive(owner)) || !sameFile(lockPath, claimPath)) return false;
+    if ((!owner && !isOldMalformedLock(claimPath)) || (owner && isLockOwnerAlive(owner, hooks)) || !sameFile(lockPath, claimPath)) return false;
     hooks.beforeStaleUnlink?.();
     try {
       fs.renameSync(lockPath, capturedPath);
@@ -140,7 +142,45 @@ function sleep(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
+// A pending file records a lock acquisition in progress. It normally disappears in the same
+// try/finally that created it, so one that lingers belongs to a process that died mid-acquisition.
+function pendingLockFiles(lockPath) {
+  const directory = path.dirname(lockPath);
+  const prefix = `${path.basename(lockPath)}.`;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(directory);
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.startsWith(prefix) && entry.endsWith(".pending"))
+    .map((entry) => path.join(directory, entry));
+}
+
+function isStalePendingFile(file, hooks = {}) {
+  const owner = readMetadata(file);
+  if (owner) return !isLockOwnerAlive(owner, hooks);
+  // An unreadable pending file may belong to a live acquirer that has opened it but not written
+  // its metadata yet; only age past the malformed-lock grace makes it safe to remove.
+  return isOldMalformedLock(file);
+}
+
+/** Removes pending temp files left behind by lock acquirers that died; returns the removed count. */
+function cleanupStalePending(lockPath, hooks = {}) {
+  let removed = 0;
+  for (const file of pendingLockFiles(lockPath)) {
+    if (!isStalePendingFile(file, hooks)) continue;
+    try {
+      fs.unlinkSync(file);
+      removed += 1;
+    } catch {}
+  }
+  return removed;
+}
+
 function acquireLockSync(lockPath, options = {}) {
+  cleanupStalePending(lockPath, options.hooks);
   for (let attempt = 0; attempt < (options.attempts || 1200); attempt++) {
     const lock = tryAcquire(lockPath, options.hooks);
     if (lock) return lock;
@@ -150,6 +190,7 @@ function acquireLockSync(lockPath, options = {}) {
 }
 
 async function acquireLock(lockPath, options = {}) {
+  cleanupStalePending(lockPath, options.hooks);
   for (let attempt = 0; attempt < (options.attempts || 1200); attempt++) {
     const lock = tryAcquire(lockPath, options.hooks);
     if (lock) return lock;
@@ -158,4 +199,4 @@ async function acquireLock(lockPath, options = {}) {
   throw new Error(options.busyMessage || "enablement state is busy");
 }
 
-module.exports = { acquireLock, acquireLockSync, processStartIdentity, reclaimStale, releaseOwned };
+module.exports = { acquireLock, acquireLockSync, cleanupStalePending, pendingLockFiles, processStartIdentity, reclaimStale, releaseOwned };

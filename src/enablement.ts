@@ -140,6 +140,42 @@ export function removeEnabledProject(state: EnablementState | null, identity: Pr
   };
 }
 
+const ENABLED_PROJECT_FIELDS = [
+  "repoPath",
+  "githubRepo",
+  "githubRepositoryId",
+  "enabledAt",
+  "disableGeneration",
+  "enableAttemptToken",
+  "baseBranch",
+  "automationLogin",
+  "firstEnableAutoMerge",
+  "firstStartPending",
+  "lastObservedAutoMerge",
+  "autoMergeAcknowledged",
+  "enabled",
+] as const;
+
+function sameEnabledProject(left: EnabledProject, right: EnabledProject): boolean {
+  return ENABLED_PROJECT_FIELDS.every((field) => left[field] === right[field]);
+}
+
+/**
+ * True when persisting `next` would not change any observable content, including the recorded
+ * writer identity. Tick-time state re-derivations use this to skip no-op enablement writes.
+ */
+export function sameEnablementStateFile(
+  previous: (Pick<EnablementStateFile, "projects"> & { lastWriterCodeIdentity?: string }) | null,
+  next: (Pick<EnablementStateFile, "projects"> & { lastWriterCodeIdentity?: string }) | null,
+): boolean {
+  if (!previous || !next) return false;
+  if ((previous.lastWriterCodeIdentity ?? "") !== (next.lastWriterCodeIdentity ?? "")) return false;
+  const previousProjects = previous.projects ?? [];
+  const nextProjects = next.projects ?? [];
+  return previousProjects.length === nextProjects.length
+    && previousProjects.every((project, index) => sameEnabledProject(project, nextProjects[index]));
+}
+
 export function removeEnabledProjectAtPath(state: EnablementState | null, repoPath: string): EnablementState {
   const normalized = normalizedPath(repoPath);
   return {
