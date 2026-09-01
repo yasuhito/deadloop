@@ -91,6 +91,16 @@ function ciFallbackGateArgs(input: JsonObject): string[] {
   ];
 }
 
+/**
+ * One operator-readable reviewer completion result: the dispatcher's exit branch plus its own
+ * summary, so the host-log reason says which terminal branch ran and why (#404).
+ */
+function dispatcherCompletionResult(dispatched: JsonObject): string {
+  const action = String(dispatched.driverAction || dispatched.action || "review_completion_retained").trim();
+  const summary = String(dispatched.summary || "").trim();
+  return summary ? `${action}: ${summary}` : action;
+}
+
 function processBranchUpdate(input: JsonObject, report: JsonObject, ops: CompletionOps): JsonObject {
   if (report.status === "blocked") return { applied: true, result: "branch_update_blocked_retained" };
   if (report.result?.outcome === "stale_head") {
@@ -150,7 +160,7 @@ function processReviewer(input: JsonObject, record: JsonObject, report: JsonObje
   }
   const dispatched = ops.run("pr-review-repair-dispatch.cts", dispatcherArgs(input, record));
   if (dispatched.action === "monitor" && dispatched.monitorHandoff?.kind === "repair") {
-    return { applied: true, nextHandoff: dispatched, result: dispatched.driverAction };
+    return { applied: true, nextHandoff: dispatched, result: dispatcherCompletionResult(dispatched) };
   }
   if (dispatched.driverAction === "review_approved") {
     const acceptedHistory = path.join(path.dirname(input.promiseFile), "pr-review-history-accepted.json");
@@ -193,15 +203,15 @@ function processReviewer(input: JsonObject, record: JsonObject, report: JsonObje
   }
   if (dispatched.driverAction === "review_human_handoff") {
     const closed = completeHumanHandoffWorkspace(input, ops);
-    return { applied: closed.driverAction === "workspace_closed", result: dispatched.driverAction };
+    return { applied: closed.driverAction === "workspace_closed", result: dispatcherCompletionResult(dispatched) };
   }
   if (["review_stale_history", "review_technical_retry"].includes(String(dispatched.driverAction))) {
     const closed = completeWorkspace(input, ops, [input.reviewLabel]);
-    return { applied: closed.driverAction === "workspace_closed", result: dispatched.driverAction };
+    return { applied: closed.driverAction === "workspace_closed", result: dispatcherCompletionResult(dispatched) };
   }
   if (dispatched.driverAction === "review_stale_head") {
     const closed = completeWorkspace(input, ops);
-    return { applied: closed.driverAction === "workspace_closed", result: dispatched.driverAction };
+    return { applied: closed.driverAction === "workspace_closed", result: dispatcherCompletionResult(dispatched) };
   }
   if (dispatched.driverAction === "review_policy_changed") {
     return { applied: false, result: dispatched.driverAction };
@@ -211,7 +221,7 @@ function processReviewer(input: JsonObject, record: JsonObject, report: JsonObje
     // next tick retries, and record the stage name plus the exception message as the reason (#389).
     return { applied: false, retain: true, result: stageFailureReason("pr-review-repair-dispatch.cts", dispatched) };
   }
-  return { applied: true, result: dispatched.driverAction || "review_completion_retained" };
+  return { applied: true, result: dispatcherCompletionResult(dispatched) };
 }
 
 function processInput(handoff: JsonObject, ops?: CompletionOps): JsonObject {
@@ -240,4 +250,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { completeWorkspace, completeHumanHandoffWorkspace, dispatcherArgs, processBranchUpdate, processInput, processRepair, processReviewer };
+module.exports = { completeWorkspace, completeHumanHandoffWorkspace, dispatcherArgs, dispatcherCompletionResult, processBranchUpdate, processInput, processRepair, processReviewer };

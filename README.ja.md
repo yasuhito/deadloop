@@ -108,7 +108,7 @@ flowchart TD
 | `/deadloop-disable` | 新しい作業の開始を止めます。実行中の試行は完了することがあります。 |
 | `/deadloop-run-once` | 自動実行が無効な状態で、通常の scheduler tick を正確に一度だけ実行します。後続の tick は予約しません。 |
 | `/deadloop-status` | deadloop が有効かどうかと、現在の状態の概要を表示します。 |
-| `/deadloop-doctor` | 設定や保持された試行を変更せずに診断します。 |
+| `/deadloop-doctor` | 設定や保持された試行を変更せずに診断します。changes required のレビュー結果を出したのに `agent:implement` の修復要求が付かなかった PR を検出し、修復に必要なラベル追加コマンドを表示します（#404）。 |
 | `/deadloop-usage [attempt-id]` | 直近7日間のトークン使用量を役割別・モデル別に表示します。試行IDを付けると、その試行の応答単位の詳細を表示します。 |
 | `/deadloop-hostlog [N]` | ホスト活動ログ（`host-log.jsonl`）の直近 N 行を表示します。既定値は 20 です。 |
 | `/deadloop-abandon-attempt <attempt-id>` | doctor に表示された場合だけ、保持された試行を安全に放棄します。 |
@@ -168,7 +168,7 @@ deadloop は追跡可能なすべてのモデル応答（親エージェント�
 
 ### ホスト活動ログ
 
-スケジューラーは各 tick の判定結果を、1 行に 1 個の JSON オブジェクトとして `~/.pi/agent/deadloop/host-log.jsonl` に追記します。記録対象は、tick の開始、自動化ごとの実行結果（driver action を含む）、役割付きの試行起動、モデル利用待機への遷移、有効化状態の書き込みです。有効化状態の書き込みは、保存内容が実際に変わったときだけ記録されるため、変化のない tick では `enablement_written` 行は増えません。各行には ISO タイムスタンプ、project id、automation id、result、理由の要約が入るため、「なぜこの tick では何も起きなかったのか」「いつ何が選ばれたのか」を実行中の状態を読まずに確認できます。
+スケジューラーは各 tick の判定結果を、1 行に 1 個の JSON オブジェクトとして `~/.pi/agent/deadloop/host-log.jsonl` に追記します。記録対象は、tick の開始、自動化ごとの実行結果（driver action を含む）、役割付きの試行起動、モデル利用待機への遷移、有効化状態の書き込みです。有効化状態の書き込みは、保存内容が実際に変わったときだけ記録されるため、変化のない tick では `enablement_written` 行は増えません。各行には ISO タイムスタンプ、project id、automation id、result、理由の要約が入るため、「なぜこの tick では何も起きなかったのか」「いつ何が選ばれたのか」を実行中の状態を読まずに確認できます。決定論的な完了処理では、reason に dispatcher の終了分岐とその根拠（観測した PR の状態、head の一致、ラベル）が入るため、`deterministic completion` という言葉だけにはなりません（#404）。
 
 ログの追記は観測的な処理です。書き込みに失敗した場合は、ログの横にある `host-log-errors.jsonl` に失敗理由が記録されるだけで、完了・push・マージや tick 本体には影響しません。
 
