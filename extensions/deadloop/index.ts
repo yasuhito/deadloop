@@ -66,6 +66,7 @@ const { proveRetainedHandoffSettlement } = require("../../src/retained-handoff-s
 const {
   closeSettledAttemptWorkspace,
   readSettledWorkspaceCleanupReceipt,
+  recordSettledWorkspaceCleanupReceipt,
 } = require("../../src/settled-workspace-closure.cts");
 const { consumeLaunchHandoffSidecar, collectOrphanedLaunchHandoffs } = require("../../src/launch-handoff-sidecar.cts");
 const { createGithubOperations } = require("../../src/github-operations.cts");
@@ -1902,7 +1903,24 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
           "--state-dir", STATE_DIR,
           "--enabled-at", String(project.enabledAt),
         ], null);
-        if (result?.action === "error") debugLog("settled workspace closure failed", result.reason || result.summary);
+        const closureOutcome = String(result?.driverAction || (result?.action === "error" ? "exception" : "unknown"));
+        if (closureOutcome !== "workspace_closed") {
+          const detail = String(result?.reason || result?.summary || closureOutcome);
+          // The receipt is the patrol's exactly-once marker. A command that errored before writing
+          // one would otherwise be retried every tick, so the patrol records the failed attempt
+          // itself and leaves the retry to doctor's command.
+          if (!readSettledWorkspaceCleanupReceipt(runDir)) {
+            recordSettledWorkspaceCleanupReceipt(runDir, { attemptId: record.attemptId, phase: record.phase }, "failed", detail);
+          }
+          emitHostLogEvent({
+            kind: "settled_workspace_closure",
+            attemptId: record.attemptId,
+            role: record.role,
+            result: closureOutcome,
+            reason: detail,
+          });
+          debugLog("settled workspace closure failed", detail);
+        }
       }
       continue;
     }

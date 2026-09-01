@@ -125,4 +125,4 @@ function closeSettledAttemptWorkspace(
   return { closed: true };
 }
 
-module.exports = { closeSettledAttemptWorkspace, readSettledWorkspaceCleanupReceipt };
+module.exports = { closeSettledAttemptWorkspace, readSettledWorkspaceCleanupReceipt, recordSettledWorkspaceCleanupReceipt: recordReceipt };

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const { closeSettledAttemptWorkspace } = require("../src/settled-workspace-closure.cts");
+const { closeSettledAttemptWorkspace, readSettledWorkspaceCleanupReceipt, recordSettledWorkspaceCleanupReceipt } = require("../src/settled-workspace-closure.cts");
 
 const HEAD = "a".repeat(40);
 
@@ -106,5 +106,27 @@ describe("settled workspace closure", () => {
       outcome: { closed: false, detail: "close timed out" },
       receipt: "close timed out",
     });
+  });
+});
+
+describe("patrol receipt for a closure command that failed before writing one", () => {
+  function runDir(): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-settled-receipt-"));
+    roots.push(root);
+    return root;
+  }
+
+  it("records the failed attempt so the patrol does not retry it every tick", () => {
+    const dir = runDir();
+    recordSettledWorkspaceCleanupReceipt(dir, { attemptId: "attempt-1", phase: "authority_released" }, "failed", "command timed out");
+
+    expect(readSettledWorkspaceCleanupReceipt(dir)).toMatchObject({ attemptId: "attempt-1", outcome: "failed", detail: "command timed out" });
+  });
+
+  it("keeps the failure reason readable for doctor's retry command", () => {
+    const dir = runDir();
+    recordSettledWorkspaceCleanupReceipt(dir, { attemptId: "attempt-2", phase: "authority_released" }, "failed", "workspace observation is pending");
+
+    expect(readSettledWorkspaceCleanupReceipt(dir)?.detail).toBe("workspace observation is pending");
   });
 });
