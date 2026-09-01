@@ -144,6 +144,19 @@ gh pr view ${prNumber} -R ${shellQuote(env.githubRepo)} --comments --json number
 3. Push a new commit, then add ${env.reviewLabel}; the changed head starts a new review cycle and ${env.blockedLabel} clears with it.${marker ? `\n\n${marker}` : ""}`;
 }
 
+/**
+ * One operator-readable grounding of the live PR state at a stale repair request: the PR state,
+ * whether the head still matches the reviewed one, and the labels the dispatcher observed. The
+ * silent early return of the repair-request transition must stay diagnosable from the result (#404).
+ */
+function claimGrounding(livePr: JsonObject, expectedHead: string): string {
+  return [
+    `state=${String(livePr.state || "unknown").toUpperCase()}`,
+    `head=${String(livePr.headRefOid || "").toLowerCase() === expectedHead.toLowerCase() ? "unchanged" : "changed"}`,
+    `labels=${labelNames(livePr.labels).join(",") || "none"}`,
+  ].join(" ");
+}
+
 function requireManagedPr(pr: JsonObject, env: ReturnType<typeof envConfig>): void {
   const labels = labelNames(pr.labels);
   if (!labels.includes(env.inProgressLabel) || labels.includes(env.blockedLabel)) {
@@ -768,8 +781,9 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
     // the claim-to-request transition landed before an interruption, and start nothing new.
     const ensured = queueRepairRequest(prNumber, env, expectedHead);
     if (!ensured.applied) {
-      return driverResult("skip", `PR #${prNumber} no longer holds the active review claim; left workflow state untouched`, {
+      return driverResult("skip", `PR #${prNumber} no longer holds the active review claim (${ensured.reason}); left workflow state untouched`, {
         driverAction: "review_repair_already_requested_stale",
+        staleReason: ensured.reason,
       });
     }
     return driverResult("done", `PR #${prNumber} already requested its one automatic review repair`, {
@@ -840,8 +854,9 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
 
   const requested = queueRepairRequest(prNumber, env, expectedHead);
   if (!requested.applied) {
-    return driverResult("skip", `PR #${prNumber} no longer holds the active review claim; left workflow state untouched`, {
+    return driverResult("skip", `PR #${prNumber} no longer holds the active review claim (${requested.reason}); left workflow state untouched`, {
       driverAction: "review_repair_request_stale",
+      staleReason: requested.reason,
     });
   }
   return driverResult("done", `PR #${prNumber} review result queued an agent:implement repair request`, {
@@ -856,8 +871,9 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
  * for repair, while removing the claim first could leave a pull request carrying nothing at all.
  * Idempotent, so an interrupted dispatch completes the transition it started.
  */
-function queueRepairRequest(prNumber: string, env: ReturnType<typeof envConfig>, expectedHead: string): { applied: boolean } {
+function queueRepairRequest(prNumber: string, env: ReturnType<typeof envConfig>, expectedHead: string): { applied: boolean; reason?: string } {
   let applied = false;
+  let reason: string | undefined;
   withEnabledDriverLock(env, (enabled: { automationLogin?: string; githubRepositoryId?: string; githubRepo?: string }, recheck: () => void) => {
     const livePr = readLivePr(env.githubRepo, prNumber);
     if (String(livePr.state || "").toUpperCase() !== "OPEN"
@@ -865,7 +881,10 @@ function queueRepairRequest(prNumber: string, env: ReturnType<typeof envConfig>,
       throw new StaleLaunchError(`PR #${prNumber} changed before its repair request`);
     }
     const labels = new Set(labelNames(livePr.labels));
-    if (!labels.has(env.inProgressLabel) || labels.has(env.blockedLabel)) return;
+    if (!labels.has(env.inProgressLabel) || labels.has(env.blockedLabel)) {
+      reason = claimGrounding(livePr, expectedHead);
+      return;
+    }
     revalidateManagedPr(prNumber, env, enabled, expectedHead);
     const guardedGithub = createGithubOperations(commandRunner, () => { recheck(); revalidateManagedPr(prNumber, env, enabled, expectedHead); });
     if (!labels.has(env.implementLabel)) {
@@ -874,7 +893,7 @@ function queueRepairRequest(prNumber: string, env: ReturnType<typeof envConfig>,
     guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel], add: [] });
     applied = true;
   });
-  return { applied };
+  return applied ? { applied } : { applied, reason };
 }
 
 function main(): void {
@@ -892,6 +911,7 @@ if (require.main === module) main();
 module.exports = {
   assertReviewerDispatchAttemptBinding,
   blockedClaimMove,
+  claimGrounding,
   dispatch,
   envConfig,
   parseArgs,

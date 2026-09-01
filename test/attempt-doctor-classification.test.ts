@@ -148,7 +148,7 @@ describe("attempt workspace doctor classifications", () => {
     );
     expect(findings[0].commands[0]).toContain("reconcile-report-received-attempt.cts");
   });
-  it("requires manual review instead of a partial recovery command when an agent owns the pane", () => {
+  it("requires manual review but still names an observation command when an agent owns the pane", () => {
     const fixture = reviewerFixture("approved");
     const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
     writeAttempt(record, undefined);
@@ -158,11 +158,124 @@ describe("attempt workspace doctor classifications", () => {
       [{ name: record.agentName, paneId: record.rootPaneId, status: "working" }],
       {},
     );
-    expect({ commands: findings[0].commands, summary: findings[0].summary }).toEqual({ commands: [], summary: expect.stringContaining("manual review required") });
+    expect({ manualReview: findings[0].summary.includes("manual review required"), commands: findings[0].commands })
+      .toEqual({ manualReview: true, commands: ["herdr agent list"] });
+  });
+
+  it("names the retreat commands for a launch failure that left its workspace and checkout", () => {
+    const fixture = workerFixture();
+    const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings(
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" } },
+      [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath, tabCount: 1, paneCount: 1 }],
+      [],
+      {
+        worktrees: [{ branch: record.branch, path: record.worktreePath }],
+        gitStatuses: { [record.worktreePath]: "" },
+      },
+    );
+    expect(findings[0].commands).toEqual([
+      `herdr workspace close '${record.workspaceId}'`,
+      `git worktree remove '${record.worktreePath}'`,
+      `git branch -D '${record.branch}'`,
+    ]);
+  });
+
+  it("falls back to the fresh-request command when a launch failure left nothing behind", () => {
+    const fixture = workerFixture();
+    const record = { ...fixture.record, phase: "launch_failed", lastSuccessfulPhase: "workspace_opened", launchError: "failed", outputRevision: undefined };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings(
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" } },
+      [],
+      [],
+      {},
+    );
+    expect(findings[0].commands).toEqual([`gh issue edit ${record.target.number} --add-label 'agent:implement'`]);
+  });
+
+  it("observes the remnants of a released never-launched attempt", () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      phase: "authority_released",
+      lastSuccessfulPhase: "workspace_opened",
+      launchError: "worktree agent/issue-42 already exists before create",
+      outputRevision: undefined,
+      authorityRelease: { reason: "never_launched", releasedAt: "2026-08-30T00:00:00Z" },
+    };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings(
+      { id: "demo", githubRepo: "octo/demo", labels: { ready: "ready-for-agent", implement: "agent:implement", inProgress: "agent:in-progress", review: "agent:review", blocked: "agent:blocked", human: "ready-for-human" } },
+      [],
+      [],
+      { worktrees: [{ branch: record.branch, path: record.worktreePath }], gitStatuses: { [record.worktreePath]: "" } },
+    );
+    expect({
+      findings: findings.length,
+      title: findings[0].title.includes("launch_failed"),
+      release: findings[0].summary.includes("never_launched"),
+      worktree: findings[0].summary.includes("linked worktree"),
+      removeCommand: findings[0].commands.includes(`git worktree remove '${record.worktreePath}'`),
+    }).toEqual({ findings: 1, title: true, release: true, worktree: true, removeCommand: true });
   });
   it("classifies cleanup pending", () => {
     const fixture = workerFixture(); const record = { ...fixture.record, phase: "github_persisted", lastSuccessfulPhase: "github_persisted" };
     expect(classify(record, undefined)).toContain("cleanup_pending");
+  });
+  it("presents the completion-chain closure command for a cleanup-pending github_persisted attempt", () => {
+    const fixture = workerFixture(); const record = { ...fixture.record, phase: "github_persisted", lastSuccessfulPhase: "github_persisted" };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], []);
+    expect(findings[0].commands[0]).toContain("complete-attempt-workspace.cts");
+  });
+  it("presents the settled-workspace closure command for an authority-released attempt whose workspace is still open", () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      phase: "authority_released",
+      lastSuccessfulPhase: "report_received",
+      authorityRelease: { reason: "terminal_missing_report", releasedAt: "2026-08-26T00:00:00.000Z" },
+    };
+    writeAttempt(record, undefined);
+    const findings = retainedAttemptDoctorFindings(
+      { id: "demo", githubRepo: "octo/demo" },
+      [{ workspaceId: record.workspaceId, worktreePath: record.worktreePath }],
+      [],
+    );
+    expect(findings[0].commands[0]).toContain("close-settled-attempt-workspace.cts");
+  });
+  it("attempts the settled workspace closure exactly once for an authority-released journal", async () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      phase: "authority_released",
+      lastSuccessfulPhase: "report_received",
+      authorityRelease: { reason: "terminal_missing_report", releasedAt: "2026-08-26T00:00:00.000Z" },
+    };
+    writeAttempt(record, undefined);
+    const scripts: string[] = [];
+    await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { scripts.push(args[0]); return { code: 0, stdout: '{"action":"done","driverAction":"workspace_closed"}' }; } }, {
+      id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
+    });
+    expect(scripts[0]).toMatch(/close-settled-attempt-workspace\.cts$/);
+  });
+  it("keeps the patrol from retrying a settled workspace closure after its receipt exists", async () => {
+    const fixture = workerFixture();
+    const record = {
+      ...fixture.record,
+      phase: "authority_released",
+      lastSuccessfulPhase: "report_received",
+      authorityRelease: { reason: "terminal_missing_report", releasedAt: "2026-08-26T00:00:00.000Z" },
+    };
+    const promiseFile = writeAttempt(record, undefined);
+    writeFileSync(path.join(path.dirname(promiseFile), "settled-workspace-cleanup.json"), JSON.stringify({ schemaVersion: 1, attemptId: record.attemptId, outcome: "failed", detail: "herdr down", at: "2026-08-26T00:00:00.000Z" }));
+    const scripts: string[] = [];
+    await reconcilePersistedAttemptJournals({ exec: async (_command: string, args: string[]) => { scripts.push(args[0]); return { code: 0, stdout: "{}" }; } }, {
+      id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
+    });
+    expect(scripts).toEqual([]);
   });
   it("classifies workspace ownership mismatch", () => {
     const fixture = workerFixture();
@@ -171,6 +284,50 @@ describe("attempt workspace doctor classifications", () => {
   it("surfaces a malformed journal", () => {
     resetRuns(); const runDir = path.join(stateDir, "runs", "one"); mkdirSync(runDir); writeFileSync(path.join(runDir, "attempt.json"), "malformed");
     expect(retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], [])[0].title).toContain("malformed_journal");
+  });
+  it("offers the archive command for a terminal journal with a removed reason code", () => {
+    resetRuns();
+    const runDir = path.join(stateDir, "runs", "old"); mkdirSync(runDir);
+    const record = { ...workerFixture().record, phase: "authority_released", authorityRelease: { reason: "github_authority_lost", releasedAt: "2026-08-20T00:00:00.000Z" } };
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(record));
+
+    const finding = retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], [])[0];
+
+    expect({
+      title: finding.title.includes("malformed_journal"),
+      field: finding.summary.includes("authorityRelease.reason = \"github_authority_lost\""),
+      recordPath: finding.summary.includes(path.join(stateDir, "runs", "old", "attempt.json")),
+      commands: finding.commands,
+    }).toEqual({
+      title: true,
+      field: true,
+      recordPath: true,
+      commands: [
+        `mkdir -p ${path.join(stateDir, "manual-review-archive")}`,
+        `mv ${runDir} ${path.join(stateDir, "manual-review-archive")}/`,
+      ],
+    });
+  });
+  it("reports an unreadable terminal journal to the host log once per record", () => {
+    resetRuns();
+    const runDir = path.join(stateDir, "runs", "old"); mkdirSync(runDir);
+    const record = { ...workerFixture().record, phase: "authority_released", authorityRelease: { reason: "github_authority_lost", releasedAt: "2026-08-20T00:00:00.000Z" } };
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(record));
+
+    retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], []);
+    retainedAttemptDoctorFindings({ id: "demo", githubRepo: "octo/demo" }, [], []);
+
+    const events = readFileSync(path.join(stateDir, "host-log.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(events.filter((event) => event.kind === "unreadable_attempt_record")).toHaveLength(1);
+  });
+  it("does not mark retained targets ambiguous for an unreadable terminal journal", () => {
+    resetRuns();
+    const runDir = path.join(stateDir, "runs", "old"); mkdirSync(runDir);
+    const record = { ...workerFixture().record, phase: "authority_released", authorityRelease: { reason: "github_authority_lost", releasedAt: "2026-08-20T00:00:00.000Z" } };
+    writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(record));
+
+    const snapshot = retainedAttemptTargetsSnapshot({ id: "demo", githubRepo: "octo/demo" });
+    expect({ targets: snapshot.targets, targetsAmbiguous: snapshot.targetsAmbiguous }).toEqual({ targets: [], targetsAmbiguous: false });
   });
   it("marks retained targets ambiguous for a malformed journal", () => {
     resetRuns(); const runDir = path.join(stateDir, "runs", "one"); mkdirSync(runDir); writeFileSync(path.join(runDir, "attempt.json"), "malformed");

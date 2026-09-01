@@ -303,6 +303,16 @@ describe("deterministic automation driver runner", () => {
     expect(entry.lastSummary).toBe("deterministic completion exploded");
   });
 
+  it("surfaces a successful completion's dispatcher branch and grounding as the host-log reason", () => {
+    const { entry, state } = completionMonitorEntry();
+    deliverPendingDriverHandoff(entry, state, "auto", completionMonitorDeps(() => ({
+      applied: true,
+      result: "review_repair_request_stale: PR #243 no longer holds the active review claim (state=OPEN head=unchanged labels=agent:blocked); left workflow state untouched",
+    })));
+
+    expect(entry.lastSummary).toBe("deterministic completion: review_repair_request_stale: PR #243 no longer holds the active review claim (state=OPEN head=unchanged labels=agent:blocked); left workflow state untouched");
+  });
+
   it("surfaces a string completion result as lastError when the deterministic completion fails", () => {
     const { entry, state } = completionMonitorEntry();
     deliverPendingDriverHandoff(entry, state, "auto", completionMonitorDeps(() => ({ applied: false, result: "ci_fallback_gate_stopped" })));

@@ -54,6 +54,12 @@ export type AutomationRunnerDeps = {
    * observer itself must never throw, so a failed read keeps the retention for the next tick.
    */
   proveRetainedHandoffSettled?: (handoff: Record<string, unknown>) => RetainedHandoffSettlement;
+  /**
+   * Closes the settled attempt's still-open workspace after the retention clears (#395). The
+   * implementation owns the ownership proof and records any failure itself; a throw here is a
+   * caller bug, so the runner treats only the returned verdict as the outcome.
+   */
+  settleRetainedWorkspace?: (handoff: Record<string, unknown>) => { closed: boolean; detail?: string };
   notify?: (message: string, level: "info" | "warning" | "error") => void;
   now: () => number;
   prepareExecutionSupply: () => AutomationExecutionSupply | Promise<AutomationExecutionSupply>;
@@ -272,6 +278,7 @@ export function deliverPendingDriverHandoff(
     | "observeAttemptMonitoring"
     | "applyAttemptMonitoring"
     | "proveRetainedHandoffSettled"
+    | "settleRetainedWorkspace"
     | "retryModelWait"
     | "revalidatePendingDriverHandoff"
     | "saveState"
@@ -321,11 +328,30 @@ export function deliverPendingDriverHandoff(
     {
       const settlementProof = deps.proveRetainedHandoffSettled?.(monitorHandoff);
       if (settlementProof?.settled === true) {
+        const closure = deps.settleRetainedWorkspace?.(monitorHandoff);
+        const closureDetail = closure && closure.closed === false
+          ? String(closure.detail || "workspace closure failed")
+          : "";
         delete entry.pendingDriverHandoff;
         recordAutomationResult(entry, "driver_monitor_settled");
-        entry.lastSummary = settlementProof.reason;
+        entry.lastSummary = closureDetail
+          ? `${settlementProof.reason}; settled workspace closure is pending: ${closureDetail}`
+          : settlementProof.reason;
         entry.updatedAt = deps.now();
         deps.saveState(state);
+        if (closureDetail) {
+          // Set after recordAutomationResult, like every non-failure result that still carries a
+          // reason: the settlement itself succeeded, only the follow-up workspace closure failed.
+          const pendingReason = `${settlementProof.reason}; settled workspace closure is pending: ${closureDetail}`;
+          entry.lastError = pendingReason;
+          observeHostLog(deps, {
+            kind: "automation_result",
+            ...logIdentity(entry, logContext),
+            result: "driver_monitor_settled",
+            reason: pendingReason,
+            driverAction: "cleanup_pending",
+          });
+        }
         return true;
       }
       const storedAccounting = payload.monitorAccounting;
@@ -376,7 +402,13 @@ export function deliverPendingDriverHandoff(
           entry.lastError = failureReason;
           entry.lastSummary = failureReason;
         } else {
-          entry.lastSummary = "reason" in directive ? directive.reason : `deterministic ${directive.action}`;
+          // A successful deterministic completion distills its child result the same way, so the
+          // dispatcher's terminal branch and its grounding stay readable in the host-log reason
+          // instead of collapsing into the bare words "deterministic completion" (#404).
+          const resultReason = completionApplicationFailureReason(application);
+          entry.lastSummary = resultReason
+            ? `deterministic ${directive.action}: ${resultReason}`
+            : "reason" in directive ? directive.reason : `deterministic ${directive.action}`;
         }
       }
       entry.updatedAt = deps.now();

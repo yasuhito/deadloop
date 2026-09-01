@@ -102,6 +102,7 @@ export type DoctorFindingType =
   | "orphan_worktree"
   | "queue_jam"
   | "stuck_in_progress"
+  | "review_repair_missing"
   | "automation_unavailable"
   | "automation_spinning"
   | "coordinator_stalled"
@@ -500,6 +501,44 @@ function buildStuckImplementStateFindings(
     });
 }
 
+// A review result that names its one automatic repair must be followed by that request: the
+// dispatcher posts the result and then replaces the in-progress claim with `agent:implement`.
+// When a pull request still holds the claim, no repair request, and no repair-result evidence, the
+// deterministic dispatch stopped between the two GitHub writes (#404); a person restores the
+// request with one label. A pull request whose repair already ran (a repair-result marker exists)
+// stays silent: a later review round may legitimately hold the claim on a new head.
+const CHANGES_REQUESTED_RESULT_MARKER_RE = /<!--\s*deadloop:review-result\s+head=[0-9a-f]+\s+review=[0-9a-f]+\s+outcome=changes_requested\s*-->/i;
+const REPAIR_RESULT_MARKER_RE = /<!--\s*deadloop:review-repair-result\s+/i;
+
+function buildMissingRepairRequestFindings(
+  project: NormalizedProject,
+  openPrs: DoctorGithubItem[],
+  retainedTargets: Set<string>,
+): DoctorFinding[] {
+  const repo = project.githubRepo || "<repo>";
+  return openPrs
+    .filter((pr) => {
+      const labels = labelsOf(pr);
+      return labels.has(project.labels.inProgress)
+        && !labels.has(project.labels.implement)
+        && !labels.has(project.labels.blocked)
+        && !labels.has(project.labels.human);
+    })
+    .filter((pr) => !retainedTargets.has(`pull-request:${pr.number}`))
+    .filter((pr) => (pr.comments || []).some((comment) => CHANGES_REQUESTED_RESULT_MARKER_RE.test(String(comment.body || ""))))
+    .filter((pr) => !(pr.comments || []).some((comment) => REPAIR_RESULT_MARKER_RE.test(String(comment.body || ""))))
+    .map((pr) => ({
+      id: `missing-repair-request-${pr.number ?? "unknown"}`,
+      type: "review_repair_missing" as const,
+      title: `review result without repair request: ${issueRef(pr)}`,
+      summary: [
+        `A changes-required review result was posted, but no ${project.labels.implement} repair request followed and ${project.labels.inProgress} remains.`,
+        "No repair-result marker exists, so the one automatic repair for this review result never started.",
+      ].join(" "),
+      commands: [`gh pr edit ${pr.number ?? "<number>"} -R ${shellArg(repo)} --add-label ${shellArg(project.labels.implement)}`],
+    }));
+}
+
 // The counterpart of the rule above: a Worker's draft pull request advances only once it holds an Agent
 // request, and the two-step publish (open the draft, then add the request) can stop between those steps.
 // Two states that carry no request are not that failure and must stay silent: a pull request holding
@@ -797,6 +836,7 @@ export function buildDoctorSnapshot(input: DoctorInput): DoctorSnapshot {
       ...buildOrphanWorktreeFindings(project, issues, openPrs, worktrees, gitStatuses),
       ...buildQueueJamFindings(project, issues),
       ...(retainedTargetsAmbiguous ? [] : buildStuckReviewStateFindings(project, openPrs, worktrees, agents, retainedTargets)),
+      ...(retainedTargetsAmbiguous ? [] : buildMissingRepairRequestFindings(project, openPrs, retainedTargets)),
       ...(retainedTargetsAmbiguous ? [] : buildStuckImplementStateFindings(project, issues, worktrees, agents, retainedTargets, openPrs)),
       ...buildUnrequestedPullRequestFindings(project, issues, openPrs),
       ...buildAutomationFindings(project, state, statePath, nowMs),

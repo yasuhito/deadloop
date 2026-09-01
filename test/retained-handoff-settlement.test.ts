@@ -8,6 +8,7 @@ import { deliverPendingDriverHandoff, type AutomationState } from "../src/automa
 import { executeSchedulerTick, type SchedulerTickDeps } from "../src/scheduler-tick";
 import { automationStateKey, normalizeProject } from "../src/core";
 const { proveRetainedHandoffSettlement } = require("../src/retained-handoff-settlement.cts");
+const { closeSettledAttemptWorkspace } = require("../src/settled-workspace-closure.cts");
 
 const NOW = Date.parse("2026-08-26T00:05:00Z");
 const HEAD = "a".repeat(40);
@@ -21,6 +22,7 @@ type SettlementWorld = {
   root: string;
   runDir: string;
   attemptRecordFile: string;
+  worktreePath: string;
   handoffInput: Record<string, unknown>;
 };
 
@@ -32,6 +34,7 @@ function settlementFixture(recordOverrides: Record<string, unknown> = {}): Settl
   const worktreePath = path.join(root, "worktrees", "pr-42");
   fs.mkdirSync(runDir, { recursive: true });
   fs.mkdirSync(worktreePath, { recursive: true });
+  fs.mkdirSync(path.join(root, ".git"), { recursive: true });
   const attemptRecordFile = path.join(runDir, "attempt.json");
   const promiseFile = path.join(runDir, "promise.json");
   fs.writeFileSync(attemptRecordFile, JSON.stringify({
@@ -59,6 +62,7 @@ function settlementFixture(recordOverrides: Record<string, unknown> = {}): Settl
     root,
     runDir,
     attemptRecordFile,
+    worktreePath,
     handoffInput: {
       attemptRecordFile,
       promiseFile,
@@ -87,7 +91,54 @@ function retainedEntry(world: SettlementWorld): Record<string, unknown> {
 
 type DeliveryOptions = {
   targetState?: () => string | never;
+  commandRunner?: { runText: (args: string[]) => string; runJson: (args: string[]) => unknown };
 };
+
+/** A fake Herdr-backed command runner for the real settled-workspace closure (#395). */
+function herdrFixtureRunner(world: SettlementWorld): {
+  commandRunner: NonNullable<DeliveryOptions["commandRunner"]>;
+  state: { workspaceOpen: boolean };
+} {
+  const state = { workspaceOpen: true };
+  const commandRunner = {
+    runText(args: string[]) {
+      if (args[0] === "git" && args.includes("--git-common-dir")) return `${world.root}/.git\n`;
+      if (args[0] === "git" && args.includes("--show-toplevel")) return `${world.worktreePath}\n`;
+      if (args[0] === "git" && args.includes("--porcelain")) {
+        return `worktree ${world.root}\n\nworktree ${world.worktreePath}\nbranch refs/heads/pr-42\n`;
+      }
+      if (args[0] === "herdr" && args[1] === "workspace" && args[2] === "close") {
+        state.workspaceOpen = false;
+        return "";
+      }
+      throw new Error(`unexpected ${args.join(" ")}`);
+    },
+    runJson(args: string[]) {
+      if (args[0] === "herdr" && args[1] === "workspace") {
+        return { result: { workspaces: state.workspaceOpen
+          ? [{ workspace_id: "workspace-1", pane_count: 1, tab_count: 1, worktree: { checkout_path: world.worktreePath } }]
+          : [] } };
+      }
+      throw new Error(`unexpected ${args.join(" ")}`);
+    },
+  };
+  return { commandRunner, state };
+}
+
+/** The same input-to-closure binding the extension host wires for settled handoffs. */
+function settleRetainedWorkspaceBinding(commandRunner: NonNullable<DeliveryOptions["commandRunner"]>) {
+  return (handoff: Record<string, unknown>) => {
+    const input = handoff.input as Record<string, string>;
+    return closeSettledAttemptWorkspace({
+      attemptRecord: input.attemptRecordFile,
+      projectId: input.projectId,
+      projectRepo: input.repoPath,
+      githubRepo: input.githubRepo,
+      stateDir: input.stateDir,
+      enabledAt: String(input.enabledAt),
+    }, commandRunner);
+  };
+}
 
 /**
  * Delivers the retained entry once with the real settlement proof wired like the host does. Live
@@ -108,6 +159,9 @@ function deliverOnce(entry: Record<string, unknown>, options: DeliveryOptions = 
           return (options.targetState as () => string)();
         },
       }),
+    ...(options.commandRunner
+      ? { settleRetainedWorkspace: settleRetainedWorkspaceBinding(options.commandRunner) }
+      : {}),
     observeAttemptMonitoring: (_handoff: Record<string, unknown>, accounting: never) =>
       ({ action: "working", accounting } as never),
     now: () => NOW,
@@ -118,6 +172,30 @@ function deliverOnce(entry: Record<string, unknown>, options: DeliveryOptions = 
 }
 
 describe("retained driver-handoff settlement proofs", () => {
+  it("closes the attempt workspace when the monitored pull request settles the retention", () => {
+    const world = settlementFixture();
+    const herdr = herdrFixtureRunner(world);
+    const entry = retainedEntry(world);
+
+    deliverOnce(entry, { targetState: () => "CLOSED", commandRunner: herdr.commandRunner });
+
+    expect(herdr.state.workspaceOpen).toBe(false);
+  });
+
+  it("closes the attempt workspace when the journal already released the attempt", () => {
+    const world = settlementFixture({
+      phase: "authority_released",
+      lastSuccessfulPhase: "agent_started",
+      authorityRelease: { reason: "terminal_missing_report", releasedAt: new Date(NOW).toISOString() },
+    });
+    const herdr = herdrFixtureRunner(world);
+    const entry = retainedEntry(world);
+
+    deliverOnce(entry, { targetState: () => "OPEN", commandRunner: herdr.commandRunner });
+
+    expect(herdr.state.workspaceOpen).toBe(false);
+  });
+
   it("clears a reviewer retention once the attempt journal proves its authority release", () => {
     const world = settlementFixture({
       phase: "authority_released",
