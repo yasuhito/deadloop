@@ -388,6 +388,85 @@ describe("0.8.0 エージェント起動フロー", () => {
   });
 });
 
+describe("launch failure self-cleanup", () => {
+  function launchUntilFailure(root: string, role: "worker" | "reviewer", breakStep: (ops: any) => void) {
+    const launchInput = input(root, role);
+    const ops: any = operations(root, role, []);
+    const calls: string[] = [];
+    ops.runner.closeWorkspace = (workspaceId: string) => { calls.push(`closeWorkspace ${workspaceId}`); return ""; };
+    ops.runner.removeWorktree = (request: any) => { calls.push(`removeWorktree ${request.branch} ${request.worktreePath}`); return ""; };
+    const originalRunText = ops.runText;
+    ops.runText = (args: string[]) => {
+      if (args[0] === "git" && args.includes("branch")) { calls.push(args.join(" ")); return ""; }
+      return originalRunText(args);
+    };
+    breakStep(ops);
+    prepareAgentLaunchFlow(launchInput, ops);
+    recordAgentLaunchGithubClaimed(launchInput);
+    return { launchInput, ops, calls };
+  }
+
+  it("起動失敗後に自分の作った workspace / worktree / branch を片付ける", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-cleanup-"));
+    try {
+      // resolveWorktreeHead compares against the recorded input revision; a different head breaks
+      // the launch after the workspace and worktree were created.
+      const { launchInput, ops, calls } = launchUntilFailure(root, "worker", (workerOps) => {
+        const originalRunText = workerOps.runText;
+        workerOps.runText = (args: string[]) => {
+          if (args[0] === "git" && args.includes("rev-parse")) return `${"b".repeat(40)}\n`;
+          return originalRunText(args);
+        };
+      });
+      let failure = "";
+      try { launchAgentFlow(launchInput, ops); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
+      const record = JSON.parse(require("node:fs").readFileSync(require("node:path").join(ops.runDir ?? path.join(root, "runs", "launch-worker"), "attempt.json"), "utf8"));
+
+      expect({
+        failed: /input revision/.test(failure),
+        closedWorkspace: calls.includes("closeWorkspace workspace-1"),
+        removedWorktree: calls.includes(`removeWorktree agent/issue-1 ${launchInput.intendedWorktreePath}`),
+        deletedBranch: calls.includes("git -C /repo branch -D agent/issue-1"),
+        phase: record.phase,
+      }).toEqual({ failed: true, closedWorkspace: true, removedWorktree: true, deletedBranch: true, phase: "launch_failed" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("開けなかった checkout は触らず workspace だけ閉じる", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-cleanup-"));
+    try {
+      const { launchInput, ops, calls } = launchUntilFailure(root, "reviewer", (reviewerOps) => {
+        reviewerOps.alignCheckout = () => { throw new Error("alignment failed"); };
+      });
+      let failure = "";
+      try { launchAgentFlow(launchInput, ops); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
+
+      expect({
+        failed: /alignment failed/.test(failure),
+        closedWorkspace: calls.includes("closeWorkspace workspace-1"),
+        touchedCheckout: calls.some((call) => call.startsWith("removeWorktree") || call.includes("branch -D")),
+      }).toEqual({ failed: true, closedWorkspace: true, touchedCheckout: false });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("agent 起動コマンドを実行した後は残骸を触らない", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-cleanup-"));
+    try {
+      const { launchInput, ops, calls } = launchUntilFailure(root, "worker", (workerOps) => {
+        const originalRunText = workerOps.runText;
+        workerOps.runText = (args: string[]) => {
+          if (args.some((arg) => String(arg).endsWith("launch-agent.cts"))) throw new Error("agent start failed");
+          return originalRunText(args);
+        };
+      });
+      let failure = "";
+      try { launchAgentFlow(launchInput, ops); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
+
+      expect({ failed: /agent start failed/.test(failure), calls }).toEqual({ failed: true, calls: [] });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
 describe("opened checkout alignment at launch", () => {
   it("aligns an opened pull-request checkout to the recorded input revision", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-launch-align-"));

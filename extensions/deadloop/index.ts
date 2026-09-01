@@ -977,8 +977,55 @@ function projectLabels(project) {
   return labels;
 }
 
+/**
+ * Observes what one launch-failed or never-launched attempt left behind, and names the retreat or
+ * removal commands for it. A launch failure must never leave the operator with an empty command
+ * list: an open workspace closes, a retained checkout is removed when it is clean, and a target
+ * with nothing left behind gets the fresh-request command that starts the next attempt (Issue #394).
+ */
+function launchFailureRecoveryObservation(record, runDir, project, workspaces, agents, evidence): { commands: string[]; observation: string } {
+  let configured: ReturnType<typeof projectLabels> | null = null;
+  try { configured = project ? projectLabels(project) : null; } catch { configured = null; }
+  const workspace = workspaceProof(record, workspaces, readWorkspaceCloseStartedReceipt(runDir, record));
+  const occupied = (agents || []).some((agent) => agentOccupiesAttemptWorkspace(agent, record));
+  if (occupied) {
+    return {
+      commands: [`herdr agent list`],
+      observation: "an agent still owns the recorded pane or launch-unique name; inspect it before closing the workspace",
+    };
+  }
+  const commands: string[] = [];
+  if (workspace.present && workspace.safe) commands.push(`herdr workspace close ${shellQuote(record.workspaceId)}`);
+  const registered = (evidence?.worktrees || []).filter((worktree) => String(worktree.branch || "") === record.branch
+    && worktree.path && path.resolve(worktree.path) === path.resolve(record.worktreePath));
+  if (registered.length === 1) {
+    const clean = !hasUncommittedWork(evidence?.gitStatuses?.[record.worktreePath] ?? "__unknown__");
+    if (clean) {
+      commands.push(`git worktree remove ${shellQuote(record.worktreePath)}`);
+      // A pull-request checkout shares its branch with the open pull request, so only an issue
+      // Worker's own launch-created branch is safe to delete once its checkout is gone.
+      if (record.target.kind === "issue") commands.push(`git branch -D ${shellQuote(record.branch)}`);
+    } else {
+      commands.push(`git -C ${shellQuote(record.worktreePath)} status --short --untracked-files=all`);
+    }
+  }
+  if (!commands.length) {
+    const requestLabel = record.target.kind === "issue" ? (configured?.implement || "agent:implement") : (configured?.review || "agent:review");
+    const editCommand = record.target.kind === "issue" ? "gh issue edit" : "gh pr edit";
+    commands.push(`${editCommand} ${record.target.number} --add-label ${shellQuote(requestLabel)}`);
+  }
+  const remnants = [
+    ...(workspace.present ? [`workspace ${record.workspaceId} is open`] : []),
+    ...(registered.length === 1 ? [`linked worktree ${record.worktreePath} is retained`] : []),
+  ];
+  return { commands, observation: remnants.length ? `leftovers observed: ${remnants.join("; ")}` : "no workspace or worktree is left behind" };
+}
+
 function launchFailedRecoveryGuidance(record, runDir, project, workspaces, agents, evidence) {
-  const refuse = (reason) => ({ commands: [], detail: `manual review required: ${reason}` });
+  const refuse = (reason) => {
+    const recovery = launchFailureRecoveryObservation(record, runDir, project, workspaces, agents, evidence);
+    return { commands: recovery.commands, detail: `manual review required: ${reason}; ${recovery.observation}` };
+  };
   if (!project || !["worker", "reviewer"].includes(record.role)) return refuse(`attempt role ${record.role} has no safe requeue policy`);
   if (record.lastSuccessfulPhase !== "workspace_opened" || !record.workspaceId || !record.tabId || !record.rootPaneId) {
     return refuse("the journal does not prove a fully identified workspace opened before agent start");
@@ -1090,8 +1137,29 @@ function retainedAttemptDoctorFindings(project, workspaces, agents = [], evidenc
       continue;
     }
     const explorerCleanupPending = successfulExplorerCleanupPending(runDir, record);
+    if (record.project === project?.id && record.repository === project?.githubRepo
+      && record.phase === "authority_released" && record.authorityRelease?.reason === "never_launched") {
+      // A never-launched journal is evidence, not a claim: doctor still observes what the failed
+      // launch left behind and names the retreat or removal commands instead of staying silent.
+      const recovery = launchFailureRecoveryObservation(record, runDir, project, workspaces, agents, evidence);
+      findings.push(herdrDoctorFinding("launch_failed",
+        `attempt ${record.attemptId} (${record.role}) was released as never_launched: ${String(record.launchError || "launch error not recorded")}; ${recovery.observation}`,
+        recovery.commands));
+      continue;
+    }
     if (record.project !== project?.id || record.repository !== project?.githubRepo
       || releasesAttemptOwnership(record.phase) && !explorerCleanupPending) continue;
+    // A retired record is terminal: the host no longer reconciles it, so doctor's recovery is the
+    // one archive command that removes the journal from the host scan (#393).
+    const retirement = readReconcileRetirement(runDir, record.attemptId);
+    if (retirement) {
+      findings.push(herdrDoctorFinding(
+        "cleanup_pending",
+        `attempt ${record.attemptId} (${record.role}) is retired from journal reconciliation: ${retirement.reason} (recorded ${retirement.retiredAt}); archive the attempt journal so the host stops scanning it`,
+        [`mv ${shellQuote(runDir)} ${shellQuote(path.join(STATE_DIR, "manual-review-archive"))}/`],
+      ));
+      continue;
+    }
     let status: import("../../src/doctor").HerdrDoctorStatus = "missing_report";
     let detail = `attempt ${record.attemptId} (${record.role}) is retained at phase ${record.phase}`;
     if (explorerCleanupPending) {
@@ -1696,6 +1764,49 @@ function reconcileReportReceivedCommand(project, attemptRecord: string): string 
   }
 }
 
+const RECONCILE_RETIREMENT_FILE = "reconcile-retired.json";
+
+type ReconcileRetirement = { schemaVersion: 1; attemptId: string; reason: string; retiredAt: string };
+
+/** The terminal journal marker for a record the host retired from reconciliation (#393). Once it
+ * exists the host neither reads the record as a reconcile target nor re-judges it. */
+function readReconcileRetirement(runDir: string, attemptId: string): ReconcileRetirement | null {
+  try {
+    const retirement = JSON.parse(fs.readFileSync(path.join(runDir, RECONCILE_RETIREMENT_FILE), "utf8"));
+    return retirement?.schemaVersion === 1 && retirement.attemptId === attemptId
+      && typeof retirement.reason === "string" && retirement.reason.trim()
+      ? retirement
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeReconcileRetirement(runDir: string, attemptId: string, reason: string): void {
+  const retirement: ReconcileRetirement = { schemaVersion: 1, attemptId, reason, retiredAt: new Date().toISOString() };
+  fs.writeFileSync(path.join(runDir, RECONCILE_RETIREMENT_FILE), `${JSON.stringify(retirement, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+/** A report_received record whose target Issue or pull request closed, or whose worktree entity is
+ * gone, can never be reconciled: every tick would only occupy the shared enablement lock to fail
+ * the same way (#393). The judgment is deterministic and stateless, so it is made here once and
+ * recorded as the journal's terminal retirement marker instead of retried every tick. */
+async function staleReconcileTargetReason(pi, record): Promise<string | null> {
+  if (record.workspaceId && (!record.worktreePath || !fs.existsSync(record.worktreePath))) {
+    return `the attempt worktree ${record.worktreePath} no longer exists`;
+  }
+  const targetNumber = Number(record.target?.number || 0);
+  if (!targetNumber || !record.repository) return null;
+  const isPullRequest = record.target.kind === "pull-request";
+  const state = await execJson(pi, "gh", [
+    isPullRequest ? "pr" : "issue", "view", String(targetNumber), "-R", record.repository, "--json", "state",
+  ], null);
+  if (String(state?.state || "").toUpperCase() === "CLOSED") {
+    return `${isPullRequest ? "pull request" : "Issue"} ${record.repository}#${targetNumber} is closed`;
+  }
+  return null;
+}
+
 async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> {
   const runsDir = path.join(STATE_DIR, "runs");
   let runs: string[];
@@ -1756,7 +1867,34 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
     if (record.role === "worker" && record.target.kind === "issue"
       && ["agent_started", "report_received"].includes(record.phase)
       && !monitoredRecords.has(path.resolve(attemptRecord))) {
+      // A retired record is terminal: the marker below already carries the reason, so neither the
+      // reconcile script nor the state query that produced it runs again (#393).
+      if (readReconcileRetirement(runDir, record.attemptId)) continue;
+      const staleReason = await staleReconcileTargetReason(pi, record);
+      if (staleReason) {
+        writeReconcileRetirement(runDir, record.attemptId, staleReason);
+        emitHostLogEvent({
+          kind: "reconcile_finished",
+          attemptId: record.attemptId,
+          role: record.role,
+          result: "reconcile_retired",
+          reason: staleReason,
+        });
+        debugLog("report_received attempt retired from reconciliation", record.attemptId, staleReason);
+        continue;
+      }
+      const reconcileStartedMs = Date.now();
+      emitHostLogEvent({ kind: "reconcile_started", attemptId: record.attemptId, role: record.role, result: "", reason: "" });
       const recovered = await execJson(pi, "node", reconcileReportReceivedArgv(project, attemptRecord), null, { timeout: 15 * 60_000 });
+      emitHostLogEvent({
+        kind: "reconcile_finished",
+        attemptId: record.attemptId,
+        role: record.role,
+        result: String(recovered?.action || recovered?.reason || "unknown"),
+        reason: String(recovered?.summary || ""),
+        ...(recovered?.driverAction ? { driverAction: String(recovered.driverAction) } : {}),
+        durationMs: Date.now() - reconcileStartedMs,
+      });
       if (recovered?.action === "error") debugLog("report_received attempt recovery failed", recovered.summary);
       try { record = readAttemptRecord(runDir); }
       catch { safeToSchedule = false; continue; }
