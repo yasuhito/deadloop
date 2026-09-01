@@ -620,7 +620,7 @@ describe("attempt lifecycle contract", () => {
 
     const read = readAttemptRecordOrUnreadable(runDir);
     if (!isUnreadableAttemptRecord(read)) throw new Error("expected an unreadable terminal record");
-    expect(read.phase).toBe("workspace_closed");
-    expect(String(read.field)).toMatch(/^requiredVerification/);
+    expect({ phase: read.phase, fieldPrefix: /^requiredVerification/.test(String(read.field)) })
+      .toEqual({ phase: "workspace_closed", fieldPrefix: true });
   });
 });

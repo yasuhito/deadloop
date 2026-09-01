@@ -53,8 +53,8 @@ describe("reconciliation of unreadable terminal journals", () => {
     loadAttempts(root, "demo", "octo/demo");
 
     const events = unreadableHostLogEvents(root);
-    expect(events).toHaveLength(1);
-    expect(String(events[0].reason)).toContain('authorityRelease.reason = "github_authority_lost"');
+    expect({ events: events.length, namesField: String(events[0].reason).includes('authorityRelease.reason = "github_authority_lost"') })
+      .toEqual({ events: 1, namesField: true });
   });
 
   it("still treats a living-phase contract violation as malformed evidence", () => {
