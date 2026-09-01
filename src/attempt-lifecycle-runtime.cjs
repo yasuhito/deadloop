@@ -109,15 +109,64 @@ function parseAttemptRecord(value) {
     ...(authorityRelease ? { authorityRelease } : {}),
   };
 }
-function readAttemptRecord(runDir) {
+const TERMINAL_ATTEMPT_PHASES = ["github_persisted", "workspace_closed", "abandoned", "authority_released"];
+function terminalPhaseOf(value) {
+  const phase = value && typeof value === "object" && !Array.isArray(value) ? value.phase : undefined;
+  return TERMINAL_ATTEMPT_PHASES.includes(phase) ? phase : undefined;
+}
+function unreadableFieldOf(record, message) {
+  const prefix = "Invalid attempt record: ";
+  const detail = message.startsWith(prefix) ? message.slice(prefix.length) : message;
+  const match = /^([A-Za-z][A-Za-z0-9_.]*) (?:is|must) /.exec(detail);
+  if (!match) return {};
+  const field = match[1];
+  let current = record;
+  for (const segment of field.split(".")) {
+    if (!current || typeof current !== "object" || Array.isArray(current) || !(segment in current)) return { field };
+    current = current[segment];
+  }
+  return { field, value: current };
+}
+function readAttemptRecordOrUnreadable(runDir) {
   const file = attemptRecordPath(runDir);
   if (!fs.existsSync(file)) throw new Error(`Attempt record is missing: ${file}`);
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch (error) { throw new Error(`Invalid attempt record: malformed JSON at ${file}`, { cause: error }); }
   try {
-    const record = parseAttemptRecord(JSON.parse(fs.readFileSync(file, "utf8")));
+    const record = parseAttemptRecord(raw);
     Object.defineProperty(record, ATTEMPT_RUN_DIR, { value: path.resolve(runDir), enumerable: false });
     return record;
   }
-  catch (error) { if (String(error.message).startsWith("Invalid attempt record:")) throw error; throw new Error(`Invalid attempt record: malformed JSON at ${file}`, { cause: error }); }
+  catch (error) {
+    const phase = terminalPhaseOf(raw);
+    if (!phase) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    const attemptId = typeof raw.attemptId === "string" && raw.attemptId.trim() ? raw.attemptId : undefined;
+    const { field, value } = unreadableFieldOf(raw, reason);
+    return {
+      unreadable: true, recordPath: file, phase,
+      ...(attemptId ? { attemptId } : {}), ...(field ? { field } : {}),
+      ...(field && value !== undefined ? { value } : {}), reason,
+    };
+  }
+}
+const MAX_UNREADABLE_VALUE_CHARS = 200;
+function boundedUnreadableValue(value) {
+  const text = JSON.stringify(value) ?? "unknown";
+  return text.length > MAX_UNREADABLE_VALUE_CHARS ? `${text.slice(0, MAX_UNREADABLE_VALUE_CHARS - 3)}...` : text;
+}
+function formatUnreadableAttemptRecord(record) {
+  const finding = record.field === undefined
+    ? record.reason
+    : `${record.field} = ${record.value === undefined ? "unknown" : boundedUnreadableValue(record.value)} (${record.reason})`;
+  return `attempt journal ${record.recordPath} is unreadable at terminal phase ${record.phase}: ${finding}`;
+}
+function isUnreadableAttemptRecord(read) { return read && read.unreadable === true; }
+function readAttemptRecord(runDir) {
+  const read = /** @type {any} */ (readAttemptRecordOrUnreadable(runDir));
+  if (read.unreadable) throw new Error(read.reason);
+  return read;
 }
 function sameIdentity(left, right) {
   return left.attemptId === right.attemptId && left.launchUuid === right.launchUuid && left.project === right.project
@@ -269,4 +318,4 @@ function recordPersistedCompletionReport(runDir, report) {
   const next = { ...record, ...(outputRevision ? { outputRevision } : {}), phase: "report_received", lastSuccessfulPhase: "report_received" };
   writeAttemptRecordAtomically(attemptRecordPath(runDir), next); return next;
 }
-module.exports = { abandonPersistedAttempt, attemptRecordPath, createPreparedAttempt, parseAttemptRecord, readAttemptRecord, recordPersistedCompletionReport, releasePersistedAttemptAuthority, releasesAttemptOwnership, transitionAttempt, transitionPersistedAttempt, validateCompletionReportBinding, writeAttemptRecordAtomically };
+module.exports = { abandonPersistedAttempt, attemptRecordPath, createPreparedAttempt, formatUnreadableAttemptRecord, isUnreadableAttemptRecord, parseAttemptRecord, readAttemptRecord, readAttemptRecordOrUnreadable, recordPersistedCompletionReport, releasePersistedAttemptAuthority, releasesAttemptOwnership, transitionAttempt, transitionPersistedAttempt, validateCompletionReportBinding, writeAttemptRecordAtomically };

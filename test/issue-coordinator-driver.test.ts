@@ -14,6 +14,7 @@ import {
   createPreparedAttempt,
   readAttemptRecord,
   recordPersistedCompletionReport,
+  releasePersistedAttemptAuthority,
   transitionPersistedAttempt,
   writeAttemptRecordAtomically,
   type PreparedAttemptInput,
@@ -546,6 +547,25 @@ describe("reusing a formally stopped Worker checkout", () => {
     return { root, runDir, worktreePath: source.worktreePath, branch: source.branch };
   }
 
+  /** Persist one terminal journal whose authorityRelease.reason was removed from the contract. */
+  function persistUnreadableTerminalJournal(root: string, runName = "unreadable-1"): string {
+    const runDir = path.join(root, "runs", runName);
+    const source: PreparedAttemptInput = {
+      attemptId: `${runName}-attempt`, launchUuid: `${runName}-launch`, project: "demo", repository: "owner/repo",
+      role: "branch-update", target: { kind: "pull-request", number: 331 }, inputRevision: { head: baseHead },
+      branch: "agent/pr-331", baseBranch: "origin/main", worktreePath: path.join(root, "agent-pr-331"),
+      agentName: `dl-bu-331-${runName}00000`, workspaceLabel: "old branch update",
+      promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
+    };
+    createPreparedAttempt(runDir, source);
+    transitionPersistedAttempt(runDir, "github_claimed");
+    releasePersistedAttemptAuthority(runDir, "2026-08-20T00:00:00.000Z");
+    const record = JSON.parse(readFileSync(path.join(runDir, "attempt.json"), "utf8"));
+    record.authorityRelease.reason = "github_authority_lost";
+    writeFileSync(path.join(runDir, "attempt.json"), `${JSON.stringify(record)}\n`);
+    return runDir;
+  }
+
   function searchEnv(root: string) {
     return driver.envConfig({ DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: "/repo", DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_STATE_DIR: root });
   }
@@ -564,6 +584,31 @@ describe("reusing a formally stopped Worker checkout", () => {
   it("still finds an abandoned launch-failure checkout at its input revision", () => {
     const fixture = persistAbandonedJournal(fixtureStateDir());
     expect(searchWith(fixture.root, () => baseHead)?.preservedHead).toBe(baseHead);
+  });
+
+  it("skips an unreadable terminal journal with a removed reason code instead of failing the scan", () => {
+    const root = fixtureStateDir();
+    persistStoppedJournal(root);
+    persistUnreadableTerminalJournal(root);
+    expect(searchWith(root, () => outputHead)?.preservedHead).toBe(outputHead);
+  });
+
+  it("still fails closed when a living journal holds a value outside the contract", () => {
+    const root = fixtureStateDir();
+    persistStoppedJournal(root);
+    const runDir = path.join(root, "runs", "living");
+    createPreparedAttempt(runDir, {
+      attemptId: "living-attempt", launchUuid: "living-launch", project: "demo", repository: "owner/repo",
+      role: "worker", target: { kind: "issue", number: 12 }, inputRevision: { head: baseHead },
+      branch: "agent/issue-12-live", worktreePath: path.join(root, "agent-issue-12-live"),
+      agentName: "dl-w-12-live000000", workspaceLabel: "live worker",
+      promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
+    });
+    const record = JSON.parse(readFileSync(path.join(runDir, "attempt.json"), "utf8"));
+    record.inputRevision.head = "not-a-commit";
+    writeFileSync(path.join(runDir, "attempt.json"), `${JSON.stringify(record)}\n`);
+
+    expect(() => searchWith(root, () => outputHead)).toThrow(/inputRevision.head must be a full 40-hex commit SHA/);
   });
 
   it("fails closed when the preserved checkout sits at no recorded revision", () => {

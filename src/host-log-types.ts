@@ -13,7 +13,8 @@ export type HostLogEventKind =
   | "automation_result"
   | "attempt_launched"
   | "model_wait_transitioned"
-  | "enablement_written";
+  | "enablement_written"
+  | "unreadable_attempt_record";
 
 /**
  * One durable line of the host activity log (`host-log.jsonl`). Every line carries the same core

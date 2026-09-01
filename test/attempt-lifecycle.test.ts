@@ -6,7 +6,10 @@ import {
   abandonPersistedAttempt,
   attemptRecordPath,
   createPreparedAttempt,
+  formatUnreadableAttemptRecord,
+  isUnreadableAttemptRecord,
   readAttemptRecord,
+  readAttemptRecordOrUnreadable,
   releasePersistedAttemptAuthority,
   transitionAttempt,
   transitionPersistedAttempt,
@@ -45,6 +48,18 @@ function preparedInput(runDir: string): Parameters<typeof createPreparedAttempt>
 
 function preparedAttempt(runDir = runDirectory()) {
   return createPreparedAttempt(runDir, preparedInput(runDir));
+}
+
+/** A terminal journal whose authorityRelease.reason was removed from the contract. */
+function unreadableAuthorityReleasedRunDir(): string {
+  const runDir = runDirectory();
+  preparedAttempt(runDir);
+  transitionPersistedAttempt(runDir, "github_claimed");
+  releasePersistedAttemptAuthority(runDir, "2026-08-30T00:00:00.000Z");
+  const record = JSON.parse(readFileSync(attemptRecordPath(runDir), "utf8"));
+  record.authorityRelease.reason = "github_authority_lost";
+  writeFileSync(attemptRecordPath(runDir), `${JSON.stringify(record)}\n`);
+  return runDir;
 }
 
 function matchingReport() {
@@ -542,5 +557,70 @@ describe("attempt lifecycle contract", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it("reads a terminal record with a removed reason code as unreadable instead of throwing", () => {
+    const runDir = unreadableAuthorityReleasedRunDir();
+
+    const read = readAttemptRecordOrUnreadable(runDir);
+
+    if (!isUnreadableAttemptRecord(read)) throw new Error("expected an unreadable terminal record");
+    expect(read).toMatchObject({
+      unreadable: true,
+      phase: "authority_released",
+      attemptId: "attempt-001",
+      field: "authorityRelease.reason",
+      value: "github_authority_lost",
+      recordPath: attemptRecordPath(runDir),
+    });
+  });
+
+  it("names the failing field and value in the unreadable record's reason line", () => {
+    const read = readAttemptRecordOrUnreadable(unreadableAuthorityReleasedRunDir());
+
+    if (!isUnreadableAttemptRecord(read)) throw new Error("expected an unreadable terminal record");
+    expect(formatUnreadableAttemptRecord(read)).toContain('authorityRelease.reason = "github_authority_lost"');
+  });
+
+  it("still fails closed when the strict reader meets an unreadable terminal record", () => {
+    expect(() => readAttemptRecord(unreadableAuthorityReleasedRunDir())).toThrow(/authorityRelease.reason is invalid/);
+  });
+
+  it("still fails closed when a living phase holds a value outside the contract", () => {
+    const runDir = runDirectory();
+    preparedAttempt(runDir);
+    transitionPersistedAttempt(runDir, "github_claimed");
+    const record = JSON.parse(readFileSync(attemptRecordPath(runDir), "utf8"));
+    record.inputRevision.head = "not-a-commit";
+    writeFileSync(attemptRecordPath(runDir), `${JSON.stringify(record)}\n`);
+
+    expect(() => readAttemptRecordOrUnreadable(runDir)).toThrow(/inputRevision.head must be a full 40-hex commit SHA/);
+  });
+
+  it("still throws on a terminal record whose file is not parsable JSON", () => {
+    const runDir = runDirectory();
+    preparedAttempt(runDir);
+    transitionPersistedAttempt(runDir, "github_claimed");
+    const record = JSON.parse(readFileSync(attemptRecordPath(runDir), "utf8"));
+    record.phase = "authority_released";
+    writeFileSync(attemptRecordPath(runDir), "{" );
+
+    expect(() => readAttemptRecordOrUnreadable(runDir)).toThrow(/malformed JSON/);
+  });
+
+  it("reads a removed reason code in a workspace_closed record as unreadable too", () => {
+    const runDir = runDirectory();
+    preparedAttempt(runDir);
+    transitionPersistedAttempt(runDir, "github_claimed");
+    const record = JSON.parse(readFileSync(attemptRecordPath(runDir), "utf8"));
+    record.phase = "workspace_closed";
+    record.lastSuccessfulPhase = "workspace_closed";
+    record.requiredVerification = { broken: true };
+    writeFileSync(attemptRecordPath(runDir), `${JSON.stringify(record)}\n`);
+
+    const read = readAttemptRecordOrUnreadable(runDir);
+    if (!isUnreadableAttemptRecord(read)) throw new Error("expected an unreadable terminal record");
+    expect(read.phase).toBe("workspace_closed");
+    expect(String(read.field)).toMatch(/^requiredVerification/);
   });
 });

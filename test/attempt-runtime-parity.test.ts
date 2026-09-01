@@ -6,7 +6,7 @@ import { evaluateCompletionPersistence } from "../src/attempt-workspace-lifecycl
 import { branchUpdateFixture, repairFixture, reviewerFixture, workerFixture } from "./fixtures/attempt-workspace";
 const runtime = require("../src/attempt-workspace-predicates.cjs");
 const lifecycleRuntime = require("../src/attempt-lifecycle-runtime.cjs");
-import { readAttemptRecord, transitionAttempt, validateCompletionReportBinding } from "../src/attempt-lifecycle";
+import { readAttemptRecord, readAttemptRecordOrUnreadable, transitionAttempt, validateCompletionReportBinding } from "../src/attempt-lifecycle";
 
 const fixtures = [workerFixture(), reviewerFixture("approved"), reviewerFixture("human_required"), reviewerFixture("changes_requested"), reviewerFixture("changes_requested", "persisted"), reviewerFixture("changes_requested", "regressed"), reviewerFixture("changes_requested", "mixed"), reviewerFixture("changes_requested", "none"), repairFixture(), repairFixture("stale_head"), branchUpdateFixture(), branchUpdateFixture("stale_head")];
 
@@ -76,6 +76,29 @@ describe("direct Node runtime parity", () => {
       const record = { ...workerFixture().record, unknown: "drop", target: { ...workerFixture().record.target, unknown: true }, inputRevision: { ...workerFixture().record.inputRevision, unknown: true } };
       writeFileSync(path.join(root, "attempt.json"), JSON.stringify(record));
       expect(lifecycleRuntime.readAttemptRecord(root)).toEqual(readAttemptRecord(root));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("matches the typed unreadable-terminal-record result for a removed reason code", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-attempt-parity-"));
+    try {
+      const record = {
+        ...workerFixture().record,
+        phase: "authority_released",
+        authorityRelease: { reason: "github_authority_lost", releasedAt: "2026-08-20T00:00:00.000Z" },
+      };
+      writeFileSync(path.join(root, "attempt.json"), JSON.stringify(record));
+      expect(lifecycleRuntime.readAttemptRecordOrUnreadable(root)).toEqual(readAttemptRecordOrUnreadable(root));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("matches the typed strict-reader rejection for a living phase outside the contract", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-attempt-parity-"));
+    try {
+      const record = { ...workerFixture().record, inputRevision: { head: "not-a-commit" } };
+      writeFileSync(path.join(root, "attempt.json"), JSON.stringify(record));
+      const outcome = (operation: () => unknown) => { try { return { value: operation() }; } catch (error) { return { error: String(error).replace(/^Error: /, "") }; } };
+      expect(outcome(() => lifecycleRuntime.readAttemptRecordOrUnreadable(root))).toEqual(outcome(() => readAttemptRecordOrUnreadable(root)));
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
