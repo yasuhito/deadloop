@@ -191,6 +191,7 @@ function revalidateManagedPr(
   env: ReturnType<typeof envConfig>,
   enabled: { automationLogin?: string; githubRepositoryId?: string; githubRepo?: string },
   expectedHead: string,
+  options: { requireClaim?: boolean } = {},
 ): void {
   const authenticated = commandRunner.runText(["gh", "api", "user", "--jq", ".login"]).trim().toLowerCase();
   const enabledLogin = String(enabled?.automationLogin || "").trim().toLowerCase();
@@ -207,7 +208,15 @@ function revalidateManagedPr(
     || String(livePr.headRefOid || "").toLowerCase() !== expectedHead.toLowerCase()) {
     throw new StaleLaunchError(`PR #${prNumber} review repair target changed before mutation`);
   }
-  requireManagedPr(livePr, env);
+  if (options.requireClaim === false) {
+    // A resume re-issues the request whose published review marker proves the result was ours, so
+    // the claim check relaxes to "no human took over"; blocked stays forbidden either way (#415).
+    if (labelNames(livePr.labels).includes(env.blockedLabel)) {
+      throw new StaleLaunchError(`PR #${prNumber} is blocked before its repair request resume`);
+    }
+  } else {
+    requireManagedPr(livePr, env);
+  }
   // The last gate is local, so no external observation stands between it and the write it guards.
   assertAttemptContractCurrent(env, enabled);
 }
@@ -502,6 +511,36 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
   const pr = readLivePr(env.githubRepo, prNumber);
   // No early claim check here: every mutation below is guarded, and a replayed
   // dispatch legitimately observes the request already queued without in-progress.
+  // A dispatch that died between publishing the review result and queuing the repair request left
+  // a complete result with no request (#415). The published attempt marker proves this result is
+  // already on the PR, so the replay only finishes the missing repair-request transition instead
+  // of re-running the guarded result persistence and its history-freshness gates.
+  const publishedResult = (parseAttemptPersistenceMarkers(pr.comments || []) as JsonObject[]).some((item) =>
+    item.attemptId === attemptRecord?.attemptId
+    && String(item.inputRevision?.head || "").toLowerCase() === expectedHead
+    && Number(item.target?.number) === Number(prNumber)
+    && item.outcome === "changes_requested");
+  if (publishedResult
+    && String(pr.state || "").toUpperCase() === "OPEN"
+    && String(pr.headRefOid || "").toLowerCase() === expectedHead
+    && String(pr.headRefName || "") === branch
+    && !labelNames(pr.labels).includes(env.implementLabel)
+    && !labelNames(pr.labels).includes(env.blockedLabel)) {
+    if (hasAttemptRecord) {
+      const closed = closeReviewerWorkspace(args, env);
+      if (closed?.driverAction !== "workspace_closed") throw new Error("reviewer workspace was not closed before repair request");
+    }
+    const resumed = queueRepairRequest(prNumber, env, expectedHead, { resumeWithoutClaim: true });
+    if (!resumed.applied) {
+      return driverResult("skip", `PR #${prNumber} no longer holds an actionable repair state (${resumed.reason}); left workflow state untouched`, {
+        driverAction: "review_repair_already_requested_stale",
+        staleReason: resumed.reason,
+      });
+    }
+    return driverResult("done", `PR #${prNumber} review result was already published; issued its missing agent:implement repair request`, {
+      driverAction: "review_repair_already_requested",
+    });
+  }
   const historyFile = hasAttemptRecord
     ? path.join(path.dirname(String(args.attemptRecord)), "pr-review-history.json")
     : "";
@@ -834,21 +873,7 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
       }
       writePrHistoryObservation(acceptedHistoryFile, advancement.observation);
     }
-    const closed = commandRunner.runJson([
-      "node", path.join(__dirname, "complete-attempt-workspace.cts"),
-      "--attempt-record", String(args.attemptRecord),
-      "--project-id", env.projectId,
-      "--project-repo", env.repoPath,
-      "--github-repo", env.githubRepo,
-      "--state-dir", env.stateDir,
-      "--enabled-at", String(env.enabledAt),
-      "--expected-label", env.inProgressLabel,
-      "--managed-label", env.reviewLabel,
-      "--managed-label", env.inProgressLabel,
-      "--managed-label", env.blockedLabel,
-      "--managed-label", env.implementLabel,
-      "--managed-label", env.updateBranchLabel,
-    ]);
+    const closed = closeReviewerWorkspace(args, env);
     if (closed?.driverAction !== "workspace_closed") throw new Error("reviewer workspace was not closed before repair request");
   }
 
@@ -864,14 +889,39 @@ function dispatchReviewResult(args: JsonObject): DriverResult {
   });
 }
 
+function closeReviewerWorkspace(args: JsonObject, env: ReturnType<typeof envConfig>): JsonObject {
+  return commandRunner.runJson([
+    "node", path.join(__dirname, "complete-attempt-workspace.cts"),
+    "--attempt-record", String(args.attemptRecord),
+    "--project-id", env.projectId,
+    "--project-repo", env.repoPath,
+    "--github-repo", env.githubRepo,
+    "--state-dir", env.stateDir,
+    "--enabled-at", String(env.enabledAt),
+    "--expected-label", env.inProgressLabel,
+    "--managed-label", env.reviewLabel,
+    "--managed-label", env.inProgressLabel,
+    "--managed-label", env.blockedLabel,
+    "--managed-label", env.implementLabel,
+    "--managed-label", env.updateBranchLabel,
+  ]);
+}
+
 /**
  * Replace the active review claim with an agent:implement repair request (ADR 0032).
  *
  * The request label goes on first: a crash window that leaves both labels visible still selects
  * for repair, while removing the claim first could leave a pull request carrying nothing at all.
- * Idempotent, so an interrupted dispatch completes the transition it started.
+ * Idempotent, so an interrupted dispatch completes the transition it started. `resumeWithoutClaim`
+ * re-issues a request for an already-published review result whose claim was released by the
+ * interrupted dispatch; a blocked pull request stays untouched in every mode (#415).
  */
-function queueRepairRequest(prNumber: string, env: ReturnType<typeof envConfig>, expectedHead: string): { applied: boolean; reason?: string } {
+function queueRepairRequest(
+  prNumber: string,
+  env: ReturnType<typeof envConfig>,
+  expectedHead: string,
+  options: { resumeWithoutClaim?: boolean } = {},
+): { applied: boolean; reason?: string } {
   let applied = false;
   let reason: string | undefined;
   withEnabledDriverLock(env, (enabled: { automationLogin?: string; githubRepositoryId?: string; githubRepo?: string }, recheck: () => void) => {
@@ -881,16 +931,25 @@ function queueRepairRequest(prNumber: string, env: ReturnType<typeof envConfig>,
       throw new StaleLaunchError(`PR #${prNumber} changed before its repair request`);
     }
     const labels = new Set(labelNames(livePr.labels));
-    if (!labels.has(env.inProgressLabel) || labels.has(env.blockedLabel)) {
+    if (labels.has(env.blockedLabel)) {
       reason = claimGrounding(livePr, expectedHead);
       return;
     }
-    revalidateManagedPr(prNumber, env, enabled, expectedHead);
-    const guardedGithub = createGithubOperations(commandRunner, () => { recheck(); revalidateManagedPr(prNumber, env, enabled, expectedHead); });
+    const holdsClaim = labels.has(env.inProgressLabel);
+    if (!holdsClaim && !options.resumeWithoutClaim) {
+      reason = claimGrounding(livePr, expectedHead);
+      return;
+    }
+    revalidateManagedPr(prNumber, env, enabled, expectedHead, { requireClaim: holdsClaim });
+    const guardedGithub = createGithubOperations(commandRunner, () => {
+      recheck(); revalidateManagedPr(prNumber, env, enabled, expectedHead, { requireClaim: holdsClaim });
+    });
     if (!labels.has(env.implementLabel)) {
       guardedGithub.addPrLabel(env.githubRepo, prNumber, env.implementLabel);
     }
-    guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel], add: [] });
+    if (holdsClaim) {
+      guardedGithub.movePrLabels(env.githubRepo, prNumber, { remove: [env.inProgressLabel], add: [] });
+    }
     applied = true;
   });
   return applied ? { applied } : { applied, reason };

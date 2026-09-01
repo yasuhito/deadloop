@@ -28,6 +28,7 @@ const {
   workerRequiredVerificationPath,
   writeWorkerContractSnapshot,
 } = require("../src/worker-required-verification-runtime.cjs");
+const { renderAttemptPersistenceMarker } = require("../src/attempt-persistence-marker.cjs");
 const cumulativeRepairFixture = require("./fixtures/pr-review-repair/cumulative-limit.json");
 const trustedCumulativeComments = cumulativeRepairFixture.comments.map((comment: Record<string, unknown>) => ({
   ...comment,
@@ -619,6 +620,8 @@ function runV1ChangesRequestedTwice(options: {
   policyRaceAfterViews?: number;
   historyRequired?: boolean;
   advisories?: Record<string, unknown>[];
+  publishedResult?: boolean;
+  claimReleased?: boolean;
 } = {}): RepairRequestRun {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-v1-repair-sequence-"));
   tempDirs.push(root);
@@ -630,7 +633,7 @@ function runV1ChangesRequestedTwice(options: {
     ? { review: "custom:review", blocked: "custom:blocked", implement: "custom:implement", updateBranch: "custom:update-branch" }
     : { review: "agent:review", blocked: "agent:blocked", implement: "agent:implement", updateBranch: "agent:update-branch" };
   const liveLabels = [
-    { name: "agent:in-progress" },
+    { name: options.claimReleased ? "agent:review" : "agent:in-progress" },
     ...(options.customConfiguration ? [{ name: "ready-for-human" }] : []),
     { name: "team:platform" },
   ];
@@ -707,6 +710,21 @@ function runV1ChangesRequestedTwice(options: {
     requestEventId: "22",
   }));
   fixReviewerContract(state, repo, attempt);
+  if (options.publishedResult) {
+    // Simulate the interrupted dispatch the issue describes: the review result comment with the
+    // attempt marker is already on the PR, but the repair request never landed.
+    const attemptValue = JSON.parse(fs.readFileSync(attempt, "utf8"));
+    attemptValue.phase = "workspace_closed";
+    attemptValue.lastSuccessfulPhase = "workspace_closed";
+    fs.writeFileSync(attempt, JSON.stringify(attemptValue));
+    const marker = renderAttemptPersistenceMarker(
+      { attemptId: "reviewer-attempt", repository: "owner/repo", target: { kind: "pull-request", number: 243 }, inputRevision: { head } },
+      { status: "complete", result: { outcome: "changes_requested" } },
+    );
+    const stored = JSON.parse(fs.readFileSync(comments, "utf8"));
+    stored.push({ body: `## Review result: changes required\n\nExactly one automatic repair for this review result will now start\n\n${marker}`, author: { login: "deadloop-bot" } });
+    fs.writeFileSync(comments, JSON.stringify(stored));
+  }
   passthroughGit(bin);
   executable(path.join(bin, "gh"), `#!/usr/bin/env node
 const fs=require("node:fs");const a=process.argv.slice(2);const f=process.env.POLICY_FILE;
@@ -999,6 +1017,24 @@ describe("review repair dispatch integration", () => {
     const result = runV1ChangesRequestedTwice();
 
     expect(result.staleReasons[1]).toMatch(/state=OPEN head=unchanged labels=agent:implement/);
+  });
+
+  it("issues the missing repair request for a published review result whose claim still holds", () => {
+    const result = runV1ChangesRequestedTwice({ attempts: 1, publishedResult: true });
+
+    expect(result.finalLabels).toContain("agent:implement");
+  });
+
+  it("keeps no duplicate result comment when it resumes a published review result", () => {
+    const result = runV1ChangesRequestedTwice({ attempts: 1, publishedResult: true });
+
+    expect(result.persistedComments).toHaveLength(1);
+  });
+
+  it("issues the missing repair request after the interrupted dispatch already released the claim", () => {
+    const result = runV1ChangesRequestedTwice({ attempts: 1, publishedResult: true, claimReleased: true });
+
+    expect(result.actions).toEqual(["review_repair_already_requested"]);
   });
 
   it("fails closed when metadata requires history but the prompt and history artifacts are missing", () => {
