@@ -61,4 +61,11 @@ describe("deterministic completion code generation (ADR 0036)", () => {
     );
     expect(application.result).toBe("current");
   });
+
+  it("names the completion script when the completion process fails", () => {
+    const dir = automationDir("broken");
+    fs.writeFileSync(path.join(dir, "complete-deterministic-issue-attempt.cts"), 'process.stderr.write("kaboom"); process.exit(1);\n');
+
+    expect(() => runDeterministicCompletion(handoffLaunchedFrom(dir))).toThrow(/complete-deterministic-issue-attempt\.cts: kaboom/);
+  });
 });

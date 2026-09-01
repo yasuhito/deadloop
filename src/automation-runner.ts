@@ -386,12 +386,19 @@ export function deliverPendingDriverHandoff(
   } catch (error) {
     delete entry.pendingDriverHandoff;
     recordAutomationResult(entry, "driver_invalid_result");
-    entry.lastError = error instanceof Error ? error.message : String(error);
+    // Set both surfaces after recordAutomationResult: lastError is the state.json reason and
+    // lastSummary becomes the host-log automation_result reason, so a thrown completion failure
+    // stays diagnosable from both (#389).
+    const message = (error instanceof Error ? error.message : String(error)).slice(0, 200);
+    entry.lastError = message;
+    entry.lastSummary = message;
     entry.updatedAt = deps.now();
     deps.saveState(state);
     return true;
   }
 }
+
+const BARE_ACTION_TAGS = new Set(["exception", "error"]);
 
 /**
  * A failed deterministic completion application reports its reason where the child completion
@@ -405,14 +412,15 @@ function completionApplicationFailureReason(application: AttemptMonitoringApplic
   const child = result && typeof result === "object" && !Array.isArray(result)
     ? result as Record<string, unknown>
     : undefined;
+  // Bare action tags ("exception", "error") say nothing: never accept them as the whole reason (#389).
   return firstNonEmpty(
     errorText,
     typeof result === "string" ? result : undefined,
     child?.summary,
     child?.error,
     child?.reason,
-    child?.driverAction,
-    child?.action,
+    BARE_ACTION_TAGS.has(String(child?.driverAction)) ? undefined : child?.driverAction,
+    BARE_ACTION_TAGS.has(String(child?.action)) ? undefined : child?.action,
   );
 }
 

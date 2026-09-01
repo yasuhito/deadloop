@@ -3,6 +3,7 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
+const { isDeepStrictEqual } = require("node:util");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../../src/agent-scratch-area.cjs");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { normalizeCompletionReportCommitShas } = require("../../../src/completion-report-normalization.cjs");
@@ -10,12 +11,15 @@ const { createCommandRunner } = require("../../../src/automation-driver-kit.cts"
 const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { closeCompletionStoppedWorkerAttempt } = require("./complete-attempt-workspace.cts");
 const { applyIssueRequiredVerificationStop, hasRequiredVerificationStopMarker, planIssueRequiredVerificationStop, requiredVerificationStopDiagnosis } = require("../../../src/issue-required-verification-stop.cts");
+const { planVerificationFailureNotice, readLogTail } = require("../../../src/issue-required-verification-failure-notice.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { assertAttemptProjectBinding, assertWorktreeBelongsToProject, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 const {
   assertCurrentWorkerContract,
+  isHostExecutedVerificationRecord,
   isRequiredVerificationPolicyBlock,
   persistHostVerificationEvidence,
+  readRequiredVerificationRecord,
   requiredVerificationBinding,
   workerRequiredVerificationPath,
 } = require("../../../src/worker-required-verification-runtime.cjs");
@@ -94,6 +98,33 @@ function writeVerificationLog(logPath: string, contents: string): void {
 
 const completionStopDiagnosis = requiredVerificationStopDiagnosis;
 
+/**
+ * Publish the same-binding verification failure on the Issue once, as a fingerprint-marked
+ * idempotent comment. Label and workspace state are intentionally untouched: this notice only
+ * makes a quiet stall visible.
+ */
+function applyVerificationFailureNotice(
+  args: Args,
+  attempt: Record<string, any>,
+  record: Record<string, any>,
+  enabledLock: typeof withEnabledDriverLock = withEnabledDriverLock,
+): void {
+  if (attempt.target?.kind !== "issue" || !Number.isInteger(attempt.target.number)) return;
+  enabledLock({
+    projectId: args.projectId,
+    repoPath: args.projectRepo,
+    githubRepo: args.githubRepo,
+    stateDir: args.stateDir,
+    enabledAt: args.enabledAt,
+  }, (_enabled: unknown, recheck: () => void) => {
+    const github = createGithubOperations(createCommandRunner(), recheck);
+    const issue = github.getIssue(args.githubRepo, attempt.target.number);
+    if (String(issue.state || "").toUpperCase() !== "OPEN") return;
+    const plan = planVerificationFailureNotice({ issue, record, logTail: readLogTail(String(record.logPath || "")) });
+    if (plan.comment) github.commentIssue(args.githubRepo, attempt.target.number, plan.comment);
+  });
+}
+
 function applyCompletionRequiredVerificationStop(
   args: Args,
   attempt: Record<string, any>,
@@ -142,6 +173,7 @@ async function run(
   verificationRunner: typeof runWorkerProjectCheck = runWorkerProjectCheck,
   enabledResolver: (project: Record<string, unknown>) => { githubRepositoryId?: string } = require("../../../src/enabled-operation.cjs").assertLocallyEnabled,
   completionBlocker: (args: Args, attempt: Record<string, any>, error: unknown) => void = applyCompletionRequiredVerificationStop,
+  failureNotifier: (args: Args, attempt: Record<string, any>, record: Record<string, any>) => void = applyVerificationFailureNotice,
 ) {
   const location = canonicalAttemptLocation(args);
   const runDir = location.runDir;
@@ -167,8 +199,19 @@ async function run(
   if (role === "reviewer" && report.result.outcome !== "approved") throw new Error("required verification runs only for reviewer approval");
   assertCleanOutput(args.worktree, outputRevision);
   const recordFile = workerRequiredVerificationPath(args.attemptRecord);
+  const binding = requiredVerificationBinding(contract, outputRevision);
+  // A failed run with the exact same binding (repository / targetCommit / command / source /
+  // baseRevision) cannot produce a different result, so a host-authenticated failed record skips
+  // re-execution and the failure is reported on the Issue once. Any other existing record —
+  // passed, unauthenticated, or bound to different inputs — is replaced by a fresh fixed-command run.
+  const existingRecord = readRequiredVerificationRecord(recordFile);
+  if (existingRecord && existingRecord.version === 1 && existingRecord.outcome === "failed"
+    && isDeepStrictEqual(existingRecord.binding, binding)
+    && isHostExecutedVerificationRecord(attempt, existingRecord)) {
+    failureNotifier(args, attempt, existingRecord);
+    throw new Error(`required verification ${existingRecord.outcome}; log: ${existingRecord.logPath}`);
+  }
   // Attempt-local files are Worker-writable, so they cannot authenticate host execution.
-  // Always replace any existing record with evidence from a fresh fixed-command run.
   const logPath = path.join(runDir, "required-verification.log");
   const started = Date.now();
   let check;
@@ -212,7 +255,7 @@ async function run(
   writeVerificationLog(logPath, `${check.stdout}${check.stderr}${outputEvidence}`);
   const record = {
     version: 1 as const,
-    binding: requiredVerificationBinding(contract, outputRevision),
+    binding,
     outcome,
     exitCode: check.timedOut || check.interrupted || runnerFailure ? null : check.code,
     ...(terminationReason ? { terminationReason } : {}),
@@ -243,4 +286,4 @@ async function main() {
   }
 }
 if (require.main === module) void main();
-module.exports = { applyCompletionRequiredVerificationStop, assertCleanOutput, completionStopDiagnosis, parseArgs, run, runWorkerProjectCheck, writeVerificationLog };
+module.exports = { applyCompletionRequiredVerificationStop, applyVerificationFailureNotice, assertCleanOutput, completionStopDiagnosis, parseArgs, run, runWorkerProjectCheck, writeVerificationLog };

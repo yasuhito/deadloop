@@ -2,7 +2,7 @@
 
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
-const { createCommandRunner } = require("../../../src/automation-driver-kit.cts");
+const { createCommandRunner, stageFailureReason } = require("../../../src/automation-driver-kit.cts");
 const { readAttemptRecord, validateCompletionReportBinding } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { normalizeCompletionReportCommitShas } = require("../../../src/completion-report-normalization.cjs");
 
@@ -205,6 +205,11 @@ function processReviewer(input: JsonObject, record: JsonObject, report: JsonObje
   }
   if (dispatched.driverAction === "review_policy_changed") {
     return { applied: false, result: dispatched.driverAction };
+  }
+  if (dispatched.action === "error") {
+    // A caught dispatch exception must not complete the attempt: keep the handoff pending so the
+    // next tick retries, and record the stage name plus the exception message as the reason (#389).
+    return { applied: false, retain: true, result: stageFailureReason("pr-review-repair-dispatch.cts", dispatched) };
   }
   return { applied: true, result: dispatched.driverAction || "review_completion_retained" };
 }

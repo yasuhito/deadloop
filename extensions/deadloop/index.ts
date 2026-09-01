@@ -74,7 +74,7 @@ const {
   selectIssueForImplementation,
 } = require("./automations/issue-coordinator-decisions.cts");
 const { loadAutomationState, saveAutomationState } = require("../../src/automation-state.cjs");
-const { acquireLock, releaseOwned } = require("../../src/enablement-lock.cjs");
+const { acquireLock, pendingLockFiles, releaseOwned } = require("../../src/enablement-lock.cjs");
 const { clearEnablementStorageExhaustion, enablementStorageExhaustionPath, formatEnablementFailureMessage, readEnablementStorageExhaustion } = require("../../src/enablement-storage-diagnosis.cjs");
 const {
   DISABLE_LOCK_ATTEMPTS,
@@ -112,6 +112,7 @@ import {
   removeEnabledProjectAtPath,
   removeEnabledProjectAttempt,
   removeEnabledProjectGeneration,
+  sameEnablementStateFile,
   upsertEnabledProject,
 } from "../../src/enablement";
 import { preserveEnablementAutomationLogins } from "../../src/enablement-write";
@@ -514,9 +515,16 @@ async function updateEnablementState(update, assertCodeIdentityCurrent, loadedCo
   assertCodeIdentityCurrent();
   return await withEnablementStateLock(async () => {
     assertCodeIdentityCurrent();
-    const next = await update(loadEnablementState());
+    const previous = loadEnablementState();
+    const next = await update(previous);
     assertCodeIdentityCurrent();
-    saveEnablementState(next, loadedCodeIdentity);
+    // Tick-time updates re-derive the same state many times; only a real content change may
+    // persist a write, so an unchanged state is neither saved nor logged (#388).
+    const unchanged = sameEnablementStateFile(previous, {
+      projects: next.projects,
+      lastWriterCodeIdentity: loadedCodeIdentity,
+    });
+    if (!unchanged) saveEnablementState(next, loadedCodeIdentity);
     return next;
   });
 }
@@ -1190,6 +1198,7 @@ async function buildLiveDoctorReport(pi, cwd, codeIdentityDecision?: () => CodeI
     loadedCodeIdentity: data.codeIdentity?.loadedIdentity ?? null,
     enablementStorageExhaustion: readEnablementStorageExhaustion(STATE_DIR),
     enablementStorageExhaustionPath: enablementStorageExhaustionPath(STATE_DIR),
+    enablementPendingFiles: pendingLockFiles(`${ENABLEMENT_PATH}.lock`).length,
     ...(data.selectedProject?.repoPath && data.selectedProject.requiredVerification.status === "blocked"
       ? { verificationCandidates: discoverVerificationCandidates({ repositoryRoot: data.selectedProject.repoPath }) }
       : {}),

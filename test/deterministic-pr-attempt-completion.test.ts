@@ -242,6 +242,32 @@ describe("deterministic PR attempt completion", () => {
     expect(closure?.includes("--handoff-blocked-label")).toBe(true);
   });
 
+  it("keeps the attempt pending when the repair dispatch reports a caught exception", () => {
+    const state = fixture("reviewer", { outcome: "human_required", reviewedHead: "a".repeat(40) });
+
+    const result = processInput(state.handoff, { run: (script: string) => {
+      if (script === "pr-review-repair-dispatch.cts") {
+        return { action: "error", summary: "repair dispatch failed: herdr socket gone", driverAction: "exception" };
+      }
+      throw new Error(`unexpected script ${script}`);
+    } });
+
+    expect(result.applied).toBe(false);
+  });
+
+  it("carries a caught dispatch exception message in the reviewer completion result", () => {
+    const state = fixture("reviewer", { outcome: "human_required", reviewedHead: "a".repeat(40) });
+
+    const result = processInput(state.handoff, { run: (script: string) => {
+      if (script === "pr-review-repair-dispatch.cts") {
+        return { action: "error", summary: "repair dispatch failed: herdr socket gone", driverAction: "exception" };
+      }
+      throw new Error(`unexpected script ${script}`);
+    } });
+
+    expect(result.result).toContain("repair dispatch failed: herdr socket gone");
+  });
+
   it("routes a pushed repair report through its completion handler and closes the workspace", () => {
     const state = repairFixture("repair_pushed");
     const scripts: string[] = [];

@@ -55,6 +55,28 @@ function oneLine(value: unknown): string {
   return String(value || "").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = oneLine(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+/**
+ * Distills one operator-readable reason for a failed completion sub-step: the stage script name
+ * plus the child result's own failure text. A child script that catches its own exception still
+ * exits 0 with a `driverAction: "exception"` tag, so collapsing the result to that tag alone
+ * would record the single word "exception" as the whole failure reason (#389).
+ */
+function stageFailureReason(stage: string, result: unknown): string {
+  const child = result && typeof result === "object" && !Array.isArray(result)
+    ? (result as Record<string, unknown>)
+    : undefined;
+  const detail = firstText(child?.summary, child?.error, child?.reason, child?.driverAction, child?.action);
+  return `${stage}: ${oneLine(detail || "unknown failure").slice(0, 200)}`;
+}
+
 function parseBool(value: string | undefined): boolean {
   return String(value || "").toLowerCase() === "1" || String(value || "").toLowerCase() === "true";
 }
@@ -87,4 +109,5 @@ module.exports = {
   parseBool,
   parseFixtureArg,
   shellQuote,
+  stageFailureReason,
 };

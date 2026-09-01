@@ -758,6 +758,34 @@ describe("enablement command integration", () => {
     });
   });
 
+  it("writes no enablement state across three unchanged ticks", async () => {
+    const { root, repoPath } = fixtureRepository();
+    writeConfig(root, repoPath);
+    const extension = await loadExtension(root);
+    vi.useFakeTimers();
+    await invoke(extension.commands.get("deadloop-enable")!, repoPath);
+    const hostLogPath = path.join(root, ".pi", "agent", "deadloop", "host-log.jsonl");
+    const events = () => existsSync(hostLogPath)
+      ? readFileSync(hostLogPath, "utf8").trimEnd().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      : [];
+
+    // The first tick retires firstStartPending, which is a real state change.
+    await vi.advanceTimersByTimeAsync(3_000);
+    const baseline = {
+      writes: events().filter((event) => event.kind === "enablement_written").length,
+      ticks: events().filter((event) => event.kind === "tick_started").length,
+    };
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect({
+      writes: events().filter((event) => event.kind === "enablement_written").length - baseline.writes,
+      ticks: events().filter((event) => event.kind === "tick_started").length - baseline.ticks,
+    }).toEqual({ writes: 0, ticks: 3 });
+  });
+
   it("does not execute the repository verification command during enablement", async () => {
     const { root, repoPath } = fixtureRepository();
     writeConfig(root, repoPath);

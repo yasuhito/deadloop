@@ -6,7 +6,7 @@
 const path = require("node:path") as typeof import("node:path");
 const fs = require("node:fs") as typeof import("node:fs");
 
-const { createCommandRunner } = require("../../../src/automation-driver-kit.cts");
+const { createCommandRunner, stageFailureReason } = require("../../../src/automation-driver-kit.cts");
 const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const {
@@ -109,7 +109,7 @@ function stopBlockedWorkerAttempt(
   });
   const closed = deps.ops.run("complete-attempt-workspace.cts", [...common(input)]);
   if (closed.driverAction !== "workspace_closed") {
-    return { applied: false, retain: true, result: String(closed.driverAction || "workspace_closure_pending") };
+    return { applied: false, retain: true, result: stageFailureReason("complete-attempt-workspace.cts", closed) };
   }
   return { applied: true, result: "issue_attempt_blocked_stopped" };
 }
@@ -158,7 +158,7 @@ function processWorker(input: JsonObject, record: JsonObject, report: JsonObject
     ...flag("review-label", input.reviewLabel),
   ]);
   if (persisted.driverAction !== "result_persisted") {
-    return { applied: false, retain: true, result: String(persisted.driverAction || "result_not_persisted") };
+    return { applied: false, retain: true, result: stageFailureReason("persist-attempt-result.cts", persisted) };
   }
   const closed = ops.run("complete-attempt-workspace.cts", [
     ...common(input),
@@ -167,7 +167,7 @@ function processWorker(input: JsonObject, record: JsonObject, report: JsonObject
     ...flag("worker-review-label", input.reviewLabel),
   ]);
   if (closed.driverAction !== "workspace_closed") {
-    return { applied: false, retain: true, result: String(closed.driverAction || "workspace_closure_pending") };
+    return { applied: false, retain: true, result: stageFailureReason("complete-attempt-workspace.cts", closed) };
   }
   return { applied: true, result: "issue_attempt_completed" };
 }
@@ -200,7 +200,7 @@ function processInput(handoff: JsonObject, injectedOps?: CompletionOps): JsonObj
     const completed = issueExploration.complete(explorationArgs(input));
     return ["exploration_persisted", "exploration_blocked"].includes(String(completed.driverAction))
       ? { applied: true, result: String(completed.driverAction) }
-      : { applied: false, retain: true, result: String(completed.driverAction || "exploration_completion_pending") };
+      : { applied: false, retain: true, result: stageFailureReason("complete-issue-exploration.cts", completed) };
   }
 
   const commandRunner = createCommandRunner({ timeoutMs: 15 * 60_000 });
