@@ -101,6 +101,45 @@ describe("selected attempt workspace completion", () => {
     }
   });
 
+  it("closes the current workspace when an older attempt for the worktree has no listed workspace", () => {
+    const data = fixture(true);
+    const current = readAttemptRecord(data.runDir);
+    const olderRunDir = path.join(path.dirname(data.runDir), "older-attempt");
+    mkdirSync(olderRunDir);
+    writeFileSync(path.join(olderRunDir, "attempt.json"), JSON.stringify({
+      ...current,
+      attemptId: "older-attempt",
+      launchUuid: "older-attempt",
+      phase: "github_persisted",
+      lastSuccessfulPhase: "github_persisted",
+      workspaceId: "old-workspace",
+      tabId: "old-tab",
+      rootPaneId: "old-pane",
+    }));
+
+    const result = completeLocked(data.args, data.runner, () => undefined);
+
+    expect(result.driverAction).toBe("workspace_closed");
+  });
+
+  it("retains the current workspace when another attempt claims its listed workspace", () => {
+    const data = fixture(true);
+    const current = readAttemptRecord(data.runDir);
+    const otherRunDir = path.join(path.dirname(data.runDir), "other-attempt");
+    mkdirSync(otherRunDir);
+    writeFileSync(path.join(otherRunDir, "attempt.json"), JSON.stringify({
+      ...current,
+      attemptId: "other-attempt",
+      launchUuid: "other-attempt",
+      phase: "github_persisted",
+      lastSuccessfulPhase: "github_persisted",
+    }));
+
+    const result = completeLocked(data.args, data.runner, () => undefined);
+
+    expect(result.driverAction).toBe("workspace_retained");
+  });
+
   it("retains a strongly reported Worker when the persisted attempt marker is absent", () => {
     const data = fixture(false);
     const result = completeLocked(data.args, data.runner, () => undefined);

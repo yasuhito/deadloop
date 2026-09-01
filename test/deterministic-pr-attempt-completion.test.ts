@@ -118,6 +118,18 @@ describe("deterministic PR attempt completion", () => {
     expect(scripts).toEqual(["pr-branch-update-complete.cts", "persist-attempt-result.cts", "complete-attempt-workspace.cts"]);
   });
 
+  it("reports the workspace closure failure after an already-requested branch update", () => {
+    const state = fixture("branch-update", { outcome: "branch_update_pushed", outputRevision: "c".repeat(40) });
+
+    const result = processInput(state.handoff, { run: (script: string) => {
+      if (script === "pr-branch-update-complete.cts") return { driverAction: "branch_update_review_already_requested" };
+      if (script === "persist-attempt-result.cts") return { driverAction: "result_persisted" };
+      return { action: "error", driverAction: "exception", summary: "workspace ownership is ambiguous" };
+    } });
+
+    expect(result.result).toEqual({ action: "error", driverAction: "exception", summary: "workspace ownership is ambiguous" });
+  });
+
   it("dispatches a failed reviewer verification to the existing approval stop", () => {
     const state = fixture("reviewer", { outcome: "approved", reviewedHead: "a".repeat(40) });
     const scripts: string[] = [];

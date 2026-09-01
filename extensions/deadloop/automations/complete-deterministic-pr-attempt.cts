@@ -118,7 +118,8 @@ function processBranchUpdate(input: JsonObject, report: JsonObject, ops: Complet
   const persisted = persistAttempt(input, ops);
   if (persisted.driverAction !== "result_persisted") return { applied: false, result: persisted };
   const closed = completeWorkspace(input, ops, [input.reviewLabel]);
-  return { applied: closed.driverAction === "workspace_closed", result: completed.driverAction };
+  const workspaceClosed = closed.driverAction === "workspace_closed";
+  return { applied: workspaceClosed, result: workspaceClosed ? completed.driverAction : closed };
 }
 
 // Repair results whose public evidence is confirmed (posted, already posted, or stale) close the

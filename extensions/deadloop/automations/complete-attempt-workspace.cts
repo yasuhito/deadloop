@@ -331,7 +331,11 @@ function completeLocked(
     }
     if (candidate.project !== record.project || candidate.repository !== record.repository) continue;
     const candidateOwnsWorkspace = !["prepared", "github_claimed"].includes(candidate.phase);
-    if (candidateOwnsWorkspace && !releasesAttemptOwnership(candidate.phase) && candidate.attemptId !== record.attemptId
+    const candidateWorkspaceIsListed = candidate.workspaceId
+      ? listed.value.some((workspace) => workspace.workspaceId === candidate.workspaceId)
+      : true;
+    if (candidateOwnsWorkspace && candidateWorkspaceIsListed
+      && !releasesAttemptOwnership(candidate.phase) && candidate.attemptId !== record.attemptId
       && (Boolean(record.workspaceId) && candidate.workspaceId === record.workspaceId
         || path.resolve(candidate.worktreePath) === path.resolve(record.worktreePath))) {
       newerOwner = true;
