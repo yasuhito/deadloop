@@ -55,7 +55,7 @@ A newly opened workspace can return before its root shell reaches an interactive
 
 A promise file is transport, not cleanup authority. Only a strong V1 report bound to the attempt journal can proceed to role-specific GitHub confirmation.
 
-- Worker: the exact pushed head, open PR, base, closing reference, review label, and attempt marker must agree. Issue request labels are not completion evidence; a request added while the Worker runs remains queued for a later attempt.
+- Worker: the exact pushed head, open PR, base, closing reference, review label, and attempt marker must agree. A retry that re-presents the existing result (output revision equal to the input revision) completes on that same proof when GitHub already holds it, and stops once with a reasoned `agent:blocked` stop when it does not. Issue request labels are not completion evidence; a request added while the Worker runs remains queued for a later attempt.
 - Reviewer: requested changes or a required human decision may persist without successful required verification. Approval additionally requires the attempt-fixed contract's host-recorded success for the exact reviewed head; the structured result comment, attempt marker, findings/repair marker when applicable, and expected labels must agree.
 - Review repair: the pushed or stale head and finalizer/result evidence must agree.
 - Branch update: the pushed or PR-head-stale result must agree. A base advance alone is not stale.

@@ -111,6 +111,25 @@ export function workerFixture() {
   return { record, report, github, context: { workerReviewLabel: "agent:review" } };
 }
 
+/**
+ * A retry that re-presents an existing result: the reported output equals the input revision, and
+ * GitHub already holds the fully persisted result at that revision (#419).
+ */
+export function workerSameRevisionFixture() {
+  const fixture = workerFixture();
+  const record = { ...fixture.record, outputRevision: INPUT_HEAD };
+  const report = { ...fixture.report, result: { outputRevision: INPUT_HEAD } };
+  const github = {
+    ...fixture.github,
+    pullRequests: fixture.github.pullRequests.map((pullRequest) => ({
+      ...pullRequest,
+      headSha: INPUT_HEAD,
+      marker: pullRequest.marker ? { ...pullRequest.marker, outputRevision: INPUT_HEAD } : undefined,
+    })),
+  };
+  return { record, report, github, context: fixture.context };
+}
+
 export function reviewerFixture(
   outcome: "approved" | "changes_requested" | "human_required" = "approved",
   priorRequiredFindings: PriorRequiredFindingDisposition = "all_resolved",
