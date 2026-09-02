@@ -6,6 +6,7 @@ const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { createGithubOperations } = require("../../../src/github-operations.cts");
 const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { consumeIssueRequest } = require("../../../src/issue-request-transition.cts");
+const { blockedPrLabelMove } = require("../../../src/pr-request-selection.cts");
 const { readAttemptRecord, releasePersistedAttemptAuthority, transitionPersistedAttempt } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { assertAttemptProjectBinding, canonicalAttemptLocation } = require("../../../src/attempt-project-confinement.cjs");
 
@@ -137,6 +138,13 @@ function reconcileLocked(
     "gh", "api", "--paginate", "--slurp", `repos/${record.repository}/issues/${record.target.number}/events`,
   ]).flat();
   if (!hasExactRequestConsumption(record, item, args, events)) {
+    // A review-repair claim that never launched must not retain forever (#421): the revalidation
+    // already judged its persisted contract changed, so no operator action can make this recorded
+    // claim launchable again, and a retained claim stops every scheduler tick behind an operator
+    // reconciliation nothing can clear. Release it to a terminal state instead.
+    if (record.role === "review-repair" && !record.workspaceId) {
+      return releaseUnlaunchedStaleRepair(args, runDir, runner, recheck, record, item, requestGithub);
+    }
     return driverResult("done", "prepared attempt retained because the exact GitHub request consumption is absent or changed", {
       driverAction: "prepared_request_consumption_blocked",
     });
@@ -149,6 +157,63 @@ function reconcileLocked(
   const consumed = transitionPersistedAttempt(runDir, "github_claimed");
   return driverResult("done", "prepared attempt GitHub request consumption reconciled", {
     driverAction: "prepared_request_consumption_reconciled", record: consumed,
+  });
+}
+
+/** The one explained stop comment for a prepared review-repair claim whose persisted contract no
+ * longer matches the pull request (#421). Human-readable only: no runtime paths or identifiers. */
+function stalePreparedRepairComment(record: JsonObject, args: JsonObject): string {
+  const number = Number(record.target.number);
+  const repository = String(record.repository);
+  return `## What happened
+- Automatic review repair for PR #${number} stopped before it started: the persisted repair contract no longer matches this pull request, so deadloop refused to launch a repair worker against it.
+- Nothing was pushed and no history was rewritten.
+
+## Recovery steps
+1. Inspect the current head and review state:
+   \`\`\`bash
+gh pr view ${number} -R ${repository} --json number,state,headRefName,headRefOid,labels
+   \`\`\`
+2. Add ${String(args.reviewLabel)} to start a fresh review; the new review persists a current repair contract and can re-queue the automatic repair.`;
+}
+
+/** Releases a prepared review-repair claim whose exact request consumption is absent or changed
+ * (#421). The claim never launched — no workspace, no agent — so releasing its authority is safe,
+ * and the released phase is terminal: the scheduler keeps running for every other Issue and PR.
+ * Before the release, a still-open pull request that holds neither a live Agent request nor the
+ * blocked label is stopped exactly once with the explanation comment and the blocked label. A live
+ * request left by a newer decision, a blocked state, or a closed pull request needs no stop write;
+ * only the release runs. A failed GitHub stop keeps the claim so the next tick retries the same
+ * stop instead of dropping the target silently. */
+function releaseUnlaunchedStaleRepair(
+  args: JsonObject,
+  runDir: string,
+  runner: ReturnType<typeof createCommandRunner>,
+  recheck: () => void,
+  record: JsonObject,
+  item: JsonObject,
+  requestGithub?: ReturnType<typeof createGithubOperations>,
+): JsonObject {
+  const github = requestGithub || createGithubOperations(runner, recheck);
+  const number = Number(record.target.number);
+  const repository = String(record.repository);
+  const labels = labelNames(item);
+  const liveRequest = [String(args.implementLabel), String(args.reviewLabel), String(args.updateBranchLabel)]
+    .some((label) => labels.has(label));
+  if (String(item.state || "").toUpperCase() === "OPEN" && !liveRequest && !labels.has(String(args.blockedLabel))) {
+    // The label move runs first: once the blocked label is on, every later pass reads the pull
+    // request as already stopped, so a retried stop cannot add a second explanation comment.
+    github.movePrLabels(repository, number, blockedPrLabelMove({
+      updateBranch: String(args.updateBranchLabel),
+      implement: String(args.implementLabel),
+      review: String(args.reviewLabel),
+    }, String(args.inProgressLabel), String(args.blockedLabel)));
+    github.commentPr(repository, number, stalePreparedRepairComment(record, args));
+  }
+  const cutoffEventId = String(record.requestEventId || "");
+  releasePersistedAttemptAuthority(runDir, new Date().toISOString(), cutoffEventId || undefined, "never_launched");
+  return driverResult("done", "prepared review-repair claim released because its repair contract no longer matches the pull request", {
+    driverAction: "prepared_repair_contract_released",
   });
 }
 
