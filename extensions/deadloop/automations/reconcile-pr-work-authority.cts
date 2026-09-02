@@ -8,7 +8,7 @@ const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { readAttemptRecordOrUnreadable, isUnreadableAttemptRecord, releasePersistedAttemptAuthority, releasesAttemptOwnership } = require("../../../src/attempt-lifecycle-runtime.cjs");
 const { reportUnreadableAttemptRecordOnce } = require("../../../src/unreadable-attempt-journal.cjs");
 const { applyPrWorkAuthorityReconciliation } = require("../../../src/pr-work-authority-reconciliation.cts");
-const { closeReceiptPath, observeAttemptRuntime } = require("../../../src/attempt-runtime-observation.cts");
+const { closeReceiptPath, observeAttemptRuntime, workspaceIsOpen } = require("../../../src/attempt-runtime-observation.cts");
 const { provenAttemptCompletion } = require("./attempt-completion-proof.cts");
 const { containsStorageExhaustion, reportNamesStorageExhaustion } = require("../../../src/storage-exhaustion.cjs");
 const { validatePromise } = require("./extract-worker-promise.cts");
@@ -388,7 +388,26 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     // Liveness is asked per journal and answered by the runtime alone. One live agent keeps the
     // pull request active; one unreadable answer makes the whole observation unobservable. No
     // journal left at all is its own answer: there is nothing to observe, not an unreadable owner.
-    const journals = matching.map((record) => ({ record, kind: observeJournalRuntime(runner, record, args.projectRepo) }));
+    const observed = matching.map((record) => ({ record, kind: observeJournalRuntime(runner, record, args.projectRepo) }));
+    // A journal whose guarded completion chain already persisted its result to GitHub is finished
+    // evidence once the runtime confirms its workspace is gone (Issue #420). The `github_persisted`
+    // phase is written only after the GitHub persistence was confirmed, and the only duty left to
+    // such a journal was the workspace closure the runtime just proved done, so the attempt no
+    // longer holds authority over the pull request. Re-running its completion handler would refuse
+    // a review it already published and block the pull request beside the requests the published
+    // result queued, so the journal is released instead of decided on.
+    const finishedRecords = new Set<JsonObject>();
+    for (const journal of observed.filter((candidate) => candidate.kind === "stopped"
+      && candidate.record.phase === "github_persisted" && !workspaceIsOpen(runner, candidate.record))) {
+      releasePersistedAttemptAuthority(journal.record.runDir, new Date().toISOString(), undefined, "owner_absent");
+      results.push({ number, action: "released_finished_attempt", attemptId: journal.record.attemptId });
+      finishedRecords.add(journal.record);
+    }
+    const journals = observed.filter((journal) => !finishedRecords.has(journal.record));
+    // A pull request whose every journal finished holds no active attempt state: the completion
+    // chain settled its GitHub state before writing the finished phase, so reconciliation has
+    // nothing left to decide. A pull request still carrying the active state stays fail closed.
+    if (journals.length === 0 && finishedRecords.size > 0 && !labels(pr).includes(inProgressLabel)) continue;
     const runtime = journals.some((journal) => journal.kind === "running") ? { kind: "running" }
       : malformed.length > 0 || journals.some((journal) => journal.kind === "unobservable")
         ? { kind: "unobservable" }

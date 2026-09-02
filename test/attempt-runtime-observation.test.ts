@@ -264,4 +264,22 @@ describe("attempt runtime observation", () => {
 
     expect(observeAttemptRuntime(closed, attempt({ runDir })).kind).toBe("ambiguous");
   });
+
+  it("reports the owner absent for a github_persisted journal whose workspace closed without a receipt", () => {
+    const closed = runner({ listWorkspaces: () => [] });
+
+    expect(observeAttemptRuntime(closed, attempt({ phase: "github_persisted" }), process.cwd()).kind).toBe("owner_absent_owned");
+  });
+
+  it("refuses a github_persisted journal whose closed workspace left no retained worktree", () => {
+    const discarded = runner({ listWorkspaces: () => [], listWorktrees: () => [] });
+
+    expect(observeAttemptRuntime(discarded, attempt({ phase: "github_persisted" }), process.cwd()).kind).toBe("ambiguous");
+  });
+
+  it("refuses a github_persisted journal whose closed checkout another agent occupies", () => {
+    const occupied = runner({ listWorkspaces: () => [], listAgents: () => [{ name: "foreign", paneId: "pane-2", cwd: "/wt", status: "working" }] });
+
+    expect(observeAttemptRuntime(occupied, attempt({ phase: "github_persisted" }), process.cwd()).kind).toBe("ambiguous");
+  });
 });

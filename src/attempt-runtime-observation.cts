@@ -70,6 +70,12 @@ function validCloseReceipt(record: JsonObject): boolean {
   } catch { return false; }
 }
 
+/** Whether the runtime still lists the attempt's own workspace as open. */
+function workspaceIsOpen(runner: AttemptRuntimeRunner, record: JsonObject): boolean {
+  return runner.listWorkspaces().some((workspace) =>
+    String(workspace.workspaceId || "") === String(record.workspaceId || ""));
+}
+
 /** Every agent the runtime lists that could be this attempt: its name, its pane, or its checkout. */
 function relatedAgents(agents: JsonObject[], record: JsonObject): JsonObject[] {
   return agents.filter((agent) => String(agent.name || "") === String(record.agentName || "")
@@ -128,7 +134,14 @@ function observeAttemptRuntime(runner: AttemptRuntimeRunner, record: JsonObject,
   const agents = runner.listAgents();
   const checkoutWorkspaces = workspaces.filter((workspace) => canonicalPath(workspace.worktreePath) === canonicalPath(record.worktreePath));
   const matchingWorkspaces = checkoutWorkspaces.filter((workspace) => String(workspace.workspaceId || "") === String(record.workspaceId || ""));
-  if (matchingWorkspaces.length === 0 && validCloseReceipt(record) && projectRepo) {
+  // A journal at `github_persisted` is written only after the guarded completion chain confirmed
+  // its GitHub persistence, and closing the workspace is that phase's own next step. A closed
+  // workspace there is the expected end state even without a close receipt: another closer (the
+  // settled-workspace patrol, or a completion chain that stopped before its journal transition)
+  // did what the phase itself was about to do. The retained-worktree and checkout-occupancy proofs
+  // below still apply, so an attempt that could still act never reads as finished.
+  if (matchingWorkspaces.length === 0 && projectRepo
+    && (validCloseReceipt(record) || record.phase === "github_persisted")) {
     const retained = worktreeIsRetained(runner, record, projectRepo);
     return retained && checkoutWorkspaces.length === 0 && relatedAgents(agents, record).length === 0
       ? { kind: "owner_absent_owned" } : { kind: "ambiguous" };
@@ -140,4 +153,4 @@ function observeAttemptRuntime(runner: AttemptRuntimeRunner, record: JsonObject,
   return liveness.kind === "live" ? { kind: "live_matching_owner" } : { kind: "owner_absent_owned" };
 }
 
-module.exports = { canonicalPath, canonicalPathContains, closeReceiptPath, observeAttemptLiveness, observeAttemptRuntime, observeAttemptTurn };
+module.exports = { canonicalPath, canonicalPathContains, closeReceiptPath, observeAttemptLiveness, observeAttemptRuntime, observeAttemptTurn, workspaceIsOpen };
