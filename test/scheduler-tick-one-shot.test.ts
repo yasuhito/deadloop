@@ -172,7 +172,9 @@ describe("shared scheduler tick", () => {
       emitHostLog: (event) => events.push(event),
     }));
 
-    expect(events.at(-1)).toMatchObject({
+    // The delivery judgment is no longer the tick's last event (#402): the same tick also
+    // selected the due automation, whose own automation_result line closes the tick.
+    expect(events.at(-2)).toMatchObject({
       kind: "automation_result",
       result: "driver_attempt_completion_pending",
       reason: childSummary,

@@ -274,7 +274,7 @@ describe("retained driver-handoff settlement proofs", () => {
     });
   });
 
-  it("lets the next tick advance to a fresh pull request selection after the clearance", async () => {
+  it("lets the same tick advance to a fresh pull request selection after the clearance", async () => {
     const world = settlementFixture({
       phase: "authority_released",
       lastSuccessfulPhase: "agent_started",
@@ -334,12 +334,11 @@ describe("retained driver-handoff settlement proofs", () => {
     });
 
     const settledTick = await executeSchedulerTick(project, tickDeps());
-    const selectionTick = await executeSchedulerTick(project, tickDeps());
 
-    expect({ settled: settledTick.status === "retained", clearedBy: entry.lastResult }).toEqual({
+    expect({ settled: settledTick.status === "retained_and_selected", clearedBy: entry.lastResult, ran: "automationName" in settledTick ? settledTick.automationName : null }).toEqual({
       settled: true,
       clearedBy: "driver_monitor_settled",
+      ran: "ticker",
     });
-    expect(selectionTick).toEqual({ status: "selected", automationName: "ticker", result: "driver_done", summary: "driver ran" });
   });
 });

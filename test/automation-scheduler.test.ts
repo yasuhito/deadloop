@@ -11,7 +11,7 @@ describe("Automation host scheduling", () => {
       "demo:demo:pr-reviewer": { lastScheduledAt: 0 },
     };
 
-    expect(reconcileAndSelectDueAutomation(project, state, 30 * 60_000)?.automation.id).toBe("demo:pr-reviewer");
+    expect(reconcileAndSelectDueAutomation(project, state, 30 * 60_000).selected?.automation.id).toBe("demo:pr-reviewer");
   });
 
   it("uses the time an automation became due rather than its previous execution time", () => {
@@ -25,7 +25,7 @@ describe("Automation host scheduling", () => {
       ],
     });
 
-    expect(reconcileAndSelectDueAutomation(project, {}, 30 * 60_000)?.automation.id).toBe("waiting");
+    expect(reconcileAndSelectDueAutomation(project, {}, 30 * 60_000).selected?.automation.id).toBe("waiting");
   });
 
   it("ranks a non-aligned initial state by its first cron slot", () => {
@@ -39,7 +39,7 @@ describe("Automation host scheduling", () => {
       ],
     });
 
-    expect(reconcileAndSelectDueAutomation(project, {}, 20 * 60_000)?.automation.id).toBe("due-at-ten");
+    expect(reconcileAndSelectDueAutomation(project, {}, 20 * 60_000).selected?.automation.id).toBe("due-at-ten");
   });
 
   it("selects the longest-waiting automation regardless of configuration order", () => {
@@ -50,7 +50,7 @@ describe("Automation host scheduling", () => {
       "demo:demo:pr-reviewer": { lastScheduledAt: 0 },
     };
 
-    expect(reconcileAndSelectDueAutomation(project, state, 30 * 60_000)?.automation.id).toBe("demo:pr-reviewer");
+    expect(reconcileAndSelectDueAutomation(project, state, 30 * 60_000).selected?.automation.id).toBe("demo:pr-reviewer");
   });
 
   it("selects the other due automation on the next tick", () => {
@@ -60,10 +60,22 @@ describe("Automation host scheduling", () => {
       "demo:demo:pr-reviewer": { lastScheduledAt: 20 * 60_000 },
     };
     const first = reconcileAndSelectDueAutomation(project, state, 30 * 60_000);
-    if (!first) throw new Error("expected a due automation");
-    state[automationStateKey(project, first.automation)].lastScheduledAt = first.dueSlot;
+    if (!first.selected) throw new Error("expected a due automation");
+    state[automationStateKey(project, first.selected.automation)].lastScheduledAt = first.selected.dueSlot;
 
-    expect(reconcileAndSelectDueAutomation(project, state, 30 * 60_000)?.automation.id).not.toBe(first.automation.id);
+    expect(reconcileAndSelectDueAutomation(project, state, 30 * 60_000).selected?.automation.id).not.toBe(first.selected.automation.id);
+  });
+
+  it("reports the due automations that lost selection as starved", () => {
+    const project = normalizeProject({ id: "demo", workerModel: "test-model", reviewerModel: "review-model" });
+    const state = {
+      "demo:demo:issue-coordinator": { lastScheduledAt: 20 * 60_000 },
+      "demo:demo:pr-reviewer": { lastScheduledAt: 20 * 60_000 },
+    };
+
+    const { starved } = reconcileAndSelectDueAutomation(project, state, 30 * 60_000);
+
+    expect(starved.map((entry) => entry.automationId)).toEqual(["demo:pr-reviewer"]);
   });
 
   it("records a missed slot on the state entry", () => {
