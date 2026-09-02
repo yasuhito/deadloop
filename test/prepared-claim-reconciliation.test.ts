@@ -8,25 +8,28 @@ const { clearIssueRecoveryBlock } = require("../extensions/deadloop/automations/
 const { hasExactRequestConsumption, reconcileLocked } = require("../extensions/deadloop/automations/reconcile-prepared-attempt.cts");
 
 const roots: string[] = [];
-function setup(input: "worker" | "reviewer" | { agentRequest?: boolean; role?: "worker" | "explorer" } = "worker") {
-  const options: { agentRequest?: boolean; role?: "worker" | "explorer" | "reviewer" } =
+function setup(
+  input: "worker" | "reviewer" | { agentRequest?: boolean; role?: "worker" | "explorer" | "reviewer" | "review-repair" } = "worker",
+) {
+  const options: { agentRequest?: boolean; role?: "worker" | "explorer" | "reviewer" | "review-repair" } =
     typeof input === "string" ? { role: input } : input;
   const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-claim-reconcile-"));
   roots.push(root);
   const stateDir = path.join(root, "state");
   const runDir = path.join(stateDir, "runs", "launch-1");
   const role = options.role || "worker";
+  const requestBound = role === "reviewer" || role === "review-repair";
   createPreparedAttempt(runDir, {
     attemptId: "launch-1", launchUuid: "launch-1", project: "demo", repository: "owner/repo", role,
-    target: { kind: role === "reviewer" ? "pull-request" : "issue", number: 12 },
+    target: { kind: requestBound ? "pull-request" : "issue", number: 12 },
     inputRevision: { head: "a".repeat(40) },
     ...(role === "worker" ? { requiredVerification: {
       repository: "owner/repo", command: "npm test", source: { kind: "repo_policy" as const, location: "deadloop.json" }, baseRevision: "a".repeat(40),
-    } } : role === "reviewer" ? { requestEventId: "request-12" } : {}),
+    } } : requestBound ? { requestEventId: "request-12" } : {}),
     branch: "agent/issue-12",
     baseBranch: "origin/main", worktreePath: path.join(root, "worktree"), agentName: "dl-w-12-123456789abc",
     workspaceLabel: "Issue 12", promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
-    ...(options.agentRequest && role !== "reviewer"
+    ...(options.agentRequest && (role === "worker" || role === "explorer")
       ? { agentRequest: { role, label: role === "explorer" ? "custom:explore" : "custom:implement", eventId: "request-1" } }
       : {}),
   });
@@ -226,5 +229,66 @@ describe("prepared attempt claim reconciliation", () => {
 
   it("leaves one recovery comment during ambiguous recovery", () => {
     expect(reconcileInterruptedRequestConsumption().comments).toHaveLength(1);
+  });
+
+  // #421: a review-repair request was consumed and its prepared claim saved, but the launch-time
+  // revalidation judged the persisted repair contract changed. The driver skipped, and the claim
+  // must end in a released state instead of stopping every later tick.
+  function stalePreparedRepair(input: { labels?: string[]; state?: string }) {
+    const data = setup({ role: "review-repair" });
+    const stopped: { comments: string[]; moves: Array<{ remove: string[]; add: string[] }> } = { comments: [], moves: [] };
+    const github = {
+      movePrLabels: (_repository: string, _number: number, move: { remove: string[]; add: string[] }) => {
+        stopped.moves.push(move);
+      },
+      commentPr: (_repository: string, _number: number, body: string) => {
+        stopped.comments.push(body);
+      },
+    };
+    const item = {
+      state: input.state || "OPEN",
+      headRefName: "agent/issue-12",
+      headRefOid: "a".repeat(40),
+      labels: (input.labels || ["custom:claimed"]).map((name) => ({ name })),
+      comments: [],
+    };
+    const runner = { runJson: (commandArgs: string[]) => commandArgs.some((arg) => arg.endsWith("/events")) ? [] : item };
+    const result = reconcileLocked(data.args, runner, { automationLogin: "deadloop-bot" }, () => {}, github);
+    return { data, result, stopped, phase: readAttemptRecord(data.runDir).phase };
+  }
+
+  it("releases a never-launched prepared review-repair claim whose persisted contract no longer matches", () => {
+    const recovery = stalePreparedRepair({});
+    expect(recovery.phase).toBe("authority_released");
+  });
+
+  it("reports the release as a done contract release, not a retained claim", () => {
+    expect(stalePreparedRepair({}).result.driverAction).toBe("prepared_repair_contract_released");
+  });
+
+  it("stops the open unrequested pull request once with the blocked label and one explanation", () => {
+    const recovery = stalePreparedRepair({});
+    expect(recovery.stopped).toEqual({
+      comments: [expect.stringContaining("stopped before it started")],
+      moves: [{
+        remove: ["custom:update", "custom:implement", "custom:review", "custom:claimed"],
+        add: ["custom:blocked"],
+      }],
+    });
+  });
+
+  it("does not stop a pull request that already carries the blocked label", () => {
+    const recovery = stalePreparedRepair({ labels: ["custom:claimed", "custom:blocked"] });
+    expect(recovery.stopped).toEqual({ comments: [], moves: [] });
+  });
+
+  it("keeps a newer live Agent request when releasing the stale claim", () => {
+    const recovery = stalePreparedRepair({ labels: ["custom:claimed", "custom:review"] });
+    expect(recovery.stopped).toEqual({ comments: [], moves: [] });
+  });
+
+  it("releases without a stop write when the pull request is already closed", () => {
+    const recovery = stalePreparedRepair({ state: "CLOSED" });
+    expect(recovery.stopped).toEqual({ comments: [], moves: [] });
   });
 });

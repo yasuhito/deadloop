@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { branchUpdateFixture, reviewerFixture, workerFixture } from "./fixtures/attempt-workspace";
+import { attemptRecord, branchUpdateFixture, reviewerFixture, workerFixture } from "./fixtures/attempt-workspace";
 
 const { createHerdrRunner } = require("../src/herdr-runner.cts");
 
@@ -355,6 +355,49 @@ describe("attempt workspace doctor classifications", () => {
       labels: { ready: "ready", explore: "explore", implement: "implement", inProgress: "progress", review: "review", blocked: "blocked", human: "human" },
     });
     expect(commandArgs[0]).toMatch(/complete-issue-exploration\.cts$/);
+  });
+
+  function preparedRequestBoundRecord(role: "reviewer" | "review-repair") {
+    return {
+      ...attemptRecord(role),
+      phase: "prepared",
+      lastSuccessfulPhase: "prepared",
+      workspaceId: undefined,
+      tabId: undefined,
+      rootPaneId: undefined,
+      outputRevision: undefined,
+      requestEventId: "request-1",
+    };
+  }
+
+  const reconcileProject = {
+    id: "demo", githubRepo: "octo/demo", repoPath: "/repo", enabledAt: 1,
+    labels: { ready: "ready", explore: "explore", implement: "implement", inProgress: "progress", review: "review", blocked: "blocked", human: "human" },
+  };
+
+  it("keeps scheduling after a prepared review-repair claim was released for a changed contract (#421)", async () => {
+    const promiseFile = writeAttempt(preparedRequestBoundRecord("review-repair"), undefined);
+    const recordFile = path.join(path.dirname(promiseFile), "attempt.json");
+    const safeToSchedule = await reconcilePersistedAttemptJournals({ exec: async (_command: string, _args: string[]) => {
+      // The real reconcile script rewrites the journal before returning its result.
+      const record = JSON.parse(readFileSync(recordFile, "utf8"));
+      writeFileSync(recordFile, JSON.stringify({
+        ...record,
+        phase: "authority_released",
+        authorityRelease: { reason: "never_launched", releasedAt: "2026-08-26T00:00:00.000Z" },
+      }));
+      return { code: 0, stdout: '{"action":"done","driverAction":"prepared_repair_contract_released"}' };
+    } }, reconcileProject);
+    expect(safeToSchedule).toBe(true);
+  });
+
+  it("still blocks scheduling while a retained prepared claim waits for reconciliation", async () => {
+    writeAttempt(preparedRequestBoundRecord("reviewer"), undefined);
+    const safeToSchedule = await reconcilePersistedAttemptJournals(
+      { exec: async () => ({ code: 0, stdout: '{"action":"done","driverAction":"prepared_request_consumption_blocked"}' }) },
+      reconcileProject,
+    );
+    expect(safeToSchedule).toBe(false);
   });
 
   it("reports successful explorer worktree cleanup pending after workspace closure", () => {
