@@ -267,7 +267,7 @@ PR の先頭コミットが変わっていた場合は、push せずに停止し
 
 実行可能な受け入れ仕様は [`acceptance/features/`](acceptance/features/) にあります。
 
-問題を調べる際は、Vitest と Cucumber を個別に実行できます。`npm test` は常に両方を直列に実行します。
+問題を調べる際は、Vitest と Cucumber を個別に実行できます。`npm test` は常に両方を直列に実行します。`npm run lint` は、`expect` が2個以上ある Vitest のテストケースも拒否します。
 
 ```bash
 npm run test:unit

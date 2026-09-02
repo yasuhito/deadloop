@@ -192,17 +192,23 @@ describe("terminal monitor transition", () => {
     now = 4_000;
     tick();
 
-    expect({ labels: state.target.labels, comments: state.comments.map((comment: any) => comment.body) }).toEqual({
-      labels: ["agent:implement", "agent:in-progress", "triage"],
-      comments: [],
-    });
+    const duringGrace = { labels: [...state.target.labels], comments: state.comments.map((comment: any) => comment.body) };
 
     now = 61_000;
     tick();
 
-    expect({ labels: state.target.labels, comments: state.comments.map((comment: any) => comment.body) }).toEqual({
-      labels: ["triage", "agent:blocked"],
-      comments: [expect.stringContaining("deadloop stopped this attempt")],
+    expect({
+      duringGrace,
+      afterGrace: { labels: state.target.labels, comments: state.comments.map((comment: any) => comment.body) },
+    }).toEqual({
+      duringGrace: {
+        labels: ["agent:implement", "agent:in-progress", "triage"],
+        comments: [],
+      },
+      afterGrace: {
+        labels: ["triage", "agent:blocked"],
+        comments: [expect.stringContaining("deadloop stopped this attempt")],
+      },
     });
   });
 

@@ -24,31 +24,32 @@ afterEach(() => {
 describe("host activity log", () => {
   it("appends one machine-readable JSON object per line with a fixed core shape", () => {
     const root = sandbox();
-    expect(
-      appendHostLogEvent(
-        root,
-        {
-          kind: "automation_result",
-          projectId: "demo",
-          automationId: "demo:ticker",
-          result: "queued",
-          reason: "driver ran",
-          driverAction: "done",
-        },
-        now,
-      ),
-    ).toBe(true);
+    const appended = appendHostLogEvent(
+      root,
+      {
+        kind: "automation_result",
+        projectId: "demo",
+        automationId: "demo:ticker",
+        result: "queued",
+        reason: "driver ran",
+        driverAction: "done",
+      },
+      now,
+    );
 
     const line = readFileSync(hostLogFile(root), "utf8").trimEnd().split("\n").at(-1)!;
-    expect(JSON.parse(line)).toEqual({
-      schemaVersion: 1,
-      at: "2026-02-14T10:00:00.000Z",
-      kind: "automation_result",
-      projectId: "demo",
-      automationId: "demo:ticker",
-      result: "queued",
-      reason: "driver ran",
-      driverAction: "done",
+    expect({ appended, event: JSON.parse(line) }).toEqual({
+      appended: true,
+      event: {
+        schemaVersion: 1,
+        at: "2026-02-14T10:00:00.000Z",
+        kind: "automation_result",
+        projectId: "demo",
+        automationId: "demo:ticker",
+        result: "queued",
+        reason: "driver ran",
+        driverAction: "done",
+      },
     });
   });
 

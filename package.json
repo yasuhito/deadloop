@@ -11,7 +11,7 @@
     "test": "npm run test:unit && npm run test:acceptance",
     "check:acceptance-rules": "tsx src/check-acceptance-rules.ts",
     "check": "npm run check:acceptance-rules && npm test && npm run lint && npm run typecheck && npm pack --dry-run",
-    "lint": "biome check package.json biome.json cucumber.cjs deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src acceptance/**/*.ts extensions/deadloop/index.ts extensions/deadloop/automations/*.ts extensions/deadloop/automations/*.cts test/*.ts --files-ignore-unknown=true",
+    "lint": "biome check package.json biome.json cucumber.cjs deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src acceptance/**/*.ts extensions/deadloop/index.ts extensions/deadloop/automations/*.ts extensions/deadloop/automations/*.cts test/*.ts --files-ignore-unknown=true && eslint \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "files": [
@@ -48,6 +48,10 @@
     "@cucumber/gherkin": "39.1.0",
     "@cucumber/messages": "32.3.1",
     "@types/node": "^26.1.0",
+    "@typescript-eslint/eslint-plugin": "^8.69.0",
+    "@typescript-eslint/parser": "^8.69.0",
+    "@vitest/eslint-plugin": "^1.6.27",
+    "eslint": "^10.9.1",
     "typescript": "^6.0.3",
     "vitest": "^3.2.4"
   },

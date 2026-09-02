@@ -21,7 +21,7 @@ describe("package manifest files", () => {
 
   it("defines a local lint command", () => {
     expect(packageJson.scripts.lint).toBe(
-      "biome check package.json biome.json cucumber.cjs deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src acceptance/**/*.ts extensions/deadloop/index.ts extensions/deadloop/automations/*.ts extensions/deadloop/automations/*.cts test/*.ts --files-ignore-unknown=true",
+      'biome check package.json biome.json cucumber.cjs deadloop.json eslint.config.mjs test/ci-workflow.test.ts test/package-manifest.test.ts tsconfig.json --files-ignore-unknown=true && biome lint src acceptance/**/*.ts extensions/deadloop/index.ts extensions/deadloop/automations/*.ts extensions/deadloop/automations/*.cts test/*.ts --files-ignore-unknown=true && eslint "test/**/*.test.ts"',
     );
   });
 
@@ -53,6 +53,10 @@ describe("package manifest files", () => {
 
   it("uses TypeScript for type checking", () => {
     expect(packageJson.devDependencies.typescript).toBeDefined();
+  });
+
+  it("uses the official Vitest ESLint plugin to enforce test rules", () => {
+    expect(packageJson.devDependencies["@vitest/eslint-plugin"]).toBeDefined();
   });
 
   it("includes public setup documentation", () => {

@@ -58,16 +58,20 @@ describe("model usage reports", () => {
   it("shows the seven-day window grouped by role and by provider/model", () => {
     const report = formatUsageWindowReport(stateWithLedger(), Date.now());
 
-    expect(report).toContain("- worker:");
-    expect(report).toContain("- openai-codex/gpt-5.6-sol:");
-    expect(report).toContain("never a provider invoice");
+    expect({
+      groupsByRole: report.includes("- worker:"),
+      groupsByProviderModel: report.includes("- openai-codex/gpt-5.6-sol:"),
+      hasInvoiceDisclaimer: report.includes("never a provider invoice"),
+    }).toEqual({ groupsByRole: true, groupsByProviderModel: true, hasInvoiceDisclaimer: true });
   });
 
   it("reports response-level detail for one attempt id", () => {
     const detail = formatAttemptUsageDetail(stateWithLedger(), "attempt-1");
 
-    expect(detail).toContain("role=worker");
-    expect(detail).toContain("cache-read=3000");
+    expect({ hasRole: detail.includes("role=worker"), hasCacheRead: detail.includes("cache-read=3000") }).toEqual({
+      hasRole: true,
+      hasCacheRead: true,
+    });
   });
 
   it("fails clearly when an unknown attempt id has no records", () => {

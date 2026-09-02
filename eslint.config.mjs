@@ -1,13 +1,24 @@
-// Compatibility shim for generic JavaScript lint runners.
-//
-// deadloop uses Biome as the canonical formatter/linter; see `npm run lint`.
-// Some agent/test harnesses auto-detect JavaScript projects and invoke ESLint
-// directly. Keep ESLint from failing with "couldn't find eslint.config" while
-// avoiding a second, divergent lint rule set.
+import tsParser from "@typescript-eslint/parser";
+import vitest from "@vitest/eslint-plugin";
+
+// Biome remains the canonical formatter and general-purpose linter. ESLint
+// supplies the focused Vitest rule that Biome does not provide.
 export default [
   {
     files: ["**/*.{js,cjs,mjs}"],
     ignores: ["node_modules/**", "dist/**", "coverage/**"],
     rules: {},
+  },
+  {
+    files: ["test/**/*.test.ts"],
+    languageOptions: {
+      parser: tsParser,
+    },
+    plugins: {
+      vitest,
+    },
+    rules: {
+      "vitest/max-expects": ["error", { max: 1 }],
+    },
   },
 ];

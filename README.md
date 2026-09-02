@@ -266,7 +266,7 @@ See [ADR 0031](docs/adr/0031-review-history-based-repair-progress.md) for the cu
 
 The executable acceptance specification lives in [`acceptance/features/`](acceptance/features/).
 
-Run Vitest or Cucumber independently when investigating a failure. `npm test` always runs both serially.
+Run Vitest or Cucumber independently when investigating a failure. `npm test` always runs both serially. `npm run lint` also rejects Vitest cases that contain more than one `expect` call.
 
 ```bash
 npm run test:unit

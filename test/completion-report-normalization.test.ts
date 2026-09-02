@@ -133,8 +133,10 @@ describe("completion report short-SHA normalization", () => {
   it("returns the ambiguity error with the reported field attached", () => {
     const error = ambiguousShortShaError("reviewedHead", "2edf");
 
-    expect(error.field).toBe("reviewedHead");
-    expect(error.message).toContain("reviewedHead must be a full 40-hex commit SHA");
+    expect({ field: error.field, hasExpectedFormat: error.message.includes("reviewedHead must be a full 40-hex commit SHA") }).toEqual({
+      field: "reviewedHead",
+      hasExpectedFormat: true,
+    });
   });
 });
 
@@ -148,8 +150,10 @@ describe("the monitor observation of a short-SHA report", () => {
 
     const observed = reportObservation(record);
 
-    expect(observed.kind).toBe("valid");
-    expect(observed.value.result.outputRevision).toBe(head);
+    expect({ kind: observed.kind, outputRevision: observed.value.result.outputRevision }).toEqual({
+      kind: "valid",
+      outputRevision: head,
+    });
   });
 
   it("stops with a detail naming the field and expected format for an ambiguous short SHA", () => {
@@ -161,8 +165,10 @@ describe("the monitor observation of a short-SHA report", () => {
 
     const observed = reportObservation(record);
 
-    expect(observed.kind).toBe("invalid");
-    expect(String(observed.detail)).toContain("outputRevision must be a full 40-hex commit SHA");
+    expect({
+      kind: observed.kind,
+      hasExpectedFormat: String(observed.detail).includes("outputRevision must be a full 40-hex commit SHA"),
+    }).toEqual({ kind: "invalid", hasExpectedFormat: true });
   });
 });
 
@@ -175,8 +181,10 @@ describe("the executable promise validation of a short-SHA report", () => {
 
     const validated = validatePromise(promiseFile, path.join(runDir, "attempt.json"));
 
-    expect(validated.evidenceStrength).toBe("strong");
-    expect(validated.promise.result.outputRevision).toBe(head);
+    expect({
+      evidenceStrength: validated.evidenceStrength,
+      outputRevision: validated.promise.result.outputRevision,
+    }).toEqual({ evidenceStrength: "strong", outputRevision: head });
   });
 
   it("rejects an ambiguous short outputRevision with a typed error", () => {
@@ -187,8 +195,10 @@ describe("the executable promise validation of a short-SHA report", () => {
 
     const validated = validatePromise(promiseFile, path.join(runDir, "attempt.json"));
 
-    expect(validated.status).toBe("invalid");
-    expect(validated.error).toBe("ambiguous_output_revision");
+    expect({ status: validated.status, error: validated.error }).toEqual({
+      status: "invalid",
+      error: "ambiguous_output_revision",
+    });
   });
 
   it("keeps an unresolvable short outputRevision invalid without expansion", () => {

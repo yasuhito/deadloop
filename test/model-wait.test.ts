@@ -45,29 +45,28 @@ describe("model wait session retry", () => {
   it("submits one fixed continuation prompt to the recorded agent session", () => {
     const state = retryFixture({ kind: "terminal", status: "done", agent: { name: "reviewer-1" } });
 
-    expect(state.retry(record)).toBe(true);
-    expect(state.prompts).toEqual([{ agentName: "reviewer-1", text: MODEL_WAIT_RETRY_PROMPT }]);
+    expect({ reused: state.retry(record), prompts: state.prompts }).toEqual({
+      reused: true,
+      prompts: [{ agentName: "reviewer-1", text: MODEL_WAIT_RETRY_PROMPT }],
+    });
   });
 
   it("reports reuse without prompting when the agent resumed working on its own", () => {
     const state = retryFixture({ kind: "working", agent: {} });
 
-    expect(state.retry(record)).toBe(true);
-    expect(state.prompts).toEqual([]);
+    expect({ reused: state.retry(record), prompts: state.prompts }).toEqual({ reused: true, prompts: [] });
   });
 
   it("refuses to reuse when the recorded agent no longer answers under its identity", () => {
     const state = retryFixture({ kind: "owner_absent" });
 
-    expect(state.retry(record)).toBe(false);
-    expect(state.prompts).toEqual([]);
+    expect({ reused: state.retry(record), prompts: state.prompts }).toEqual({ reused: false, prompts: [] });
   });
 
   it("refuses an ambiguous runtime without prompting", () => {
     const state = retryFixture({ kind: "ambiguous" });
 
-    expect(state.retry(record)).toBe(false);
-    expect(state.prompts).toEqual([]);
+    expect({ reused: state.retry(record), prompts: state.prompts }).toEqual({ reused: false, prompts: [] });
   });
 
   it("treats a rejected prompt submission as an unusable session", () => {
@@ -80,7 +79,6 @@ describe("model wait session retry", () => {
       },
     });
 
-    expect(retry(record)).toBe(false);
-    expect(prompts).toEqual(["reviewer-1"]);
+    expect({ reused: retry(record), prompts }).toEqual({ reused: false, prompts: ["reviewer-1"] });
   });
 });

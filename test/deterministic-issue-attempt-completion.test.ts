@@ -113,14 +113,16 @@ describe("deterministic Issue attempt completion", () => {
       return {};
     } });
 
-    expect(scripts).toEqual([
-      "run-worker-required-verification.cts",
-      "guarded-push.cts",
-      "guarded-worker-pr.cts",
-      "persist-attempt-result.cts",
-      "complete-attempt-workspace.cts",
-    ]);
-    expect(result.applied).toBe(true);
+    expect({ scripts, applied: result.applied }).toEqual({
+      scripts: [
+        "run-worker-required-verification.cts",
+        "guarded-push.cts",
+        "guarded-worker-pr.cts",
+        "persist-attempt-result.cts",
+        "complete-attempt-workspace.cts",
+      ],
+      applied: true,
+    });
   });
 
   it("skips rerunning verification when an authoritative record already binds this report", () => {
@@ -239,14 +241,15 @@ describe("deterministic Issue attempt completion", () => {
         stopNoun: stopInputs[0]?.stopNoun,
         clearedRequests: stopInputs[0]?.requestLabels,
         reason: (stopInputs[0]?.failure as Record<string, unknown>)?.reason,
+        scripts,
       }).toEqual({
         applied: true,
         result: "issue_attempt_blocked_stopped",
         stopNoun: "implementation",
         clearedRequests: ["agent:implement", "agent:explore"],
         reason: "spec_missing",
+        scripts: ["complete-attempt-workspace.cts"],
       });
-      expect(scripts).toEqual(["complete-attempt-workspace.cts"]);
     } finally {
       transitions.persistIssueAttemptStop = original;
     }
@@ -326,6 +329,8 @@ describe("deterministic Issue attempt completion", () => {
         stopNoun: stopInputs[0]?.stopNoun,
         clearedRequests: stopInputs[0]?.requestLabels,
         scripts,
+        explanationNamesMissingCommit: String(failure?.explanation).includes("without a new commit"),
+        recoveryNamesRequest: String(failure?.recovery).includes("agent:implement"),
       }).toEqual({
         applied: true,
         result: "issue_attempt_noop_stopped",
@@ -333,9 +338,9 @@ describe("deterministic Issue attempt completion", () => {
         stopNoun: "implementation",
         clearedRequests: ["agent:implement", "agent:explore"],
         scripts: ["run-worker-required-verification.cts", "complete-attempt-workspace.cts"],
+        explanationNamesMissingCommit: true,
+        recoveryNamesRequest: true,
       });
-      expect(String(failure?.explanation)).toContain("without a new commit");
-      expect(String(failure?.recovery)).toContain("agent:implement");
     } finally {
       transitions.persistIssueAttemptStop = original;
     }

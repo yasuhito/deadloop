@@ -63,9 +63,17 @@ describe("enablement lock pending temp files", () => {
     const { lockPath } = lockSandbox();
     writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startIdentity, token: "held" }));
 
-    expect(() => acquireLockSync(lockPath, { attempts: 1, delayMs: 1, hooks: aliveHooks })).toThrow(/busy/);
+    let error: unknown;
+    try {
+      acquireLockSync(lockPath, { attempts: 1, delayMs: 1, hooks: aliveHooks });
+    } catch (caught) {
+      error = caught;
+    }
 
-    expect(pendingLockFiles(lockPath)).toEqual([]);
+    expect({ error: String(error), pendingFiles: pendingLockFiles(lockPath) }).toEqual({
+      error: "Error: enablement state is busy",
+      pendingFiles: [],
+    });
   });
 
   it("removes a dead owner's pending temp file at the next lock acquisition", () => {
@@ -95,11 +103,15 @@ describe("enablement lock pending temp files", () => {
     const pendingPath = `${lockPath}.64999.empty.pending`;
     writeFileSync(pendingPath, "");
 
-    expect(cleanupStalePending(lockPath, deadHooks)).toBe(0);
+    const removedWithinGrace = cleanupStalePending(lockPath, deadHooks);
 
     const past = new Date(Date.now() - 5_000);
     utimesSync(pendingPath, past, past);
-    expect(cleanupStalePending(lockPath, deadHooks)).toBe(1);
-    expect(existsSync(pendingPath)).toBe(false);
+    const removedAfterGrace = cleanupStalePending(lockPath, deadHooks);
+    expect({ removedWithinGrace, removedAfterGrace, pendingFileExists: existsSync(pendingPath) }).toEqual({
+      removedWithinGrace: 0,
+      removedAfterGrace: 1,
+      pendingFileExists: false,
+    });
   });
 });

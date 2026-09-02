@@ -23,8 +23,10 @@ describe("doctor enablement pending lock files", () => {
   });
 
   it("raises a finding only when pending temp files remain", () => {
-    expect(snapshotWith(2).findings.map((finding: { type: string }) => finding.type)).toContain("enablement_pending_lock_files");
-    expect(snapshotWith(0).findings.some((finding: { type: string }) => finding.type === "enablement_pending_lock_files")).toBe(false);
+    expect({
+      withPendingFiles: snapshotWith(2).findings.map((finding: { type: string }) => finding.type),
+      withoutPendingFiles: snapshotWith(0).findings.some((finding: { type: string }) => finding.type === "enablement_pending_lock_files"),
+    }).toEqual({ withPendingFiles: ["enablement_pending_lock_files"], withoutPendingFiles: false });
   });
 
   it("states that the next lock acquisition cleans the residual files", () => {

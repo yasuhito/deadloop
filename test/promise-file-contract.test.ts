@@ -30,7 +30,9 @@ describe("promise file contract", () => {
   it("uses the promise file as the completion authority", () => {
     const workerPrompt = issueWorkerPrompt();
 
-    expect(workerPrompt).toContain("Promise report:");
-    expect(workerPrompt).toContain("Always write the promise file");
+    expect({
+      namesPromiseReport: workerPrompt.includes("Promise report:"),
+      requiresPromiseWrite: workerPrompt.includes("Always write the promise file"),
+    }).toEqual({ namesPromiseReport: true, requiresPromiseWrite: true });
   });
 });

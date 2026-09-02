@@ -133,12 +133,21 @@ describe("CI-equivalent verification runner on real repositories", () => {
     const verifiedHead = git(fx.repoPath, ["rev-parse", "HEAD"]);
     runVerification({ projectRepo: fx.repoPath, stateDir: fx.stateDir, headOid: verifiedHead, baseOid: fx.baseOid, policyBaseRevision: fx.baseOid });
     const persisted = store.readMergeCandidateRecord(fx.stateDir, "demo", 24);
-    expect(persisted.headOid).toBe(verifiedHead);
-    expect(persisted.baseOid).toBe(fx.baseOid);
-    expect(persisted.treeOid).toMatch(/^[0-9a-f]{40}$/);
-    expect(persisted.command).toBe("npm ci && npm run check");
-    expect(persisted.derivation).toBe("npm_convention");
-    expect(persisted.policyBaseRevision).toBe(fx.baseOid);
+    expect({
+      headOid: persisted.headOid,
+      baseOid: persisted.baseOid,
+      treeOidIsFullSha: /^[0-9a-f]{40}$/.test(persisted.treeOid),
+      command: persisted.command,
+      derivation: persisted.derivation,
+      policyBaseRevision: persisted.policyBaseRevision,
+    }).toEqual({
+      headOid: verifiedHead,
+      baseOid: fx.baseOid,
+      treeOidIsFullSha: true,
+      command: "npm ci && npm run check",
+      derivation: "npm_convention",
+      policyBaseRevision: fx.baseOid,
+    });
   });
 
   it("keeps execution logs outside the worktree and removes the temporary worktree afterwards", () => {
@@ -148,11 +157,12 @@ describe("CI-equivalent verification runner on real repositories", () => {
     const loggedHead = git(fx.repoPath, ["rev-parse", "HEAD"]);
     runVerification({ projectRepo: fx.repoPath, stateDir: fx.stateDir, headOid: loggedHead, baseOid: fx.baseOid, policyBaseRevision: fx.baseOid });
     const persisted = store.readMergeCandidateRecord(fx.stateDir, "demo", 24);
-    expect(existsSync(persisted.logPath)).toBe(true);
-    expect(readFileSync(persisted.logPath, "utf8")).toContain("ran");
-
     const worktrees = git(fx.repoPath, ["worktree", "list", "--porcelain"]);
-    expect(worktrees).not.toContain("merge-trees");
+    expect({
+      logExists: existsSync(persisted.logPath),
+      logContainsOutput: readFileSync(persisted.logPath, "utf8").includes("ran"),
+      temporaryWorktreeRemoved: !worktrees.includes("merge-trees"),
+    }).toEqual({ logExists: true, logContainsOutput: true, temporaryWorktreeRemoved: true });
   });
 
   it("reports the contract unavailable without guessing another ecosystem's command", () => {
@@ -187,8 +197,10 @@ describe("CI-equivalent verification runner on real repositories", () => {
       baseOid: healthyBase,
       policyBaseRevision: healthyBase,
     });
-    expect(result.outcome).toBe("passed");
-    expect(store.readDiagnosisRecord(fx.stateDir, "demo", 24).role).toBe("base_diagnosis");
+    expect({ outcome: result.outcome, role: store.readDiagnosisRecord(fx.stateDir, "demo", 24).role }).toEqual({
+      outcome: "passed",
+      role: "base_diagnosis",
+    });
   });
 
   it("replaces the record when the head advances so the newest evidence wins", () => {
@@ -199,7 +211,6 @@ describe("CI-equivalent verification runner on real repositories", () => {
     git(fx.repoPath, ["commit", "--quiet", "-m", "introduce the defect"]);
     runVerification({ projectRepo: fx.repoPath, stateDir: fx.stateDir, headOid: git(fx.repoPath, ["rev-parse", "HEAD"]), baseOid: fx.baseOid, policyBaseRevision: fx.baseOid });
     const failedOutcome = store.readMergeCandidateRecord(fx.stateDir, "demo", 24);
-    expect(failedOutcome.outcome).toBe("failed");
 
     // A repair pushes a head that removes the defect; the same record file now carries the new proof.
     rmSync(path.join(fx.repoPath, "should-fail.flag"));
@@ -208,8 +219,11 @@ describe("CI-equivalent verification runner on real repositories", () => {
     const repairedHead = git(fx.repoPath, ["rev-parse", "HEAD"]);
     runVerification({ projectRepo: fx.repoPath, stateDir: fx.stateDir, headOid: repairedHead, baseOid: fx.baseOid, policyBaseRevision: fx.baseOid });
     const latest = store.readMergeCandidateRecord(fx.stateDir, "demo", 24);
-    expect(latest.outcome).toBe("passed");
-    expect(latest.headOid).toBe(repairedHead);
+    expect({ failedOutcome: failedOutcome.outcome, latestOutcome: latest.outcome, latestHead: latest.headOid }).toEqual({
+      failedOutcome: "failed",
+      latestOutcome: "passed",
+      latestHead: repairedHead,
+    });
   });
 
   it("binds the failed record to its exact head so an advanced head invalidates it", () => {

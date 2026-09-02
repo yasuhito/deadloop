@@ -180,10 +180,14 @@ describe("a driver result lost after a launched attempt", () => {
       });
 
       const entry = state.automations["demo:demo:issue-coordinator"];
-      expect(entry.lastResult).toBe("driver_invalid_result");
       const handoff = entry.pendingDriverHandoff as { monitorHandoff?: { input?: { attemptRecordFile?: string } } };
-      expect(handoff.monitorHandoff?.input?.attemptRecordFile)
-        .toBe(path.join(root, "runs", "fixture-worker-demo-12", "attempt.json"));
+      expect({
+        lastResult: entry.lastResult,
+        attemptRecordFile: handoff.monitorHandoff?.input?.attemptRecordFile,
+      }).toEqual({
+        lastResult: "driver_invalid_result",
+        attemptRecordFile: path.join(root, "runs", "fixture-worker-demo-12", "attempt.json"),
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

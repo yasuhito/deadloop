@@ -43,8 +43,10 @@ describe("deadloop status report", () => {
   it("shows the resolved role models in the status report", () => {
     const report = formatStatusReport(buildStatusSnapshot({ cwd: "/home/yasuhito/Work/deadloop", projects }));
 
-    expect(report).toContain(`roleModels: worker=${projects[0].workerModel}`);
-    expect(report).toContain(`explorer=${projects[0].workerModel}`);
+    expect({
+      hasWorkerModel: report.includes(`roleModels: worker=${projects[0].workerModel}`),
+      hasExplorerModel: report.includes(`explorer=${projects[0].workerModel}`),
+    }).toEqual({ hasWorkerModel: true, hasExplorerModel: true });
   });
 
   it("lists current-attempt model and token totals when an active attempt has usage", () => {
@@ -61,9 +63,11 @@ describe("deadloop status report", () => {
       buildStatusSnapshot({ cwd: "/home/yasuhito/Work/deadloop", projects, attemptUsage }),
     );
 
-    expect(report).toContain("Current attempt usage:");
-    expect(report).toContain("attempt-9 (worker, issue #42): model=openai-codex/gpt-5.6-sol");
-    expect(report).toContain("cache-read=12000");
+    expect({
+      hasUsageHeading: report.includes("Current attempt usage:"),
+      hasAttemptModel: report.includes("attempt-9 (worker, issue #42): model=openai-codex/gpt-5.6-sol"),
+      hasCacheRead: report.includes("cache-read=12000"),
+    }).toEqual({ hasUsageHeading: true, hasAttemptModel: true, hasCacheRead: true });
   });
 
 

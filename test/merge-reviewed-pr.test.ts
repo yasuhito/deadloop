@@ -320,9 +320,11 @@ describe("reviewed PR merge", () => {
       ciFallbackRecord: recordFile,
     });
     const mergeIndex = result.commands.findIndex((command) => command[1] === "pr" && command[2] === "merge");
-    expect(mergeIndex).toBeGreaterThan(-1);
 
-    expect(result.commands.slice(0, mergeIndex).some((command) => command[1] === "pr" && command[2] === "comment")).toBe(true);
+    expect({
+      mergeRan: mergeIndex > -1,
+      commentPrecededMerge: result.commands.slice(0, mergeIndex).some((command) => command[1] === "pr" && command[2] === "comment"),
+    }).toEqual({ mergeRan: true, commentPrecededMerge: true });
   });
 
   it("fails closed when CI fallback evidence is bound to a different tree", () => {

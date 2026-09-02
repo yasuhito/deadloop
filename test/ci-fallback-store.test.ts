@@ -42,9 +42,11 @@ describe("CI fallback verification records", () => {
   it("persists records outside every worktree under the project's state directory", () => {
     const stateDir = newStateDir();
     const recordPath = store.writeMergeCandidateRecord(stateDir, "demo", record());
-    expect(recordPath.startsWith(path.join(stateDir, "ci-fallback", "demo"))).toBe(true);
 
-    expect(store.readMergeCandidateRecord(stateDir, "demo", 24)).toMatchObject({ prNumber: 24 });
+    expect({
+      storedOutsideWorktree: recordPath.startsWith(path.join(stateDir, "ci-fallback", "demo")),
+      persistedPrNumber: store.readMergeCandidateRecord(stateDir, "demo", 24).prNumber,
+    }).toEqual({ storedOutsideWorktree: true, persistedPrNumber: 24 });
   });
 
   it("keeps the diagnosis record separate from the merge-candidate record", () => {
@@ -74,8 +76,11 @@ describe("base blocking records", () => {
     const stateDir = newStateDir();
     store.writeBaseBlocking(stateDir, "demo", { baseRevision: "base1", command: "make ci", prNumber: 24 });
     const evaluation = store.evaluateBaseBlocking(stateDir, "demo", { baseRevision: "base2", command: "make ci" });
-    expect(evaluation.active).toBe(false);
-    expect(existsSync(store.ciFallbackDirectory(stateDir, "demo") + "/base-blocking.json")).toBe(false);
+
+    expect({
+      active: evaluation.active,
+      recordExists: existsSync(store.ciFallbackDirectory(stateDir, "demo") + "/base-blocking.json"),
+    }).toEqual({ active: false, recordExists: false });
   });
 
   it("clears automatically when the contract command changes", () => {
@@ -138,11 +143,13 @@ describe("project base blocking evaluation", () => {
     store.writeBaseBlocking(root, "demo", { baseRevision, command: "make ci", prNumber: 24 });
 
     const evaluation = evaluateProjectBaseBlocking({ stateDir: root, projectId: "demo", repoPath, baseBranch: "main" });
-    expect(evaluation.active).toBe(true);
 
     execFileSync("git", ["-C", repoPath, "commit", "--quiet", "--allow-empty", "-m", "advance"]);
     const cleared = evaluateProjectBaseBlocking({ stateDir: root, projectId: "demo", repoPath, baseBranch: "main" });
-    expect(cleared.active).toBe(false);
+    expect({ activeBeforeAdvance: evaluation.active, activeAfterAdvance: cleared.active }).toEqual({
+      activeBeforeAdvance: true,
+      activeAfterAdvance: false,
+    });
   });
 
   it("observing a stale base/contract pair reports it inactive", () => {

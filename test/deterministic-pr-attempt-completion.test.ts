@@ -179,8 +179,10 @@ describe("deterministic PR attempt completion", () => {
       return { driverAction: "workspace_closed" };
     } });
 
-    expect(scripts.indexOf("ci-fallback-gate.cts")).toBeGreaterThan(-1);
-    expect(result.applied).toBe(true);
+    expect({ fallbackGateRan: scripts.includes("ci-fallback-gate.cts"), applied: result.applied }).toEqual({
+      fallbackGateRan: true,
+      applied: true,
+    });
   });
 
   it("passes the fallback record to the merge only when the gate authorizes on CI fallback", () => {
@@ -209,8 +211,10 @@ describe("deterministic PR attempt completion", () => {
       return { driverAction: "workspace_closed" };
     } });
 
-    expect(result.applied).toBe(false);
-    expect(scripts).not.toContain("merge-reviewed-pr.cts");
+    expect({ applied: result.applied, mergeRan: scripts.includes("merge-reviewed-pr.cts") }).toEqual({
+      applied: false,
+      mergeRan: false,
+    });
   });
 
   it("records a queued CI fallback repair request as applied without closing a second workspace", () => {
@@ -224,8 +228,10 @@ describe("deterministic PR attempt completion", () => {
       throw new Error(`unexpected script ${script}`);
     } });
 
-    expect(result.applied).toBe(true);
-    expect(scripts).not.toContain("complete-attempt-workspace.cts");
+    expect({ applied: result.applied, workspaceClosed: scripts.includes("complete-attempt-workspace.cts") }).toEqual({
+      applied: true,
+      workspaceClosed: false,
+    });
   });
 
   it("closes an approved non-autoMerge review through the explicit human handoff expectation", () => {

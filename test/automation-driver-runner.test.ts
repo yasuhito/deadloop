@@ -741,22 +741,23 @@ describe("model availability waiting in deterministic attempt monitoring", () =>
     fixture.setDirective(rejectionDirective(null));
 
     fixture.tick({ projectId: "demo", automationId: "demo:ticker" });
-    const established = fixture.hostLogEvents[0];
-    expect(established).toMatchObject({
-      kind: "model_wait_transitioned",
-      projectId: "demo",
-      automationId: "demo:ticker",
-      result: "driver_monitor_waiting_for_model",
-      reason: "waiting for model availability",
-    });
-
     fixture.setNow(Date.parse("2026-08-21T00:10:00.000Z"));
     fixture.tick({ projectId: "demo", automationId: "demo:ticker" });
-    expect(fixture.hostLogEvents[1]).toMatchObject({
-      kind: "model_wait_transitioned",
-      result: "driver_monitor_model_retry",
-      reason: "model availability retry sent",
-    });
+
+    expect(fixture.hostLogEvents).toMatchObject([
+      {
+        kind: "model_wait_transitioned",
+        projectId: "demo",
+        automationId: "demo:ticker",
+        result: "driver_monitor_waiting_for_model",
+        reason: "waiting for model availability",
+      },
+      {
+        kind: "model_wait_transitioned",
+        result: "driver_monitor_model_retry",
+        reason: "model availability retry sent",
+      },
+    ]);
   });
 
   it("keeps the tick outcome intact when the host log sink throws during a model-wait transition", () => {
@@ -925,15 +926,18 @@ describe("model availability waiting in deterministic attempt monitoring", () =>
     fixture.setDirective(rejectionDirective(null));
 
     fixture.tick();
-    expect({
+    const wait = {
       result: fixture.entry.lastResult,
       retained: fixture.entry.pendingDriverHandoff !== undefined,
       retries: fixture.retries.length,
-    }).toEqual({ result: "driver_monitor_waiting_for_model", retained: true, retries: 0 });
+    };
 
     fixture.setNow(Date.parse("2026-08-21T00:10:00.000Z"));
     fixture.tick();
-    expect(fixture.retries.length).toBe(1);
+    expect({ wait, retriesAfterNextTick: fixture.retries.length }).toEqual({
+      wait: { result: "driver_monitor_waiting_for_model", retained: true, retries: 0 },
+      retriesAfterNextTick: 1,
+    });
   });
 });
 

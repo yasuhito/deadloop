@@ -180,8 +180,10 @@ describe("deterministic extension core", () => {
       }),
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.reason).toMatch(/key is not allowed: promptFile/);
+    expect({ ok: result.ok, hasExpectedReason: result.ok === false && /key is not allowed: promptFile/.test(result.reason) }).toEqual({
+      ok: false,
+      hasExpectedReason: true,
+    });
   });
 
   it("keeps explicit empty automations disabled", () => {
@@ -462,9 +464,11 @@ describe("deterministic extension core", () => {
       repoPolicyBaseRevision: "base",
     } as never);
 
-    expect(project.ciEquivalentCommand).toBeUndefined();
     const configured = normalizeProject({ ciEquivalentCommand: "make ci", workerModel: "test-model", reviewerModel: "review-model", automations: [{ driverFile: "driver.cts" }] });
-    expect(automationEnvironment(configured, configured.automations[0]).DEADLOOP_CI_EQUIVALENT_COMMAND).toBe("make ci");
+    expect({
+      policyOnlyCommand: project.ciEquivalentCommand,
+      configuredEnvironmentCommand: automationEnvironment(configured, configured.automations[0]).DEADLOOP_CI_EQUIVALENT_COMMAND,
+    }).toEqual({ policyOnlyCommand: undefined, configuredEnvironmentCommand: "make ci" });
   });
 
   it("preserves an automation driver file from project config", () => {
