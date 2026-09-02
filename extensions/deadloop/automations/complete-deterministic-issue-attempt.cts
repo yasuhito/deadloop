@@ -23,6 +23,7 @@ const {
 } = require("../../../src/worker-required-verification-runtime.cjs");
 const issueRequestTransition = require("../../../src/issue-request-transition.cts");
 const issueExploration = require("./complete-issue-exploration.cts");
+const { workerPrIsPersisted } = require("./persist-attempt-result.cts");
 const { normalizeCompletionReportCommitShas } = require("../../../src/completion-report-normalization.cjs");
 
 type JsonObject = Record<string, any>;
@@ -30,6 +31,8 @@ type JsonObject = Record<string, any>;
 type CompletionOps = {
   run(script: string, args: string[]): JsonObject;
   lock<T>(operation: (enabled: { automationLogin?: string }, recheck: () => void) => T): T;
+  /** Observation seam for tests: the open Worker PRs GitHub currently lists for the attempt branch. */
+  observeWorkerPrs?(input: JsonObject, record: JsonObject): JsonObject[];
 };
 
 function flag(name: string, value: unknown): string[] {
@@ -114,10 +117,71 @@ function stopBlockedWorkerAttempt(
   return { applied: true, result: "issue_attempt_blocked_stopped" };
 }
 
+/** The open Worker PRs GitHub currently lists for the attempt branch. */
+function observeWorkerPrs(_input: JsonObject, record: JsonObject): JsonObject[] {
+  const prs = createCommandRunner().runJson([
+    "gh", "pr", "list", "-R", String(record.repository), "--state", "open", "--head", String(record.branch),
+    "--json", "number,state,headRefName,headRefOid,baseRefName,body,labels,closingIssuesReferences,comments",
+  ]);
+  return Array.isArray(prs) ? prs : [];
+}
+
+/**
+ * The Worker reported the input revision as its output while GitHub holds no persisted result for
+ * it. That no-op report cannot complete: publish one reasoned stop, release the attempt, and close
+ * only the disposable workspace; the linked worktree stays retained as evidence.
+ */
+function stopSameRevisionWorkerAttempt(
+  input: JsonObject,
+  record: JsonObject,
+  report: JsonObject,
+  deps: { ops: CompletionOps; enabled: { automationLogin?: string }; recheck: () => void },
+): JsonObject {
+  const automationLogin = String(deps.enabled.automationLogin || "");
+  if (!automationLogin.trim()) throw new Error("authorized Automation host login is required");
+  const runDir = path.dirname(String(input.attemptRecordFile));
+  // The report is a valid bound report, so it becomes the journal's completion record too.
+  if (record.phase === "agent_started") recordPersistedCompletionReport(runDir, report);
+  const phase = String(readAttemptRecord(runDir).phase || "");
+  if (!["report_received", "github_persisted"].includes(phase)) {
+    throw new Error(`same-revision Worker report is not completable from phase ${phase}`);
+  }
+  issueRequestTransition.persistIssueAttemptStop({
+    github: createGithubOperations(createCommandRunner(), deps.recheck),
+    repository: String(record.repository),
+    issueNumber: Number(record.target.number),
+    requestLabels: [String(input.implementLabel), String(input.exploreLabel)],
+    requestLabel: String(record.agentRequest?.label || input.implementLabel),
+    requestEventId: String(record.agentRequest?.eventId || input.requestEventId),
+    inProgressLabel: String(input.inProgressLabel),
+    blockedLabel: String(input.blockedLabel),
+    automationLogin,
+    automationLogins: authorizedLogins(input, automationLogin),
+    attemptId: String(record.attemptId),
+    failure: {
+      reason: "add_request",
+      explanation: `The Worker reported the input revision ${String(record.inputRevision?.head || "")} as its output without a new commit, and GitHub holds no open pull request from ${String(record.branch)} at that revision closing this Issue, so the reported result cannot be reused as persisted work.`,
+      recovery: `Inspect the retained worktree (${String(record.worktreePath)}) and attempt journal, then add "${String(input.implementLabel)}" again to request a fresh implementation attempt.`,
+    },
+    stopNoun: "implementation",
+    persistGithub: () => { transitionPersistedAttempt(runDir, "github_persisted"); },
+  });
+  const closed = deps.ops.run("complete-attempt-workspace.cts", [...common(input)]);
+  if (closed.driverAction !== "workspace_closed") {
+    return { applied: false, retain: true, result: stageFailureReason("complete-attempt-workspace.cts", closed) };
+  }
+  return { applied: true, result: "issue_attempt_noop_stopped" };
+}
+
 /**
  * One complete Worker completion report reaches its verified push, draft PR with review request,
  * persisted marker, and deterministic workspace closure. Every step is an independently guarded
  * command, so a pending closure retries without replaying GitHub mutations.
+ *
+ * A retry may lawfully re-present the existing result: its report names the input revision as its
+ * output. When GitHub already holds the fully persisted result (PR head, base, closing reference,
+ * and review label), the ordinary chain reuses it and completes (#419); otherwise the report is an
+ * unprovable no-op and stops once instead of staying pending forever.
  */
 function processWorker(input: JsonObject, record: JsonObject, report: JsonObject, ops: CompletionOps): JsonObject {
   if (!verificationAuthorizesCompletion(input, record, report)) {
@@ -140,6 +204,15 @@ function processWorker(input: JsonObject, record: JsonObject, report: JsonObject
         result: "required_verification_failed",
         error: error instanceof Error ? error.message : String(error),
       };
+    }
+  }
+  const outputRevision = String(report.result?.outputRevision || "");
+  if (report.status === "complete" && /^[0-9a-f]{40}$/i.test(outputRevision)
+    && outputRevision.toLowerCase() === String(record.inputRevision?.head || "").toLowerCase()) {
+    const prs = ops.observeWorkerPrs ? ops.observeWorkerPrs(input, record) : observeWorkerPrs(input, record);
+    const reusable = prs.length === 1 && workerPrIsPersisted(record, report, prs[0], String(input.reviewLabel));
+    if (!reusable) {
+      return ops.lock((enabled, recheck) => stopSameRevisionWorkerAttempt(input, record, report, { ops, enabled, recheck }));
     }
   }
   ops.run("guarded-push.cts", [
@@ -231,4 +304,4 @@ function main(): void {
 }
 
 if (require.main === module) main();
-module.exports = { processInput, processWorker, stopBlockedWorkerAttempt, verificationAuthorizesCompletion };
+module.exports = { processInput, processWorker, stopBlockedWorkerAttempt, stopSameRevisionWorkerAttempt, verificationAuthorizesCompletion };

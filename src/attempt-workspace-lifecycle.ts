@@ -223,7 +223,14 @@ function markerMatches(
   );
 }
 
-/** Pure Worker row predicate: no GitHub mutation is available through this seam. */
+/**
+ * Pure Worker row predicate: no GitHub mutation is available through this seam.
+ *
+ * A retry may lawfully re-present an existing result, so the report's output revision may equal the
+ * input revision. When every persistence row matches — one open pull request at that revision bound
+ * to the issue with the review label, plus this attempt's own completion marker — the existing
+ * result is reused and the attempt completes instead of waiting forever (#419).
+ */
 export function workerCompletionPersisted(
   record: AttemptRecord,
   report: WorkerReport,
@@ -244,8 +251,7 @@ export function workerCompletionPersisted(
     pullRequest.baseBranch === record.baseBranch &&
     pullRequest.closesIssue === record.target.number &&
     pullRequest.labels.includes(reviewLabel) &&
-    markerMatches(pullRequest.marker, record, "complete", outputRevision) &&
-    !sameSha(outputRevision, record.inputRevision.head)
+    markerMatches(pullRequest.marker, record, "complete", outputRevision)
   );
 }
 

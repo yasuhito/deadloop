@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { evaluateCompletionPersistence } from "../src/attempt-workspace-lifecycle";
-import { branchUpdateFixture, repairFixture, reviewerFixture, workerFixture } from "./fixtures/attempt-workspace";
+import { branchUpdateFixture, repairFixture, reviewerFixture, workerFixture, workerSameRevisionFixture } from "./fixtures/attempt-workspace";
 const runtime = require("../src/attempt-workspace-predicates.cjs");
 const lifecycleRuntime = require("../src/attempt-lifecycle-runtime.cjs");
 import { readAttemptRecord, readAttemptRecordOrUnreadable, transitionAttempt, validateCompletionReportBinding } from "../src/attempt-lifecycle";
 
-const fixtures = [workerFixture(), reviewerFixture("approved"), reviewerFixture("human_required"), reviewerFixture("changes_requested"), reviewerFixture("changes_requested", "persisted"), reviewerFixture("changes_requested", "regressed"), reviewerFixture("changes_requested", "mixed"), reviewerFixture("changes_requested", "none"), repairFixture(), repairFixture("stale_head"), branchUpdateFixture(), branchUpdateFixture("stale_head")];
+const fixtures = [workerFixture(), workerSameRevisionFixture(), reviewerFixture("approved"), reviewerFixture("human_required"), reviewerFixture("changes_requested"), reviewerFixture("changes_requested", "persisted"), reviewerFixture("changes_requested", "regressed"), reviewerFixture("changes_requested", "mixed"), reviewerFixture("changes_requested", "none"), repairFixture(), repairFixture("stale_head"), branchUpdateFixture(), branchUpdateFixture("stale_head")];
 
 describe("direct Node runtime parity", () => {
   it.each(fixtures.map((fixture, index) => [index, fixture] as const))("matches the typed completion predicate for fixture %s", (_index, fixture) => {

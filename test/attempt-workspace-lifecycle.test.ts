@@ -26,6 +26,7 @@ import {
   repairFixture,
   reviewerFixture,
   workerFixture,
+  workerSameRevisionFixture,
 } from "./fixtures/attempt-workspace";
 
 const { evaluateCompletionPersistence: evaluateSelectedRuntimePersistence } = require("../src/attempt-workspace-predicates.cjs");
@@ -126,6 +127,38 @@ describe("attempt completion persistence decisions", () => {
     const fixture = workerFixture();
 
     expect(decide(fixture.record, fixture.report, fixture.github)).toEqual({ action: "close" });
+  });
+
+  it("closes a same-revision Worker result whose existing persistence is fully proven", () => {
+    const fixture = workerSameRevisionFixture();
+
+    expect(decide(fixture.record, fixture.report, fixture.github)).toEqual({ action: "close" });
+  });
+
+  it("preserves a same-revision Worker result without a persistence marker", () => {
+    const fixture = workerSameRevisionFixture();
+    const github = {
+      ...fixture.github,
+      pullRequests: fixture.github.pullRequests.map((pullRequest) => ({ ...pullRequest, marker: undefined })),
+    };
+
+    expect(decide(fixture.record, fixture.report, github)).toEqual({
+      action: "preserve",
+      reason: "github_persistence_not_confirmed",
+    });
+  });
+
+  it("preserves a same-revision Worker result whose pull request head moved on", () => {
+    const fixture = workerSameRevisionFixture();
+    const github = {
+      ...fixture.github,
+      pullRequests: fixture.github.pullRequests.map((pullRequest) => ({ ...pullRequest, headSha: "f".repeat(40) })),
+    };
+
+    expect(decide(fixture.record, fixture.report, github)).toEqual({
+      action: "preserve",
+      reason: "github_persistence_not_confirmed",
+    });
   });
 
   it("uses the configured Worker review label for persistence proof", () => {

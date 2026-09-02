@@ -28,6 +28,7 @@ function fixture(kind: "issue" | "explorer", reportStatus: "complete" | "blocked
     role: roleOverride || (kind === "issue" ? "worker" : "explorer"),
     target: { kind: "issue", number: 12 },
     inputRevision: { head },
+    baseBranch: "main",
     branch: "agent/issue-12-task",
     worktreePath: "/worktree",
     agentName: "dl-w-12-abcdef123456",
@@ -91,6 +92,13 @@ function fixture(kind: "issue" | "explorer", reportStatus: "complete" | "blocked
 
 function writeFileSyncSafe(file: string, content: string): void {
   fs.writeFileSync(file, content, "utf8");
+}
+
+/** A retry may re-present the existing result: its report names the input revision as its output. */
+function rewriteReportAsSameRevision(promiseFile: string): void {
+  const report = JSON.parse(fs.readFileSync(promiseFile, "utf8"));
+  report.result = { outputRevision: report.inputRevision.head };
+  fs.writeFileSync(promiseFile, JSON.stringify(report), "utf8");
 }
 
 describe("deterministic Issue attempt completion", () => {
@@ -239,6 +247,95 @@ describe("deterministic Issue attempt completion", () => {
         reason: "spec_missing",
       });
       expect(scripts).toEqual(["complete-attempt-workspace.cts"]);
+    } finally {
+      transitions.persistIssueAttemptStop = original;
+    }
+  });
+
+  it("completes a same-revision Worker report by reusing the fully persisted existing result", () => {
+    const state = fixture("issue", "complete");
+    rewriteReportAsSameRevision(state.handoff.input.promiseFile);
+    const scripts: string[] = [];
+
+    const result = processInput(state.handoff, {
+      lock: (operation: (enabled: unknown) => unknown) => operation({}),
+      observeWorkerPrs: () => [{
+        number: 3,
+        state: "OPEN",
+        headRefName: state.handoff.input.branch,
+        headRefOid: JSON.parse(fs.readFileSync(state.handoff.input.promiseFile, "utf8")).result.outputRevision,
+        baseRefName: "main",
+        body: "Closes #12",
+        labels: ["agent:review"],
+        closingIssuesReferences: [{ number: 12 }],
+        comments: [],
+      }],
+      run: (script: string) => {
+        scripts.push(script);
+        if (script === "persist-attempt-result.cts") return { driverAction: "result_persisted" };
+        if (script === "complete-attempt-workspace.cts") return { driverAction: "workspace_closed" };
+        return {};
+      },
+    });
+
+    expect({ applied: result.applied, result: result.result, scripts }).toEqual({
+      applied: true,
+      result: "issue_attempt_completed",
+      scripts: [
+        "run-worker-required-verification.cts",
+        "guarded-push.cts",
+        "guarded-worker-pr.cts",
+        "persist-attempt-result.cts",
+        "complete-attempt-workspace.cts",
+      ],
+    });
+  });
+
+  it("stops once with a reasoned stop when a same-revision Worker report proves no persisted result", () => {
+    const state = fixture("issue", "complete");
+    rewriteReportAsSameRevision(state.handoff.input.promiseFile);
+    const lifecycle = require("../src/attempt-lifecycle-runtime.cjs");
+    lifecycle.transitionPersistedAttempt(state.runDir, "github_claimed");
+    lifecycle.transitionPersistedAttempt(state.runDir, "workspace_opened");
+    lifecycle.transitionPersistedAttempt(state.runDir, "agent_started");
+    const stopInputs: Record<string, unknown>[] = [];
+    const scripts: string[] = [];
+    const transitions = require("../src/issue-request-transition.cts");
+    const original = transitions.persistIssueAttemptStop as unknown;
+    transitions.persistIssueAttemptStop = (input: Record<string, unknown>) => {
+      stopInputs.push(input);
+      (input.persistGithub as () => void)();
+      return { kind: "blocked", requestEventId: String(input.requestEventId) };
+    };
+
+    try {
+      const result = processInput(state.handoff, {
+        lock: (operation: (enabled: { automationLogin?: string }) => unknown) => operation({ automationLogin: "deadloop-bot" }),
+        observeWorkerPrs: () => [],
+        run: (script: string) => {
+          scripts.push(script);
+          return script === "complete-attempt-workspace.cts" ? { driverAction: "workspace_closed" } : {};
+        },
+      });
+
+      const failure = stopInputs[0]?.failure as Record<string, unknown>;
+      expect({
+        applied: result.applied,
+        result: result.result,
+        reason: failure?.reason,
+        stopNoun: stopInputs[0]?.stopNoun,
+        clearedRequests: stopInputs[0]?.requestLabels,
+        scripts,
+      }).toEqual({
+        applied: true,
+        result: "issue_attempt_noop_stopped",
+        reason: "add_request",
+        stopNoun: "implementation",
+        clearedRequests: ["agent:implement", "agent:explore"],
+        scripts: ["run-worker-required-verification.cts", "complete-attempt-workspace.cts"],
+      });
+      expect(String(failure?.explanation)).toContain("without a new commit");
+      expect(String(failure?.recovery)).toContain("agent:implement");
     } finally {
       transitions.persistIssueAttemptStop = original;
     }
