@@ -97,10 +97,10 @@ function observeAutomationResult(
 }
 
 /**
- * Observes `executeSchedulerTick` for the host activity log: every tick starts with one
- * `tick_started` line and closes with exactly one judgment line — either the automation-level
- * result emitted inside `performSchedulerTick` when work was selected or retained, or a tick-level
- * idle/blocked/stopped record that answers "why did nothing happen this tick".
+ * Observes `executeSchedulerTick` for the host activity log. Every tick starts with one
+ * `tick_started` line. Retained and selected work each emit an `automation_result`; due work that
+ * was not selected emits `automation_starved`. An idle, blocked, or stopped tick also emits its
+ * tick-level outcome, so one tick can contain more than one judgment line.
  */
 export async function executeSchedulerTick(
   project: NormalizedProject,
@@ -114,15 +114,6 @@ export async function executeSchedulerTick(
   return outcome;
 }
 
-/**
- * One scheduler tick against a resolved project: work-authority reconciliation, retained-attempt
- * reconciliation, pending deterministic handoff delivery, due-automation selection, driver or
- * prompt execution, and state persistence. This is the shared seam — the continuous host and the
- * one-shot command both call it once per iteration, and neither may duplicate this logic.
- *
- * Every mutation stage rechecks `guard` (the caller's execution authority) and the deployed code
- * identity first, so an authority change during the tick blocks the next mutation.
- */
 /**
  * Picks the automation whose retained handoff delivery is due first: the least-recently-advanced
  * entry wins, ties broken by configuration order, so two retained automations alternate delivery
@@ -145,6 +136,15 @@ function nextRetainedDelivery(
   return candidate && { automation: candidate.automation, entry: candidate.entry };
 }
 
+/**
+ * One scheduler tick against a resolved project: work-authority reconciliation, retained-attempt
+ * reconciliation, pending deterministic handoff delivery, due-automation selection, driver or
+ * prompt execution, and state persistence. This is the shared seam — the continuous host and the
+ * one-shot command both call it once per iteration, and neither may duplicate this logic.
+ *
+ * Every mutation stage rechecks `guard` (the caller's execution authority) and the deployed code
+ * identity first, so an authority change during the tick blocks the next mutation.
+ */
 async function performSchedulerTick(
   project: NormalizedProject,
   deps: SchedulerTickDeps,
