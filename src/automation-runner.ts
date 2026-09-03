@@ -599,6 +599,22 @@ async function runConfiguredDriver(
       observedAt: new Date(deps.now()).toISOString(),
       runtimeWasWorking: false,
     };
+    // A retained handoff belongs to an attempt that is still working, waiting for model
+    // availability, or pending completion. Registering a new launch result over it would orphan
+    // that attempt's monitoring (#426): the scheduler defers such automations, so reaching this
+    // point with a retained handoff is an out-of-band launch and is refused without overwrite.
+    const retained = entry.pendingDriverHandoff;
+    if (retained && typeof retained === "object" && !Array.isArray(retained)) {
+      recordDriverFailure(
+        entry,
+        "driver_invalid_result",
+        "a retained monitor handoff blocked registering the new launch result",
+        deps,
+        state,
+      );
+      deps.notify?.(`deadloop driver returned invalid result: ${automation.name}`, "warning");
+      return true;
+    }
     entry.pendingDriverHandoff = payload;
     recordAutomationResult(entry, "driver_attempt_monitoring");
     entry.updatedAt = deps.now();

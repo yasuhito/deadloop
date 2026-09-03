@@ -176,6 +176,8 @@ export type AutomationStateEntry = {
   lastDriverAction?: string;
   failureStreak?: number;
   updatedAt?: number;
+  /** Retained deterministic monitor handoff of a launched attempt (#386, #426). */
+  pendingDriverHandoff?: unknown;
 };
 
 export type TemplateValueMap = Record<string, unknown>;

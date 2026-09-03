@@ -17,6 +17,7 @@ export type HostLogEventKind =
   | "settled_workspace_closure"
   | "model_wait_transitioned"
   | "automation_starved"
+  | "automation_deferred"
   | "enablement_written"
   | "unreadable_attempt_record";
 
@@ -60,6 +61,11 @@ export type TickHostLogEvent =
   | (({ kind: "tick_blocked"; reason: string } | { kind: "tick_stopped"; reason: string }) & TickHostLogContext)
   | ({
       kind: "automation_starved";
+      reason?: string;
+      dueAt?: string;
+    } & TickHostLogContext)
+  | ({
+      kind: "automation_deferred";
       reason?: string;
       dueAt?: string;
     } & TickHostLogContext)

@@ -19,6 +19,18 @@ function twoAutomationProject(): NormalizedProject {
   });
 }
 
+function dueCoordinatorProject(): NormalizedProject {
+  return normalizeProject({
+    id: "demo",
+    workerModel: "test-model",
+    reviewerModel: "test-review-model",
+    automations: [
+      { id: "issue-coordinator", name: "issue coordinator", schedule: "*/10 * * * *", initialLastScheduledAt: 20 * 60_000, driverFile: "coordinator-driver.cts" },
+      { id: "pr-reviewer", name: "pr reviewer", schedule: "*/10 * * * *", initialLastScheduledAt: START, driverFile: "reviewer-driver.cts" },
+    ],
+  });
+}
+
 function retainedEntry(marker: string): Record<string, unknown> {
   return {
     pendingDriverHandoff: {
@@ -35,7 +47,13 @@ type Harness = {
   observedMarkers: string[];
 };
 
-function tickHarness(state: AutomationState, overrides: Partial<SchedulerTickDeps> = {}): Harness {
+type MonitorAction = "working" | "settled";
+
+function tickHarness(
+  state: AutomationState,
+  overrides: Partial<SchedulerTickDeps> = {},
+  observeAction: () => MonitorAction = () => "working",
+): Harness {
   const driversRun: string[] = [];
   const observedMarkers: string[] = [];
   let clock = START;
@@ -56,9 +74,9 @@ function tickHarness(state: AutomationState, overrides: Partial<SchedulerTickDep
       const input = handoff.input as Record<string, unknown> | undefined;
       observedMarkers.push(String(input?.marker ?? ""));
       return {
-        action: "working" as const,
-        accounting: { activeMilliseconds: 0, observedAt: new Date(clock).toISOString(), runtimeWasWorking: true },
-      };
+        action: observeAction(),
+        accounting: { activeMilliseconds: 0, observedAt: new Date(clock).toISOString(), runtimeWasWorking: false },
+      } as const;
     },
     runDriver: async (_project: unknown, automation: { id: string }) => {
       driversRun.push(automation.id);
@@ -125,6 +143,58 @@ describe("retained delivery within a scheduler tick", () => {
     await executeSchedulerTick(project, deps);
 
     expect(observedMarkers).toEqual(["coordinator", "reviewer", "coordinator"]);
+  });
+
+  it("does not launch the same automation again while a working retained attempt keeps its monitor handoff", async () => {
+    const project = dueCoordinatorProject();
+    const state: AutomationState = { automations: { "demo:issue-coordinator": retainedEntry("coordinator") } };
+    const { deps, driversRun } = tickHarness(state);
+
+    await executeSchedulerTick(project, deps);
+
+    expect(driversRun).toEqual([]);
+  });
+
+  it("keeps the working retained handoff when the same automation is due and deferred", async () => {
+    const project = dueCoordinatorProject();
+    const state: AutomationState = { automations: { "demo:issue-coordinator": retainedEntry("coordinator") } };
+    const { deps } = tickHarness(state);
+
+    await executeSchedulerTick(project, deps);
+
+    const payload = state.automations["demo:issue-coordinator"].pendingDriverHandoff as { monitorHandoff: { input: { marker: string } } };
+    expect(payload.monitorHandoff.input.marker).toBe("coordinator");
+  });
+
+  it("reports a due automation deferred for its retained handoff in the host activity log", async () => {
+    const project = dueCoordinatorProject();
+    const state: AutomationState = { automations: { "demo:issue-coordinator": retainedEntry("coordinator") } };
+    const events: unknown[] = [];
+    const { deps } = tickHarness(state, { emitHostLog: (event) => events.push(event) });
+
+    await executeSchedulerTick(project, deps);
+
+    expect(events.filter((event) => (event as { kind: string }).kind === "automation_deferred")).toEqual([{
+      kind: "automation_deferred",
+      projectId: "demo",
+      automationId: "issue-coordinator",
+      dueAt: new Date(30 * 60_000).toISOString(),
+      reason: "a retained monitor handoff is still active",
+    }]);
+  });
+
+  it("selects the deferred automation after the retained handoff reaches a terminal state", async () => {
+    const project = dueCoordinatorProject();
+    const state: AutomationState = { automations: { "demo:issue-coordinator": retainedEntry("coordinator") } };
+    const actions: MonitorAction[] = ["working", "working", "settled"];
+    const { deps, driversRun } = tickHarness(state, {}, () => actions.shift() ?? "settled");
+
+    await executeSchedulerTick(project, deps);
+    await executeSchedulerTick(project, deps);
+    await executeSchedulerTick(project, deps);
+    await executeSchedulerTick(project, deps);
+
+    expect(driversRun).toEqual(["issue-coordinator"]);
   });
 
   it("records an automation that was due but not selected as starved in the host activity log", async () => {

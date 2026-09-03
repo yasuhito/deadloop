@@ -78,6 +78,62 @@ describe("Automation host scheduling", () => {
     expect(starved.map((entry) => entry.automationId)).toEqual(["demo:pr-reviewer"]);
   });
 
+  it("does not select a due automation whose retained monitor handoff is still active", () => {
+    const project = normalizeProject({
+      id: "demo",
+      workerModel: "test-model",
+      reviewerModel: "review-model",
+      automations: [{ id: "issue-coordinator", name: "issue coordinator", schedule: "*/10 * * * *", initialLastScheduledAt: 20 * 60_000, driverFile: "driver.cts" }],
+    });
+    const state = {
+      "demo:issue-coordinator": { lastScheduledAt: 20 * 60_000, pendingDriverHandoff: { monitorHandoff: { kind: "issue" } } },
+    };
+
+    const { selected, deferred } = reconcileAndSelectDueAutomation(project, state, 30 * 60_000);
+
+    expect({ selected, deferred }).toEqual({
+      selected: null,
+      deferred: [{ automationId: "issue-coordinator", dueSince: 30 * 60_000 }],
+    });
+  });
+
+  it("selects another due automation while a retained-handoff automation is deferred", () => {
+    const project = normalizeProject({ id: "demo", workerModel: "test-model", reviewerModel: "review-model" });
+    const state = {
+      "demo:demo:issue-coordinator": { lastScheduledAt: 20 * 60_000 },
+      "demo:demo:pr-reviewer": { lastScheduledAt: 20 * 60_000, pendingDriverHandoff: { monitorHandoff: { kind: "pr" } } },
+    };
+
+    const { selected, deferred } = reconcileAndSelectDueAutomation(project, state, 30 * 60_000);
+
+    expect({ selected: selected?.automation.id, deferred }).toEqual({
+      selected: "demo:issue-coordinator",
+      deferred: [{ automationId: "demo:pr-reviewer", dueSince: 30 * 60_000 }],
+    });
+  });
+  it("defers a due automation while it waits for model availability", () => {
+    const project = normalizeProject({
+      id: "demo",
+      workerModel: "test-model",
+      reviewerModel: "review-model",
+      automations: [{ id: "issue-coordinator", name: "issue coordinator", schedule: "*/10 * * * *", initialLastScheduledAt: 20 * 60_000, driverFile: "driver.cts" }],
+    });
+    const state = {
+      "demo:issue-coordinator": {
+        lastScheduledAt: 20 * 60_000,
+        lastResult: "driver_monitor_waiting_for_model",
+        pendingDriverHandoff: { monitorHandoff: { kind: "issue" }, modelWait: { startedAt: new Date(0).toISOString() } },
+      },
+    };
+
+    const { selected, deferred } = reconcileAndSelectDueAutomation(project, state, 30 * 60_000);
+
+    expect({ selected, deferred }).toEqual({
+      selected: null,
+      deferred: [{ automationId: "issue-coordinator", dueSince: 30 * 60_000 }],
+    });
+  });
+
   it("records a missed slot on the state entry", () => {
     const project = normalizeProject({
       id: "demo",

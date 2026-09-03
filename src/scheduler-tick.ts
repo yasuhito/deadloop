@@ -99,7 +99,8 @@ function observeAutomationResult(
 /**
  * Observes `executeSchedulerTick` for the host activity log. Every tick starts with one
  * `tick_started` line. Retained and selected work each emit an `automation_result`; due work that
- * was not selected emits `automation_starved`. An idle, blocked, or stopped tick also emits its
+ * was not selected emits `automation_starved`, and due work held back by a still-active retained
+ * handoff emits `automation_deferred`. An idle, blocked, or stopped tick also emits its
  * tick-level outcome, so one tick can contain more than one judgment line.
  */
 export async function executeSchedulerTick(
@@ -142,6 +143,11 @@ function nextRetainedDelivery(
  * prompt execution, and state persistence. This is the shared seam — the continuous host and the
  * one-shot command both call it once per iteration, and neither may duplicate this logic.
  *
+ * A due automation whose retained monitor handoff is still active after delivery is deferred: it
+ * is not launched in this tick, so the running attempt keeps its monitoring handoff and its
+ * active-work accounting (#426). It becomes selectable again once the handoff reaches a terminal
+ * state and is cleared. Other due automations are still selected in the same tick (#402).
+ *
  * Every mutation stage rechecks `guard` (the caller's execution authority) and the deployed code
  * identity first, so an authority change during the tick blocks the next mutation.
  */
@@ -174,7 +180,16 @@ async function performSchedulerTick(
   }
 
   if (!deps.codeIdentityAllowsTick()) return { status: "stopped", reason: "deployed deadloop code changed" };
-  const { selected, starved } = reconcileAndSelectDueAutomation(project, state.automations, deps.now());
+  const { selected, starved, deferred } = reconcileAndSelectDueAutomation(project, state.automations, deps.now());
+  for (const deferredAutomation of deferred) {
+    observeTickEvent(deps, {
+      kind: "automation_deferred",
+      projectId: project.id,
+      automationId: deferredAutomation.automationId,
+      dueAt: new Date(deferredAutomation.dueSince).toISOString(),
+      reason: "a retained monitor handoff is still active",
+    });
+  }
   for (const starvedAutomation of starved) {
     observeTickEvent(deps, {
       kind: "automation_starved",
