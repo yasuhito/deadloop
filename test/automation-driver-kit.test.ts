@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { createCommandRunner, driverResult, oneLine, parseBool, parseFixtureArg, shellQuote } = require("../src/automation-driver-kit.cts");
+const { createCommandRunner, defaultCommandTimeoutMs, driverResult, oneLine, parseBool, parseFixtureArg, shellQuote } = require("../src/automation-driver-kit.cts");
 
 describe("automation driver kit", () => {
   it("builds driver result payloads", () => {
@@ -17,6 +17,18 @@ describe("automation driver kit", () => {
     const runner = createCommandRunner({ timeoutMs: 50 });
 
     expect(() => runner.runText(["node", "-e", "setInterval(() => {}, 1000)"])).toThrow("timed out");
+  });
+
+  it("gives gh commands a longer default timeout than local commands", () => {
+    expect(defaultCommandTimeoutMs("gh")).toBeGreaterThan(defaultCommandTimeoutMs("git"));
+  });
+
+  it("names the script and the give-up budget in a timeout reason", () => {
+    const runner = createCommandRunner({ timeoutMs: 50, label: "pr-review-repair-dispatch.cts" });
+
+    expect(() => runner.runText(["node", "-e", "setInterval(() => {}, 1000)"])).toThrow(
+      "pr-review-repair-dispatch.cts: command timed out after 50ms: node -e setInterval(() => {}, 1000)",
+    );
   });
 
   it("normalizes multiline text", () => {
