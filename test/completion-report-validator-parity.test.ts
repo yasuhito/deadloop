@@ -11,6 +11,7 @@ import {
 } from "../src/attempt-lifecycle";
 
 const { validatePromise } = require("../extensions/deadloop/automations/extract-worker-promise.cts");
+const { validateCompletionReportBinding: validateRuntimeBinding } = require("../src/attempt-lifecycle-runtime.cjs");
 
 const head = "a".repeat(40);
 const base = "b".repeat(40);
@@ -97,6 +98,12 @@ const cases: Array<[string, unknown]> = [
     role: "reviewer",
     result: { outcome: "approved", reviewedHead: head, findings: [], priorRequiredFindings: "probably_fine" },
     evidence: { reviewed: ["diff"] },
+  }],
+  ["reviewer result whose validation evidence is not a string list", {
+    ...common,
+    role: "reviewer",
+    result: { outcome: "approved", reviewedHead: head, findings: [] },
+    evidence: { reviewed: ["diff"], validations: "npm test passed" },
   }],
   ["reviewer finding without severity", {
     ...common,
@@ -205,6 +212,84 @@ const cases: Array<[string, unknown]> = [
     evidence: { finalizer: { action: "stale_head", reason: "head_sha_changed", originalHeadOid: head, currentRemoteHeadOid: "origin/main" } },
   }],
 ];
+
+/**
+ * The monitor observation classifies a completion report through the runtime binding validator,
+ * while the completion chain validates the same file through the executable validator. When the
+ * two disagree, a report the executable rejects keeps its pending handoff retrying forever
+ * (#427), so the runtime validator must accept exactly what the executable accepts.
+ */
+function acceptedByRuntimeMonitor(report: unknown): boolean {
+  const record = {
+    attemptId: "attempt",
+    launchUuid: "launch-001",
+    project: "demo",
+    repository: "octo/demo",
+    role: "reviewer",
+    target: { kind: "pull-request", number: 1 },
+    inputRevision: { head },
+    branch: "pr-1",
+    baseBranch: "main",
+    worktreePath: "/worktrees/pr-1",
+    agentName: "dl-r-1-123456789abc",
+    workspaceLabel: "PR #1",
+    promptFile: "/runs/attempt/prompt.md",
+    promiseFile: "/runs/attempt/promise.json",
+    phase: "report_received",
+    lastSuccessfulPhase: "report_received",
+  } as unknown as AttemptRecord;
+  try {
+    validateRuntimeBinding(record, report);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const monitorObservationCases: Array<[string, unknown]> = [
+  ["a valid reviewer report", {
+    ...common,
+    role: "reviewer",
+    result: { outcome: "approved", reviewedHead: head, findings: [] },
+    evidence: { reviewed: ["diff"] },
+  }],
+  ["changes_requested without a prior-finding disposition", {
+    ...common,
+    role: "reviewer",
+    result: { outcome: "changes_requested", reviewedHead: head, findings: [{ title: "Bug", body: "Fix it", severity: "major" }] },
+    evidence: { reviewed: ["diff"] },
+  }],
+  ["approved reviewer result carrying a required finding", {
+    ...common,
+    role: "reviewer",
+    result: { outcome: "approved", reviewedHead: head, findings: [{ title: "Bug", body: "Fix it", severity: "major" }] },
+    evidence: { reviewed: ["diff"] },
+  }],
+  ["reviewer result with a malformed advisory observation", {
+    ...common,
+    role: "reviewer",
+    result: { outcome: "approved", reviewedHead: head, findings: [], advisories: [{ title: "Naming", body: "" }] },
+    evidence: { reviewed: ["diff"] },
+  }],
+  ["reviewer result with an unknown prior-finding disposition", {
+    ...common,
+    role: "reviewer",
+    result: { outcome: "approved", reviewedHead: head, findings: [], priorRequiredFindings: "probably_fine" },
+    evidence: { reviewed: ["diff"] },
+  }],
+  ["reviewer result whose validation evidence is not a string list", {
+    ...common,
+    role: "reviewer",
+    result: { outcome: "approved", reviewedHead: head, findings: [] },
+    evidence: { reviewed: ["diff"], validations: "npm test passed" },
+  }],
+];
+
+describe("runtime monitor observation validator parity", () => {
+  it.each(monitorObservationCases)("keeps runtime and executable validation aligned for %s", (_name, report) => {
+    expect(acceptedByRuntimeMonitor(report)).toBe(acceptedByExecutable(report));
+  });
+});
 
 describe("V1 validator parity", () => {
   it.each(cases)("keeps lifecycle and executable validation aligned for %s", (_name, report) => {

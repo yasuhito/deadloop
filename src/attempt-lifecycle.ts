@@ -892,6 +892,9 @@ function validateCompleteResult(report: CompletionReportEnvelope): void {
       throw new Error("Reviewer changes_requested requires a priorRequiredFindings disposition");
     }
     if (!nonEmptyStringArray(evidence.reviewed)) throw new Error("Reviewer completion requires review evidence");
+    if (evidence.validations !== undefined && !nonEmptyStringArray(evidence.validations)) {
+      throw new Error("Reviewer completion validations must be a string list");
+    }
     return;
   }
   if (report.role === "review-repair") {
