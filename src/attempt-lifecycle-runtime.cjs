@@ -2,6 +2,9 @@ const { randomUUID } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
+// @ts-expect-error Node loads this CommonJS-style TypeScript module with built-in type stripping.
+const { isPriorRequiredFindingDisposition } = require("./reviewer-outcome-contract.cts");
+
 const ATTEMPT_RECORD_FILE = "attempt.json";
 const ATTEMPT_RUN_DIR = Symbol.for("deadloop.attemptRunDir");
 const SUCCESSFUL_PHASES = ["prepared", "github_claimed", "workspace_opened", "agent_started", "report_received", "github_persisted", "workspace_closed"];
@@ -215,6 +218,11 @@ function validateComplete(report) {
     requiredSha(result, "reviewedHead"); if (!sameText(result.reviewedHead, report.inputRevision.head)) throw new Error("Reviewer completion reviewedHead does not match input revision");
     if (result.findings !== undefined && (!Array.isArray(result.findings) || !result.findings.every((item) => finding(item, result.outcome === "changes_requested")))) throw new Error("Reviewer completion has an invalid finding");
     if (result.outcome === "changes_requested" && (!Array.isArray(result.findings) || !result.findings.length)) throw new Error("Reviewer changes_requested requires findings with severity");
+    if (result.outcome === "approved" && Array.isArray(result.findings) && result.findings.length) throw new Error("Reviewer approved requires no required findings");
+    if (result.advisories !== undefined && (!Array.isArray(result.advisories) || !result.advisories.every((item) => finding(item, false)))) throw new Error("Reviewer completion has an invalid advisory observation");
+    if (result.priorRequiredFindings !== undefined && !isPriorRequiredFindingDisposition(result.priorRequiredFindings)) throw new Error("Reviewer completion has an invalid priorRequiredFindings disposition");
+    if (result.outcome === "changes_requested" && result.priorRequiredFindings === undefined) throw new Error("Reviewer changes_requested requires a priorRequiredFindings disposition");
+    if (evidence.validations !== undefined && !stringArray(evidence.validations)) throw new Error("Reviewer completion validations must be a string list");
     if (!stringArray(evidence.reviewed)) throw new Error("Reviewer completion requires review evidence"); return;
   }
   requiredSha(result, "outputRevision"); const finalizer = validateFinalizer(report, evidence);

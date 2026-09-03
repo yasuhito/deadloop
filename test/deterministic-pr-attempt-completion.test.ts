@@ -158,7 +158,7 @@ describe("deterministic PR attempt completion", () => {
   });
 
   it("routes actionable reviewer findings into deterministic repair dispatch", () => {
-    const state = fixture("reviewer", { outcome: "changes_requested", reviewedHead: "a".repeat(40), findings: [{ title: "bug", body: "fix it", severity: "major" }] });
+    const state = fixture("reviewer", { outcome: "changes_requested", reviewedHead: "a".repeat(40), findings: [{ title: "bug", body: "fix it", severity: "major" }], priorRequiredFindings: "none" });
 
     const result = processInput(state.handoff, { run: () => ({
       action: "monitor", driverAction: "review_repair_monitor_request", monitorHandoff: { kind: "repair", input: {} },
@@ -287,7 +287,7 @@ describe("deterministic PR attempt completion", () => {
   });
 
   it("carries the dispatcher's exit branch and grounding in the reviewer completion result", () => {
-    const state = fixture("reviewer", { outcome: "changes_requested", reviewedHead: "a".repeat(40), findings: [{ title: "bug", body: "fix it", severity: "major" }] });
+    const state = fixture("reviewer", { outcome: "changes_requested", reviewedHead: "a".repeat(40), findings: [{ title: "bug", body: "fix it", severity: "major" }], priorRequiredFindings: "none" });
 
     const result = processInput(state.handoff, { run: (script: string) => {
       if (script === "pr-review-repair-dispatch.cts") {

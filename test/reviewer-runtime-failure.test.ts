@@ -81,6 +81,69 @@ describe("formal storage-exhaustion evidence from deadloop's own processing", ()
   });
 });
 
+describe("the monitor observation of a reviewer report missing its review-history disposition", () => {
+  const input = {
+    attempt: { phase: "agent_started" },
+    accounting: { activeMilliseconds: 0, observedAt: started, runtimeWasWorking: true },
+    maxActiveMilliseconds: 86_400_000,
+    now: started,
+  };
+  const record = {
+    attemptId: "attempt-1",
+    launchUuid: "launch-1",
+    project: "demo",
+    repository: "octo/demo",
+    role: "reviewer",
+    target: { kind: "pull-request", number: 42 },
+    inputRevision: { head: HEAD },
+    branch: "pr-42",
+    worktreePath: "/worktrees/pr-42",
+    agentName: "reviewer",
+    workspaceLabel: "reviewer 42",
+    promptFile: "/runs/attempt-1/prompt.md",
+    promiseFile: "/runs/attempt-1/promise.json",
+    phase: "agent_started",
+    lastSuccessfulPhase: "agent_started",
+  };
+  // The observed incident: an ended reviewer wrote a complete-shaped report whose review-history
+  // disposition was missing, and the pending handoff retried the same rejection every tick (#427).
+  const report = {
+    schemaVersion: 1,
+    attemptId: "attempt-1",
+    role: "reviewer",
+    target: { repository: "octo/demo", kind: "pull-request", number: 42 },
+    inputRevision: { head: HEAD },
+    status: "complete",
+    summary: "review finished",
+    result: { outcome: "changes_requested", reviewedHead: HEAD, findings: [{ title: "Bug", body: "Fix it", severity: "major" }] },
+    evidence: { reviewed: ["diff and configured checks"] },
+  };
+
+  it("classifies the report as invalid and names the missing disposition", () => {
+    const observed = reportObservation({ ...record, promiseFile: writeReport(report) } as never) as { kind: string; detail?: string };
+
+    expect(observed.kind).toBe("invalid");
+  });
+
+  it("directs the ended reviewer to the invalid-report stop that carries the detail", () => {
+    const observed = reportObservation({ ...record, promiseFile: writeReport(report) } as never) as { kind: string; detail?: string };
+    const directive = decideAttemptMonitoring({
+      ...input,
+      report: observed,
+      runtime: { kind: "terminal", status: "done" },
+    });
+
+    expect(directive).toMatchObject({ action: "missing_report", reason: "invalid_completion_report" });
+  });
+
+  function writeReport(value: unknown): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-review-history-"));
+    const file = path.join(root, "promise.json");
+    fs.writeFileSync(file, JSON.stringify(value));
+    return file;
+  }
+});
+
 describe("the reviewer stop classification for a storage-broken report", () => {
   const input = {
     attempt: { phase: "agent_started" },
