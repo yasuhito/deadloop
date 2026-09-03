@@ -884,7 +884,7 @@ const a=process.argv.slice(2);if(a.includes("get-url")) process.stdout.write("ht
     ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
     DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: root, DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
     HEAD: head, BASE: base, READS: historyReads, MUTATIONS: mutations,
-    RACE_AT: options.stableHistory ? "-1" : "3", DRAFT: options.draft ? "1" : "0",
+    RACE_AT: options.stableHistory ? "-1" : "2", DRAFT: options.draft ? "1" : "0",
     BLOCK_FLAG: path.join(root, "block-flag"), BLOCK_AFTER_COMMENT: options.blockDuringRelease ? "1" : "0",
   }});
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
@@ -893,6 +893,238 @@ const a=process.argv.slice(2);if(a.includes("get-url")) process.stdout.write("ht
     mutations: fs.existsSync(mutations)
       ? fs.readFileSync(mutations, "utf8").trim().split("\n").filter((line) => line.startsWith("pr "))
       : [],
+  };
+}
+
+type AcceptedResultSequence = {
+  actions: string[];
+  checkpointNotes: (string | undefined)[];
+  comments: number;
+  finalLabels: string[];
+};
+
+/**
+ * A reviewer dispatch that saved its exact result comment and accepted history, then a replay of
+ * the same pending completion after the recorded interruption. `replay` mutates the fake GitHub
+ * state between the two runs the way the named interruption would; `resetLabels` simulates a
+ * downstream transition that never landed.
+ */
+function runAcceptedResultSequence(options: {
+  outcome: "approved" | "changes_requested" | "human_required";
+  replay?:
+    | "none"
+    | "add_comment"
+    | "edit_result"
+    | "delete_result"
+    | "add_review"
+    | "add_inline"
+    | "change_head"
+    | "change_base"
+    | "change_diff"
+    | "reset_labels";
+  tamperAccepted?: "extra_comment";
+}): AcceptedResultSequence {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deadloop-accepted-result-checkpoint-"));
+  tempDirs.push(root);
+  const bin = path.join(root, "bin");
+  const repo = path.join(root, "repo");
+  const worktree = path.join(root, "worktrees", "agent-issue-243");
+  const state = path.join(root, "config", "deadloop");
+  const reviewerRun = path.join(state, "runs", "reviewer-run");
+  const promise = path.join(reviewerRun, "promise.json");
+  const attempt = path.join(reviewerRun, "attempt.json");
+  const commentsFile = path.join(root, "comments.json");
+  const reviewsFile = path.join(root, "reviews.json");
+  const inlineFile = path.join(root, "inline.json");
+  const labelsFile = path.join(root, "labels.json");
+  const prStateFile = path.join(root, "pr-state.json");
+  const runtime = path.join(root, "runtime.json");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(reviewerRun, { recursive: true });
+  fs.mkdirSync(worktree, { recursive: true });
+  spawnSync("git", ["init", "--quiet", repo]);
+  spawnSync("git", ["-C", repo, "config", "user.name", "Test"]);
+  spawnSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
+  fs.writeFileSync(path.join(repo, "README.md"), "fixture\n");
+  spawnSync("git", ["-C", repo, "add", "."]);
+  spawnSync("git", ["-C", repo, "commit", "--quiet", "-m", "fixture"]);
+  spawnSync("git", ["-C", repo, "branch", "agent/issue-243"]);
+  spawnSync("git", ["-C", repo, "worktree", "add", "--quiet", worktree, "agent/issue-243"]);
+  spawnSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
+  spawnSync("git", ["-C", repo, "update-ref", "refs/remotes/origin/master", "HEAD"]);
+  const head = spawnSync("git", ["-C", worktree, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
+  fs.writeFileSync(commentsFile, "[]");
+  fs.writeFileSync(reviewsFile, "[]");
+  fs.writeFileSync(inlineFile, "[]");
+  fs.writeFileSync(labelsFile, JSON.stringify(["agent:in-progress"]));
+  fs.writeFileSync(prStateFile, JSON.stringify({ head, base: "b".repeat(40), diff: "diff\n", isDraft: false }));
+  const originalHistory = {
+    pullRequest: { number: 243, state: "open", headRef: "agent/issue-243", headSha: head, baseRef: "main", baseSha: "b".repeat(40) },
+    commits: [{ sha: head }],
+    diff: { sha256: createHash("sha256").update("diff\n").digest("hex"), bytes: 5 },
+    conversationComments: [],
+    submittedReviews: [],
+    inlineReviewComments: [],
+  };
+  fs.writeFileSync(path.join(reviewerRun, "pr-review-history.json"), JSON.stringify({
+    schemaVersion: 1, repository: "owner/repo", pullRequestNumber: 243, observedAt: "2026-01-01T00:00:00.000Z",
+    revision: createHash("sha256").update(`${JSON.stringify(originalHistory)}\n`).digest("hex"), history: originalHistory, evidence: { exactDiff: "diff\n" },
+  }));
+  fs.writeFileSync(runtime, JSON.stringify({ workspace: "reviewer-workspace", agent: null, launches: 0 }));
+  fs.writeFileSync(path.join(state, "enabled-projects.json"), JSON.stringify({ lastWriterCodeIdentity: "a".repeat(40), projects: [{
+    repoPath: repo, githubRepo: "owner/repo", githubRepositoryId: "R_repo", baseBranch: "origin/master", automationLogin: "deadloop-bot", enabledAt: 1,
+    firstEnableAutoMerge: false, firstStartPending: false, lastObservedAutoMerge: false,
+    autoMergeAcknowledged: false, enabled: true,
+  }] }));
+  fs.writeFileSync(path.join(state, "projects.json"), JSON.stringify({ projects: [{
+    id: "demo", repoPath: repo, githubRepo: "owner/repo", baseBranch: "origin/master",
+  }] }));
+  const result = {
+    outcome: options.outcome,
+    reviewedHead: head,
+    findings: [],
+    ...(options.outcome === "changes_requested"
+      ? { findings: [{ title: "Lint contract", body: "Format src/a.ts", path: "src/a.ts", severity: "major" }], priorRequiredFindings: "none" }
+      : {}),
+  };
+  fs.writeFileSync(promise, JSON.stringify({
+    schemaVersion: 1, attemptId: "reviewer-attempt", role: "reviewer",
+    target: { repository: "owner/repo", kind: "pull-request", number: 243 }, inputRevision: { head },
+    status: "complete", summary: "Review result summary",
+    result, evidence: { reviewed: ["diff"] },
+  }));
+  fs.writeFileSync(attempt, JSON.stringify({
+    attemptId: "reviewer-attempt", launchUuid: "reviewer-run", project: "demo", repository: "owner/repo",
+    role: "reviewer", target: { kind: "pull-request", number: 243 }, inputRevision: { head }, branch: "agent/issue-243",
+    worktreePath: worktree, agentName: "dl-r-243-111111111111", workspaceLabel: "reviewer",
+    promptFile: path.join(reviewerRun, "prompt.md"), promiseFile: promise, phase: "workspace_closed",
+    lastSuccessfulPhase: "workspace_closed", workspaceId: "reviewer-workspace", tabId: "reviewer-tab", rootPaneId: "reviewer-pane",
+    reviewHistoryRequired: true, requestEventId: "22",
+  }));
+  fixReviewerContract(state, repo, attempt);
+  const attemptValue = JSON.parse(fs.readFileSync(attempt, "utf8"));
+  persistHostVerificationEvidence(workerRequiredVerificationPath(attempt), {
+    version: 1, binding: requiredVerificationBinding(attemptValue.requiredVerification, head), outcome: "passed", exitCode: 0,
+    startedAt: "2026-01-01T00:00:00.000Z", durationMs: 1, logPath: path.join(reviewerRun, "required-verification.log"),
+  });
+  passthroughGit(bin);
+  executable(path.join(bin, "gh"), `#!/usr/bin/env node
+const fs=require("node:fs");const a=process.argv.slice(2);
+const read=(file,fallback)=>fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8")):fallback;
+const prState=()=>read(process.env.PR_STATE,{});
+if(a[0]==="repo") process.stdout.write(JSON.stringify({id:"R_repo",nameWithOwner:"owner/repo"}));
+else if(a[0]==="api"&&a[1]==="user") process.stdout.write("deadloop-bot\\n");
+else if(a[0]==="pr"&&a[1]==="view") process.stdout.write(JSON.stringify({number:243,state:"OPEN",isDraft:prState().isDraft,headRefName:"agent/issue-243",headRefOid:prState().head,isCrossRepository:false,labels:read(process.env.LABELS,[]).map((name)=>({name})),comments:read(process.env.COMMENTS,[])}));
+else if(a[0]==="pr"&&a[1]==="comment"){
+  const list=read(process.env.COMMENTS,[]);const id=list.reduce((max,c)=>Math.max(max,Number(c.id||0)),0)+1;
+  list.push({id:String(id),author:{login:"deadloop-bot"},body:a[a.indexOf("--body")+1]});
+  fs.writeFileSync(process.env.COMMENTS,JSON.stringify(list));
+  process.stdout.write("https://github.com/owner/repo/pull/243#issuecomment-"+id+"\\n");
+}
+else if(a[0]==="pr"&&a[1]==="edit"){
+  const removes=a.filter((v,i)=>a[i-1]==="--remove-label");const adds=a.filter((v,i)=>a[i-1]==="--add-label");
+  let names=read(process.env.LABELS,[]);
+  for(const label of removes) names=names.filter((name)=>name!==label);
+  for(const label of adds) if(!names.includes(label)) names.push(label);
+  fs.writeFileSync(process.env.LABELS,JSON.stringify(names));
+}
+else if(a[0]==="api"&&a.includes("--method")&&a.includes("POST")){
+  const body=JSON.parse(fs.readFileSync(0,"utf8"));const names=read(process.env.LABELS,[]);
+  for(const label of body.labels||[]) if(!names.includes(label)) names.push(label);
+  fs.writeFileSync(process.env.LABELS,JSON.stringify(names));process.stdout.write(JSON.stringify(names));
+}
+else if(a[0]==="api"&&a.includes("graphql")) process.stdout.write(JSON.stringify([{data:{repository:{pullRequest:{commits:{nodes:[{commit:{oid:prState().head}}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}]));
+else if(a[0]==="api"&&a[1].includes("/pulls/243")&&a.includes("-H")) process.stdout.write(prState().diff);
+else if(a[0]==="api"&&a[1].endsWith("/pulls/243")) process.stdout.write(JSON.stringify({number:243,state:"open",head:{ref:"agent/issue-243",sha:prState().head},base:{ref:"main",sha:prState().base}}));
+else if(a[0]==="api"&&a.some((value)=>value.includes("/issues/243/comments"))) process.stdout.write(JSON.stringify([read(process.env.COMMENTS,[]).map((comment)=>({id:comment.id,node_id:"n"+comment.id,body:comment.body,user:comment.author,created_at:"x",updated_at:"x"}))]));
+else if(a[0]==="api"&&a.some((value)=>value.includes("/pulls/243/reviews"))) process.stdout.write(JSON.stringify([read(process.env.REVIEWS,[])]));
+else if(a[0]==="api"&&a.some((value)=>value.includes("/pulls/243/comments"))) process.stdout.write(JSON.stringify([read(process.env.INLINE,[])]));
+else if(a[0]==="api") process.stdout.write(JSON.stringify([[]]));
+`);
+  executable(path.join(bin, "herdr"), `#!/usr/bin/env node
+const fs=require("node:fs");const a=process.argv.slice(2);const s=JSON.parse(fs.readFileSync(process.env.RUNTIME,"utf8"));
+if(a[0]==="--version") process.stdout.write("herdr 0.8.0\\n");
+else if(a[0]==="status") process.stdout.write("version: 0.8.0\\n");
+else if(a[0]==="workspace"&&a[1]==="list") process.stdout.write(JSON.stringify({result:{workspaces:s.workspace?[{workspace_id:s.workspace,pane_count:1,tab_count:1,worktree:{checkout_path:process.env.WORKTREE}}]:[]}}));
+else if(a[0]==="workspace"&&a[1]==="close"){s.workspace=null;fs.writeFileSync(process.env.RUNTIME,JSON.stringify(s));}
+else if(a[0]==="worktree"&&a[1]==="list") process.stdout.write(JSON.stringify({result:{worktrees:[{path:process.env.WORKTREE,branch:"agent/issue-243",is_linked_worktree:true,...(s.workspace?{open_workspace_id:s.workspace}:{})}]}}));
+else process.stdout.write(JSON.stringify({ok:true}));
+`);
+  const env = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: path.join(root, "config"),
+    DEADLOOP_PROJECT_ID: "demo", DEADLOOP_REPO_PATH: repo, DEADLOOP_WORKTREE_ROOT: path.join(root, "worktrees"),
+    DEADLOOP_GITHUB_REPO: "owner/repo", DEADLOOP_ENABLED_AT: "1", DEADLOOP_STATE_DIR: state,
+    DEADLOOP_WORKER_MODEL: "test-worker-model", DEADLOOP_REPAIR_MODEL: "test-repair-model",
+    HEAD: head, COMMENTS: commentsFile, REVIEWS: reviewsFile, INLINE: inlineFile, LABELS: labelsFile,
+    PR_STATE: prStateFile, RUNTIME: runtime, WORKTREE: worktree,
+  };
+  const argv = ["extensions/deadloop/automations/pr-review-repair-dispatch.cts", "--promise", promise, "--attempt-record", attempt,
+    "--request-event-id", "22", "--pr", "243", "--expected-head", head, "--branch", "agent/issue-243"];
+  const run = (): Record<string, any> => {
+    const result = spawnSync("node", argv, { cwd: process.cwd(), encoding: "utf8", env });
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    return JSON.parse(result.stdout);
+  };
+  const actions: string[] = [];
+  const checkpointNotes: (string | undefined)[] = [];
+  actions.push(String(run().driverAction));
+  checkpointNotes.push(undefined);
+  const applyReplay = () => {
+    switch (options.replay) {
+      case "add_comment": {
+        const list = JSON.parse(fs.readFileSync(commentsFile, "utf8"));
+        list.push({ id: "99", author: { login: "human" }, body: "an unrelated later comment" });
+        fs.writeFileSync(commentsFile, JSON.stringify(list));
+        break;
+      }
+      case "edit_result": {
+        const list = JSON.parse(fs.readFileSync(commentsFile, "utf8"));
+        list[0].body = `${list[0].body} edited`;
+        fs.writeFileSync(commentsFile, JSON.stringify(list));
+        break;
+      }
+      case "delete_result":
+        fs.writeFileSync(commentsFile, "[]");
+        break;
+      case "add_review":
+        fs.writeFileSync(reviewsFile, JSON.stringify([{ id: "9", user: { login: "human" }, body: "LGTM", state: "APPROVED", commit_id: head, submitted_at: "x", created_at: "x", updated_at: "x" }]));
+        break;
+      case "add_inline":
+        fs.writeFileSync(inlineFile, JSON.stringify([{ id: "10", user: { login: "human" }, body: "nit", path: "src/a.ts", commit_id: head, original_commit_id: head, line: 1, original_line: 1, side: "RIGHT", start_line: null, start_side: "", in_reply_to_id: null, created_at: "x", updated_at: "x" }]));
+        break;
+      case "change_head":
+        fs.writeFileSync(prStateFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(prStateFile, "utf8")), head: "c".repeat(40) }));
+        break;
+      case "change_base":
+        fs.writeFileSync(prStateFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(prStateFile, "utf8")), base: "d".repeat(40) }));
+        break;
+      case "change_diff":
+        fs.writeFileSync(prStateFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(prStateFile, "utf8")), diff: "changed diff\n" }));
+        break;
+      case "reset_labels":
+        fs.writeFileSync(labelsFile, JSON.stringify(["agent:in-progress"]));
+        break;
+      default:
+        break;
+    }
+    if (options.tamperAccepted === "extra_comment") {
+      const acceptedFile = path.join(reviewerRun, "pr-review-history-accepted.json");
+      const accepted = JSON.parse(fs.readFileSync(acceptedFile, "utf8"));
+      accepted.history.conversationComments.push({ id: "77", nodeId: "n77", author: "human", body: "never happened", createdAt: "x", updatedAt: "x" });
+      accepted.revision = createHash("sha256").update(`${JSON.stringify(accepted.history)}\n`).digest("hex");
+      fs.writeFileSync(acceptedFile, JSON.stringify(accepted));
+    }
+  };
+  applyReplay();
+  const second = run();
+  actions.push(String(second.driverAction));
+  checkpointNotes.push(typeof second.resultCheckpoint === "string" ? second.resultCheckpoint : undefined);
+  return {
+    actions,
+    checkpointNotes,
+    comments: JSON.parse(fs.readFileSync(commentsFile, "utf8")).length,
+    finalLabels: JSON.parse(fs.readFileSync(labelsFile, "utf8")),
   };
 }
 
@@ -1330,4 +1562,86 @@ else process.stdout.write(JSON.stringify(args[0] === "repo"
 
 
 
+});
+
+describe("review result checkpoint replay", () => {
+  it("resumes an approved review from the accepted result checkpoint after a downstream stop", () => {
+    const result = runAcceptedResultSequence({ outcome: "approved" });
+    expect(result).toEqual({
+      actions: ["review_approved", "review_approved"],
+      checkpointNotes: [undefined, "accepted_result_history"],
+      comments: 1,
+      finalLabels: ["agent:in-progress"],
+    });
+  });
+
+  it("releases the claim for a fresh review when a comment follows the accepted history", () => {
+    const result = runAcceptedResultSequence({ outcome: "approved", replay: "add_comment" });
+    expect(result).toEqual({
+      actions: ["review_approved", "review_stale_history"],
+      checkpointNotes: [undefined, undefined],
+      comments: 2,
+      finalLabels: ["agent:review"],
+    });
+  });
+
+  it("releases the claim for a fresh review when the result comment is edited", () => {
+    const result = runAcceptedResultSequence({ outcome: "approved", replay: "edit_result" });
+    expect(result.actions[1]).toBe("review_stale_history");
+  });
+
+  it("releases the claim for a fresh review when the result comment is deleted", () => {
+    const result = runAcceptedResultSequence({ outcome: "approved", replay: "delete_result" });
+    expect(result.actions[1]).toBe("review_stale_history");
+  });
+
+  it("releases the claim for a fresh review when a submitted review follows the accepted history", () => {
+    const result = runAcceptedResultSequence({ outcome: "approved", replay: "add_review" });
+    expect(result.actions[1]).toBe("review_stale_history");
+  });
+
+  it("releases the claim for a fresh review when an inline comment follows the accepted history", () => {
+    const result = runAcceptedResultSequence({ outcome: "approved", replay: "add_inline" });
+    expect(result.actions[1]).toBe("review_stale_history");
+  });
+
+  it("releases the claim for a fresh review when the head changes after the accepted history", () => {
+    const result = runAcceptedResultSequence({ outcome: "approved", replay: "change_head" });
+    expect(result.actions[1]).toBe("review_stale_history");
+  });
+
+  it("releases the claim for a fresh review when the base changes after the accepted history", () => {
+    const result = runAcceptedResultSequence({ outcome: "approved", replay: "change_base" });
+    expect(result.actions[1]).toBe("review_stale_history");
+  });
+
+  it("releases the claim for a fresh review when the diff changes after the accepted history", () => {
+    const result = runAcceptedResultSequence({ outcome: "approved", replay: "change_diff" });
+    expect(result.actions[1]).toBe("review_stale_history");
+  });
+
+  it("does not adopt an accepted history that is not the original history plus one comment", () => {
+    const result = runAcceptedResultSequence({ outcome: "approved", tamperAccepted: "extra_comment" });
+    expect(result.actions[1]).toBe("review_stale_history");
+  });
+
+  it("continues the interrupted repair request from the accepted changes-requested checkpoint", () => {
+    const result = runAcceptedResultSequence({ outcome: "changes_requested", replay: "reset_labels" });
+    expect(result).toEqual({
+      actions: ["review_repair_requested", "review_repair_already_requested"],
+      checkpointNotes: [undefined, "accepted_result_history"],
+      comments: 1,
+      finalLabels: ["agent:implement"],
+    });
+  });
+
+  it("continues the interrupted human handoff from the accepted human-required checkpoint", () => {
+    const result = runAcceptedResultSequence({ outcome: "human_required", replay: "reset_labels" });
+    expect(result).toEqual({
+      actions: ["review_human_handoff", "review_human_handoff"],
+      checkpointNotes: [undefined, "accepted_result_history"],
+      comments: 1,
+      finalLabels: [],
+    });
+  });
 });
