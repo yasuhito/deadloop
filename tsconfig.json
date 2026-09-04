@@ -8,6 +8,7 @@
     "allowJs": true,
     "checkJs": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true
