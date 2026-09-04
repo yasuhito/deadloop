@@ -154,9 +154,9 @@ Every launch records which model it started, and status shows the resolved per-r
 
 ### Model usage records
 
-deadloop normalizes every traceable model response — the parent agent, sub-agents, and advisors — into one record with attempt identity, role, provider, model, input/cache-read/cache-write/output/reasoning/total tokens, duration, stop reason, error presence, timestamp, and an estimated cost. Records are collected after the turn ends and before workspace closure, deduplicated by stable session/response identity, and stored in deadloop's state directory for the same retention period as attempt evidence. Prompt and response bodies are never copied.
+deadloop normalizes every traceable model response — the parent agent, sub-agents, and advisors — into one record with attempt identity, role, provider, model, input/cache-read/cache-write/output/reasoning/total tokens, duration, stop reason, error presence, timestamp, and an estimated cost. Records are collected after the turn ends and before workspace closure from the sessions proven to belong to the attempt's checkout; unrelated host-wide session history is never imported, so a stored ledger stays proportional to the attempt's own responses. Records are deduplicated by stable session/response identity, and the seven-day view counts each identity once across attempts. Prompt and response bodies are never copied.
 
-- Missing measurements appear as `unknown`, never as zero; usage that cannot be proven to belong to an attempt is counted as `unattributed`.
+- Missing measurements appear as `unknown`, never as zero; `unattributed` marks a response bound to the attempt whose role cannot be proven.
 - Collection is observational: a telemetry failure is recorded but never undoes a completion, push, handoff, or merge.
 - There is no token ceiling; measurements exist so operators can tune model policy after real operation. The estimated cost is deadloop's estimate from session metadata, not a provider invoice.
 - Status shows current-attempt usage totals; `/deadloop-usage` reports the last 7 days by role and provider/model, or one attempt in detail.

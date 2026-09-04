@@ -101,6 +101,16 @@ describe("selected attempt workspace completion", () => {
     }
   });
 
+  it("closes the workspace even when usage collection fails", () => {
+    // This journal records no agent kind, so the collector throws before any scan;
+    // the closure boundary must still complete the already-authorized completion.
+    const data = fixture(true);
+
+    const result = completeLocked(data.args, data.runner, () => undefined);
+
+    expect(result.driverAction).toBe("workspace_closed");
+  });
+
   it("closes the current workspace when an older attempt for the worktree has no listed workspace", () => {
     const data = fixture(true);
     const current = readAttemptRecord(data.runDir);
