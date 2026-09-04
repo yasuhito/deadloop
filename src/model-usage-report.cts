@@ -36,10 +36,19 @@ function readAllUsageRecords(stateDir: string): { runDir: string; record: Normal
   const entries: { runDir: string; record: NormalizedUsageRecord }[] = [];
   let runs: string[] = [];
   try { runs = fs.readdirSync(path.join(stateDir, "runs")); } catch { return entries; }
-  for (const entry of runs) {
+  // One stable response identity is counted once across attempts: the same response can
+  // appear in more than one attempt ledger (for example when attempts share a checkout),
+  // and the window aggregation must not double-count it. Ledger order is sorted so the
+  // surviving copy is deterministic.
+  const seen = new Set<string>();
+  for (const entry of runs.sort()) {
     const runDir = path.join(stateDir, "runs", entry);
     if (!fs.existsSync(usageLedgerFile(runDir))) continue;
-    for (const record of readLedger(runDir)) entries.push({ runDir, record });
+    for (const record of readLedger(runDir)) {
+      if (seen.has(record.recordId)) continue;
+      seen.add(record.recordId);
+      entries.push({ runDir, record });
+    }
   }
   return entries;
 }

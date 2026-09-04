@@ -58,6 +58,8 @@ export type ModelGroup = { provider: string; model: string; totals: UsageTotals 
 export type SessionSource = {
   file: string;
   agentKind: AgentKind;
+  /** A caller-declared attempt source (for example a temporary worktree artifact copy). */
+  declared?: boolean;
 };
 
 /** A session-tree root spec for a pi/omp-shaped CLI. */
@@ -79,6 +81,8 @@ export type CollectOptions = {
 export type CollectionOutcome = {
   records: NormalizedUsageRecord[];
   duplicatesSkipped: number;
+  /** Session-tree candidates dropped because no proof ties them to the attempt's checkout. */
+  unrelatedSkipped: number;
 };
 
 export type CollectionError = {

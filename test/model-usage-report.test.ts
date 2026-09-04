@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -63,6 +63,17 @@ describe("model usage reports", () => {
       groupsByProviderModel: report.includes("- openai-codex/gpt-5.6-sol:"),
       hasInvoiceDisclaimer: report.includes("never a provider invoice"),
     }).toEqual({ groupsByRole: true, groupsByProviderModel: true, hasInvoiceDisclaimer: true });
+  });
+
+  it("counts a response recorded by two attempts once in the seven-day window", () => {
+    const state = stateWithLedger();
+    const second = path.join(state, "runs", "attempt-2");
+    mkdirSync(second, { recursive: true });
+    writeFileSync(path.join(second, "model-usage.jsonl"), readFileSync(path.join(state, "runs", "attempt-1", "model-usage.jsonl"), "utf8"));
+
+    const report = formatUsageWindowReport(state, Date.now());
+
+    expect(report.includes("(1 of 1 response record(s))")).toBe(true);
   });
 
   it("reports response-level detail for one attempt id", () => {

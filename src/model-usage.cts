@@ -201,6 +201,26 @@ function usageLedgerFile(runDir: string): string {
   return path.join(runDir, "model-usage.jsonl");
 }
 
+/**
+ * Reads the first JSONL line of a session file with one bounded disk read, so unrelated
+ * host history is never parsed in full. Returns undefined when the file is unreadable or
+ * its first line is not a pi/omp session header.
+ */
+function sessionHeader(file: string): Record<string, unknown> | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, "r");
+    const buffer = Buffer.alloc(8192);
+    const read = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    if (read <= 0) return undefined;
+    const text = buffer.toString("utf8", 0, read);
+    const newline = text.indexOf("\n");
+    const entry = JSON.parse(newline === -1 ? text : text.slice(0, newline));
+    return isRecord(entry) ? entry : undefined;
+  } catch { return undefined; }
+  finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch {} } }
+}
+
 
 /** Reads back the persisted ledger so a repeated collection cannot double-count. */
 function readPersistedRecordIds(runDir: string): Set<string> {
@@ -219,13 +239,20 @@ function readPersistedRecordIds(runDir: string): Set<string> {
 }
 
 /**
- * Collects and normalizes every traceable model response belonging to one attempt:
- * the durable external session tree plus any temporary worktree artifacts. Attribution is
- * proven by the session's recorded cwd sitting inside the attempt's canonical checkout;
- * anything else stays `unattributed` instead of silently inflating another attempt.
+ * Collects and normalizes every model response belonging to one attempt: the durable
+ * external session tree plus any caller-declared temporary worktree artifacts. A
+ * session-tree file is read in full only when it can belong to the attempt's canonical
+ * checkout — pi/omp headers carry the session cwd on the first line, so a file whose header
+ * cwd sits outside the checkout is unrelated host history and is skipped without reading
+ * the rest; Claude attribution is the exact project-directory slug, so only that directory
+ * is scanned. A response that still cannot be proven to belong to the checkout is never
+ * imported as `unattributed` filler: unrelated host-wide history stays out of the attempt
+ * record entirely. Declared artifact sources stay tied to the attempt by contract; their
+ * responses without a role proof are kept visible as `unattributed`.
  */
 function collectModelUsage(options: CollectOptions): CollectionOutcome {
   const sources: SessionSource[] = [];
+  let unrelatedSkipped = 0;
   const scanSessionRoots = () => {
     for (const spec of [options.sessionsRoots?.pi, options.sessionsRoots?.omp]) {
       if (!spec) continue;
@@ -236,7 +263,14 @@ function collectModelUsage(options: CollectOptions): CollectionOutcome {
         try {
           if (!fs.statSync(dirPath).isDirectory()) continue;
           for (const file of fs.readdirSync(dirPath)) {
-            if (file.endsWith(".jsonl")) sources.push({ file: path.join(dirPath, file), agentKind: spec.kind });
+            if (!file.endsWith(".jsonl")) continue;
+            const filePath = path.join(dirPath, file);
+            const header = sessionHeader(filePath);
+            if (header && typeof header.cwd === "string" && !isInsidePath(options.worktreePath, header.cwd)) {
+              unrelatedSkipped += 1;
+              continue;
+            }
+            sources.push({ file: filePath, agentKind: spec.kind });
           }
         } catch {}
       }
@@ -244,23 +278,18 @@ function collectModelUsage(options: CollectOptions): CollectionOutcome {
   };
   const scanClaudeRoot = () => {
     if (!options.claudeProjectsRoot) return;
-    let dirs: string[] = [];
-    try { dirs = fs.readdirSync(options.claudeProjectsRoot); } catch { return; }
-    for (const dir of dirs) {
-      const dirPath = path.join(options.claudeProjectsRoot, dir);
-      try {
-        if (!fs.statSync(dirPath).isDirectory()) continue;
-        for (const file of fs.readdirSync(dirPath)) {
-          if (file.endsWith(".jsonl")) sources.push({ file: path.join(dirPath, file), agentKind: "claude" });
-        }
-      } catch {}
+    const dirPath = path.join(options.claudeProjectsRoot, options.worktreePath.replace(/\//g, "-"));
+    let files: string[] = [];
+    try { files = fs.readdirSync(dirPath); } catch { return; }
+    for (const file of files) {
+      if (file.endsWith(".jsonl")) sources.push({ file: path.join(dirPath, file), agentKind: "claude" });
     }
   };
 
   scanSessionRoots();
   scanClaudeRoot();
   for (const file of options.extraSessionFiles || []) {
-    sources.push({ file, agentKind: options.agentKind });
+    sources.push({ file, agentKind: options.agentKind, declared: true });
   }
 
   const seen = readPersistedRecordIds(options.runDir);
@@ -283,6 +312,12 @@ function collectModelUsage(options: CollectOptions): CollectionOutcome {
       const attributed = source.agentKind === "claude"
         ? path.basename(path.dirname(source.file)) === options.worktreePath.replace(/\//g, "-")
         : Boolean(response.cwd) && isInsidePath(options.worktreePath, String(response.cwd));
+      if (!attributed && !source.declared) {
+        // No proof ties this response to the attempt's checkout, so it is unrelated host
+        // history rather than attempt usage; it is never recorded.
+        unrelatedSkipped += 1;
+        continue;
+      }
       const role: UsageRole = attributed ? options.role : UNATTRIBUTED_ROLE;
       const record = normalizeResponse(source, response, { ...attributionBase, role });
       if (seen.has(record.recordId)) { duplicatesSkipped += 1; continue; }
@@ -291,7 +326,7 @@ function collectModelUsage(options: CollectOptions): CollectionOutcome {
     }
   }
   records.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
-  return { records, duplicatesSkipped };
+  return { records, duplicatesSkipped, unrelatedSkipped };
 }
 
 function sumCategory(values: KnownUsage[]): KnownUsage {

@@ -60,6 +60,10 @@ A Worker or reviewer attempt stores its resolved required-verification contract 
 
 A failed Worker-completion record is kept instead of rerun: while its binding (repository, target commit, command, source, base revision) is unchanged, later ticks skip re-execution, and the host posts one fingerprint-marked, idempotent Issue comment containing the exit code and log tail. Only a host-authenticated failed record (provenance in the host evidence directory) qualifies; any binding change, a passed record, or an unauthenticated record triggers a fresh fixed-command run that replaces the record.
 
+## Model usage ledgers
+
+Collection reads only the sessions proven to belong to the attempt's checkout, so a ledger stays proportional to that attempt's own responses, and the seven-day view counts one stable response identity once across attempts. Ledgers written before this collection scope (#424) may hold large `unattributed` copies of host-wide session history; deadloop never rewrites or deletes them automatically. To reclaim state capacity, archive an affected attempt's ledger manually after review — for example `mv ~/.pi/agent/deadloop/runs/<uuid>/model-usage.jsonl ~/.pi/agent/deadloop/manual-review-archive/<uuid>-model-usage.jsonl`. That attempt's usage detail is lost; attempt journals and workflow state are untouched.
+
 ## Commands
 
 ```text
