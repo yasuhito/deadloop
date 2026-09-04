@@ -30,8 +30,10 @@ Vitest 4 projects do not inherit root test options, so `vitest.config.mts` appli
 
 ### Verification
 
-- Full suite on Vitest 4.1.11: 142 files, 2567 tests, all passing; wall time comparable to the Vitest 3 baseline.
-- The acceptance criterion of ten consecutive green `npm run test:unit` runs on the GitHub Actions runner is checked by CI after this change lands; the deterministic two-vCPU fixture above covers the same failure mode locally.
+- Full suite on Vitest 4.1.11: 143 files, 2574 tests, all passing, each file exactly once; wall time comparable to the Vitest 3 baseline plus the fixture run time.
+- Ten consecutive `npm run test:unit` runs on the development machine: all 2574 tests passed and zero `onTaskUpdate` timeouts.
+- Three full suite runs under a deterministic CPU constraint (suite and competing load pinned to the same 4 CPUs): all passed with zero `onTaskUpdate` timeouts.
+- The same check on the GitHub Actions runner is verified by CI after this change lands.
 
 ## Remaining gap and next action
 
