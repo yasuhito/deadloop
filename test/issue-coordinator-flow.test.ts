@@ -72,6 +72,18 @@ describe("Issue coordinator use-case flow", () => {
     expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 85 }).kind).toBe("planning_blocked");
   });
 
+  it("plans planning-blocked for checkbox items whose issue reference trails the item", () => {
+    const data = fixture("driver-trailing-task-list-reference.json");
+
+    expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 86 }).kind).toBe("planning_blocked");
+  });
+
+  it("does not block checkbox items that all reference the same issue", () => {
+    const data = fixture("driver-same-reference-task-list.json");
+
+    expect(planIssueCoordinatorAction(data.issues, { selected: true, number: 87 }).kind).toBe("worker_required");
+  });
+
   it("keeps blocking planning issues recognized by their title", () => {
     const data = fixture("driver-planning-title.json");
 

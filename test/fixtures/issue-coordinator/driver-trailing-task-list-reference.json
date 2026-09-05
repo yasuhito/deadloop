@@ -1,0 +1,12 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 86,
+      "title": "認証基盤を切り出す",
+      "body": "## Agent Brief\n子 issue を順に実装する。\n\n## 受け入れ条件\n- 子 issue がすべて閉じている。\n\n## 子 issue\n- [ ] 認証境界を切り出す #101\n- [ ] セッション保存を移す #102",
+      "url": "https://github.com/owner/repo/issues/86",
+      "labels": [{"name": "ready-for-agent"}, {"name": "agent:implement"}]
+    }
+  ]
+}
