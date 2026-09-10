@@ -66,9 +66,102 @@ function fixture(withMarker: boolean) {
     setWorkspaceOpen: (value: boolean) => { workspaceOpen = value; },
   };
 }
+function staleReviewerFixture(requestEvents: any[], labels = ["agent:review", "agent:implement"]) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "deadloop-complete-stale-reviewer-")); roots.push(root);
+  const stateDir = path.join(root, "state"); const runDir = path.join(stateDir, "runs", "review-1");
+  const worktree = path.join(root, "worktree"); const head = "a".repeat(40);
+  mkdirSync(runDir, { recursive: true }); mkdirSync(worktree); mkdirSync(path.join(root, ".git"));
+  const record = {
+    attemptId: "review-1", launchUuid: "review-1", project: "demo", repository: "owner/repo", role: "reviewer",
+    target: { kind: "pull-request", number: 21 }, inputRevision: { head }, requestEventId: "100",
+    branch: "agent/issue-12", worktreePath: worktree, agentName: "dl-r-21-123456789abc", workspaceLabel: "PR 21 reviewer",
+    promptFile: path.join(runDir, "prompt.md"), promiseFile: path.join(runDir, "promise.json"),
+    phase: "report_received", lastSuccessfulPhase: "report_received", workspaceId: "workspace-1", tabId: "tab-1", rootPaneId: "pane-1",
+  };
+  writeFileSync(path.join(runDir, "attempt.json"), JSON.stringify(record));
+  writeFileSync(path.join(runDir, "promise.json"), JSON.stringify({
+    schemaVersion: 1, attemptId: "review-1", role: "reviewer", target: { repository: "owner/repo", kind: "pull-request", number: 21 },
+    inputRevision: { head }, status: "complete", summary: "review complete",
+    result: { outcome: "human_required", reviewedHead: head, reason: "history changed", priorRequiredFindings: "none", findings: [] },
+    evidence: { reviewed: ["complete diff"] },
+  }));
+  let workspaceOpen = true;
+  const runner = {
+    runText(args: string[]) {
+      if (args[0] === "git" && args.includes("--git-common-dir")) return `${path.join(root, ".git")}\n`;
+      if (args[0] === "git" && args.includes("--show-toplevel")) return `${worktree}\n`;
+      if (args[0] === "git" && args.includes("worktree") && args.includes("--porcelain")) return `worktree ${root}\n\nworktree ${worktree}\nbranch refs/heads/agent/issue-12\n`;
+      if (args[0] === "herdr" && args[1] === "workspace" && args[2] === "close") workspaceOpen = false;
+      return "";
+    },
+    runJson(args: string[]) {
+      if (args[0] === "gh" && args[1] === "pr" && args[2] === "view") return { number: 21, state: "OPEN", isDraft: true, headRefName: "agent/issue-12", headRefOid: head, baseRefName: "main", labels: labels.map((name) => ({ name })), comments: [], closingIssuesReferences: [] };
+      if (args[0] === "gh" && args[1] === "api") return [requestEvents];
+      if (args[0] === "herdr" && args[1] === "workspace") return { result: { workspaces: workspaceOpen ? [{ workspace_id: "workspace-1", pane_count: 1, tab_count: 1, worktree: { checkout_path: worktree } }] : [] } };
+      if (args[0] === "herdr" && args[1] === "worktree") return { result: { worktrees: [{ path: worktree, branch: "agent/issue-12" }] } };
+      if (args[0] === "herdr" && args[1] === "agent") return { result: { agents: [] } };
+      throw new Error(`unexpected ${args.join(" ")}`);
+    },
+  };
+  return {
+    args: {
+      attemptRecord: path.join(runDir, "attempt.json"), projectId: "demo", projectRepo: root, githubRepo: "owner/repo", stateDir,
+      enabledAt: "1", expectedLabel: ["agent:review"], managedLabel: ["agent:review", "agent:implement", "agent:update-branch", "agent:in-progress", "agent:blocked"],
+      staleReviewRelease: "true", reviewLabel: "agent:review", implementLabel: "agent:implement", updateBranchLabel: "agent:update-branch",
+      inProgressLabel: "agent:in-progress", blockedLabel: "agent:blocked",
+    },
+    runDir,
+    runner,
+  };
+}
+
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("selected attempt workspace completion", () => {
+  it("closes a stale Reviewer workspace while preserving a newer implementation request", () => {
+    const data = staleReviewerFixture([
+      { id: "100", event: "labeled", created_at: "2026-09-10T00:00:00Z", label: { name: "agent:review" } },
+      { id: "200", event: "labeled", created_at: "2026-09-10T00:01:00Z", label: { name: "agent:implement" } },
+    ], ["agent:implement"]);
+
+    const result = completeLocked(data.args, data.runner, () => undefined);
+
+    expect(result.driverAction).toBe("workspace_closed");
+  });
+
+  it("closes a stale Reviewer workspace while preserving a newer review request", () => {
+    const data = staleReviewerFixture([
+      { id: "100", event: "labeled", created_at: "2026-09-10T00:00:00Z", label: { name: "agent:review" } },
+      { id: "200", event: "labeled", created_at: "2026-09-10T00:01:00Z", label: { name: "agent:review" } },
+    ], ["agent:review"]);
+
+    const result = completeLocked(data.args, data.runner, () => undefined);
+
+    expect(result.driverAction).toBe("workspace_closed");
+  });
+
+  it("retains a stale Reviewer workspace when the current request is not newer", () => {
+    const data = staleReviewerFixture([
+      { id: "100", event: "labeled", created_at: "2026-09-10T00:00:00Z", label: { name: "agent:review" } },
+      { id: "90", event: "labeled", created_at: "2026-09-09T23:59:00Z", label: { name: "agent:implement" } },
+    ]);
+
+    const result = completeLocked(data.args, data.runner, () => undefined);
+
+    expect(result.driverAction).toBe("workspace_retained");
+  });
+
+  it("retains a stale Reviewer workspace when its consumed event is not a review request", () => {
+    const data = staleReviewerFixture([
+      { id: "100", event: "labeled", created_at: "2026-09-10T00:00:00Z", label: { name: "agent:implement" } },
+      { id: "200", event: "labeled", created_at: "2026-09-10T00:01:00Z", label: { name: "agent:implement" } },
+      { id: "300", event: "labeled", created_at: "2026-09-10T00:02:00Z", label: { name: "agent:review" } },
+    ]);
+
+    const result = completeLocked(data.args, data.runner, () => undefined);
+
+    expect(result.driverAction).toBe("workspace_retained");
+  });
   it("collects normalized model usage before closing the workspace", () => {
     const data = fixture(true);
     const worktreePath = JSON.parse(readFileSync(data.args.attemptRecord, "utf8")).worktreePath;

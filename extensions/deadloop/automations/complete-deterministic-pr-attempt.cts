@@ -43,11 +43,22 @@ function handoffExpectationLabels(input: JsonObject): string[] {
   ];
 }
 
-function completeWorkspace(input: JsonObject, ops: CompletionOps, expectedLabels: string[] = []): JsonObject {
+function completeWorkspace(
+  input: JsonObject,
+  ops: CompletionOps,
+  expectedLabels: string[] = [],
+  options: { staleReviewRelease?: boolean } = {},
+): JsonObject {
   return ops.run("complete-attempt-workspace.cts", [
     ...common(input),
     ...expectedLabels.flatMap((label) => flag("expected-label", label)),
     ...managedLabels(input),
+    ...(options.staleReviewRelease ? flag("stale-review-release", "true") : []),
+    ...flag("review-label", input.reviewLabel),
+    ...flag("implement-label", input.implementLabel),
+    ...flag("update-branch-label", input.updateBranchLabel),
+    ...flag("in-progress-label", input.inProgressLabel),
+    ...flag("blocked-label", input.blockedLabel),
     ...("autoMerge" in input ? flag("auto-merge", String(Boolean(input.autoMerge))) : []),
   ]);
 }
@@ -206,9 +217,15 @@ function processReviewer(input: JsonObject, record: JsonObject, report: JsonObje
     const closed = completeHumanHandoffWorkspace(input, ops);
     return { applied: closed.driverAction === "workspace_closed", result: dispatcherCompletionResult(dispatched) };
   }
-  if (["review_stale_history", "review_technical_retry"].includes(String(dispatched.driverAction))) {
+  if (dispatched.driverAction === "review_stale_history") {
+    const closed = completeWorkspace(input, ops, [input.reviewLabel], { staleReviewRelease: true });
+    const workspaceClosed = closed.driverAction === "workspace_closed";
+    return { applied: workspaceClosed, result: workspaceClosed ? dispatcherCompletionResult(dispatched) : closed };
+  }
+  if (dispatched.driverAction === "review_technical_retry") {
     const closed = completeWorkspace(input, ops, [input.reviewLabel]);
-    return { applied: closed.driverAction === "workspace_closed", result: dispatcherCompletionResult(dispatched) };
+    const workspaceClosed = closed.driverAction === "workspace_closed";
+    return { applied: workspaceClosed, result: workspaceClosed ? dispatcherCompletionResult(dispatched) : closed };
   }
   if (dispatched.driverAction === "review_stale_head") {
     const closed = completeWorkspace(input, ops);

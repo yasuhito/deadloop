@@ -157,6 +157,30 @@ describe("deterministic PR attempt completion", () => {
     expect(scripts).toEqual(["pr-review-repair-dispatch.cts", "complete-attempt-workspace.cts"]);
   });
 
+  it("marks stale-history workspace closure as a released stale review", () => {
+    const state = fixture("reviewer", { outcome: "human_required", reviewedHead: "a".repeat(40) });
+    let closureArgs: string[] = [];
+
+    processInput(state.handoff, { run: (script: string, args: string[]) => {
+      if (script === "complete-attempt-workspace.cts") closureArgs = args;
+      return script === "pr-review-repair-dispatch.cts"
+        ? { action: "done", driverAction: "review_stale_history" }
+        : { driverAction: "workspace_closed" };
+    } });
+
+    expect(closureArgs).toContain("--stale-review-release");
+  });
+
+  it("reports a stale-history workspace closure failure instead of the stale result", () => {
+    const state = fixture("reviewer", { outcome: "human_required", reviewedHead: "a".repeat(40) });
+
+    const result = processInput(state.handoff, { run: (script: string) => script === "pr-review-repair-dispatch.cts"
+      ? { action: "done", driverAction: "review_stale_history" }
+      : { action: "done", driverAction: "cleanup_pending", detail: "workspace close failed" } });
+
+    expect(result.result.driverAction).toBe("cleanup_pending");
+  });
+
   it("routes actionable reviewer findings into deterministic repair dispatch", () => {
     const state = fixture("reviewer", { outcome: "changes_requested", reviewedHead: "a".repeat(40), findings: [{ title: "bug", body: "fix it", severity: "major" }], priorRequiredFindings: "none" });
 
