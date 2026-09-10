@@ -69,17 +69,41 @@ function appendHostLogEvent(stateDir: string, event: Record<string, unknown>, no
 }
 
 // Tail reads cap their window so an old, large log cannot make the /deadloop-hostlog command
-// scan unbounded history for twenty lines.
+// scan unbounded history for twenty lines. The cap bounds the disk read and the temporary
+// allocation too: the region is read positionally through one read-only descriptor instead of
+// loading the whole file and trimming afterwards.
 const TAIL_WINDOW_BYTES = 16 * 1024 * 1024;
 
 function readTailRegion(stateDir: string): Buffer {
+  let fd: number;
   try {
-    const content = fs.readFileSync(hostLogFile(stateDir));
-    if (content.length <= TAIL_WINDOW_BYTES) return content;
-    const newlineAt = content.indexOf(0x0a, content.length - TAIL_WINDOW_BYTES);
-    return content.subarray(newlineAt === -1 ? content.length - TAIL_WINDOW_BYTES : newlineAt + 1);
+    fd = fs.openSync(hostLogFile(stateDir), "r");
   } catch {
     return Buffer.alloc(0);
+  }
+  try {
+    // One size snapshot: bytes appended after fstat belong to a later tail read, not this one.
+    const size = fs.fstatSync(fd).size;
+    const start = Math.max(0, size - TAIL_WINDOW_BYTES);
+    const region = Buffer.alloc(size - start);
+    let read = 0;
+    while (read < region.length) {
+      const bytesRead = fs.readSync(fd, region, read, region.length - read, start + read);
+      if (bytesRead <= 0) break; // short read or the snapshot shrank; keep only obtained bytes
+      read += bytesRead;
+    }
+    if (start > 0) {
+      // The region begins mid-file, so its first line may be partial; drop it.
+      const newlineAt = region.indexOf(0x0a);
+      return newlineAt === -1 ? Buffer.alloc(0) : region.subarray(newlineAt + 1);
+    }
+    return region;
+  } catch {
+    return Buffer.alloc(0);
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {}
   }
 }
 
@@ -96,4 +120,4 @@ function readHostLogTail(stateDir: string, count: number | undefined = undefined
   return events.slice(-wanted);
 }
 
-module.exports = { HOST_LOG_FILE_NAME, hostLogFile, hostLogErrorsFile, appendHostLogEvent, readHostLogTail };
+module.exports = { HOST_LOG_FILE_NAME, TAIL_WINDOW_BYTES, hostLogFile, hostLogErrorsFile, appendHostLogEvent, readHostLogTail };
