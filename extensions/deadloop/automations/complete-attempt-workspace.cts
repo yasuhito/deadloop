@@ -17,6 +17,9 @@ const { runHerdrPreflight } = require("../../../src/herdr-preflight.cjs");
 const { withEnabledDriverLock } = require("../../../src/driver-enablement.cjs");
 const { parseAttemptPersistenceMarkers } = require("../../../src/attempt-persistence-marker.cjs");
 const { collectAttemptModelUsage } = require("../../../src/model-usage-collector.cts");
+const { createGithubOperations } = require("../../../src/github-operations.cts");
+const { compareGithubTimelineEvents } = require("../../../src/github-timeline-order.cts");
+const { latestPrRequestEvent } = require("../../../src/pr-request-selection.cts");
 const { evaluateCompletionPersistence } = require("../../../src/attempt-workspace-predicates.cjs");
 const { isExactRequiredVerificationStop } = require("../../../src/issue-required-verification-stop.cts");
 const {
@@ -219,6 +222,34 @@ function collectUsageBeforeClosure(runDir: string): void {
   try { collectAttemptModelUsage({ runDir }); } catch {}
 }
 
+/**
+ * A stale Reviewer result has no persistence marker: the dispatcher deliberately discarded it and
+ * released the old claim by creating a fresh review request. A request added after the consumed
+ * request is a later workflow generation and must not make the old workspace own that new work.
+ */
+function staleReviewReleaseConfirmed(
+  record: AttemptRecord,
+  pr: JsonObject,
+  args: JsonObject,
+  timelineEvents: JsonObject[],
+): boolean {
+  if (args.staleReviewRelease !== "true" || record.role !== "reviewer" || !record.requestEventId) return false;
+  const headMatches = same(pr.headRefOid, record.inputRevision.head);
+  const labels = new Set(labelsOf(pr));
+  if (!headMatches) return false;
+  if ([String(args.inProgressLabel || ""), String(args.blockedLabel || "")].some((label) => label && labels.has(label))) return false;
+  const originalRequest = timelineEvents.find((event) => String(event.id || event.node_id || "") === record.requestEventId);
+  if (!originalRequest || String(originalRequest.event || "").toLowerCase() !== "labeled"
+    || String(originalRequest.label?.name || "") !== String(args.reviewLabel || "")) return false;
+  const requestLabels = [String(args.updateBranchLabel || ""), String(args.implementLabel || ""), String(args.reviewLabel || "")]
+    .filter((label) => label && labels.has(label));
+  if (requestLabels.length === 0) return false;
+  return requestLabels.every((label) => {
+    const latest = latestPrRequestEvent(timelineEvents, label);
+    return latest !== null && compareGithubTimelineEvents(originalRequest, latest) < 0;
+  });
+}
+
 function completeLocked(
   args: JsonObject,
   commandRunner: ReturnType<typeof createCommandRunner>,
@@ -250,6 +281,7 @@ function completeLocked(
   // ownership, workspace closure, and linked-worktree postconditions.
   let report: CompletionReportV1 | undefined;
   let github: GithubCompletionObservation | undefined;
+  let pr: JsonObject | undefined;
   if (record.phase !== "github_persisted") {
     let validation;
     try { validation = validatePromise(record.promiseFile, attemptRecord); }
@@ -292,7 +324,6 @@ function completeLocked(
       return driverResult("done", "attempt workspace retained for inspection", { driverAction: "workspace_retained" });
     }
 
-    let pr: JsonObject | undefined;
     if (record.role !== "worker") pr = prView(commandRunner, record);
     if (record.role !== "worker" && (!same(pr?.headRefOid, outputRevision(report) || record.inputRevision.head))) {
       return driverResult("done", "attempt workspace retained because the live PR head differs", { driverAction: "workspace_retained" });
@@ -356,9 +387,14 @@ function completeLocked(
       completionStopConfirmed = isExactRequiredVerificationStop(issue, completionStop.resolution, completionStop.labels);
     }
     const reviewerHumanHandoff = reviewerHumanHandoffExpectation(args);
+    const staleReleaseConfirmed = record.role === "reviewer" && args.staleReviewRelease === "true"
+      ? staleReviewReleaseConfirmed(record, pr as JsonObject, args, createGithubOperations(commandRunner).listPrTimelineEvents(record.repository, record.target.number))
+      : false;
     const decision = completionStop
       ? { action: completionStopConfirmed ? "close" as const : "retain" as const }
-      : evaluateCompletionPersistence({
+      : staleReleaseConfirmed
+        ? { action: "close" as const }
+        : evaluateCompletionPersistence({
         record,
         report: { kind: "v1", promisePath: record.promiseFile, report },
         github,
