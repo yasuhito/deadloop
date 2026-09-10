@@ -1901,6 +1901,7 @@ function closeSettledWorkspaceCommand(project, attemptRecord: string): string {
 }
 
 const RECONCILE_RETIREMENT_FILE = "reconcile-retired.json";
+const RECONCILE_REPORT_RECEIVED_TIMEOUT_MS = 15 * 60_000;
 
 type ReconcileRetirement = { schemaVersion: 1; attemptId: string; reason: string; retiredAt: string };
 
@@ -1941,6 +1942,51 @@ async function staleReconcileTargetReason(pi, record): Promise<string | null> {
     return `${isPullRequest ? "pull request" : "Issue"} ${record.repository}#${targetNumber} is closed`;
   }
   return null;
+}
+
+/** The driverAction vocabulary reconcile-report-received-attempt.cts publishes. Each term is a
+ * known waiting, completion, reasoned-stop, or not-applicable outcome, so the journal patrol's
+ * host-log lines keep their own classification instead of falling to unknown (#445). */
+const RECONCILE_DRIVER_ACTIONS = new Set([
+  "recovery_not_applicable",
+  "recovery_retained",
+  "recovery_retained_newer_owner",
+  "report_received_stopped",
+  "report_received_persisted",
+  "report_received_completion_pending",
+  "exception",
+]);
+
+/** Maps one reconcile driver output to the host-log result / reason pair (#445). A recognized
+ * driverAction keeps its classification with the child's own explanation; only an invalid or
+ * unrecognized output falls to an explicit unknown-result while keeping the sanitized diagnostic. */
+function reconcileDriverLogClassification(driverOutput: unknown): { result: string; reason: string } {
+  if (!driverOutput || typeof driverOutput !== "object" || Array.isArray(driverOutput)) {
+    return { result: "unknown", reason: "the reconcile driver returned no parsable result" };
+  }
+  const value = driverOutput as Record<string, unknown>;
+  const driverAction = typeof value.driverAction === "string" ? value.driverAction.trim() : "";
+  const summary = sanitizeDriverDiagnostic(value.summary);
+  if (driverAction && RECONCILE_DRIVER_ACTIONS.has(driverAction)) {
+    return {
+      result: driverAction,
+      reason: summary || `the reconcile driver reported ${driverAction} without an explanation`,
+    };
+  }
+  return {
+    result: "unknown",
+    reason: summary
+      ? `the reconcile driver returned an unrecognized result: ${summary}`
+      : "the reconcile driver returned an unrecognized result",
+  };
+}
+
+/** Keeps a process-level driver failure in the same unknown-result vocabulary as a bad output. */
+function classifyReconcileDriverOutcome(outcome: JsonExecOutcome): { result: string; reason: string } {
+  if (outcome.kind === "failure") {
+    return { result: "unknown", reason: reconciliationDriverFailureReason(outcome.failure, RECONCILE_REPORT_RECEIVED_TIMEOUT_MS) };
+  }
+  return reconcileDriverLogClassification(outcome.value);
 }
 
 async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> {
@@ -2041,32 +2087,36 @@ async function reconcilePersistedAttemptJournals(pi, project): Promise<boolean> 
       // A retired record is terminal: the marker below already carries the reason, so neither the
       // reconcile script nor the state query that produced it runs again (#393).
       if (readReconcileRetirement(runDir, record.attemptId)) continue;
+      const staleTargetJudgmentStartedMs = Date.now();
       const staleReason = await staleReconcileTargetReason(pi, record);
       if (staleReason) {
         writeReconcileRetirement(runDir, record.attemptId, staleReason);
         emitHostLogEvent({
           kind: "reconcile_finished",
+          projectId: project.id,
           attemptId: record.attemptId,
           role: record.role,
           result: "reconcile_retired",
           reason: staleReason,
+          durationMs: Date.now() - staleTargetJudgmentStartedMs,
         });
         debugLog("report_received attempt retired from reconciliation", record.attemptId, staleReason);
         continue;
       }
       const reconcileStartedMs = Date.now();
-      emitHostLogEvent({ kind: "reconcile_started", attemptId: record.attemptId, role: record.role, result: "", reason: "" });
-      const recovered = await execJson(pi, "node", reconcileReportReceivedArgv(project, attemptRecord), null, { timeout: 15 * 60_000 });
+      emitHostLogEvent({ kind: "reconcile_started", projectId: project.id, attemptId: record.attemptId, role: record.role, result: "", reason: "" });
+      const outcome = await execJsonOutcome(pi, "node", reconcileReportReceivedArgv(project, attemptRecord), { timeout: RECONCILE_REPORT_RECEIVED_TIMEOUT_MS });
+      const classification = classifyReconcileDriverOutcome(outcome);
       emitHostLogEvent({
         kind: "reconcile_finished",
+        projectId: project.id,
         attemptId: record.attemptId,
         role: record.role,
-        result: String(recovered?.action || recovered?.reason || "unknown"),
-        reason: String(recovered?.summary || ""),
-        ...(recovered?.driverAction ? { driverAction: String(recovered.driverAction) } : {}),
+        result: classification.result,
+        reason: classification.reason,
         durationMs: Date.now() - reconcileStartedMs,
       });
-      if (recovered?.action === "error") debugLog("report_received attempt recovery failed", recovered.summary);
+      if (outcome.kind === "value" && outcome.value?.action === "error") debugLog("report_received attempt recovery failed", outcome.value.summary);
       try { record = readAttemptRecord(runDir); }
       catch { safeToSchedule = false; continue; }
       if (releasesAttemptOwnership(record.phase)) continue;
@@ -2147,6 +2197,7 @@ export {
   reconcilePrWorkAuthority,
   retainedAttemptTargetsSnapshot,
   retainedAttemptDoctorFindings,
+  reconcileDriverLogClassification,
 };
 
 function attemptRecordForId(project, attemptId) {

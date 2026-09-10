@@ -35,7 +35,13 @@ function writeAttemptFixture(overrides: Record<string, unknown> = {}) {
 }
 
 /** GitHub double: answers target state queries and counts reconcile script dispatches. */
-function makePi(targetState: string) {
+const ORDINARY_RECONCILE_RESPONSE = JSON.stringify({
+  action: "done",
+  summary: "report_received attempt persisted deterministically: complete",
+  driverAction: "report_received_persisted",
+});
+
+function makePi(targetState: string, reconcileResponse: { code?: number; stdout?: string; stderr?: string } = { stdout: ORDINARY_RECONCILE_RESPONSE }) {
   const dispatches: string[] = [];
   const pi = {
     exec: async (command: string, args: string[]) => {
@@ -43,7 +49,7 @@ function makePi(targetState: string) {
       if (command === "gh" && joined.includes("view")) return { code: 0, stdout: JSON.stringify({ state: targetState }) };
       if (joined.includes("reconcile-report-received-attempt.cts")) {
         dispatches.push(joined);
-        return { code: 0, stdout: '{"action":"done","driverAction":"report_received_persisted"}' };
+        return { code: reconcileResponse.code ?? 0, stdout: reconcileResponse.stdout ?? "", stderr: reconcileResponse.stderr ?? "" };
       }
       return { code: 0, stdout: "{}" };
     },
@@ -107,15 +113,83 @@ describe("stale report_received reconcile targets", () => {
     ]);
   });
 
-  it("records reconcile start, finish, and duration in the host log", async () => {
+  it("records reconcile start, finish, project id, classification, and duration in the host log", async () => {
     fs.rmSync(path.join(stateDir, "host-log.jsonl"), { force: true });
     writeAttemptFixture();
     const { pi } = makePi("OPEN");
     await reconcilePersistedAttemptJournals(pi, project);
     const events = readHostLog().filter((event) => ["reconcile_started", "reconcile_finished"].includes(event.kind));
     const finished = events.find((event) => event.kind === "reconcile_finished");
-    expect({ kinds: events.map((event) => event.kind), attemptId: finished?.attemptId, durationMs: typeof finished?.durationMs })
-      .toEqual({ kinds: ["reconcile_started", "reconcile_finished"], attemptId: "attempt-1", durationMs: "number" });
+    expect({
+      kinds: events.map((event) => event.kind),
+      projectIds: events.map((event) => event.projectId),
+      attemptId: finished?.attemptId,
+      result: finished?.result,
+      reason: finished?.reason,
+      durationMs: typeof finished?.durationMs,
+    }).toEqual({
+      kinds: ["reconcile_started", "reconcile_finished"],
+      projectIds: ["demo", "demo"],
+      attemptId: "attempt-1",
+      result: "report_received_persisted",
+      reason: "report_received attempt persisted deterministically: complete",
+      durationMs: "number",
+    });
+  });
+
+  it("carries the project id and judgment duration on the stale-target retirement event", async () => {
+    fs.rmSync(path.join(stateDir, "host-log.jsonl"), { force: true });
+    writeAttemptFixture();
+    const { pi } = makePi("CLOSED");
+    await reconcilePersistedAttemptJournals(pi, project);
+    const retirement = readHostLog().find((event) => event.kind === "reconcile_finished");
+    expect({ projectId: retirement?.projectId, result: retirement?.result, durationMs: typeof retirement?.durationMs })
+      .toEqual({ projectId: "demo", result: "reconcile_retired", durationMs: "number" });
+  });
+
+  it("maps a known non-terminal wait to a specific result with a non-empty reason", async () => {
+    fs.rmSync(path.join(stateDir, "host-log.jsonl"), { force: true });
+    writeAttemptFixture();
+    const { pi } = makePi("OPEN", { stdout: JSON.stringify({
+      action: "done",
+      summary: "report_received attempt retained while the execution runtime reports working",
+      driverAction: "recovery_retained",
+      runtime: "working",
+    }) });
+    await reconcilePersistedAttemptJournals(pi, project);
+    const finished = readHostLog().find((event) => event.kind === "reconcile_finished");
+    expect({ result: finished?.result, reason: finished?.reason }).toEqual({
+      result: "recovery_retained",
+      reason: "report_received attempt retained while the execution runtime reports working",
+    });
+  });
+
+  it("keeps an explicit unknown-result with the failure reason when the reconcile driver fails", async () => {
+    fs.rmSync(path.join(stateDir, "host-log.jsonl"), { force: true });
+    writeAttemptFixture();
+    const { pi } = makePi("OPEN", { code: 1, stderr: "journal rebuild refused" });
+    await reconcilePersistedAttemptJournals(pi, project);
+    const finished = readHostLog().find((event) => event.kind === "reconcile_finished");
+    expect({ result: finished?.result, reason: finished?.reason }).toEqual({
+      result: "unknown",
+      reason: expect.stringContaining("exited with code 1"),
+    });
+  });
+
+  it("keeps an explicit unknown-result with sanitized diagnostics for an unrecognized output", async () => {
+    fs.rmSync(path.join(stateDir, "host-log.jsonl"), { force: true });
+    writeAttemptFixture();
+    const { pi } = makePi("OPEN", { stdout: JSON.stringify({
+      action: "done",
+      summary: "dangling claim in /tmp/journal",
+      driverAction: "recovery_wobbled",
+    }) });
+    await reconcilePersistedAttemptJournals(pi, project);
+    const finished = readHostLog().find((event) => event.kind === "reconcile_finished");
+    expect({ result: finished?.result, reason: finished?.reason }).toEqual({
+      result: "unknown",
+      reason: "the reconcile driver returned an unrecognized result: dangling claim in [internal path omitted]",
+    });
   });
 
   it("leaves an open-target record with a live worktree on the ordinary reconcile path", async () => {
