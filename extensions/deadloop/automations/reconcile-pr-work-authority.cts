@@ -261,20 +261,22 @@ const COMPLETION_HANDLERS: Record<string, { module: string; args: (record: JsonO
 
 /**
  * The one-axis runtime answer for one attempt journal, collapsed from the runtime observation.
- * Running means the runtime lists the attempt's agent; stopped means it reports the attempt ended;
- * an answer the runtime cannot give — unreachable, or a checkout it cannot describe — is
- * unobservable, and unobservable fails closed.
+ * Running means the runtime lists the attempt's agent; stopped means it reports the attempt ended.
+ * An answer the runtime cannot give — an ambiguous reading, or a runtime it cannot reach — is no
+ * evidence of ownership loss, so the caller keeps watching instead of deciding (Issue #454). The
+ * two share one answer on purpose: neither names an owner change, and the decision treats them
+ * alike; attempt monitoring keeps the vocabulary distinction instead.
  */
 function observeJournalRuntime(
   runner: any,
   record: JsonObject,
   projectRepo: string,
-): "running" | "stopped" | "unobservable" {
+): "running" | "stopped" | "ambiguous" {
   try {
     const observed = observeAttemptRuntime(runner, record, projectRepo);
     return observed.kind === "live_matching_owner" ? "running"
-      : observed.kind === "owner_absent_owned" ? "stopped" : "unobservable";
-  } catch { return "unobservable"; }
+      : observed.kind === "owner_absent_owned" ? "stopped" : "ambiguous";
+  } catch { return "ambiguous"; }
 }
 
 async function reconcile(args: JsonObject, commandRunner = createCommandRunner()): Promise<JsonObject> {
@@ -386,7 +388,9 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
       || matching.some((attempt) => observedAttemptStorageExhaustion(attempt));
 
     // Liveness is asked per journal and answered by the runtime alone. One live agent keeps the
-    // pull request active; one unreadable answer makes the whole observation unobservable. No
+    // pull request active; one unreadable answer is no evidence either way, so the whole
+    // observation stays undecided and nothing is written (Issue #454) — undecided also outranks a
+    // malformed journal, whose fail-closed block waits for a runtime state it can decide on. No
     // journal left at all is its own answer: there is nothing to observe, not an unreadable owner.
     const observed = matching.map((record) => ({ record, kind: observeJournalRuntime(runner, record, args.projectRepo) }));
     // A journal whose guarded completion chain already persisted its result to GitHub is finished
@@ -409,8 +413,8 @@ async function reconcile(args: JsonObject, commandRunner = createCommandRunner()
     // nothing left to decide. A pull request still carrying the active state stays fail closed.
     if (journals.length === 0 && finishedRecords.size > 0 && !labels(pr).includes(inProgressLabel)) continue;
     const runtime = journals.some((journal) => journal.kind === "running") ? { kind: "running" }
-      : malformed.length > 0 || journals.some((journal) => journal.kind === "unobservable")
-        ? { kind: "unobservable" }
+      : journals.some((journal) => journal.kind === "ambiguous") ? { kind: "ambiguous" }
+      : malformed.length > 0 ? { kind: "unobservable" }
         : journals.length === 0 ? { kind: "absent" } : { kind: "stopped" };
 
     // A stopped attempt that left proof of a completed attempt is finished, not abandoned. Handing

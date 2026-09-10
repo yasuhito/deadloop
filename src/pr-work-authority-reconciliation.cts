@@ -8,14 +8,19 @@ type JsonObject = Record<string, any>;
 
 /**
  * Liveness has one authority: the execution runtime. Deadloop never proves ownership, so there is
- * no second observation to reconcile against and no ambiguous middle: an answer the runtime cannot
- * give is unobservable, and unobservable fails closed.
+ * no second observation to reconcile against. An answer that does not resolve the attempt to
+ * running or stopped is not evidence of ownership loss: it names no owner change, so the request
+ * and the review history stay and monitoring continues (Issue #454). A block answers deterministic
+ * evidence only — an owner the runtime proves absent, a journal no state can account for, or the
+ * launch failures and exhausted storage the journals recorded.
  */
 type RuntimeObservation =
   | { kind: "running" }
   | { kind: "stopped" }
   /** The pull request holds an active-attempt state no journal can account for. */
   | { kind: "absent" }
+  /** The runtime answered, but the answer does not resolve the attempt to running or stopped. */
+  | { kind: "ambiguous" }
   | { kind: "unobservable" };
 
 /** Whether the completion handler ran, answered by the finalizer receipt and the attempt journal. */
@@ -79,6 +84,10 @@ function blockedLabels(input: ReconciliationInput): string[] {
  */
 function reconcilePrWorkAuthority(input: ReconciliationInput): ReconciliationDecision {
   if (input.runtime.kind === "running") return { action: "keep_active", cleanup: "none" };
+  // A reading that does not resolve the attempt to running or stopped is no evidence either way:
+  // the attempt may still be working, so the request, the review history, and the workspace all
+  // stay exactly as they are until a deterministic answer returns (Issue #454).
+  if (input.runtime.kind === "ambiguous") return { action: "keep_active", cleanup: "none" };
   // A refused handoff is a completed attempt whose result the role's finalizer would not apply, so
   // it names its own reason instead of reading as an abandoned attempt.
   if (input.runtime.kind === "stopped" && input.completion?.kind === "handoff_refused") {

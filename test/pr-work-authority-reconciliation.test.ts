@@ -50,6 +50,34 @@ describe("one-axis reconciliation of stopped attempts", () => {
   });
 });
 
+describe("a transient ambiguous runtime reading", () => {
+  it("keeps the active attempt while the runtime reading stays ambiguous", () => {
+    expect(reconcilePrWorkAuthority({ ...base, runtime: { kind: "ambiguous" } }).action).toBe("keep_active");
+  });
+
+  it("touches no workspace while the runtime reading stays ambiguous", () => {
+    expect(reconcilePrWorkAuthority({ ...base, runtime: { kind: "ambiguous" } }).cleanup).toBe("none");
+  });
+
+  it("withholds a launch-failure block while one journal reads ambiguously", () => {
+    const decision = reconcilePrWorkAuthority({
+      ...base,
+      runtime: { kind: "ambiguous" },
+      launchFailures: ["worktree agent/issue-42 already exists before create"],
+    });
+    expect(decision.action).toBe("keep_active");
+  });
+
+  it("withholds a refused-handoff block while one journal reads ambiguously", () => {
+    const decision = reconcilePrWorkAuthority({
+      ...base,
+      runtime: { kind: "ambiguous" },
+      completion: { kind: "handoff_refused" },
+    });
+    expect(decision.action).toBe("keep_active");
+  });
+});
+
 describe("blocks whose reasons name an operator action", () => {
   it("blocks when the runtime cannot describe the attempt", () => {
     expect(reconcilePrWorkAuthority({ ...base, runtime: { kind: "unobservable" } })).toMatchObject({
