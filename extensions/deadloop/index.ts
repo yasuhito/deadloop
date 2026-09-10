@@ -49,6 +49,9 @@ import {
 const { clearOneShotExecution, issueOneShotExecution, readValidOneShotExecution } = require("../../src/one-shot-execution.cjs");
 const { hasUncommittedWork, UNCOMMITTED_WORK_STATUS_ARGS } = require("../../src/agent-scratch-area.cjs");
 const { createAsyncHerdrRunner } = require("../../src/herdr-runner.cts");
+const { redactLocalDetail } = require("../../src/local-detail-redaction.cts") as {
+  redactLocalDetail: (value: unknown) => string;
+};
 const { observeAttemptLiveness } = require("../../src/attempt-runtime-observation.cts");
 const {
   agentOccupiesAttemptWorkspace,
@@ -762,15 +765,36 @@ async function runAutomationScript(pi, project, automation, automationFile, supp
   });
 }
 
-async function execJson(pi, command, args, fallback, options: { timeout?: number } = {}) {
+type JsonExecFailure =
+  | { kind: "nonzero_exit"; code: number; stderr: string }
+  | { kind: "timeout" }
+  | { kind: "exec_error"; detail: string }
+  | { kind: "invalid_json"; detail: string };
+
+type JsonExecOutcome = { kind: "value"; value: any } | { kind: "failure"; failure: JsonExecFailure };
+
+/** Keeps each failure kind instead of collapsing every miss into a fallback. */
+async function execJsonOutcome(pi, command, args, options: { timeout?: number } = {}): Promise<JsonExecOutcome> {
+  let result;
   try {
-    const result = await pi.exec(command, args, { timeout: options.timeout || 15_000 });
-    if (result.code !== 0) return fallback;
-    return JSON.parse(result.stdout || "null") ?? fallback;
+    result = await pi.exec(command, args, { timeout: options.timeout || 15_000 });
   } catch (error) {
     debugLog("status query failed", command, args.join(" "), error?.message || error);
-    return fallback;
+    return { kind: "failure", failure: { kind: "exec_error", detail: String(error?.message || error) } };
   }
+  if (result.killed) return { kind: "failure", failure: { kind: "timeout" } };
+  if (result.code !== 0) return { kind: "failure", failure: { kind: "nonzero_exit", code: Number(result.code), stderr: String(result.stderr || "") } };
+  try {
+    return { kind: "value", value: JSON.parse(result.stdout || "null") ?? null };
+  } catch (error) {
+    debugLog("status query failed", command, args.join(" "), error?.message || error);
+    return { kind: "failure", failure: { kind: "invalid_json", detail: String(error?.message || error) } };
+  }
+}
+
+async function execJson(pi, command, args, fallback, options: { timeout?: number } = {}) {
+  const outcome = await execJsonOutcome(pi, command, args, options);
+  return outcome.kind === "value" ? outcome.value : fallback;
 }
 
 function uniquePrs(prs) {
@@ -1719,6 +1743,32 @@ function unreconciledAuthorityStatus(authority: { reconciled: boolean; reason: s
 
 // A caller that cannot reconcile must be able to say why, so the outcome carries its own reason
 // instead of leaving one in the debug log. Only an explicit override may replace the reconciliation.
+const PR_WORK_AUTHORITY_RECONCILE_TIMEOUT_MS = 90_000;
+const DRIVER_DIAGNOSTIC_MAX_CHARS = 200;
+
+// A reconciliation failure reason is published to the host status and host log, so it must name
+// the failure kind, keep a concrete sanitized cause, and never carry a local path or a token.
+function sanitizeDriverDiagnostic(text: unknown): string {
+  const collapsed = String(text || "").replace(/\s+/g, " ").trim();
+  const withoutTokens = collapsed.replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}\b/g, "[redacted token]");
+  return redactLocalDetail(withoutTokens).slice(0, DRIVER_DIAGNOSTIC_MAX_CHARS);
+}
+
+function reconciliationDriverFailureReason(failure: JsonExecFailure, timeoutMs: number): string {
+  switch (failure.kind) {
+    case "nonzero_exit": {
+      const stderr = sanitizeDriverDiagnostic(failure.stderr);
+      return `the reconciliation driver exited with code ${failure.code}${stderr ? `: ${stderr}` : ""}`;
+    }
+    case "timeout":
+      return `the reconciliation driver timed out after ${Math.round(timeoutMs / 1000)}s`;
+    case "exec_error":
+      return `the reconciliation driver could not be started: ${sanitizeDriverDiagnostic(failure.detail)}`;
+    case "invalid_json":
+      return `the reconciliation driver returned invalid JSON output: ${sanitizeDriverDiagnostic(failure.detail)}`;
+  }
+}
+
 async function reconcilePrWorkAuthority(pi, project): Promise<{ reconciled: boolean; reason: string }> {
   if (typeof pi.testing?.reconcilePrWorkAuthority === "function") {
     return await pi.testing.reconcilePrWorkAuthority(project);
@@ -1726,7 +1776,7 @@ async function reconcilePrWorkAuthority(pi, project): Promise<{ reconciled: bool
   const labels = projectLabels(project);
   const enabled = automationHostIdentity(project);
   if (!enabled?.automationLogin) return { reconciled: false, reason: "the enabled record names no Automation host login" };
-  const result = await execJson(pi, "node", [
+  const outcome = await execJsonOutcome(pi, "node", [
     path.join(AUTOMATION_DIR, "reconcile-pr-work-authority.cts"),
     "--project-id", project.id,
     "--project-repo", project.repoPath,
@@ -1739,9 +1789,17 @@ async function reconcilePrWorkAuthority(pi, project): Promise<{ reconciled: bool
     "--update-branch-label", "agent:update-branch",
     "--in-progress-label", labels.inProgress,
     "--blocked-label", labels.blocked,
-  ], null, { timeout: 90_000 });
+  ], { timeout: PR_WORK_AUTHORITY_RECONCILE_TIMEOUT_MS });
+  if (outcome.kind === "failure") {
+    const reason = reconciliationDriverFailureReason(outcome.failure, PR_WORK_AUTHORITY_RECONCILE_TIMEOUT_MS);
+    debugLog("PR work-authority reconciliation failed", reason);
+    return { reconciled: false, reason };
+  }
+  const result = outcome.value;
   if (!result || result.action === "error") {
-    const reason = String(result?.summary || result?.error || "the reconciliation driver returned no result");
+    const reason = !result
+      ? "the reconciliation driver returned an empty result"
+      : sanitizeDriverDiagnostic(String(result.summary || result.error || "the reconciliation driver reported an unnamed error"));
     debugLog("PR work-authority reconciliation failed", reason);
     return { reconciled: false, reason };
   }

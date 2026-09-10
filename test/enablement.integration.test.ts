@@ -1051,7 +1051,7 @@ describe("enablement command integration", () => {
   }, SCHEDULED_DRIVER_TIMEOUT_MS);
 
   it("names the blocker in the host status when PR work authority cannot be reconciled", async () => {
-    expect(await unreconciledAuthorityStatus()).toContain("the reconciliation driver returned no result");
+    expect(await unreconciledAuthorityStatus()).toContain("the reconciliation driver could not be started");
   }, SCHEDULED_DRIVER_TIMEOUT_MS);
 
   it("shows a general project-check restoration quarantine in doctor", async () => {
