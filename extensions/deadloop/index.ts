@@ -280,10 +280,6 @@ function githubRepoFromRemote(remote) {
   return match ? match[1] : "";
 }
 
-function inferGithubRepo(repoPath) {
-  return githubRepoFromRemote(gitOutput(repoPath, ["remote", "get-url", "origin"]));
-}
-
 function implicitProjectFromCwd(cwd, options: { fetchPolicy?: boolean } = {}) {
   const repoPath = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
   if (!repoPath) return null;
@@ -293,15 +289,19 @@ function implicitProjectFromCwd(cwd, options: { fetchPolicy?: boolean } = {}) {
   const enabledIdentity = loadEnablementState().projects.find((project) =>
     project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repoPath)
   );
-  const githubRepo = enabledIdentity?.githubRepo || inferGithubRepo(repoPath);
-  if (!githubRepo) return null;
+  // An implicit project is adopted only through isProjectEnabled. A checkout with no persisted
+  // enabled record has no standing enablement to resolve against, so stop before any identity
+  // inference or trusted policy load: startup in a disabled repository must not run a remote git
+  // fetch, and a leftover one-shot authorization must not bootstrap project resolution.
+  if (!enabledIdentity) return null;
+  const githubRepo = enabledIdentity.githubRepo;
   const id = inferredProjectId(repoPath, githubRepo);
   const raw = {
     id,
     enabled: true,
     repoPath,
     githubRepo,
-    baseBranch: enabledIdentity?.baseBranch || inferBaseBranch(repoPath),
+    baseBranch: enabledIdentity.baseBranch || inferBaseBranch(repoPath),
     worktreeRoot: path.join(os.homedir(), ".herdr", "worktrees", id),
     autoMerge: false,
   };

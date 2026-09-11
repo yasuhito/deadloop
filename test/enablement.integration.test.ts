@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -56,6 +56,21 @@ const enabledSafetyFields = {
 
 function git(repoPath: string, args: string[]): string {
   return execFileSync("git", ["-C", repoPath, ...args], { encoding: "utf8" });
+}
+
+// Every git subprocess in the extension resolves through this PATH shim, so logging every
+// invocation observes the real startup behavior instead of a timing proxy.
+function recordGitCalls(root: string): string {
+  const callLog = path.join(root, "git-calls.log");
+  const shimPath = path.join(root, "bin", "git");
+  const templateShimPath = `${shimPath}.template`;
+  renameSync(shimPath, templateShimPath);
+  writeFileSync(shimPath, `#!/bin/sh
+printf '%s\\n' "$*" >> "${callLog}"
+exec "${templateShimPath}" "$@"
+`);
+  chmodSync(shimPath, 0o755);
+  return callLog;
 }
 
 function gitReportMutationSnapshot(repoPath: string): string {
@@ -2558,6 +2573,23 @@ fs.writeFileSync(reportPath, JSON.stringify({ reads, errors }));
     await extension.events.get("session_start")!({}, { ...context, cwd: nested });
 
     expect(existsSync(path.join(root, ".pi", "agent", "deadloop", schedulerLockName({ githubRepositoryId: "R_demo" })))).toBe(false);
+  });
+
+  it("does not fetch during startup in a repository that is neither enabled nor configured", async () => {
+    const { root, repoPath } = fixtureRepository();
+    // A checkout absent from projects.json and from the persisted enablement state must resolve
+    // as disabled during startup without touching the network.
+    const stateDir = path.join(root, ".pi", "agent", "deadloop");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, "projects.json"), JSON.stringify({ projects: [] }));
+    const callLog = recordGitCalls(root);
+    const extension = await loadExtension(root);
+    const context = { cwd: repoPath, mode: "interactive", ui: { notify: () => undefined, setStatus: () => undefined } };
+
+    await extension.events.get("session_start")!({}, context);
+
+    const gitCalls = existsSync(callLog) ? readFileSync(callLog, "utf8").split("\n").filter(Boolean) : [];
+    expect(gitCalls.filter((line) => line.includes(repoPath) && /\bfetch\b/.test(line))).toEqual([]);
   });
 });
 

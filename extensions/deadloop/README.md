@@ -125,7 +125,7 @@ pi -p -e extensions/deadloop/index.ts "/deadloop-status"
 pi -p -e extensions/deadloop/index.ts "/deadloop-doctor"
 ```
 
-Those report runs never start the scheduler: the `session_start` hook returns early in print and json mode. `/deadloop-enable` starts it in any mode. To accept the scheduler, start the host interactively in an enabled checkout: it takes `~/.pi/agent/deadloop/scheduler.<repository-id hash>.lock` with its own pid at startup, then rewrites `~/.pi/agent/deadloop/state.json` on a startup tick three seconds later and on a 30-second interval anchored to the same startup.
+Those report runs never start the scheduler: the `session_start` hook returns early in print and json mode. In an interactive checkout absent from both projects.json and the persisted enabled-project state, startup resolves it as disabled without running a trusted-policy `git fetch`, so an unconfigured repository never delays editor input on a broad fetch refspec. `/deadloop-enable` starts it in any mode. To accept the scheduler, start the host interactively in an enabled checkout: it takes `~/.pi/agent/deadloop/scheduler.<repository-id hash>.lock` with its own pid at startup, then rewrites `~/.pi/agent/deadloop/state.json` on a startup tick three seconds later and on a 30-second interval anchored to the same startup.
 
 Known host differences: none in the reports or in scheduler behavior. The scheduler lock is scoped to the GitHub repository ID and is host-agnostic, so starting a second host of either kind on the same repository leaves the first one driving and shows `skipped: repository is already served by Automation host pid <pid>` on the second.
 
