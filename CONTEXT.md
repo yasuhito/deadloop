@@ -77,7 +77,7 @@ _Avoid_: 自動リロード(起こり方であって操作の名前ではない�
 _Avoid_: 試行ごとのコピー(識別子ごとに共有するため)、キャッシュ(性能目的ではないため)、working tree(可変でありエージェント向け供給元にしないため)、host が読み込む配備先(host は checkout から読み込むため)、`__dirname` から作るエージェント向けパス
 
 **エージェント実行スクリプト (Agent-run script)**:
-エージェントが自分の session から `node` で実行する deadloop のスクリプト。`run-project-check`、`pr-review-repair-finalize`、`pr-branch-update-finalize` の 3 本で、`extensions/deadloop/automations/` に置く薄い CLI の殻であり、実装は `src/` のモジュールを呼ぶ。host と agent の 2 つの利用者を持つ seam であり、Automation host が自分の処理をこの形で子プロセスとして起動することはない。
+エージェントが自分の session から `node` で実行する deadloop のスクリプト。`run-project-check`、`write-worker-report`、`pr-review-repair-finalize`、`pr-branch-update-finalize` の 4 本で、`extensions/deadloop/automations/` に置く薄い CLI の殻であり、実装は `src/` のモジュールを呼ぶ。host と agent の 2 つの利用者を持つ seam であり、Automation host が自分の処理をこの形で子プロセスとして起動することはない。
 _Avoid_: driver、automation スクリプト(host が起動する意味を含むため)、`--fixture` による起動、host↔host の subprocess
 
 **ワークフロー状態 (Workflow state)**:

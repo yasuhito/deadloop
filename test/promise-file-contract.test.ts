@@ -20,7 +20,7 @@ function issueWorkerPrompt(): string {
 
 describe("promise file contract", () => {
   it("documents unique promise file allocation outside the worktree", () => {
-    expect(issueWorkerPrompt()).toContain("<deadloopStateDir>/runs/<uuid>/promise.json");
+    expect(issueWorkerPrompt()).toContain("<deadloopStateDir>/runs/<uuid>/attempt.json");
   });
 
   it("requires blocked workers to write a promise file", () => {
@@ -32,7 +32,7 @@ describe("promise file contract", () => {
 
     expect({
       namesPromiseReport: workerPrompt.includes("Promise report:"),
-      requiresPromiseWrite: workerPrompt.includes("Always write the promise file"),
-    }).toEqual({ namesPromiseReport: true, requiresPromiseWrite: true });
+      requiresWriterHandoff: workerPrompt.includes("Always hand a report to the writer before stopping"),
+    }).toEqual({ namesPromiseReport: true, requiresWriterHandoff: true });
   });
 });

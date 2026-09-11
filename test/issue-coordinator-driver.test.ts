@@ -380,10 +380,16 @@ exit 2
     }).driverAction).toBe("no_candidate");
   });
 
-  it("binds the Worker V1 identity to an exact commit SHA", () => {
+  it("binds completion through the attempt writer instead of a hand-written V1 identity", () => {
     const instructions = runDriverFixture("driver-ready-worker.json").launch.instructions;
 
-    expect(instructions).toContain(`"inputRevision":{"head":"${"f".repeat(40)}"}`);
+    expect(instructions).toContain("write-worker-report.cts");
+  });
+
+  it("does not hand the Worker an exact V1 identity to transcribe", () => {
+    const instructions = runDriverFixture("driver-ready-worker.json").launch.instructions;
+
+    expect(instructions).not.toContain(`"inputRevision":{"head":"${"f".repeat(40)}"}`);
   });
 
   it("persists the launch-time issue title for monitor revalidation", () => {

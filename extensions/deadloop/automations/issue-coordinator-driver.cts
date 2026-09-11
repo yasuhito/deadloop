@@ -589,8 +589,7 @@ function issueWorkerLaunchPlan(
       ...(agentRequest ? { agentRequest } : {}),
       intendedWorktreePath,
       resolveWorktreeHead: true,
-      renderPrompt: ({ promiseFile, worktreePath, worktreeHead }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
-        if (!worktreeHead) throw new Error("Worker prompt requires the exact created worktree HEAD");
+      renderPrompt: ({ promiseFile, worktreePath }: { promiseFile: string; worktreePath: string; worktreeHead?: string }) => {
         return renderIssueWorkerPrompt({
           launchReason: "The issue is ready for implementation.",
           issueNumber: number,
@@ -607,7 +606,6 @@ function issueWorkerLaunchPlan(
             command: env.checkCommand,
           }),
           promiseFile,
-          reportIdentity: { attemptId: uuid, inputRevision: { head: worktreeHead } },
         });
       },
     },

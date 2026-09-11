@@ -130,26 +130,28 @@ describe("issue coordinator renderers", () => {
     );
   });
 
-  it("renders the worker promise file contract", () => {
-    expect(renderIssueWorkerPrompt(workerInput)).toContain(
-      '"schemaVersion":1,'
-    );
+  it("hands the semantic payload to the launch-time code snapshot writer", () => {
+    expect(renderIssueWorkerPrompt(workerInput)).toContain("node /automation/write-worker-report.cts");
   });
 
-  it("requires a three-sentence summary in the worker report template", () => {
+  it("targets the attempt record beside the promise file", () => {
+    expect(renderIssueWorkerPrompt(workerInput)).toContain("--attempt-record /tmp/worktree/.deadloop/attempt.json");
+  });
+
+  it("does not ask the worker to hand-write the exact V1 identity", () => {
+    expect(renderIssueWorkerPrompt(workerInput)).not.toContain('"schemaVersion":1');
+  });
+
+  it("does not ask the worker to transcribe git rev-parse HEAD output", () => {
+    expect(renderIssueWorkerPrompt(workerInput)).not.toContain("outputRevision");
+  });
+
+  it("requires confirming the writer succeeded before stopping", () => {
+    expect(renderIssueWorkerPrompt(workerInput)).toContain("exits 0");
+  });
+
+  it("requires a three-sentence summary in the worker payload template", () => {
     expect(renderIssueWorkerPrompt(workerInput)).toContain('"summary":"<three sentences>"');
-  });
-
-  it("requires the 40-hex outputRevision in the worker report JSON template", () => {
-    expect(renderIssueWorkerPrompt(workerInput)).toContain(
-      '"result":{"outputRevision":"<40-hex output of git rev-parse HEAD>"}',
-    );
-  });
-
-  it("tells the worker to copy git rev-parse HEAD verbatim for outputRevision", () => {
-    expect(renderIssueWorkerPrompt(workerInput)).toContain(
-      "Write `outputRevision` exactly as the full 40-hex output of `git rev-parse HEAD`; a short SHA invalidates the whole report.",
-    );
   });
 
   it("requires a three-sentence summary in the explorer report template", () => {
