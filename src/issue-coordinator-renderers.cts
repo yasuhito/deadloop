@@ -1,3 +1,5 @@
+const path = require("node:path") as typeof import("node:path");
+
 type IssuePlanningCommentInput = {
   githubRepo: string;
   blockedLabel: string;
@@ -37,12 +39,11 @@ type IssueWorkerPromptInput = {
   issueTitle: string;
   issueUrl: string;
   githubRepo: string;
-  automationDir?: string;
+  automationDir: string;
   workerInstructions: string;
   checkCommand: string;
   validationCommand?: string;
   promiseFile: string;
-  reportIdentity?: { attemptId: string; inputRevision: { head: string; base?: string } };
 };
 
 function oneLineForRenderer(value: string): string {
@@ -183,18 +184,10 @@ Promise report:
 
 function renderIssueWorkerPrompt(input: IssueWorkerPromptInput): string {
   const issueTitle = oneLineForRenderer(input.issueTitle);
-  const validationCommand = input.validationCommand || (input.automationDir
-    ? `node ${shellQuoteForRenderer(pathForProjectCheck(input.automationDir))} --command ${shellQuoteForRenderer(input.checkCommand)}`
-    : input.checkCommand);
+  const validationCommand = input.validationCommand || `node ${shellQuoteForRenderer(pathForProjectCheck(input.automationDir))} --command ${shellQuoteForRenderer(input.checkCommand)}`;
   const validationFence = markdownFence(validationCommand);
-  const identity = input.reportIdentity || { attemptId: "<attemptId>", inputRevision: { head: "<baseRevision>" } };
-  const reportBase = JSON.stringify({
-    schemaVersion: 1,
-    attemptId: identity.attemptId,
-    role: "worker",
-    target: { repository: input.githubRepo, kind: "issue", number: input.issueNumber },
-    inputRevision: identity.inputRevision,
-  });
+  const writerCommand = `node ${shellQuoteForRenderer(`${input.automationDir.replace(/\/$/, "")}/write-worker-report.cts`)} --attempt-record ${shellQuoteForRenderer(attemptRecordForPromise(input.promiseFile))} <<'JSON'`;
+  const writerFence = markdownFence(writerCommand);
 
   return `Launch reason: ${oneLineForRenderer(input.launchReason)}
 
@@ -225,18 +218,26 @@ Hard limits:
 - Do not revert unrelated changes.
 
 Promise report:
-- Before stopping, write JSON to the orchestrator promise file: \`${markdownCode(input.promiseFile)}\`.
-- Every report must start with this exact V1 identity: \`${markdownCode(reportBase)}\`.
-- Every report must also include the summary field beside the identity: \`"summary":"<three sentences>"\`. A report without it is invalid and discarded.
-- On success, add \`"status":"complete"\`, \`"result":{"outputRevision":"<40-hex output of git rev-parse HEAD>"}\`, and \`"evidence":{"validations":["<command and result>"]}\`.
-- Write \`outputRevision\` exactly as the full 40-hex output of \`git rev-parse HEAD\`; a short SHA invalidates the whole report.
-- If blocked by failure, missing spec, risky change, or uncertainty, add \`"status":"blocked"\`, \`"result":{"reason":"add_request|free_storage|fix_environment|fix_verification_policy","explanation":"what is unsafe","recovery":"safe next step"}\`, and \`"evidence":{}\`.
-- Write one complete JSON object; do not nest the identity JSON as a string.
-- Always write the promise file, even on failure. Do not exit silently.`;
+- Do not write the promise file yourself. Decide the result, then hand its semantic payload to the report writer from the launch code snapshot:
+  ${writerFence}bash
+  ${writerCommand}
+  {"status":"complete","summary":"<three sentences>","evidence":{"validations":["<command and result>"]}}
+  JSON
+  ${writerFence}
+- On success the writer prints the written report file and exits 0; confirm that before stopping.
+- If blocked by failure, missing spec, risky change, or uncertainty, hand the writer this payload instead:
+  {"status":"blocked","summary":"<three sentences>","result":{"reason":"add_request|free_storage|fix_environment|fix_verification_policy","explanation":"what is unsafe","recovery":"safe next step"}}
+- The writer injects the report identity and the worktree HEAD revision itself. Supply only status, summary, and the meaning of the result; a payload that names identity, target, revision, worktree, or output-path fields is refused and names them.
+- Always hand a report to the writer before stopping, even on failure. If the writer refuses, fix the field it names and run it again.`;
 }
 
 function pathForProjectCheck(automationDir: string): string {
   return `${automationDir.replace(/\/$/, "")}/run-project-check.ts`;
+}
+
+/** The attempt record sits beside the promise file in the attempt's run directory. */
+function attemptRecordForPromise(promiseFile: string): string {
+  return path.join(path.dirname(promiseFile), "attempt.json");
 }
 
 module.exports = { renderIssueBlockedComment, renderIssueExplorerPrompt, renderIssuePlanningComment, renderIssueWorkerPrompt };
