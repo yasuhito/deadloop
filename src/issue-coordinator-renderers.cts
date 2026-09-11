@@ -91,10 +91,6 @@ function markdownFence(value: string): string {
   return "`".repeat(backticks + 1);
 }
 
-function markdownCode(value: string): string {
-  return oneLineForRenderer(value).replace(/`/g, "\\`");
-}
-
 function renderIssuePlanningComment(input: IssuePlanningCommentInput): string {
   return [
     "Skipped automated implementation because this looks like a PRD, design, or parent issue.",
