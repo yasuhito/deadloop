@@ -138,8 +138,13 @@ describe("Issue exploration completion", () => {
       .toBe("explorer_repository_changed");
   });
 
-  it("rejects an exploration result after repository files change", () => {
+  it("rejects an exploration result after a tracked repository file changes", () => {
     expect(readOnlyExplorationFailure({ inputRevision: { head: "a".repeat(40) } }, "a".repeat(40), " M src/example.ts\n")?.reason)
+      .toBe("explorer_repository_changed");
+  });
+
+  it("rejects an exploration result after an untracked repository file appears", () => {
+    expect(readOnlyExplorationFailure({ inputRevision: { head: "a".repeat(40) } }, "a".repeat(40), "?? notes.txt\n")?.reason)
       .toBe("explorer_repository_changed");
   });
 

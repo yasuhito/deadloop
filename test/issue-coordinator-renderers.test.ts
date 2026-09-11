@@ -40,9 +40,9 @@ const explorerInput = {
   issueTitle: "Explore the issue",
   issueUrl: "https://github.com/owner/repo/issues/72",
   githubRepo: "owner/repo",
+  automationDir: "/automation",
   workerInstructions: "Read AGENTS.md. Do not paste unsafe fences.",
   promiseFile: "/tmp/worktree/.deadloop/promise-124.json",
-  reportIdentity: { attemptId: "attempt-124", inputRevision: { head: "a".repeat(40) } },
 };
 
 describe("issue coordinator renderers", () => {
@@ -156,5 +156,17 @@ describe("issue coordinator renderers", () => {
 
   it("requires a three-sentence summary in the explorer report template", () => {
     expect(renderIssueExplorerPrompt(explorerInput)).toContain('"summary":"<three sentences>"');
+  });
+
+  it("hands the explorer semantic payload to the launch-time writer", () => {
+    expect(renderIssueExplorerPrompt(explorerInput)).toContain("node /automation/write-explorer-report.cts");
+  });
+
+  it("does not ask the explorer to hand-write V1 identity", () => {
+    expect(renderIssueExplorerPrompt(explorerInput)).not.toContain('"schemaVersion":1');
+  });
+
+  it("requires the explorer to confirm writer success", () => {
+    expect(renderIssueExplorerPrompt(explorerInput)).toContain("exits 0");
   });
 });
