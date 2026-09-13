@@ -34,10 +34,16 @@ export function normalizeEnablementState(value: unknown): EnablementStateFile | 
   return normalizeEnablementStateValue(value);
 }
 
+export function findEnabledRecordByRepoPath(state: EnablementState | null, repoPath: string): EnabledProject | null {
+  if (!state || !String(repoPath || "").trim()) return null;
+  const resolved = normalizedPath(repoPath);
+  return state.projects.find((project) => project.enabled !== false && normalizedPath(project.repoPath) === resolved) || null;
+}
+
 export function findEnabledProject(state: EnablementState | null, identity: ProjectIdentity): EnabledProject | null {
   if (!state || !validIdentity(identity)) return null;
-  const repoPath = normalizedPath(identity.repoPath);
-  return state.projects.find((project) => project.repoPath === repoPath && project.githubRepo === identity.githubRepo && project.enabled !== false) || null;
+  const enabled = findEnabledRecordByRepoPath(state, identity.repoPath);
+  return enabled?.githubRepo === identity.githubRepo ? enabled : null;
 }
 
 export function isEnabledProjectState(state: EnablementState | null, identity: ProjectIdentity): boolean {

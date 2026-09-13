@@ -116,6 +116,7 @@ const { inspectRetainedProjectCheckFailures, inspectUnresolvedProjectCheckFailur
 };
 import {
   findEnabledProject,
+  findEnabledRecordByRepoPath,
   normalizeEnablementState,
   observeAutoMerge,
   removeEnabledProject,
@@ -286,9 +287,7 @@ function implicitProjectFromCwd(cwd, options: { fetchPolicy?: boolean } = {}) {
   const gitDir = gitOutput(cwd, ["rev-parse", "--git-dir"]);
   const gitCommonDir = gitOutput(cwd, ["rev-parse", "--git-common-dir"]);
   if (!gitDir || !gitCommonDir || isLinkedGitWorktree(cwd, gitDir, gitCommonDir)) return null;
-  const enabledIdentity = loadEnablementState().projects.find((project) =>
-    project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repoPath)
-  );
+  const enabledIdentity = findEnabledRecordByRepoPath(loadEnablementState(), repoPath);
   // An implicit project is adopted only through isProjectEnabled. A checkout with no persisted
   // enabled record has no standing enablement to resolve against, so stop before any identity
   // inference or trusted policy load: startup in a disabled repository must not run a remote git
@@ -368,9 +367,7 @@ function loadProjectsResult(
     let enableIdentity = options.enableIdentity;
     if (!enableIdentity && cwd) {
       const repoPath = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
-      const enabled = loadEnablementState().projects.find((project) =>
-        project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repoPath)
-      );
+      const enabled = findEnabledRecordByRepoPath(loadEnablementState(), repoPath);
       if (enabled) {
         const id = inferredProjectId(repoPath, enabled.githubRepo);
         enableIdentity = {
@@ -394,11 +391,7 @@ function loadProjectsResult(
     const enablement = loadEnablementState();
     if (!options.enableIdentity) {
       const baseBranchChanged = result.projects.some((project) => {
-        const enabled = enablement.projects.find((candidate) =>
-          candidate.repoPath === path.resolve(project.repoPath || "")
-          && candidate.githubRepo === project.githubRepo
-          && candidate.enabled !== false
-        );
+        const enabled = findEnabledProject(enablement, { repoPath: project.repoPath || "", githubRepo: project.githubRepo });
         return Boolean(enabled?.baseBranch && enabled.baseBranch !== project.baseBranch);
       });
       if (baseBranchChanged) {
@@ -406,11 +399,7 @@ function loadProjectsResult(
       }
     }
     result.projects = result.projects.map((project) => {
-      const enabled = enablement.projects.find((candidate) =>
-        candidate.repoPath === path.resolve(project.repoPath || "")
-        && candidate.githubRepo === project.githubRepo
-        && candidate.enabled !== false
-      );
+      const enabled = findEnabledProject(enablement, { repoPath: project.repoPath || "", githubRepo: project.githubRepo });
       return enabled
         ? authorizeAutomationLogin({ ...project, githubRepositoryId: enabled.githubRepositoryId }, enabled.automationLogin)
         : project;
@@ -821,9 +810,7 @@ async function gitText(pi, args) {
 
 function repositoryEnablementForRoot(repositoryRoot: string | undefined): RepositoryEnablement {
   if (!repositoryRoot) return "unavailable";
-  const enabled = loadEnablementState().projects.find((project) =>
-    project.enabled !== false && path.resolve(project.repoPath) === path.resolve(repositoryRoot)
-  );
+  const enabled = findEnabledRecordByRepoPath(loadEnablementState(), repositoryRoot);
   if (!enabled) return "disabled";
   try {
     assertEnabled({
@@ -2828,7 +2815,7 @@ export default function (pi) {
             writeEnableAttempt(repoPath, attempt.token, true);
           }
           const state = loadEnablementState();
-          const enabled = state.projects.find((project) => project.repoPath === path.resolve(repoPath) && project.enabled !== false);
+          const enabled = findEnabledRecordByRepoPath(state, repoPath);
           assertCodeIdentityCurrent();
           saveEnablementState(removeEnabledProjectAtPath(state, repoPath), loadedCodeIdentityForWrite());
           if (active?.project?.repoPath && path.resolve(active.project.repoPath) === path.resolve(repoPath)) {

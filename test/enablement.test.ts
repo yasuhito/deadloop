@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import path from "node:path";
 
 import {
   findEnabledProject,
+  findEnabledRecordByRepoPath,
   isEnabledProjectState,
   normalizeEnablementState,
   observeAutoMerge,
@@ -30,6 +32,25 @@ describe("local enablement state", () => {
     const state = upsertEnabledProject(null, project);
 
     expect(findEnabledProject(state, project)?.githubRepo).toBe("owner/demo");
+  });
+
+  it("finds the checkout's enabled record without consulting its GitHub identity", () => {
+    const state = upsertEnabledProject(null, project);
+
+    expect(findEnabledRecordByRepoPath(state, "/repos/demo")?.githubRepo).toBe("owner/demo");
+  });
+
+  it("does not return a disabled record for the checkout path", () => {
+    const state = upsertEnabledProject(null, project);
+    const disabled = { ...state, projects: state.projects.map((enabled) => ({ ...enabled, enabled: false })) };
+
+    expect(findEnabledRecordByRepoPath(disabled, "/repos/demo")).toBeNull();
+  });
+
+  it("resolves a relative record path before matching the checkout path", () => {
+    const state = { projects: [{ ...upsertEnabledProject(null, project).projects[0], repoPath: "repos/demo" }] };
+
+    expect(findEnabledRecordByRepoPath(state, path.join(process.cwd(), "repos/demo"))?.githubRepo).toBe("owner/demo");
   });
 
   it("rejects a record when the checkout path belongs to another repository", () => {
