@@ -847,9 +847,9 @@ function launchIssueExplorer(issue: JsonObject, env: ReturnType<typeof envConfig
         issueTitle: String(issue.title || ""),
         issueUrl: String(issue.url || `https://github.com/${env.githubRepo}/issues/${number}`),
         githubRepo: env.githubRepo,
+        automationDir: env.automationDir,
         workerInstructions: env.workerInstructions,
         promiseFile,
-        reportIdentity: { attemptId: uuid, inputRevision: { head: worktreeHead } },
       });
     },
   };

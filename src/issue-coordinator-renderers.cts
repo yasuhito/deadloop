@@ -28,9 +28,9 @@ type IssueExplorerPromptInput = {
   issueTitle: string;
   issueUrl: string;
   githubRepo: string;
+  automationDir: string;
   workerInstructions: string;
   promiseFile: string;
-  reportIdentity: { attemptId: string; inputRevision: { head: string } };
 };
 
 type IssueWorkerPromptInput = {
@@ -91,10 +91,6 @@ function markdownFence(value: string): string {
   return "`".repeat(backticks + 1);
 }
 
-function markdownCode(value: string): string {
-  return oneLineForRenderer(value).replace(/`/g, "\\`");
-}
-
 function renderIssuePlanningComment(input: IssuePlanningCommentInput): string {
   return [
     "Skipped automated implementation because this looks like a PRD, design, or parent issue.",
@@ -150,13 +146,8 @@ gh issue edit ${issue} -R ${shellQuoteForRenderer(input.githubRepo)} --remove-la
 }
 
 function renderIssueExplorerPrompt(input: IssueExplorerPromptInput): string {
-  const reportBase = JSON.stringify({
-    schemaVersion: 1,
-    attemptId: input.reportIdentity.attemptId,
-    role: "explorer",
-    target: { repository: input.githubRepo, kind: "issue", number: input.issueNumber },
-    inputRevision: input.reportIdentity.inputRevision,
-  });
+  const writerCommand = `node ${shellQuoteForRenderer(`${input.automationDir.replace(/\/$/, "")}/write-explorer-report.cts`)} --attempt-record ${shellQuoteForRenderer(attemptRecordForPromise(input.promiseFile))} <<'JSON'`;
+  const writerFence = markdownFence(writerCommand);
   return `Explore Issue #${input.issueNumber}: ${oneLineForRenderer(input.issueTitle)}
 
 Target:
@@ -174,12 +165,17 @@ Hard limits:
 - Do not run destructive commands. The Automation host alone validates and posts the result.
 
 Promise report:
-- Write one JSON object to \`${markdownCode(input.promiseFile)}\` before stopping.
-- Start with this exact identity: \`${markdownCode(reportBase)}\`.
-- Every report must also include the summary field beside the identity: \`"summary":"<three sentences>"\`. A report without it is invalid and discarded.
-- On success add \`"status":"complete"\`, \`"result":{"difficulty":"low|medium|high","relevantFiles":["path"],"verifiedClaims":["claim"],"disprovedClaims":[],"openQuestions":[],"approach":"optional approach"}\`, and \`"evidence":{"commands":["command and result"]}\`.
-- On failure add \`"status":"blocked"\`, \`"result":{"reason":"add_request|free_storage|fix_environment|fix_verification_policy","explanation":"what failed","recovery":"safe next step"}\`, and \`"evidence":{}\`.
-- Always write the promise file; do not exit silently.`;
+- Do not write the promise file yourself. Decide the result, then hand its semantic payload to the report writer from the launch code snapshot:
+  ${writerFence}bash
+  ${writerCommand}
+  {"status":"complete","summary":"<three sentences>","result":{"difficulty":"low|medium|high","relevantFiles":["path"],"verifiedClaims":["claim"],"disprovedClaims":[],"openQuestions":[],"approach":"optional approach"},"evidence":{"commands":["command and result"]}}
+  JSON
+  ${writerFence}
+- On success the writer prints the written report file and exits 0; confirm that before stopping.
+- If blocked, hand the writer this payload instead:
+  {"status":"blocked","summary":"<three sentences>","result":{"reason":"add_request|free_storage|fix_environment|fix_verification_policy","explanation":"what failed","recovery":"safe next step"}}
+- The writer injects the report identity from the attempt record. Supply only status, summary, and the investigation meaning; a payload that names identity, revision, worktree, workspace, run-directory, or output-path fields is refused and names them.
+- Always hand a report to the writer before stopping, even on failure. If the writer refuses, fix the field it names and run it again.`;
 }
 
 function renderIssueWorkerPrompt(input: IssueWorkerPromptInput): string {
