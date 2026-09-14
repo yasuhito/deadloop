@@ -79,8 +79,7 @@ const { createCommandRunner } = require("../../src/automation-driver-kit.cts");
 const { decideReviewTransition } = require("../../src/reviewer-outcome-contract.cts");
 const {
   defaultIssueDecisionConfig,
-  issueBlockedByNumbers,
-  liveDependencyState,
+  issueBlockedBy,
   selectIssueForImplementation,
 } = require("./automations/issue-coordinator-decisions.cts");
 const { loadAutomationState, saveAutomationState } = require("../../src/automation-state.cjs");
@@ -1561,8 +1560,7 @@ function revalidatePendingIssueHandoff(handoff) {
         needsInfoLabel: input.needsInfoLabel,
         wontfixLabel: input.wontfixLabel,
       }),
-      (candidate) => issueBlockedByNumbers(input.githubRepo, Number(candidate.number)),
-      (number) => liveDependencyState(input.githubRepo, number),
+      (candidate) => issueBlockedBy(input.githubRepo, Number(candidate.number)),
     );
     return decision.selected === true && decision.number === input.issueNumber;
   } catch {

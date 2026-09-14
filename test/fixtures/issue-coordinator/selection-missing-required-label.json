@@ -5,10 +5,11 @@
       "title": "Issue missing the ready label",
       "body": "## Agent Brief\nBuild the thing.\n\n## Acceptance criteria\n- It works.",
       "labels": [
-        { "name": "ready-for-agent" }
+        {
+          "name": "ready-for-agent"
+        }
       ]
     }
   ],
-  "dependencyStates": {},
-  "relationshipDependencies": {}
+  "blockedBy": {}
 }

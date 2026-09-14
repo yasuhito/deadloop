@@ -30,19 +30,12 @@ const DEFAULT_HUMAN_LABEL = "ready-for-human";
 const DEFAULT_NEEDS_INFO_LABEL = "needs-info";
 const DEFAULT_WONTFIX_LABEL = "wontfix";
 
-type DependencyRef = { repository: string | null; number: number };
+// One GitHub-native blocker of a candidate Issue. `repository` is set only for blockers that live
+// in another repository; their state is judged the same way as local ones.
+type BlockedByNode = { number: number; state: string; repository?: string };
 
-const INLINE_DEPENDENCY_RE = /(?:Depends on|Blocked by|依存:|ブロック:)\s*#(\d+)/gi;
-const DEPENDENCY_SECTION_RE = /^##\s*(?:Blocked by|Depends on|依存|ブロック)\b[\s\S]*?(?=^##|(?![\s\S]))/gim;
-const NONE_LINE_RE = /^\s*none\s*(?:-|$)/im;
-const ISSUE_REFERENCE_RE = /#(\d+)/g;
-// A dependency section can reference Issues by bare number, by `owner/repo#123`, or by a GitHub
-// Issue/pull request URL (bare or wrapped in a markdown link). Qualified references belong to their
-// own repository's number space and must not be read as target-repository numbers.
-const MARKDOWN_ISSUE_LINK_RE = /\[[^\]]*\]\(\s*(https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pulls)\/(\d+))[^)]*\)/gi;
-const GITHUB_ISSUE_URL_RE = /https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pulls)\/(\d+)/gi;
-const QUALIFIED_NUMBER_RE = /\b([\w.-]+\/[\w.-]+)#(\d+)\b/g;
 const DEPENDENCY_QUERY_TIMEOUT_MS = 5_000;
+const BLOCKED_BY_FIRST = 20;
 
 class IssueDecisionDeadlineError extends Error {}
 
@@ -105,76 +98,22 @@ function issueNumberForDecision(issue: IssueDecisionRecord): number {
   return Number.isFinite(number) ? number : 0;
 }
 
-function numbersFromMatches(regex: RegExp, text: string): number[] {
-  const values: number[] = [];
-  regex.lastIndex = 0;
-  for (let match = regex.exec(text); match; match = regex.exec(text)) values.push(Number(match[1]));
-  return values;
-}
-
-function normalizeRepository(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function refsFromSectionText(section: string): DependencyRef[] {
-  const refs: DependencyRef[] = [];
-  const rest = section
-    .replace(MARKDOWN_ISSUE_LINK_RE, (_match, _url, owner, name, number) => {
-      refs.push({ repository: `${owner}/${name}`, number: Number(number) });
-      return " ";
-    })
-    .replace(GITHUB_ISSUE_URL_RE, (_match, owner, name, number) => {
-      refs.push({ repository: `${owner}/${name}`, number: Number(number) });
-      return " ";
-    })
-    .replace(QUALIFIED_NUMBER_RE, (_match, repository, number) => {
-      refs.push({ repository, number: Number(number) });
-      return " ";
-    });
-  for (const number of numbersFromMatches(ISSUE_REFERENCE_RE, rest)) refs.push({ repository: null, number });
-  return refs;
-}
-
-function bodyDependencyRefs(body: string | undefined | null): DependencyRef[] {
-  const text = body || "";
-  const refs = new Map<string, DependencyRef>();
-  const add = (ref: DependencyRef) => {
-    const key = `${ref.repository ? normalizeRepository(ref.repository) : ""}#${ref.number}`;
-    if (!refs.has(key)) refs.set(key, ref);
-  };
-  for (const number of numbersFromMatches(INLINE_DEPENDENCY_RE, text)) add({ repository: null, number });
-  DEPENDENCY_SECTION_RE.lastIndex = 0;
-  for (let match = DEPENDENCY_SECTION_RE.exec(text); match; match = DEPENDENCY_SECTION_RE.exec(text)) {
-    const section = match[0];
-    if (NONE_LINE_RE.test(section)) continue;
-    for (const ref of refsFromSectionText(section)) add(ref);
-  }
-  return [...refs.values()];
-}
-
-// A bare number resolves inside the target repository. A URL or `owner/repo#123` naming the target
-// repository also resolves locally; any other qualified reference names another repository and is not
-// a dependency of this repository's loop.
-function resolveDependencyRef(ref: DependencyRef, targetRepository?: string): { local: boolean; key: string } {
-  if (!ref.repository) return { local: true, key: `#${ref.number}` };
-  const normalized = normalizeRepository(ref.repository);
-  if (targetRepository && normalized === normalizeRepository(targetRepository)) return { local: true, key: `#${ref.number}` };
-  return { local: false, key: `${normalized}#${ref.number}` };
-}
-
 function skipIssueForDecision(reason: string, issue: IssueDecisionRecord): IssueDecisionRecord {
   return { number: issue.number, reason };
 }
 
 function dependencyStatesClosed(
-  dependencies: Set<number>,
-  dependencyState: (number: number) => string | null | undefined,
+  blockers: BlockedByNode[],
 ): { closed: boolean; openDependencies: IssueDecisionRecord[] } {
   const openDependencies: IssueDecisionRecord[] = [];
-  for (const number of [...dependencies].sort((left, right) => left - right)) {
-    const state = dependencyState(number);
-    if (String(state || "OPEN").toUpperCase() !== "CLOSED") {
-      openDependencies.push({ number, state: state || "UNKNOWN" });
+  for (const blocker of [...blockers].sort((left, right) => left.number - right.number)) {
+    const state = String(blocker.state || "").toUpperCase() || "UNKNOWN";
+    if (state !== "CLOSED") {
+      openDependencies.push({
+        number: blocker.number,
+        state,
+        ...(blocker.repository ? { repository: blocker.repository } : {}),
+      });
     }
   }
   return { closed: openDependencies.length === 0, openDependencies };
@@ -183,10 +122,8 @@ function dependencyStatesClosed(
 function selectIssueForImplementation(
   issues: IssueDecisionRecord[],
   config: IssueDecisionConfig,
-  relationshipDependencies: (issue: IssueDecisionRecord) => Set<number>,
-  dependencyState: (number: number) => string | null | undefined,
+  blockedBy: (issue: IssueDecisionRecord) => BlockedByNode[],
   timelineEvents: (issue: IssueDecisionRecord) => IssueDecisionRecord[] = (issue) => issue.timelineEvents || [],
-  repository?: string,
 ): IssueDecisionRecord {
   const skipLabels = [config.inProgressLabel, config.needsInfoLabel, config.humanLabel, config.wontfixLabel];
   const skipped: IssueDecisionRecord[] = [];
@@ -222,21 +159,14 @@ function selectIssueForImplementation(
       continue;
     }
 
-    const dependencies = new Set<number>();
+    let blockers: BlockedByNode[] = [];
     if (request.role === "worker") {
-      const externalDependencies = new Set<string>();
-      for (const ref of bodyDependencyRefs(issue.body || "")) {
-        const resolved = resolveDependencyRef(ref, repository);
-        if (resolved.local) dependencies.add(Number(resolved.key.slice(1)));
-        else externalDependencies.add(resolved.key);
-      }
-      for (const number of relationshipDependencies(issue)) dependencies.add(number);
-      const { closed, openDependencies } = dependencyStatesClosed(dependencies, dependencyState);
+      blockers = blockedBy(issue);
+      const { closed, openDependencies } = dependencyStatesClosed(blockers);
       if (!closed) {
         skipped.push({
           ...skipIssueForDecision("open_dependency", issue),
           dependencies: openDependencies,
-          ...(externalDependencies.size ? { externalDependencies: [...externalDependencies].sort() } : {}),
         });
         continue;
       }
@@ -248,7 +178,7 @@ function selectIssueForImplementation(
       role: request.role,
       requestLabel: request.label,
       reason: "selectable",
-      dependencies: [...dependencies].sort((left, right) => left - right),
+      dependencies: blockers.map((blocker) => blocker.number).sort((left, right) => left - right),
       skipped,
     };
   }
@@ -256,69 +186,69 @@ function selectIssueForImplementation(
   return { selected: false, reason: "no_candidate", skipped };
 }
 
-function parseDependencyStateMap(data: IssueDecisionRecord): Map<number, string> {
-  const states = data.dependencyStates || {};
-  const parsed = new Map<number, string>();
-  for (const [number, state] of Object.entries(states)) parsed.set(Number(number), String(state));
-  return parsed;
-}
-
-function parseRelationshipDependencyMap(data: IssueDecisionRecord): Map<number, Set<number>> {
-  const relationships = data.relationshipDependencies || data.blockedBy || {};
-  const parsed = new Map<number, Set<number>>();
-  for (const [number, dependencies] of Object.entries(relationships)) {
-    parsed.set(Number(number), new Set((dependencies as any[] || []).map((value) => Number(value))));
+function parseBlockedByMap(data: IssueDecisionRecord): Map<number, BlockedByNode[]> {
+  const blockedBy = data.blockedBy || {};
+  const parsed = new Map<number, BlockedByNode[]>();
+  for (const [number, nodes] of Object.entries(blockedBy)) {
+    parsed.set(Number(number), ((nodes as any[]) || []).map((node) => ({
+      number: Number(node.number),
+      state: String(node.state || ""),
+      ...(node.repository ? { repository: String(node.repository) } : {}),
+    })));
   }
   return parsed;
 }
 
-function fixtureDecision(file: string, config: IssueDecisionConfig, repository?: string): IssueDecisionRecord {
+function fixtureDecision(file: string, config: IssueDecisionConfig): IssueDecisionRecord {
   const data = JSON.parse(fs.readFileSync(file, "utf8"));
-  const states = parseDependencyStateMap(data);
-  const relationships = parseRelationshipDependencyMap(data);
+  const blockedBy = parseBlockedByMap(data);
   return selectIssueForImplementation(
     (data.issues || []).filter((issue: unknown) => issue && typeof issue === "object"),
     config,
-    (issue) => relationships.get(issueNumberForDecision(issue)) || new Set(),
-    (number) => states.get(number),
-    undefined,
-    repository,
+    (issue) => blockedBy.get(issueNumberForDecision(issue)) || [],
   );
 }
 
-function issueBlockedByNumbers(repo: string, number: number, deadline?: number): Set<number> {
-  const [owner, name] = repo.split("/", 2);
-  if (!owner || !name) return new Set();
-  try {
-    const data = runJsonForIssueDecision([
-      "gh",
-      "api",
-      "graphql",
-      "-f",
-      `owner=${owner}`,
-      "-f",
-      `name=${name}`,
-      "-F",
-      `number=${number}`,
-      "-f",
-      "query=query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { issue(number:$number) { blockedBy(first:20) { nodes { number } } } } }",
-    ], deadline);
-    const nodes = data?.data?.repository?.issue?.blockedBy?.nodes || [];
-    return new Set(nodes.filter((node: unknown) => node && typeof node === "object" && (node as IssueDecisionRecord).number !== undefined).map((node: IssueDecisionRecord) => Number(node.number)));
-  } catch (error) {
-    if (error instanceof IssueDecisionDeadlineError) throw error;
-    return new Set();
-  }
+function normalizeRepositoryForNode(value: string): string {
+  return String(value || "").trim().toLowerCase();
 }
 
-function liveDependencyState(repo: string, number: number, deadline?: number): string | null {
-  try {
-    const data = runJsonForIssueDecision(["gh", "issue", "view", String(number), "-R", repo, "--json", "state"], deadline);
-    return data && typeof data === "object" && data.state ? String(data.state) : null;
-  } catch (error) {
-    if (error instanceof IssueDecisionDeadlineError) throw error;
-    return null;
+// One GraphQL query per candidate returns every blocker together with its state, so no per-dependency
+// follow-up query is needed. Any query failure fails closed: a timeout throws the deadline error and
+// every other failure propagates, so a candidate is never selected on unknown dependency state.
+function issueBlockedBy(repo: string, number: number, deadline?: number): BlockedByNode[] {
+  const [owner, name] = repo.split("/", 2);
+  if (!owner || !name) throw new Error(`invalid repository: ${repo}`);
+  const data = runJsonForIssueDecision([
+    "gh",
+    "api",
+    "graphql",
+    "-f",
+    `owner=${owner}`,
+    "-f",
+    `name=${name}`,
+    "-F",
+    `number=${number}`,
+    "-f",
+    `query=query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { issue(number:$number) { blockedBy(first:${BLOCKED_BY_FIRST}) { pageInfo { hasNextPage } nodes { number state repository { nameWithOwner } } } } } }`,
+  ], deadline);
+  const connection = data?.data?.repository?.issue?.blockedBy;
+  if (connection?.pageInfo?.hasNextPage) {
+    throw new Error(`issue #${number} has more than ${BLOCKED_BY_FIRST} blockedBy dependencies; refusing to guess`);
   }
+  const nodes = connection?.nodes || [];
+  return nodes
+    .filter((node: unknown) => node && typeof node === "object" && (node as IssueDecisionRecord).number !== undefined)
+    .map((node: IssueDecisionRecord) => {
+      const repository = node.repository?.nameWithOwner;
+      const crossRepository = repository
+        && normalizeRepositoryForNode(repository) !== normalizeRepositoryForNode(repo);
+      return {
+        number: Number(node.number),
+        state: String(node.state || ""),
+        ...(crossRepository ? { repository } : {}),
+      };
+    });
 }
 
 type IssueRequestRole = "exploration" | "implementation";
@@ -387,19 +317,15 @@ function issueRequestStopResult(
 }
 
 module.exports = {
-  bodyDependencyRefs,
   dependencyStatesClosed,
-  normalizeRepository,
-  resolveDependencyRef,
   defaultIssueDecisionConfig,
   fixtureDecision,
   DEPENDENCY_QUERY_TIMEOUT_MS,
   IssueDecisionDeadlineError,
-  issueBlockedByNumbers,
+  issueBlockedBy,
   issueDecisionDeadline,
   issueNumberForDecision,
   issueRequestStopResult,
-  liveDependencyState,
   remainingIssueDecisionTimeout,
   selectIssueForImplementation,
 };

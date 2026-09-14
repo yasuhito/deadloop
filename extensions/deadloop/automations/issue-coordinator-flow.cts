@@ -1,9 +1,8 @@
 const {
   defaultIssueDecisionConfig,
   fixtureDecision,
-  issueBlockedByNumbers,
+  issueBlockedBy,
   issueNumberForDecision,
-  liveDependencyState,
   selectIssueForImplementation,
 } = require("./issue-coordinator-decisions.cts");
 
@@ -56,14 +55,12 @@ function decisionForIssues(
   timelineEvents?: (issue: JsonObject) => JsonObject[],
 ): JsonObject {
   const config = issueDecisionConfig(env);
-  if (fixturePath) return fixtureDecision(fixturePath, config, repo || undefined);
+  if (fixturePath) return fixtureDecision(fixturePath, config);
   return selectIssueForImplementation(
     issues,
     config,
-    (issue: JsonObject) => issueBlockedByNumbers(repo, issueNumberForDecision(issue), deadline),
-    (number: number) => liveDependencyState(repo, number, deadline),
+    (issue: JsonObject) => issueBlockedBy(repo, issueNumberForDecision(issue), deadline),
     timelineEvents,
-    repo,
   );
 }
 

@@ -1,19 +1,88 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const {
   DEPENDENCY_QUERY_TIMEOUT_MS,
   defaultIssueDecisionConfig,
+  issueBlockedBy,
   issueRequestStopResult,
   remainingIssueDecisionTimeout,
   selectIssueForImplementation,
 } = require("../extensions/deadloop/automations/issue-coordinator-decisions.cts");
+
+describe("issueBlockedBy", () => {
+  const roots: string[] = [];
+  const originalPath = process.env.PATH;
+
+  afterEach(() => {
+    process.env.PATH = originalPath;
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function stubGh(output: string, exitCode = 0): void {
+    const root = path.join(os.tmpdir(), `deadloop-blockedby-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    roots.push(root);
+    const bin = path.join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(bin + "/gh", `#!/bin/sh
+cat <<'JSON'
+${output}
+JSON
+exit ${exitCode}
+`);
+    chmodSync(bin + "/gh", 0o755);
+    process.env.PATH = `${bin}:${process.env.PATH}`;
+  }
+
+  it("returns each blocker with its state, marking only cross-repository ones", () => {
+    stubGh(JSON.stringify({
+      data: { repository: { issue: { blockedBy: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          { number: 1, state: "OPEN", repository: { nameWithOwner: "Owner/Repo" } },
+          { number: 348, state: "CLOSED", repository: { nameWithOwner: "qorraq/qorraq-prototype" } },
+        ],
+      } } } },
+    }));
+    try {
+      expect(issueBlockedBy("owner/repo", 2)).toEqual([
+        { number: 1, state: "OPEN" },
+        { number: 348, state: "CLOSED", repository: "qorraq/qorraq-prototype" },
+      ]);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("throws instead of returning an empty list when the query fails", () => {
+    stubGh("gh: api failed", 1);
+    try {
+      expect(() => issueBlockedBy("owner/repo", 2)).toThrow();
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("throws when more blockers exist than one page returned", () => {
+    stubGh(JSON.stringify({
+      data: { repository: { issue: { blockedBy: { pageInfo: { hasNextPage: true }, nodes: [] } } } },
+    }));
+    try {
+      expect(() => issueBlockedBy("owner/repo", 2)).toThrow("blockedBy");
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+});
+
 describe("issue coordinator selection", () => {
   it("prefers exploration when one Issue requests both roles", () => {
     const decision = selectIssueForImplementation(
       [{ number: 1, body: "", labels: [{ name: "agent:explore" }, { name: "agent:implement" }] }],
       defaultIssueDecisionConfig(),
-      () => new Set(),
-      () => "CLOSED",
+      () => [],
     );
 
     expect(decision.role).toBe("explorer");
@@ -23,8 +92,7 @@ describe("issue coordinator selection", () => {
     const decision = selectIssueForImplementation(
       [{ number: 1, body: "", labels: [{ name: "agent:implement" }] }],
       defaultIssueDecisionConfig(),
-      () => new Set(),
-      () => "CLOSED",
+      () => [],
     );
 
     expect(decision.role).toBe("worker");
@@ -42,8 +110,7 @@ describe("issue coordinator selection", () => {
         ],
       }],
       defaultIssueDecisionConfig(),
-      () => new Set(),
-      () => "CLOSED",
+      () => [],
     );
 
     expect(decision.number).toBe(1);
@@ -58,8 +125,7 @@ describe("issue coordinator selection", () => {
         labels: [{ name: "agent:explore" }, { name: "agent:implement" }, { name: "agent:blocked" }],
       }],
       defaultIssueDecisionConfig(),
-      () => new Set(),
-      () => "CLOSED",
+      () => [],
       () => {
         queries += 1;
         return [{ id: "10", event: "labeled", created_at: "2026-08-16T00:00:00Z", label: { name: "agent:blocked" } }];
@@ -81,22 +147,88 @@ describe("issue coordinator selection", () => {
         ],
       }],
       defaultIssueDecisionConfig(),
-      () => new Set(),
-      () => "CLOSED",
+      () => [],
     );
 
     expect(decision.selected).toBe(false);
   });
 
-  it("does not select an Issue whose same-repository dependency is open", () => {
+  it("does not select an Issue whose native dependency is open", () => {
     const decision = selectIssueForImplementation(
-      [{ number: 2, body: "## Blocked by\n- Depends on #1", labels: [{ name: "agent:implement" }] }],
+      [{ number: 2, body: "", labels: [{ name: "agent:implement" }] }],
       defaultIssueDecisionConfig(),
-      () => new Set(),
-      (number) => (number === 1 ? "OPEN" : null),
+      (issue) => (issue.number === 2 ? [{ number: 1, state: "OPEN" }] : []),
     );
 
     expect(decision.selected).toBe(false);
+  });
+
+  it("names the open dependency and its state in the skip record", () => {
+    const decision = selectIssueForImplementation(
+      [{ number: 2, body: "", labels: [{ name: "agent:implement" }] }],
+      defaultIssueDecisionConfig(),
+      () => [{ number: 1, state: "OPEN" }],
+    );
+
+    expect(decision.skipped.find((entry) => entry.reason === "open_dependency").dependencies)
+      .toEqual([{ number: 1, state: "OPEN" }]);
+  });
+
+  it("selects an Issue whose native dependencies are all closed", () => {
+    const decision = selectIssueForImplementation(
+      [{ number: 2, body: "", labels: [{ name: "agent:implement" }] }],
+      defaultIssueDecisionConfig(),
+      () => [{ number: 1, state: "CLOSED" }],
+    );
+
+    expect(decision.selected).toBe(true);
+  });
+
+  it("selects an Issue whose body says Blocked by but that has no native dependency", () => {
+    const decision = selectIssueForImplementation(
+      [{ number: 2, body: "Blocked by #1", labels: [{ name: "agent:implement" }] }],
+      defaultIssueDecisionConfig(),
+      () => [],
+    );
+
+    expect(decision.selected).toBe(true);
+  });
+
+  it("does not select an Issue whose cross-repository dependency is open", () => {
+    const decision = selectIssueForImplementation(
+      [{ number: 2, body: "", labels: [{ name: "agent:implement" }] }],
+      defaultIssueDecisionConfig(),
+      () => [{ number: 348, state: "OPEN", repository: "qorraq/qorraq-prototype" }],
+    );
+
+    expect(decision.selected).toBe(false);
+  });
+
+  it("selects an Issue whose cross-repository dependency is closed", () => {
+    const decision = selectIssueForImplementation(
+      [{ number: 2, body: "", labels: [{ name: "agent:implement" }] }],
+      defaultIssueDecisionConfig(),
+      () => [{ number: 348, state: "CLOSED", repository: "qorraq/qorraq-prototype" }],
+    );
+
+    expect(decision.selected).toBe(true);
+  });
+
+  it("queries native dependencies exactly once per candidate", () => {
+    let queries = 0;
+    selectIssueForImplementation(
+      [
+        { number: 1, body: "", labels: [{ name: "agent:implement" }] },
+        { number: 2, body: "", labels: [{ name: "agent:implement" }] },
+      ],
+      defaultIssueDecisionConfig(),
+      () => {
+        queries += 1;
+        return [];
+      },
+    );
+
+    expect(queries).toBe(1);
   });
 
   it("skips an invalid blocked candidate before selecting another Issue", () => {
@@ -114,108 +246,10 @@ describe("issue coordinator selection", () => {
         { number: 2, body: "", labels: [{ name: "agent:explore" }] },
       ],
       defaultIssueDecisionConfig(),
-      () => new Set(),
-      () => "CLOSED",
+      () => [],
     );
 
     expect(decision.number).toBe(2);
-  });
-
-  it("selects an Issue whose same-repository dependency is closed", () => {
-    const decision = selectIssueForImplementation(
-      [{ number: 2, body: "## Blocked by\n- Depends on #1", labels: [{ name: "agent:implement" }] }],
-      defaultIssueDecisionConfig(),
-      () => new Set(),
-      (number) => (number === 1 ? "CLOSED" : null),
-    );
-
-    expect(decision.selected).toBe(true);
-  });
-
-  it("ignores a linked dependency reference that names another repository", () => {
-    const decision = selectIssueForImplementation(
-      [{
-        number: 2,
-        body: "## Blocked by\n- [other repo](https://github.com/qorraq/qorraq-prototype/issues/348)",
-        labels: [{ name: "agent:implement" }],
-      }],
-      defaultIssueDecisionConfig(),
-      () => new Set(),
-      () => null,
-      undefined,
-      "owner/repo",
-    );
-
-    expect(decision.selected).toBe(true);
-  });
-
-  it("ignores a shorthand dependency reference that names another repository", () => {
-    const decision = selectIssueForImplementation(
-      [{ number: 2, body: "## Blocked by\n- qorraq/qorraq-prototype#348", labels: [{ name: "agent:implement" }] }],
-      defaultIssueDecisionConfig(),
-      () => new Set(),
-      () => null,
-      undefined,
-      "owner/repo",
-    );
-
-    expect(decision.selected).toBe(true);
-  });
-
-  it("counts a linked reference naming the target repository as a local dependency", () => {
-    const decision = selectIssueForImplementation(
-      [{
-        number: 2,
-        body: "## Blocked by\n- [sibling](https://github.com/owner/repo/issues/9)",
-        labels: [{ name: "agent:implement" }],
-      }],
-      defaultIssueDecisionConfig(),
-      () => new Set(),
-      (number) => (number === 9 ? "OPEN" : null),
-      undefined,
-      "owner/repo",
-    );
-
-    expect(decision.selected).toBe(false);
-  });
-
-  it("keeps fail-closed behavior when a dependency number does not exist", () => {
-    const decision = selectIssueForImplementation(
-      [{ number: 2, body: "## Blocked by\n- Depends on #404", labels: [{ name: "agent:implement" }] }],
-      defaultIssueDecisionConfig(),
-      () => new Set(),
-      () => null,
-    );
-
-    expect(decision.selected).toBe(false);
-  });
-
-  it("marks a nonexistent dependency number as UNKNOWN in the skip record", () => {
-    const decision = selectIssueForImplementation(
-      [{ number: 2, body: "## Blocked by\n- Depends on #404", labels: [{ name: "agent:implement" }] }],
-      defaultIssueDecisionConfig(),
-      () => new Set(),
-      () => null,
-    );
-
-    expect(decision.skipped.find((entry) => entry.reason === "open_dependency").dependencies[0].state).toBe("UNKNOWN");
-  });
-
-  it("lists external references separately in the skip record", () => {
-    const decision = selectIssueForImplementation(
-      [{
-        number: 2,
-        body: "## Blocked by\n- Depends on #1\n- [other repo](https://github.com/qorraq/qorraq-prototype/issues/348)",
-        labels: [{ name: "agent:implement" }],
-      }],
-      defaultIssueDecisionConfig(),
-      () => new Set(),
-      (number) => (number === 1 ? "OPEN" : null),
-      undefined,
-      "owner/repo",
-    );
-
-    expect(decision.skipped.find((entry) => entry.reason === "open_dependency").externalDependencies).toEqual(["qorraq/qorraq-prototype#348"]);
   });
 
   it("caps each dependency query below the overall revalidation deadline", () => {

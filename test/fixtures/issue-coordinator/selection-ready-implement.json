@@ -5,10 +5,11 @@
       "title": "Implement ready issue",
       "body": "## Agent Brief\nBuild the thing.\n\n## Acceptance criteria\n- It works.",
       "labels": [
-        { "name": "agent:implement" }
+        {
+          "name": "agent:implement"
+        }
       ]
     }
   ],
-  "dependencyStates": {},
-  "relationshipDependencies": {}
+  "blockedBy": {}
 }
