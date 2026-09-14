@@ -31,8 +31,11 @@ const CONTRACT_BRIEF_RE = /^##\s*(?:Agent Brief|What to build)\b/im;
 const CONTRACT_ACCEPTANCE_RE = /^##\s*(?:Acceptance criteria|受け入れ条件)\b|\bAcceptance criteria\b|受け入れ条件/im;
 const PLANNING_TITLE_RE = /^\s*(?:PRD|RFC|設計|計画)\b/i;
 const PLANNING_SECTION_RE = /^##\s*(?:PRD|RFC|設計|計画)\b/im;
-const TASK_LIST_LEADING_REFERENCE_RE = /^\s*- \[[ xX]\]\s+(?:[\w.-]+\/[\w.-]+)?#\d+/;
-const TASK_LIST_MIN_ITEMS = 2;
+const TASK_LIST_ITEM_RE = /^\s*- \[[ xX]\]/;
+const TASK_LIST_ITEM_REFERENCE_RE = /(?:[\w.-]+\/[\w.-]+)?#\d+/;
+const TASK_LIST_ITEM_REFERENCE_GLOBAL_RE = new RegExp(TASK_LIST_ITEM_REFERENCE_RE.source, "g");
+const TASK_LIST_MIN_REFERENCE_ITEMS = 2;
+const TASK_LIST_MIN_DISTINCT_REFERENCES = 2;
 
 function issueDecisionConfig(env: IssueCoordinatorFlowEnv): JsonObject {
   return defaultIssueDecisionConfig({
@@ -77,8 +80,15 @@ function hasImplementationContract(issue: JsonObject): boolean {
 }
 
 function hasParentTaskList(body: string): boolean {
-  const leadingReferenceItems = body.split(/\r?\n/).filter((line) => TASK_LIST_LEADING_REFERENCE_RE.test(line));
-  return leadingReferenceItems.length >= TASK_LIST_MIN_ITEMS;
+  const referenceItems = body
+    .split(/\r?\n/)
+    .filter((line) => TASK_LIST_ITEM_RE.test(line) && TASK_LIST_ITEM_REFERENCE_RE.test(line));
+  if (referenceItems.length < TASK_LIST_MIN_REFERENCE_ITEMS) return false;
+  const references = new Set<string>();
+  for (const line of referenceItems) {
+    for (const match of line.matchAll(TASK_LIST_ITEM_REFERENCE_GLOBAL_RE)) references.add(match[0]);
+  }
+  return references.size >= TASK_LIST_MIN_DISTINCT_REFERENCES;
 }
 
 function isBlockedPlanningIssue(issue: JsonObject): boolean {

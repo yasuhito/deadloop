@@ -1,0 +1,12 @@
+{
+  "cleanup": {"candidates": []},
+  "issues": [
+    {
+      "number": 87,
+      "title": "親 issue への報告を複数回行う",
+      "body": "## What to build\n実装を進め、親 issue へ報告する。\n\n## 受け入れ条件\n- [ ] 第1切り出しを完了して #101 へ報告する。\n- [ ] 第2切り出しを完了して #101 へ報告する。",
+      "url": "https://github.com/owner/repo/issues/87",
+      "labels": [{"name": "ready-for-agent"}, {"name": "agent:implement"}]
+    }
+  ]
+}
