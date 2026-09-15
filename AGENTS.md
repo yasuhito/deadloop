@@ -21,18 +21,6 @@ Pi 拡張 / パッケージの仕様に関わる変更では、Pi 本体のド�
 - Extensions: `/home/yasuhito/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/docs/extensions.md`
 - Packages: `/home/yasuhito/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/docs/packages.md`
 
-## Matt workflow
-
-このリポジトリでは、Matt skills の考え方に従って作業を進める。
-
-- 大きな機能、公開方針、設計変更は、いきなり実装せず `/grill-with-docs` 相当の聞き取りで目的と制約を明確にする。
-- 聞き取りでは抽象的な専門用語だけで質問せず、このリポジトリの製品や操作に置き換えた具体例と推奨案を示し、一度に一つの判断を確認する。
-- `/wayfinder` で質問するときも、判断対象を平易な言葉で説明し、具体例と推奨案を添えて、利用者が選択結果の違いを理解できる形で一度に一つだけ確認する。
-- 複数セッションに分かれる大きな作業は、PRD と独立した Issue に分けてから実装する。
-- 小さく具体的な変更は、そのまま実装してよい。ただし、完了前に差分を見直す。
-- 実装では、可能な限り `/tdd` の考え方で、先に観測可能な失敗や検証用データを作ってから直す。
-- 変更後は `/code-review` の考え方で、仕様適合と標準適合の 2 軸を確認する。
-
 ## 設計方針
 
 - LLM プロンプトは判断、説明、曖昧な状況の扱いに寄せる。
@@ -57,7 +45,6 @@ Pi 拡張 / パッケージの仕様に関わる変更では、Pi 本体のド�
 - `git reset --hard`、`git clean`、強制 push、branch の強制削除は、ユーザーの明示指示なしに実行しない。
 - 自動化プロンプトの安全制約を弱めない。特に作業エージェントに push / ラベル操作 / PR 作成 / Issue close を許す変更は、明示的な設計判断なしに行わない。
 - 自動マージに関わる変更は、dry-run、manual approval、失敗時の停止条件を確認する。
-- エージェントの push は次の範囲に限る。既存 PR のレビュー指摘対応と CI の修復は、そのまま push してよい。新しいブランチの作成、新しい PR の作成、`main` への push、PR のマージは、利用者に確認する。
 
 ## 検証
 
@@ -92,4 +79,10 @@ npm pack --dry-run
 - `extensions/deadloop/projects.json` や一時ファイルが staged されていないことを確認する。
 - README / docs / プロンプトの変更は、実装と矛盾していないか読み直す。
 - 自動化プロンプトを変えた場合は、GitHub に書き込む文面、ラベル遷移、停止条件を重点的に見直す。
-- コミットは `~/Work/agent-kit/scripts/committer "メッセージ" <パス> ...` をフルパスで呼ぶ。`git add -A` は使わず、常にステージするパスを明示する。
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.
